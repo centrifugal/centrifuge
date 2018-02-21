@@ -14,13 +14,13 @@ option (gogoproto.testgen_all) = true;
 message ClientInfo {
     string user = 1 [(gogoproto.jsontag) = "user"];
     string client = 2 [(gogoproto.jsontag) = "client"];
-    bytes conn_info = 3 [(gogoproto.customtype) = "github.com/centrifugal/centrifugo/lib/proto.Raw", (gogoproto.jsontag) = "conn_info,omitempty", (gogoproto.nullable) = false];
-    bytes chan_info = 4 [(gogoproto.customtype) = "github.com/centrifugal/centrifugo/lib/proto.Raw", (gogoproto.jsontag) = "chan_info,omitempty", (gogoproto.nullable) = false];
+    bytes conn_info = 3 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "conn_info,omitempty", (gogoproto.nullable) = false];
+    bytes chan_info = 4 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "chan_info,omitempty", (gogoproto.nullable) = false];
 }
 
 message Publication {
     string uid = 1 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
-    bytes data = 2 [(gogoproto.customtype) = "github.com/centrifugal/centrifugo/lib/proto.Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+    bytes data = 2 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
     ClientInfo info = 3 [(gogoproto.jsontag) = "info,omitempty"];
 }
 
@@ -47,18 +47,18 @@ enum MethodType {
 message Command {
     uint32 id = 1 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id"];
     MethodType method = 2 [(gogoproto.jsontag) = "method"];
-    bytes params = 3 [(gogoproto.customtype) = "github.com/centrifugal/centrifugo/lib/proto.Raw", (gogoproto.jsontag) = "params", (gogoproto.nullable) = false];
+    bytes params = 3 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "params", (gogoproto.nullable) = false];
 }
 
 message Reply {
     uint32 id = 1 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id,omitempty"];
     Error error = 2 [(gogoproto.jsontag) = "error,omitempty"];
-    bytes result = 3 [(gogoproto.customtype) = "github.com/centrifugal/centrifugo/lib/proto.Raw", (gogoproto.jsontag) = "result,omitempty", (gogoproto.nullable) = false];
+    bytes result = 3 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "result,omitempty", (gogoproto.nullable) = false];
 }
 
 message PublishRequest {
     string channel = 1 [(gogoproto.jsontag) = "channel"];
-    bytes data = 2 [(gogoproto.customtype) = "github.com/centrifugal/centrifugo/lib/proto.Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+    bytes data = 2 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
     string uid = 3 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid"];
 }
 
@@ -71,7 +71,7 @@ message PublishResult {}
 
 message BroadcastRequest {
     repeated string channels = 1 [(gogoproto.jsontag) = "channels"];
-    bytes data = 2 [(gogoproto.customtype) = "github.com/centrifugal/centrifugo/lib/proto.Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+    bytes data = 2 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
     string uid = 3 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid"];
 }
 
