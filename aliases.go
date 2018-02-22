@@ -17,5 +17,8 @@ type Error = proto.Error
 // ClientInfo is short information about client connection.
 type ClientInfo = proto.ClientInfo
 
-// Info represents summary of Centrifuge node cluster.
-type Info = apiproto.InfoResult
+// Encoding represents client connection transport encoding format.
+type Encoding = proto.Encoding
+
+// NodeInfo represents summary of Centrifuge node cluster.
+type NodeInfo = apiproto.InfoResult

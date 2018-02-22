@@ -229,7 +229,7 @@ func (n *Node) Channels() ([]string, error) {
 }
 
 // Info returns aggregated stats from all Centrifugo nodes.
-func (n *Node) Info() (*Info, error) {
+func (n *Node) Info() (*NodeInfo, error) {
 	nodes := n.nodes.list()
 	nodeResults := make([]*apiproto.NodeResult, len(nodes))
 	for i, nd := range nodes {
@@ -243,7 +243,7 @@ func (n *Node) Info() (*Info, error) {
 		}
 	}
 
-	return &Info{
+	return &NodeInfo{
 		Engine: n.engine.name(),
 		Nodes:  nodeResults,
 	}, nil

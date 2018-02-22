@@ -1,6 +1,6 @@
 package centrifuge
 
-// Here we define errors that can be exposed in server and client API replies.
+// Here we define well-known errors that can be used in client API replies.
 var (
 	// ErrInternalServerError means server error, if returned this is a signal
 	// that something went wrong with Centrifugo itself.

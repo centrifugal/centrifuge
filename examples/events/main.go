@@ -63,7 +63,7 @@ func main() {
 			userID = credentials.UserID
 		}
 
-		log.Printf("RPC from user: %s, data: %s", userID, string(req.Data))
+		log.Printf("RPC from user: %s, data: %s, encoding: %d", userID, string(req.Data), req.Client.Transport().Encoding())
 		result := []byte(`{"text": "rpc response"}`)
 
 		go func() {

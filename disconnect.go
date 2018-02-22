@@ -1,13 +1,5 @@
 package centrifuge
 
-var (
-	disconnectReasonNormal      = "normal"
-	disconnectReasonShutdown    = "shutdown"
-	disconnectReasonInvalidSign = "invalid sign"
-	disconnectReasonBadRequest  = "bad request"
-	disconnectReasonServerError = "internal server error"
-)
-
 // Disconnect allows to configure how client will be disconnected from server.
 type Disconnect struct {
 	Reason    string `json:"reason"`
@@ -19,27 +11,27 @@ type Disconnect struct {
 var (
 	// DisconnectNormal ...
 	DisconnectNormal = &Disconnect{
-		Reason:    disconnectReasonNormal,
+		Reason:    "",
 		Reconnect: true,
 	}
 	// DisconnectShutdown ...
 	DisconnectShutdown = &Disconnect{
-		Reason:    disconnectReasonShutdown,
+		Reason:    "shutdown",
 		Reconnect: true,
 	}
 	// DisconnectInvalidSign ...
 	DisconnectInvalidSign = &Disconnect{
-		Reason:    disconnectReasonInvalidSign,
+		Reason:    "invalid sign",
 		Reconnect: false,
 	}
 	// DisconnectBadRequest ...
 	DisconnectBadRequest = &Disconnect{
-		Reason:    disconnectReasonBadRequest,
+		Reason:    "bad request",
 		Reconnect: false,
 	}
 	// DisconnectServerError ...
 	DisconnectServerError = &Disconnect{
-		Reason:    disconnectReasonServerError,
+		Reason:    "internal server error",
 		Reconnect: true,
 	}
 )

@@ -321,6 +321,9 @@ func (c *client) Handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 			mediator := c.node.Mediator()
 			if mediator != nil && mediator.RPC != nil {
 				rpcReply, err := mediator.RPC(c.ctx, &RPCContext{
+					EventContext: EventContext{
+						Client: c,
+					},
 					Data: params,
 				})
 				if err == nil {
