@@ -46,7 +46,7 @@ func (s *grpcClientService) Communicate(stream proto.Centrifugo_CommunicateServe
 	transport := newGRPCTransport(stream, replies)
 
 	c := newClient(stream.Context(), s.node, transport, clientConfig{})
-	defer c.Close(proto.DisconnectNormal)
+	defer c.Close(DisconnectNormal)
 
 	s.node.logger.log(newLogEntry(LogLevelDebug, "GRPC connection established", map[string]interface{}{"client": c.ID()}))
 	defer func(started time.Time) {
@@ -57,16 +57,16 @@ func (s *grpcClientService) Communicate(stream proto.Centrifugo_CommunicateServe
 		for {
 			cmd, err := stream.Recv()
 			if err == io.EOF {
-				c.Close(proto.DisconnectNormal)
+				c.Close(DisconnectNormal)
 				return
 			}
 			if err != nil {
-				c.Close(proto.DisconnectNormal)
+				c.Close(DisconnectNormal)
 				return
 			}
 			if cmd.ID == 0 {
 				s.node.logger.log(newLogEntry(LogLevelInfo, "command ID required", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-				c.Close(proto.DisconnectBadRequest)
+				c.Close(DisconnectBadRequest)
 				return
 			}
 			rep, disconnect := c.Handle(cmd)
@@ -78,7 +78,7 @@ func (s *grpcClientService) Communicate(stream proto.Centrifugo_CommunicateServe
 			if rep != nil {
 				err = transport.Send(proto.NewPreparedReply(rep, proto.EncodingProtobuf))
 				if err != nil {
-					c.Close(&proto.Disconnect{Reason: "error sending message", Reconnect: true})
+					c.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
 					return
 				}
 			}
@@ -127,7 +127,7 @@ func (t *grpcTransport) Send(reply *proto.PreparedReply) error {
 	return nil
 }
 
-func (t *grpcTransport) Close(disconnect *proto.Disconnect) error {
+func (t *grpcTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

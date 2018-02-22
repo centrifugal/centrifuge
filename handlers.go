@@ -530,7 +530,7 @@ func (t *sockjsTransport) write(data ...[]byte) error {
 			transportBytesOut.WithLabelValues("sockjs").Add(float64(len(data)))
 			err := t.session.Send(string(payload))
 			if err != nil {
-				t.Close(&proto.Disconnect{Reason: "error sending message", Reconnect: true})
+				t.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
 				return err
 			}
 		}
@@ -538,7 +538,7 @@ func (t *sockjsTransport) write(data ...[]byte) error {
 	}
 }
 
-func (t *sockjsTransport) Close(disconnect *proto.Disconnect) error {
+func (t *sockjsTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -548,7 +548,7 @@ func (t *sockjsTransport) Close(disconnect *proto.Disconnect) error {
 	t.closed = true
 	close(t.closeCh)
 	if disconnect == nil {
-		disconnect = proto.DisconnectNormal
+		disconnect = DisconnectNormal
 	}
 	reason, err := json.Marshal(disconnect)
 	if err != nil {
@@ -701,7 +701,7 @@ func (t *websocketTransport) ping() {
 		deadline := time.Now().Add(t.opts.pingInterval / 2)
 		err := t.conn.WriteControl(websocket.PingMessage, []byte("ping"), deadline)
 		if err != nil {
-			t.Close(proto.DisconnectServerError)
+			t.Close(DisconnectServerError)
 			return
 		}
 		t.addPing()
@@ -755,20 +755,20 @@ func (t *websocketTransport) write(data ...[]byte) error {
 		}
 		writer, err := t.conn.NextWriter(messageType)
 		if err != nil {
-			t.Close(&proto.Disconnect{Reason: "error sending message", Reconnect: true})
+			t.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
 		}
 		bytesOut := 0
 		for _, payload := range data {
 			n, err := writer.Write(payload)
 			if n != len(payload) || err != nil {
-				t.Close(&proto.Disconnect{Reason: "error sending message", Reconnect: true})
+				t.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
 				return err
 			}
 			bytesOut += len(data)
 		}
 		err = writer.Close()
 		if err != nil {
-			t.Close(&proto.Disconnect{Reason: "error sending message", Reconnect: true})
+			t.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
 		} else {
 			if t.opts.writeTimeout > 0 {
 				t.conn.SetWriteDeadline(time.Time{})
@@ -780,7 +780,7 @@ func (t *websocketTransport) write(data ...[]byte) error {
 	}
 }
 
-func (t *websocketTransport) Close(disconnect *proto.Disconnect) error {
+func (t *websocketTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
 		// Already closed, noop.
@@ -1016,13 +1016,13 @@ func (w *writer) runWriteRoutine() {
 	}
 }
 
-func (w *writer) write(data []byte) *proto.Disconnect {
+func (w *writer) write(data []byte) *Disconnect {
 	ok := w.messages.Add(data)
 	if !ok {
 		return nil
 	}
 	if w.messages.Size() > w.config.MaxQueueSize {
-		return &proto.Disconnect{Reason: "slow", Reconnect: true}
+		return &Disconnect{Reason: "slow", Reconnect: true}
 	}
 	return nil
 }
@@ -1069,7 +1069,7 @@ func LogRequest(n *Node, h http.Handler) http.Handler {
 func handleClientData(n *Node, c Client, data []byte, transport Transport, writer *writer) bool {
 	if len(data) == 0 {
 		n.logger.log(newLogEntry(LogLevelError, "empty client request received"))
-		transport.Close(&proto.Disconnect{Reason: proto.ErrBadRequest.Error(), Reconnect: false})
+		transport.Close(&Disconnect{Reason: ErrBadRequest.Error(), Reconnect: false})
 		return false
 	}
 
@@ -1083,14 +1083,14 @@ func handleClientData(n *Node, c Client, data []byte, transport Transport, write
 				break
 			}
 			n.logger.log(newLogEntry(LogLevelInfo, "error decoding request", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-			transport.Close(proto.DisconnectBadRequest)
+			transport.Close(DisconnectBadRequest)
 			proto.PutCommandDecoder(transport.Encoding(), decoder)
 			proto.PutReplyEncoder(transport.Encoding(), encoder)
 			return false
 		}
 		if cmd.ID == 0 {
 			n.logger.log(newLogEntry(LogLevelInfo, "command ID required", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-			c.Close(proto.DisconnectBadRequest)
+			c.Close(DisconnectBadRequest)
 			proto.PutCommandDecoder(transport.Encoding(), decoder)
 			proto.PutReplyEncoder(transport.Encoding(), encoder)
 			return false
@@ -1108,7 +1108,7 @@ func handleClientData(n *Node, c Client, data []byte, transport Transport, write
 			err = encoder.Encode(rep)
 			if err != nil {
 				n.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-				transport.Close(&proto.Disconnect{Reason: "internal error", Reconnect: true})
+				transport.Close(&Disconnect{Reason: "internal error", Reconnect: true})
 				return false
 			}
 		}

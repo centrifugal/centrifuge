@@ -60,7 +60,7 @@ var (
 func (h *clientHub) Shutdown() error {
 	var wg sync.WaitGroup
 	h.RLock()
-	advice := proto.DisconnectShutdown
+	advice := DisconnectShutdown
 	// Limit concurrency here to prevent memory burst on shutdown.
 	sem := make(chan struct{}, ShutdownSemaphoreChanBufferSize)
 	for _, user := range h.users {
@@ -86,7 +86,7 @@ func (h *clientHub) Shutdown() error {
 
 func (h *clientHub) Disconnect(user string, reconnect bool) error {
 	userConnections := h.UserConnections(user)
-	advice := &proto.Disconnect{Reason: "disconnect", Reconnect: reconnect}
+	advice := &Disconnect{Reason: "disconnect", Reconnect: reconnect}
 	for _, c := range userConnections {
 		go func(cc Client) {
 			cc.Close(advice)

@@ -1,19 +1,14 @@
-package proto
+package centrifuge
 
 var (
-	// DisconnectReasonNormal ...
-	DisconnectReasonNormal = "normal"
-	// DisconnectReasonShutdown ...
-	DisconnectReasonShutdown = "shutdown"
-	// DisconnectReasonInvalidSign ...
-	DisconnectReasonInvalidSign = "invalid sign"
-	// DisconnectReasonBadRequest ...
-	DisconnectReasonBadRequest = "bad request"
-	// DisconnectReasonServerError ...
-	DisconnectReasonServerError = "internal server error"
+	disconnectReasonNormal      = "normal"
+	disconnectReasonShutdown    = "shutdown"
+	disconnectReasonInvalidSign = "invalid sign"
+	disconnectReasonBadRequest  = "bad request"
+	disconnectReasonServerError = "internal server error"
 )
 
-// Disconnect ...
+// Disconnect allows to configure how client will be disconnected from server.
 type Disconnect struct {
 	Reason    string `json:"reason"`
 	Reconnect bool   `json:"reconnect"`
@@ -24,27 +19,27 @@ type Disconnect struct {
 var (
 	// DisconnectNormal ...
 	DisconnectNormal = &Disconnect{
-		Reason:    DisconnectReasonNormal,
+		Reason:    disconnectReasonNormal,
 		Reconnect: true,
 	}
 	// DisconnectShutdown ...
 	DisconnectShutdown = &Disconnect{
-		Reason:    DisconnectReasonShutdown,
+		Reason:    disconnectReasonShutdown,
 		Reconnect: true,
 	}
 	// DisconnectInvalidSign ...
 	DisconnectInvalidSign = &Disconnect{
-		Reason:    DisconnectReasonInvalidSign,
+		Reason:    disconnectReasonInvalidSign,
 		Reconnect: false,
 	}
 	// DisconnectBadRequest ...
 	DisconnectBadRequest = &Disconnect{
-		Reason:    DisconnectReasonBadRequest,
+		Reason:    disconnectReasonBadRequest,
 		Reconnect: false,
 	}
 	// DisconnectServerError ...
 	DisconnectServerError = &Disconnect{
-		Reason:    DisconnectReasonServerError,
+		Reason:    disconnectReasonServerError,
 		Reconnect: true,
 	}
 )

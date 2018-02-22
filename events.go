@@ -2,8 +2,6 @@ package centrifuge
 
 import (
 	"context"
-
-	"github.com/centrifugal/centrifuge/internal/proto"
 )
 
 // EventContext ...
@@ -13,8 +11,8 @@ type EventContext struct {
 
 // EventReply ...
 type EventReply struct {
-	Error      *proto.Error
-	Disconnect *proto.Disconnect
+	Error      *Error
+	Disconnect *Disconnect
 }
 
 // ConnectContext ...
@@ -33,7 +31,7 @@ type ConnectHandler func(context.Context, *ConnectContext) (*ConnectReply, error
 // DisconnectContext ...
 type DisconnectContext struct {
 	EventContext
-	Disconnect *proto.Disconnect
+	Disconnect *Disconnect
 }
 
 // DisconnectReply ...
@@ -74,7 +72,7 @@ type UnsubscribeHandler func(context.Context, *UnsubscribeContext) (*Unsubscribe
 type PublishContext struct {
 	EventContext
 	Channel     string
-	Publication *proto.Publication
+	Publication *Publication
 }
 
 // PublishReply ...
@@ -92,7 +90,7 @@ type PresenceContext struct {
 
 // PresenceReply ...
 type PresenceReply struct {
-	Disconnect *proto.Disconnect
+	Disconnect *Disconnect
 }
 
 // PresenceHandler ...
@@ -115,13 +113,13 @@ type RefreshHandler func(context.Context, *RefreshContext) (*RefreshReply, error
 // RPCContext ...
 type RPCContext struct {
 	EventContext
-	Data proto.Raw
+	Data Raw
 }
 
 // RPCReply ...
 type RPCReply struct {
 	EventReply
-	Result proto.Raw
+	Result Raw
 }
 
 // RPCHandler must handle incoming command from client.
@@ -130,12 +128,12 @@ type RPCHandler func(context.Context, *RPCContext) (*RPCReply, error)
 // MessageContext ...
 type MessageContext struct {
 	EventContext
-	Data proto.Raw
+	Data Raw
 }
 
 // MessageReply ...
 type MessageReply struct {
-	Disconnect *proto.Disconnect
+	Disconnect *Disconnect
 }
 
 // MessageHandler must handle incoming async message from client.

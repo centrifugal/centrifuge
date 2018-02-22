@@ -5,11 +5,14 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto/apiproto"
 )
 
+// Raw represents raw bytes.
+type Raw = proto.Raw
+
 // Publication can be sent into channel and delivered to all channel subscribers.
 type Publication = proto.Publication
 
-// Disconnect allows to configure how client will be disconnected from server.
-type Disconnect = proto.Disconnect
+// Error represents client reply error.
+type Error = proto.Error
 
 // ClientInfo is short information about client connection.
 type ClientInfo = proto.ClientInfo

@@ -267,26 +267,26 @@ func (n *Node) handleControl(cmd *controlproto.Command) error {
 		cmd, err := n.controlDecoder.DecodeNode(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding node control params", map[string]interface{}{"error": err.Error()}))
-			return proto.ErrBadRequest
+			return ErrBadRequest
 		}
 		return n.nodeCmd(cmd)
 	case controlproto.MethodTypeUnsubscribe:
 		cmd, err := n.controlDecoder.DecodeUnsubscribe(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe control params", map[string]interface{}{"error": err.Error()}))
-			return proto.ErrBadRequest
+			return ErrBadRequest
 		}
 		return n.hub.Unsubscribe(cmd.User, cmd.Channel)
 	case controlproto.MethodTypeDisconnect:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
-			return proto.ErrBadRequest
+			return ErrBadRequest
 		}
 		return n.hub.Disconnect(cmd.User, false)
 	default:
 		n.logger.log(newLogEntry(LogLevelError, "unknown control message method", map[string]interface{}{"method": method}))
-		return proto.ErrBadRequest
+		return ErrBadRequest
 	}
 }
 
@@ -361,7 +361,7 @@ func (n *Node) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
-			return makeErrChan(proto.ErrNamespaceNotFound)
+			return makeErrChan(ErrNamespaceNotFound)
 		}
 		opts = &chOpts
 	}
@@ -381,7 +381,7 @@ func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
-			return makeErrChan(proto.ErrNamespaceNotFound)
+			return makeErrChan(ErrNamespaceNotFound)
 		}
 		opts = &chOpts
 	}
@@ -395,7 +395,7 @@ func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions)
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
-			return makeErrChan(proto.ErrNamespaceNotFound)
+			return makeErrChan(ErrNamespaceNotFound)
 		}
 		opts = &chOpts
 	}
@@ -533,25 +533,25 @@ func (n *Node) nodeCmd(node *controlproto.Node) error {
 func (n *Node) Unsubscribe(user string, ch string) error {
 
 	if string(user) == "" {
-		return proto.ErrBadRequest
+		return ErrBadRequest
 	}
 
 	if string(ch) != "" {
 		_, ok := n.ChannelOpts(ch)
 		if !ok {
-			return proto.ErrNamespaceNotFound
+			return ErrNamespaceNotFound
 		}
 	}
 
 	// First unsubscribe on this node.
 	err := n.hub.Unsubscribe(user, ch)
 	if err != nil {
-		return proto.ErrInternalServerError
+		return ErrInternalServerError
 	}
 	// Second send unsubscribe control message to other nodes.
 	err = n.pubUnsubscribe(user, ch)
 	if err != nil {
-		return proto.ErrInternalServerError
+		return ErrInternalServerError
 	}
 	return nil
 }
@@ -560,18 +560,18 @@ func (n *Node) Unsubscribe(user string, ch string) error {
 func (n *Node) Disconnect(user string, reconnect bool) error {
 
 	if string(user) == "" {
-		return proto.ErrBadRequest
+		return ErrBadRequest
 	}
 
 	// first disconnect user from this node
 	err := n.hub.Disconnect(user, reconnect)
 	if err != nil {
-		return proto.ErrInternalServerError
+		return ErrInternalServerError
 	}
 	// second send disconnect control message to other nodes
 	err = n.pubDisconnect(user, reconnect)
 	if err != nil {
-		return proto.ErrInternalServerError
+		return ErrInternalServerError
 	}
 	return nil
 }

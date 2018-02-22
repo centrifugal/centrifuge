@@ -8,22 +8,24 @@
   revision = "76bd05e8e22f9f8f5e1dd6d3a85b7951da7cce57"
 
 [[projects]]
-  name = "github.com/FZambia/statik"
-  packages = ["fs"]
-  revision = "fd36b3595eb2ec8da4b8153b107f7ea08504899d"
-  version = "v0.1.1"
-
-[[projects]]
   branch = "master"
   name = "github.com/beorn7/perks"
   packages = ["quantile"]
   revision = "4c0e84591b9aa9e6dcfdf3e020114cd81f89d5f9"
 
 [[projects]]
-  name = "github.com/davecgh/go-spew"
-  packages = ["spew"]
-  revision = "346938d642f2ec3594ed81d874461961cd0faa76"
-  version = "v1.1.0"
+  branch = "master"
+  name = "github.com/centrifugal/centrifuge"
+  packages = [
+    ".",
+    "internal/auth",
+    "internal/priority",
+    "internal/proto",
+    "internal/proto/apiproto",
+    "internal/proto/controlproto",
+    "internal/queue"
+  ]
+  revision = "6a2fc23e68b070855d1f4684a6dc25538a9535e1"
 
 [[projects]]
   name = "github.com/garyburd/redigo"
@@ -38,11 +40,8 @@
   name = "github.com/gogo/protobuf"
   packages = [
     "gogoproto",
-    "jsonpb",
     "proto",
-    "protoc-gen-gogo/descriptor",
-    "sortkeys",
-    "types"
+    "protoc-gen-gogo/descriptor"
   ]
   revision = "342cbe0a04158f6dcb03ca0079991a51a4248c02"
   version = "v0.5"
@@ -90,12 +89,6 @@
   version = "v1.0.0"
 
 [[projects]]
-  name = "github.com/pmezard/go-difflib"
-  packages = ["difflib"]
-  revision = "792786c7400a136282c1664665ae0a8db921c6c2"
-  version = "v1.0.0"
-
-[[projects]]
   name = "github.com/prometheus/client_golang"
   packages = ["prometheus"]
   revision = "c5b7fccd204277076155f10851dad72b76a49317"
@@ -135,12 +128,6 @@
   version = "v1.2.0"
 
 [[projects]]
-  name = "github.com/stretchr/testify"
-  packages = ["assert"]
-  revision = "12b6f73e6084dad08a7c6e575284b177ecafbc71"
-  version = "v1.2.1"
-
-[[projects]]
   branch = "master"
   name = "golang.org/x/net"
   packages = [
@@ -155,7 +142,6 @@
   revision = "cbe0f9307d0156177f9dd5dc85da1a31abc5f2fb"
 
 [[projects]]
-  branch = "master"
   name = "golang.org/x/text"
   packages = [
     "collate",
@@ -173,7 +159,8 @@
     "unicode/norm",
     "unicode/rangetable"
   ]
-  revision = "4e4a3210bb54bb31f6ab2cdca2edcc0b50c420c1"
+  revision = "f21a4dfb5e38f5895301dc265a8def02365cc3d0"
+  version = "v0.3.0"
 
 [[projects]]
   branch = "master"
@@ -214,6 +201,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "6ac5e81bb1525ee8fd7b5571871bf403747f56e92aac934cbb68bc2763b4cfff"
+  inputs-digest = "99d62d4f3f6eb7415fa425e3952eac883013f721e370c741804209f4974a57e4"
   solver-name = "gps-cdcl"
   solver-version = 1
