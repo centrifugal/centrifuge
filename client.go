@@ -15,17 +15,17 @@ import (
 // Client interface contains functions to inspect and control client
 // connection.
 type Client interface {
-	// ID returns unique connection id.
+	// ID returns unique client connection id.
 	ID() string
-	// User return user ID associated with connection.
+	// User return user ID associated with client connection.
 	UserID() string
-	// Channels returns a slice of channels connection subscribed to at moment.
+	// Channels returns a slice of channels client connection subscribed to at moment.
 	Channels() []string
-	// TransportName returns name of transport used.
+	// Transport returns transport used by client connection.
 	Transport() Transport
-	// Unsubscribe allows to unsubscribe connection from channel.
+	// Unsubscribe allows to unsubscribe client connection from channel.
 	Unsubscribe(channel string) error
-	// Close closes client's connection.
+	// Close closes client connection.
 	Close(*Disconnect) error
 }
 
