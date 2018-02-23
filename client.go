@@ -23,8 +23,6 @@ type Client interface {
 	Channels() []string
 	// TransportName returns name of transport used.
 	Transport() Transport
-	// Handle data coming from connection transport.
-	Handle(*proto.Command) (*proto.Reply, *Disconnect)
 	// Unsubscribe allows to unsubscribe connection from channel.
 	Unsubscribe(channel string) error
 	// Close closes client's connection.
@@ -71,7 +69,7 @@ type client struct {
 }
 
 // newClient creates new client connection.
-func newClient(ctx context.Context, n *Node, t Transport, conf clientConfig) Client {
+func newClient(ctx context.Context, n *Node, t Transport, conf clientConfig) *client {
 	c := &client{
 		ctx:       ctx,
 		uid:       uuid.NewV4().String(),
@@ -276,8 +274,8 @@ func (c *client) info(ch string) *proto.ClientInfo {
 	}
 }
 
-// Handle dispatches Command into correct command handler.
-func (c *client) Handle(command *proto.Command) (*proto.Reply, *Disconnect) {
+// handle dispatches Command into correct command handler.
+func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

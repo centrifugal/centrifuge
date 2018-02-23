@@ -914,7 +914,7 @@ func LogRequest(n *Node, h http.Handler) http.Handler {
 }
 
 // common data handling logic for Websocket and Sockjs handlers.
-func handleClientData(n *Node, c Client, data []byte, transport Transport, writer *writer) bool {
+func handleClientData(n *Node, c *client, data []byte, transport Transport, writer *writer) bool {
 	transportBytesIn.WithLabelValues(transport.Name()).Add(float64(len(data)))
 
 	if len(data) == 0 {
@@ -945,7 +945,7 @@ func handleClientData(n *Node, c Client, data []byte, transport Transport, write
 			proto.PutReplyEncoder(transport.Encoding(), encoder)
 			return false
 		}
-		rep, disconnect := c.Handle(cmd)
+		rep, disconnect := c.handle(cmd)
 		if disconnect != nil {
 			n.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			transport.Close(disconnect)
