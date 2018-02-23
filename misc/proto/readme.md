@@ -9,13 +9,13 @@ go get github.com/hairyhenderson/gomplate
 Generate for cross-language API client usage:
 
 ```
-gomplate -f $GOPATH/src/github.com/centrifugal/centrifugo/extras/proto/api.template.proto > $GOPATH/src/github.com/centrifugal/centrifugo/extras/proto/api.proto
+gomplate -f $GOPATH/src/github.com/centrifugal/centrifuge/misc/proto/api.template.proto > $GOPATH/src/github.com/centrifugal/centrifuge/misc/proto/api.proto
 ```
 
-Generate for internal Centrifugo usage.
+Generate for internal Centrifuge library usage.
 
 ```
-GOGO=1 gomplate -f $GOPATH/src/github.com/centrifugal/centrifugo/extras/proto/api.template.proto > $GOPATH/src/github.com/centrifugal/centrifugo/lib/proto/apiproto/api.proto
+GOGO=1 gomplate -f $GOPATH/src/github.com/centrifugal/centrifuge/misc/proto/api.template.proto > $GOPATH/src/github.com/centrifugal/centrifuge/internal/proto/apiproto/api.proto
 ```
 
 ### Client proto
@@ -23,13 +23,13 @@ GOGO=1 gomplate -f $GOPATH/src/github.com/centrifugal/centrifugo/extras/proto/ap
 Generate for cross-language client usage:
 
 ```
-gomplate -f $GOPATH/src/github.com/centrifugal/centrifugo/extras/proto/client.template.proto > $GOPATH/src/github.com/centrifugal/centrifugo/extras/proto/client.proto
+gomplate -f $GOPATH/src/github.com/centrifugal/centrifuge/misc/proto/client.template.proto > $GOPATH/src/github.com/centrifugal/centrifuge/misc/proto/client.proto
 ```
 
-Generate for internal Centrifugo usage.
+Generate for internal Centrifuge library usage.
 
 ```
-GOGO=1 gomplate -f $GOPATH/src/github.com/centrifugal/centrifugo/extras/proto/client.template.proto > $GOPATH/src/github.com/centrifugal/centrifugo/lib/proto/client.proto
+GOGO=1 gomplate -f $GOPATH/src/github.com/centrifugal/centrifuge/misc/proto/client.template.proto > $GOPATH/src/github.com/centrifugal/centrifuge/internal/proto/client.proto
 ```
 
 ### API examples
@@ -42,7 +42,7 @@ import api_pb2_grpc as api_grpc
 import api_pb2 as api_pb
 
 channel = grpc.insecure_channel('localhost:8001')
-stub = api_grpc.CentrifugoStub(channel)
+stub = api_grpc.CentrifugeStub(channel)
 
 try:
     resp = stub.Info(api_pb.InfoRequest())

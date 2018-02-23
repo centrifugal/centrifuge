@@ -85,7 +85,7 @@ type shard struct {
 
 // RedisEngineConfig of Redis Engine.
 type RedisEngineConfig struct {
-	shards []*ShardConfig
+	Shards []*ShardConfig
 }
 
 // ShardConfig is struct with Redis Engine options.
@@ -274,11 +274,11 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 
 	var shards []*shard
 
-	if len(config.shards) > 1 {
-		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("Redis sharding enabled: %d shards", len(config.shards))))
+	if len(config.Shards) > 1 {
+		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("Redis sharding enabled: %d shards", len(config.Shards))))
 	}
 
-	for _, conf := range config.shards {
+	for _, conf := range config.Shards {
 		shard, err := newShard(n, conf)
 		if err != nil {
 			return nil, err
@@ -532,7 +532,7 @@ func (e *shard) Run() error {
 }
 
 // Shutdown shuts down Redis engine.
-func (e *RedisEngine) Shutdown() error {
+func (e *RedisEngine) shutdown() error {
 	return errors.New("Shutdown not implemented")
 }
 

@@ -8,12 +8,6 @@
   revision = "76bd05e8e22f9f8f5e1dd6d3a85b7951da7cce57"
 
 [[projects]]
-  name = "github.com/FZambia/statik"
-  packages = ["fs"]
-  revision = "fd36b3595eb2ec8da4b8153b107f7ea08504899d"
-  version = "v0.1.1"
-
-[[projects]]
   branch = "master"
   name = "github.com/beorn7/perks"
   packages = ["quantile"]
@@ -58,12 +52,6 @@
   ]
   revision = "925541529c1fa6821df4e44ce2723319eb2be768"
   version = "v1.0.0"
-
-[[projects]]
-  name = "github.com/gorilla/securecookie"
-  packages = ["."]
-  revision = "667fe4e3466a040b780561fe9b51a83a3753eefc"
-  version = "v1.1"
 
 [[projects]]
   name = "github.com/gorilla/websocket"
@@ -214,6 +202,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "6ac5e81bb1525ee8fd7b5571871bf403747f56e92aac934cbb68bc2763b4cfff"
+  inputs-digest = "1f1858b6ff540e03e18ca122859bb9f3bfed8b9e00c62bcc10438ff1a870cefe"
   solver-name = "gps-cdcl"
   solver-version = 1
