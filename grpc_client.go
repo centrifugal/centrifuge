@@ -15,7 +15,7 @@ import (
 
 // RegisterGRPCServerClient ...
 func RegisterGRPCServerClient(n *Node, server *grpc.Server, config GRPCClientServiceConfig) error {
-	proto.RegisterCentrifugoServer(server, newGRPCClientService(n, config))
+	proto.RegisterCentrifugeServer(server, newGRPCClientService(n, config))
 	return nil
 }
 
@@ -40,7 +40,7 @@ const replyBufferSize = 64
 
 // Communicate is a bidirectional stream reading Command and
 // sending Reply to client.
-func (s *grpcClientService) Communicate(stream proto.Centrifugo_CommunicateServer) error {
+func (s *grpcClientService) Communicate(stream proto.Centrifuge_CommunicateServer) error {
 
 	replies := make(chan *proto.Reply, replyBufferSize)
 	transport := newGRPCTransport(stream, replies)
@@ -94,16 +94,20 @@ func (s *grpcClientService) Communicate(stream proto.Centrifugo_CommunicateServe
 	return nil
 }
 
+const (
+	transportGRPC = "grpc"
+)
+
 // grpcTransport represents wrapper over stream to work with it
 // from outside in abstract way.
 type grpcTransport struct {
 	mu      sync.Mutex
 	closed  bool
-	stream  proto.Centrifugo_CommunicateServer
+	stream  proto.Centrifuge_CommunicateServer
 	replies chan *proto.Reply
 }
 
-func newGRPCTransport(stream proto.Centrifugo_CommunicateServer, replies chan *proto.Reply) *grpcTransport {
+func newGRPCTransport(stream proto.Centrifuge_CommunicateServer, replies chan *proto.Reply) *grpcTransport {
 	return &grpcTransport{
 		stream:  stream,
 		replies: replies,

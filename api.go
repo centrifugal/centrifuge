@@ -45,7 +45,7 @@ func (h *apiExecutor) Publish(ctx context.Context, cmd *apiproto.PublishRequest)
 		publication.UID = cmd.UID
 	}
 
-	err := <-h.node.Publish(cmd.Channel, publication, &chOpts)
+	err := <-h.node.publish(cmd.Channel, publication, &chOpts)
 	if err != nil {
 		h.node.logger.log(newLogEntry(LogLevelError, "error publishing message in engine", map[string]interface{}{"error": err.Error()}))
 		resp.Error = apiproto.ErrInternalServerError
@@ -96,7 +96,7 @@ func (h *apiExecutor) Broadcast(ctx context.Context, cmd *apiproto.BroadcastRequ
 		if cmd.UID != "" {
 			publication.UID = cmd.UID
 		}
-		errs[i] = h.node.Publish(ch, publication, &chOpts)
+		errs[i] = h.node.publish(ch, publication, &chOpts)
 	}
 
 	var firstErr error

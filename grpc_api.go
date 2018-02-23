@@ -12,7 +12,7 @@ type GRPCAPIServiceConfig struct{}
 
 // RegisterGRPCServerAPI ...
 func RegisterGRPCServerAPI(n *Node, server *grpc.Server, config GRPCAPIServiceConfig) error {
-	apiproto.RegisterCentrifugoServer(server, newGRPCAPIService(n, config))
+	apiproto.RegisterCentrifugeServer(server, newGRPCAPIService(n, config))
 	return nil
 }
 

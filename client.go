@@ -1009,7 +1009,11 @@ func (c *client) unsubscribeCmd(cmd *proto.UnsubscribeRequest) (*proto.Unsubscri
 
 	err := c.unsubscribe(channel)
 	if err != nil {
-		resp.Error = ErrInternalServerError
+		if err == ErrNamespaceNotFound {
+			resp.Error = ErrNamespaceNotFound
+		} else {
+			resp.Error = ErrInternalServerError
+		}
 		return resp, nil
 	}
 
@@ -1068,7 +1072,7 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 		})
 	}
 
-	err := <-c.node.Publish(ch, publication, &chOpts)
+	err := <-c.node.publish(ch, publication, &chOpts)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error publishing", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		resp.Error = ErrInternalServerError

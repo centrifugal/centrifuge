@@ -20,6 +20,11 @@ import (
 	"github.com/igm/sockjs-go/sockjs"
 )
 
+const (
+	transportWebsocket = "websocket"
+	transportSockJS    = "sockjs"
+)
+
 // AdminConfig ...
 type AdminConfig struct {
 	// WebPath is path to admin web application to serve.
@@ -502,7 +507,7 @@ func newSockjsTransport(s sockjs.Session, w *writer) *sockjsTransport {
 }
 
 func (t *sockjsTransport) Name() string {
-	return "sockjs"
+	return transportSockJS
 }
 
 func (t *sockjsTransport) Encoding() proto.Encoding {
@@ -526,8 +531,8 @@ func (t *sockjsTransport) write(data ...[]byte) error {
 	default:
 		for _, payload := range data {
 			// TODO: can actually be sent in single message as streaming JSON.
-			transportMessagesSent.WithLabelValues("sockjs").Inc()
-			transportBytesOut.WithLabelValues("sockjs").Add(float64(len(data)))
+			transportMessagesSent.WithLabelValues(transportSockJS).Inc()
+			transportBytesOut.WithLabelValues(transportSockJS).Add(float64(len(data)))
 			err := t.session.Send(string(payload))
 			if err != nil {
 				t.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
@@ -622,7 +627,7 @@ func newSockJSHandler(s *SockjsHandler, sockjsPrefix string, sockjsOpts sockjs.O
 
 // sockJSHandler called when new client connection comes to SockJS endpoint.
 func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
-	transportConnectCount.WithLabelValues("sockjs").Inc()
+	transportConnectCount.WithLabelValues(transportSockJS).Inc()
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
@@ -719,7 +724,7 @@ func (t *websocketTransport) addPing() {
 }
 
 func (t *websocketTransport) Name() string {
-	return "websocket"
+	return transportWebsocket
 }
 
 func (t *websocketTransport) Encoding() proto.Encoding {
@@ -773,8 +778,8 @@ func (t *websocketTransport) write(data ...[]byte) error {
 			if t.opts.writeTimeout > 0 {
 				t.conn.SetWriteDeadline(time.Time{})
 			}
-			transportMessagesSent.WithLabelValues("websocket").Add(float64(len(data)))
-			transportBytesOut.WithLabelValues("websocket").Add(float64(bytesOut))
+			transportMessagesSent.WithLabelValues(transportWebsocket).Add(float64(len(data)))
+			transportBytesOut.WithLabelValues(transportWebsocket).Add(float64(bytesOut))
 		}
 		return err
 	}
@@ -847,7 +852,7 @@ func NewWebsocketHandler(n *Node, c WebsocketConfig) *WebsocketHandler {
 }
 
 func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	transportConnectCount.WithLabelValues("websocket").Inc()
+	transportConnectCount.WithLabelValues(transportWebsocket).Inc()
 
 	wsCompression := s.config.WebsocketCompression
 	wsCompressionLevel := s.config.WebsocketCompressionLevel
@@ -1067,9 +1072,11 @@ func LogRequest(n *Node, h http.Handler) http.Handler {
 
 // common data handling logic for Websocket and Sockjs handlers.
 func handleClientData(n *Node, c Client, data []byte, transport Transport, writer *writer) bool {
+	transportBytesIn.WithLabelValues(transport.Name()).Add(float64(len(data)))
+
 	if len(data) == 0 {
 		n.logger.log(newLogEntry(LogLevelError, "empty client request received"))
-		transport.Close(&Disconnect{Reason: ErrBadRequest.Error(), Reconnect: false})
+		transport.Close(DisconnectBadRequest)
 		return false
 	}
 
@@ -1108,7 +1115,7 @@ func handleClientData(n *Node, c Client, data []byte, transport Transport, write
 			err = encoder.Encode(rep)
 			if err != nil {
 				n.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-				transport.Close(&Disconnect{Reason: "internal error", Reconnect: true})
+				transport.Close(DisconnectServerError)
 				return false
 			}
 		}

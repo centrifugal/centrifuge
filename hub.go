@@ -6,30 +6,9 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 )
 
-// hub is an interface describing current client connections to node and
-// actions we can do with them.
-type hub interface {
-	Add(c Client) error
-	Remove(c Client) error
-	AddSub(ch string, c Client) (bool, error)
-	RemoveSub(ch string, c Client) (bool, error)
-	BroadcastPublication(ch string, publication *proto.Publication) error
-	BroadcastJoin(ch string, join *proto.Join) error
-	BroadcastLeave(ch string, leave *proto.Leave) error
-	NumSubscribers(ch string) int
-	NumClients() int
-	NumUsers() int
-	NumChannels() int
-	Channels() []string
-	UserConnections(user string) map[string]Client
-	Unsubscribe(user string, channel string) error
-	Disconnect(user string, reconnect bool) error
-	Shutdown() error
-}
-
-// clientHub manages client connections.
-type clientHub struct {
-	sync.RWMutex
+// Hub manages client connections.
+type Hub struct {
+	mu sync.RWMutex
 
 	// match ConnID with actual client connection.
 	conns map[string]Client
@@ -41,9 +20,9 @@ type clientHub struct {
 	subs map[string]map[string]struct{}
 }
 
-// newHub initializes clientHub.
-func newHub() hub {
-	return &clientHub{
+// newHub initializes Hub.
+func newHub() *Hub {
+	return &Hub{
 		conns: make(map[string]Client),
 		users: make(map[string]map[string]struct{}),
 		subs:  make(map[string]map[string]struct{}),
@@ -51,18 +30,18 @@ func newHub() hub {
 }
 
 var (
-	// ShutdownSemaphoreChanBufferSize limits graceful disconnects concurrency on
+	// hubShutdownSemaphoreSize limits graceful disconnects concurrency on
 	// node shutdown.
-	ShutdownSemaphoreChanBufferSize = 1000
+	hubShutdownSemaphoreSize = 1000
 )
 
-// Shutdown unsubscribes users from all channels and disconnects them.
-func (h *clientHub) Shutdown() error {
+// shutdown unsubscribes users from all channels and disconnects them.
+func (h *Hub) shutdown() error {
 	var wg sync.WaitGroup
-	h.RLock()
+	h.mu.RLock()
 	advice := DisconnectShutdown
 	// Limit concurrency here to prevent memory burst on shutdown.
-	sem := make(chan struct{}, ShutdownSemaphoreChanBufferSize)
+	sem := make(chan struct{}, hubShutdownSemaphoreSize)
 	for _, user := range h.users {
 		wg.Add(len(user))
 		for uid := range user {
@@ -79,12 +58,12 @@ func (h *clientHub) Shutdown() error {
 			}(cc)
 		}
 	}
-	h.RUnlock()
+	h.mu.RUnlock()
 	wg.Wait()
 	return nil
 }
 
-func (h *clientHub) Disconnect(user string, reconnect bool) error {
+func (h *Hub) disconnect(user string, reconnect bool) error {
 	userConnections := h.UserConnections(user)
 	advice := &Disconnect{Reason: "disconnect", Reconnect: reconnect}
 	for _, c := range userConnections {
@@ -95,7 +74,7 @@ func (h *clientHub) Disconnect(user string, reconnect bool) error {
 	return nil
 }
 
-func (h *clientHub) Unsubscribe(user string, ch string) error {
+func (h *Hub) unsubscribe(user string, ch string) error {
 	userConnections := h.UserConnections(user)
 	for _, c := range userConnections {
 		var channels []string
@@ -116,10 +95,10 @@ func (h *clientHub) Unsubscribe(user string, ch string) error {
 	return nil
 }
 
-// Add adds connection into clientHub connections registry.
-func (h *clientHub) Add(c Client) error {
-	h.Lock()
-	defer h.Unlock()
+// add adds connection into clientHub connections registry.
+func (h *Hub) add(c Client) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	uid := c.ID()
 	user := c.UserID()
@@ -135,9 +114,9 @@ func (h *clientHub) Add(c Client) error {
 }
 
 // Remove removes connection from clientHub connections registry.
-func (h *clientHub) Remove(c Client) error {
-	h.Lock()
-	defer h.Unlock()
+func (h *Hub) remove(c Client) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	uid := c.ID()
 	user := c.UserID()
@@ -163,12 +142,12 @@ func (h *clientHub) Remove(c Client) error {
 	return nil
 }
 
-// userConnections returns all connections of user with specified UserID.
-func (h *clientHub) UserConnections(user string) map[string]Client {
-	h.RLock()
-	defer h.RUnlock()
+// UserConnections returns all connections of user with specified UserID.
+func (h *Hub) UserConnections(userID string) map[string]Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 
-	userConnections, ok := h.users[user]
+	userConnections, ok := h.users[userID]
 	if !ok {
 		return map[string]Client{}
 	}
@@ -186,10 +165,10 @@ func (h *clientHub) UserConnections(user string) map[string]Client {
 	return conns
 }
 
-// AddSub adds connection into clientHub subscriptions registry.
-func (h *clientHub) AddSub(ch string, c Client) (bool, error) {
-	h.Lock()
-	defer h.Unlock()
+// addSub adds connection into clientHub subscriptions registry.
+func (h *Hub) addSub(ch string, c Client) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	uid := c.ID()
 
@@ -206,10 +185,10 @@ func (h *clientHub) AddSub(ch string, c Client) (bool, error) {
 	return false, nil
 }
 
-// RemoveSub removes connection from clientHub subscriptions registry.
-func (h *clientHub) RemoveSub(ch string, c Client) (bool, error) {
-	h.Lock()
-	defer h.Unlock()
+// removeSub removes connection from clientHub subscriptions registry.
+func (h *Hub) removeSub(ch string, c Client) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	uid := c.ID()
 
@@ -233,10 +212,10 @@ func (h *clientHub) RemoveSub(ch string, c Client) (bool, error) {
 	return false, nil
 }
 
-// Broadcast sends message to all clients subscribed on channel.
-func (h *clientHub) BroadcastPublication(channel string, publication *proto.Publication) error {
-	h.RLock()
-	defer h.RUnlock()
+// broadcast sends message to all clients subscribed on channel.
+func (h *Hub) broadcastPublication(channel string, publication *proto.Publication) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 
 	// get connections currently subscribed on channel
 	channelSubscriptions, ok := h.subs[channel]
@@ -291,10 +270,10 @@ func (h *clientHub) BroadcastPublication(channel string, publication *proto.Publ
 	return nil
 }
 
-// BroadcastJoin sends message to all clients subscribed on channel.
-func (h *clientHub) BroadcastJoin(channel string, join *proto.Join) error {
-	h.RLock()
-	defer h.RUnlock()
+// broadcastJoin sends message to all clients subscribed on channel.
+func (h *Hub) broadcastJoin(channel string, join *proto.Join) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 
 	// get connections currently subscribed on channel
 	channelSubscriptions, ok := h.subs[channel]
@@ -349,10 +328,10 @@ func (h *clientHub) BroadcastJoin(channel string, join *proto.Join) error {
 	return nil
 }
 
-// Broadcast sends message to all clients subscribed on channel.
-func (h *clientHub) BroadcastLeave(channel string, leave *proto.Leave) error {
-	h.RLock()
-	defer h.RUnlock()
+// broadcastLeave sends message to all clients subscribed on channel.
+func (h *Hub) broadcastLeave(channel string, leave *proto.Leave) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 
 	// get connections currently subscribed on channel
 	channelSubscriptions, ok := h.subs[channel]
@@ -408,9 +387,9 @@ func (h *clientHub) BroadcastLeave(channel string, leave *proto.Leave) error {
 }
 
 // NumClients returns total number of client connections.
-func (h *clientHub) NumClients() int {
-	h.RLock()
-	defer h.RUnlock()
+func (h *Hub) NumClients() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	total := 0
 	for _, clientConnections := range h.users {
 		total += len(clientConnections)
@@ -419,23 +398,23 @@ func (h *clientHub) NumClients() int {
 }
 
 // NumUsers returns a number of unique users connected.
-func (h *clientHub) NumUsers() int {
-	h.RLock()
-	defer h.RUnlock()
+func (h *Hub) NumUsers() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	return len(h.users)
 }
 
 // NumChannels returns a total number of different channels.
-func (h *clientHub) NumChannels() int {
-	h.RLock()
-	defer h.RUnlock()
+func (h *Hub) NumChannels() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	return len(h.subs)
 }
 
 // Channels returns a slice of all active channels.
-func (h *clientHub) Channels() []string {
-	h.RLock()
-	defer h.RUnlock()
+func (h *Hub) Channels() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	channels := make([]string, len(h.subs))
 	i := 0
 	for ch := range h.subs {
@@ -446,9 +425,9 @@ func (h *clientHub) Channels() []string {
 }
 
 // NumSubscribers returns number of current subscribers for a given channel.
-func (h *clientHub) NumSubscribers(ch string) int {
-	h.RLock()
-	defer h.RUnlock()
+func (h *Hub) NumSubscribers(ch string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	conns, ok := h.subs[ch]
 	if !ok {
 		return 0

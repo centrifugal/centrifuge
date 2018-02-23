@@ -41,7 +41,7 @@ type Engine interface {
 	// Unsubscribe node from channel.
 	unsubscribe(ch string) error
 	// Channels returns slice of currently active channels (with
-	// one or more subscribers) on all Centrifugo nodes.
+	// one or more subscribers) on all Centrifuge nodes.
 	channels() ([]string, error)
 
 	// AddPresence sets or updates presence information in channel

@@ -2161,44 +2161,44 @@ var _ grpc.ClientConn
 // is compatible with the grpc package it is being compiled against.
 const _ = grpc.SupportPackageIsVersion4
 
-// Client API for Centrifugo service
+// Client API for Centrifuge service
 
-type CentrifugoClient interface {
-	Communicate(ctx context.Context, opts ...grpc.CallOption) (Centrifugo_CommunicateClient, error)
+type CentrifugeClient interface {
+	Communicate(ctx context.Context, opts ...grpc.CallOption) (Centrifuge_CommunicateClient, error)
 }
 
-type centrifugoClient struct {
+type centrifugeClient struct {
 	cc *grpc.ClientConn
 }
 
-func NewCentrifugoClient(cc *grpc.ClientConn) CentrifugoClient {
-	return &centrifugoClient{cc}
+func NewCentrifugeClient(cc *grpc.ClientConn) CentrifugeClient {
+	return &centrifugeClient{cc}
 }
 
-func (c *centrifugoClient) Communicate(ctx context.Context, opts ...grpc.CallOption) (Centrifugo_CommunicateClient, error) {
-	stream, err := grpc.NewClientStream(ctx, &_Centrifugo_serviceDesc.Streams[0], c.cc, "/proto.Centrifugo/Communicate", opts...)
+func (c *centrifugeClient) Communicate(ctx context.Context, opts ...grpc.CallOption) (Centrifuge_CommunicateClient, error) {
+	stream, err := grpc.NewClientStream(ctx, &_Centrifuge_serviceDesc.Streams[0], c.cc, "/proto.Centrifuge/Communicate", opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &centrifugoCommunicateClient{stream}
+	x := &centrifugeCommunicateClient{stream}
 	return x, nil
 }
 
-type Centrifugo_CommunicateClient interface {
+type Centrifuge_CommunicateClient interface {
 	Send(*Command) error
 	Recv() (*Reply, error)
 	grpc.ClientStream
 }
 
-type centrifugoCommunicateClient struct {
+type centrifugeCommunicateClient struct {
 	grpc.ClientStream
 }
 
-func (x *centrifugoCommunicateClient) Send(m *Command) error {
+func (x *centrifugeCommunicateClient) Send(m *Command) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *centrifugoCommunicateClient) Recv() (*Reply, error) {
+func (x *centrifugeCommunicateClient) Recv() (*Reply, error) {
 	m := new(Reply)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -2206,35 +2206,35 @@ func (x *centrifugoCommunicateClient) Recv() (*Reply, error) {
 	return m, nil
 }
 
-// Server API for Centrifugo service
+// Server API for Centrifuge service
 
-type CentrifugoServer interface {
-	Communicate(Centrifugo_CommunicateServer) error
+type CentrifugeServer interface {
+	Communicate(Centrifuge_CommunicateServer) error
 }
 
-func RegisterCentrifugoServer(s *grpc.Server, srv CentrifugoServer) {
-	s.RegisterService(&_Centrifugo_serviceDesc, srv)
+func RegisterCentrifugeServer(s *grpc.Server, srv CentrifugeServer) {
+	s.RegisterService(&_Centrifuge_serviceDesc, srv)
 }
 
-func _Centrifugo_Communicate_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(CentrifugoServer).Communicate(&centrifugoCommunicateServer{stream})
+func _Centrifuge_Communicate_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CentrifugeServer).Communicate(&centrifugeCommunicateServer{stream})
 }
 
-type Centrifugo_CommunicateServer interface {
+type Centrifuge_CommunicateServer interface {
 	Send(*Reply) error
 	Recv() (*Command, error)
 	grpc.ServerStream
 }
 
-type centrifugoCommunicateServer struct {
+type centrifugeCommunicateServer struct {
 	grpc.ServerStream
 }
 
-func (x *centrifugoCommunicateServer) Send(m *Reply) error {
+func (x *centrifugeCommunicateServer) Send(m *Reply) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func (x *centrifugoCommunicateServer) Recv() (*Command, error) {
+func (x *centrifugeCommunicateServer) Recv() (*Command, error) {
 	m := new(Command)
 	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -2242,14 +2242,14 @@ func (x *centrifugoCommunicateServer) Recv() (*Command, error) {
 	return m, nil
 }
 
-var _Centrifugo_serviceDesc = grpc.ServiceDesc{
-	ServiceName: "proto.Centrifugo",
-	HandlerType: (*CentrifugoServer)(nil),
+var _Centrifuge_serviceDesc = grpc.ServiceDesc{
+	ServiceName: "proto.Centrifuge",
+	HandlerType: (*CentrifugeServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Communicate",
-			Handler:       _Centrifugo_Communicate_Handler,
+			Handler:       _Centrifuge_Communicate_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},
@@ -9171,10 +9171,10 @@ var fileDescriptorClient = []byte{
 	0x7a, 0xfc, 0x10, 0xa2, 0x5f, 0x1d, 0x57, 0x6b, 0x12, 0x92, 0x73, 0xa3, 0x71, 0x71, 0x55, 0x40,
 	0xb1, 0x6f, 0x0f, 0x0a, 0xc4, 0x0e, 0x2b, 0xfb, 0xbf, 0xa2, 0xe9, 0x5a, 0x1f, 0x8d, 0x8b, 0x92,
 	0xb0, 0xef, 0x7f, 0x5e, 0x50, 0x20, 0xc6, 0x72, 0x25, 0x45, 0xae, 0x00, 0x58, 0x9a, 0x7c, 0x1b,
-	0x77, 0xf7, 0x00, 0xca, 0xc4, 0x70, 0x2c, 0xfd, 0xcc, 0xed, 0x9a, 0xf8, 0x67, 0x90, 0x2a, 0x9b,
-	0xfd, 0xbe, 0x6b, 0x50, 0x2b, 0x08, 0xce, 0x06, 0xff, 0xb0, 0xd9, 0x37, 0x45, 0x39, 0x1d, 0xfc,
-	0x9f, 0x1a, 0xf4, 0x86, 0xea, 0xd2, 0x16, 0xfa, 0x10, 0x95, 0xde, 0xff, 0xef, 0xbf, 0x0a, 0xe8,
-	0x2f, 0x97, 0x05, 0xf4, 0xb7, 0xcb, 0x02, 0x7a, 0x75, 0x59, 0x40, 0xaf, 0x2f, 0x0b, 0xe8, 0x9f,
-	0x97, 0x05, 0xf4, 0xdd, 0xbf, 0x0b, 0x4b, 0xa7, 0x2b, 0x8c, 0xe1, 0xa3, 0xff, 0x05, 0x00, 0x00,
-	0xff, 0xff, 0x29, 0x5b, 0x7f, 0xe7, 0x2c, 0x15, 0x00, 0x00,
+	0x77, 0xf7, 0x00, 0xca, 0xc4, 0x70, 0x2c, 0xfd, 0xcc, 0xed, 0x12, 0xfc, 0x33, 0x48, 0x95, 0xcd,
+	0x7e, 0xdf, 0x35, 0xa8, 0x15, 0x04, 0x67, 0x83, 0x7f, 0xd8, 0xec, 0x9b, 0xa2, 0x9c, 0x0e, 0xfe,
+	0x4f, 0x0d, 0x7a, 0x43, 0x75, 0x69, 0x0b, 0x7d, 0x88, 0x4a, 0xef, 0xff, 0xf7, 0x5f, 0x05, 0xf4,
+	0x97, 0xcb, 0x02, 0xfa, 0xdb, 0x65, 0x01, 0xbd, 0xba, 0x2c, 0xa0, 0xd7, 0x97, 0x05, 0xf4, 0xcf,
+	0xcb, 0x02, 0xfa, 0xee, 0xdf, 0x85, 0xa5, 0xd3, 0x15, 0xc6, 0xf0, 0xd1, 0xff, 0x02, 0x00, 0x00,
+	0xff, 0xff, 0x6a, 0x91, 0xfd, 0x8f, 0x2c, 0x15, 0x00, 0x00,
 }

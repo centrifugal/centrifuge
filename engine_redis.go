@@ -149,7 +149,7 @@ func (sr *subRequest) done(err error) {
 
 func (sr *subRequest) result() error {
 	if sr.err == nil {
-		// No waiting, as caller didn't care about response
+		// No waiting, as caller didn't care about response.
 		return nil
 	}
 	return <-sr.err
@@ -165,11 +165,11 @@ func newPool(n *Node, conf *ShardConfig) *redis.Pool {
 	serverAddr := net.JoinHostPort(host, port)
 	useSentinel := conf.MasterName != "" && len(conf.SentinelAddrs) > 0
 
-	usingPassword := yesno(password != "")
+	usingPassword := password != ""
 	if !useSentinel {
-		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("Redis: %s/%d, pool: %d, using password: %s", serverAddr, db, conf.PoolSize, usingPassword)))
+		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("Redis: %s/%d, pool: %d, using password: %v", serverAddr, db, conf.PoolSize, usingPassword)))
 	} else {
-		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("Redis: Sentinel for name: %s, db: %d, pool: %d, using password: %s", conf.MasterName, db, conf.PoolSize, usingPassword)))
+		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("Redis: Sentinel for name: %s, db: %d, pool: %d, using password: %v", conf.MasterName, db, conf.PoolSize, usingPassword)))
 	}
 
 	var lastMu sync.Mutex
@@ -384,13 +384,6 @@ func newShard(n *Node, conf *ShardConfig) (*shard, error) {
 	shard.dataCh = make(chan dataRequest, redisDataChannelSize)
 	shard.messagePrefix = conf.Prefix + redisClientChannelPrefix
 	return shard, nil
-}
-
-func yesno(condition bool) string {
-	if condition {
-		return "yes"
-	}
-	return "no"
 }
 
 func (e *shard) messageChannelID(ch string) channelID {

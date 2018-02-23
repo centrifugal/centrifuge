@@ -2,6 +2,7 @@
 package centrifuge
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -33,7 +34,7 @@ type Node struct {
 	config Config
 
 	// hub to manage client connections.
-	hub hub
+	hub *Hub
 
 	// engine - in memory or redis.
 	engine Engine
@@ -112,12 +113,17 @@ func (n *Node) Mediator() *Mediator {
 	return n.mediator
 }
 
+// Hub returns node's Hub.
+func (n *Node) Hub() *Hub {
+	return n.hub
+}
+
 // Version returns version of node.
 func (n *Node) Version() string {
 	return n.version
 }
 
-// Reload node.
+// Reload node config.
 func (n *Node) Reload(c Config) error {
 	if err := c.Validate(); err != nil {
 		return err
@@ -148,7 +154,7 @@ func (n *Node) Run(e Engine) error {
 	if err != nil {
 		n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]interface{}{"error": err.Error()}))
 	}
-	go n.sendNodePingMsg()
+	go n.sendNodePing()
 	go n.cleanNodeInfo()
 	go n.updateMetrics()
 
@@ -165,10 +171,10 @@ func (n *Node) Shutdown() error {
 	n.shutdown = true
 	close(n.shutdownCh)
 	n.mu.Unlock()
-	return n.hub.Shutdown()
+	return n.hub.shutdown()
 }
 
-func (n *Node) updateMetricsOnce() {
+func (n *Node) updateGauges() {
 	numClientsGauge.Set(float64(n.hub.NumClients()))
 	numUsersGauge.Set(float64(n.hub.NumUsers()))
 	numChannelsGauge.Set(float64(n.hub.NumChannels()))
@@ -176,28 +182,21 @@ func (n *Node) updateMetricsOnce() {
 
 func (n *Node) updateMetrics() {
 	for {
-		n.mu.RLock()
-		interval := n.config.NodeMetricsInterval
-		n.mu.RUnlock()
 		select {
 		case <-n.shutdownCh:
 			return
-		case <-time.After(interval):
-			n.updateMetricsOnce()
+		case <-time.After(10 * time.Second):
+			n.updateGauges()
 		}
 	}
 }
 
-func (n *Node) sendNodePingMsg() {
+func (n *Node) sendNodePing() {
 	for {
-		n.mu.RLock()
-		interval := n.config.NodePingInterval
-		n.mu.RUnlock()
-
 		select {
 		case <-n.shutdownCh:
 			return
-		case <-time.After(interval):
+		case <-time.After(nodeInfoPublishInterval):
 			err := n.pubNode()
 			if err != nil {
 				n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]interface{}{"error": err.Error()}))
@@ -208,15 +207,12 @@ func (n *Node) sendNodePingMsg() {
 
 func (n *Node) cleanNodeInfo() {
 	for {
-		n.mu.RLock()
-		interval := n.config.NodeInfoCleanInterval
-		n.mu.RUnlock()
 		select {
 		case <-n.shutdownCh:
 			return
-		case <-time.After(interval):
+		case <-time.After(nodeInfoCleanInterval):
 			n.mu.RLock()
-			delay := n.config.NodeInfoMaxDelay
+			delay := nodeInfoMaxDelay
 			n.mu.RUnlock()
 			n.nodes.clean(delay)
 		}
@@ -267,26 +263,26 @@ func (n *Node) handleControl(cmd *controlproto.Command) error {
 		cmd, err := n.controlDecoder.DecodeNode(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding node control params", map[string]interface{}{"error": err.Error()}))
-			return ErrBadRequest
+			return err
 		}
 		return n.nodeCmd(cmd)
 	case controlproto.MethodTypeUnsubscribe:
 		cmd, err := n.controlDecoder.DecodeUnsubscribe(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe control params", map[string]interface{}{"error": err.Error()}))
-			return ErrBadRequest
+			return err
 		}
-		return n.hub.Unsubscribe(cmd.User, cmd.Channel)
+		return n.hub.unsubscribe(cmd.User, cmd.Channel)
 	case controlproto.MethodTypeDisconnect:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
-			return ErrBadRequest
+			return err
 		}
-		return n.hub.Disconnect(cmd.User, false)
+		return n.hub.disconnect(cmd.User, false)
 	default:
 		n.logger.log(newLogEntry(LogLevelError, "unknown control message method", map[string]interface{}{"method": method}))
-		return ErrBadRequest
+		return fmt.Errorf("control method not found: %d", method)
 	}
 }
 
@@ -326,7 +322,7 @@ func (n *Node) handlePublication(ch string, publication *Publication) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.BroadcastPublication(ch, publication)
+	return n.hub.broadcastPublication(ch, publication)
 }
 
 // handleJoin handles join messages.
@@ -336,7 +332,7 @@ func (n *Node) handleJoin(ch string, join *proto.Join) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.BroadcastJoin(ch, join)
+	return n.hub.broadcastJoin(ch, join)
 }
 
 // handleLeave handles leave messages.
@@ -346,7 +342,7 @@ func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.BroadcastLeave(ch, leave)
+	return n.hub.broadcastLeave(ch, leave)
 }
 
 func makeErrChan(err error) <-chan error {
@@ -357,7 +353,11 @@ func makeErrChan(err error) <-chan error {
 
 // Publish sends a message to all clients subscribed on channel. All running nodes
 // will receive it and will send it to all clients on node subscribed on channel.
-func (n *Node) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
+func (n *Node) Publish(ch string, pub *Publication) error {
+	return <-n.publish(ch, pub, nil)
+}
+
+func (n *Node) publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -485,20 +485,20 @@ func (n *Node) pubDisconnect(user string, reconnect bool) error {
 // this allows to make operations with user connection on demand.
 func (n *Node) addClient(c Client) error {
 	actionCount.WithLabelValues("add_client").Inc()
-	return n.hub.Add(c)
+	return n.hub.add(c)
 }
 
 // removeClient removes client connection from connection registry.
 func (n *Node) removeClient(c Client) error {
 	actionCount.WithLabelValues("remove_client").Inc()
-	return n.hub.Remove(c)
+	return n.hub.remove(c)
 }
 
 // addSubscription registers subscription of connection on channel in both
 // engine and clientSubscriptionHub.
 func (n *Node) addSubscription(ch string, c Client) error {
 	actionCount.WithLabelValues("add_subscription").Inc()
-	first, err := n.hub.AddSub(ch, c)
+	first, err := n.hub.addSub(ch, c)
 	if err != nil {
 		return err
 	}
@@ -512,7 +512,7 @@ func (n *Node) addSubscription(ch string, c Client) error {
 // from both engine and clientSubscriptionHub.
 func (n *Node) removeSubscription(ch string, c Client) error {
 	actionCount.WithLabelValues("remove_subscription").Inc()
-	empty, err := n.hub.RemoveSub(ch, c)
+	empty, err := n.hub.removeSub(ch, c)
 	if err != nil {
 		return err
 	}
@@ -544,7 +544,7 @@ func (n *Node) Unsubscribe(user string, ch string) error {
 	}
 
 	// First unsubscribe on this node.
-	err := n.hub.Unsubscribe(user, ch)
+	err := n.hub.unsubscribe(user, ch)
 	if err != nil {
 		return ErrInternalServerError
 	}
@@ -564,7 +564,7 @@ func (n *Node) Disconnect(user string, reconnect bool) error {
 	}
 
 	// first disconnect user from this node
-	err := n.hub.Disconnect(user, reconnect)
+	err := n.hub.disconnect(user, reconnect)
 	if err != nil {
 		return ErrInternalServerError
 	}

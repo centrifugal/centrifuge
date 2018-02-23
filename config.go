@@ -21,21 +21,6 @@ type Config struct {
 	// Namespaces - list of namespaces for custom channel options.
 	Namespaces []ChannelNamespace
 
-	// NodePingInterval is an interval how often node must send ping
-	// control message.
-	NodePingInterval time.Duration
-
-	// NodeInfoCleanInterval is an interval in seconds, how often node must
-	// clean information about other running nodes.
-	NodeInfoCleanInterval time.Duration
-
-	// NodeInfoMaxDelay is an interval in seconds – how many seconds node
-	// info considered actual.
-	NodeInfoMaxDelay time.Duration
-
-	// NodeMetricsInterval detects interval node will use to aggregate metrics.
-	NodeMetricsInterval time.Duration
-
 	// ClientInsecure turns on insecure mode for client connections - when it's
 	// turned on then no authentication required at all when connecting to Centrifugo,
 	// anonymous access and publish allowed for all channels, no connection expire
@@ -153,20 +138,20 @@ func (c *Config) channelOpts(namespaceName string) (ChannelOptions, bool) {
 }
 
 const (
-	// DefaultName of node.
-	DefaultName = "centrifugo"
-	// DefaultNodePingInterval used in default config.
-	DefaultNodePingInterval = 3
+	// nodeInfoPublishInterval is an interval how often node must publish node info
+	// control message.
+	nodeInfoPublishInterval = 3 * time.Second
+	// nodeInfoCleanInterval is an interval in seconds, how often node must
+	// clean information about other running nodes.
+	nodeInfoCleanInterval = nodeInfoPublishInterval * 3
+	// nodeInfoMaxDelay is an interval in seconds – how many seconds node
+	// info considered actual.
+	nodeInfoMaxDelay = nodeInfoPublishInterval*2 + time.Second
 )
 
 // DefaultConfig is Config initialized with default values for all fields.
 var DefaultConfig = Config{
-	Name: DefaultName,
-
-	NodePingInterval:      DefaultNodePingInterval * time.Second,
-	NodeInfoCleanInterval: DefaultNodePingInterval * 3 * time.Second,
-	NodeInfoMaxDelay:      DefaultNodePingInterval*2*time.Second + 1*time.Second,
-	NodeMetricsInterval:   60 * time.Second,
+	Name: "centrifugo",
 
 	ChannelMaxLength:         255,
 	ChannelPrivatePrefix:     "$", // so private channel will look like "$gossips"

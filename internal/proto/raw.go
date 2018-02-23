@@ -5,13 +5,14 @@ import (
 	"errors"
 )
 
-// Raw type used by Centrifugo as type for fields in structs which value we want to left
-// untouched. For example custom application specific JSON payload data in published message.
-// This is very similar to json.RawMessage type but have some extra methods to fit
-// gogoprotobuf custom type interface.
+// Raw type used by Centrifugo as type for fields in structs which value
+// we want to left untouched. For example custom application specific JSON
+// payload data in published message. This is very similar to json.RawMessage
+// type but have some extra methods to fit gogoprotobuf custom type interface.
 type Raw []byte
 
-// Marshal encodes Raw to slice of bytes. Exists to fit gogoprotobuf custom type interface.
+// Marshal encodes Raw to slice of bytes. Exists to fit gogoprotobuf custom
+// type interface.
 func (r Raw) Marshal() ([]byte, error) {
 	if len(r) == 0 {
 		return nil, nil

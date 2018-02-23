@@ -20,7 +20,10 @@ func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Our middleware logic goes here...
 		ctx := r.Context()
-		ctx = context.WithValue(ctx, centrifuge.CredentialsContextKey, &centrifuge.Credentials{UserID: "42"})
+		ctx = context.WithValue(ctx, centrifuge.CredentialsContextKey, &centrifuge.Credentials{
+			UserID: "42",
+			Info:   []byte(`{"name": "Alexander"}`),
+		})
 		r = r.WithContext(ctx)
 		h.ServeHTTP(w, r)
 	})
@@ -67,7 +70,7 @@ func main() {
 		result := []byte(`{"text": "rpc response"}`)
 
 		go func() {
-			err := <-node.Publish("$public:chat", &centrifuge.Publication{Data: []byte(`{"input": "Booom!"}`)}, nil)
+			err := node.Publish("$public:chat", &centrifuge.Publication{Data: []byte(`{"input": "Booom!"}`)})
 			if err != nil {
 				log.Fatalln(err)
 			}
