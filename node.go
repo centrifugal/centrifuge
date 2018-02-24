@@ -85,7 +85,7 @@ func New(c Config) *Node {
 		messageDecoder: proto.NewProtobufMessageDecoder(),
 		controlEncoder: controlproto.NewProtobufEncoder(),
 		controlDecoder: controlproto.NewProtobufDecoder(),
-		logger:         newLogger(LogLevelNone, nil),
+		logger:         nil,
 	}
 	return n
 }
