@@ -881,13 +881,6 @@ func handleClientData(n *Node, c *client, data []byte, transport Transport, writ
 			proto.PutReplyEncoder(transport.Encoding(), encoder)
 			return false
 		}
-		if cmd.ID == 0 {
-			n.logger.log(newLogEntry(LogLevelInfo, "command ID required", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-			c.Close(DisconnectBadRequest)
-			proto.PutCommandDecoder(transport.Encoding(), decoder)
-			proto.PutReplyEncoder(transport.Encoding(), encoder)
-			return false
-		}
 		rep, disconnect := c.handle(cmd)
 		if disconnect != nil {
 			n.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))

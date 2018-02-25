@@ -287,12 +287,14 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 	var replyRes []byte
 	var replyErr *proto.Error
 	var disconnect *Disconnect
-	var noReply bool
 
 	method := command.Method
 	params := command.Params
 
-	if method != proto.MethodTypeConnect && !c.authenticated {
+	if command.ID == 0 && method != proto.MethodTypeMessage {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for synchronous messages", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
+		replyErr = ErrBadRequest
+	} else if method != proto.MethodTypeConnect && !c.authenticated {
 		// Client must send connect command first.
 		replyErr = ErrUnauthorized
 	} else {
@@ -345,7 +347,6 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 				if err == nil {
 					disconnect = messageReply.Disconnect
 				}
-				noReply = true
 			} else {
 				replyRes, replyErr = nil, ErrNotAvailable
 			}
@@ -359,7 +360,7 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 		return nil, disconnect
 	}
 
-	if noReply {
+	if command.ID == 0 {
 		// Asynchronous message from client - no need to reply.
 		return nil, nil
 	}
