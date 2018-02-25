@@ -287,6 +287,7 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 	var replyRes []byte
 	var replyErr *proto.Error
 	var disconnect *Disconnect
+	var noReply bool
 
 	method := command.Method
 	params := command.Params
@@ -336,11 +337,17 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 			mediator := c.node.Mediator()
 			if mediator != nil && mediator.Message != nil {
 				messageReply, err := mediator.Message(c.ctx, &MessageContext{
+					EventContext: EventContext{
+						Client: c,
+					},
 					Data: params,
 				})
 				if err == nil {
 					disconnect = messageReply.Disconnect
 				}
+				noReply = true
+			} else {
+				replyRes, replyErr = nil, ErrNotAvailable
 			}
 		default:
 			replyRes, replyErr = nil, ErrMethodNotFound
@@ -352,7 +359,8 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 		return nil, disconnect
 	}
 
-	if command.ID == 0 {
+	if noReply {
+		// Asynchronous message from client - no need to reply.
 		return nil, nil
 	}
 
