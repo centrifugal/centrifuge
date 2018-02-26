@@ -10,6 +10,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/auth"
 	"github.com/centrifugal/centrifuge/internal/proto"
+
 	uuid "github.com/satori/go.uuid"
 )
 
