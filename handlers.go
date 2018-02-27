@@ -255,6 +255,24 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 				}
 			}
 		}
+	case apiproto.MethodTypeHistoryRemove:
+		cmd, err := decoder.DecodeHistoryRemove(params)
+		if err != nil {
+			s.node.logger.log(newLogEntry(LogLevelError, "error decoding history remove params", map[string]interface{}{"error": err.Error()}))
+			rep.Error = apiproto.ErrBadRequest
+			return rep, nil
+		}
+		resp := s.api.HistoryRemove(ctx, cmd)
+		if resp.Error != nil {
+			rep.Error = resp.Error
+		} else {
+			if resp.Result != nil {
+				replyRes, err = encoder.EncodeHistoryRemove(resp.Result)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
 	case apiproto.MethodTypeChannels:
 		resp := s.api.Channels(ctx, &apiproto.ChannelsRequest{})
 		if resp.Error != nil {
