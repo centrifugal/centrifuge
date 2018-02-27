@@ -289,6 +289,43 @@ func (h *apiExecutor) History(ctx context.Context, cmd *apiproto.HistoryRequest)
 	return resp
 }
 
+// HistoryRemove removes all history information for channel.
+func (h *apiExecutor) HistoryRemove(ctx context.Context, cmd *apiproto.HistoryRemoveRequest) *apiproto.HistoryRemoveResponse {
+
+	resp := &apiproto.HistoryRemoveResponse{}
+
+	ch := cmd.Channel
+
+	if string(ch) == "" {
+		resp.Error = apiproto.ErrBadRequest
+		return resp
+	}
+
+	chOpts, ok := h.node.ChannelOpts(ch)
+	if !ok {
+		resp.Error = apiproto.ErrNamespaceNotFound
+		return resp
+	}
+
+	if chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0 {
+		resp.Error = apiproto.ErrNotAvailable
+		return resp
+	}
+
+	err := h.node.RemoveHistory(ch)
+	if err != nil {
+		h.node.logger.log(newLogEntry(LogLevelError, "error calling history remove", map[string]interface{}{"error": err.Error()}))
+		resp.Error = apiproto.ErrInternalServerError
+		return resp
+	}
+
+	resp.Result = &apiproto.HistoryRemoveResult{
+		Success: true,
+	}
+	return resp
+}
+
+
 // Channels returns active channels.
 func (h *apiExecutor) Channels(ctx context.Context, cmd *apiproto.ChannelsRequest) *apiproto.ChannelsResponse {
 
