@@ -155,9 +155,7 @@ message HistoryRemoveResponse {
     HistoryRemoveResult result = 2 [(gogoproto.jsontag) = "result,omitempty"];
 }
 
-message HistoryRemoveResult {
-    bool Success = 1 [(gogoproto.jsontag) = "success", (gogoproto.nullable) = true];
-}
+message HistoryRemoveResult {}
 
 message ChannelsRequest {}
 

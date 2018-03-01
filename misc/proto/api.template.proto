@@ -155,9 +155,7 @@ message HistoryRemoveResponse {
     HistoryRemoveResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
 }
 
-message HistoryRemoveResult {
-    bool Success = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "success", (gogoproto.nullable) = true]{{end}};
-}
+message HistoryRemoveResult {}
 
 message ChannelsRequest {}
 

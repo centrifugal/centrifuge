@@ -145,9 +145,7 @@ message HistoryRemoveResponse {
     HistoryRemoveResult result = 2;
 }
 
-message HistoryRemoveResult {
-    bool Success = 1;
-}
+message HistoryRemoveResult {}
 
 message ChannelsRequest {}
 
