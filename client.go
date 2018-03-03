@@ -289,10 +289,10 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 
 	if command.ID == 0 && method != proto.MethodTypeMessage {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for synchronous messages", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-		replyErr = ErrBadRequest
+		replyErr = ErrorBadRequest
 	} else if method != proto.MethodTypeConnect && !c.authenticated {
 		// Client must send connect command first.
-		replyErr = ErrUnauthorized
+		replyErr = ErrorUnauthorized
 	} else {
 		started := time.Now()
 		switch method {
@@ -319,7 +319,7 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 		case proto.MethodTypeMessage:
 			disconnect = c.handleMessage(params)
 		default:
-			replyRes, replyErr = nil, ErrMethodNotFound
+			replyRes, replyErr = nil, ErrorMethodNotFound
 		}
 		commandDurationSummary.WithLabelValues(strings.ToLower(proto.MethodType_name[int32(method)])).Observe(float64(time.Since(started).Seconds()))
 	}
@@ -627,9 +627,9 @@ func (c *client) handleRPC(params proto.Raw) (proto.Raw, *proto.Error, *Disconne
 			}
 			return replyRes, nil, nil
 		}
-		return nil, ErrInternalServerError, nil
+		return nil, ErrorInternal, nil
 	}
-	return nil, ErrNotAvailable, nil
+	return nil, ErrorNotAvailable, nil
 }
 
 func (c *client) handleMessage(params proto.Raw) *Disconnect {
@@ -729,7 +729,7 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 
 	if userConnectionLimit > 0 && c.user != "" && len(c.node.hub.userConnections(c.user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": c.user, "client": c.uid, "limit": userConnectionLimit}))
-		resp.Error = ErrLimitExceeded
+		resp.Error = ErrorLimitExceeded
 		return resp, nil
 	}
 
@@ -917,48 +917,48 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 
 	if len(channel) > channelMaxLength {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long", map[string]interface{}{"max": channelMaxLength, "channel": channel, "user": c.user, "client": c.uid}))
-		resp.Error = ErrLimitExceeded
+		resp.Error = ErrorLimitExceeded
 		return resp, nil
 	}
 
 	if len(c.channels) >= channelLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]interface{}{"limit": channelLimit, "user": c.user, "client": c.uid}))
-		resp.Error = ErrLimitExceeded
+		resp.Error = ErrorLimitExceeded
 		return resp, nil
 	}
 
 	if _, ok := c.channels[channel]; ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		resp.Error = ErrAlreadySubscribed
+		resp.Error = ErrorAlreadySubscribed
 		return resp, nil
 	}
 
 	if !c.node.userAllowed(channel, c.user) || !c.node.clientAllowed(channel, c.uid) {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "user not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		resp.Error = ErrPermissionDenied
+		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
 
 	chOpts, ok := c.node.ChannelOpts(channel)
 	if !ok {
-		resp.Error = ErrNamespaceNotFound
+		resp.Error = ErrorNamespaceNotFound
 		return resp, nil
 	}
 
 	if !chOpts.Anonymous && c.user == "" && !insecure {
-		resp.Error = ErrPermissionDenied
+		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
 
 	if c.node.privateChannel(channel) {
 		// private channel - subscription must be properly signed
 		if string(c.uid) != string(cmd.Client) {
-			resp.Error = ErrPermissionDenied
+			resp.Error = ErrorPermissionDenied
 			return resp, nil
 		}
 		isValid := auth.CheckChannelSign(secret, string(cmd.Client), string(channel), cmd.Info, cmd.Sign)
 		if !isValid {
-			resp.Error = ErrPermissionDenied
+			resp.Error = ErrorPermissionDenied
 			return resp, nil
 		}
 		if len(cmd.Info) > 0 {
@@ -1032,7 +1032,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 func (c *client) unsubscribe(channel string) error {
 	chOpts, ok := c.node.ChannelOpts(channel)
 	if !ok {
-		return ErrNamespaceNotFound
+		return ErrorNamespaceNotFound
 	}
 
 	info := c.clientInfo(channel)
@@ -1088,10 +1088,10 @@ func (c *client) unsubscribeCmd(cmd *proto.UnsubscribeRequest) (*proto.Unsubscri
 
 	err := c.unsubscribe(channel)
 	if err != nil {
-		if err == ErrNamespaceNotFound {
-			resp.Error = ErrNamespaceNotFound
+		if err == ErrorNamespaceNotFound {
+			resp.Error = ErrorNamespaceNotFound
 		} else {
-			resp.Error = ErrInternalServerError
+			resp.Error = ErrorInternal
 		}
 		return resp, nil
 	}
@@ -1116,7 +1116,7 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 	resp := &proto.PublishResponse{}
 
 	if _, ok := c.channels[ch]; !ok {
-		resp.Error = ErrPermissionDenied
+		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
 
@@ -1125,14 +1125,14 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on non-existing namespace", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid}))
-		resp.Error = ErrNamespaceNotFound
+		resp.Error = ErrorNamespaceNotFound
 		return resp, nil
 	}
 
 	insecure := c.node.Config().ClientInsecure
 
 	if !chOpts.Publish && !insecure {
-		resp.Error = ErrPermissionDenied
+		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
 
@@ -1154,7 +1154,7 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 	err := <-c.node.publish(ch, publication, &chOpts)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error publishing", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
-		resp.Error = ErrInternalServerError
+		resp.Error = ErrorInternal
 		return resp, nil
 	}
 
@@ -1177,24 +1177,24 @@ func (c *client) presenceCmd(cmd *proto.PresenceRequest) (*proto.PresenceRespons
 
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
-		resp.Error = ErrNamespaceNotFound
+		resp.Error = ErrorNamespaceNotFound
 		return resp, nil
 	}
 
 	if _, ok := c.channels[ch]; !ok {
-		resp.Error = ErrPermissionDenied
+		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
 
 	if !chOpts.Presence {
-		resp.Error = ErrNotAvailable
+		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
 
 	presence, err := c.node.Presence(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting presence", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
-		resp.Error = ErrInternalServerError
+		resp.Error = ErrorInternal
 		return resp, nil
 	}
 
@@ -1217,25 +1217,25 @@ func (c *client) presenceStatsCmd(cmd *proto.PresenceStatsRequest) (*proto.Prese
 	resp := &proto.PresenceStatsResponse{}
 
 	if _, ok := c.channels[ch]; !ok {
-		resp.Error = ErrPermissionDenied
+		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
 
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
-		resp.Error = ErrNamespaceNotFound
+		resp.Error = ErrorNamespaceNotFound
 		return resp, nil
 	}
 
 	if !chOpts.Presence || !chOpts.PresenceStats {
-		resp.Error = ErrNotAvailable
+		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
 
 	presence, err := c.node.Presence(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting presence", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
-		resp.Error = ErrInternalServerError
+		resp.Error = ErrorInternal
 		return resp, nil
 	}
 
@@ -1274,25 +1274,25 @@ func (c *client) historyCmd(cmd *proto.HistoryRequest) (*proto.HistoryResponse, 
 	resp := &proto.HistoryResponse{}
 
 	if _, ok := c.channels[ch]; !ok {
-		resp.Error = ErrPermissionDenied
+		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
 
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
-		resp.Error = ErrNamespaceNotFound
+		resp.Error = ErrorNamespaceNotFound
 		return resp, nil
 	}
 
 	if chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0 {
-		resp.Error = ErrNotAvailable
+		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
 
 	publications, err := c.node.History(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting history", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
-		resp.Error = ErrInternalServerError
+		resp.Error = ErrorInternal
 		return resp, nil
 	}
 

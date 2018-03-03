@@ -354,7 +354,7 @@ func (n *Node) publish(ch string, pub *Publication, opts *ChannelOptions) <-chan
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
-			return makeErrChan(ErrNamespaceNotFound)
+			return makeErrChan(ErrorNamespaceNotFound)
 		}
 		opts = &chOpts
 	}
@@ -374,7 +374,7 @@ func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
-			return makeErrChan(ErrNamespaceNotFound)
+			return makeErrChan(ErrorNamespaceNotFound)
 		}
 		opts = &chOpts
 	}
@@ -388,7 +388,7 @@ func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions)
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
-			return makeErrChan(ErrNamespaceNotFound)
+			return makeErrChan(ErrorNamespaceNotFound)
 		}
 		opts = &chOpts
 	}
@@ -526,25 +526,25 @@ func (n *Node) nodeCmd(node *controlproto.Node) error {
 func (n *Node) Unsubscribe(user string, ch string) error {
 
 	if string(user) == "" {
-		return ErrBadRequest
+		return ErrorBadRequest
 	}
 
 	if string(ch) != "" {
 		_, ok := n.ChannelOpts(ch)
 		if !ok {
-			return ErrNamespaceNotFound
+			return ErrorNamespaceNotFound
 		}
 	}
 
 	// First unsubscribe on this node.
 	err := n.hub.unsubscribe(user, ch)
 	if err != nil {
-		return ErrInternalServerError
+		return ErrorInternal
 	}
 	// Second send unsubscribe control message to other nodes.
 	err = n.pubUnsubscribe(user, ch)
 	if err != nil {
-		return ErrInternalServerError
+		return ErrorInternal
 	}
 	return nil
 }
@@ -553,18 +553,18 @@ func (n *Node) Unsubscribe(user string, ch string) error {
 func (n *Node) Disconnect(user string, reconnect bool) error {
 
 	if string(user) == "" {
-		return ErrBadRequest
+		return ErrorBadRequest
 	}
 
 	// first disconnect user from this node
 	err := n.hub.disconnect(user, reconnect)
 	if err != nil {
-		return ErrInternalServerError
+		return ErrorInternal
 	}
 	// second send disconnect control message to other nodes
 	err = n.pubDisconnect(user, reconnect)
 	if err != nil {
-		return ErrInternalServerError
+		return ErrorInternal
 	}
 	return nil
 }

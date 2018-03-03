@@ -133,7 +133,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 		cmd, err := decoder.DecodePublish(params)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error decoding publish params", map[string]interface{}{"error": err.Error()}))
-			rep.Error = apiproto.ErrBadRequest
+			rep.Error = apiproto.ErrorBadRequest
 			return rep, nil
 		}
 		resp := s.api.Publish(ctx, cmd)
@@ -151,7 +151,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 		cmd, err := decoder.DecodeBroadcast(params)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error decoding broadcast params", map[string]interface{}{"error": err.Error()}))
-			rep.Error = apiproto.ErrBadRequest
+			rep.Error = apiproto.ErrorBadRequest
 			return rep, nil
 		}
 		resp := s.api.Broadcast(ctx, cmd)
@@ -169,7 +169,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 		cmd, err := decoder.DecodeUnsubscribe(params)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe params", map[string]interface{}{"error": err.Error()}))
-			rep.Error = apiproto.ErrBadRequest
+			rep.Error = apiproto.ErrorBadRequest
 			return rep, nil
 		}
 		resp := s.api.Unsubscribe(ctx, cmd)
@@ -187,7 +187,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 		cmd, err := decoder.DecodeDisconnect(params)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error decoding disconnect params", map[string]interface{}{"error": err.Error()}))
-			rep.Error = apiproto.ErrBadRequest
+			rep.Error = apiproto.ErrorBadRequest
 			return rep, nil
 		}
 		resp := s.api.Disconnect(ctx, cmd)
@@ -205,7 +205,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 		cmd, err := decoder.DecodePresence(params)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error decoding presence params", map[string]interface{}{"error": err.Error()}))
-			rep.Error = apiproto.ErrBadRequest
+			rep.Error = apiproto.ErrorBadRequest
 			return rep, nil
 		}
 		resp := s.api.Presence(ctx, cmd)
@@ -223,7 +223,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 		cmd, err := decoder.DecodePresenceStats(params)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error decoding presence stats params", map[string]interface{}{"error": err.Error()}))
-			rep.Error = apiproto.ErrBadRequest
+			rep.Error = apiproto.ErrorBadRequest
 			return rep, nil
 		}
 		resp := s.api.PresenceStats(ctx, cmd)
@@ -241,7 +241,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 		cmd, err := decoder.DecodeHistory(params)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error decoding history params", map[string]interface{}{"error": err.Error()}))
-			rep.Error = apiproto.ErrBadRequest
+			rep.Error = apiproto.ErrorBadRequest
 			return rep, nil
 		}
 		resp := s.api.History(ctx, cmd)
@@ -259,7 +259,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 		cmd, err := decoder.DecodeHistoryRemove(params)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error decoding history remove params", map[string]interface{}{"error": err.Error()}))
-			rep.Error = apiproto.ErrBadRequest
+			rep.Error = apiproto.ErrorBadRequest
 			return rep, nil
 		}
 		resp := s.api.HistoryRemove(ctx, cmd)
@@ -298,7 +298,7 @@ func (s *APIHandler) handleAPICommand(ctx context.Context, enc apiproto.Encoding
 			}
 		}
 	default:
-		rep.Error = apiproto.ErrMethodNotFound
+		rep.Error = apiproto.ErrorMethodNotFound
 	}
 
 	if replyRes != nil {

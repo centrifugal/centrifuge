@@ -77,8 +77,7 @@ func main() {
 		}()
 
 		return &centrifuge.RPCReply{
-			Data:  data,
-			Error: centrifuge.ErrBadRequest,
+			Data: data,
 		}, nil
 	}
 
