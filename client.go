@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -212,7 +213,10 @@ func (c *client) Close(advice *Disconnect) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	fmt.Printf("%#v\n", advice)
+
 	if c.closed {
+		fmt.Println("already closed")
 		return nil
 	}
 
@@ -319,37 +323,9 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 		case proto.MethodTypePing:
 			replyRes, replyErr, disconnect = c.handlePing(params)
 		case proto.MethodTypeRPC:
-			mediator := c.node.Mediator()
-			if mediator != nil && mediator.RPC != nil {
-				rpcReply, err := mediator.RPC(c.ctx, &RPCContext{
-					EventContext: EventContext{
-						Client: c,
-					},
-					Data: params,
-				})
-				if err == nil {
-					disconnect = rpcReply.Disconnect
-					replyRes = rpcReply.Result
-					replyErr = rpcReply.Error
-				}
-			} else {
-				replyRes, replyErr = nil, ErrNotAvailable
-			}
+			replyRes, replyErr, disconnect = c.handleRPC(params)
 		case proto.MethodTypeMessage:
-			mediator := c.node.Mediator()
-			if mediator != nil && mediator.Message != nil {
-				messageReply, err := mediator.Message(c.ctx, &MessageContext{
-					EventContext: EventContext{
-						Client: c,
-					},
-					Data: params,
-				})
-				if err == nil {
-					disconnect = messageReply.Disconnect
-				}
-			} else {
-				replyRes, replyErr = nil, ErrNotAvailable
-			}
+			disconnect = c.handleMessage(params)
 		default:
 			replyRes, replyErr = nil, ErrMethodNotFound
 		}
@@ -623,6 +599,67 @@ func (c *client) handlePing(params proto.Raw) (proto.Raw, *proto.Error, *Disconn
 		}
 	}
 	return replyRes, nil, nil
+}
+
+func (c *client) handleRPC(params proto.Raw) (proto.Raw, *proto.Error, *Disconnect) {
+	mediator := c.node.Mediator()
+	if mediator != nil && mediator.RPC != nil {
+		cmd, err := proto.GetParamsDecoder(c.transport.Encoding()).DecodeRPC(params)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding rpc", map[string]interface{}{"error": err.Error()}))
+			return nil, nil, DisconnectBadRequest
+		}
+		rpcReply, err := mediator.RPC(c.ctx, &RPCContext{
+			EventContext: EventContext{
+				Client: c,
+			},
+			Data: cmd.Data,
+		})
+		if err == nil {
+			if rpcReply.Disconnect != nil {
+				return nil, nil, rpcReply.Disconnect
+			}
+			if rpcReply.Error != nil {
+				return nil, rpcReply.Error, nil
+			}
+
+			result := &proto.RPCResult{
+				Data: rpcReply.Data,
+			}
+
+			var replyRes []byte
+			replyRes, err = proto.GetResultEncoder(c.transport.Encoding()).EncodeRPCResult(result)
+			if err != nil {
+				c.node.logger.log(newLogEntry(LogLevelError, "error encoding rpc", map[string]interface{}{"error": err.Error()}))
+				return nil, nil, DisconnectServerError
+			}
+			return replyRes, nil, nil
+		}
+		return nil, ErrInternalServerError, nil
+	}
+	return nil, ErrNotAvailable, nil
+}
+
+func (c *client) handleMessage(params proto.Raw) *Disconnect {
+	mediator := c.node.Mediator()
+	if mediator != nil && mediator.Message != nil {
+		cmd, err := proto.GetParamsDecoder(c.transport.Encoding()).DecodeMessage(params)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding message", map[string]interface{}{"error": err.Error()}))
+			return DisconnectBadRequest
+		}
+		messageReply, err := mediator.Message(c.ctx, &MessageContext{
+			EventContext: EventContext{
+				Client: c,
+			},
+			Data: cmd.Data,
+		})
+		if err == nil && messageReply.Disconnect != nil {
+			return messageReply.Disconnect
+		}
+		return nil
+	}
+	return nil
 }
 
 // connectCmd handles connect command from client - client must send connect
