@@ -64,7 +64,7 @@ func (h *Hub) shutdown() error {
 }
 
 func (h *Hub) disconnect(user string, reconnect bool) error {
-	userConnections := h.UserConnections(user)
+	userConnections := h.userConnections(user)
 	advice := &Disconnect{Reason: "disconnect", Reconnect: reconnect}
 	for _, c := range userConnections {
 		go func(cc *client) {
@@ -75,7 +75,7 @@ func (h *Hub) disconnect(user string, reconnect bool) error {
 }
 
 func (h *Hub) unsubscribe(user string, ch string) error {
-	userConnections := h.UserConnections(user)
+	userConnections := h.userConnections(user)
 	for _, c := range userConnections {
 		var channels []string
 		if string(ch) == "" {
@@ -142,8 +142,8 @@ func (h *Hub) remove(c *client) error {
 	return nil
 }
 
-// UserConnections returns all connections of user with specified UserID.
-func (h *Hub) UserConnections(userID string) map[string]*client {
+// userConnections returns all connections of user with specified UserID.
+func (h *Hub) userConnections(userID string) map[string]*client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

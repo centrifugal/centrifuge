@@ -727,7 +727,7 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		}
 	}
 
-	if userConnectionLimit > 0 && c.user != "" && len(c.node.hub.UserConnections(c.user)) >= userConnectionLimit {
+	if userConnectionLimit > 0 && c.user != "" && len(c.node.hub.userConnections(c.user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": c.user, "client": c.uid, "limit": userConnectionLimit}))
 		resp.Error = ErrLimitExceeded
 		return resp, nil
