@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,10 +25,6 @@ type Client interface {
 	Channels() []string
 	// Transport returns transport used by client connection.
 	Transport() Transport
-	// Unsubscribe allows to unsubscribe client connection from channel.
-	Unsubscribe(channel string) error
-	// Close closes client connection.
-	Close(*Disconnect) error
 }
 
 // ClientConfig contains client connection specific configuration.
@@ -50,13 +45,13 @@ type credentialsContextKeyType int
 // CredentialsContextKey ...
 var CredentialsContextKey credentialsContextKeyType
 
-// Client represents client connection to Centrifugo. Transport of
+// client represents client connection to Centrifugo. Transport of
 // incoming connection abstracted away via Transport interface.
 type client struct {
 	mu            sync.RWMutex
 	ctx           context.Context
 	node          *Node
-	transport     Transport
+	transport     transport
 	authenticated bool
 	uid           string
 	user          string
@@ -71,7 +66,7 @@ type client struct {
 }
 
 // newClient creates new client connection.
-func newClient(ctx context.Context, n *Node, t Transport, conf clientConfig) *client {
+func newClient(ctx context.Context, n *Node, t transport, conf clientConfig) *client {
 	c := &client{
 		ctx:       ctx,
 		uid:       uuid.NewV4().String(),
@@ -209,14 +204,11 @@ func (c *client) sendUnsubscribe(ch string) error {
 
 // clean called when connection was closed to make different clean up
 // actions for a client
-func (c *client) Close(advice *Disconnect) error {
+func (c *client) Close(disconnect *Disconnect) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	fmt.Printf("%#v\n", advice)
-
 	if c.closed {
-		fmt.Println("already closed")
 		return nil
 	}
 
@@ -251,11 +243,11 @@ func (c *client) Close(advice *Disconnect) error {
 		c.staleTimer.Stop()
 	}
 
-	if advice != nil && advice.Reason != "" {
-		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": advice.Reason}))
+	if disconnect != nil && disconnect.Reason != "" {
+		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": disconnect.Reason, "reconnect": disconnect.Reconnect}))
 	}
 
-	c.transport.Close(advice)
+	c.transport.Close(disconnect)
 
 	if c.node.Mediator() != nil && c.node.Mediator().Disconnect != nil {
 		c.node.Mediator().Disconnect(c.ctx, &DisconnectContext{

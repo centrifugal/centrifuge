@@ -639,28 +639,28 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
-	// WebsocketCompression allows to enable websocket permessage-deflate
+	// Compression allows to enable websocket permessage-deflate
 	// compression support for raw websocket connections. It does not guarantee
 	// that compression will be used - i.e. it only says that Centrifugo will
 	// try to negotiate it with client.
-	WebsocketCompression bool
+	Compression bool
 
-	// WebsocketCompressionLevel sets a level for websocket compression.
+	// CompressionLevel sets a level for websocket compression.
 	// See posiible value description at https://golang.org/pkg/compress/flate/#NewWriter
-	WebsocketCompressionLevel int
+	CompressionLevel int
 
-	// WebsocketCompressionMinSize allows to set minimal limit in bytes for message to use
+	// CompressionMinSize allows to set minimal limit in bytes for message to use
 	// compression when writing it into client connection. By default it's 0 - i.e. all messages
 	// will be compressed when WebsocketCompression enabled and compression negotiated with client.
-	WebsocketCompressionMinSize int
+	CompressionMinSize int
 
-	// WebsocketReadBufferSize is a parameter that is used for raw websocket Upgrader.
+	// ReadBufferSize is a parameter that is used for raw websocket Upgrader.
 	// If set to zero reasonable default value will be used.
-	WebsocketReadBufferSize int
+	ReadBufferSize int
 
-	// WebsocketWriteBufferSize is a parameter that is used for raw websocket Upgrader.
+	// WriteBufferSize is a parameter that is used for raw websocket Upgrader.
 	// If set to zero reasonable default value will be used.
-	WebsocketWriteBufferSize int
+	WriteBufferSize int
 }
 
 // WebsocketHandler ...
@@ -680,16 +680,14 @@ func NewWebsocketHandler(n *Node, c WebsocketConfig) *WebsocketHandler {
 func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	transportConnectCount.WithLabelValues(transportWebsocket).Inc()
 
-	wsCompression := s.config.WebsocketCompression
-	wsCompressionLevel := s.config.WebsocketCompressionLevel
-	wsCompressionMinSize := s.config.WebsocketCompressionMinSize
-	wsReadBufferSize := s.config.WebsocketReadBufferSize
-	wsWriteBufferSize := s.config.WebsocketWriteBufferSize
+	compression := s.config.Compression
+	compressionLevel := s.config.CompressionLevel
+	compressionMinSize := s.config.CompressionMinSize
 
 	upgrader := websocket.Upgrader{
-		ReadBufferSize:    wsReadBufferSize,
-		WriteBufferSize:   wsWriteBufferSize,
-		EnableCompression: wsCompression,
+		ReadBufferSize:    s.config.ReadBufferSize,
+		WriteBufferSize:   s.config.WriteBufferSize,
+		EnableCompression: s.config.Compression,
 		CheckOrigin: func(r *http.Request) bool {
 			// Allow all connections.
 			return true
@@ -702,8 +700,8 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if wsCompression {
-		err := conn.SetCompressionLevel(wsCompressionLevel)
+	if compression {
+		err := conn.SetCompressionLevel(compressionLevel)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "websocket error setting compression level", map[string]interface{}{"error": err.Error()}))
 		}
@@ -733,7 +731,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		opts := &websocketTransportOptions{
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
-			compressionMinSize: wsCompressionMinSize,
+			compressionMinSize: compressionMinSize,
 			enc:                enc,
 		}
 		writerConf := writerConfig{

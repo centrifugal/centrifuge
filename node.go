@@ -476,20 +476,20 @@ func (n *Node) pubDisconnect(user string, reconnect bool) error {
 
 // addClient registers authenticated connection in clientConnectionHub
 // this allows to make operations with user connection on demand.
-func (n *Node) addClient(c Client) error {
+func (n *Node) addClient(c *client) error {
 	actionCount.WithLabelValues("add_client").Inc()
 	return n.hub.add(c)
 }
 
 // removeClient removes client connection from connection registry.
-func (n *Node) removeClient(c Client) error {
+func (n *Node) removeClient(c *client) error {
 	actionCount.WithLabelValues("remove_client").Inc()
 	return n.hub.remove(c)
 }
 
 // addSubscription registers subscription of connection on channel in both
 // engine and clientSubscriptionHub.
-func (n *Node) addSubscription(ch string, c Client) error {
+func (n *Node) addSubscription(ch string, c *client) error {
 	actionCount.WithLabelValues("add_subscription").Inc()
 	first, err := n.hub.addSub(ch, c)
 	if err != nil {
@@ -503,7 +503,7 @@ func (n *Node) addSubscription(ch string, c Client) error {
 
 // removeSubscription removes subscription of connection on channel
 // from both engine and clientSubscriptionHub.
-func (n *Node) removeSubscription(ch string, c Client) error {
+func (n *Node) removeSubscription(ch string, c *client) error {
 	actionCount.WithLabelValues("remove_subscription").Inc()
 	empty, err := n.hub.removeSub(ch, c)
 	if err != nil {
@@ -589,7 +589,7 @@ func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
 // addPresence proxies presence adding to engine.
 func (n *Node) addPresence(ch string, uid string, info *proto.ClientInfo) error {
 	n.mu.RLock()
-	expire := int(n.config.ClientPresenceExpireInterval.Seconds())
+	expire := n.config.ClientPresenceExpireInterval
 	n.mu.RUnlock()
 	actionCount.WithLabelValues("add_presence").Inc()
 	return n.engine.addPresence(ch, uid, info, expire)

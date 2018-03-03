@@ -468,7 +468,8 @@ func (e *RedisEngine) unsubscribe(ch string) error {
 }
 
 // AddPresence - see engine interface description.
-func (e *RedisEngine) addPresence(ch string, uid string, info *proto.ClientInfo, expire int) error {
+func (e *RedisEngine) addPresence(ch string, uid string, info *proto.ClientInfo, exp time.Duration) error {
+	expire := int(exp.Seconds())
 	return e.shards[e.shardIndex(ch)].AddPresence(ch, uid, info, expire)
 }
 

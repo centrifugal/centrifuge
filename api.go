@@ -319,10 +319,8 @@ func (h *apiExecutor) HistoryRemove(ctx context.Context, cmd *apiproto.HistoryRe
 		return resp
 	}
 
-	resp.Result = &apiproto.HistoryRemoveResult{}
 	return resp
 }
-
 
 // Channels returns active channels.
 func (h *apiExecutor) Channels(ctx context.Context, cmd *apiproto.ChannelsRequest) *apiproto.ChannelsResponse {
