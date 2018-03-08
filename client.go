@@ -27,11 +27,6 @@ type Client interface {
 	Transport() Transport
 }
 
-// ClientConfig contains client connection specific configuration.
-type clientConfig struct {
-	Credentials *Credentials
-}
-
 // Credentials allows to authenticate connection when set into context.
 type Credentials struct {
 	UserID string
@@ -66,7 +61,7 @@ type client struct {
 }
 
 // newClient creates new client connection.
-func newClient(ctx context.Context, n *Node, t transport, conf clientConfig) *client {
+func newClient(ctx context.Context, n *Node, t transport) *client {
 	c := &client{
 		ctx:       ctx,
 		uid:       uuid.NewV4().String(),
@@ -211,8 +206,7 @@ func (c *client) sendUnsubscribe(ch string) error {
 	return nil
 }
 
-// clean called when connection was closed to make different clean up
-// actions for a client
+// Close client connection with specific disconnect reason.
 func (c *client) Close(disconnect *Disconnect) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1043,11 +1037,11 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			}
 		} else {
 			// Client don't want to recover messages yet, we just return last message id to him here.
-			lastMessageID, err := c.node.LastMessageID(channel)
+			lastPubUID, err := c.node.lastPublicationUID(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last message ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			} else {
-				res.Last = lastMessageID
+				res.Last = lastPubUID
 			}
 		}
 	}

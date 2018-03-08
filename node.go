@@ -625,9 +625,9 @@ func (n *Node) RemoveHistory(ch string) error {
 	return n.engine.removeHistory(ch)
 }
 
-// LastMessageID return last message id for channel.
-func (n *Node) LastMessageID(ch string) (string, error) {
-	actionCount.WithLabelValues("last_message_id").Inc()
+// lastPublicationUID return last message id for channel.
+func (n *Node) lastPublicationUID(ch string) (string, error) {
+	actionCount.WithLabelValues("last_publication_uid").Inc()
 	publications, err := n.engine.history(ch, historyFilter{Limit: 1})
 	if err != nil {
 		return "", err

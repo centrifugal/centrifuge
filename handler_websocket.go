@@ -272,7 +272,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		writer := newWriter(writerConf)
 		defer writer.close()
 		transport := newWebsocketTransport(conn, writer, opts)
-		c := newClient(r.Context(), s.node, transport, clientConfig{})
+		c := newClient(r.Context(), s.node, transport)
 		defer c.Close(nil)
 
 		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket connection established", map[string]interface{}{"client": c.ID()}))

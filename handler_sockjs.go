@@ -170,7 +170,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 		writer := newWriter(writerConf)
 		defer writer.close()
 		transport := newSockjsTransport(sess, writer)
-		c := newClient(sess.Request().Context(), s.node, transport, clientConfig{})
+		c := newClient(sess.Request().Context(), s.node, transport)
 		defer c.Close(nil)
 
 		s.node.logger.log(newLogEntry(LogLevelDebug, "SockJS connection established", map[string]interface{}{"client": c.ID()}))
