@@ -49,7 +49,7 @@ func main() {
 	cfg.ClientExpire = true
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
-			Name: "public",
+			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:   true,
 				Presence:  true,
@@ -130,6 +130,7 @@ func main() {
 	}
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
 		if err := http.ListenAndServe(":8000", nil); err != nil {
