@@ -108,6 +108,7 @@ func (c *client) updateChannelPresence(ch string) {
 func (c *client) updatePresence() {
 	c.mu.RLock()
 	if c.closed {
+		c.mu.RUnlock()
 		return
 	}
 	channels := c.Channels()
