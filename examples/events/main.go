@@ -45,7 +45,6 @@ func waitExitSignal(n *centrifuge.Node) {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
-	cfg.Secret = "secret"
 	cfg.ClientExpire = true
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{

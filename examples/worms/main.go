@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/centrifugal/centrifuge"
 )
@@ -21,20 +20,6 @@ type event struct {
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("[centrifuge %s] %s: %v", centrifuge.LogLevelToString(e.Level), e.Message, e.Fields)
-}
-
-func authMiddleware(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Our middleware logic goes here...
-		ctx := r.Context()
-		ctx = context.WithValue(ctx, centrifuge.CredentialsContextKey, &centrifuge.Credentials{
-			UserID: "42",
-			Exp:    time.Now().Unix() + 10,
-			Info:   []byte(`{"name": "Alexander"}`),
-		})
-		r = r.WithContext(ctx)
-		h.ServeHTTP(w, r)
-	})
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -51,9 +36,6 @@ func waitExitSignal(n *centrifuge.Node) {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
-	cfg.Secret = "secret"
-	cfg.Presence = true
-	cfg.JoinLeave = true
 
 	node := centrifuge.New(cfg)
 
@@ -99,7 +81,7 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
