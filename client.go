@@ -956,7 +956,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	}
 
 	if !c.node.userAllowed(channel, c.user) || !c.node.clientAllowed(channel, c.uid) {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "user not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
+		c.node.logger.log(newLogEntry(LogLevelInfo, "user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
@@ -968,6 +968,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	}
 
 	if !chOpts.Anonymous && c.user == "" && !insecure {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "anonymous user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}

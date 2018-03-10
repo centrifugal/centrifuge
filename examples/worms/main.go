@@ -22,6 +22,18 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("[centrifuge %s] %s: %v", centrifuge.LogLevelToString(e.Level), e.Message, e.Fields)
 }
 
+func authMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Our middleware logic goes here...
+		ctx := r.Context()
+		ctx = context.WithValue(ctx, centrifuge.CredentialsContextKey, &centrifuge.Credentials{
+			UserID: "",
+		})
+		r = r.WithContext(ctx)
+		h.ServeHTTP(w, r)
+	})
+}
+
 func waitExitSignal(n *centrifuge.Node) {
 	sigs := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
@@ -36,6 +48,7 @@ func waitExitSignal(n *centrifuge.Node) {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
+	cfg.Anonymous = true
 
 	node := centrifuge.New(cfg)
 
@@ -81,7 +94,7 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

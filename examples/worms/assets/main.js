@@ -29,10 +29,12 @@ $(function(){
 		if(!(data.id in clients)){
 			// New user has joined – create new worm.
 			worms[data.id] = createWorm(data.color);
-        }
-        worms[data.id].segments = path.segments;
-        worms[data.id].strokeColor = data.color;
-		
+		}
+		if (data.id !== id) {
+        	worms[data.id].segments = path.segments;
+			worms[data.id].strokeColor = data.color;
+		}
+
 		// Saving the current client state
 		clients[data.id] = data;
 		clients[data.id].updated = $.now();
@@ -88,7 +90,7 @@ $(function(){
 			nextSegment.point = new paper.Point(segment.point.x - vector.x,segment.point.y - vector.y);
 		}
 		myPath.smooth();
-		
+
 		if ($.now() - lastEmit > 5) {
             var data = {
                 'name': 'mousemove',
