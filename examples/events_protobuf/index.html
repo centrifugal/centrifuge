@@ -7,6 +7,8 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
+        <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding-indexes.js"></script>
+        <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding.js"></script>
         <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.11.2/jquery.min.js"></script>
         <script type="text/javascript" src="centrifuge.min.js"></script>
         <script type="text/javascript">
@@ -24,22 +26,17 @@
                 var input = $("#input");
                 var container = $('#messages');
 
-                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket?format=protobuf');
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
                     input.attr("disabled", false);
-                    centrifuge.send({"x": 100, "y": 200});
                 });
 
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                     input.attr("disabled", true);
-                });
-
-                centrifuge.on('error', function(errCtx) {
-                    console.log("error happened", errCtx);
                 });
 
                 // show how many users currently in channel.
@@ -79,13 +76,14 @@
                         showPresence(sub);
                     }
 
-                    // This can be whatever JSON you want.
                     var rpcRequest = {"method": "getCurrentYear"}
+                    var binary = new TextEncoder("utf-8").encode(JSON.stringify(rpcRequest)); 
 
-                    centrifuge.rpc(rpcRequest).then(function(data){
-                        drawText(JSON.stringify(data))
+                    centrifuge.rpc(binary).then(function(result){
+                        var str = new TextDecoder("utf-8").decode(result.data);
+                        drawText(str);
                     }, function(err) {
-                        drawText(JSON.stringify(err))
+                        drawText(JSON.stringify(err));
                     });
                 }
 
@@ -96,13 +94,15 @@
 
                 function handleMessage(message) {
                     console.log("new message received", message);
+                    var str = new TextDecoder("utf-8").decode(message.data);
+                    data = JSON.parse(str);
                     var clientID;
                     if (message.info){
                         clientID = message.info.client;
                     } else {
                         clientID = null;
                     }
-                    var inputText = message.data["input"].toString();
+                    var inputText = data["input"].toString();
                     var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
@@ -127,7 +127,9 @@
 
                 $('#form').submit(function(event) {
                     event.preventDefault();
-                    sub.publish({"input": input.val()}).then(function() {
+                    var data = {"input": input.val()};
+                    var binaryData = new TextEncoder("utf-8").encode(JSON.stringify(data)); 
+                    sub.publish(binaryData).then(function() {
                         console.log('message accepted by server');
                     }, function(err) {
                         console.log('error publishing message', err);
