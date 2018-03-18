@@ -24,7 +24,8 @@ type transport interface {
 }
 
 type writerConfig struct {
-	MaxQueueSize int
+	MaxQueueSize       int
+	MaxMessagesInFrame int
 }
 
 // writer helps to manage per-connection message queue.
@@ -46,11 +47,15 @@ func newWriter(config writerConfig) *writer {
 }
 
 const (
-	mergeQueueMessages = true
-	maxMessagesInFrame = 4
+	defaultMaxMessagesInFrame = 4
 )
 
 func (w *writer) runWriteRoutine() {
+	maxMessagesInFrame := w.config.MaxMessagesInFrame
+	if maxMessagesInFrame == 0 {
+		maxMessagesInFrame = defaultMaxMessagesInFrame
+	}
+
 	for {
 		// Wait for message from queue.
 		msg, ok := w.messages.Wait()
@@ -64,7 +69,7 @@ func (w *writer) runWriteRoutine() {
 		var writeErr error
 
 		messageCount := w.messages.Len()
-		if mergeQueueMessages && messageCount > 0 {
+		if maxMessagesInFrame > 1 && messageCount > 0 {
 			// There are several more messages left in queue, try to send them in single frame,
 			// but no more than maxMessagesInFrame.
 
@@ -112,7 +117,7 @@ func (w *writer) write(data []byte) *Disconnect {
 	if !ok {
 		return nil
 	}
-	if w.messages.Size() > w.config.MaxQueueSize {
+	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
 		return &Disconnect{Reason: "slow", Reconnect: true}
 	}
 	return nil

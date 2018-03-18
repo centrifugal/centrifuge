@@ -17,8 +17,6 @@
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            // we use private channel in this example (starting with $), tornado server
-            // authorizes subscription on this channel when we subscribe on it.
             var channel = "chat:index";
 
             $(function() {
