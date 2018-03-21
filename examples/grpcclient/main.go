@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"log"
@@ -15,7 +16,7 @@ import (
 )
 
 var (
-	addr    = flag.String("addr", "localhost:8002", "Server address, e.g. :8000")
+	addr    = flag.String("addr", "localhost:8001", "Server address, e.g. centrifuge.io:443")
 	useTLS  = flag.Bool("tls", false, "Use TLS")
 	cert    = flag.String("cert", "", "CA certificate file")
 	channel = flag.String("channel", "index", "channel to subscribe")
@@ -66,8 +67,8 @@ func run() {
 		}
 		opts = append(opts, grpc.WithTransportCredentials(cred))
 	} else if *useTLS {
-		cred := credentials.NewTLS(nil)
-		opts = append(opts, grpc.WithTransportCredentials(cred))
+		creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+		opts = append(opts, grpc.WithTransportCredentials(creds))
 	} else {
 		opts = append(opts, grpc.WithInsecure())
 	}

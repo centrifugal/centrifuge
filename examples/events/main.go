@@ -157,7 +157,7 @@ func main() {
 	)
 	centrifuge.RegisterGRPCServerClient(node, grpcServer, centrifuge.GRPCClientServiceConfig{})
 	go func() {
-		listener, _ := net.Listen("tcp", ":8002")
+		listener, _ := net.Listen("tcp", ":8001")
 		if err := grpcServer.Serve(listener); err != nil {
 			logger.FATAL.Fatalf("Serve GRPC: %v", err)
 		}
@@ -165,4 +165,5 @@ func main() {
 
 	waitExitSignal(node)
 	fmt.Println("exiting")
+	time.Sleep(time.Second)
 }
