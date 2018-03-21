@@ -22,7 +22,7 @@ Start Nginx with `nginx.conf` located here:
 sudo /usr/local/sbin/nginx -c `pwd`/nginx.conf
 ```
 
-Then you can run `events` example in this repo and you connect to server using `wss://localhost:443/connection/websocket` endpoint and via GRPC using `localhost:443` as dial address.
+Then you can run `events` example in this repo and you connect to server using `wss://localhost:443/connection/websocket` endpoint (just change it in `index.html` file) and via GRPC using `localhost:443` as dial address (you can try naive `grpcclient` located nearby in examples).
 
 
 Remember that as this example uses self-signed certificate you must skip verifying certificate check when connecting (or allow it in web browser in case of Websocket for example). With production certificates you don't need this of course.

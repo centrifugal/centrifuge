@@ -22,7 +22,7 @@
                 var input = $("#input");
                 var container = $('#messages');
 
-                var centrifuge = new Centrifuge('wss://localhost:8000/connection/websocket');
+                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){

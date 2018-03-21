@@ -1,5 +1,7 @@
 Connect to Centrifuge GRPC client server over GRPC.
 
+This is a very naive implementaion just for proof of concept at moment.
+
 Without TLS:
 
 ```
