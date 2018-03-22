@@ -204,9 +204,11 @@ func (c *client) sendUnsubscribe(ch string) error {
 		return nil
 	}
 
-	c.transport.Send(proto.NewPreparedReply(&proto.Reply{
+	reply := newPreparedReply(&proto.Reply{
 		Result: result,
-	}, c.transport.Encoding()))
+	}, c.transport.Encoding())
+
+	c.transport.Send(reply)
 
 	return nil
 }

@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"sync"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/centrifugal/centrifuge/internal/queue"
 )
 
@@ -18,7 +17,7 @@ type Transport interface {
 type transport interface {
 	Transport
 	// Send sends data to session.
-	Send(*proto.PreparedReply) error
+	Send(*preparedReply) error
 	// Close closes the session with provided code and reason.
 	Close(*Disconnect) error
 }
