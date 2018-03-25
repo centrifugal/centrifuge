@@ -6,7 +6,7 @@ For example for MacOS [download](http://nginx.org/en/download.html) Nginx and un
 
 ```
 cd nginx-1.13.10/
-./configure — prefix=/usr/local — with-http_ssl_module — with-http_v2_module — with-cc-opt=”-I/usr/local/opt/openssl/include” — with-ld-opt=”-L/usr/local/opt/openssl/lib”
+./configure --prefix=/usr/local --with-http_ssl_module --with-http_v2_module --with-cc-opt="-I/usr/local/opt/openssl/include --with-ld-opt="-L/usr/local/opt/openssl/lib"
 make && sudo make install
 ```
 
