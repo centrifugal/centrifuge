@@ -26,8 +26,8 @@ ignored = [
 ]
 
 [[constraint]]
-  branch = "gomodule"
-  name = "github.com/FZambia/go-sentinel"
+  branch = "master"
+  name = "github.com/FZambia/sentinel"
 
 [[constraint]]
   name = "github.com/gomodule/redigo"

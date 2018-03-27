@@ -12,7 +12,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/proto"
 
-	"github.com/FZambia/go-sentinel"
+	"github.com/FZambia/sentinel"
 	"github.com/gomodule/redigo/redis"
 )
 

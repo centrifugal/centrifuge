@@ -2,10 +2,10 @@
 
 
 [[projects]]
-  branch = "gomodule"
-  name = "github.com/FZambia/go-sentinel"
+  branch = "master"
+  name = "github.com/FZambia/sentinel"
   packages = ["."]
-  revision = "6c4b3c0095089dcd75415bc3d5540cbda2e779f3"
+  revision = "95e118f3593eb6ab0051310688a700a5df833e13"
 
 [[projects]]
   branch = "master"
@@ -202,6 +202,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "43274a77310fdc2f953af7e41e907e08fdf2e88a06fb1ca006296b545b94d99e"
+  inputs-digest = "362bfc04fdd6da6ac93b02502ec67df593b6c59eca7b29cec68b3997e87fa358"
   solver-name = "gps-cdcl"
   solver-version = 1
