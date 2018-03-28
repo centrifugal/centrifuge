@@ -2,10 +2,10 @@
 
 
 [[projects]]
-  branch = "master"
   name = "github.com/FZambia/sentinel"
   packages = ["."]
-  revision = "95e118f3593eb6ab0051310688a700a5df833e13"
+  revision = "e69a8dc549bb0aabdc63fbfd9e8bfe971a368153"
+  version = "v1.0.0"
 
 [[projects]]
   branch = "master"
@@ -202,6 +202,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "362bfc04fdd6da6ac93b02502ec67df593b6c59eca7b29cec68b3997e87fa358"
+  inputs-digest = "f2b8f8ec8f30fe363b453ebbec9c0e7a1aea7676579751174a5149a75ea78521"
   solver-name = "gps-cdcl"
   solver-version = 1
