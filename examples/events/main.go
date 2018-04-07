@@ -35,13 +35,14 @@ func authMiddleware(h http.Handler) http.Handler {
 	})
 }
 
-func waitExitSignal(n *centrifuge.Node) {
+func waitExitSignal(n *centrifuge.Node, srv *grpc.Server) {
 	sigs := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigs
 		n.Shutdown()
+		srv.GracefulStop()
 		done <- true
 	}()
 	<-done
@@ -163,7 +164,6 @@ func main() {
 		}
 	}()
 
-	waitExitSignal(node)
+	waitExitSignal(node, grpcServer)
 	fmt.Println("exiting")
-	time.Sleep(time.Second)
 }
