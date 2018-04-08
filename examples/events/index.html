@@ -31,13 +31,13 @@
                     centrifuge.send({"x": 100, "y": 200});
                 });
 
+                centrifuge.on('message', function(data) {
+                    drawText(JSON.stringify(data));
+                });
+
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                     input.attr("disabled", true);
-                });
-
-                centrifuge.on('error', function(errCtx) {
-                    console.log("error happened", errCtx);
                 });
 
                 // show how many users currently in channel.

@@ -71,8 +71,9 @@ func main() {
 		}
 	}
 
-	handleMessage := func(ctc context.Context, req centrifuge.MessageContext) centrifuge.MessageReply {
-		log.Printf("Message from user: %s, data: %s", req.Client.UserID(), string(req.Data))
+	handleMessage := func(ctx context.Context, req centrifuge.MessageContext) centrifuge.MessageReply {
+		log.Printf("message from user: %s, data: %s", req.Client.UserID(), string(req.Data))
+		req.Client.Send(req.Data)
 		return centrifuge.MessageReply{}
 	}
 
@@ -97,7 +98,7 @@ func main() {
 	}
 
 	handlePublish := func(ctx context.Context, req centrifuge.PublishContext) centrifuge.PublishReply {
-		log.Printf("user %s publishes into channel %s: %s", req.Client.UserID(), req.Channel, string(req.Publication.Data))
+		log.Printf("user %s publishes into channel %s: %s", req.Client.UserID(), req.Channel, string(req.Pub.Data))
 		return centrifuge.PublishReply{}
 	}
 
