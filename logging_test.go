@@ -29,6 +29,7 @@ func TestLogger(t *testing.T) {
 	l.log(newLogEntry(LogLevelError, "test"))
 	assert.Equal(t, 1, h.count)
 	assert.False(t, l.enabled(LogLevelDebug))
+	assert.True(t, l.enabled(LogLevelError))
 }
 
 func TestNewLogEntry(t *testing.T) {
