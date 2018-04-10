@@ -111,7 +111,6 @@ func (t *websocketTransport) write(data ...[]byte) error {
 			t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
 		}
 
-		var err error
 		var messageType = websocket.TextMessage
 		if t.Encoding() == proto.EncodingProtobuf {
 			messageType = websocket.BinaryMessage
@@ -140,7 +139,7 @@ func (t *websocketTransport) write(data ...[]byte) error {
 		}
 		transportMessagesSent.WithLabelValues(transportWebsocket).Add(float64(len(data)))
 		transportBytesOut.WithLabelValues(transportWebsocket).Add(float64(bytesOut))
-		return err
+		return nil
 	}
 }
 

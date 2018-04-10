@@ -110,7 +110,7 @@ func newGRPCTransport(stream proto.Centrifuge_CommunicateServer, replies chan *p
 }
 
 func (t *grpcTransport) Name() string {
-	return "grpc"
+	return transportGRPC
 }
 
 func (t *grpcTransport) Encoding() proto.Encoding {

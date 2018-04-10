@@ -116,9 +116,9 @@ func (w *writer) runWriteRoutine() {
 				if len(msgs) >= maxMessagesInFrame {
 					break
 				}
-				msg, ok := w.messages.Remove()
+				m, ok := w.messages.Remove()
 				if ok {
-					msgs = append(msgs, msg)
+					msgs = append(msgs, m)
 				} else {
 					if w.messages.Closed() {
 						return

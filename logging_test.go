@@ -17,7 +17,6 @@ type testHandler struct {
 
 func (h *testHandler) Handle(e LogEntry) {
 	h.count++
-	return
 }
 
 func TestLogger(t *testing.T) {

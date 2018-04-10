@@ -21,8 +21,6 @@ type Client interface {
 	ID() string
 	// User return user ID associated with client connection.
 	UserID() string
-	// Channels returns a slice of channels client connection subscribed to at moment.
-	Channels() []string
 	// Send data to client asynchronously.
 	Send(data Raw) error
 	// Transport returns transport used by client connection.
@@ -122,8 +120,8 @@ func (c *client) updatePresence() {
 		i++
 	}
 	if c.node.Mediator() != nil && c.node.Mediator().Presence != nil {
-		c.node.Mediator().Presence(c.ctx, PresenceContext{
-			EventContext: EventContext{
+		c.node.Mediator().Presence(c.ctx, PresenceEvent{
+			Event: Event{
 				Client: c,
 			},
 			Channels: channels,
@@ -161,18 +159,6 @@ func (c *client) Transport() Transport {
 	return c.transport
 }
 
-func (c *client) Channels() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	keys := make([]string, len(c.channels))
-	i := 0
-	for k := range c.channels {
-		keys[i] = k
-		i++
-	}
-	return keys
-}
-
 func (c *client) Send(data Raw) error {
 	p := &proto.Push{
 		Data: data,
@@ -197,17 +183,26 @@ func (c *client) Send(data Raw) error {
 
 func (c *client) Unsubscribe(ch string) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closed {
-		c.mu.Unlock()
 		return nil
 	}
-	err := c.unsubscribe(ch)
-	if err != nil {
-		c.mu.Unlock()
-		return err
+	if ch != "" {
+		err := c.unsubscribe(ch)
+		if err != nil {
+			return err
+		}
+		c.sendUnsubscribe(ch)
+	} else {
+		// unsubscribe from all channels.
+		for ch := range c.channels {
+			err := c.unsubscribe(ch)
+			if err != nil {
+				return err
+			}
+			c.sendUnsubscribe(ch)
+		}
 	}
-	c.mu.Unlock()
-	c.sendUnsubscribe(ch)
 	return nil
 }
 
@@ -284,8 +279,8 @@ func (c *client) Close(disconnect *Disconnect) error {
 	c.transport.Close(disconnect)
 
 	if c.node.Mediator() != nil && c.node.Mediator().Disconnect != nil {
-		c.node.Mediator().Disconnect(c.ctx, DisconnectContext{
-			EventContext: EventContext{
+		c.node.Mediator().Disconnect(c.ctx, DisconnectEvent{
+			Event: Event{
 				Client: c,
 			},
 			Disconnect: disconnect,
@@ -296,7 +291,7 @@ func (c *client) Close(disconnect *Disconnect) error {
 }
 
 func (c *client) clientInfo(ch string) *proto.ClientInfo {
-	channelInfo, _ := c.channelInfo[ch]
+	channelInfo := c.channelInfo[ch]
 	return &proto.ClientInfo{
 		User:     c.user,
 		Client:   c.uid,
@@ -356,7 +351,7 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 		default:
 			replyRes, replyErr = nil, ErrorMethodNotFound
 		}
-		commandDurationSummary.WithLabelValues(strings.ToLower(proto.MethodType_name[int32(method)])).Observe(float64(time.Since(started).Seconds()))
+		commandDurationSummary.WithLabelValues(strings.ToLower(proto.MethodType_name[int32(method)])).Observe(time.Since(started).Seconds())
 	}
 
 	if disconnect != nil {
@@ -389,8 +384,8 @@ func (c *client) expire() {
 
 	mediator := c.node.Mediator()
 	if mediator != nil && mediator.Refresh != nil {
-		reply := mediator.Refresh(c.ctx, RefreshContext{
-			EventContext: EventContext{
+		reply := mediator.Refresh(c.ctx, RefreshEvent{
+			Event: Event{
 				Client: c,
 			},
 		})
@@ -422,7 +417,6 @@ func (c *client) expire() {
 	}
 
 	c.Close(&Disconnect{Reason: "expired", Reconnect: true})
-	return
 }
 
 func (c *client) handleConnect(params proto.Raw) (proto.Raw, *proto.Error, *Disconnect) {
@@ -649,8 +643,8 @@ func (c *client) handleRPC(params proto.Raw) (proto.Raw, *proto.Error, *Disconne
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding rpc", map[string]interface{}{"error": err.Error()}))
 			return nil, nil, DisconnectBadRequest
 		}
-		rpcReply := mediator.RPC(c.ctx, RPCContext{
-			EventContext: EventContext{
+		rpcReply := mediator.RPC(c.ctx, RPCEvent{
+			Event: Event{
 				Client: c,
 			},
 			Data: cmd.Data,
@@ -685,8 +679,8 @@ func (c *client) handleMessage(params proto.Raw) *Disconnect {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding message", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
 		}
-		messageReply := mediator.Message(c.ctx, MessageContext{
-			EventContext: EventContext{
+		messageReply := mediator.Message(c.ctx, MessageEvent{
+			Event: Event{
 				Client: c,
 			},
 			Data: cmd.Data,
@@ -829,16 +823,22 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		c.expireTimer = time.AfterFunc(duration, c.expire)
 	}
 
-	resp.Result.Client = c.uid
-
-	// TODO: check locking.
 	if c.node.Mediator() != nil && c.node.Mediator().Connect != nil {
-		c.node.Mediator().Connect(c.ctx, ConnectContext{
-			EventContext: EventContext{
+		reply := c.node.Mediator().Connect(c.ctx, ConnectEvent{
+			Event: Event{
 				Client: c,
 			},
 		})
+		if reply.Disconnect != nil {
+			return resp, reply.Disconnect
+		}
+		if reply.Error != nil {
+			resp.Error = reply.Error
+			return resp, nil
+		}
 	}
+
+	resp.Result.Client = c.uid
 
 	return resp, nil
 }
@@ -1005,11 +1005,11 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 
 	if c.node.privateChannel(channel) {
 		// private channel - subscription must be properly signed
-		if string(c.uid) != string(cmd.Client) {
+		if c.uid != cmd.Client {
 			resp.Error = ErrorPermissionDenied
 			return resp, nil
 		}
-		isValid := auth.CheckChannelSign(secret, string(cmd.Client), string(channel), cmd.Info, cmd.Sign)
+		isValid := auth.CheckChannelSign(secret, cmd.Client, channel, cmd.Info, cmd.Sign)
 		if !isValid {
 			resp.Error = ErrorPermissionDenied
 			return resp, nil
@@ -1020,8 +1020,8 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	}
 
 	if c.node.Mediator() != nil && c.node.Mediator().Subscribe != nil {
-		reply := c.node.Mediator().Subscribe(c.ctx, SubscribeContext{
-			EventContext: EventContext{
+		reply := c.node.Mediator().Subscribe(c.ctx, SubscribeEvent{
+			Event: Event{
 				Client: c,
 			},
 			Channel: channel,
@@ -1069,7 +1069,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			}
 		} else {
 			// Client don't want to recover messages yet, we just return last message id to him here.
-			lastPubUID, err := c.node.lastPublicationUID(channel)
+			lastPubUID, err := c.node.lastPubUID(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last message ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			} else {
@@ -1089,6 +1089,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	return resp, nil
 }
 
+// Lock must be held outside.
 func (c *client) unsubscribe(channel string) error {
 	chOpts, ok := c.node.ChannelOpts(channel)
 	if !ok {
@@ -1123,8 +1124,8 @@ func (c *client) unsubscribe(channel string) error {
 	}
 
 	if c.node.Mediator() != nil && c.node.Mediator().Unsubscribe != nil {
-		c.node.Mediator().Unsubscribe(c.ctx, UnsubscribeContext{
-			EventContext: EventContext{
+		c.node.Mediator().Unsubscribe(c.ctx, UnsubscribeEvent{
+			Event: Event{
 				Client: c,
 			},
 			Channel: channel,
@@ -1168,7 +1169,7 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 	ch := cmd.Channel
 	data := cmd.Data
 
-	if string(ch) == "" || len(data) == 0 {
+	if ch == "" || len(data) == 0 {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel and data required for publish", map[string]interface{}{"user": c.user, "client": c.uid}))
 		return nil, DisconnectBadRequest
 	}
@@ -1202,8 +1203,8 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 	}
 
 	if c.node.Mediator() != nil && c.node.Mediator().Publish != nil {
-		reply := c.node.Mediator().Publish(c.ctx, PublishContext{
-			EventContext: EventContext{
+		reply := c.node.Mediator().Publish(c.ctx, PublishEvent{
+			Event: Event{
 				Client: c,
 			},
 			Channel: ch,
@@ -1236,7 +1237,7 @@ func (c *client) presenceCmd(cmd *proto.PresenceRequest) (*proto.PresenceRespons
 
 	ch := cmd.Channel
 
-	if string(ch) == "" {
+	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
@@ -1277,7 +1278,7 @@ func (c *client) presenceStatsCmd(cmd *proto.PresenceStatsRequest) (*proto.Prese
 
 	ch := cmd.Channel
 
-	if string(ch) == "" {
+	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
@@ -1334,7 +1335,7 @@ func (c *client) historyCmd(cmd *proto.HistoryRequest) (*proto.HistoryResponse, 
 
 	ch := cmd.Channel
 
-	if string(ch) == "" {
+	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
