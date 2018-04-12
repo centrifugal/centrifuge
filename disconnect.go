@@ -34,4 +34,9 @@ var (
 		Reason:    "internal server error",
 		Reconnect: true,
 	}
+	// DisconnectExpired ...
+	DisconnectExpired = &Disconnect{
+		Reason:    "expired",
+		Reconnect: true,
+	}
 )

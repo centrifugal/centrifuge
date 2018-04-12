@@ -66,8 +66,9 @@ type SubscribeEvent struct {
 
 // SubscribeReply contains fields determining the reaction on subscribe event.
 type SubscribeReply struct {
-	Error      *Error
-	Disconnect *Disconnect
+	Error       *Error
+	Disconnect  *Disconnect
+	ChannelInfo Raw
 }
 
 // SubscribeHandler ...
@@ -105,7 +106,7 @@ type PublishHandler func(context.Context, PublishEvent) PublishReply
 // PresenceEvent contains fields related to presence update event.
 type PresenceEvent struct {
 	Event
-	Channels []string
+	Channels map[string]ChannelContext
 }
 
 // PresenceReply contains fields determining the reaction on presence update event.

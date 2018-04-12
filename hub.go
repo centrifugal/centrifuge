@@ -53,7 +53,7 @@ func (h *Hub) shutdown() error {
 			sem <- struct{}{}
 			go func(cc *client) {
 				defer func() { <-sem }()
-				cc.Close(advice)
+				cc.close(advice)
 				wg.Done()
 			}(cc)
 		}
@@ -68,7 +68,7 @@ func (h *Hub) disconnect(user string, reconnect bool) error {
 	advice := &Disconnect{Reason: "disconnect", Reconnect: reconnect}
 	for _, c := range userConnections {
 		go func(cc *client) {
-			cc.Close(advice)
+			cc.close(advice)
 		}(c)
 	}
 	return nil

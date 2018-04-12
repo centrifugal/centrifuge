@@ -21,10 +21,14 @@ type Client interface {
 	ID() string
 	// User return user ID associated with client connection.
 	UserID() string
-	// Send data to client asynchronously.
+	// Send data to client connection asynchronously.
 	Send(data Raw) error
 	// Transport returns transport used by client connection.
 	Transport() Transport
+	// Channels returns a map of channels client connection currently subscribed to.
+	Channels() map[string]ChannelContext
+	// Close closes client connection.
+	Close(*Disconnect) error
 }
 
 // Credentials allows to authenticate connection when set into context.
@@ -40,24 +44,37 @@ type credentialsContextKeyType int
 // CredentialsContextKey allows Go code to set Credentials into context.
 var CredentialsContextKey credentialsContextKeyType
 
+// ChannelContext contains extra context for channel connection subscribed to.
+type ChannelContext struct {
+	Info proto.Raw
+}
+
 // client represents client connection to Centrifugo. Transport of
 // incoming connection abstracted away via Transport interface.
 type client struct {
-	mu            sync.RWMutex
-	ctx           context.Context
-	node          *Node
-	transport     transport
-	authenticated bool
-	uid           string
-	user          string
-	exp           int64
-	info          proto.Raw
-	channelInfo   map[string]proto.Raw
-	channels      map[string]struct{}
+	mu sync.RWMutex
+
+	ctx       context.Context
+	node      *Node
+	transport transport
+
 	closed        bool
+	authenticated bool
+
+	uid  string
+	user string
+	exp  int64
+	info proto.Raw
+
+	channelsMu sync.RWMutex
+	channels   map[string]ChannelContext
+
 	staleTimer    *time.Timer
 	expireTimer   *time.Timer
 	presenceTimer *time.Timer
+
+	disconnectMu sync.Mutex
+	disconnect   *Disconnect
 }
 
 // newClient creates new client connection.
@@ -89,7 +106,7 @@ func (c *client) closeUnauthenticated() {
 	closed := c.closed
 	c.mu.RUnlock()
 	if !authenticated && !closed {
-		c.Close(&Disconnect{Reason: "stale", Reconnect: false})
+		c.close(&Disconnect{Reason: "stale", Reconnect: false})
 	}
 }
 
@@ -113,12 +130,9 @@ func (c *client) updatePresence() {
 	if c.closed {
 		return
 	}
-	channels := make([]string, len(c.channels))
-	i := 0
-	for k := range c.channels {
-		channels[i] = k
-		i++
-	}
+
+	channels := c.Channels()
+
 	if c.node.Mediator() != nil && c.node.Mediator().Presence != nil {
 		c.node.Mediator().Presence(c.ctx, PresenceEvent{
 			Event: Event{
@@ -127,7 +141,7 @@ func (c *client) updatePresence() {
 			Channels: channels,
 		})
 	}
-	for _, channel := range channels {
+	for channel := range channels {
 		err := c.updateChannelPresence(channel)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error updating presence for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -143,7 +157,7 @@ func (c *client) addPresenceUpdate() {
 	c.presenceTimer = time.AfterFunc(presenceInterval, c.updatePresence)
 }
 
-// No lock here as uid set on client initialization and can not be changed - we
+// No lock here as uid set on client connect and can not be changed - we
 // only read this value after.
 func (c *client) ID() string {
 	return c.uid
@@ -159,6 +173,16 @@ func (c *client) Transport() Transport {
 	return c.transport
 }
 
+func (c *client) Channels() map[string]ChannelContext {
+	c.channelsMu.RLock()
+	defer c.channelsMu.RUnlock()
+	channels := make(map[string]ChannelContext, len(c.channels))
+	for ch, ctx := range c.channels {
+		channels[ch] = ctx
+	}
+	return channels
+}
+
 func (c *client) Send(data Raw) error {
 	p := &proto.Push{
 		Data: data,
@@ -171,7 +195,7 @@ func (c *client) Send(data Raw) error {
 	}
 	result, err := messageEncoder.Encode(proto.NewPushMessage(data))
 	if err != nil {
-		return nil
+		return err
 	}
 
 	reply := newPreparedReply(&proto.Reply{
@@ -195,7 +219,8 @@ func (c *client) Unsubscribe(ch string) error {
 		c.sendUnsubscribe(ch)
 	} else {
 		// unsubscribe from all channels.
-		for ch := range c.channels {
+		channels := c.Channels()
+		for ch := range channels {
 			err := c.unsubscribe(ch)
 			if err != nil {
 				return err
@@ -220,7 +245,7 @@ func (c *client) sendUnsubscribe(ch string) error {
 	}
 	result, err := messageEncoder.Encode(proto.NewUnsubMessage(ch, data))
 	if err != nil {
-		return nil
+		return err
 	}
 
 	reply := newPreparedReply(&proto.Reply{
@@ -232,16 +257,28 @@ func (c *client) sendUnsubscribe(ch string) error {
 	return nil
 }
 
-// Close client connection with specific disconnect reason.
 func (c *client) Close(disconnect *Disconnect) error {
+	c.disconnectMu.Lock()
+	c.disconnect = disconnect
+	c.disconnectMu.Unlock()
+	return c.transport.Close(disconnect)
+}
+
+// Close client connection with specific disconnect reason.
+func (c *client) close(disconnect *Disconnect) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.closed {
 		return nil
 	}
-
 	c.closed = true
+
+	c.disconnectMu.Lock()
+	if c.disconnect != nil {
+		disconnect = c.disconnect
+	}
+	c.disconnectMu.Unlock()
 
 	if len(c.channels) > 0 {
 		// unsubscribe from all channels
@@ -291,7 +328,9 @@ func (c *client) Close(disconnect *Disconnect) error {
 }
 
 func (c *client) clientInfo(ch string) *proto.ClientInfo {
-	channelInfo := c.channelInfo[ch]
+	c.channelsMu.RLock()
+	channelInfo := c.channels[ch].Info
+	c.channelsMu.RUnlock()
 	return &proto.ClientInfo{
 		User:     c.user,
 		Client:   c.uid,
@@ -407,7 +446,9 @@ func (c *client) expire() {
 				c.expireTimer.Stop()
 			}
 			duration := time.Duration(ttl) * time.Second
+			c.mu.Lock()
 			c.expireTimer = time.AfterFunc(duration, c.expire)
+			c.mu.Unlock()
 		}
 	}
 
@@ -416,7 +457,7 @@ func (c *client) expire() {
 		return
 	}
 
-	c.Close(&Disconnect{Reason: "expired", Reconnect: true})
+	c.close(DisconnectExpired)
 }
 
 func (c *client) handleConnect(params proto.Raw) (proto.Raw, *proto.Error, *Disconnect) {
@@ -803,8 +844,10 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 
 	// Client successfully connected.
 	c.authenticated = true
-	c.channels = map[string]struct{}{}
-	c.channelInfo = map[string]proto.Raw{}
+
+	c.channelsMu.Lock()
+	c.channels = make(map[string]ChannelContext)
+	c.channelsMu.Unlock()
 
 	if c.staleTimer != nil {
 		c.staleTimer.Stop()
@@ -1003,6 +1046,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 		return resp, nil
 	}
 
+	var channelInfo proto.Raw
 	if c.node.privateChannel(channel) {
 		// private channel - subscription must be properly signed
 		if c.uid != cmd.Client {
@@ -1015,7 +1059,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			return resp, nil
 		}
 		if len(cmd.Info) > 0 {
-			c.channelInfo[channel] = proto.Raw(cmd.Info)
+			channelInfo = proto.Raw(cmd.Info)
 		}
 	}
 
@@ -1033,9 +1077,17 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			resp.Error = reply.Error
 			return resp, nil
 		}
+		if len(reply.ChannelInfo) > 0 {
+			channelInfo = reply.ChannelInfo
+		}
 	}
 
-	c.channels[channel] = struct{}{}
+	channelContext := ChannelContext{
+		Info: channelInfo,
+	}
+	c.channelsMu.Lock()
+	c.channels[channel] = channelContext
+	c.channelsMu.Unlock()
 
 	err := c.node.addSubscription(channel, c)
 	if err != nil {
