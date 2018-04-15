@@ -30,12 +30,12 @@
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
                     input.attr("disabled", false);
-                    centrifuge.send(new TextEncoder("utf-8").encode('hello'));
                 });
 
                 centrifuge.on('message', function(data) {
                     var str = new TextDecoder("utf-8").decode(data);
                     drawText(str);
+                    // echo data back to server with 'ack' prefix.
                     var echoData = new TextEncoder("utf-8").encode("ack " + str);
                     centrifuge.send(echoData);
                 })
