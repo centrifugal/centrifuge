@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
+
+	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
 )
@@ -73,6 +77,25 @@ func main() {
 
 	handleConnect := func(ctx context.Context, req centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		log.Printf("user %s connected via %s", req.Client.UserID(), req.Client.Transport().Name())
+		go func() {
+			i := 0
+			for {
+				select {
+				case <-time.After(1 * time.Millisecond):
+					message := "hello " + strconv.Itoa(i+1)
+					err := req.Client.Send([]byte(message))
+					if err == io.EOF {
+						return
+					}
+					log.Printf("sent message to user %s: %s", req.Client.UserID(), message)
+					i++
+					if i%100 == 0 {
+						req.Client.Close(centrifuge.DisconnectNormal)
+						return
+					}
+				}
+			}
+		}()
 		return centrifuge.ConnectReply{}
 	}
 
@@ -97,7 +120,7 @@ func main() {
 	}
 
 	handlePresence := func(ctx context.Context, req centrifuge.PresenceEvent) centrifuge.PresenceReply {
-		log.Printf("user %s is online and subscribed on channels %#v", req.Client.UserID(), req.Channels)
+		log.Printf("user %s is online and subscribed on channels %#v", req.Client.UserID(), req.Client.Channels())
 		return centrifuge.PresenceReply{}
 	}
 

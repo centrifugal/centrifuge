@@ -95,6 +95,7 @@ func (t *websocketTransport) Send(reply *preparedReply) error {
 	if disconnect != nil {
 		// Close in goroutine to not block message broadcast.
 		go t.Close(disconnect)
+		return io.EOF
 	}
 	return nil
 }
@@ -117,21 +118,21 @@ func (t *websocketTransport) write(data ...[]byte) error {
 		}
 		writer, err := t.conn.NextWriter(messageType)
 		if err != nil {
-			t.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
+			t.Close(DisconnectWriteError)
 			return err
 		}
 		bytesOut := 0
 		for _, payload := range data {
 			n, err := writer.Write(payload)
 			if n != len(payload) || err != nil {
-				t.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
+				t.Close(DisconnectWriteError)
 				return err
 			}
 			bytesOut += len(data)
 		}
 		err = writer.Close()
 		if err != nil {
-			t.Close(&Disconnect{Reason: "error sending message", Reconnect: true})
+			t.Close(DisconnectWriteError)
 			return err
 		}
 		if t.opts.writeTimeout > 0 {
@@ -149,12 +150,19 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 		t.mu.Unlock()
 		return nil
 	}
-	close(t.closeCh)
 	t.closed = true
 	if t.pingTimer != nil {
 		t.pingTimer.Stop()
 	}
 	t.mu.Unlock()
+
+	// Send messages remaining in queue.
+	t.writer.close()
+
+	t.mu.Lock()
+	close(t.closeCh)
+	t.mu.Unlock()
+
 	if disconnect != nil {
 		deadline := time.Now().Add(time.Second)
 		reason, err := json.Marshal(disconnect)

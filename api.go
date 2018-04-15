@@ -211,7 +211,7 @@ func (h *apiExecutor) PresenceStats(ctx context.Context, cmd *apiproto.PresenceS
 		return resp
 	}
 
-	if !chOpts.Presence || !chOpts.PresenceStats {
+	if !chOpts.Presence {
 		resp.Error = apiproto.ErrorNotAvailable
 		return resp
 	}

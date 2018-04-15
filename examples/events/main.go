@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	_ "net/http/pprof"
+
 	logger "github.com/FZambia/go-logger"
 	"github.com/centrifugal/centrifuge"
 	"github.com/grpc-ecosystem/go-grpc-middleware"
@@ -73,7 +75,6 @@ func main() {
 
 	handleMessage := func(ctx context.Context, req centrifuge.MessageEvent) centrifuge.MessageReply {
 		log.Printf("message from user: %s, data: %s", req.Client.UserID(), string(req.Data))
-		req.Client.Send(req.Data)
 		return centrifuge.MessageReply{}
 	}
 
@@ -103,7 +104,7 @@ func main() {
 	}
 
 	handlePresence := func(ctx context.Context, req centrifuge.PresenceEvent) centrifuge.PresenceReply {
-		log.Printf("user %s is online and subscribed on channels %#v", req.Client.UserID(), req.Channels)
+		log.Printf("user %s is online and subscribed on channels %#v", req.Client.UserID(), req.Client.Channels())
 		return centrifuge.PresenceReply{}
 	}
 

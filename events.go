@@ -106,7 +106,6 @@ type PublishHandler func(context.Context, PublishEvent) PublishReply
 // PresenceEvent contains fields related to presence update event.
 type PresenceEvent struct {
 	Event
-	Channels map[string]ChannelContext
 }
 
 // PresenceReply contains fields determining the reaction on presence update event.

@@ -121,7 +121,8 @@ func (t *grpcTransport) Send(reply *preparedReply) error {
 	select {
 	case t.replies <- reply.Reply:
 	default:
-		return fmt.Errorf("error sending to transport: buffer channel is full")
+		go t.Close(DisconnectSlow)
+		return io.EOF
 	}
 	return nil
 }
