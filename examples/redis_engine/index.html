@@ -22,7 +22,7 @@
                 var input = $("#input");
                 var container = $('#messages');
 
-                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+                var centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket');
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
@@ -35,6 +35,20 @@
                     input.attr("disabled", true);
                 });
 
+                // show how many users currently in channel.
+                function showPresence(sub) {
+                    sub.presence().then(function(result) {
+                        var count = 0;
+                        for (var key in result.presence){
+                            count++;
+                        }
+                        drawText('Now in this room: ' + count + ' clients');
+                    }, function(err) {
+                        console.log("presence error", err);
+                        drawText("Presence error");
+                    });
+                }
+
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be firer after client will connect to
                 // Centrifugo and will be authorized.
@@ -45,6 +59,8 @@
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
 
+                showPresence(sub);
+
                 // Trigger actual connection establishing with Centrifugo server.
                 // At this moment actual client work starts - i.e. subscriptions
                 // defined start subscribing etc.
@@ -52,6 +68,9 @@
 
                 function handleSubscribe(ctx) {
                     drawText('Subscribed on channel ' + ctx.channel);
+                    if (ctx.isResubscribe) {
+                        showPresence(sub);
+                    }
                 }
 
                 function handleSubscribeError(err) {

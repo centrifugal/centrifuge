@@ -61,6 +61,7 @@ func main() {
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:   true,
 				JoinLeave: true,
+				Presence:  true,
 			},
 		},
 	}
