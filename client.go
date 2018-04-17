@@ -115,9 +115,10 @@ type client struct {
 
 // newClient creates new client connection.
 func newClient(ctx context.Context, n *Node, t transport) *client {
+	uuidObject, _ := uuid.NewV4()
 	c := &client{
 		ctx:       ctx,
-		uid:       uuid.NewV4().String(),
+		uid:       uuidObject.String(),
 		node:      n,
 		transport: t,
 	}
