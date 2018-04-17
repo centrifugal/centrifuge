@@ -114,8 +114,11 @@ type client struct {
 }
 
 // newClient creates new client connection.
-func newClient(ctx context.Context, n *Node, t transport) *client {
-	uuidObject, _ := uuid.NewV4()
+func newClient(ctx context.Context, n *Node, t transport) (*client, error) {
+	uuidObject, err := uuid.NewV4()
+	if err != nil {
+		return nil, err
+	}
 	c := &client{
 		ctx:       ctx,
 		uid:       uuidObject.String(),
@@ -131,7 +134,7 @@ func newClient(ctx context.Context, n *Node, t transport) *client {
 		c.mu.Unlock()
 	}
 
-	return c
+	return c, nil
 }
 
 // closeUnauthenticated closes connection if it's not authenticated yet.
