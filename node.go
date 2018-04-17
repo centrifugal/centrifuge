@@ -59,7 +59,8 @@ type Node struct {
 
 // New creates Node, the only required argument is config.
 func New(c Config) *Node {
-	uid := uuid.NewV4().String()
+	uidObject, _ := uuid.NewV4()
+	uid := uidObject.String()
 
 	n := &Node{
 		uid:            uid,
