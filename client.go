@@ -10,8 +10,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/auth"
 	"github.com/centrifugal/centrifuge/internal/proto"
-
-	uuid "github.com/satori/go.uuid"
+	"github.com/centrifugal/centrifuge/internal/uuid"
 )
 
 // Client interface contains functions to inspect and control client

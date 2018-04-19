@@ -13,9 +13,9 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/centrifugal/centrifuge/internal/proto/apiproto"
 	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
+	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/nats-io/nuid"
-	uuid "github.com/satori/go.uuid"
 )
 
 // Node is a heart of centrifuge library – it internally keeps and manages
