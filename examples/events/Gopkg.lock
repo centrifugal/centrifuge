@@ -29,9 +29,10 @@
     "internal/proto",
     "internal/proto/apiproto",
     "internal/proto/controlproto",
-    "internal/queue"
+    "internal/queue",
+    "internal/uuid"
   ]
-  revision = "45805507156b1031d07e57df19795ccbba1ec233"
+  revision = "92b0089e7f334beacf18eb578064d8d8e934d661"
 
 [[projects]]
   name = "github.com/gogo/protobuf"
@@ -126,12 +127,6 @@
     "xfs"
   ]
   revision = "780932d4fbbe0e69b84c34c20f5c8d0981e109ea"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/satori/go.uuid"
-  packages = ["."]
-  revision = "36e9d2ebbde5e3f13ab2e25625fd453271d6522e"
 
 [[projects]]
   branch = "master"
