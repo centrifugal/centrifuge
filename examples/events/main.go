@@ -59,9 +59,11 @@ func main() {
 		centrifuge.ChannelNamespace{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:   true,
-				Presence:  true,
-				JoinLeave: true,
+				Publish:         true,
+				Presence:        true,
+				JoinLeave:       true,
+				HistoryLifetime: 60,
+				HistorySize:     10,
 			},
 		},
 	}

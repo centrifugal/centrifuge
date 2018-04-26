@@ -334,7 +334,7 @@ func handleClientData(n *Node, c *client, data []byte, transport Transport, writ
 			if err == io.EOF {
 				break
 			}
-			n.logger.log(newLogEntry(LogLevelInfo, "error decoding request", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+			n.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "error": err.Error()}))
 			c.close(DisconnectBadRequest)
 			proto.PutCommandDecoder(enc, decoder)
 			proto.PutReplyEncoder(enc, encoder)
