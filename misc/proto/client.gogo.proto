@@ -46,7 +46,7 @@ message Reply {
 
 enum MessageType {
     option (gogoproto.goproto_enum_prefix) = false;
-    PUB = 0 [(gogoproto.enumvalue_customname) = "MessageTypePub"];
+    PUBLICATION = 0 [(gogoproto.enumvalue_customname) = "MessageTypePublication"];
     JOIN = 1 [(gogoproto.enumvalue_customname) = "MessageTypeJoin"];
     LEAVE = 2 [(gogoproto.enumvalue_customname) = "MessageTypeLeave"];
     UNSUB = 3 [(gogoproto.enumvalue_customname) = "MessageTypeUnsub"];
@@ -70,7 +70,7 @@ message Push {
     bytes data = 1 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
 }
 
-message Pub {
+message Publication {
     string uid = 1 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
     bytes data = 2 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
     ClientInfo info = 3 [(gogoproto.jsontag) = "info,omitempty"];
@@ -145,7 +145,7 @@ message SubscribeResponse {
 message SubscribeResult {
     string last = 1 [(gogoproto.jsontag) = "last,omitempty"];
     bool recovered = 2 [(gogoproto.jsontag) = "recovered,omitempty"];
-    repeated Pub pubs = 3 [(gogoproto.jsontag) = "pubs,omitempty"];
+    repeated Publication publications = 3 [(gogoproto.jsontag) = "publications,omitempty"];
 }
 
 message UnsubscribeRequest {
@@ -208,7 +208,7 @@ message HistoryResponse {
 }
 
 message HistoryResult {
-    repeated Pub pubs = 1 [(gogoproto.jsontag) = "pubs"];
+    repeated Publication publications = 1 [(gogoproto.jsontag) = "publications"];
 }
 
 message PingRequest {

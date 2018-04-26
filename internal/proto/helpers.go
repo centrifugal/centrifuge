@@ -11,7 +11,7 @@ func NewPushMessage(data Raw) *Message {
 // NewPubMessage returns initialized async publication message.
 func NewPubMessage(ch string, data Raw) *Message {
 	return &Message{
-		Type:    MessageTypePub,
+		Type:    MessageTypePublication,
 		Channel: ch,
 		Data:    data,
 	}

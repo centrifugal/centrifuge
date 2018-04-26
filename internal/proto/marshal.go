@@ -10,7 +10,7 @@ import (
 type MessageEncoder interface {
 	Encode(*Message) ([]byte, error)
 	EncodePush(*Push) ([]byte, error)
-	EncodePub(*Pub) ([]byte, error)
+	EncodePublication(*Publication) ([]byte, error)
 	EncodeJoin(*Join) ([]byte, error)
 	EncodeLeave(*Leave) ([]byte, error)
 	EncodeUnsub(*Unsub) ([]byte, error)
@@ -30,8 +30,8 @@ func (e *JSONMessageEncoder) Encode(message *Message) ([]byte, error) {
 	return json.Marshal(message)
 }
 
-// EncodePub ...
-func (e *JSONMessageEncoder) EncodePub(message *Pub) ([]byte, error) {
+// EncodePublication ...
+func (e *JSONMessageEncoder) EncodePublication(message *Publication) ([]byte, error) {
 	return json.Marshal(message)
 }
 
@@ -69,8 +69,8 @@ func (e *ProtobufMessageEncoder) Encode(message *Message) ([]byte, error) {
 	return message.Marshal()
 }
 
-// EncodePub ...
-func (e *ProtobufMessageEncoder) EncodePub(message *Pub) ([]byte, error) {
+// EncodePublication ...
+func (e *ProtobufMessageEncoder) EncodePublication(message *Publication) ([]byte, error) {
 	return message.Marshal()
 }
 

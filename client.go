@@ -1024,7 +1024,7 @@ func (c *client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 // example if we eventually will work with Redis streams. For
 // this sth like HistoryFilter{limit int, from string} struct
 // can be added as History engine method argument.
-func recoverMessages(last string, messages []*proto.Pub) ([]*proto.Pub, bool) {
+func recoverMessages(last string, messages []*proto.Publication) ([]*proto.Publication, bool) {
 	if last == "" {
 		// Client wants to recover messages but it seems that there were no
 		// messages in history before, so client missed all messages which
@@ -1183,10 +1183,10 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			messages, err := c.node.History(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error recovering messages", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				res.Pubs = nil
+				res.Publications = nil
 			} else {
 				recoveredMessages, recovered := recoverMessages(cmd.Last, messages)
-				res.Pubs = recoveredMessages
+				res.Publications = recoveredMessages
 				res.Recovered = recovered
 			}
 		} else {
@@ -1326,15 +1326,15 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 		return resp, nil
 	}
 
-	pub := &proto.Pub{
+	pub := &proto.Publication{
 		Data: data,
 		Info: info,
 	}
 
 	if c.publishHandler != nil {
 		reply := c.publishHandler(PublishEvent{
-			Channel: ch,
-			Pub:     pub,
+			Channel:     ch,
+			Publication: pub,
 		})
 		if reply.Disconnect != nil {
 			return resp, reply.Disconnect
@@ -1505,7 +1505,7 @@ func (c *client) historyCmd(cmd *proto.HistoryRequest) (*proto.HistoryResponse, 
 	}
 
 	resp.Result = &proto.HistoryResult{
-		Pubs: pubs,
+		Publications: pubs,
 	}
 
 	return resp, nil

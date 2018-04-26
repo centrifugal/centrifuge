@@ -37,7 +37,7 @@ message Reply {
 
 enum MessageType {
     
-    PUB = 0;
+    PUBLICATION = 0;
     JOIN = 1;
     LEAVE = 2;
     UNSUB = 3;
@@ -61,7 +61,7 @@ message Push {
     bytes data = 1;
 }
 
-message Pub {
+message Publication {
     string uid = 1;
     bytes data = 2;
     ClientInfo info = 3;
@@ -136,7 +136,7 @@ message SubscribeResponse {
 message SubscribeResult {
     string last = 1;
     bool recovered = 2;
-    repeated Pub pubs = 3;
+    repeated Publication publications = 3;
 }
 
 message UnsubscribeRequest {
@@ -199,7 +199,7 @@ message HistoryResponse {
 }
 
 message HistoryResult {
-    repeated Pub pubs = 1;
+    repeated Publication publications = 1;
 }
 
 message PingRequest {

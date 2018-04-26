@@ -46,7 +46,7 @@ message Reply {
 
 enum MessageType {
     {{if env.Getenv "GOGO"}}option (gogoproto.goproto_enum_prefix) = false;{{end}}
-    PUB = 0{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypePub"]{{end}};
+    PUBLICATION = 0{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypePublication"]{{end}};
     JOIN = 1{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypeJoin"]{{end}};
     LEAVE = 2{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypeLeave"]{{end}};
     UNSUB = 3{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypeUnsub"]{{end}};
@@ -70,7 +70,7 @@ message Push {
     bytes data = 1{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
 }
 
-message Pub {
+message Publication {
     string uid = 1{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"]{{end}};
     bytes data = 2{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
     ClientInfo info = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "info,omitempty"]{{end}};
@@ -145,7 +145,7 @@ message SubscribeResponse {
 message SubscribeResult {
     string last = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "last,omitempty"]{{end}};
     bool recovered = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recovered,omitempty"]{{end}};
-    repeated Pub pubs = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "pubs,omitempty"]{{end}};
+    repeated Publication publications = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "publications,omitempty"]{{end}};
 }
 
 message UnsubscribeRequest {
@@ -208,7 +208,7 @@ message HistoryResponse {
 }
 
 message HistoryResult {
-    repeated Pub pubs = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "pubs"]{{end}};
+    repeated Publication publications = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "publications"]{{end}};
 }
 
 message PingRequest {

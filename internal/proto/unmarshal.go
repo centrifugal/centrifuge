@@ -27,7 +27,7 @@ func (m *MethodType) UnmarshalJSON(data []byte) error {
 // MessageDecoder ...
 type MessageDecoder interface {
 	Decode([]byte) (*Message, error)
-	DecodePub([]byte) (*Pub, error)
+	DecodePub([]byte) (*Publication, error)
 	DecodeJoin([]byte) (*Join, error)
 	DecodeLeave([]byte) (*Leave, error)
 }
@@ -52,8 +52,8 @@ func (e *JSONMessageDecoder) Decode(data []byte) (*Message, error) {
 }
 
 // DecodePub ...
-func (e *JSONMessageDecoder) DecodePub(data []byte) (*Pub, error) {
-	var m Pub
+func (e *JSONMessageDecoder) DecodePub(data []byte) (*Publication, error) {
+	var m Publication
 	err := json.Unmarshal(data, &m)
 	if err != nil {
 		return nil, err
@@ -101,8 +101,8 @@ func (e *ProtobufMessageDecoder) Decode(data []byte) (*Message, error) {
 }
 
 // DecodePub ...
-func (e *ProtobufMessageDecoder) DecodePub(data []byte) (*Pub, error) {
-	var m Pub
+func (e *ProtobufMessageDecoder) DecodePub(data []byte) (*Publication, error) {
+	var m Publication
 	err := m.Unmarshal(data)
 	if err != nil {
 		return nil, err

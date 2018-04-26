@@ -202,7 +202,7 @@ func (h *Hub) removeSub(ch string, c *client) (bool, error) {
 }
 
 // broadcastPub sends message to all clients subscribed on channel.
-func (h *Hub) broadcastPub(channel string, pub *proto.Pub) error {
+func (h *Hub) broadcastPublication(channel string, pub *Publication) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -224,7 +224,7 @@ func (h *Hub) broadcastPub(channel string, pub *proto.Pub) error {
 		enc := c.Transport().Encoding()
 		if enc == proto.EncodingJSON {
 			if jsonReply == nil {
-				data, err := proto.GetMessageEncoder(enc).EncodePub(pub)
+				data, err := proto.GetMessageEncoder(enc).EncodePublication(pub)
 				if err != nil {
 					return err
 				}
@@ -240,7 +240,7 @@ func (h *Hub) broadcastPub(channel string, pub *proto.Pub) error {
 			c.transport.Send(jsonReply)
 		} else if enc == proto.EncodingProtobuf {
 			if protobufReply == nil {
-				data, err := proto.GetMessageEncoder(enc).EncodePub(pub)
+				data, err := proto.GetMessageEncoder(enc).EncodePublication(pub)
 				if err != nil {
 					return err
 				}
