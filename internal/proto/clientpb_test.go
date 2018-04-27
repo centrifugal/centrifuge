@@ -48,7 +48,7 @@ It has these top-level messages:
 	RPCRequest
 	RPCResponse
 	RPCResult
-	MessageRequest
+	SendRequest
 */
 package proto
 
@@ -2306,15 +2306,15 @@ func TestRPCResultMarshalTo(t *testing.T) {
 	}
 }
 
-func TestMessageRequestProto(t *testing.T) {
+func TestSendRequestProto(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
-	p := NewPopulatedMessageRequest(popr, false)
+	p := NewPopulatedSendRequest(popr, false)
 	dAtA, err := proto1.Marshal(p)
 	if err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
 	}
-	msg := &MessageRequest{}
+	msg := &SendRequest{}
 	if err := proto1.Unmarshal(dAtA, msg); err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
 	}
@@ -2337,10 +2337,10 @@ func TestMessageRequestProto(t *testing.T) {
 	}
 }
 
-func TestMessageRequestMarshalTo(t *testing.T) {
+func TestSendRequestMarshalTo(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
-	p := NewPopulatedMessageRequest(popr, false)
+	p := NewPopulatedSendRequest(popr, false)
 	size := p.Size()
 	dAtA := make([]byte, size)
 	for i := range dAtA {
@@ -2350,7 +2350,7 @@ func TestMessageRequestMarshalTo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
 	}
-	msg := &MessageRequest{}
+	msg := &SendRequest{}
 	if err := proto1.Unmarshal(dAtA, msg); err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
 	}
@@ -3082,16 +3082,16 @@ func TestRPCResultJSON(t *testing.T) {
 		t.Fatalf("seed = %d, %#v !Json Equal %#v", seed, msg, p)
 	}
 }
-func TestMessageRequestJSON(t *testing.T) {
+func TestSendRequestJSON(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
-	p := NewPopulatedMessageRequest(popr, true)
+	p := NewPopulatedSendRequest(popr, true)
 	marshaler := jsonpb.Marshaler{}
 	jsondata, err := marshaler.MarshalToString(p)
 	if err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
 	}
-	msg := &MessageRequest{}
+	msg := &SendRequest{}
 	err = jsonpb.UnmarshalString(jsondata, msg)
 	if err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
@@ -4220,12 +4220,12 @@ func TestRPCResultProtoCompactText(t *testing.T) {
 	}
 }
 
-func TestMessageRequestProtoText(t *testing.T) {
+func TestSendRequestProtoText(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
-	p := NewPopulatedMessageRequest(popr, true)
+	p := NewPopulatedSendRequest(popr, true)
 	dAtA := proto1.MarshalTextString(p)
-	msg := &MessageRequest{}
+	msg := &SendRequest{}
 	if err := proto1.UnmarshalText(dAtA, msg); err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
 	}
@@ -4234,12 +4234,12 @@ func TestMessageRequestProtoText(t *testing.T) {
 	}
 }
 
-func TestMessageRequestProtoCompactText(t *testing.T) {
+func TestSendRequestProtoCompactText(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
-	p := NewPopulatedMessageRequest(popr, true)
+	p := NewPopulatedSendRequest(popr, true)
 	dAtA := proto1.CompactTextString(p)
-	msg := &MessageRequest{}
+	msg := &SendRequest{}
 	if err := proto1.UnmarshalText(dAtA, msg); err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
 	}
@@ -5128,10 +5128,10 @@ func TestRPCResultSize(t *testing.T) {
 	}
 }
 
-func TestMessageRequestSize(t *testing.T) {
+func TestSendRequestSize(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
-	p := NewPopulatedMessageRequest(popr, true)
+	p := NewPopulatedSendRequest(popr, true)
 	size2 := proto1.Size(p)
 	dAtA, err := proto1.Marshal(p)
 	if err != nil {

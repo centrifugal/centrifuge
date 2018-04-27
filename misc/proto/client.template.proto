@@ -27,7 +27,7 @@ enum MethodType {
     PRESENCE_STATS = 5{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypePresenceStats"]{{end}};
     HISTORY = 6{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeHistory"]{{end}};
     PING = 7{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypePing"]{{end}};
-    MESSAGE = 8{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeMessage"]{{end}};
+    SEND = 8{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeSend"]{{end}};
     RPC = 9{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeRPC"]{{end}};
     REFRESH = 10{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeRefresh"]{{end}};
 }
@@ -50,7 +50,7 @@ enum PushType {
     JOIN = 1{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeJoin"]{{end}};
     LEAVE = 2{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeLeave"]{{end}};
     UNSUB = 3{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeUnsub"]{{end}};
-    PUSH = 4{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeMessage"]{{end}};
+    MESSAGE = 4{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeMessage"]{{end}};
 }
 
 message Push {
@@ -237,7 +237,7 @@ message RPCResult {
     bytes data = 1 {{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false]{{end}};
 }
 
-message MessageRequest{
+message SendRequest{
     bytes data = 1{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
 }
 

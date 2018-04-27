@@ -212,7 +212,7 @@ type ParamsDecoder interface {
 	DecodeHistory([]byte) (*HistoryRequest, error)
 	DecodePing([]byte) (*PingRequest, error)
 	DecodeRPC([]byte) (*RPCRequest, error)
-	DecodeMessage([]byte) (*MessageRequest, error)
+	DecodeSend([]byte) (*SendRequest, error)
 }
 
 // JSONParamsDecoder ...
@@ -329,9 +329,9 @@ func (d *JSONParamsDecoder) DecodeRPC(data []byte) (*RPCRequest, error) {
 	return &p, nil
 }
 
-// DecodeMessage ...
-func (d *JSONParamsDecoder) DecodeMessage(data []byte) (*MessageRequest, error) {
-	var p MessageRequest
+// DecodeSend ...
+func (d *JSONParamsDecoder) DecodeSend(data []byte) (*SendRequest, error) {
+	var p SendRequest
 	if data != nil {
 		err := json.Unmarshal(data, &p)
 		if err != nil {
@@ -451,9 +451,9 @@ func (d *ProtobufParamsDecoder) DecodeRPC(data []byte) (*RPCRequest, error) {
 	return &p, nil
 }
 
-// DecodeMessage ...
-func (d *ProtobufParamsDecoder) DecodeMessage(data []byte) (*MessageRequest, error) {
-	var p MessageRequest
+// DecodeSend ...
+func (d *ProtobufParamsDecoder) DecodeSend(data []byte) (*SendRequest, error) {
+	var p SendRequest
 	err := p.Unmarshal(data)
 	if err != nil {
 		return nil, err

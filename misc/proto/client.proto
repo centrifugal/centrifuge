@@ -18,7 +18,7 @@ enum MethodType {
     PRESENCE_STATS = 5;
     HISTORY = 6;
     PING = 7;
-    MESSAGE = 8;
+    SEND = 8;
     RPC = 9;
     REFRESH = 10;
 }
@@ -41,7 +41,7 @@ enum PushType {
     JOIN = 1;
     LEAVE = 2;
     UNSUB = 3;
-    PUSH = 4;
+    MESSAGE = 4;
 }
 
 message Push {
@@ -228,7 +228,7 @@ message RPCResult {
     bytes data = 1 ;
 }
 
-message MessageRequest{
+message SendRequest{
     bytes data = 1;
 }
 

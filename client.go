@@ -400,7 +400,7 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 	method := command.Method
 	params := command.Params
 
-	if command.ID == 0 && method != proto.MethodTypeMessage {
+	if command.ID == 0 && method != proto.MethodTypeSend {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
 		replyErr = ErrorBadRequest
 	} else if method != proto.MethodTypeConnect && !c.authenticated {
@@ -429,8 +429,8 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 			replyRes, replyErr, disconnect = c.handlePing(params)
 		case proto.MethodTypeRPC:
 			replyRes, replyErr, disconnect = c.handleRPC(params)
-		case proto.MethodTypeMessage:
-			disconnect = c.handleMessage(params)
+		case proto.MethodTypeSend:
+			disconnect = c.handleSend(params)
 		default:
 			replyRes, replyErr = nil, ErrorMethodNotFound
 		}
@@ -753,9 +753,9 @@ func (c *client) handleRPC(params proto.Raw) (proto.Raw, *proto.Error, *Disconne
 	return nil, ErrorNotAvailable, nil
 }
 
-func (c *client) handleMessage(params proto.Raw) *Disconnect {
+func (c *client) handleSend(params proto.Raw) *Disconnect {
 	if c.messageHandler != nil {
-		cmd, err := proto.GetParamsDecoder(c.transport.Encoding()).DecodeMessage(params)
+		cmd, err := proto.GetParamsDecoder(c.transport.Encoding()).DecodeSend(params)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding message", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
