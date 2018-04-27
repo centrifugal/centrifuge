@@ -44,17 +44,17 @@ message Reply {
     bytes result = 3{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "result,omitempty", (gogoproto.nullable) = false]{{end}};
 }
 
-enum MessageType {
+enum PushType {
     {{if env.Getenv "GOGO"}}option (gogoproto.goproto_enum_prefix) = false;{{end}}
-    PUBLICATION = 0{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypePublication"]{{end}};
-    JOIN = 1{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypeJoin"]{{end}};
-    LEAVE = 2{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypeLeave"]{{end}};
-    UNSUB = 3{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypeUnsub"]{{end}};
-    PUSH = 4{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MessageTypePush"]{{end}};
+    PUBLICATION = 0{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypePublication"]{{end}};
+    JOIN = 1{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeJoin"]{{end}};
+    LEAVE = 2{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeLeave"]{{end}};
+    UNSUB = 3{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeUnsub"]{{end}};
+    PUSH = 4{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeMessage"]{{end}};
 }
 
-message Message {
-    MessageType type = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "type,omitempty"]{{end}};
+message Push {
+    PushType type = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "type,omitempty"]{{end}};
     string channel = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "channel,omitempty"]{{end}};
     bytes data = 3{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
 }
@@ -64,10 +64,6 @@ message ClientInfo {
     string client = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "client"]{{end}};
     bytes conn_info = 3{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "conn_info,omitempty", (gogoproto.nullable) = false]{{end}};
     bytes chan_info = 4{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "chan_info,omitempty", (gogoproto.nullable) = false]{{end}};
-}
-
-message Push {
-    bytes data = 1{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
 }
 
 message Publication {
@@ -85,6 +81,10 @@ message Leave {
 }
 
 message Unsub {}
+
+message Message {
+    bytes data = 1{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
+}
 
 message ConnectRequest {
     string user = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "user"]{{end}};

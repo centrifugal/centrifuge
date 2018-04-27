@@ -35,7 +35,7 @@ message Reply {
     bytes result = 3;
 }
 
-enum MessageType {
+enum PushType {
     
     PUBLICATION = 0;
     JOIN = 1;
@@ -44,8 +44,8 @@ enum MessageType {
     PUSH = 4;
 }
 
-message Message {
-    MessageType type = 1;
+message Push {
+    PushType type = 1;
     string channel = 2;
     bytes data = 3;
 }
@@ -55,10 +55,6 @@ message ClientInfo {
     string client = 2;
     bytes conn_info = 3;
     bytes chan_info = 4;
-}
-
-message Push {
-    bytes data = 1;
 }
 
 message Publication {
@@ -76,6 +72,10 @@ message Leave {
 }
 
 message Unsub {}
+
+message Message {
+    bytes data = 1;
+}
 
 message ConnectRequest {
     string user = 1;

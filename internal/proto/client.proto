@@ -44,17 +44,17 @@ message Reply {
     bytes result = 3 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "result,omitempty", (gogoproto.nullable) = false];
 }
 
-enum MessageType {
+enum PushType {
     option (gogoproto.goproto_enum_prefix) = false;
-    PUBLICATION = 0 [(gogoproto.enumvalue_customname) = "MessageTypePublication"];
-    JOIN = 1 [(gogoproto.enumvalue_customname) = "MessageTypeJoin"];
-    LEAVE = 2 [(gogoproto.enumvalue_customname) = "MessageTypeLeave"];
-    UNSUB = 3 [(gogoproto.enumvalue_customname) = "MessageTypeUnsub"];
-    PUSH = 4 [(gogoproto.enumvalue_customname) = "MessageTypePush"];
+    PUBLICATION = 0 [(gogoproto.enumvalue_customname) = "PushTypePublication"];
+    JOIN = 1 [(gogoproto.enumvalue_customname) = "PushTypeJoin"];
+    LEAVE = 2 [(gogoproto.enumvalue_customname) = "PushTypeLeave"];
+    UNSUB = 3 [(gogoproto.enumvalue_customname) = "PushTypeUnsub"];
+    PUSH = 4 [(gogoproto.enumvalue_customname) = "PushTypeMessage"];
 }
 
-message Message {
-    MessageType type = 1 [(gogoproto.jsontag) = "type,omitempty"];
+message Push {
+    PushType type = 1 [(gogoproto.jsontag) = "type,omitempty"];
     string channel = 2 [(gogoproto.jsontag) = "channel,omitempty"];
     bytes data = 3 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
 }
@@ -64,10 +64,6 @@ message ClientInfo {
     string client = 2 [(gogoproto.jsontag) = "client"];
     bytes conn_info = 3 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "conn_info,omitempty", (gogoproto.nullable) = false];
     bytes chan_info = 4 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "chan_info,omitempty", (gogoproto.nullable) = false];
-}
-
-message Push {
-    bytes data = 1 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
 }
 
 message Publication {
@@ -85,6 +81,10 @@ message Leave {
 }
 
 message Unsub {}
+
+message Message {
+    bytes data = 1 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+}
 
 message ConnectRequest {
     string user = 1 [(gogoproto.jsontag) = "user"];

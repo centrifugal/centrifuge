@@ -24,26 +24,26 @@ func (m *MethodType) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MessageDecoder ...
-type MessageDecoder interface {
-	Decode([]byte) (*Message, error)
-	DecodePub([]byte) (*Publication, error)
+// PushDecoder ...
+type PushDecoder interface {
+	Decode([]byte) (*Push, error)
+	DecodePublication([]byte) (*Publication, error)
 	DecodeJoin([]byte) (*Join, error)
 	DecodeLeave([]byte) (*Leave, error)
 }
 
-// JSONMessageDecoder ...
-type JSONMessageDecoder struct {
+// JSONPushDecoder ...
+type JSONPushDecoder struct {
 }
 
-// NewJSONMessageDecoder ...
-func NewJSONMessageDecoder() *JSONMessageDecoder {
-	return &JSONMessageDecoder{}
+// NewJSONPushDecoder ...
+func NewJSONPushDecoder() *JSONPushDecoder {
+	return &JSONPushDecoder{}
 }
 
 // Decode ...
-func (e *JSONMessageDecoder) Decode(data []byte) (*Message, error) {
-	var m Message
+func (e *JSONPushDecoder) Decode(data []byte) (*Push, error) {
+	var m Push
 	err := json.Unmarshal(data, &m)
 	if err != nil {
 		return nil, err
@@ -51,8 +51,8 @@ func (e *JSONMessageDecoder) Decode(data []byte) (*Message, error) {
 	return &m, nil
 }
 
-// DecodePub ...
-func (e *JSONMessageDecoder) DecodePub(data []byte) (*Publication, error) {
+// DecodePublication ...
+func (e *JSONPushDecoder) DecodePublication(data []byte) (*Publication, error) {
 	var m Publication
 	err := json.Unmarshal(data, &m)
 	if err != nil {
@@ -62,7 +62,7 @@ func (e *JSONMessageDecoder) DecodePub(data []byte) (*Publication, error) {
 }
 
 // DecodeJoin ...
-func (e *JSONMessageDecoder) DecodeJoin(data []byte) (*Join, error) {
+func (e *JSONPushDecoder) DecodeJoin(data []byte) (*Join, error) {
 	var m Join
 	err := json.Unmarshal(data, &m)
 	if err != nil {
@@ -72,7 +72,7 @@ func (e *JSONMessageDecoder) DecodeJoin(data []byte) (*Join, error) {
 }
 
 // DecodeLeave  ...
-func (e *JSONMessageDecoder) DecodeLeave(data []byte) (*Leave, error) {
+func (e *JSONPushDecoder) DecodeLeave(data []byte) (*Leave, error) {
 	var m Leave
 	err := json.Unmarshal(data, &m)
 	if err != nil {
@@ -81,18 +81,18 @@ func (e *JSONMessageDecoder) DecodeLeave(data []byte) (*Leave, error) {
 	return &m, nil
 }
 
-// ProtobufMessageDecoder ...
-type ProtobufMessageDecoder struct {
+// ProtobufPushDecoder ...
+type ProtobufPushDecoder struct {
 }
 
-// NewProtobufMessageDecoder ...
-func NewProtobufMessageDecoder() *ProtobufMessageDecoder {
-	return &ProtobufMessageDecoder{}
+// NewProtobufPushDecoder ...
+func NewProtobufPushDecoder() *ProtobufPushDecoder {
+	return &ProtobufPushDecoder{}
 }
 
 // Decode ...
-func (e *ProtobufMessageDecoder) Decode(data []byte) (*Message, error) {
-	var m Message
+func (e *ProtobufPushDecoder) Decode(data []byte) (*Push, error) {
+	var m Push
 	err := m.Unmarshal(data)
 	if err != nil {
 		return nil, err
@@ -100,8 +100,8 @@ func (e *ProtobufMessageDecoder) Decode(data []byte) (*Message, error) {
 	return &m, nil
 }
 
-// DecodePub ...
-func (e *ProtobufMessageDecoder) DecodePub(data []byte) (*Publication, error) {
+// DecodePublication ...
+func (e *ProtobufPushDecoder) DecodePublication(data []byte) (*Publication, error) {
 	var m Publication
 	err := m.Unmarshal(data)
 	if err != nil {
@@ -111,7 +111,7 @@ func (e *ProtobufMessageDecoder) DecodePub(data []byte) (*Publication, error) {
 }
 
 // DecodeJoin ...
-func (e *ProtobufMessageDecoder) DecodeJoin(data []byte) (*Join, error) {
+func (e *ProtobufPushDecoder) DecodeJoin(data []byte) (*Join, error) {
 	var m Join
 	err := m.Unmarshal(data)
 	if err != nil {
@@ -121,7 +121,7 @@ func (e *ProtobufMessageDecoder) DecodeJoin(data []byte) (*Join, error) {
 }
 
 // DecodeLeave  ...
-func (e *ProtobufMessageDecoder) DecodeLeave(data []byte) (*Leave, error) {
+func (e *ProtobufPushDecoder) DecodeLeave(data []byte) (*Leave, error) {
 	var m Leave
 	err := m.Unmarshal(data)
 	if err != nil {

@@ -85,8 +85,8 @@ type shard struct {
 	lpopManyScript    *redis.Script
 	messagePrefix     string
 
-	messageEncoder proto.MessageEncoder
-	messageDecoder proto.MessageDecoder
+	pushEncoder proto.PushEncoder
+	pushDecoder proto.PushDecoder
 }
 
 // RedisEngineConfig of Redis Engine.
@@ -401,8 +401,8 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
 		lpopManyScript:    redis.NewScript(1, lpopManySource),
-		messageEncoder:    proto.NewProtobufMessageEncoder(),
-		messageDecoder:    proto.NewProtobufMessageDecoder(),
+		pushEncoder:       proto.NewProtobufPushEncoder(),
+		pushDecoder:       proto.NewProtobufPushDecoder(),
 	}
 	shard.pubCh = make(chan pubRequest, redisPublishChannelSize)
 	shard.subCh = make(chan subRequest, redisSubscribeChannelSize)
@@ -731,34 +731,34 @@ func (e *shard) runPubSub() {
 }
 
 func (e *shard) handleRedisClientMessage(chID channelID, data []byte) error {
-	var message proto.Message
+	var message proto.Push
 	err := message.Unmarshal(data)
 	if err != nil {
 		return err
 	}
-	return e.handleClientMessage(&message)
+	return e.handleClientPush(&message)
 }
 
-func (e *shard) handleClientMessage(message *proto.Message) error {
-	switch message.Type {
-	case proto.MessageTypePublication:
-		pub, err := e.messageDecoder.DecodePub(message.Data)
+func (e *shard) handleClientPush(push *proto.Push) error {
+	switch push.Type {
+	case proto.PushTypePublication:
+		pub, err := e.pushDecoder.DecodePublication(push.Data)
 		if err != nil {
 			return err
 		}
-		e.node.handlePublication(message.Channel, pub)
-	case proto.MessageTypeJoin:
-		join, err := e.messageDecoder.DecodeJoin(message.Data)
+		e.node.handlePublication(push.Channel, pub)
+	case proto.PushTypeJoin:
+		join, err := e.pushDecoder.DecodeJoin(push.Data)
 		if err != nil {
 			return err
 		}
-		e.node.handleJoin(message.Channel, join)
-	case proto.MessageTypeLeave:
-		leave, err := e.messageDecoder.DecodeLeave(message.Data)
+		e.node.handleJoin(push.Channel, join)
+	case proto.PushTypeLeave:
+		leave, err := e.pushDecoder.DecodeLeave(push.Data)
 		if err != nil {
 			return err
 		}
-		e.node.handleLeave(message.Channel, leave)
+		e.node.handleLeave(push.Channel, leave)
 	default:
 	}
 	return nil
@@ -1031,12 +1031,12 @@ func (e *shard) Publish(ch string, pub *proto.Publication, opts *ChannelOptions)
 
 	eChan := make(chan error, 1)
 
-	data, err := e.messageEncoder.EncodePublication(pub)
+	data, err := e.pushEncoder.EncodePublication(pub)
 	if err != nil {
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.messageEncoder.Encode(proto.NewPubMessage(ch, data))
+	byteMessage, err := e.pushEncoder.Encode(proto.NewPublication(ch, data))
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -1071,12 +1071,12 @@ func (e *shard) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) <
 
 	eChan := make(chan error, 1)
 
-	data, err := e.messageEncoder.EncodeJoin(join)
+	data, err := e.pushEncoder.EncodeJoin(join)
 	if err != nil {
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.messageEncoder.Encode(proto.NewJoinMessage(ch, data))
+	byteMessage, err := e.pushEncoder.Encode(proto.NewJoin(ch, data))
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -1098,12 +1098,12 @@ func (e *shard) PublishLeave(ch string, leave *proto.Leave, opts *ChannelOptions
 
 	eChan := make(chan error, 1)
 
-	data, err := e.messageEncoder.EncodeLeave(leave)
+	data, err := e.pushEncoder.EncodeLeave(leave)
 	if err != nil {
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.messageEncoder.Encode(proto.NewLeaveMessage(ch, data))
+	byteMessage, err := e.pushEncoder.Encode(proto.NewLeave(ch, data))
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -1293,16 +1293,16 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*proto.Publication,
 			return nil, errors.New("error getting Message value")
 		}
 
-		msg, err := n.messageDecoder.Decode(value)
+		msg, err := n.pushDecoder.Decode(value)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Message: %v", err)
 		}
 
-		if msg.Type != proto.MessageTypePublication {
+		if msg.Type != proto.PushTypePublication {
 			return nil, fmt.Errorf("wrong message type in history: %d", msg.Type)
 		}
 
-		publication, err := n.messageDecoder.DecodePub(msg.Data)
+		publication, err := n.pushDecoder.DecodePublication(msg.Data)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}

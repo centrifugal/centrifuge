@@ -243,16 +243,16 @@ func (c *client) OnPublish(h PublishHandler) {
 }
 
 func (c *client) Send(data Raw) error {
-	p := &proto.Push{
+	p := &proto.Message{
 		Data: data,
 	}
 
-	messageEncoder := proto.GetMessageEncoder(c.transport.Encoding())
-	data, err := messageEncoder.EncodePush(p)
+	pushEncoder := proto.GetPushEncoder(c.transport.Encoding())
+	data, err := pushEncoder.EncodeMessage(p)
 	if err != nil {
 		return err
 	}
-	result, err := messageEncoder.Encode(proto.NewPushMessage(data))
+	result, err := pushEncoder.Encode(proto.NewMessage(data))
 	if err != nil {
 		return err
 	}
@@ -281,18 +281,13 @@ func (c *client) Unsubscribe(ch string) error {
 }
 
 func (c *client) sendUnsub(ch string) error {
-	var messageEncoder proto.MessageEncoder
-	if c.transport.Encoding() == proto.EncodingJSON {
-		messageEncoder = proto.NewJSONMessageEncoder()
-	} else {
-		messageEncoder = proto.NewProtobufMessageEncoder()
-	}
+	pushEncoder := proto.GetPushEncoder(c.transport.Encoding())
 
-	data, err := messageEncoder.EncodeUnsub(&proto.Unsub{})
+	data, err := pushEncoder.EncodeUnsub(&proto.Unsub{})
 	if err != nil {
 		return err
 	}
-	result, err := messageEncoder.Encode(proto.NewUnsubMessage(ch, data))
+	result, err := pushEncoder.Encode(proto.NewUnsub(ch, data))
 	if err != nil {
 		return err
 	}
