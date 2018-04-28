@@ -446,6 +446,10 @@ func (c *client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 		return nil, nil
 	}
 
+	if replyErr != nil {
+		replyErrorCount.WithLabelValues(strings.ToLower(proto.MethodType_name[int32(method)])).Inc()
+	}
+
 	rep := &proto.Reply{
 		ID:    command.ID,
 		Error: replyErr,

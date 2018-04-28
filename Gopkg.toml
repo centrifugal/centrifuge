@@ -51,7 +51,7 @@ ignored = [
 
 [[constraint]]
   name = "github.com/prometheus/client_golang"
-  branch = "master"
+  version = "0.8.0"
 
 [[constraint]]
   name = "github.com/stretchr/testify"
