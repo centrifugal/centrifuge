@@ -1019,37 +1019,6 @@ func (c *client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 	return resp, nil
 }
 
-// NOTE: actually can be a part of engine history method, for
-// example if we eventually will work with Redis streams. For
-// this sth like HistoryFilter{limit int, from string} struct
-// can be added as History engine method argument.
-func recoverMessages(last string, messages []*proto.Publication) ([]*proto.Publication, bool) {
-	if last == "" {
-		// Client wants to recover messages but it seems that there were no
-		// messages in history before, so client missed all messages which
-		// exist now.
-		return messages, false
-	}
-	position := -1
-	for index, msg := range messages {
-		if msg.UID == last {
-			position = index
-			break
-		}
-	}
-	if position > -1 {
-		// Last uid provided found in history. Set recovered flag which means that
-		// Centrifugo thinks missed messages fully recovered.
-		return messages[0:position], true
-	}
-	// Last id provided not found in history messages. This means that client
-	// most probably missed too many messages (maybe wrong last uid provided but
-	// it's not a normal case). So we try to compensate as many as we can. But
-	// recovered flag stays false so we do not give a guarantee all missed messages
-	// recovered successfully.
-	return messages, false
-}
-
 // subscribeCmd handles subscribe command - clients send this when subscribe
 // on channel, if channel if private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
@@ -1176,21 +1145,20 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 
 	if chOpts.HistoryRecover {
 		if cmd.Recover {
-			// Client provided subscribe request with recover flag on. Try to recover missed messages
+			// Client provided subscribe request with recover flag on. Try to recover missed publications
 			// automatically from history (we suppose here that history configured wisely) based on
-			// provided last message id value.
-			messages, err := c.node.History(channel)
+			// provided last publication uid seen by client.
+			publications, recovered, err := c.node.recoverHistory(channel, cmd.Last)
 			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error recovering messages", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+				c.node.logger.log(newLogEntry(LogLevelError, "error recovering publications", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				res.Publications = nil
 			} else {
-				recoveredMessages, recovered := recoverMessages(cmd.Last, messages)
-				res.Publications = recoveredMessages
+				res.Publications = publications
 				res.Recovered = recovered
 			}
 		} else {
-			// Client don't want to recover messages yet, we just return last message id to him here.
-			lastPubUID, err := c.node.lastPubUID(channel)
+			// Client don't want to recover messages yet (fresh connect), we just return last message id here so it could recover later.
+			lastPubUID, err := c.node.lastPublicationUID(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last message ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			} else {
@@ -1434,28 +1402,16 @@ func (c *client) presenceStatsCmd(cmd *proto.PresenceStatsRequest) (*proto.Prese
 		return resp, nil
 	}
 
-	presence, err := c.node.Presence(ch)
+	stats, err := c.node.presenceStats(ch)
 	if err != nil {
-		c.node.logger.log(newLogEntry(LogLevelError, "error getting presence", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
+		c.node.logger.log(newLogEntry(LogLevelError, "error getting presence stats", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		resp.Error = ErrorInternal
 		return resp, nil
 	}
 
-	numClients := len(presence)
-	numUsers := 0
-	uniqueUsers := map[string]struct{}{}
-
-	for _, info := range presence {
-		userID := info.User
-		if _, ok := uniqueUsers[userID]; !ok {
-			uniqueUsers[userID] = struct{}{}
-			numUsers++
-		}
-	}
-
 	resp.Result = &proto.PresenceStatsResult{
-		NumClients: uint32(numClients),
-		NumUsers:   uint32(numUsers),
+		NumClients: uint32(stats.NumClients),
+		NumUsers:   uint32(stats.NumUsers),
 	}
 
 	return resp, nil

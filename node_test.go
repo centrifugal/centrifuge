@@ -78,12 +78,20 @@ func (e *TestEngine) presence(ch string) (map[string]*proto.ClientInfo, error) {
 	return map[string]*proto.ClientInfo{}, nil
 }
 
+func (e *TestEngine) presenceStats(ch string) (presenceStats, error) {
+	return presenceStats{}, nil
+}
+
 func (e *TestEngine) history(ch string, filter historyFilter) ([]*proto.Publication, error) {
 	return []*proto.Publication{}, nil
 }
 
 func (e *TestEngine) removeHistory(ch string) error {
 	return nil
+}
+
+func (e *TestEngine) recoverHistory(ch string, lastUID string) ([]*proto.Publication, bool, error) {
+	return []*proto.Publication{}, false, nil
 }
 
 func (e *TestEngine) channels() ([]string, error) {
