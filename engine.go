@@ -10,7 +10,7 @@ type historyFilter struct {
 	// Limit sets the max amount of messages that must
 	// be returned. 0 means no limit - i.e. return all history
 	// messages (limited by configured history_size). 1 means
-	// last message only.
+	// last message only, 2 - two last messages etc.
 	Limit int
 }
 

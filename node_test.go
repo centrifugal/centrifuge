@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"encoding/json"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -98,7 +99,7 @@ func (e *TestEngine) channels() ([]string, error) {
 	return []string{}, nil
 }
 
-func testNode() *Node {
+func nodeWithTestEngine() *Node {
 	c := DefaultConfig
 	n := New(c)
 	n.SetEngine(NewTestEngine())
@@ -109,8 +110,18 @@ func testNode() *Node {
 	return n
 }
 
+func nodeWithMemoryEngine() *Node {
+	c := DefaultConfig
+	n := New(c)
+	err := n.Run()
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
 func TestUserAllowed(t *testing.T) {
-	node := testNode()
+	node := nodeWithTestEngine()
 	assert.True(t, node.userAllowed("channel#1", "1"))
 	assert.True(t, node.userAllowed("channel", "1"))
 	assert.False(t, node.userAllowed("channel#1", "2"))
@@ -120,7 +131,7 @@ func TestUserAllowed(t *testing.T) {
 }
 
 func TestSetConfig(t *testing.T) {
-	node := testNode()
+	node := nodeWithTestEngine()
 	err := node.Reload(DefaultConfig)
 	assert.NoError(t, err)
 }
@@ -139,4 +150,49 @@ func TestNodeRegistry(t *testing.T) {
 	registry.clean(time.Second)
 	// Current node info should still be in node registry - we never delete it.
 	assert.Equal(t, 1, len(registry.list()))
+}
+
+var testPayload = map[string]interface{}{
+	"_id":        "5adece493c1a23736b037c52",
+	"index":      2,
+	"guid":       "478a00f4-19b1-4567-8097-013b8cc846b8",
+	"isActive":   false,
+	"balance":    "$2,199.02",
+	"picture":    "http://placehold.it/32x32",
+	"age":        25,
+	"eyeColor":   "blue",
+	"name":       "Swanson Walker",
+	"gender":     "male",
+	"company":    "SHADEASE",
+	"email":      "swansonwalker@shadease.com",
+	"phone":      "+1 (885) 410-3991",
+	"address":    "768 Paerdegat Avenue, Gouglersville, Oklahoma, 5380",
+	"registered": "2016-01-24T07:40:09 -03:00",
+	"latitude":   -71.336378,
+	"longitude":  -28.155956,
+	"tags": []string{
+		"magna",
+		"nostrud",
+		"irure",
+		"aliquip",
+		"culpa",
+		"sint",
+	},
+	"greeting":      "Hello, Swanson Walker! You have 9 unread messages.",
+	"favoriteFruit": "apple",
+}
+
+func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
+	node := nodeWithTestEngine()
+	payload, err := json.Marshal(testPayload)
+	if err != nil {
+		panic(err.Error())
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		node.Publish("bench", &Publication{
+			UID:  "test",
+			Data: payload,
+		})
+	}
 }
