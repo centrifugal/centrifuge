@@ -71,15 +71,21 @@ type Credentials struct {
 type credentialsContextKeyType int
 
 // CredentialsContextKey allows Go code to set Credentials into context.
-var CredentialsContextKey credentialsContextKeyType
+var credentialsContextKey credentialsContextKeyType
+
+// SetCredentials allows to set connection Credentials to context.
+func SetCredentials(ctx context.Context, creds *Credentials) context.Context {
+	ctx = context.WithValue(ctx, credentialsContextKey, creds)
+	return ctx
+}
 
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
 	Info proto.Raw
 }
 
-// client represents client connection to Centrifugo. Transport of
-// incoming connection abstracted away via Transport interface.
+// client represents client connection to server. Transport of
+// incoming connection abstracted away via transport interface.
 type client struct {
 	mu sync.RWMutex
 
@@ -795,16 +801,14 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	}
 
 	config := c.node.Config()
-
-	secret := config.Secret
-	insecure := config.ClientInsecure
-	closeDelay := config.ClientExpiredCloseDelay
-	clientExpire := config.ClientExpire
 	version := config.Version
+	insecure := config.ClientInsecure
+	clientExpire := config.ClientExpire
+	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
 
 	var credentials *Credentials
-	if val := c.ctx.Value(CredentialsContextKey); val != nil {
+	if val := c.ctx.Value(credentialsContextKey); val != nil {
 		if creds, ok := val.(*Credentials); ok {
 			credentials = creds
 		}
@@ -824,46 +828,56 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		}
 		c.mu.Unlock()
 	} else {
-		user := cmd.User
-		info := cmd.Info
-		opts := cmd.Opts
+		// explicit authentication Credentials not provided in middlewares, look
+		// for signed credentials in connect command.
+		credentials := cmd.Credentials
+		if credentials != nil {
+			user := credentials.User
+			info := credentials.Info
+			opts := credentials.Opts
 
-		var exp string
-		var sign string
-		if !insecure {
-			exp = cmd.Exp
-			sign = cmd.Sign
-		}
-
-		if !insecure {
-			isValid := auth.CheckClientSign(secret, user, exp, info, opts, sign)
-			if !isValid {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid sign", map[string]interface{}{"user": user, "client": c.uid}))
-				return resp, DisconnectInvalidSign
+			var exp string
+			var sign string
+			if !insecure {
+				exp = credentials.Exp
+				sign = credentials.Sign
 			}
-			timestamp, err := strconv.Atoi(exp)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid exp timestamp", map[string]interface{}{"user": user, "client": c.uid, "error": err.Error()}))
+			if !insecure {
+				secret := config.Secret
+				isValid := auth.CheckClientSign(secret, user, exp, info, opts, sign)
+				if !isValid {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "invalid sign", map[string]interface{}{"user": user, "client": c.uid}))
+					return resp, DisconnectInvalidSign
+				}
+				timestamp, err := strconv.Atoi(exp)
+				if err != nil {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "invalid exp timestamp", map[string]interface{}{"user": user, "client": c.uid, "error": err.Error()}))
+					return resp, DisconnectBadRequest
+				}
+				c.mu.Lock()
+				c.exp = int64(timestamp)
+				c.mu.Unlock()
+			}
+
+			c.mu.Lock()
+			c.user = user
+			c.mu.Unlock()
+
+			if len(info) > 0 {
+				byteInfo, err := base64.StdEncoding.DecodeString(info)
+				if err != nil {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": user, "client": c.uid, "error": err.Error()}))
+					return resp, DisconnectBadRequest
+				}
+				c.mu.Lock()
+				c.info = proto.Raw(byteInfo)
+				c.mu.Unlock()
+			}
+		} else {
+			if !insecure {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not provided in connect", map[string]interface{}{"client": c.uid, "user": c.user}))
 				return resp, DisconnectBadRequest
 			}
-			c.mu.Lock()
-			c.exp = int64(timestamp)
-			c.mu.Unlock()
-		}
-
-		c.mu.Lock()
-		c.user = user
-		c.mu.Unlock()
-
-		if len(info) > 0 {
-			byteInfo, err := base64.StdEncoding.DecodeString(info)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": user, "client": c.uid, "error": err.Error()}))
-				return resp, DisconnectBadRequest
-			}
-			c.mu.Lock()
-			c.info = proto.Raw(byteInfo)
-			c.mu.Unlock()
 		}
 	}
 
@@ -893,11 +907,6 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		Expires: expires,
 		TTL:     ttl,
 		Expired: expired,
-	}
-
-	if c.refreshHandler != nil {
-		res.Expires = false
-		res.TTL = 0
 	}
 
 	resp.Result = res
@@ -931,7 +940,9 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	}
 
 	if c.node.ConnectHandler() != nil {
-		reply := c.node.ConnectHandler()(c.ctx, c, ConnectEvent{})
+		reply := c.node.ConnectHandler()(c.ctx, c, ConnectEvent{
+			Data: cmd.Data,
+		})
 		if reply.Disconnect != nil {
 			return resp, reply.Disconnect
 		}
@@ -939,6 +950,14 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 			resp.Error = reply.Error
 			return resp, nil
 		}
+		if reply.Data != nil {
+			resp.Result.Data = reply.Data
+		}
+	}
+
+	if c.refreshHandler != nil {
+		resp.Result.Expires = false
+		resp.Result.TTL = 0
 	}
 
 	resp.Result.Client = c.uid
@@ -952,11 +971,17 @@ func (c *client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 
 	resp := &proto.RefreshResponse{}
 
-	user := cmd.User
-	info := cmd.Info
-	exp := cmd.Exp
-	opts := cmd.Opts
-	sign := cmd.Sign
+	credentials := cmd.Credentials
+	if credentials == nil {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not provided in refresh", map[string]interface{}{"user": c.user, "client": c.uid}))
+		return resp, DisconnectBadRequest
+	}
+
+	user := credentials.User
+	info := credentials.Info
+	exp := credentials.Exp
+	opts := credentials.Opts
+	sign := credentials.Sign
 
 	config := c.node.Config()
 	secret := config.Secret
