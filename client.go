@@ -84,8 +84,8 @@ type ChannelContext struct {
 	Info proto.Raw
 }
 
-// client represents client connection to server. Transport of
-// incoming connection abstracted away via transport interface.
+// client is an implementation of Client connection to server.
+// Transport of incoming connection abstracted away via transport interface.
 type client struct {
 	mu sync.RWMutex
 
@@ -885,6 +885,8 @@ func (c *client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	user := c.user
 	c.mu.RUnlock()
 
+	c.node.logger.log(newLogEntry(LogLevelDebug, "client authenticated", map[string]interface{}{"client": c.uid, "user": c.user}))
+
 	if userConnectionLimit > 0 && user != "" && len(c.node.hub.userConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": user, "client": c.uid, "limit": userConnectionLimit}))
 		resp.Error = ErrorLimitExceeded
@@ -1066,7 +1068,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 
 	res := &proto.SubscribeResult{}
 
-	if len(channel) > channelMaxLength {
+	if channelMaxLength > 0 && len(channel) > channelMaxLength {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long", map[string]interface{}{"max": channelMaxLength, "channel": channel, "user": c.user, "client": c.uid}))
 		resp.Error = ErrorLimitExceeded
 		return resp, nil
@@ -1076,7 +1078,7 @@ func (c *client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	numChannels := len(c.channels)
 	c.mu.RUnlock()
 
-	if numChannels >= channelLimit {
+	if channelLimit > 0 && numChannels >= channelLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]interface{}{"limit": channelLimit, "user": c.user, "client": c.uid}))
 		resp.Error = ErrorLimitExceeded
 		return resp, nil
@@ -1306,7 +1308,7 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on non-existing namespace", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid}))
+		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to publish to non-existing namespace", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid}))
 		resp.Error = ErrorNamespaceNotFound
 		return resp, nil
 	}
