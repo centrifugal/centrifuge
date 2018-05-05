@@ -17,7 +17,7 @@ type ConnectReply struct {
 }
 
 // ConnectHandler ...
-type ConnectHandler func(context.Context, Client, ConnectEvent) ConnectReply
+type ConnectHandler func(context.Context, *Client, ConnectEvent) ConnectReply
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
