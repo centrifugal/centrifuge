@@ -292,10 +292,12 @@ func (c *Client) Close(disconnect *Disconnect) error {
 	c.mu.Lock()
 	c.disconnect = disconnect
 	c.mu.Unlock()
+	// Closed transport will cause transport connection handler to
+	// return and thus calling client's close method.
 	return c.transport.Close(disconnect)
 }
 
-// Close client connection with specific disconnect reason.
+// close client connection with specific disconnect reason.
 func (c *Client) close(disconnect *Disconnect) error {
 	c.mu.Lock()
 	if c.closed {
@@ -361,7 +363,11 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 // Lock must be held outside.
 func (c *Client) clientInfo(ch string) *proto.ClientInfo {
-	channelInfo := c.channels[ch].Info
+	var channelInfo proto.Raw
+	channelContext, ok := c.channels[ch]
+	if ok {
+		channelInfo = channelContext.Info
+	}
 	return &proto.ClientInfo{
 		User:     c.user,
 		Client:   c.uid,
@@ -804,24 +810,21 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		c.user = credentials.UserID
 		c.info = credentials.Info
 		c.exp = credentials.Exp
-		if c.exp > 0 {
-			ttl = uint32(c.exp - time.Now().Unix())
-		}
 		c.mu.Unlock()
 	} else {
 		// explicit authentication Credentials not provided in middlewares, look
 		// for signed credentials in connect command.
-		credentials := cmd.Credentials
-		if credentials != nil {
-			user := credentials.User
-			info := credentials.Info
-			opts := credentials.Opts
+		signedCredentials := cmd.Credentials
+		if signedCredentials != nil {
+			user := signedCredentials.User
+			info := signedCredentials.Info
+			opts := signedCredentials.Opts
 
 			var exp string
 			var sign string
 			if !insecure {
-				exp = credentials.Exp
-				sign = credentials.Sign
+				exp = signedCredentials.Exp
+				sign = signedCredentials.Sign
 			}
 			if !insecure {
 				secret := config.Secret
@@ -877,11 +880,13 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	if clientExpire && !insecure {
 		expires = true
 		c.mu.RLock()
-		ttl = uint32(c.exp - time.Now().Unix())
+		diff := c.exp - time.Now().Unix()
 		c.mu.RUnlock()
-		if ttl <= 0 {
+		if diff <= 0 {
 			expired = true
 			ttl = 0
+		} else {
+			ttl = uint32(diff)
 		}
 	}
 
@@ -895,6 +900,9 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	resp.Result = res
 
 	if expired {
+		if credentials != nil {
+			return nil, DisconnectExpired
+		}
 		// Can't authenticate client with expired credentials.
 		return resp, nil
 	}
@@ -998,8 +1006,12 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 	res := &proto.RefreshResult{
 		Version: version,
 		Expires: clientExpire,
-		TTL:     uint32(int64(timestamp) - time.Now().Unix()),
 		Client:  c.uid,
+	}
+
+	diff := int64(timestamp) - time.Now().Unix()
+	if diff > 0 {
+		res.TTL = uint32(diff)
 	}
 
 	resp.Result = res
