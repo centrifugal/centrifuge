@@ -22,6 +22,10 @@ type ChannelOptions struct {
 	// prototyping.
 	Publish bool `json:"publish"`
 
+	// SubscribeToPublish turns on an automatic check that client subscribed
+	// on channel before allow it to publish into that channel.
+	SubscribeToPublish bool `mapstructure:"subscribe_to_publish" json:"subscribe_to_publish"`
+
 	// Anonymous determines is anonymous access (with empty user ID)
 	// allowed or not. In most situations your application works with
 	// authorized users so every user has its own unique user ID. But

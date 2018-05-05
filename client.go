@@ -1293,25 +1293,26 @@ func (c *client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 
 	resp := &proto.PublishResponse{}
 
-	c.mu.RLock()
-	_, ok := c.channels[ch]
-	c.mu.RUnlock()
-
-	if !ok {
-		resp.Error = ErrorPermissionDenied
-		return resp, nil
-	}
-
-	c.mu.RLock()
-	info := c.clientInfo(ch)
-	c.mu.RUnlock()
-
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to publish to non-existing namespace", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid}))
 		resp.Error = ErrorNamespaceNotFound
 		return resp, nil
 	}
+
+	if chOpts.SubscribeToPublish {
+		c.mu.RLock()
+		_, ok := c.channels[ch]
+		c.mu.RUnlock()
+		if !ok {
+			resp.Error = ErrorPermissionDenied
+			return resp, nil
+		}
+	}
+
+	c.mu.RLock()
+	info := c.clientInfo(ch)
+	c.mu.RUnlock()
 
 	insecure := c.node.Config().ClientInsecure
 
