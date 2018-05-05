@@ -624,6 +624,9 @@ func (n *Node) lastPublicationUID(ch string) (string, error) {
 func (n *Node) privateChannel(ch string) bool {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
+	if n.config.ChannelPrivatePrefix == "" {
+		return false
+	}
 	return strings.HasPrefix(ch, n.config.ChannelPrivatePrefix)
 }
 
