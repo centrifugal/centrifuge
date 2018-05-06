@@ -82,7 +82,7 @@ func TestClientConnectWithWrongCredentials(t *testing.T) {
 	assert.Equal(t, disconnect, DisconnectInvalidSign)
 }
 
-func TestClientConnectWithValidCredentials(t *testing.T) {
+func TestClientConnectWithValidSignedCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	node.config.Secret = "secret"
 	transport := newTestTransport()
@@ -100,7 +100,7 @@ func TestClientConnectWithValidCredentials(t *testing.T) {
 	assert.Equal(t, false, resp.Result.Expires)
 }
 
-func TestClientConnectWithExpiredCredentials(t *testing.T) {
+func TestClientConnectWithExpiredSignedCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	node.config.Secret = "secret"
 	node.config.ClientExpire = true
@@ -119,6 +119,40 @@ func TestClientConnectWithExpiredCredentials(t *testing.T) {
 	assert.Equal(t, true, resp.Result.Expired)
 	assert.Equal(t, uint32(0), resp.Result.TTL)
 	assert.False(t, client.authenticated)
+}
+
+func TestClientRefreshSignedCredentials(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.ClientExpire = true
+	node.config.Secret = "secret"
+	transport := newTestTransport()
+	client, _ := newClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
+		Credentials: &proto.SignedCredentials{
+			User: "42",
+			Exp:  "1525541722",
+			Info: "",
+			Sign: "46789cda3bea52eca167961dd68c4d4240b9108f196a8516d1c753259b457d12",
+		},
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, "", resp.Result.Client)
+	assert.Equal(t, true, resp.Result.Expires)
+	assert.Equal(t, true, resp.Result.Expired)
+
+	refreshResp, disconnect := client.refreshCmd(&proto.RefreshRequest{
+		Credentials: &proto.SignedCredentials{
+			User: "42",
+			Exp:  "2525637058",
+			Info: "",
+			Sign: "1651ee08ba82f8e54578c4c20bc7675e6fce7af4b75f3e21aa537d4f0518a6a7",
+		},
+	})
+	assert.Nil(t, disconnect)
+	assert.NotEmpty(t, client.ID())
+	assert.Equal(t, true, refreshResp.Result.Expires)
+	assert.Equal(t, false, refreshResp.Result.Expired)
+	assert.True(t, refreshResp.Result.TTL > 0)
 }
 
 func TestClientConnectContextCredentials(t *testing.T) {
@@ -295,6 +329,15 @@ func TestClientUnsubscribe(t *testing.T) {
 	assert.Equal(t, 0, len(client.Channels()))
 	assert.Equal(t, 1, node.Hub().NumClients())
 	assert.Equal(t, 0, node.Hub().NumChannels())
+
+	subscribeClient(t, client, "test")
+	assert.Equal(t, 1, len(client.Channels()))
+
+	err := client.Unsubscribe("test")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(client.Channels()))
+	assert.Equal(t, 1, node.Hub().NumClients())
+	assert.Equal(t, 0, node.Hub().NumChannels())
 }
 
 func TestClientPublish(t *testing.T) {
@@ -336,6 +379,23 @@ func TestClientPublish(t *testing.T) {
 	})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, publishResp.Error)
+}
+
+func TestClientPing(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	pingResp, disconnect := client.pingCmd(&proto.PingRequest{
+		Data: "hi",
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, pingResp.Error)
+	assert.Equal(t, "hi", pingResp.Result.Data)
 }
 
 func TestClientPresence(t *testing.T) {
@@ -418,4 +478,94 @@ func TestClientHistory(t *testing.T) {
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorNotAvailable, historyResp.Error)
 	assert.Nil(t, historyResp.Result)
+}
+
+func TestClientCloseUnauthenticated(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.ClientStaleCloseDelay = time.Millisecond
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+	time.Sleep(100 * time.Millisecond)
+	assert.True(t, client.closed)
+}
+
+func TestClientPresenceUpdate(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.Presence = true
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	err := client.updateChannelPresence("test")
+	assert.NoError(t, err)
+}
+
+func TestClientSend(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.Presence = true
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	err := client.Send([]byte(`{}`))
+	assert.NoError(t, err)
+
+	err = transport.Close(nil)
+	assert.NoError(t, err)
+
+	err = client.Send([]byte(`{}`))
+	assert.Error(t, err)
+}
+
+func TestClientClose(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	err := client.Close(DisconnectShutdown)
+	assert.NoError(t, err)
+	assert.True(t, transport.closed)
+	assert.Equal(t, client.disconnect, DisconnectShutdown)
+}
+
+func TestClientHandleMalformedCommand(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	reply, disconnect := client.handle(&proto.Command{
+		ID:     1,
+		Method: 1000,
+		Params: []byte(`{}`),
+	})
+	assert.Equal(t, ErrorMethodNotFound, reply.Error)
+	assert.Nil(t, disconnect)
+
+	reply, disconnect = client.handle(&proto.Command{
+		ID:     1,
+		Method: 2,
+		Params: []byte(`{}`),
+	})
+	assert.Nil(t, reply)
+	assert.Equal(t, DisconnectBadRequest, disconnect)
 }
