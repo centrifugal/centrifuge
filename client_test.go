@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -71,7 +72,7 @@ func TestClientConnectWithWrongCredentials(t *testing.T) {
 	client, _ := newClient(context.Background(), node, transport)
 	_, disconnect := client.connectCmd(&proto.ConnectRequest{
 		Credentials: &proto.SignedCredentials{
-			User: "test",
+			User: "42",
 			Exp:  "",
 			Info: "",
 			Sign: "",
@@ -122,7 +123,6 @@ func TestClientConnectWithExpiredCredentials(t *testing.T) {
 
 func TestClientConnectContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.Secret = "secret"
 	node.config.ClientExpire = true
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -166,4 +166,256 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	_, disconnect := client.connectCmd(&proto.ConnectRequest{})
 	assert.NotNil(t, disconnect)
 	assert.Equal(t, DisconnectExpired, disconnect)
+}
+
+func connectClient(t *testing.T, client *Client) *proto.ConnectResult {
+	connectResp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, connectResp.Error)
+	assert.True(t, client.authenticated)
+	assert.Equal(t, client.uid, connectResp.Result.Client)
+	return connectResp.Result
+}
+
+func subscribeClient(t *testing.T, client *Client, ch string) *proto.SubscribeResult {
+	subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: ch,
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, subscribeResp.Error)
+	return subscribeResp.Result
+}
+
+func TestClientSubscribe(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	assert.Equal(t, 0, len(client.Channels()))
+
+	subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "test1",
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, subscribeResp.Error)
+	assert.Empty(t, subscribeResp.Result.Last)
+	assert.False(t, subscribeResp.Result.Recovered)
+	assert.Empty(t, subscribeResp.Result.Publications)
+	assert.Equal(t, 1, len(client.Channels()))
+
+	subscribeResp, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "test2",
+	})
+	assert.Equal(t, 2, len(client.Channels()))
+
+	assert.Equal(t, 1, node.Hub().NumClients())
+	assert.Equal(t, 2, node.Hub().NumChannels())
+
+	subscribeResp, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "test2",
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorAlreadySubscribed, subscribeResp.Error)
+}
+
+func TestClientSubscribeLast(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.HistorySize = 10
+	node.config.HistoryLifetime = 60
+	node.config.HistoryRecover = true
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	for i := 0; i < 10; i++ {
+		node.Publish("test", &Publication{
+			UID:  strconv.Itoa(i),
+			Data: []byte("{}"),
+		})
+	}
+
+	connectClient(t, client)
+	result := subscribeClient(t, client, "test")
+	assert.Equal(t, "9", result.Last)
+}
+
+func TestClientSubscribeRecover(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.HistorySize = 10
+	node.config.HistoryLifetime = 60
+	node.config.HistoryRecover = true
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	for i := 0; i < 10; i++ {
+		node.Publish("test", &Publication{
+			UID:  strconv.Itoa(i),
+			Data: []byte(`{}`),
+		})
+	}
+
+	connectClient(t, client)
+
+	subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "test",
+		Recover: true,
+		Last:    "7",
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, subscribeResp.Error)
+	assert.Equal(t, 2, len(subscribeResp.Result.Publications))
+	assert.True(t, subscribeResp.Result.Recovered)
+}
+
+func TestClientUnsubscribe(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	unsubscribeResp, disconnect := client.unsubscribeCmd(&proto.UnsubscribeRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, unsubscribeResp.Error)
+
+	assert.Equal(t, 0, len(client.Channels()))
+	assert.Equal(t, 1, node.Hub().NumClients())
+	assert.Equal(t, 0, node.Hub().NumChannels())
+}
+
+func TestClientPublish(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	publishResp, disconnect := client.publishCmd(&proto.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorPermissionDenied, publishResp.Error)
+
+	node.config.Publish = true
+	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, publishResp.Error)
+
+	node.config.SubscribeToPublish = true
+	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorPermissionDenied, publishResp.Error)
+
+	subscribeClient(t, client, "test")
+	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, publishResp.Error)
+}
+
+func TestClientPresence(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.Presence = true
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	presenceResp, disconnect := client.presenceCmd(&proto.PresenceRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, presenceResp.Error)
+	assert.Equal(t, 1, len(presenceResp.Result.Presence))
+
+	presenceStatsResp, disconnect := client.presenceStatsCmd(&proto.PresenceStatsRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, presenceResp.Error)
+	assert.Equal(t, uint32(1), presenceStatsResp.Result.NumUsers)
+	assert.Equal(t, uint32(1), presenceStatsResp.Result.NumClients)
+
+	node.config.Presence = false
+	presenceResp, disconnect = client.presenceCmd(&proto.PresenceRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorNotAvailable, presenceResp.Error)
+	assert.Nil(t, presenceResp.Result)
+
+	presenceStatsResp, disconnect = client.presenceStatsCmd(&proto.PresenceStatsRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorNotAvailable, presenceStatsResp.Error)
+	assert.Nil(t, presenceStatsResp.Result)
+}
+
+func TestClientHistory(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.HistorySize = 10
+	node.config.HistoryLifetime = 60
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	for i := 0; i < 10; i++ {
+		node.Publish("test", &Publication{
+			UID:  strconv.Itoa(i),
+			Data: []byte(`{}`),
+		})
+	}
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	historyResp, disconnect := client.historyCmd(&proto.HistoryRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, historyResp.Error)
+	assert.Equal(t, 10, len(historyResp.Result.Publications))
+
+	node.config.HistorySize = 0
+	node.config.HistoryLifetime = 0
+
+	historyResp, disconnect = client.historyCmd(&proto.HistoryRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorNotAvailable, historyResp.Error)
+	assert.Nil(t, historyResp.Result)
 }

@@ -901,9 +901,10 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 
 	if expired {
 		if credentials != nil {
+			// In case of native Go authentication disconnect user.
 			return nil, DisconnectExpired
 		}
-		// Can't authenticate client with expired credentials.
+		// In case of using signed credentials initiate refresh workflow.
 		return resp, nil
 	}
 
@@ -962,17 +963,17 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 
 	resp := &proto.RefreshResponse{}
 
-	credentials := cmd.Credentials
-	if credentials == nil {
+	signedCredentials := cmd.Credentials
+	if signedCredentials == nil {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not provided in refresh", map[string]interface{}{"user": c.user, "client": c.uid}))
 		return resp, DisconnectBadRequest
 	}
 
-	user := credentials.User
-	info := credentials.Info
-	exp := credentials.Exp
-	opts := credentials.Opts
-	sign := credentials.Sign
+	user := signedCredentials.User
+	exp := signedCredentials.Exp
+	info := signedCredentials.Info
+	opts := signedCredentials.Opts
+	sign := signedCredentials.Sign
 
 	config := c.node.Config()
 	secret := config.Secret
