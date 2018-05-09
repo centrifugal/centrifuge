@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -71,24 +70,31 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
 	h, err = e.history("channel", historyFilter{Limit: 2})
+}
+
+func TestMemoryEnginePublishHistoryDropInactive(t *testing.T) {
+	e := testMemoryEngine()
+
+	pub := newTestPublication()
+	pub.UID = "test UID"
 
 	// HistoryDropInactive tests - new channel to avoid conflicts with test above
 	// 1. add history with DropInactive = true should be a no-op if history is empty
-	assert.NoError(t, <-e.publish("channel-2", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: true}))
-	h, err = e.history("channel-2", historyFilter{Limit: 2})
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: true}))
+	h, err := e.history("channel", historyFilter{Limit: 2})
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(h))
 
 	// 2. add history with DropInactive = false should always work
-	assert.NoError(t, <-e.publish("channel-2", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: false}))
-	h, err = e.history("channel-2", historyFilter{Limit: 0})
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: false}))
+	h, err = e.history("channel", historyFilter{Limit: 0})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(h))
 
 	// 3. add with DropInactive = true should work immediately since there should be something in history
 	// for 5 seconds from above
-	assert.NoError(t, <-e.publish("channel-2", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: true}))
-	h, err = e.history("channel-2", historyFilter{Limit: 0})
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: true}))
+	h, err = e.history("channel", historyFilter{Limit: 0})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(h))
 }
@@ -241,7 +247,7 @@ func BenchmarkOpAddPresence(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := e.addPresence("channel", "uid", &proto.ClientInfo{}, 25*time.Second)
+		err := e.addPresence("channel", "uid", &ClientInfo{}, 25*time.Second)
 		if err != nil {
 			panic(err)
 		}
@@ -254,7 +260,7 @@ func BenchmarkOpAddPresenceParallel(b *testing.B) {
 	b.SetParallelism(12)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := e.addPresence("channel", "uid", &proto.ClientInfo{}, 25*time.Second)
+			err := e.addPresence("channel", "uid", &ClientInfo{}, 25*time.Second)
 			if err != nil {
 				panic(err)
 			}
@@ -264,7 +270,7 @@ func BenchmarkOpAddPresenceParallel(b *testing.B) {
 
 func BenchmarkOpPresence(b *testing.B) {
 	e := testMemoryEngine()
-	e.addPresence("channel", "uid", &proto.ClientInfo{}, 30*time.Second)
+	e.addPresence("channel", "uid", &ClientInfo{}, 30*time.Second)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := e.presence("channel")
@@ -276,7 +282,7 @@ func BenchmarkOpPresence(b *testing.B) {
 
 func BenchmarkOpPresenceParallel(b *testing.B) {
 	e := testMemoryEngine()
-	e.addPresence("channel", "uid", &proto.ClientInfo{}, 30*time.Second)
+	e.addPresence("channel", "uid", &ClientInfo{}, 30*time.Second)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
