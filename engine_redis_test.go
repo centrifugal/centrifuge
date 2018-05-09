@@ -12,8 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-	"github.com/garyburd/redigo/redis"
+	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -502,7 +501,7 @@ func BenchmarkRedisEngineOpPresence(b *testing.B) {
 
 func BenchmarkRedisEngineOpPresenceParallel(b *testing.B) {
 	e := newTestRedisEngine()
-	e.addPresence("channel", "uid", &proto.ClientInfo{}, 300*time.Second)
+	e.addPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

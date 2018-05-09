@@ -59,4 +59,4 @@ ignored = [
 
 [[constraint]]
   name = "google.golang.org/grpc"
-  version = "1.10.0"
+  version = "1.12.0"
