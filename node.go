@@ -539,7 +539,7 @@ func (n *Node) Disconnect(user string, reconnect bool) error {
 // namespaceName returns namespace name from channel if exists.
 func (n *Node) namespaceName(ch string) string {
 	cTrim := strings.TrimPrefix(ch, n.config.ChannelPrivatePrefix)
-	if strings.Contains(cTrim, n.config.ChannelNamespaceBoundary) {
+	if n.config.ChannelNamespaceBoundary != "" && strings.Contains(cTrim, n.config.ChannelNamespaceBoundary) {
 		parts := strings.SplitN(cTrim, n.config.ChannelNamespaceBoundary, 2)
 		return parts[0]
 	}
@@ -636,11 +636,19 @@ func (n *Node) privateChannel(ch string) bool {
 func (n *Node) userAllowed(ch string, user string) bool {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
-	if !strings.Contains(ch, n.config.ChannelUserBoundary) {
+	userBoundary := n.config.ChannelUserBoundary
+	userSeparator := n.config.ChannelUserSeparator
+	if userBoundary == "" {
 		return true
 	}
-	parts := strings.Split(ch, n.config.ChannelUserBoundary)
-	allowedUsers := strings.Split(parts[len(parts)-1], n.config.ChannelUserSeparator)
+	if !strings.Contains(ch, userBoundary) {
+		return true
+	}
+	parts := strings.Split(ch, userBoundary)
+	if userSeparator == "" {
+		return parts[len(parts)-1] == user
+	}
+	allowedUsers := strings.Split(parts[len(parts)-1], userSeparator)
 	for _, allowedUser := range allowedUsers {
 		if user == allowedUser {
 			return true
