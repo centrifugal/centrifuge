@@ -55,7 +55,7 @@ type Node struct {
 	// configured log handler.
 	logger *logger
 
-	// cache control encoder/decoder in node.
+	// cache control encoder/decoder in Node.
 	controlEncoder controlproto.Encoder
 	controlDecoder controlproto.Decoder
 }
@@ -268,9 +268,9 @@ func (n *Node) handleControl(data []byte) error {
 	}
 }
 
-// handlePub handles messages published by web application or client into channel.
-// The goal of this method to deliver this message to all clients on this node subscribed
-// on channel.
+// handlePublication handles messages published into channel and
+// coming from engine. The goal of method is to deliver this message
+// to all clients on this node currently subscribed to channel.
 func (n *Node) handlePublication(ch string, pub *Publication) error {
 	messagesReceivedCount.WithLabelValues("pub").Inc()
 	numSubscribers := n.hub.NumSubscribers(ch)
@@ -281,7 +281,8 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 	return n.hub.broadcastPublication(ch, pub)
 }
 
-// handleJoin handles join messages.
+// handleJoin handles join messages - i.e. broadcasts it to
+// interested local clients subscribed to channel.
 func (n *Node) handleJoin(ch string, join *proto.Join) error {
 	messagesReceivedCount.WithLabelValues("join").Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
@@ -291,7 +292,8 @@ func (n *Node) handleJoin(ch string, join *proto.Join) error {
 	return n.hub.broadcastJoin(ch, join)
 }
 
-// handleLeave handles leave messages.
+// handleLeave handles leave messages - i.e. broadcasts it to
+// interested local clients subscribed to channel.
 func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
 	messagesReceivedCount.WithLabelValues("leave").Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
@@ -587,7 +589,7 @@ func (n *Node) presenceStats(ch string) (presenceStats, error) {
 // History returns a slice of last messages published into project channel.
 func (n *Node) History(ch string) ([]*Publication, error) {
 	actionCount.WithLabelValues("history").Inc()
-	pubs, err := n.engine.history(ch, historyFilter{Limit: 0})
+	pubs, err := n.engine.history(ch, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -609,7 +611,7 @@ func (n *Node) RemoveHistory(ch string) error {
 // lastPublicationUID return last message id for channel.
 func (n *Node) lastPublicationUID(ch string) (string, error) {
 	actionCount.WithLabelValues("last_publication_uid").Inc()
-	publications, err := n.engine.history(ch, historyFilter{Limit: 1})
+	publications, err := n.engine.history(ch, 1)
 	if err != nil {
 		return "", err
 	}

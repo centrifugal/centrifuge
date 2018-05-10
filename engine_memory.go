@@ -119,8 +119,8 @@ func (e *MemoryEngine) presenceStats(ch string) (presenceStats, error) {
 }
 
 // History extracts history from history hub.
-func (e *MemoryEngine) history(ch string, filter historyFilter) ([]*proto.Publication, error) {
-	return e.historyHub.get(ch, filter.Limit)
+func (e *MemoryEngine) history(ch string, limit int) ([]*proto.Publication, error) {
+	return e.historyHub.get(ch, limit)
 }
 
 // RecoverHistory ...

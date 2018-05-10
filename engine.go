@@ -4,16 +4,6 @@ import (
 	"time"
 )
 
-// historyFilter allows to provide several parameters for history
-// extraction.
-type historyFilter struct {
-	// Limit sets the max amount of messages that must
-	// be returned. 0 means no limit - i.e. return all history
-	// messages (limited by configured history_size). 1 means
-	// last message only, 2 - two last messages etc.
-	Limit int
-}
-
 // presenceStats ...
 type presenceStats struct {
 	NumClients int
@@ -50,12 +40,17 @@ type Engine interface {
 	channels() ([]string, error)
 
 	// History returns a slice of history messages for channel.
-	history(ch string, filter historyFilter) ([]*Publication, error)
-	// recoverHistory allows to recover missed messages starting from last seen
-	// Publication UID provided by client. This method should return as many Publications
-	// as possible and boolean value indicating whether all Publications
-	// were successfully restored or not. The case when publications can not be
-	// fully restored can happen if old Publications already removed from history
+	// limit argument sets the max amount of messages that must
+	// be returned. 0 means no limit - i.e. return all history
+	// messages (though limited by configured history_size).
+	// 1 means last (most recent) message only, 2 - two last messages etc.
+	history(ch string, limit int) ([]*Publication, error)
+	// recoverHistory allows to recover missed messages starting
+	// from last seen Publication UID provided by client. This method
+	// should return as many Publications as possible and boolean value
+	// indicating whether all Publications were successfully restored
+	// or not. The case when publications can not be fully restored
+	// can happen if old Publications already removed from history
 	// due to size or lifetime limits.
 	recoverHistory(ch string, lastUID string) ([]*Publication, bool, error)
 	// RemoveHistory removes history from channel. This is in general not

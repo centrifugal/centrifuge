@@ -526,8 +526,8 @@ func (e *RedisEngine) presenceStats(ch string) (presenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *RedisEngine) history(ch string, filter historyFilter) ([]*proto.Publication, error) {
-	return e.shards[e.shardIndex(ch)].History(ch, filter)
+func (e *RedisEngine) history(ch string, limit int) ([]*proto.Publication, error) {
+	return e.shards[e.shardIndex(ch)].History(ch, limit)
 }
 
 // RecoverHistory - see engine interface description.
@@ -1238,8 +1238,7 @@ func (e *shard) PresenceStats(ch string) (presenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *shard) History(ch string, filter historyFilter) ([]*proto.Publication, error) {
-	limit := filter.Limit
+func (e *shard) History(ch string, limit int) ([]*proto.Publication, error) {
 	var rangeBound = -1
 	if limit > 0 {
 		rangeBound = limit - 1 // Redis includes last index into result
@@ -1256,7 +1255,7 @@ func (e *shard) History(ch string, filter historyFilter) ([]*proto.Publication, 
 
 // RecoverHistory - see engine interface description.
 func (e *shard) RecoverHistory(ch string, last string) ([]*proto.Publication, bool, error) {
-	publications, err := e.History(ch, historyFilter{Limit: 0})
+	publications, err := e.History(ch, 0)
 	if err != nil {
 		return nil, false, err
 	}

@@ -126,7 +126,7 @@ func TestRedisEngine(t *testing.T) {
 
 	// test adding history
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1, HistoryDropInactive: false}))
-	h, err := e.history("channel", historyFilter{Limit: 0})
+	h, err := e.history("channel", 0)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(h))
 	assert.Equal(t, h[0].UID, "test UID")
@@ -135,7 +135,7 @@ func TestRedisEngine(t *testing.T) {
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1, HistoryDropInactive: false}))
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1, HistoryDropInactive: false}))
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1, HistoryDropInactive: false}))
-	h, err = e.history("channel", historyFilter{Limit: 2})
+	h, err = e.history("channel", 2)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(h))
 
@@ -143,7 +143,7 @@ func TestRedisEngine(t *testing.T) {
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
-	h, err = e.history("channel", historyFilter{Limit: 2})
+	h, err = e.history("channel", 2)
 
 	// test publishing control message.
 	err = <-e.publishControl([]byte(""))
@@ -170,20 +170,20 @@ func TestRedisEnginePublishHistoryDropInactive(t *testing.T) {
 
 	// 1. add history with DropInactive = true should be a no-op if history is empty
 	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: true}))
-	h, err := e.history("channel", historyFilter{Limit: 0})
+	h, err := e.history("channel", 0)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(h))
 
 	// 2. add history with DropInactive = false should always work
 	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: false}))
-	h, err = e.history("channel", historyFilter{Limit: 0})
+	h, err = e.history("channel", 0)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(h))
 
 	// 3. add with DropInactive = true should work immediately since there should be something in history
 	// for 5 seconds from above
 	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: true}))
-	h, err = e.history("channel", historyFilter{Limit: 0})
+	h, err = e.history("channel", 0)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(h))
 }
@@ -203,14 +203,14 @@ func TestRedisEngineDropInactive(t *testing.T) {
 	opts, _ := e.node.ChannelOpts("channel")
 
 	assert.Nil(t, <-e.publish("channel", pub, &opts))
-	h, err := e.history("channel", historyFilter{Limit: 0})
+	h, err := e.history("channel", 0)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(h))
 
 	e.unsubscribe("channel")
 
 	assert.NoError(t, <-e.publish("channel", pub, &opts))
-	h, err = e.history("channel", historyFilter{Limit: 0})
+	h, err = e.history("channel", 0)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(h))
 }
@@ -522,7 +522,7 @@ func BenchmarkRedisEngineOpHistory(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := e.history("channel", historyFilter{Limit: 0})
+		_, err := e.history("channel", 0)
 		if err != nil {
 			panic(err)
 		}
@@ -540,7 +540,7 @@ func BenchmarkRedisEngineOpHistoryParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, err := e.history("channel", historyFilter{Limit: 0})
+			_, err := e.history("channel", 0)
 			if err != nil {
 				panic(err)
 			}

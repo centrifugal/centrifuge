@@ -83,7 +83,7 @@ func (e *TestEngine) presenceStats(ch string) (presenceStats, error) {
 	return presenceStats{}, nil
 }
 
-func (e *TestEngine) history(ch string, filter historyFilter) ([]*proto.Publication, error) {
+func (e *TestEngine) history(ch string, limit int) ([]*proto.Publication, error) {
 	return []*proto.Publication{}, nil
 }
 
