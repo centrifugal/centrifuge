@@ -49,7 +49,7 @@ type Node struct {
 	shutdownCh chan struct{}
 
 	// eventHub to manage event handlers binded to node.
-	eventHub *NodeEventHub
+	eventHub *nodeEventHub
 
 	// logger allows to log throughout library code and proxy log entries to
 	// configured log handler.
@@ -73,7 +73,7 @@ func New(c Config) *Node {
 		logger:         nil,
 		controlEncoder: controlproto.NewProtobufEncoder(),
 		controlDecoder: controlproto.NewProtobufDecoder(),
-		eventHub:       &NodeEventHub{},
+		eventHub:       &nodeEventHub{},
 	}
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
@@ -117,7 +117,10 @@ func (n *Node) Reload(c Config) error {
 // Run performs all startup actions. At moment must be called once on start
 // after engine and structure set.
 func (n *Node) Run() error {
-	if err := n.engine.run(); err != nil {
+
+	eventHandler := &engineEventHandler{n}
+
+	if err := n.engine.run(eventHandler); err != nil {
 		return err
 	}
 
@@ -133,7 +136,7 @@ func (n *Node) Run() error {
 }
 
 // On allows access to NodeEventHub.
-func (n *Node) On() *NodeEventHub {
+func (n *Node) On() NodeEventHub {
 	return n.eventHub
 }
 
@@ -216,8 +219,7 @@ func (n *Node) info() (*apiproto.InfoResult, error) {
 	}
 
 	return &apiproto.InfoResult{
-		Engine: n.engine.name(),
-		Nodes:  nodeResults,
+		Nodes: nodeResults,
 	}, nil
 }
 
@@ -727,12 +729,39 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 }
 
 // NodeEventHub can deal with events binded to Node.
+// All its methods are not goroutine-safe as handlers must be
+// registered once before Node Run method called.
+type NodeEventHub interface {
+	Connect(handler ConnectHandler)
+}
+
+// nodeEventHub can deal with events binded to Node.
 // All its methods are not goroutine-safe.
-type NodeEventHub struct {
+type nodeEventHub struct {
 	connectHandler ConnectHandler
 }
 
 // Connect allows to set ConnectHandler.
-func (h *NodeEventHub) Connect(handler ConnectHandler) {
+func (h *nodeEventHub) Connect(handler ConnectHandler) {
 	h.connectHandler = handler
+}
+
+type engineEventHandler struct {
+	node *Node
+}
+
+func (h *engineEventHandler) HandlePublication(ch string, pub *Publication) error {
+	return h.node.handlePublication(ch, pub)
+}
+
+func (h *engineEventHandler) HandleJoin(ch string, join *Join) error {
+	return h.node.handleJoin(ch, join)
+}
+
+func (h *engineEventHandler) HandleLeave(ch string, leave *Leave) error {
+	return h.node.handleLeave(ch, leave)
+}
+
+func (h *engineEventHandler) HandleControl(data []byte) error {
+	return h.node.handleControl(data)
 }

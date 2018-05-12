@@ -73,6 +73,7 @@ type RedisEngine struct {
 // shard has everything to connect to Redis instance.
 type shard struct {
 	node              *Node
+	eventHandler      EngineEventHandler
 	config            RedisShardConfig
 	pool              *redis.Pool
 	subCh             chan subRequest
@@ -452,9 +453,9 @@ func (e *RedisEngine) name() string {
 }
 
 // Run runs engine after node initialized.
-func (e *RedisEngine) run() error {
+func (e *RedisEngine) run(h EngineEventHandler) error {
 	for _, shard := range e.shards {
-		err := shard.Run()
+		err := shard.Run(h)
 		if err != nil {
 			return err
 		}
@@ -566,7 +567,8 @@ func (e *RedisEngine) channels() ([]string, error) {
 }
 
 // Run runs Redis shard.
-func (e *shard) Run() error {
+func (e *shard) Run(h EngineEventHandler) error {
+	e.eventHandler = h
 	go e.runForever(func() {
 		e.runPublishPipeline()
 	})
@@ -676,7 +678,7 @@ func (e *shard) runPubSub() {
 					}
 					switch chID {
 					case controlChannel:
-						e.node.handleControl(n.Data)
+						e.eventHandler.HandleControl(n.Data)
 					case pingChannel:
 						// Do nothing - this message just maintains connection open.
 					default:
@@ -756,19 +758,19 @@ func (e *shard) handleClientPush(push *proto.Push) error {
 		if err != nil {
 			return err
 		}
-		e.node.handlePublication(push.Channel, pub)
+		e.eventHandler.HandlePublication(push.Channel, pub)
 	case proto.PushTypeJoin:
 		join, err := e.pushDecoder.DecodeJoin(push.Data)
 		if err != nil {
 			return err
 		}
-		e.node.handleJoin(push.Channel, join)
+		e.eventHandler.HandleJoin(push.Channel, join)
 	case proto.PushTypeLeave:
 		leave, err := e.pushDecoder.DecodeLeave(push.Data)
 		if err != nil {
 			return err
 		}
-		e.node.handleLeave(push.Channel, leave)
+		e.eventHandler.HandleLeave(push.Channel, leave)
 	default:
 	}
 	return nil

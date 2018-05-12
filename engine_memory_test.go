@@ -36,7 +36,6 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 
 	assert.NotEqual(t, nil, e.historyHub)
 	assert.NotEqual(t, nil, e.presenceHub)
-	assert.NotEqual(t, e.name(), "")
 
 	err := <-e.publish("channel", newTestPublication(), nil)
 	assert.NoError(t, err)

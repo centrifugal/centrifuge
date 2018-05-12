@@ -14,9 +14,10 @@ import (
 // only run single Centrifugo node. If you need to scale you should
 // use Redis engine instead.
 type MemoryEngine struct {
-	node        *Node
-	presenceHub *presenceHub
-	historyHub  *historyHub
+	node         *Node
+	eventHandler EngineEventHandler
+	presenceHub  *presenceHub
+	historyHub   *historyHub
 }
 
 // MemoryEngineConfig is a memory engine config.
@@ -33,14 +34,10 @@ func NewMemoryEngine(n *Node, conf MemoryEngineConfig) (*MemoryEngine, error) {
 	return e, nil
 }
 
-// Name returns a name of engine.
-func (e *MemoryEngine) name() string {
-	return "Memory"
-}
-
 // Run runs memory engine - we do not have any logic here as Memory Engine ready to work
 // just after initialization.
-func (e *MemoryEngine) run() error {
+func (e *MemoryEngine) run(h EngineEventHandler) error {
+	e.eventHandler = h
 	return nil
 }
 
@@ -58,28 +55,28 @@ func (e *MemoryEngine) publish(ch string, pub *Publication, opts *ChannelOptions
 	}
 
 	eChan := make(chan error, 1)
-	eChan <- e.node.handlePublication(ch, pub)
+	eChan <- e.eventHandler.HandlePublication(ch, pub)
 	return eChan
 }
 
-// PublishJoin ...
+// PublishJoin - see engine interface description.
 func (e *MemoryEngine) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-chan error {
 	eChan := make(chan error, 1)
-	eChan <- e.node.handleJoin(ch, join)
+	eChan <- e.eventHandler.HandleJoin(ch, join)
 	return eChan
 }
 
-// PublishLeave ...
+// PublishLeave - see engine interface description.
 func (e *MemoryEngine) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) <-chan error {
 	eChan := make(chan error, 1)
-	eChan <- e.node.handleLeave(ch, leave)
+	eChan <- e.eventHandler.HandleLeave(ch, leave)
 	return eChan
 }
 
 // PublishControl - see Engine interface description.
 func (e *MemoryEngine) publishControl(data []byte) <-chan error {
 	eChan := make(chan error, 1)
-	eChan <- e.node.handleControl(data)
+	eChan <- e.eventHandler.HandleControl(data)
 	return eChan
 }
 
@@ -88,9 +85,9 @@ func (e *MemoryEngine) subscribe(ch string) error {
 	return nil
 }
 
-// Unsubscribe node from Channel In case of memory engine
-// its only job is to touch channel history for history
-// lifetime period. See https://github.com/centrifugal/centrifugo/pull/148
+// Unsubscribe node from Channel In case of memory engine its only job is
+// to touch channel history for history lifetime period.
+// See https://github.com/centrifugal/centrifugo/pull/148
 func (e *MemoryEngine) unsubscribe(ch string) error {
 	if chOpts, ok := e.node.ChannelOpts(ch); ok && chOpts.HistoryDropInactive {
 		e.historyHub.touch(ch, &chOpts)
@@ -98,42 +95,42 @@ func (e *MemoryEngine) unsubscribe(ch string) error {
 	return nil
 }
 
-// AddPresence adds client info into presence hub.
+// AddPresence - see engine interface description.
 func (e *MemoryEngine) addPresence(ch string, uid string, info *proto.ClientInfo, exp time.Duration) error {
 	return e.presenceHub.add(ch, uid, info)
 }
 
-// RemovePresence removes client info from presence hub.
+// RemovePresence - see engine interface description.
 func (e *MemoryEngine) removePresence(ch string, uid string) error {
 	return e.presenceHub.remove(ch, uid)
 }
 
-// Presence extracts presence info from presence hub.
+// Presence - see engine interface description.
 func (e *MemoryEngine) presence(ch string) (map[string]*proto.ClientInfo, error) {
 	return e.presenceHub.get(ch)
 }
 
-// PresenceStats extracts presence info from presence hub.
+// PresenceStats - see engine interface description.
 func (e *MemoryEngine) presenceStats(ch string) (presenceStats, error) {
 	return e.presenceHub.getStats(ch)
 }
 
-// History extracts history from history hub.
+// History - see engine interface description.
 func (e *MemoryEngine) history(ch string, limit int) ([]*proto.Publication, error) {
 	return e.historyHub.get(ch, limit)
 }
 
-// RecoverHistory ...
+// RecoverHistory - see engine interface description.
 func (e *MemoryEngine) recoverHistory(ch string, lastUID string) ([]*proto.Publication, bool, error) {
 	return e.historyHub.recover(ch, lastUID)
 }
 
-// RemoveHistory ...
+// RemoveHistory - see engine interface description.
 func (e *MemoryEngine) removeHistory(ch string) error {
 	return e.historyHub.remove(ch)
 }
 
-// Channels returns all channels node currently subscribed on.
+// Channels - see engine interface description.
 func (e *MemoryEngine) channels() ([]string, error) {
 	return e.node.hub.Channels(), nil
 }

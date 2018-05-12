@@ -27,7 +27,7 @@ func (e *TestEngine) name() string {
 	return "test engine"
 }
 
-func (e *TestEngine) run() error {
+func (e *TestEngine) run(h EngineEventHandler) error {
 	return nil
 }
 

@@ -15,9 +15,7 @@ import (
 
 	_ "net/http/pprof"
 
-	logger "github.com/FZambia/go-logger"
 	"github.com/centrifugal/centrifuge"
-	"github.com/grpc-ecosystem/go-grpc-middleware"
 	"google.golang.org/grpc"
 )
 
@@ -25,7 +23,7 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
-func authMiddleware(h http.Handler) http.Handler {
+func httpAuthMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
@@ -36,6 +34,25 @@ func authMiddleware(h http.Handler) http.Handler {
 		r = r.WithContext(newCtx)
 		h.ServeHTTP(w, r)
 	})
+}
+
+// Also handle GRPC client connections on :8001.
+func grpcAuthInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	// You probably want to authenticate user by information included in stream metadata.
+	// meta, ok := metadata.FromIncomingContext(ss.Context())
+	// But here we skip it for simplicity and just always authenticate user with ID 42.
+	ctx := ss.Context()
+	newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
+		UserID: "42",
+		Exp:    time.Now().Unix() + 10,
+		Info:   []byte(`{"name": "Alexander"}`),
+	})
+
+	// GRPC has no builtin method to add data to context so here we use small
+	// wrapper over ServerStream.
+	wrapped := WrapServerStream(ss)
+	wrapped.WrappedContext = newCtx
+	return handler(srv, wrapped)
 }
 
 func waitExitSignal(n *centrifuge.Node, srv *grpc.Server) {
@@ -134,7 +151,7 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket", httpAuthMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
@@ -143,29 +160,41 @@ func main() {
 		}
 	}()
 
-	// Also handle GRPC client connections on :8002.
-	authInterceptor := func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		ctx := ss.Context()
-		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID: "42",
-			Exp:    time.Now().Unix() + 10,
-			Info:   []byte(`{"name": "Alexander"}`),
-		})
-		wrapped := grpc_middleware.WrapServerStream(ss)
-		wrapped.WrappedContext = newCtx
-		return handler(srv, wrapped)
-	}
 	grpcServer := grpc.NewServer(
-		grpc.StreamInterceptor(authInterceptor),
+		grpc.StreamInterceptor(grpcAuthInterceptor),
 	)
 	centrifuge.RegisterGRPCServerClient(node, grpcServer, centrifuge.GRPCClientServiceConfig{})
 	go func() {
 		listener, _ := net.Listen("tcp", ":8001")
 		if err := grpcServer.Serve(listener); err != nil {
-			logger.FATAL.Fatalf("Serve GRPC: %v", err)
+			log.Fatalf("Serve GRPC: %v", err)
 		}
 	}()
 
 	waitExitSignal(node, grpcServer)
 	fmt.Println("exiting")
+}
+
+// WrappedServerStream is a thin wrapper around grpc.ServerStream that allows modifying context.
+// This can be replaced to analogue from github.com/grpc-ecosystem/go-grpc-middleware package -
+// https://github.com/grpc-ecosystem/go-grpc-middleware/blob/master/wrappers.go –
+// you most probably will have dependency to it in your application as it has lots of useful
+// features to deal with GRPC.
+type WrappedServerStream struct {
+	grpc.ServerStream
+	// WrappedContext is the wrapper's own Context. You can assign it.
+	WrappedContext context.Context
+}
+
+// Context returns the wrapper's WrappedContext, overwriting the nested grpc.ServerStream.Context()
+func (w *WrappedServerStream) Context() context.Context {
+	return w.WrappedContext
+}
+
+// WrapServerStream returns a ServerStream that has the ability to overwrite context.
+func WrapServerStream(stream grpc.ServerStream) *WrappedServerStream {
+	if existing, ok := stream.(*WrappedServerStream); ok {
+		return existing
+	}
+	return &WrappedServerStream{ServerStream: stream, WrappedContext: stream.Context()}
 }
