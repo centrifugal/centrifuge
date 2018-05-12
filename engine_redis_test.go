@@ -463,7 +463,7 @@ func BenchmarkRedisEnginePublishWithHistory(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisEngineOpAddPresence(b *testing.B) {
+func BenchmarkRedisEngineAddPresence(b *testing.B) {
 	e := newTestRedisEngine()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -474,7 +474,7 @@ func BenchmarkRedisEngineOpAddPresence(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisEngineOpAddPresenceParallel(b *testing.B) {
+func BenchmarkRedisEngineAddPresenceParallel(b *testing.B) {
 	e := newTestRedisEngine()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -487,7 +487,7 @@ func BenchmarkRedisEngineOpAddPresenceParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkRedisEngineOpPresence(b *testing.B) {
+func BenchmarkRedisEnginePresence(b *testing.B) {
 	e := newTestRedisEngine()
 	e.addPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
@@ -499,7 +499,7 @@ func BenchmarkRedisEngineOpPresence(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisEngineOpPresenceParallel(b *testing.B) {
+func BenchmarkRedisEnginePresenceParallel(b *testing.B) {
 	e := newTestRedisEngine()
 	e.addPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
@@ -513,7 +513,7 @@ func BenchmarkRedisEngineOpPresenceParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkRedisEngineOpHistory(b *testing.B) {
+func BenchmarkRedisEngineHistory(b *testing.B) {
 	e := newTestRedisEngine()
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test UID", Data: rawData}
@@ -530,7 +530,7 @@ func BenchmarkRedisEngineOpHistory(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisEngineOpHistoryParallel(b *testing.B) {
+func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
 	e := newTestRedisEngine()
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test UID", Data: rawData}
