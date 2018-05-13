@@ -32,34 +32,38 @@ func newHub() *Hub {
 var (
 	// hubShutdownSemaphoreSize limits graceful disconnects concurrency on
 	// node shutdown.
-	hubShutdownSemaphoreSize = 1000
+	hubShutdownSemaphoreSize = 128
 )
 
 // shutdown unsubscribes users from all channels and disconnects them.
 func (h *Hub) shutdown() error {
 	var wg sync.WaitGroup
-	h.mu.RLock()
 	advice := DisconnectShutdown
-	// Limit concurrency here to prevent memory burst on shutdown.
+
+	// Limit concurrency here to prevent resource usage burst on shutdown.
 	sem := make(chan struct{}, hubShutdownSemaphoreSize)
-	for _, user := range h.users {
-		wg.Add(len(user))
-		for uid := range user {
-			cc, ok := h.conns[uid]
-			if !ok {
-				wg.Done()
-				continue
-			}
-			sem <- struct{}{}
-			go func(cc *Client) {
-				defer func() { <-sem }()
-				cc.close(advice)
-				wg.Done()
-			}(cc)
-		}
+
+	h.mu.RLock()
+	// At this moment node won't accept new client connections so we can
+	// safely copy existing clients and release lock.
+	clients := make([]*Client, 0, len(h.conns))
+	for _, client := range h.conns {
+		clients = append(clients, client)
 	}
 	h.mu.RUnlock()
+
+	for _, client := range clients {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(cc *Client) {
+			defer func() { <-sem }()
+			defer wg.Done()
+			cc.close(advice)
+		}(client)
+	}
+
 	wg.Wait()
+
 	return nil
 }
 

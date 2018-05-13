@@ -153,6 +153,11 @@ func (n *Node) Shutdown() error {
 	return n.hub.shutdown()
 }
 
+// NotifyShutdown returns a channel which will be closed on node shutdown.
+func (n *Node) NotifyShutdown() chan struct{} {
+	return n.shutdownCh
+}
+
 func (n *Node) updateGauges() {
 	numClientsGauge.Set(float64(n.hub.NumClients()))
 	numUsersGauge.Set(float64(n.hub.NumUsers()))

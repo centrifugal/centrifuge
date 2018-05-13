@@ -139,7 +139,6 @@ func (t *websocketTransport) write(data ...[]byte) error {
 			t.conn.SetWriteDeadline(time.Time{})
 		}
 		transportMessagesSent.WithLabelValues(transportWebsocket).Add(float64(len(data)))
-		transportBytesOut.WithLabelValues(transportWebsocket).Add(float64(bytesOut))
 		return nil
 	}
 }
@@ -286,7 +285,16 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 		writer := newWriter(writerConf)
 		defer writer.close()
+
 		transport := newWebsocketTransport(conn, writer, opts)
+
+		select {
+		case <-s.node.NotifyShutdown():
+			transport.Close(DisconnectShutdown)
+			return
+		default:
+		}
+
 		c, err := newClient(r.Context(), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
@@ -314,8 +322,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 // common data handling logic for Websocket and Sockjs handlers.
 func handleClientData(n *Node, c *Client, data []byte, transport Transport, writer *writer) bool {
-	transportBytesIn.WithLabelValues(transport.Name()).Add(float64(len(data)))
-
 	if len(data) == 0 {
 		n.logger.log(newLogEntry(LogLevelError, "empty client request received"))
 		c.close(DisconnectBadRequest)

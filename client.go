@@ -1194,7 +1194,6 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 		}
 		go c.node.publishJoin(channel, join, &chOpts)
 	}
-
 	resp.Result = res
 	return resp, nil
 }
