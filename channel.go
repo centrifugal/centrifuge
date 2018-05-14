@@ -20,17 +20,19 @@ type ChannelOptions struct {
 	// on channel before allow it to publish into that channel.
 	SubscribeToPublish bool `mapstructure:"subscribe_to_publish" json:"subscribe_to_publish"`
 
-	// Anonymous enables anonymous access (with empty user ID) to channel
-	// In most situations your application works with authorized users so
+	// Anonymous enables anonymous access (with empty user ID) to channel.
+	// In most situations your application works with authenticated users so
 	// every user has its own unique user ID. But if you provide real-time
-	// features for public access you may need unauthorized access to channels.
+	// features for public access you may need unauthenticated access to channels.
 	// Turn on this option and use empty string as user ID.
 	Anonymous bool `json:"anonymous"`
 
 	// JoinLeave turns on join/leave messages for channels.
 	// When client subscribes on channel join message sent to all
 	// clients in this channel. When client leaves channel (unsubscribes)
-	// leave message sent.
+	// leave message sent. This option does not fit well for channels with
+	// many subscribers because every subscribe/unsubscribe event results
+	// into join/leave event broadcast to all other active subscribers.
 	JoinLeave bool `mapstructure:"join_leave" json:"join_leave"`
 
 	// Presence turns on presence information for channels.

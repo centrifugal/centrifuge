@@ -464,17 +464,17 @@ func (e *RedisEngine) run(h EngineEventHandler) error {
 }
 
 // Publish - see engine interface description.
-func (e *RedisEngine) publish(ch string, pub *proto.Publication, opts *ChannelOptions) <-chan error {
+func (e *RedisEngine) publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
 	return e.shards[e.shardIndex(ch)].Publish(ch, pub, opts)
 }
 
 // PublishJoin - see engine interface description.
-func (e *RedisEngine) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-chan error {
+func (e *RedisEngine) publishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
 	return e.shards[e.shardIndex(ch)].PublishJoin(ch, join, opts)
 }
 
 // PublishLeave - see engine interface description.
-func (e *RedisEngine) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) <-chan error {
+func (e *RedisEngine) publishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
 	return e.shards[e.shardIndex(ch)].PublishLeave(ch, leave, opts)
 }
 
@@ -506,7 +506,7 @@ func (e *RedisEngine) unsubscribe(ch string) error {
 }
 
 // AddPresence - see engine interface description.
-func (e *RedisEngine) addPresence(ch string, uid string, info *proto.ClientInfo, exp time.Duration) error {
+func (e *RedisEngine) addPresence(ch string, uid string, info *ClientInfo, exp time.Duration) error {
 	expire := int(exp.Seconds())
 	return e.shards[e.shardIndex(ch)].AddPresence(ch, uid, info, expire)
 }
@@ -517,7 +517,7 @@ func (e *RedisEngine) removePresence(ch string, uid string) error {
 }
 
 // Presence - see engine interface description.
-func (e *RedisEngine) presence(ch string) (map[string]*proto.ClientInfo, error) {
+func (e *RedisEngine) presence(ch string) (map[string]*ClientInfo, error) {
 	return e.shards[e.shardIndex(ch)].Presence(ch)
 }
 
@@ -527,12 +527,12 @@ func (e *RedisEngine) presenceStats(ch string) (presenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *RedisEngine) history(ch string, limit int) ([]*proto.Publication, error) {
+func (e *RedisEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.shards[e.shardIndex(ch)].History(ch, limit)
 }
 
 // RecoverHistory - see engine interface description.
-func (e *RedisEngine) recoverHistory(ch string, lastUID string) ([]*proto.Publication, bool, error) {
+func (e *RedisEngine) recoverHistory(ch string, lastUID string) ([]*Publication, bool, error) {
 	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, lastUID)
 }
 
@@ -1039,7 +1039,7 @@ func (e *shard) runDataPipeline() {
 }
 
 // Publish - see engine interface description.
-func (e *shard) Publish(ch string, pub *proto.Publication, opts *ChannelOptions) <-chan error {
+func (e *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
 
 	eChan := make(chan error, 1)
 
@@ -1048,7 +1048,7 @@ func (e *shard) Publish(ch string, pub *proto.Publication, opts *ChannelOptions)
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.pushEncoder.Encode(proto.NewPublication(ch, data))
+	byteMessage, err := e.pushEncoder.Encode(proto.NewPublicationPush(ch, data))
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -1079,7 +1079,7 @@ func (e *shard) Publish(ch string, pub *proto.Publication, opts *ChannelOptions)
 }
 
 // PublishJoin - see engine interface description.
-func (e *shard) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-chan error {
+func (e *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
 
 	eChan := make(chan error, 1)
 
@@ -1088,7 +1088,7 @@ func (e *shard) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) <
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.pushEncoder.Encode(proto.NewJoin(ch, data))
+	byteMessage, err := e.pushEncoder.Encode(proto.NewJoinPush(ch, data))
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -1106,7 +1106,7 @@ func (e *shard) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) <
 }
 
 // PublishLeave - see engine interface description.
-func (e *shard) PublishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) <-chan error {
+func (e *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
 
 	eChan := make(chan error, 1)
 
@@ -1115,7 +1115,7 @@ func (e *shard) PublishLeave(ch string, leave *proto.Leave, opts *ChannelOptions
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.pushEncoder.Encode(proto.NewLeave(ch, data))
+	byteMessage, err := e.pushEncoder.Encode(proto.NewLeavePush(ch, data))
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -1176,7 +1176,7 @@ func (e *shard) Unsubscribe(ch string) error {
 }
 
 // AddPresence - see engine interface description.
-func (e *shard) AddPresence(ch string, uid string, info *proto.ClientInfo, expire int) error {
+func (e *shard) AddPresence(ch string, uid string, info *ClientInfo, expire int) error {
 	infoJSON, err := info.Marshal()
 	if err != nil {
 		return err
@@ -1201,7 +1201,7 @@ func (e *shard) RemovePresence(ch string, uid string) error {
 }
 
 // Presence - see engine interface description.
-func (e *shard) Presence(ch string) (map[string]*proto.ClientInfo, error) {
+func (e *shard) Presence(ch string) (map[string]*ClientInfo, error) {
 	hashKey := e.getPresenceHashKey(ch)
 	setKey := e.getPresenceSetKey(ch)
 	now := int(time.Now().Unix())
@@ -1240,7 +1240,7 @@ func (e *shard) PresenceStats(ch string) (presenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *shard) History(ch string, limit int) ([]*proto.Publication, error) {
+func (e *shard) History(ch string, limit int) ([]*Publication, error) {
 	var rangeBound = -1
 	if limit > 0 {
 		rangeBound = limit - 1 // Redis includes last index into result
@@ -1256,7 +1256,7 @@ func (e *shard) History(ch string, limit int) ([]*proto.Publication, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *shard) RecoverHistory(ch string, last string) ([]*proto.Publication, bool, error) {
+func (e *shard) RecoverHistory(ch string, last string) ([]*Publication, bool, error) {
 	publications, err := e.History(ch, 0)
 	if err != nil {
 		return nil, false, err
@@ -1325,7 +1325,7 @@ func (e *shard) Channels() ([]string, error) {
 	return channels, nil
 }
 
-func mapStringClientInfo(result interface{}, err error) (map[string]*proto.ClientInfo, error) {
+func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {
 	values, err := redis.Values(result, err)
 	if err != nil {
 		return nil, err
@@ -1333,14 +1333,14 @@ func mapStringClientInfo(result interface{}, err error) (map[string]*proto.Clien
 	if len(values)%2 != 0 {
 		return nil, errors.New("mapStringClientInfo expects even number of values result")
 	}
-	m := make(map[string]*proto.ClientInfo, len(values)/2)
+	m := make(map[string]*ClientInfo, len(values)/2)
 	for i := 0; i < len(values); i += 2 {
 		key, okKey := values[i].([]byte)
 		value, okValue := values[i+1].([]byte)
 		if !okKey || !okValue {
 			return nil, errors.New("ScanMap key not a bulk string value")
 		}
-		var f proto.ClientInfo
+		var f ClientInfo
 		err = f.Unmarshal(value)
 		if err != nil {
 			return nil, errors.New("can not unmarshal value to ClientInfo")
@@ -1350,12 +1350,12 @@ func mapStringClientInfo(result interface{}, err error) (map[string]*proto.Clien
 	return m, nil
 }
 
-func sliceOfPubs(n *shard, result interface{}, err error) ([]*proto.Publication, error) {
+func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error) {
 	values, err := redis.Values(result, err)
 	if err != nil {
 		return nil, err
 	}
-	msgs := make([]*proto.Publication, len(values))
+	msgs := make([]*Publication, len(values))
 	for i := 0; i < len(values); i++ {
 		value, okValue := values[i].([]byte)
 		if !okValue {

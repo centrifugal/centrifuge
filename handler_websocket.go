@@ -15,11 +15,8 @@ import (
 
 const (
 	transportWebsocket = "websocket"
-)
-
-const (
-	// We don't use specific websocket close codes because our connections
-	// can use another transport so there is no much sense to depend on this.
+	// We don't use specific close codes here because our connections
+	// can use other transport that do not have the same code semantics as Websocket.
 	websocketCloseStatus = 3000
 )
 

@@ -80,7 +80,8 @@ func New(c Config) *Node {
 	return n
 }
 
-// SetLogHandler ...
+// SetLogHandler sets LogHandler to handle log messages with
+// severity higher than specific LogLevel.
 func (n *Node) SetLogHandler(level LogLevel, handler LogHandler) {
 	n.logger = newLogger(level, handler)
 }
@@ -587,7 +588,7 @@ func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
 	return presence, nil
 }
 
-// presenceStats ...
+// presenceStats returns presence stats from engine.
 func (n *Node) presenceStats(ch string) (presenceStats, error) {
 	actionCount.WithLabelValues("presence_stats").Inc()
 	return n.engine.presenceStats(ch)
@@ -603,7 +604,7 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 	return pubs, nil
 }
 
-// recoverHistory ...
+// recoverHistory recovers publications since last UID seen by client.
 func (n *Node) recoverHistory(ch string, lastUID string) ([]*Publication, bool, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
 	return n.engine.recoverHistory(ch, lastUID)

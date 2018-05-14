@@ -13,11 +13,8 @@ import (
 
 const (
 	transportSockJS = "sockjs"
-)
-
-const (
-	// We don't use specific close codes because our connections
-	// can use another transport so there is no much sense to depend on this.
+	// We don't use specific close codes here because our connections
+	// can use other transport that do not have the same code semantics as SockJS.
 	sockjsCloseStatus = 3000
 )
 

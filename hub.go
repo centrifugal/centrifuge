@@ -10,13 +10,13 @@ import (
 type Hub struct {
 	mu sync.RWMutex
 
-	// match ConnID with actual client connection.
+	// match client ID with actual client connection.
 	conns map[string]*Client
 
 	// registry to hold active client connections grouped by user.
 	users map[string]map[string]struct{}
 
-	// registry to hold active subscriptions of clients on channels.
+	// registry to hold active subscriptions of clients to channels.
 	subs map[string]map[string]struct{}
 }
 
@@ -29,7 +29,7 @@ func newHub() *Hub {
 	}
 }
 
-var (
+const (
 	// hubShutdownSemaphoreSize limits graceful disconnects concurrency on
 	// node shutdown.
 	hubShutdownSemaphoreSize = 128
@@ -232,7 +232,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication) error {
 				if err != nil {
 					return err
 				}
-				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewPublication(channel, data))
+				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewPublicationPush(channel, data))
 				if err != nil {
 					return err
 				}
@@ -248,7 +248,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication) error {
 				if err != nil {
 					return err
 				}
-				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewPublication(channel, data))
+				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewPublicationPush(channel, data))
 				if err != nil {
 					return err
 				}
@@ -290,7 +290,7 @@ func (h *Hub) broadcastJoin(channel string, join *proto.Join) error {
 				if err != nil {
 					return err
 				}
-				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewJoin(channel, data))
+				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewJoinPush(channel, data))
 				if err != nil {
 					return err
 				}
@@ -306,7 +306,7 @@ func (h *Hub) broadcastJoin(channel string, join *proto.Join) error {
 				if err != nil {
 					return err
 				}
-				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewJoin(channel, data))
+				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewJoinPush(channel, data))
 				if err != nil {
 					return err
 				}
@@ -348,7 +348,7 @@ func (h *Hub) broadcastLeave(channel string, leave *proto.Leave) error {
 				if err != nil {
 					return err
 				}
-				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewLeave(channel, data))
+				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewLeavePush(channel, data))
 				if err != nil {
 					return err
 				}
@@ -364,7 +364,7 @@ func (h *Hub) broadcastLeave(channel string, leave *proto.Leave) error {
 				if err != nil {
 					return err
 				}
-				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewLeave(channel, data))
+				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewLeavePush(channel, data))
 				if err != nil {
 					return err
 				}
