@@ -280,7 +280,7 @@ func (n *Node) handleControl(data []byte) error {
 // coming from engine. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
 func (n *Node) handlePublication(ch string, pub *Publication) error {
-	messagesReceivedCount.WithLabelValues("pub").Inc()
+	messagesReceivedCount.WithLabelValues("publication").Inc()
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
