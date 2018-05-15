@@ -14,6 +14,9 @@ type ChannelNamespace struct {
 // or global channel options if set on top level of configuration.
 type ChannelOptions struct {
 	// Publish enables possibility for clients to publish messages into channels.
+	// Once enabled client can publish into channel and that publication will be
+	// broadcasted to all current channel subscribers. You can control publishing
+	// on server-side setting On().Publish callback to client connection.
 	Publish bool `json:"publish"`
 
 	// SubscribeToPublish turns on an automatic check that client subscribed

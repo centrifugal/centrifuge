@@ -61,7 +61,7 @@ type Node struct {
 }
 
 // New creates Node, the only required argument is config.
-func New(c Config) *Node {
+func New(c Config) (*Node, error) {
 	uid := uuid.Must(uuid.NewV4()).String()
 	n := &Node{
 		uid:            uid,
@@ -77,7 +77,7 @@ func New(c Config) *Node {
 	}
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
-	return n
+	return n, nil
 }
 
 // SetLogHandler sets LogHandler to handle log messages with

@@ -81,7 +81,7 @@ func main() {
 		},
 	}
 
-	node := centrifuge.New(cfg)
+	node, _ := centrifuge.New(cfg)
 
 	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 
