@@ -74,7 +74,7 @@ func newTestRedisEngine() *RedisEngine {
 }
 
 func NewTestRedisEngineWithPrefix(prefix string) *RedisEngine {
-	n := New(Config{})
+	n, _ := New(Config{})
 	redisConf := RedisShardConfig{
 		Host:        testRedisHost,
 		Port:        testRedisPort,
