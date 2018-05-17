@@ -9,7 +9,7 @@ import (
 )
 
 func testMemoryEngine() *MemoryEngine {
-	n := New(Config{})
+	n, _ := New(Config{})
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
 	err := n.Run()

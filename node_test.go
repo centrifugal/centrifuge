@@ -101,9 +101,12 @@ func (e *TestEngine) channels() ([]string, error) {
 
 func nodeWithTestEngine() *Node {
 	c := DefaultConfig
-	n := New(c)
+	n, err := New(c)
+	if err != nil {
+		panic(err)
+	}
 	n.SetEngine(NewTestEngine())
-	err := n.Run()
+	err = n.Run()
 	if err != nil {
 		panic(err)
 	}
@@ -112,8 +115,11 @@ func nodeWithTestEngine() *Node {
 
 func nodeWithMemoryEngine() *Node {
 	c := DefaultConfig
-	n := New(c)
-	err := n.Run()
+	n, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	err = n.Run()
 	if err != nil {
 		panic(err)
 	}
