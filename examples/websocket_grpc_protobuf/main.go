@@ -124,7 +124,7 @@ func main() {
 			return centrifuge.DisconnectReply{}
 		})
 
-		log.Printf("user %s connected via %s with encoding: %d", client.UserID(), client.Transport().Name(), client.Transport().Encoding())
+		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), client.Transport().Name(), client.Transport().Encoding())
 
 		go func() {
 			err := client.Send([]byte("hello"))
