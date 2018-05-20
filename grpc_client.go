@@ -139,6 +139,12 @@ func (t *grpcTransport) Encoding() proto.Encoding {
 }
 
 func (t *grpcTransport) Send(reply *preparedReply) error {
+	t.mu.Lock()
+	if t.repliesClosed {
+		t.mu.Unlock()
+		return io.EOF
+	}
+	t.mu.Unlock()
 	select {
 	case <-t.closeCh:
 		t.mu.Lock()
