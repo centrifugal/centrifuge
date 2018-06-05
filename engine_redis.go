@@ -1262,12 +1262,6 @@ func (e *shard) RecoverHistory(ch string, last string) ([]*Publication, bool, er
 		return nil, false, err
 	}
 
-	if last == "" {
-		// Client wants to recover publications but it seems that there were no
-		// messages in history before, so client missed all existing messages.
-		return publications, false, nil
-	}
-
 	position := -1
 	for index, msg := range publications {
 		if msg.UID == last {
@@ -1276,7 +1270,7 @@ func (e *shard) RecoverHistory(ch string, last string) ([]*Publication, bool, er
 		}
 	}
 	if position > -1 {
-		// Last uid provided found in history. Set recovered flag which means that
+		// Last uid found in history. Set recovered flag which means that
 		// server thinks missed messages fully recovered.
 		return publications[0:position], true, nil
 	}

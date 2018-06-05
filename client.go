@@ -1166,19 +1166,37 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 
 	if chOpts.HistoryRecover {
 		if cmd.Recover {
-			// Client provided subscribe request with recover flag on. Try to recover missed publications
-			// automatically from history (we suppose here that history configured wisely) based on
-			// provided last publication uid seen by client.
-			publications, recovered, err := c.node.recoverHistory(channel, cmd.Last)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error recovering publications", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				res.Publications = nil
+			// Client provided subscribe request with recover flag on. Try to recover missed
+			// publications automatically from history (we suppose here that history configured wisely)
+			// based on provided last publication uid seen by client.
+			if cmd.Last == "" {
+				// Client wants to recover publications but it seems that there were no
+				// messages in channel history before, so looks like client missed all
+				// existing messages. Though in this case we can't guarantee that messages
+				// were fully recovered.
+				publications, err := c.node.History(channel)
+				if err != nil {
+					c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+					res.Publications = nil
+					res.Recovered = false
+				} else {
+					res.Publications = publications
+					res.Recovered = false
+				}
 			} else {
-				res.Publications = publications
-				res.Recovered = recovered
+				publications, recovered, err := c.node.recoverHistory(channel, cmd.Last)
+				if err != nil {
+					c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+					res.Publications = nil
+					res.Recovered = false
+				} else {
+					res.Publications = publications
+					res.Recovered = recovered
+				}
 			}
 		} else {
-			// Client don't want to recover messages yet (fresh connect), we just return last message id here so it could recover later.
+			// Client don't want to recover messages yet (fresh connect), we just return last
+			// publication uid here so it could recover later.
 			lastPubUID, err := c.node.lastPublicationUID(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last message ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))

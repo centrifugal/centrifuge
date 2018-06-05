@@ -381,12 +381,6 @@ func (h *historyHub) recover(ch string, last string) ([]*Publication, bool, erro
 		return nil, false, err
 	}
 
-	if last == "" {
-		// Client wants to recover publications but it seems that there were no
-		// messages in history before, so client missed all existing messages.
-		return publications, false, nil
-	}
-
 	position := -1
 	for index, msg := range publications {
 		if msg.UID == last {

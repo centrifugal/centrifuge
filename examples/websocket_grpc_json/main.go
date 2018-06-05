@@ -127,10 +127,11 @@ func main() {
 			return centrifuge.DisconnectReply{}
 		})
 
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), client.Transport().Name(), client.Transport().Encoding())
+		transport := client.Transport()
+		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
 
 		go func() {
-			messageData, _ := json.Marshal("hello")
+			messageData, _ := json.Marshal("hello client " + client.ID())
 			err := client.Send(messageData)
 			if err != nil {
 				if err == io.EOF {

@@ -90,7 +90,8 @@ func main() {
 			return centrifuge.DisconnectReply{}
 		})
 
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), client.Transport().Name(), client.Transport().Encoding())
+		transport := client.Transport()
+		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
 		return centrifuge.ConnectReply{}
 	})
 

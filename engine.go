@@ -38,7 +38,7 @@ type Engine interface {
 	publishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error
 	// PublishLeave publishes Leave message into channel.
 	publishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error
-	// PublishControl allows to send control command to all running nodes.
+	// PublishControl allows to send control command data to all running nodes.
 	publishControl(data []byte) <-chan error
 
 	// Subscribe node on channel to listen all messages coming from channel.
