@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"google.golang.org/grpc"
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -32,22 +30,6 @@ func httpAuthMiddleware(h http.Handler) http.Handler {
 		r = r.WithContext(newCtx)
 		h.ServeHTTP(w, r)
 	})
-}
-
-func grpcAuthInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	// You probably want to authenticate user by information included in stream metadata.
-	// meta, ok := metadata.FromIncomingContext(ss.Context())
-	// But here we skip it for simplicity and just always authenticate user with ID 42.
-	ctx := ss.Context()
-	newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-		UserID: "42",
-	})
-
-	// GRPC has no builtin method to add data to context so here we use small
-	// wrapper over ServerStream.
-	wrapped := WrapServerStream(ss)
-	wrapped.WrappedContext = newCtx
-	return handler(srv, wrapped)
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -158,41 +140,6 @@ func main() {
 		}
 	}()
 
-	grpcServer := grpc.NewServer(
-		grpc.StreamInterceptor(grpcAuthInterceptor),
-	)
-	centrifuge.RegisterGRPCServerClient(node, grpcServer, centrifuge.GRPCClientServiceConfig{})
-	go func() {
-		listener, _ := net.Listen("tcp", ":8001")
-		if err := grpcServer.Serve(listener); err != nil {
-			log.Fatalf("Serve GRPC: %v", err)
-		}
-	}()
-
 	waitExitSignal(node)
 	fmt.Println("exiting")
-}
-
-// WrappedServerStream is a thin wrapper around grpc.ServerStream that allows modifying context.
-// This can be replaced to analogue from github.com/grpc-ecosystem/go-grpc-middleware package -
-// https://github.com/grpc-ecosystem/go-grpc-middleware/blob/master/wrappers.go –
-// you most probably will have dependency to it in your application as it has lots of useful
-// features to deal with GRPC.
-type WrappedServerStream struct {
-	grpc.ServerStream
-	// WrappedContext is the wrapper's own Context. You can assign it.
-	WrappedContext context.Context
-}
-
-// Context returns the wrapper's WrappedContext, overwriting the nested grpc.ServerStream.Context()
-func (w *WrappedServerStream) Context() context.Context {
-	return w.WrappedContext
-}
-
-// WrapServerStream returns a ServerStream that has the ability to overwrite context.
-func WrapServerStream(stream grpc.ServerStream) *WrappedServerStream {
-	if existing, ok := stream.(*WrappedServerStream); ok {
-		return existing
-	}
-	return &WrappedServerStream{ServerStream: stream, WrappedContext: stream.Context()}
 }
