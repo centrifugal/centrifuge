@@ -138,6 +138,7 @@ message SubscribeRequest {
     string sign = 4 [(gogoproto.jsontag) = "sign"];
     bool recover = 5 [(gogoproto.jsontag) = "recover"];
     string last = 6 [(gogoproto.jsontag) = "last"];
+    uint32 away = 7 [(gogoproto.jsontag) = "away"];
 }
 
 message SubscribeResponse {

@@ -138,6 +138,7 @@ message SubscribeRequest {
     string sign = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "sign"]{{end}};
     bool recover = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recover"]{{end}};
     string last = 6{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "last"]{{end}};
+    uint32 away = 7{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "away"]{{end}};
 }
 
 message SubscribeResponse {

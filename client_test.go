@@ -279,35 +279,56 @@ func TestClientSubscribeLast(t *testing.T) {
 	assert.Equal(t, "9", result.Last)
 }
 
+var recoverTests = []struct {
+	Name            string
+	HistorySize     int
+	HistoryLifetime int
+	NumPublications int
+	Last            string
+	Away            uint32
+	NumRecovered    int
+	Recovered       bool
+}{
+	{"from_last_uid", 10, 60, 10, "7", 0, 2, true},
+	{"empty_last_uid_full_history", 10, 60, 10, "", 0, 10, false},
+	{"empty_last_uid_short_disconnect", 10, 60, 9, "", 19, 9, true},
+	{"empty_last_uid_long_disconnect", 10, 60, 9, "", 119, 9, false},
+}
+
 func TestClientSubscribeRecover(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	node.config.HistorySize = 10
-	node.config.HistoryLifetime = 60
-	node.config.HistoryRecover = true
+	for _, tt := range recoverTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := nodeWithMemoryEngine()
+			node.config.HistorySize = tt.HistorySize
+			node.config.HistoryLifetime = tt.HistoryLifetime
+			node.config.HistoryRecover = true
 
-	transport := newTestTransport()
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+			transport := newTestTransport()
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
 
-	for i := 0; i < 10; i++ {
-		node.Publish("test", &Publication{
-			UID:  strconv.Itoa(i),
-			Data: []byte(`{}`),
+			for i := 0; i < tt.NumPublications; i++ {
+				node.Publish("test", &Publication{
+					UID:  strconv.Itoa(i),
+					Data: []byte(`{}`),
+				})
+			}
+
+			connectClient(t, client)
+
+			subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+				Channel: "test",
+				Recover: true,
+				Last:    tt.Last,
+				Away:    tt.Away,
+			})
+			assert.Nil(t, disconnect)
+			assert.Nil(t, subscribeResp.Error)
+			assert.Equal(t, tt.NumRecovered, len(subscribeResp.Result.Publications))
+			assert.Equal(t, tt.Recovered, subscribeResp.Result.Recovered)
 		})
 	}
-
-	connectClient(t, client)
-
-	subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
-		Channel: "test",
-		Recover: true,
-		Last:    "7",
-	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, subscribeResp.Error)
-	assert.Equal(t, 2, len(subscribeResp.Result.Publications))
-	assert.True(t, subscribeResp.Result.Recovered)
 }
 
 func TestClientUnsubscribe(t *testing.T) {

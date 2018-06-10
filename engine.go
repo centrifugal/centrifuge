@@ -58,8 +58,8 @@ type Engine interface {
 	// recoverHistory allows to recover missed messages starting
 	// from last seen Publication UID provided by client. This method
 	// should return as many Publications as possible and boolean value
-	// indicating whether all Publications were successfully restored
-	// or not. The case when publications can not be fully restored
+	// indicating whether lastUID was found in publications or not
+	// The case when publications can not be fully restored
 	// can happen if old Publications already removed from history
 	// due to size or lifetime limits.
 	recoverHistory(ch string, lastUID string) ([]*Publication, bool, error)

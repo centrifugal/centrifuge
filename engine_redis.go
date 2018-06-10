@@ -1270,15 +1270,14 @@ func (e *shard) RecoverHistory(ch string, last string) ([]*Publication, bool, er
 		}
 	}
 	if position > -1 {
-		// Last uid found in history. Set recovered flag which means that
-		// server thinks missed messages fully recovered.
+		// Last uid found in history.
 		return publications[0:position], true, nil
 	}
-	// Provided last UID not found in history messages. This means that client
-	// most probably missed too many messages (or maybe wrong last uid provided but
-	// it's not a normal case). So we try to compensate as many as we can. But
-	// recovered flag stays false so we do not give a guarantee all missed messages
-	// recovered successfully.
+	// Provided last UID not found in history messages. This means that
+	// client most probably missed too many messages or publication with
+	// last UID already expired (or maybe wrong last uid provided but
+	// it's not a normal case). So we try to compensate as many as we
+	// can but get caller know about missing UID.
 	return publications, false, nil
 }
 

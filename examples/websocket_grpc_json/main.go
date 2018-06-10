@@ -80,6 +80,7 @@ func main() {
 				JoinLeave:       true,
 				HistoryLifetime: 60,
 				HistorySize:     10,
+				HistoryRecover:  true,
 			},
 		},
 	}

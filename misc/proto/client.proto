@@ -129,6 +129,7 @@ message SubscribeRequest {
     string sign = 4;
     bool recover = 5;
     string last = 6;
+    uint32 away = 7;
 }
 
 message SubscribeResponse {
