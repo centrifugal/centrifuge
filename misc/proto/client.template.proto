@@ -99,11 +99,6 @@ message ConnectRequest {
     bytes data = 2{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false]{{end}};
 }
 
-message ConnectResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    ConnectResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
-}
-
 message ConnectResult {
     string client = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "client"]{{end}};
     string version = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "version"]{{end}};
@@ -115,11 +110,6 @@ message ConnectResult {
 
 message RefreshRequest {
     SignedCredentials credentials = 1 {{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "credentials"]{{end}};
-}
-
-message RefreshResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    RefreshResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
 }
 
 message RefreshResult {
@@ -141,11 +131,6 @@ message SubscribeRequest {
     uint32 away = 7{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "away"]{{end}};
 }
 
-message SubscribeResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    SubscribeResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
-}
-
 message SubscribeResult {
     string last = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "last,omitempty"]{{end}};
     bool recovered = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recovered,omitempty"]{{end}};
@@ -156,21 +141,11 @@ message UnsubscribeRequest {
     string channel = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "channel"]{{end}};
 }
 
-message UnsubscribeResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    UnsubscribeResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
-}
-
 message UnsubscribeResult {}
 
 message PublishRequest {
     string channel = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "channel"]{{end}};
     bytes data = 2{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
-}
-
-message PublishResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    PublishResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
 }
 
 message PublishResult {}
@@ -179,22 +154,12 @@ message PresenceRequest {
     string channel = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "channel"]{{end}};
 }
 
-message PresenceResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    PresenceResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
-}
-
 message PresenceResult {
     map<string, ClientInfo> presence = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "presence"]{{end}};
 }
 
 message PresenceStatsRequest {
     string channel = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "channel"]{{end}};
-}
-
-message PresenceStatsResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    PresenceStatsResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
 }
 
 message PresenceStatsResult {
@@ -206,22 +171,12 @@ message HistoryRequest {
     string channel = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "channel"]{{end}};
 }
 
-message HistoryResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    HistoryResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
-}
-
 message HistoryResult {
     repeated Publication publications = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "publications"]{{end}};
 }
 
 message PingRequest {
     string data = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "data"]{{end}};
-}
-
-message PingResponse {
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    PingResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
 }
 
 message PingResult {
@@ -232,19 +187,10 @@ message RPCRequest{
     bytes data = 1{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
 }
 
-message RPCResponse{
-    Error error = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "error,omitempty"]{{end}};
-    RPCResult result = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "result,omitempty"]{{end}};
-}
-
 message RPCResult {
     bytes data = 1 {{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false]{{end}};
 }
 
 message SendRequest{
     bytes data = 1{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
-}
-
-service Centrifuge {
-    rpc Communicate(stream Command) returns (stream Reply) {}
 }

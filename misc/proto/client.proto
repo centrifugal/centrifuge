@@ -90,11 +90,6 @@ message ConnectRequest {
     bytes data = 2;
 }
 
-message ConnectResponse {
-    Error error = 1;
-    ConnectResult result = 2;
-}
-
 message ConnectResult {
     string client = 1;
     string version = 2;
@@ -106,11 +101,6 @@ message ConnectResult {
 
 message RefreshRequest {
     SignedCredentials credentials = 1 ;
-}
-
-message RefreshResponse {
-    Error error = 1;
-    RefreshResult result = 2;
 }
 
 message RefreshResult {
@@ -132,11 +122,6 @@ message SubscribeRequest {
     uint32 away = 7;
 }
 
-message SubscribeResponse {
-    Error error = 1;
-    SubscribeResult result = 2;
-}
-
 message SubscribeResult {
     string last = 1;
     bool recovered = 2;
@@ -147,21 +132,11 @@ message UnsubscribeRequest {
     string channel = 1;
 }
 
-message UnsubscribeResponse {
-    Error error = 1;
-    UnsubscribeResult result = 2;
-}
-
 message UnsubscribeResult {}
 
 message PublishRequest {
     string channel = 1;
     bytes data = 2;
-}
-
-message PublishResponse {
-    Error error = 1;
-    PublishResult result = 2;
 }
 
 message PublishResult {}
@@ -170,22 +145,12 @@ message PresenceRequest {
     string channel = 1;
 }
 
-message PresenceResponse {
-    Error error = 1;
-    PresenceResult result = 2;
-}
-
 message PresenceResult {
     map<string, ClientInfo> presence = 1;
 }
 
 message PresenceStatsRequest {
     string channel = 1;
-}
-
-message PresenceStatsResponse {
-    Error error = 1;
-    PresenceStatsResult result = 2;
 }
 
 message PresenceStatsResult {
@@ -197,22 +162,12 @@ message HistoryRequest {
     string channel = 1;
 }
 
-message HistoryResponse {
-    Error error = 1;
-    HistoryResult result = 2;
-}
-
 message HistoryResult {
     repeated Publication publications = 1;
 }
 
 message PingRequest {
     string data = 1;
-}
-
-message PingResponse {
-    Error error = 1;
-    PingResult result = 2;
 }
 
 message PingResult {
@@ -223,19 +178,10 @@ message RPCRequest{
     bytes data = 1;
 }
 
-message RPCResponse{
-    Error error = 1;
-    RPCResult result = 2;
-}
-
 message RPCResult {
     bytes data = 1 ;
 }
 
 message SendRequest{
     bytes data = 1;
-}
-
-service Centrifuge {
-    rpc Communicate(stream Command) returns (stream Reply) {}
 }

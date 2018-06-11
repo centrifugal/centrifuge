@@ -95,7 +95,6 @@
 
                 function handleSubscribeError(err) {
                     drawText('Error subscribing on channel ' + err.channel);
-                    console.log("subscription failed", err);
                 }
 
                 function handleMessage(message) {
@@ -114,12 +113,10 @@
                 }
 
                 function handleJoin(message) {
-                    console.log("subscription join event fired", message);
                     drawText('Someone joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
                 }
 
                 function handleLeave(message) {
-                    console.log("subscription leave event fired", message);
                     drawText('Someone left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
                 }
 

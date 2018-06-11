@@ -200,7 +200,7 @@ func (c *Client) ID() string {
 	return c.uid
 }
 
-// User return user ID associated with client connection.
+// UserID returns user ID associated with client connection.
 func (c *Client) UserID() string {
 	return c.user
 }
@@ -314,7 +314,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 	c.mu.Unlock()
 
 	if len(channels) > 0 {
-		// unsubscribe from all channels
+		// Unsubscribe from all channels.
 		for channel := range c.channels {
 			err := c.unsubscribe(channel)
 			if err != nil {
@@ -1332,7 +1332,7 @@ func (c *Client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 		return resp, nil
 	}
 
-	pub := &proto.Publication{
+	pub := &Publication{
 		Data: data,
 		Info: info,
 	}

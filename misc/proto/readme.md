@@ -51,7 +51,7 @@ except grpc.RpcError as err:
     print(err.code(), err.details())
 else:
     if resp.error.code:
-        # Centrifugo level error.
+        # Centrifuge server level error.
         print(resp.error.code, resp.error.message)
     else:
         print(resp.result)
