@@ -110,9 +110,12 @@ func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
 // so client could recover it.
 func TestMemoryEngineDropInactive(t *testing.T) {
 	e := testMemoryEngine()
-	e.node.config.HistoryDropInactive = true
-	e.node.config.HistoryLifetime = 5
-	e.node.config.HistorySize = 2
+
+	config := e.node.Config()
+	config.HistoryDropInactive = true
+	config.HistoryLifetime = 5
+	config.HistorySize = 2
+	e.node.Reload(config)
 
 	pub := newTestPublication()
 

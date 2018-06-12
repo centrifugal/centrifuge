@@ -84,7 +84,11 @@ func TestClientConnectWithWrongCredentials(t *testing.T) {
 
 func TestClientConnectWithValidSignedCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.Secret = "secret"
+
+	config := node.Config()
+	config.Secret = "secret"
+	node.Reload(config)
+
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
@@ -102,8 +106,12 @@ func TestClientConnectWithValidSignedCredentials(t *testing.T) {
 
 func TestClientConnectWithExpiredSignedCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.Secret = "secret"
-	node.config.ClientExpire = true
+
+	config := node.Config()
+	config.Secret = "secret"
+	config.ClientExpire = true
+	node.Reload(config)
+
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
@@ -123,8 +131,12 @@ func TestClientConnectWithExpiredSignedCredentials(t *testing.T) {
 
 func TestClientRefreshSignedCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.ClientExpire = true
-	node.config.Secret = "secret"
+
+	config := node.Config()
+	config.ClientExpire = true
+	config.Secret = "secret"
+	node.Reload(config)
+
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
@@ -157,7 +169,11 @@ func TestClientRefreshSignedCredentials(t *testing.T) {
 
 func TestClientConnectContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.ClientExpire = true
+
+	config := node.Config()
+	config.ClientExpire = true
+	node.Reload(config)
+
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{
@@ -182,8 +198,12 @@ func TestClientConnectContextCredentials(t *testing.T) {
 
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.Secret = "secret"
-	node.config.ClientExpire = true
+
+	config := node.Config()
+	config.Secret = "secret"
+	config.ClientExpire = true
+	node.Reload(config)
+
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{
@@ -258,9 +278,12 @@ func TestClientSubscribe(t *testing.T) {
 
 func TestClientSubscribeLast(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.HistorySize = 10
-	node.config.HistoryLifetime = 60
-	node.config.HistoryRecover = true
+
+	config := node.Config()
+	config.HistorySize = 10
+	config.HistoryLifetime = 60
+	config.HistoryRecover = true
+	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -299,9 +322,12 @@ func TestClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := nodeWithMemoryEngine()
-			node.config.HistorySize = tt.HistorySize
-			node.config.HistoryLifetime = tt.HistoryLifetime
-			node.config.HistoryRecover = true
+
+			config := node.Config()
+			config.HistorySize = tt.HistorySize
+			config.HistoryLifetime = tt.HistoryLifetime
+			config.HistoryRecover = true
+			node.Reload(config)
 
 			transport := newTestTransport()
 			ctx := context.Background()
@@ -377,7 +403,10 @@ func TestClientPublish(t *testing.T) {
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorPermissionDenied, publishResp.Error)
 
-	node.config.Publish = true
+	config := node.Config()
+	config.Publish = true
+	node.Reload(config)
+
 	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{}`),
@@ -421,7 +450,10 @@ func TestClientPing(t *testing.T) {
 
 func TestClientPresence(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.Presence = true
+
+	config := node.Config()
+	config.Presence = true
+	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -446,7 +478,10 @@ func TestClientPresence(t *testing.T) {
 	assert.Equal(t, uint32(1), presenceStatsResp.Result.NumUsers)
 	assert.Equal(t, uint32(1), presenceStatsResp.Result.NumClients)
 
-	node.config.Presence = false
+	config = node.Config()
+	config.Presence = false
+	node.Reload(config)
+
 	presenceResp, disconnect = client.presenceCmd(&proto.PresenceRequest{
 		Channel: "test",
 	})
@@ -465,8 +500,11 @@ func TestClientPresence(t *testing.T) {
 
 func TestClientHistory(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.HistorySize = 10
-	node.config.HistoryLifetime = 60
+
+	config := node.Config()
+	config.HistorySize = 10
+	config.HistoryLifetime = 60
+	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -490,8 +528,10 @@ func TestClientHistory(t *testing.T) {
 	assert.Nil(t, historyResp.Error)
 	assert.Equal(t, 10, len(historyResp.Result.Publications))
 
-	node.config.HistorySize = 0
-	node.config.HistoryLifetime = 0
+	config = node.Config()
+	config.HistorySize = 0
+	config.HistoryLifetime = 0
+	node.Reload(config)
 
 	historyResp, disconnect = client.historyCmd(&proto.HistoryRequest{
 		Channel: "test",
@@ -503,7 +543,10 @@ func TestClientHistory(t *testing.T) {
 
 func TestClientCloseUnauthenticated(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.ClientStaleCloseDelay = time.Millisecond
+
+	config := node.Config()
+	config.ClientStaleCloseDelay = time.Millisecond
+	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -517,7 +560,10 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 
 func TestClientPresenceUpdate(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.Presence = true
+
+	config := node.Config()
+	config.Presence = true
+	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -533,7 +579,6 @@ func TestClientPresenceUpdate(t *testing.T) {
 
 func TestClientSend(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.Presence = true
 
 	transport := newTestTransport()
 	ctx := context.Background()
