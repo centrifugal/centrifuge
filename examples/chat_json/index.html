@@ -8,6 +8,7 @@
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
         <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.11.2/jquery.min.js"></script>
+        <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
         <script type="text/javascript" src="centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
@@ -23,6 +24,7 @@
                 var container = $('#messages');
 
                 var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+                // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs');
 
                 centrifuge.setConnectData({"user-agent": navigator.userAgent});
 
@@ -108,12 +110,10 @@
                 }
 
                 function handleJoin(message) {
-                    console.log("subscription join event fired", message);
                     drawText('Client joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
                 }
 
                 function handleLeave(message) {
-                    console.log("subscription leave event fired", message);
                     drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
                 }
 

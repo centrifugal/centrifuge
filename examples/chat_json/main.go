@@ -15,13 +15,14 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
-func httpAuthMiddleware(h http.Handler) http.Handler {
+func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
@@ -131,7 +132,12 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", httpAuthMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/sockjs/", authMiddleware(centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
+		URL:           "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
+		HandlerPrefix: "/connection/sockjs",
+	})))
+	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

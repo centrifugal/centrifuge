@@ -21,7 +21,7 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %+v", e.Message, e.Fields)
 }
 
-func httpAuthMiddleware(h http.Handler) http.Handler {
+func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
@@ -131,7 +131,7 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", httpAuthMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket/", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/metrics", promhttp.Handler())
 
 	go func() {
