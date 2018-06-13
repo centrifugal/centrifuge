@@ -194,9 +194,12 @@ func TestRedisEngineDropInactive(t *testing.T) {
 	defer c.close()
 
 	e := newTestRedisEngine()
+
+	config := e.node.Config()
 	e.node.config.HistoryDropInactive = true
 	e.node.config.HistoryLifetime = 5
 	e.node.config.HistorySize = 2
+	e.node.Reload(config)
 
 	pub := newTestPublication()
 
