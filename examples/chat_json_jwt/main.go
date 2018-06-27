@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -14,23 +15,11 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
-}
-
-func authMiddleware(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID:   "42",
-			ExpireAt: time.Now().Unix() + 10,
-			Info:     []byte(`{"name": "Alexander"}`),
-		})
-		r = r.WithContext(newCtx)
-		h.ServeHTTP(w, r)
-	})
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -47,13 +36,17 @@ func waitExitSignal(n *centrifuge.Node) {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
+	cfg.Secret = "secret"
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:   true,
-				Presence:  true,
-				JoinLeave: true,
+				Publish:         true,
+				Presence:        true,
+				JoinLeave:       true,
+				HistoryLifetime: 60,
+				HistorySize:     10,
+				HistoryRecover:  true,
 			},
 		},
 	}
@@ -105,7 +98,8 @@ func main() {
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
 
 		go func() {
-			err := client.Send([]byte("hello"))
+			messageData, _ := json.Marshal("hello client " + client.ID())
+			err := client.Send(messageData)
 			if err != nil {
 				if err == io.EOF {
 					return
@@ -114,7 +108,9 @@ func main() {
 			}
 		}()
 
-		return centrifuge.ConnectReply{}
+		return centrifuge.ConnectReply{
+			Data: []byte(`{"timezone": "Moscow/Europe"}`),
+		}
 	})
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
@@ -123,7 +119,12 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}))
+	http.Handle("/connection/sockjs/", centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
+		URL:           "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
+		HandlerPrefix: "/connection/sockjs",
+	}))
+	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

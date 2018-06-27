@@ -1,6 +1,4 @@
-Example demonstrates simple chat with JSON protocol.
-
-Client uses Websocket by default, but you can simply uncomment one line in `index.html` to use SockJS instead. 
+Example of server that accepts connections with JWT connection token - i.e. without authentication middleware that sets Credentials.
 
 To start example locally install dependencies first:
 

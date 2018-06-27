@@ -1,3 +1,5 @@
+Example uses Websocket with Protobuf binary protocol between client and server.
+
 To start example locally install dependencies first:
 
 ```
