@@ -842,6 +842,9 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 				}
+				if config.Secret == "" {
+					return nil, fmt.Errorf("secret not set")
+				}
 				return []byte(config.Secret), nil
 			})
 			if parsedToken == nil && err != nil {
@@ -1014,6 +1017,9 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
+		if secret == "" {
+			return nil, fmt.Errorf("secret not set")
+		}
 		return []byte(secret), nil
 	})
 	if parsedToken == nil && err != nil {
@@ -1168,6 +1174,9 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 		parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			if secret == "" {
+				return nil, fmt.Errorf("secret not set")
 			}
 			return []byte(secret), nil
 		})
