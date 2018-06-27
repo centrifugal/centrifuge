@@ -26,9 +26,9 @@ func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID: "42",
-			Exp:    time.Now().Unix() + 10,
-			Info:   []byte(`{"name": "Alexander"}`),
+			UserID:   "42",
+			ExpireAt: time.Now().Unix() + 10,
+			Info:     []byte(`{"name": "Alexander"}`),
 		})
 		r = r.WithContext(newCtx)
 		h.ServeHTTP(w, r)
@@ -49,7 +49,12 @@ func waitExitSignal(n *centrifuge.Node) {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
-	cfg.ClientExpire = true
+
+	// Set secret to handle requests with JWT auth too. This is
+	// not required if you don't use token authentication and
+	// private subscriptions verified by token.
+	cfg.Secret = "secret"
+
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
 			Name: "chat",
@@ -98,7 +103,7 @@ func main() {
 		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
 			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
 			return centrifuge.RefreshReply{
-				Exp: time.Now().Unix() + 60,
+				ExpireAt: time.Now().Unix() + 60,
 			}
 		})
 

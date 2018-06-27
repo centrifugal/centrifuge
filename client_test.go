@@ -7,8 +7,33 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/proto"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/stretchr/testify/assert"
 )
+
+func getConnToken(user string, exp int64) string {
+	claims := jwt.MapClaims{"user": user}
+	if exp > 0 {
+		claims["exp"] = exp
+	}
+	t, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("secret"))
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+func getSubscribeToken(channel string, client string, exp int64) string {
+	claims := jwt.MapClaims{"channel": channel, "client": client}
+	if exp > 0 {
+		claims["exp"] = exp
+	}
+	t, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("secret"))
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
 
 func TestClientEventHub(t *testing.T) {
 	h := ClientEventHub{}
@@ -57,7 +82,7 @@ func TestClientClosedState(t *testing.T) {
 	assert.True(t, client.closed)
 }
 
-func TestClientConnectWithNoCredentials(t *testing.T) {
+func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
@@ -66,23 +91,18 @@ func TestClientConnectWithNoCredentials(t *testing.T) {
 	assert.Equal(t, disconnect, DisconnectBadRequest)
 }
 
-func TestClientConnectWithWrongCredentials(t *testing.T) {
+func TestClientConnectWithMalformedToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	_, disconnect := client.connectCmd(&proto.ConnectRequest{
-		Credentials: &proto.SignedCredentials{
-			User: "42",
-			Exp:  "",
-			Info: "",
-			Sign: "",
-		},
+		Token: "bad bad token",
 	})
 	assert.NotNil(t, disconnect)
-	assert.Equal(t, disconnect, DisconnectInvalidSign)
+	assert.Equal(t, disconnect, DisconnectInvalidToken)
 }
 
-func TestClientConnectWithValidSignedCredentials(t *testing.T) {
+func TestClientConnectWithValidToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
@@ -92,35 +112,24 @@ func TestClientConnectWithValidSignedCredentials(t *testing.T) {
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
-		Credentials: &proto.SignedCredentials{
-			User: "42",
-			Exp:  "1525541722",
-			Info: "",
-			Sign: "46789cda3bea52eca167961dd68c4d4240b9108f196a8516d1c753259b457d12",
-		},
+		Token: getConnToken("42", 0),
 	})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, client.ID(), resp.Result.Client)
 	assert.Equal(t, false, resp.Result.Expires)
 }
 
-func TestClientConnectWithExpiredSignedCredentials(t *testing.T) {
+func TestClientConnectWithExpiredToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
 	config.Secret = "secret"
-	config.ClientExpire = true
 	node.Reload(config)
 
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
-		Credentials: &proto.SignedCredentials{
-			User: "42",
-			Exp:  "1525541722",
-			Info: "",
-			Sign: "46789cda3bea52eca167961dd68c4d4240b9108f196a8516d1c753259b457d12",
-		},
+		Token: getConnToken("42", 1525541722),
 	})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, true, resp.Result.Expires)
@@ -129,23 +138,17 @@ func TestClientConnectWithExpiredSignedCredentials(t *testing.T) {
 	assert.False(t, client.authenticated)
 }
 
-func TestClientRefreshSignedCredentials(t *testing.T) {
+func TestClientTokenRefresh(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.ClientExpire = true
 	config.Secret = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
-		Credentials: &proto.SignedCredentials{
-			User: "42",
-			Exp:  "1525541722",
-			Info: "",
-			Sign: "46789cda3bea52eca167961dd68c4d4240b9108f196a8516d1c753259b457d12",
-		},
+		Token: getConnToken("42", 1525541722),
 	})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, "", resp.Result.Client)
@@ -153,12 +156,7 @@ func TestClientRefreshSignedCredentials(t *testing.T) {
 	assert.Equal(t, true, resp.Result.Expired)
 
 	refreshResp, disconnect := client.refreshCmd(&proto.RefreshRequest{
-		Credentials: &proto.SignedCredentials{
-			User: "42",
-			Exp:  "2525637058",
-			Info: "",
-			Sign: "1651ee08ba82f8e54578c4c20bc7675e6fce7af4b75f3e21aa537d4f0518a6a7",
-		},
+		Token: getConnToken("42", 2525637058),
 	})
 	assert.Nil(t, disconnect)
 	assert.NotEmpty(t, client.ID())
@@ -171,14 +169,13 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.ClientExpire = true
 	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{
-		UserID: "42",
-		Exp:    time.Now().Unix() + 60,
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() + 60,
 	})
 	client, _ := newClient(newCtx, node, transport)
 
@@ -200,15 +197,13 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.Secret = "secret"
-	config.ClientExpire = true
 	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{
-		UserID: "42",
-		Exp:    time.Now().Unix() - 60,
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() - 60,
 	})
 	client, _ := newClient(newCtx, node, transport)
 
@@ -274,6 +269,58 @@ func TestClientSubscribe(t *testing.T) {
 	})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorAlreadySubscribed, subscribeResp.Error)
+}
+
+func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "$test1",
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorPermissionDenied, subscribeResp.Error)
+}
+
+func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	config.Secret = "secret"
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "$test1",
+		Token:   getSubscribeToken("$wrong_channel", "wrong client", 0),
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorPermissionDenied, subscribeResp.Error)
+
+	subscribeResp, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "$test1",
+		Token:   getSubscribeToken("$wrong_channel", client.ID(), 0),
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorPermissionDenied, subscribeResp.Error)
+
+	subscribeResp, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "$test1",
+		Token:   getSubscribeToken("$test1", client.ID(), 0),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, subscribeResp.Error)
 }
 
 func TestClientSubscribeLast(t *testing.T) {
