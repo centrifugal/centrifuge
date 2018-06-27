@@ -110,7 +110,6 @@ message RefreshResult {
     bool expires = 3 [(gogoproto.jsontag) = "expires,omitempty"];
     bool expired = 4 [(gogoproto.jsontag) = "expired,omitempty"];
     uint32 ttl = 5 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
-    bytes data = 6 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty"];
 }
 
 message SubscribeRequest {

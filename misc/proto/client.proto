@@ -101,7 +101,6 @@ message RefreshResult {
     bool expires = 3;
     bool expired = 4;
     uint32 ttl = 5;
-    bytes data = 6;
 }
 
 message SubscribeRequest {

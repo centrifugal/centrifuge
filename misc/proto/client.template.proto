@@ -110,7 +110,6 @@ message RefreshResult {
     bool expires = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
     bool expired = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expired,omitempty"]{{end}};
     uint32 ttl = 5{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
-    bytes data = 6{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty"]{{end}};
 }
 
 message SubscribeRequest {
