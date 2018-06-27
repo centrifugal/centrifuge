@@ -47,6 +47,12 @@ func waitExitSignal(n *centrifuge.Node) {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
+
+	// Set secret to handle requests with JWT auth too. This is
+	// not required if you don't use token authentication and
+	// private subscriptions verified by token.
+	cfg.Secret = "secret"
+
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
 			Name: "chat",
