@@ -22,6 +22,7 @@ type ClientEventHub struct {
 	unsubscribeHandler UnsubscribeHandler
 	publishHandler     PublishHandler
 	refreshHandler     RefreshHandler
+	subRefreshHandler  SubRefreshHandler
 	rpcHandler         RPCHandler
 	messageHandler     MessageHandler
 }
@@ -48,6 +49,12 @@ func (c *ClientEventHub) RPC(h RPCHandler) {
 // RefreshHandler called when it's time to refresh client connection credentials.
 func (c *ClientEventHub) Refresh(h RefreshHandler) {
 	c.refreshHandler = h
+}
+
+// SubRefresh allows to set SubRefreshHandler.
+// SubRefreshHandler called when it's time to refresh client subscription.
+func (c *ClientEventHub) SubRefresh(h SubRefreshHandler) {
+	c.subRefreshHandler = h
 }
 
 // Subscribe allows to set SubscribeHandler.
@@ -174,14 +181,47 @@ func (c *Client) updateChannelPresence(ch string) error {
 	return c.node.addPresence(ch, c.uid, info)
 }
 
-// updatePresence updates presence info for all client channels
+// updatePresence updates presence info for all client channels.
+// At moment it also checks for expired subscriptions. As this happens
+// once in configured presence ping interval then subscription
+// expiration time resolution is pretty big. Though on practice
+// this should be reasonable for most use cases.
 func (c *Client) updatePresence() {
+	config := c.node.Config()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return
 	}
-	for channel := range c.channels {
+	for channel, channelContext := range c.channels {
+		now := time.Now().Unix()
+		expireAt := channelContext.expireAt
+		if expireAt > 0 && now > expireAt+int64(config.ClientExpiredSubCloseDelay.Seconds()) {
+			// Ooops, subscription expired.
+			if c.eventHub.subRefreshHandler != nil {
+				// Give subscription a chance to be refreshed via SubRefreshHandler.
+				reply := c.eventHub.subRefreshHandler(SubRefreshEvent{Channel: channel})
+				if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
+					go c.Unsubscribe(channel, true)
+					// No need to update channel presence.
+					continue
+				}
+				ctx := c.channels[channel]
+				if len(reply.Info) > 0 {
+					ctx.Info = reply.Info
+				}
+				ctx.expireAt = reply.ExpireAt
+				c.channels[channel] = ctx
+			} else {
+				// The only way subscription could be refreshed in this case is via
+				// SUB_REFRESH command sent from client but looks like that command
+				// with new refreshed token have not been received in configured window.
+				go c.Unsubscribe(channel, true)
+				// No need to update channel presence.
+				continue
+			}
+		}
+
 		err := c.updateChannelPresence(channel)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error updating presence for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -252,7 +292,7 @@ func (c *Client) Send(data Raw) error {
 }
 
 // Unsubscribe allows to unsubscribe client from channel.
-func (c *Client) Unsubscribe(ch string) error {
+func (c *Client) Unsubscribe(ch string, resubscribe bool) error {
 	c.mu.RLock()
 	if c.closed {
 		c.mu.RUnlock()
@@ -264,14 +304,14 @@ func (c *Client) Unsubscribe(ch string) error {
 	if err != nil {
 		return err
 	}
-	c.sendUnsub(ch)
+	c.sendUnsub(ch, resubscribe)
 	return nil
 }
 
-func (c *Client) sendUnsub(ch string) error {
+func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 	pushEncoder := proto.GetPushEncoder(c.transport.Encoding())
 
-	data, err := pushEncoder.EncodeUnsub(&proto.Unsub{})
+	data, err := pushEncoder.EncodeUnsub(&proto.Unsub{Resubscribe: resubscribe})
 	if err != nil {
 		return err
 	}
@@ -410,6 +450,8 @@ func (c *Client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 			replyRes, replyErr, disconnect = c.handleRefresh(params)
 		case proto.MethodTypeSubscribe:
 			replyRes, replyErr, disconnect = c.handleSubscribe(params)
+		case proto.MethodTypeSubRefresh:
+			replyRes, replyErr, disconnect = c.handleSubRefresh(params)
 		case proto.MethodTypeUnsubscribe:
 			replyRes, replyErr, disconnect = c.handleUnsubscribe(params)
 		case proto.MethodTypePublish:
@@ -570,6 +612,30 @@ func (c *Client) handleSubscribe(params proto.Raw) (proto.Raw, *proto.Error, *Di
 		replyRes, err = proto.GetResultEncoder(c.transport.Encoding()).EncodeSubscribeResult(resp.Result)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))
+			return nil, nil, DisconnectServerError
+		}
+	}
+	return replyRes, nil, nil
+}
+
+func (c *Client) handleSubRefresh(params proto.Raw) (proto.Raw, *proto.Error, *Disconnect) {
+	cmd, err := proto.GetParamsDecoder(c.transport.Encoding()).DecodeSubRefresh(params)
+	if err != nil {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding sub refresh", map[string]interface{}{"error": err.Error()}))
+		return nil, nil, DisconnectBadRequest
+	}
+	resp, disconnect := c.subRefreshCmd(cmd)
+	if disconnect != nil {
+		return nil, nil, disconnect
+	}
+	if resp.Error != nil {
+		return nil, resp.Error, nil
+	}
+	var replyRes []byte
+	if resp.Result != nil {
+		replyRes, err = proto.GetResultEncoder(c.transport.Encoding()).EncodeSubRefreshResult(resp.Result)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error encoding sub refresh", map[string]interface{}{"error": err.Error()}))
 			return nil, nil, DisconnectServerError
 		}
 	}
@@ -1009,7 +1075,7 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 	secret := config.Secret
 
 	var user string
-	var exp int64
+	var expireAt int64
 	var info proto.Raw
 	var b64info string
 
@@ -1030,12 +1096,12 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 		user = claims.User
 		info = claims.Info
 		b64info = claims.Base64Info
-		exp = claims.StandardClaims.ExpiresAt
+		expireAt = claims.StandardClaims.ExpiresAt
 	} else {
 		if validationErr, ok := err.(*jwt.ValidationError); ok {
 			if validationErr.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other errors set in bitfield.
-				exp = claims.StandardClaims.ExpiresAt
+				expireAt = claims.StandardClaims.ExpiresAt
 			} else {
 				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 				return resp, DisconnectInvalidToken
@@ -1051,24 +1117,24 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 
 	res := &proto.RefreshResult{
 		Version: version,
-		Expires: exp > 0,
+		Expires: expireAt > 0,
 		Client:  c.uid,
 	}
 
-	diff := exp - time.Now().Unix()
+	diff := expireAt - time.Now().Unix()
 	if diff > 0 {
 		res.TTL = uint32(diff)
 	}
 
 	resp.Result = res
 
-	if exp > 0 {
+	if expireAt > 0 {
 		// connection check enabled
-		timeToExpire := exp - time.Now().Unix()
+		timeToExpire := expireAt - time.Now().Unix()
 		if timeToExpire > 0 {
 			// connection refreshed, update client timestamp and set new expiration timeout
 			c.mu.Lock()
-			c.exp = exp
+			c.exp = expireAt
 			if len(info) > 0 {
 				c.info = info
 			}
@@ -1110,6 +1176,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	resp := &proto.SubscribeResponse{}
 
 	config := c.node.Config()
+
 	secret := config.Secret
 	channelMaxLength := config.ChannelMaxLength
 	channelLimit := config.ClientChannelLimit
@@ -1162,8 +1229,11 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	}
 
 	var channelInfo proto.Raw
+	var expireAt int64
 
-	if c.node.privateChannel(channel) {
+	isPrivateChannel := c.node.privateChannel(channel)
+
+	if isPrivateChannel {
 		// private channel - subscription request must have valid token.
 
 		var tokenChannel string
@@ -1190,32 +1260,44 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			tokenInfo = claims.Info
 			tokenB64info = claims.Base64Info
 			tokenClient = claims.Client
-		} else {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-			resp.Error = ErrorPermissionDenied
-			return resp, nil
-		}
+			expireAt = claims.StandardClaims.ExpiresAt
 
-		if c.uid != tokenClient {
-			resp.Error = ErrorPermissionDenied
-			return resp, nil
-		}
-		if cmd.Channel != tokenChannel {
-			resp.Error = ErrorPermissionDenied
-			return resp, nil
-		}
-
-		if len(tokenInfo) > 0 {
-			channelInfo = tokenInfo
-		}
-
-		if tokenB64info != "" {
-			byteInfo, err := base64.StdEncoding.DecodeString(tokenB64info)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": c.UserID(), "client": c.uid, "error": err.Error()}))
-				return resp, DisconnectBadRequest
+			if c.uid != tokenClient {
+				resp.Error = ErrorPermissionDenied
+				return resp, nil
 			}
-			channelInfo = byteInfo
+			if cmd.Channel != tokenChannel {
+				resp.Error = ErrorPermissionDenied
+				return resp, nil
+			}
+
+			if len(tokenInfo) > 0 {
+				channelInfo = tokenInfo
+			}
+
+			if tokenB64info != "" {
+				byteInfo, err := base64.StdEncoding.DecodeString(tokenB64info)
+				if err != nil {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": c.UserID(), "client": c.uid, "error": err.Error()}))
+					return resp, DisconnectBadRequest
+				}
+				channelInfo = byteInfo
+			}
+		} else {
+			if validationErr, ok := err.(*jwt.ValidationError); ok {
+				if validationErr.Errors == jwt.ValidationErrorExpired {
+					// The only problem with token is its expiration - no other errors set in bitfield.
+					expireAt = claims.StandardClaims.ExpiresAt
+				} else {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+					resp.Error = ErrorPermissionDenied
+					return resp, nil
+				}
+			} else {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+				resp.Error = ErrorPermissionDenied
+				return resp, nil
+			}
 		}
 	}
 
@@ -1233,10 +1315,31 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 		if len(reply.ChannelInfo) > 0 {
 			channelInfo = reply.ChannelInfo
 		}
+		if reply.ExpireAt > 0 {
+			expireAt = reply.ExpireAt
+		}
+	}
+
+	if expireAt > 0 {
+		now := time.Now().Unix()
+		if expireAt < now {
+			res.Expires = true
+			res.Expired = true
+			resp.Result = res
+			return resp, nil
+		}
+		if isPrivateChannel {
+			// Only expose expiration info to client in private channel case.
+			// In other scenarios expiration will be handled by SubRefreshHandler
+			// on Go application backend side.
+			res.Expires = true
+			res.TTL = uint32(expireAt - now)
+		}
 	}
 
 	channelContext := ChannelContext{
-		Info: channelInfo,
+		Info:     channelInfo,
+		expireAt: expireAt,
 	}
 	c.mu.Lock()
 	c.channels[channel] = channelContext
@@ -1308,6 +1411,109 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 		}
 		go c.node.publishJoin(channel, join, &chOpts)
 	}
+	resp.Result = res
+	return resp, nil
+}
+
+func (c *Client) subRefreshCmd(cmd *proto.SubRefreshRequest) (*proto.SubRefreshResponse, *Disconnect) {
+
+	channel := cmd.Channel
+	if channel == "" {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for sub refresh", map[string]interface{}{"user": c.user, "client": c.uid}))
+		return nil, DisconnectBadRequest
+	}
+
+	resp := &proto.SubRefreshResponse{}
+	res := &proto.SubRefreshResult{}
+
+	config := c.node.Config()
+	secret := config.Secret
+
+	var channelInfo proto.Raw
+	var expireAt int64
+
+	var tokenChannel string
+	var tokenClient string
+	var tokenInfo proto.Raw
+	var tokenB64info string
+
+	parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		if secret == "" {
+			return nil, fmt.Errorf("secret not set")
+		}
+		return []byte(secret), nil
+	})
+	if parsedToken == nil && err != nil {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+		resp.Error = ErrorBadRequest
+		return resp, nil
+	}
+	if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
+		tokenChannel = claims.Channel
+		tokenInfo = claims.Info
+		tokenB64info = claims.Base64Info
+		tokenClient = claims.Client
+		expireAt = claims.StandardClaims.ExpiresAt
+	} else {
+		if validationErr, ok := err.(*jwt.ValidationError); ok {
+			if validationErr.Errors == jwt.ValidationErrorExpired {
+				// The only problem with token is its expiration - no other errors set in bitfield.
+				expireAt = claims.StandardClaims.ExpiresAt
+			} else {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+				resp.Error = ErrorBadRequest
+				return resp, nil
+			}
+		} else {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+			resp.Error = ErrorBadRequest
+			return resp, nil
+		}
+	}
+
+	if c.uid != tokenClient {
+		resp.Error = ErrorBadRequest
+		return resp, nil
+	}
+	if cmd.Channel != tokenChannel {
+		resp.Error = ErrorBadRequest
+		return resp, nil
+	}
+
+	if len(tokenInfo) > 0 {
+		channelInfo = tokenInfo
+	}
+
+	if tokenB64info != "" {
+		byteInfo, err := base64.StdEncoding.DecodeString(tokenB64info)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": c.UserID(), "client": c.uid, "error": err.Error()}))
+			return resp, DisconnectBadRequest
+		}
+		channelInfo = byteInfo
+	}
+
+	if expireAt > 0 {
+		res.Expires = true
+		now := time.Now().Unix()
+		if expireAt < now {
+			res.Expired = true
+		} else {
+			res.TTL = uint32(expireAt - now)
+		}
+	}
+
+	channelContext := ChannelContext{
+		Info:     channelInfo,
+		expireAt: expireAt,
+	}
+	c.mu.Lock()
+	c.channels[channel] = channelContext
+	c.mu.Unlock()
+
 	resp.Result = res
 	return resp, nil
 }

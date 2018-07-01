@@ -30,6 +30,7 @@ enum MethodType {
     SEND = 8{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeSend"]{{end}};
     RPC = 9{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeRPC"]{{end}};
     REFRESH = 10{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeRefresh"]{{end}};
+    SUB_REFRESH = 11{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "MethodTypeSubRefresh"]{{end}};
 }
 
 message Command {
@@ -80,14 +81,16 @@ message Leave {
     ClientInfo info = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "info", (gogoproto.nullable) = false]{{end}};
 }
 
-message Unsub {}
+message Unsub {
+    bool resubscribe =1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "resubscribe,omitempty"]{{end}};
+}
 
 message Message {
     bytes data = 1{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
 }
 
 message ConnectRequest {
-    string token = 1 {{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "token"]{{end}};
+    string token = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "token"]{{end}};
     bytes data = 2{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false]{{end}};
 }
 
@@ -101,7 +104,7 @@ message ConnectResult {
 }
 
 message RefreshRequest {
-    string token = 1 {{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "token"]{{end}};
+    string token = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "token"]{{end}};
 }
 
 message RefreshResult {
@@ -127,6 +130,17 @@ message SubscribeResult {
     bool expires = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
     bool expired = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expired,omitempty"]{{end}};
     uint32 ttl = 6{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
+}
+
+message SubRefreshRequest {
+    string channel = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "channel"]{{end}};
+    string token = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "token"]{{end}};
+}
+
+message SubRefreshResult {
+    bool expires = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
+    bool expired = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expired,omitempty"]{{end}};
+    uint32 ttl = 3{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
 }
 
 message UnsubscribeRequest {

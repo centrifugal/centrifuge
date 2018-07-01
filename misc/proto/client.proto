@@ -21,6 +21,7 @@ enum MethodType {
     SEND = 8;
     RPC = 9;
     REFRESH = 10;
+    SUB_REFRESH = 11;
 }
 
 message Command {
@@ -71,14 +72,16 @@ message Leave {
     ClientInfo info = 1;
 }
 
-message Unsub {}
+message Unsub {
+    bool resubscribe =1;
+}
 
 message Message {
     bytes data = 1;
 }
 
 message ConnectRequest {
-    string token = 1 ;
+    string token = 1;
     bytes data = 2;
 }
 
@@ -92,7 +95,7 @@ message ConnectResult {
 }
 
 message RefreshRequest {
-    string token = 1 ;
+    string token = 1;
 }
 
 message RefreshResult {
@@ -118,6 +121,17 @@ message SubscribeResult {
     bool expires = 4;
     bool expired = 5;
     uint32 ttl = 6;
+}
+
+message SubRefreshRequest {
+    string channel = 1;
+    string token = 2;
+}
+
+message SubRefreshResult {
+    bool expires = 1;
+    bool expired = 2;
+    uint32 ttl = 3;
 }
 
 message UnsubscribeRequest {

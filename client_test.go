@@ -119,6 +119,25 @@ func TestClientConnectWithValidToken(t *testing.T) {
 	assert.Equal(t, false, resp.Result.Expires)
 }
 
+func TestClientConnectWithExpiringToken(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	config.Secret = "secret"
+	node.Reload(config)
+
+	transport := newTestTransport()
+	client, _ := newClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
+		Token: getConnToken("42", time.Now().Unix()+10),
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, true, resp.Result.Expires)
+	assert.Equal(t, false, resp.Result.Expired)
+	assert.True(t, resp.Result.TTL > 0)
+	assert.True(t, client.authenticated)
+}
+
 func TestClientConnectWithExpiredToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
@@ -132,9 +151,9 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 		Token: getConnToken("42", 1525541722),
 	})
 	assert.Nil(t, disconnect)
-	assert.Equal(t, true, resp.Result.Expires)
-	assert.Equal(t, true, resp.Result.Expired)
-	assert.Equal(t, uint32(0), resp.Result.TTL)
+	assert.True(t, resp.Result.Expires)
+	assert.True(t, resp.Result.Expired)
+	assert.Zero(t, resp.Result.TTL)
 	assert.False(t, client.authenticated)
 }
 
@@ -151,17 +170,17 @@ func TestClientTokenRefresh(t *testing.T) {
 		Token: getConnToken("42", 1525541722),
 	})
 	assert.Nil(t, disconnect)
-	assert.Equal(t, "", resp.Result.Client)
-	assert.Equal(t, true, resp.Result.Expires)
-	assert.Equal(t, true, resp.Result.Expired)
+	assert.Empty(t, resp.Result.Client)
+	assert.True(t, resp.Result.Expires)
+	assert.True(t, resp.Result.Expired)
 
 	refreshResp, disconnect := client.refreshCmd(&proto.RefreshRequest{
 		Token: getConnToken("42", 2525637058),
 	})
 	assert.Nil(t, disconnect)
 	assert.NotEmpty(t, client.ID())
-	assert.Equal(t, true, refreshResp.Result.Expires)
-	assert.Equal(t, false, refreshResp.Result.Expired)
+	assert.True(t, refreshResp.Result.Expires)
+	assert.False(t, refreshResp.Result.Expired)
 	assert.True(t, refreshResp.Result.TTL > 0)
 }
 
@@ -323,6 +342,39 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	assert.Nil(t, subscribeResp.Error)
 }
 
+func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	config.Secret = "secret"
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "$test1",
+		Token:   getSubscribeToken("$test1", client.ID(), 10),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, subscribeResp.Error, "token already expired but no error")
+	assert.True(t, subscribeResp.Result.Expired, "expired flag must be set")
+
+	subscribeResp, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "$test1",
+		Token:   getSubscribeToken("$test1", client.ID(), time.Now().Unix()+10),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, subscribeResp.Error, "token is valid and not expired yet")
+	assert.False(t, subscribeResp.Result.Expired, "expired flag must not be set")
+	assert.True(t, subscribeResp.Result.Expires, "expires flag must be set")
+	assert.True(t, subscribeResp.Result.TTL > 0, "positive TTL must be set")
+}
+
 func TestClientSubscribeLast(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
@@ -427,7 +479,7 @@ func TestClientUnsubscribe(t *testing.T) {
 	subscribeClient(t, client, "test")
 	assert.Equal(t, 1, len(client.Channels()))
 
-	err := client.Unsubscribe("test")
+	err := client.Unsubscribe("test", false)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(client.Channels()))
 	assert.Equal(t, 1, node.Hub().NumClients())
@@ -461,7 +513,10 @@ func TestClientPublish(t *testing.T) {
 	assert.Nil(t, disconnect)
 	assert.Nil(t, publishResp.Error)
 
-	node.config.SubscribeToPublish = true
+	config = node.Config()
+	config.SubscribeToPublish = true
+	node.Reload(config)
+
 	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{}`),

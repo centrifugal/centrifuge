@@ -46,6 +46,9 @@ type Config struct {
 	// refresh its connection in the end of connection lifetime.
 	ClientExpiredCloseDelay time.Duration
 
+	// ClientExpiredSubCloseDelay ...
+	ClientExpiredSubCloseDelay time.Duration
+
 	// ClientStaleCloseDelay is an interval in seconds after which
 	// connection will be closed if still not authenticated.
 	ClientStaleCloseDelay time.Duration
@@ -160,6 +163,7 @@ var DefaultConfig = Config{
 	ClientMessageWriteTimeout:    0,
 	ClientPingInterval:           25 * time.Second,
 	ClientExpiredCloseDelay:      25 * time.Second,
+	ClientExpiredSubCloseDelay:   25 * time.Second,
 	ClientStaleCloseDelay:        25 * time.Second,
 	ClientRequestMaxSize:         65536,    // 64KB by default
 	ClientQueueMaxSize:           10485760, // 10MB by default
