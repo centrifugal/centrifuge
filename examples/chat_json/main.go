@@ -73,12 +73,12 @@ func main() {
 
 	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 
-		// client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		// 	log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-		// 	return centrifuge.RefreshReply{
-		// 		ExpireAt: time.Now().Unix() + 10,
-		// 	}
-		// })
+		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			return centrifuge.RefreshReply{
+				ExpireAt: time.Now().Unix() + 10,
+			}
+		})
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -146,7 +146,7 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/connection/sockjs/", authMiddleware(centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
 		URL:           "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
 		HandlerPrefix: "/connection/sockjs",
