@@ -98,9 +98,8 @@ message ConnectResult {
     string client = 1 [(gogoproto.jsontag) = "client"];
     string version = 2 [(gogoproto.jsontag) = "version"];
     bool expires = 3 [(gogoproto.jsontag) = "expires,omitempty"];
-    bool expired = 4 [(gogoproto.jsontag) = "expired,omitempty"];
-    uint32 ttl = 5 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
-    bytes data = 6 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false];
+    uint32 ttl = 4 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
+    bytes data = 5 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false];
 }
 
 message RefreshRequest {
@@ -111,8 +110,7 @@ message RefreshResult {
     string client = 1 [(gogoproto.jsontag) = "client"];
     string version = 2 [(gogoproto.jsontag) = "version"];
     bool expires = 3 [(gogoproto.jsontag) = "expires,omitempty"];
-    bool expired = 4 [(gogoproto.jsontag) = "expired,omitempty"];
-    uint32 ttl = 5 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
+    uint32 ttl = 4 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
 }
 
 message SubscribeRequest {
@@ -128,8 +126,7 @@ message SubscribeResult {
     bool recovered = 2 [(gogoproto.jsontag) = "recovered,omitempty"];
     repeated Publication publications = 3 [(gogoproto.jsontag) = "publications,omitempty"];
     bool expires = 4 [(gogoproto.jsontag) = "expires,omitempty"];
-    bool expired = 5 [(gogoproto.jsontag) = "expired,omitempty"];
-    uint32 ttl = 6 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
+    uint32 ttl = 5 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
 }
 
 message SubRefreshRequest {
@@ -139,8 +136,7 @@ message SubRefreshRequest {
 
 message SubRefreshResult {
     bool expires = 1 [(gogoproto.jsontag) = "expires,omitempty"];
-    bool expired = 2 [(gogoproto.jsontag) = "expired,omitempty"];
-    uint32 ttl = 3 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
+    uint32 ttl = 2 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
 }
 
 message UnsubscribeRequest {

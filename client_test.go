@@ -133,7 +133,6 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 	})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, true, resp.Result.Expires)
-	assert.Equal(t, false, resp.Result.Expired)
 	assert.True(t, resp.Result.TTL > 0)
 	assert.True(t, client.authenticated)
 }
@@ -151,9 +150,7 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 		Token: getConnToken("42", 1525541722),
 	})
 	assert.Nil(t, disconnect)
-	assert.True(t, resp.Result.Expires)
-	assert.True(t, resp.Result.Expired)
-	assert.Zero(t, resp.Result.TTL)
+	assert.Equal(t, ErrorTokenExpired, resp.Error)
 	assert.False(t, client.authenticated)
 }
 
@@ -170,9 +167,7 @@ func TestClientTokenRefresh(t *testing.T) {
 		Token: getConnToken("42", 1525541722),
 	})
 	assert.Nil(t, disconnect)
-	assert.Empty(t, resp.Result.Client)
-	assert.True(t, resp.Result.Expires)
-	assert.True(t, resp.Result.Expired)
+	assert.Equal(t, ErrorTokenExpired, resp.Error)
 
 	refreshResp, disconnect := client.refreshCmd(&proto.RefreshRequest{
 		Token: getConnToken("42", 2525637058),
@@ -180,7 +175,6 @@ func TestClientTokenRefresh(t *testing.T) {
 	assert.Nil(t, disconnect)
 	assert.NotEmpty(t, client.ID())
 	assert.True(t, refreshResp.Result.Expires)
-	assert.False(t, refreshResp.Result.Expired)
 	assert.True(t, refreshResp.Result.TTL > 0)
 }
 
@@ -206,7 +200,6 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, false, resp.Result.Expires)
-	assert.Equal(t, false, resp.Result.Expired)
 	assert.Equal(t, uint32(0), resp.Result.TTL)
 	assert.True(t, client.authenticated)
 	assert.Equal(t, "42", client.UserID())
@@ -231,9 +224,9 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 		return RefreshReply{}
 	})
 
-	_, disconnect := client.connectCmd(&proto.ConnectRequest{})
-	assert.NotNil(t, disconnect)
-	assert.Equal(t, DisconnectExpired, disconnect)
+	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorExpired, resp.Error)
 }
 
 func connectClient(t *testing.T, client *Client) *proto.ConnectResult {
@@ -361,8 +354,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 		Token:   getSubscribeToken("$test1", client.ID(), 10),
 	})
 	assert.Nil(t, disconnect)
-	assert.Nil(t, subscribeResp.Error, "token already expired but no error")
-	assert.True(t, subscribeResp.Result.Expired, "expired flag must be set")
+	assert.Equal(t, ErrorTokenExpired, subscribeResp.Error)
 
 	subscribeResp, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "$test1",
@@ -370,7 +362,6 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, subscribeResp.Error, "token is valid and not expired yet")
-	assert.False(t, subscribeResp.Result.Expired, "expired flag must not be set")
 	assert.True(t, subscribeResp.Result.Expires, "expires flag must be set")
 	assert.True(t, subscribeResp.Result.TTL > 0, "positive TTL must be set")
 }

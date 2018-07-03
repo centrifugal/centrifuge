@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +83,8 @@ type Credentials struct {
 	Info     []byte
 }
 
-// credentialsContextKeyType ...
+// credentialsContextKeyType is special type to safely use
+// context for setting and getting Credentials.
 type credentialsContextKeyType int
 
 // CredentialsContextKey allows Go code to set Credentials into context.
@@ -175,9 +177,7 @@ func (c *Client) updateChannelPresence(ch string) error {
 	if !chOpts.Presence {
 		return nil
 	}
-
 	info := c.clientInfo(ch)
-
 	return c.node.addPresence(ch, c.uid, info)
 }
 
@@ -197,7 +197,7 @@ func (c *Client) updatePresence() {
 		now := time.Now().Unix()
 		expireAt := channelContext.expireAt
 		if expireAt > 0 && now > expireAt+int64(config.ClientExpiredSubCloseDelay.Seconds()) {
-			// Ooops, subscription expired.
+			// Subscription expired.
 			if c.eventHub.subRefreshHandler != nil {
 				// Give subscription a chance to be refreshed via SubRefreshHandler.
 				reply := c.eventHub.subRefreshHandler(SubRefreshEvent{Channel: channel})
@@ -484,7 +484,7 @@ func (c *Client) handle(command *proto.Command) (*proto.Reply, *Disconnect) {
 	}
 
 	if replyErr != nil {
-		replyErrorCount.WithLabelValues(strings.ToLower(proto.MethodType_name[int32(method)])).Inc()
+		replyErrorCount.WithLabelValues(strings.ToLower(proto.MethodType_name[int32(method)]), strconv.FormatUint(uint64(replyErr.Code), 10)).Inc()
 	}
 
 	rep := &proto.Reply{
@@ -884,7 +884,6 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	}
 
 	var expires bool
-	var expired bool
 	var ttl uint32
 
 	if credentials != nil {
@@ -927,15 +926,14 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 					if validationErr.Errors == jwt.ValidationErrorExpired {
 						// The only problem with token is its expiration - no other
 						// errors set in Errors bitfield.
-						exp = claims.StandardClaims.ExpiresAt
-					} else {
-						c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
-						return resp, DisconnectInvalidToken
+						resp.Error = ErrorTokenExpired
+						return resp, nil
 					}
-				} else {
 					c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
 					return resp, DisconnectInvalidToken
 				}
+				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
+				return resp, DisconnectInvalidToken
 			}
 
 			c.mu.Lock()
@@ -982,13 +980,14 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	c.mu.RLock()
 	if exp > 0 && !insecure {
 		expires = true
-		diff := exp - time.Now().Unix()
-		if diff <= 0 {
-			expired = true
-			ttl = 0
-		} else {
-			ttl = uint32(diff)
+		now := time.Now().Unix()
+		if exp < now {
+			c.mu.RUnlock()
+			c.node.logger.log(newLogEntry(LogLevelInfo, "connection expiration must be greater than now", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
+			resp.Error = ErrorExpired
+			return resp, nil
 		}
+		ttl = uint32(exp - now)
 	}
 	c.mu.RUnlock()
 
@@ -996,19 +995,9 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		Version: version,
 		Expires: expires,
 		TTL:     ttl,
-		Expired: expired,
 	}
 
 	resp.Result = res
-
-	if expired {
-		if credentials != nil {
-			// In case of native Go authentication disconnect user.
-			return nil, DisconnectExpired
-		}
-		// In case of using connect token initiate refresh workflow.
-		return resp, nil
-	}
 
 	// Client successfully connected.
 	c.mu.Lock()
@@ -1026,7 +1015,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		return resp, DisconnectServerError
 	}
 
-	if exp > 0 && !expired {
+	if exp > 0 {
 		duration := closeDelay + time.Duration(ttl)*time.Second
 		c.mu.Lock()
 		c.expireTimer = time.AfterFunc(duration, c.expire)
@@ -1101,15 +1090,14 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 		if validationErr, ok := err.(*jwt.ValidationError); ok {
 			if validationErr.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other errors set in bitfield.
-				expireAt = claims.StandardClaims.ExpiresAt
-			} else {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-				return resp, DisconnectInvalidToken
+				resp.Error = ErrorTokenExpired
+				return resp, nil
 			}
-		} else {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 			return resp, DisconnectInvalidToken
 		}
+		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+		return resp, DisconnectInvalidToken
 	}
 
 	closeDelay := config.ClientExpiredCloseDelay
@@ -1155,7 +1143,8 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 			c.expireTimer = time.AfterFunc(duration, c.expire)
 			c.mu.Unlock()
 		} else {
-			resp.Result.Expired = true
+			resp.Error = ErrorExpired
+			return resp, nil
 		}
 	}
 	return resp, nil
@@ -1235,7 +1224,6 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 
 	if isPrivateChannel {
 		// private channel - subscription request must have valid token.
-
 		var tokenChannel string
 		var tokenClient string
 		var tokenInfo proto.Raw
@@ -1287,17 +1275,16 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			if validationErr, ok := err.(*jwt.ValidationError); ok {
 				if validationErr.Errors == jwt.ValidationErrorExpired {
 					// The only problem with token is its expiration - no other errors set in bitfield.
-					expireAt = claims.StandardClaims.ExpiresAt
-				} else {
-					c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-					resp.Error = ErrorPermissionDenied
+					resp.Error = ErrorTokenExpired
 					return resp, nil
 				}
-			} else {
 				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 				resp.Error = ErrorPermissionDenied
 				return resp, nil
 			}
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+			resp.Error = ErrorPermissionDenied
+			return resp, nil
 		}
 	}
 
@@ -1312,10 +1299,10 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			resp.Error = reply.Error
 			return resp, nil
 		}
-		if len(reply.ChannelInfo) > 0 {
+		if len(reply.ChannelInfo) > 0 && !isPrivateChannel {
 			channelInfo = reply.ChannelInfo
 		}
-		if reply.ExpireAt > 0 {
+		if reply.ExpireAt > 0 && !isPrivateChannel {
 			expireAt = reply.ExpireAt
 		}
 	}
@@ -1323,9 +1310,8 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	if expireAt > 0 {
 		now := time.Now().Unix()
 		if expireAt < now {
-			res.Expires = true
-			res.Expired = true
-			resp.Result = res
+			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription expiration must be greater than now", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
+			resp.Error = ErrorExpired
 			return resp, nil
 		}
 		if isPrivateChannel {
@@ -1426,6 +1412,15 @@ func (c *Client) subRefreshCmd(cmd *proto.SubRefreshRequest) (*proto.SubRefreshR
 	resp := &proto.SubRefreshResponse{}
 	res := &proto.SubRefreshResult{}
 
+	c.mu.RLock()
+	_, ok := c.channels[channel]
+	c.mu.RUnlock()
+	if !ok {
+		// Must be subscribed to refresh.
+		resp.Error = ErrorPermissionDenied
+		return resp, nil
+	}
+
 	config := c.node.Config()
 	secret := config.Secret
 
@@ -1461,17 +1456,16 @@ func (c *Client) subRefreshCmd(cmd *proto.SubRefreshRequest) (*proto.SubRefreshR
 		if validationErr, ok := err.(*jwt.ValidationError); ok {
 			if validationErr.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other errors set in bitfield.
-				expireAt = claims.StandardClaims.ExpiresAt
-			} else {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-				resp.Error = ErrorBadRequest
+				resp.Error = ErrorTokenExpired
 				return resp, nil
 			}
-		} else {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 			resp.Error = ErrorBadRequest
 			return resp, nil
 		}
+		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+		resp.Error = ErrorBadRequest
+		return resp, nil
 	}
 
 	if c.uid != tokenClient {
@@ -1500,10 +1494,10 @@ func (c *Client) subRefreshCmd(cmd *proto.SubRefreshRequest) (*proto.SubRefreshR
 		res.Expires = true
 		now := time.Now().Unix()
 		if expireAt < now {
-			res.Expired = true
-		} else {
-			res.TTL = uint32(expireAt - now)
+			resp.Error = ErrorExpired
+			return resp, nil
 		}
+		res.TTL = uint32(expireAt - now)
 	}
 
 	channelContext := ChannelContext{

@@ -98,9 +98,8 @@ message ConnectResult {
     string client = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "client"]{{end}};
     string version = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "version"]{{end}};
     bool expires = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
-    bool expired = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expired,omitempty"]{{end}};
-    uint32 ttl = 5{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
-    bytes data = 6{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false]{{end}};
+    uint32 ttl = 4{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
+    bytes data = 5{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false]{{end}};
 }
 
 message RefreshRequest {
@@ -111,8 +110,7 @@ message RefreshResult {
     string client = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "client"]{{end}};
     string version = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "version"]{{end}};
     bool expires = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
-    bool expired = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expired,omitempty"]{{end}};
-    uint32 ttl = 5{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
+    uint32 ttl = 4{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
 }
 
 message SubscribeRequest {
@@ -128,8 +126,7 @@ message SubscribeResult {
     bool recovered = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recovered,omitempty"]{{end}};
     repeated Publication publications = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "publications,omitempty"]{{end}};
     bool expires = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
-    bool expired = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expired,omitempty"]{{end}};
-    uint32 ttl = 6{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
+    uint32 ttl = 5{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
 }
 
 message SubRefreshRequest {
@@ -139,8 +136,7 @@ message SubRefreshRequest {
 
 message SubRefreshResult {
     bool expires = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
-    bool expired = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expired,omitempty"]{{end}};
-    uint32 ttl = 3{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
+    uint32 ttl = 2{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
 }
 
 message UnsubscribeRequest {

@@ -89,9 +89,8 @@ message ConnectResult {
     string client = 1;
     string version = 2;
     bool expires = 3;
-    bool expired = 4;
-    uint32 ttl = 5;
-    bytes data = 6;
+    uint32 ttl = 4;
+    bytes data = 5;
 }
 
 message RefreshRequest {
@@ -102,8 +101,7 @@ message RefreshResult {
     string client = 1;
     string version = 2;
     bool expires = 3;
-    bool expired = 4;
-    uint32 ttl = 5;
+    uint32 ttl = 4;
 }
 
 message SubscribeRequest {
@@ -119,8 +117,7 @@ message SubscribeResult {
     bool recovered = 2;
     repeated Publication publications = 3;
     bool expires = 4;
-    bool expired = 5;
-    uint32 ttl = 6;
+    uint32 ttl = 5;
 }
 
 message SubRefreshRequest {
@@ -130,8 +127,7 @@ message SubRefreshRequest {
 
 message SubRefreshResult {
     bool expires = 1;
-    bool expired = 2;
-    uint32 ttl = 3;
+    uint32 ttl = 2;
 }
 
 message UnsubscribeRequest {
