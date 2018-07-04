@@ -893,74 +893,73 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		c.info = credentials.Info
 		c.exp = credentials.ExpireAt
 		c.mu.Unlock()
-	} else {
+	} else if cmd.Token != "" {
 		// explicit auth Credentials not provided in context, try to look
 		// for credentials in connect token.
 		token := cmd.Token
-		if token != "" {
-			var user string
-			var info proto.Raw
-			var b64info string
-			var exp int64
 
-			parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-				}
-				if config.Secret == "" {
-					return nil, fmt.Errorf("secret not set")
-				}
-				return []byte(config.Secret), nil
-			})
-			if parsedToken == nil && err != nil {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-				return resp, DisconnectInvalidToken
+		var user string
+		var info proto.Raw
+		var b64info string
+		var exp int64
+
+		parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
-			if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
-				user = claims.User
-				info = claims.Info
-				b64info = claims.Base64Info
-				exp = claims.StandardClaims.ExpiresAt
-			} else {
-				if validationErr, ok := err.(*jwt.ValidationError); ok {
-					if validationErr.Errors == jwt.ValidationErrorExpired {
-						// The only problem with token is its expiration - no other
-						// errors set in Errors bitfield.
-						resp.Error = ErrorTokenExpired
-						return resp, nil
-					}
-					c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
-					return resp, DisconnectInvalidToken
+			if config.Secret == "" {
+				return nil, fmt.Errorf("secret not set")
+			}
+			return []byte(config.Secret), nil
+		})
+		if parsedToken == nil && err != nil {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+			return resp, DisconnectInvalidToken
+		}
+		if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
+			user = claims.User
+			info = claims.Info
+			b64info = claims.Base64Info
+			exp = claims.StandardClaims.ExpiresAt
+		} else {
+			if validationErr, ok := err.(*jwt.ValidationError); ok {
+				if validationErr.Errors == jwt.ValidationErrorExpired {
+					// The only problem with token is its expiration - no other
+					// errors set in Errors bitfield.
+					resp.Error = ErrorTokenExpired
+					return resp, nil
 				}
 				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
 				return resp, DisconnectInvalidToken
 			}
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
+			return resp, DisconnectInvalidToken
+		}
 
+		c.mu.Lock()
+		c.user = user
+		c.exp = exp
+		c.mu.Unlock()
+
+		if len(info) > 0 {
 			c.mu.Lock()
-			c.user = user
-			c.exp = exp
+			c.info = info
 			c.mu.Unlock()
-
-			if len(info) > 0 {
-				c.mu.Lock()
-				c.info = info
-				c.mu.Unlock()
-			}
-			if b64info != "" {
-				byteInfo, err := base64.StdEncoding.DecodeString(b64info)
-				if err != nil {
-					c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": user, "client": c.uid, "error": err.Error()}))
-					return resp, DisconnectBadRequest
-				}
-				c.mu.Lock()
-				c.info = proto.Raw(byteInfo)
-				c.mu.Unlock()
-			}
-		} else {
-			if !insecure {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
+		}
+		if b64info != "" {
+			byteInfo, err := base64.StdEncoding.DecodeString(b64info)
+			if err != nil {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": user, "client": c.uid, "error": err.Error()}))
 				return resp, DisconnectBadRequest
 			}
+			c.mu.Lock()
+			c.info = proto.Raw(byteInfo)
+			c.mu.Unlock()
+		}
+	} else {
+		if !insecure {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
+			return resp, DisconnectBadRequest
 		}
 	}
 

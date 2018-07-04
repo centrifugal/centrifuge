@@ -5,6 +5,7 @@
 package centrifuge
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -142,7 +143,7 @@ func (n *Node) On() NodeEventHub {
 }
 
 // Shutdown sets shutdown flag and does various clean ups.
-func (n *Node) Shutdown() error {
+func (n *Node) Shutdown(ctx context.Context) error {
 	n.mu.Lock()
 	if n.shutdown {
 		n.mu.Unlock()
@@ -151,7 +152,7 @@ func (n *Node) Shutdown() error {
 	n.shutdown = true
 	close(n.shutdownCh)
 	n.mu.Unlock()
-	return n.hub.shutdown()
+	return n.hub.shutdown(ctx)
 }
 
 // NotifyShutdown returns a channel which will be closed on node shutdown.
