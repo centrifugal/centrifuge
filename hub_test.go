@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/centrifugal/centrifuge/internal/proto"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -61,6 +62,18 @@ func TestHub(t *testing.T) {
 	h.remove(c)
 	assert.Equal(t, len(h.users), 0)
 	assert.Equal(t, 1, len(conns))
+}
+
+func TestHubShutdown(t *testing.T) {
+	h := newHub()
+	err := h.shutdown(context.Background())
+	assert.NoError(t, err)
+	h = newHub()
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	assert.NoError(t, err)
+	h.add(c)
+	err = h.shutdown(context.Background())
+	assert.NoError(t, err)
 }
 
 func TestHubSubscriptions(t *testing.T) {
