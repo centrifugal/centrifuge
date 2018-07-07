@@ -1,0 +1,288 @@
+package main
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/centrifugal/centrifuge"
+	"github.com/dchest/uniuri"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+)
+
+// SessionName is the key used to access the session store.
+const SessionName = "_session"
+
+// Store can/should be set by applications. The default is a cookie store.
+var Store sessions.Store
+
+func init() {
+	if os.Getenv("SESSION_SECRET") == "" {
+		panic("SESSION_SECRET environment variable required")
+	}
+	if os.Getenv("GOOGLE_CLIENT_ID") == "" {
+		panic("GOOGLE_CLIENT_ID environment variable required")
+	}
+	if os.Getenv("GOOGLE_CLIENT_SECRET") == "" {
+		panic("GOOGLE_CLIENT_SECRET environment variable required")
+	}
+	key := []byte(os.Getenv("SESSION_SECRET"))
+	cookieStore := sessions.NewCookieStore([]byte(key))
+	cookieStore.Options.HttpOnly = true
+	Store = cookieStore
+}
+
+var googleOauthConfig = &oauth2.Config{
+	RedirectURL:  "http://localhost:3000/callback",
+	ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+	ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+	Scopes: []string{
+		"https://www.googleapis.com/auth/userinfo.profile",
+		"https://www.googleapis.com/auth/userinfo.email"},
+	Endpoint: google.Endpoint,
+}
+
+// GoogleUser ...
+type GoogleUser struct {
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	VerifiedEmail bool   `json:"verified_email"`
+	Name          string `json:"name"`
+	GivenName     string `json:"given_name"`
+	FamilyName    string `json:"family_name"`
+	Link          string `json:"link"`
+	Picture       string `json:"picture"`
+	Gender        string `json:"gender"`
+	Locale        string `json:"locale"`
+}
+
+func authMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		value, _ := GetFromSession("google", r)
+		if value == "" {
+			w.Header().Set("Location", "/account")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
+		var user *GoogleUser
+		err := json.Unmarshal([]byte(value), &user)
+		if err != nil {
+			log.Printf("Error unmarshaling Google user %s\n", err.Error())
+			w.Header().Set("Location", "/account")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			Logout(w, r)
+			return
+		}
+		ctx := r.Context()
+		ctx = centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
+			UserID: user.Email,
+		})
+		r = r.WithContext(ctx)
+		h.ServeHTTP(w, r)
+	})
+}
+
+func createCentrifugeNode() (*centrifuge.Node, error) {
+	cfg := centrifuge.DefaultConfig
+	cfg.Publish = true
+
+	node, err := centrifuge.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+
+		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+			log.Printf("client %s subscribes on channel %s", client.UserID(), e.Channel)
+			return centrifuge.SubscribeReply{}
+		})
+
+		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
+			log.Printf("client %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			return centrifuge.PublishReply{}
+		})
+
+		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
+			log.Printf("client %s disconnected", client.UserID())
+			return centrifuge.DisconnectReply{}
+		})
+
+		log.Printf("client %s connected via %s", client.UserID(), client.Transport().Name())
+		return centrifuge.ConnectReply{}
+	})
+
+	if err := node.Run(); err != nil {
+		return nil, err
+	}
+
+	return node, nil
+}
+
+func main() {
+	node, err := createCentrifugeNode()
+	if err != nil {
+		panic(err)
+	}
+
+	router := mux.NewRouter().StrictSlash(true)
+
+	// Chat handlers.
+	router.Handle("/", authMiddleware(http.FileServer(http.Dir("./"))))
+	router.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+
+	// Auth handlers.
+	router.HandleFunc("/account", accountHandler)
+	router.HandleFunc("/login", loginHandler)
+	router.HandleFunc("/logout", logoutHandler)
+	router.HandleFunc("/callback", callbackHandler)
+
+	if err := http.ListenAndServe(":3000", router); err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func accountHandler(w http.ResponseWriter, r *http.Request) {
+	value, _ := GetFromSession("google", r)
+	if value != "" {
+		fmt.Fprintln(w, "<a href='/logout'>Logout</a>")
+		return
+	}
+	fmt.Fprintln(w, "<a href='/login'>Log in with Google</a>")
+}
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	oauthStateString := uniuri.New()
+	url := googleOauthConfig.AuthCodeURL(oauthStateString)
+	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+}
+
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+	Logout(w, r)
+	w.Header().Set("Location", "/")
+	w.WriteHeader(http.StatusTemporaryRedirect)
+}
+
+func callbackHandler(w http.ResponseWriter, r *http.Request) {
+	code := r.FormValue("code")
+	token, err := googleOauthConfig.Exchange(oauth2.NoContext, code)
+	if err != nil {
+		fmt.Fprintf(w, "Code exchange failed with error %s\n", err.Error())
+		return
+	}
+
+	if !token.Valid() {
+		fmt.Fprintln(w, "Retreived invalid token")
+		return
+	}
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+	response, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo?access_token=" + token.AccessToken)
+	if err != nil {
+		log.Printf("Error getting user from token %s\n", err.Error())
+	}
+
+	defer response.Body.Close()
+	contents, err := ioutil.ReadAll(response.Body)
+
+	var user *GoogleUser
+	err = json.Unmarshal(contents, &user)
+	if err != nil {
+		log.Printf("Error unmarshaling Google user %s\n", err.Error())
+		return
+	}
+
+	err = StoreInSession("google", string(contents), r, w)
+	if err != nil {
+		log.Printf("Error storing in session %s\n", err.Error())
+		return
+	}
+
+	w.Header().Set("Location", "/")
+	w.WriteHeader(http.StatusTemporaryRedirect)
+}
+
+// StoreInSession stores a specified key/value pair in the session.
+func StoreInSession(key string, value string, req *http.Request, res http.ResponseWriter) error {
+	session, _ := Store.New(req, SessionName)
+	if err := updateSessionValue(session, key, value); err != nil {
+		return err
+	}
+	return session.Save(req, res)
+}
+
+// GetFromSession retrieves a previously-stored value from the session.
+// If no value has previously been stored at the specified key, it will return an error.
+func GetFromSession(key string, req *http.Request) (string, error) {
+	session, _ := Store.Get(req, SessionName)
+	value, err := getSessionValue(session, key)
+	if err != nil {
+		return "", errors.New("could not find a matching session for this request")
+	}
+	return value, nil
+}
+
+func getSessionValue(session *sessions.Session, key string) (string, error) {
+	value := session.Values[key]
+	if value == nil {
+		return "", fmt.Errorf("could not find a matching session for this request")
+	}
+
+	rdata := strings.NewReader(value.(string))
+	r, err := gzip.NewReader(rdata)
+	if err != nil {
+		return "", err
+	}
+	s, err := ioutil.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+
+	return string(s), nil
+}
+
+func updateSessionValue(session *sessions.Session, key, value string) error {
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	if _, err := gz.Write([]byte(value)); err != nil {
+		return err
+	}
+	if err := gz.Flush(); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+
+	session.Values[key] = b.String()
+	return nil
+}
+
+// Logout invalidates a user session.
+func Logout(res http.ResponseWriter, req *http.Request) error {
+	session, err := Store.Get(req, SessionName)
+	if err != nil {
+		return err
+	}
+	session.Options.MaxAge = -1
+	session.Values = make(map[interface{}]interface{})
+	err = session.Save(req, res)
+	if err != nil {
+		return errors.New("Could not delete user session")
+	}
+	return nil
+}

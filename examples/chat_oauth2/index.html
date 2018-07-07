@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/c2/dist/centrifuge.min.js"></script>
+    </head>
+    <body>
+        <div>
+            Go to <a href="/account"> account page</a>
+        </div>
+        <div style="margin-top: 20px;">
+            <input type="text" id="input" />
+        </div>
+        <script type="text/javascript">
+            var centrifuge = new Centrifuge('ws://localhost:3000/connection/websocket');
+
+            function drawText(text) {
+                var div = document.createElement('div');
+                div.innerHTML = text;
+                document.body.appendChild(div);
+            }
+
+            centrifuge.on('connect', function(ctx){
+                drawText('Connected over ' + ctx.transport + '<br>');
+            });
+
+            centrifuge.on('disconnect', function(ctx){
+                drawText('Disconnected: ' + ctx.reason + '<br>');
+            });
+
+            var sub = centrifuge.subscribe("chat", function(message) {
+                drawText(message.info.user + ": " + message.data + '<br>');
+            })
+
+            var input = document.getElementById("input");
+            input.addEventListener('keyup', function(e) {
+                if (e.keyCode == 13) {
+                    sub.publish(this.value);
+                    input.value = '';
+                }
+            });
+
+            centrifuge.connect();
+        </script>
+    </body>
+</html>
