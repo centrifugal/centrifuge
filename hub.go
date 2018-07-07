@@ -55,6 +55,10 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	closeFinishedCh := make(chan struct{}, len(clients))
 	finished := 0
 
+	if len(clients) == 0 {
+		return nil
+	}
+
 	for _, client := range clients {
 		select {
 		case sem <- struct{}{}:
