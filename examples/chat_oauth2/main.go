@@ -72,17 +72,15 @@ func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		value, _ := GetFromSession("google", r)
 		if value == "" {
-			w.Header().Set("Location", "/account")
-			w.WriteHeader(http.StatusTemporaryRedirect)
+			http.Redirect(w, r, "/account", http.StatusTemporaryRedirect)
 			return
 		}
 		var user *GoogleUser
 		err := json.Unmarshal([]byte(value), &user)
 		if err != nil {
 			log.Printf("Error unmarshaling Google user %s\n", err.Error())
-			w.Header().Set("Location", "/account")
-			w.WriteHeader(http.StatusTemporaryRedirect)
 			Logout(w, r)
+			http.Redirect(w, r, "/account", http.StatusTemporaryRedirect)
 			return
 		}
 		ctx := r.Context()
@@ -171,8 +169,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	Logout(w, r)
-	w.Header().Set("Location", "/")
-	w.WriteHeader(http.StatusTemporaryRedirect)
+	http.Redirect(w, r, "/account", http.StatusTemporaryRedirect)
 }
 
 func callbackHandler(w http.ResponseWriter, r *http.Request) {
@@ -212,8 +209,7 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Location", "/")
-	w.WriteHeader(http.StatusTemporaryRedirect)
+	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
 
 // StoreInSession stores a specified key/value pair in the session.

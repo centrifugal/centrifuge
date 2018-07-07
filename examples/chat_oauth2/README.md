@@ -1,4 +1,4 @@
-Simple chat with Oauth2 authentication via Google.
+Simple chat with OAuth2 authentication via Google.
 
 To run:
 

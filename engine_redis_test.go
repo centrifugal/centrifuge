@@ -143,7 +143,16 @@ func TestRedisEngine(t *testing.T) {
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
 	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
+
+	// ask all history.
+	h, err = e.history("channel", 0)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(h))
+
+	// ask more history than history_size.
 	h, err = e.history("channel", 2)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(h))
 
 	// test publishing control message.
 	err = <-e.publishControl([]byte(""))
