@@ -155,8 +155,9 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 }
 
 // closeUnauthenticated closes connection if it's not authenticated yet.
-// At moment used to close connections which have not sent valid connect command
-// in a reasonable time interval after actually connected to Centrifugo.
+// At moment used to close client connections which have not sent valid
+// connect command in a reasonable time interval after established connection
+// with server.
 func (c *Client) closeUnauthenticated() {
 	c.mu.RLock()
 	authenticated := c.authenticated
