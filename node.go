@@ -116,8 +116,8 @@ func (n *Node) Reload(c Config) error {
 	return nil
 }
 
-// Run performs all startup actions. At moment must be called once on start
-// after engine and structure set.
+// Run performs node startup actions. At moment must be called once on start
+// after engine set to Node.
 func (n *Node) Run() error {
 
 	eventHandler := &engineEventHandler{n}
@@ -142,7 +142,8 @@ func (n *Node) On() NodeEventHub {
 	return n.eventHub
 }
 
-// Shutdown sets shutdown flag and does various clean ups.
+// Shutdown sets shutdown flag to Node so handlers could stop accepting
+// new requests and disconnects clients with shutdown reason.
 func (n *Node) Shutdown(ctx context.Context) error {
 	n.mu.Lock()
 	if n.shutdown {
@@ -207,12 +208,14 @@ func (n *Node) cleanNodeInfo() {
 	}
 }
 
-// Channels returns list of all engines clients subscribed on all Centrifugo nodes.
+// Channels returns list of all channels currently active across on all nodes.
+// This is a snapshot of state mostly useful for understanding what's going on
+// with system.
 func (n *Node) Channels() ([]string, error) {
 	return n.engine.channels()
 }
 
-// info returns aggregated stats from all Centrifugo nodes.
+// info returns aggregated stats from all nodes.
 func (n *Node) info() (*apiproto.InfoResult, error) {
 	nodes := n.nodes.list()
 	nodeResults := make([]*apiproto.NodeResult, len(nodes))
