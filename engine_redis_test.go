@@ -465,6 +465,24 @@ func BenchmarkRedisEnginePublish(b *testing.B) {
 	}
 }
 
+func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
+	e := newTestRedisEngine()
+	rawData := Raw([]byte("{}"))
+	pub := &Publication{UID: "test UID", Data: rawData}
+	for i := 0; i < 4; i++ {
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300, HistoryDropInactive: false})
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, err := e.history("channel", 0)
+			if err != nil {
+				panic(err)
+			}
+		}
+	})
+}
+
 func BenchmarkRedisEnginePublishParallel(b *testing.B) {
 	e := newTestRedisEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
@@ -553,22 +571,4 @@ func BenchmarkRedisEngineHistory(b *testing.B) {
 		}
 
 	}
-}
-
-func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
-	e := newTestRedisEngine()
-	rawData := Raw([]byte("{}"))
-	pub := &Publication{UID: "test UID", Data: rawData}
-	for i := 0; i < 4; i++ {
-		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300, HistoryDropInactive: false})
-	}
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := e.history("channel", 0)
-			if err != nil {
-				panic(err)
-			}
-		}
-	})
 }

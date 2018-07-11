@@ -231,8 +231,20 @@ func BenchmarkMemoryEnginePublish(b *testing.B) {
 	pub := &Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		e.publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0, HistoryDropInactive: false})
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0, HistoryDropInactive: false})
 	}
+}
+
+func BenchmarkMemoryEnginePublishParallel(b *testing.B) {
+	e := testMemoryEngine()
+	rawData := Raw([]byte(`{"bench": true}`))
+	pub := &Publication{UID: "test UID", Data: rawData}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			<-e.publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0, HistoryDropInactive: false})
+		}
+	})
 }
 
 func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
