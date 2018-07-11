@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -41,6 +42,7 @@ func init() {
 	key := []byte(os.Getenv("SESSION_SECRET"))
 	cookieStore := sessions.NewCookieStore([]byte(key))
 	cookieStore.Options.HttpOnly = true
+	cookieStore.Options.MaxAge = 3600
 	Store = cookieStore
 }
 
@@ -70,7 +72,7 @@ type GoogleUser struct {
 
 func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		value, _ := GetFromSession("google", r)
+		value, _ := GetFromSession("user", r)
 		if value == "" {
 			http.Redirect(w, r, "/account", http.StatusTemporaryRedirect)
 			return
@@ -153,7 +155,7 @@ func main() {
 }
 
 func accountHandler(w http.ResponseWriter, r *http.Request) {
-	value, _ := GetFromSession("google", r)
+	value, _ := GetFromSession("user", r)
 	if value != "" {
 		fmt.Fprintln(w, "<a href='/logout'>Logout</a>")
 		return
@@ -163,8 +165,21 @@ func accountHandler(w http.ResponseWriter, r *http.Request) {
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	oauthStateString := uniuri.New()
-	url := googleOauthConfig.AuthCodeURL(oauthStateString)
-	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+	rawURL := googleOauthConfig.AuthCodeURL(oauthStateString)
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		log.Printf("error parsing url: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	state := parsedURL.Query().Get("state")
+	err = StoreInSession("state", state, r, w)
+	if err != nil {
+		log.Printf("error storing in session %s\n", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, rawURL, http.StatusTemporaryRedirect)
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +188,24 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func callbackHandler(w http.ResponseWriter, r *http.Request) {
+
+	state := r.FormValue("state")
+	if state == "" {
+		fmt.Fprintf(w, "Empty state received")
+		return
+	}
+
+	savedState, _ := GetFromSession("state", r)
+	if savedState == "" {
+		fmt.Fprintf(w, "No state in session")
+		return
+	}
+
+	if state != savedState {
+		fmt.Fprintf(w, "Invalid state")
+		return
+	}
+
 	code := r.FormValue("code")
 	token, err := googleOauthConfig.Exchange(oauth2.NoContext, code)
 	if err != nil {
@@ -203,7 +236,7 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = StoreInSession("google", string(contents), r, w)
+	err = StoreInSession("user", string(contents), r, w)
 	if err != nil {
 		log.Printf("Error storing in session %s\n", err.Error())
 		return
