@@ -20,21 +20,21 @@ import (
 const (
 	// redisSubscribeChannelSize is the size for the internal buffered channels RedisEngine
 	// uses to synchronize subscribe/unsubscribe.
-	redisSubscribeChannelSize = 4096
+	redisSubscribeChannelSize = 1024
 	// redisPubSubWorkerChannelSize sets buffer size of channel to which we send all
 	// messages received from Redis PUB/SUB connection to process in separate goroutine.
-	redisPubSubWorkerChannelSize = 4096
+	redisPubSubWorkerChannelSize = 1024
 	// redisSubscribeBatchLimit is a maximum number of channels to include in a single subscribe
 	// call. Redis documentation doesn't specify a maximum allowed but we think it probably makes
 	// sense to keep a sane limit given how many subscriptions a single Centrifugo instance might
 	// be handling.
-	redisSubscribeBatchLimit = 2048
+	redisSubscribeBatchLimit = 512
 	// redisPublishChannelSize is the size for the internal buffered channel RedisEngine uses
 	// to collect publish requests.
 	redisPublishChannelSize = 1024
 	// redisPublishBatchLimit is a maximum limit of publish requests one batched publish
 	// operation can contain.
-	redisPublishBatchLimit = 2048
+	redisPublishBatchLimit = 512
 	// redisDataChannelSize is a buffer size of channel with data operation requests.
 	redisDataChannelSize = 256
 )
@@ -111,6 +111,8 @@ type RedisShardConfig struct {
 	SentinelAddrs []string
 	// Prefix to use before every channel name and key in Redis.
 	Prefix string
+	// IdleTimeout is timeout after which idle connections to Redis will be closed.
+	IdleTimeout time.Duration
 	// PubSubNumWorkers sets how many PUB/SUB message processing workers will be started.
 	// By default we start runtime.NumCPU() workers.
 	PubSubNumWorkers int
@@ -223,7 +225,7 @@ func newPool(n *Node, conf RedisShardConfig) *redis.Pool {
 		MaxIdle:     maxIdle,
 		MaxActive:   poolSize,
 		Wait:        true,
-		IdleTimeout: 240 * time.Second,
+		IdleTimeout: conf.IdleTimeout,
 		Dial: func() (redis.Conn, error) {
 			var err error
 			if useSentinel {

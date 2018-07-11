@@ -1100,11 +1100,8 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 		return resp, DisconnectInvalidToken
 	}
 
-	closeDelay := config.ClientExpiredCloseDelay
-	version := config.Version
-
 	res := &proto.RefreshResult{
-		Version: version,
+		Version: config.Version,
 		Expires: expireAt > 0,
 		Client:  c.uid,
 	}
@@ -1139,7 +1136,7 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 			if c.expireTimer != nil {
 				c.expireTimer.Stop()
 			}
-			duration := time.Duration(timeToExpire)*time.Second + closeDelay
+			duration := time.Duration(timeToExpire)*time.Second + config.ClientExpiredCloseDelay
 			c.expireTimer = time.AfterFunc(duration, c.expire)
 			c.mu.Unlock()
 		} else {
