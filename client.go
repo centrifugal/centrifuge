@@ -874,6 +874,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	config := c.node.Config()
 	version := config.Version
 	insecure := config.ClientInsecure
+	clientAnonymous := config.ClientAnonymous
 	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
 
@@ -958,7 +959,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 			c.mu.Unlock()
 		}
 	} else {
-		if !insecure {
+		if !insecure && !clientAnonymous {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
 			return resp, DisconnectBadRequest
 		}
