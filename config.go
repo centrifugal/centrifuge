@@ -25,8 +25,9 @@ type Config struct {
 	// anonymous access and publish allowed for all channels, no connection expire
 	// performed. This can be suitable for demonstration or personal usage.
 	ClientInsecure bool
-	// ClientAnonymous when set to true, allows connect requests without specifying a token.
-	// The resulting user will have empty string for user ID, meaning they can only subscribe
+	// ClientAnonymous when set to true, allows connect requests without specifying
+	// a token or setting Credentials in authentication middleware. The resulting
+	// user will have empty string for user ID, meaning user can only subscribe
 	// to anonymous channels.
 	ClientAnonymous bool
 	// ClientPresencePingInterval is an interval how often connected clients

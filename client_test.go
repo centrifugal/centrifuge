@@ -91,6 +91,38 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	assert.Equal(t, disconnect, DisconnectBadRequest)
 }
 
+func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	config.ClientInsecure = true
+	node.Reload(config)
+
+	transport := newTestTransport()
+	client, _ := newClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, resp.Error)
+	assert.NotEmpty(t, resp.Result.Client)
+	assert.Empty(t, client.UserID())
+}
+
+func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	config.ClientAnonymous = true
+	node.Reload(config)
+
+	transport := newTestTransport()
+	client, _ := newClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, resp.Error)
+	assert.NotEmpty(t, resp.Result.Client)
+	assert.Empty(t, client.UserID())
+}
+
 func TestClientConnectWithMalformedToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
