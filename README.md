@@ -83,41 +83,41 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
-    // We use default config here as starting point. Default config contains
-    // reasonable values for available options.
+	// We use default config here as starting point. Default config contains
+	// reasonable values for available options.
 	cfg := centrifuge.DefaultConfig
-    // In this example we want client to do all possible actions with server 
-    // without any authentication and authorization. Insecure flag DISABLES 
-    // many security related checks in library. This is only to make example 
-    // short. In real app you most probably want authenticate and authorize 
-    // access to server. See godoc and examples in repo for more details.
+	// In this example we want client to do all possible actions with server
+	// without any authentication and authorization. Insecure flag DISABLES
+	// many security related checks in library. This is only to make example
+	// short. In real app you most probably want authenticate and authorize
+	// access to server. See godoc and examples in repo for more details.
 	cfg.ClientInsecure = true
-    // By default clients can not publish messages into channels. Settings this 
-    // option to true we allow them to publish.
+	// By default clients can not publish messages into channels. Settings this
+	// option to true we allow them to publish.
 	cfg.Publish = true
 
-    // Node is the core object in Centrifuge library responsible for many useful 
-    // things. Here we initialize new Node instance and pass config to it.
+	// Node is the core object in Centrifuge library responsible for many useful
+	// things. Here we initialize new Node instance and pass config to it.
 	node, _ := centrifuge.New(cfg)
 
-    // On().Connect() method is a point where you start connecting Centrifuge 
-    // with your app's business logic. Callback function you pass to On().Connect 
-    // will be called every time new connection established with server. Inside 
-    // this callback function you have to set various event handlers for incoming 
-    // client connection.  
+	// On().Connect() method is a point where you start connecting Centrifuge
+	// with your app's business logic. Callback function you pass to On().Connect
+	// will be called every time new connection established with server. Inside
+	// this callback function you have to set various event handlers for incoming
+	// client connection.
 	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 
-        // Set Subscribe Handler to react on every channel subscribtion attempt
-        // initiated by client. Here you can theoretically return an Error or 
-        // Disconnect client from server if needed. But now we just accept subscription.
+		// Set Subscribe Handler to react on every channel subscribtion attempt
+		// initiated by client. Here you can theoretically return an Error or
+		// Disconnect client from server if needed. But now we just accept subscription.
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("client subscribes on channel %s", e.Channel)
 			return centrifuge.SubscribeReply{}
 		})
 
-		// Set Publish Handler to react on every channel Publication sent by client. 
-        // Inside this method you can validate client permissions to publish into channel.
-        // But in our simple chat app we allow everyone to publish into any channel.
+		// Set Publish Handler to react on every channel Publication sent by client.
+		// Inside this method you can validate client permissions to publish into channel.
+		// But in our simple chat app we allow everyone to publish into any channel.
 		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
 			log.Printf("client publishes into channel %s: %s", e.Channel, string(e.Data))
 			return centrifuge.PublishReply{}
@@ -133,32 +133,32 @@ func main() {
 		return centrifuge.ConnectReply{}
 	})
 
-    // Centrifuge library exposes logs with different log level. In your app 
-    // you can set special function to handle this log entries in a way you want. 
+	// Centrifuge library exposes logs with different log level. In your app
+	// you can set special function to handle this log entries in a way you want.
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
-    // Run node will start node's underlying Engine, launch several 
-    // internal goroutines.
+	// Run node will start node's underlying Engine, launch several
+	// internal goroutines.
 	if err := node.Run(); err != nil {
 		panic(err)
 	}
 
-    // Configure http routes.
+	// Configure http routes.
 
-    // The first route is for handling Websocket connections.  
+	// The first route is for handling Websocket connections.
 	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}))
-    
-    // The second route is for serving index.html file.
-    http.Handle("/", http.FileServer(http.Dir("./")))
 
-    // Start HTTP server.
+	// The second route is for serving index.html file.
+	http.Handle("/", http.FileServer(http.Dir("./")))
+
+	// Start HTTP server.
 	go func() {
 		if err := http.ListenAndServe(":8000", nil); err != nil {
 			panic(err)
 		}
 	}()
 
-    // Run program until interrupted.
+	// Run program until interrupted.
 	waitExitSignal(node)
 }
 ```
