@@ -1,7 +1,10 @@
 // Package centrifuge is a real-time messaging library that abstracts
-// several bidirectional transports (GRPC, Websocket, SockJS) and provides
+// several bidirectional transports (Websocket, SockJS) and provides
 // primitives to build real-time applications with Go. It's also used as
 // core of Centrifugo server.
+//
+// The API of this library is almost all goroutine-safe except cases where
+// one-time operations like setting callback handlers performed.
 package centrifuge
 
 import (
@@ -420,40 +423,31 @@ func (n *Node) pubNode() error {
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
 // nodes could unsubscribe user from channel.
 func (n *Node) pubUnsubscribe(user string, ch string) error {
-
-	// TODO: looks it's already ok - need to check.
 	unsubscribe := &controlproto.Unsubscribe{
 		User:    user,
 		Channel: ch,
 	}
-
 	params, _ := n.controlEncoder.EncodeUnsubscribe(unsubscribe)
-
 	cmd := &controlproto.Command{
 		UID:    n.uid,
 		Method: controlproto.MethodTypeUnsubscribe,
 		Params: params,
 	}
-
 	return <-n.publishControl(cmd)
 }
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from Centrifugo.
 func (n *Node) pubDisconnect(user string, reconnect bool) error {
-
 	disconnect := &controlproto.Disconnect{
 		User: user,
 	}
-
 	params, _ := n.controlEncoder.EncodeDisconnect(disconnect)
-
 	cmd := &controlproto.Command{
 		UID:    n.uid,
 		Method: controlproto.MethodTypeDisconnect,
 		Params: params,
 	}
-
 	return <-n.publishControl(cmd)
 }
 
