@@ -501,47 +501,30 @@ func (n *Node) nodeCmd(node *controlproto.Node) error {
 // Unsubscribe unsubscribes user from channel, if channel is equal to empty
 // string then user will be unsubscribed from all channels.
 func (n *Node) Unsubscribe(user string, ch string) error {
-
-	if user == "" {
-		return ErrorBadRequest
-	}
-
-	if ch != "" {
-		_, ok := n.ChannelOpts(ch)
-		if !ok {
-			return ErrorNamespaceNotFound
-		}
-	}
-
 	// First unsubscribe on this node.
 	err := n.hub.unsubscribe(user, ch)
 	if err != nil {
-		return ErrorInternal
+		return err
 	}
 	// Second send unsubscribe control message to other nodes.
 	err = n.pubUnsubscribe(user, ch)
 	if err != nil {
-		return ErrorInternal
+		return err
 	}
 	return nil
 }
 
 // Disconnect allows to close all user connections to Centrifugo.
 func (n *Node) Disconnect(user string, reconnect bool) error {
-
-	if user == "" {
-		return ErrorBadRequest
-	}
-
 	// first disconnect user from this node
 	err := n.hub.disconnect(user, reconnect)
 	if err != nil {
-		return ErrorInternal
+		return err
 	}
 	// second send disconnect control message to other nodes
 	err = n.pubDisconnect(user, reconnect)
 	if err != nil {
-		return ErrorInternal
+		return err
 	}
 	return nil
 }

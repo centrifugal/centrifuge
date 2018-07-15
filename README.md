@@ -67,7 +67,7 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
-// Wait untill program interrupted. When interrupted gracefully shutdown Node.
+// Wait until program interrupted. When interrupted gracefully shutdown Node.
 func waitExitSignal(n *centrifuge.Node) {
 	sigs := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
@@ -92,7 +92,7 @@ func main() {
 	// short. In real app you most probably want authenticate and authorize
 	// access to server. See godoc and examples in repo for more details.
 	cfg.ClientInsecure = true
-	// By default clients can not publish messages into channels. Settings this
+	// By default clients can not publish messages into channels. Setting this
 	// option to true we allow them to publish.
 	cfg.Publish = true
 
@@ -100,24 +100,25 @@ func main() {
 	// things. Here we initialize new Node instance and pass config to it.
 	node, _ := centrifuge.New(cfg)
 
-	// On().Connect() method is a point where you start connecting Centrifuge
-	// with your app's business logic. Callback function you pass to On().Connect
-	// will be called every time new connection established with server. Inside
-	// this callback function you have to set various event handlers for incoming
-	// client connection.
+	// On().Connect() method is a point where you create a binding between
+	// Centrifuge and your app business logic. Callback function you pass
+	// to On().Connect will be called every time new connection established
+	// with server. Inside this callback function you can set various event
+	// handlers for incoming client connection.
 	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
-
 		// Set Subscribe Handler to react on every channel subscribtion attempt
-		// initiated by client. Here you can theoretically return an Error or
-		// Disconnect client from server if needed. But now we just accept subscription.
+		// initiated by client. Here you can theoretically return an error or
+		// disconnect client from server if needed. But now we just accept
+		// all subscriptions.
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("client subscribes on channel %s", e.Channel)
 			return centrifuge.SubscribeReply{}
 		})
 
 		// Set Publish Handler to react on every channel Publication sent by client.
-		// Inside this method you can validate client permissions to publish into channel.
-		// But in our simple chat app we allow everyone to publish into any channel.
+		// Inside this method you can validate client permissions to publish into
+		// channel. But in our simple chat app we allow everyone to publish into
+		// any channel.
 		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
 			log.Printf("client publishes into channel %s: %s", e.Channel, string(e.Data))
 			return centrifuge.PublishReply{}
@@ -129,12 +130,17 @@ func main() {
 			return centrifuge.DisconnectReply{}
 		})
 
-		log.Printf("client connected via %s", client.Transport().Name())
+		// In our example transport will always be Websocket but it can also be SockJS.
+		transportName := client.Transport().Name()
+		// In our example clients connect with JSON protocol but it can also be Protobuf.
+		transportEncoding := client.Transport().Encoding()
+
+		log.Printf("client connected via %s (%s)", transportName, transportEncoding)
 		return centrifuge.ConnectReply{}
 	})
 
 	// Centrifuge library exposes logs with different log level. In your app
-	// you can set special function to handle this log entries in a way you want.
+	// you can set special function to handle these log entries in a way you want.
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
 	// Run node will start node's underlying Engine, launch several
@@ -195,7 +201,7 @@ Also create file `index.html` near `main.go` with content:
             })
             var input = document.getElementById("input");
             input.addEventListener('keyup', function(e) {
-                if (e.keyCode == 13) {
+                if (e.keyCode == 13) { // ENTER key pressed
                     sub.publish(this.value);
                     input.value = '';
                 }

@@ -111,6 +111,29 @@ func TestPresenceStatsAPI(t *testing.T) {
 	assert.Nil(t, resp.Error)
 }
 
+func TestDisconnectAPI(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	api := newAPIExecutor(node)
+	resp := api.Disconnect(context.Background(), &apiproto.DisconnectRequest{})
+	assert.Equal(t, apiproto.ErrorBadRequest, resp.Error)
+	resp = api.Disconnect(context.Background(), &apiproto.DisconnectRequest{
+		User: "test",
+	})
+	assert.Nil(t, resp.Error)
+}
+
+func TestUnsubscribeAPI(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	api := newAPIExecutor(node)
+	resp := api.Unsubscribe(context.Background(), &apiproto.UnsubscribeRequest{})
+	assert.Equal(t, apiproto.ErrorBadRequest, resp.Error)
+	resp = api.Unsubscribe(context.Background(), &apiproto.UnsubscribeRequest{
+		User:    "test",
+		Channel: "test",
+	})
+	assert.Nil(t, resp.Error)
+}
+
 func TestChannelsAPI(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	api := newAPIExecutor(node)
