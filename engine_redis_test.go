@@ -227,6 +227,47 @@ func TestRedisEngineDropInactive(t *testing.T) {
 	assert.Equal(t, 1, len(h))
 }
 
+func TestRedisEngineRecover(t *testing.T) {
+
+	c := dial()
+	defer c.close()
+
+	e := newTestRedisEngine()
+
+	rawData := Raw([]byte("{}"))
+	pub := &Publication{Data: rawData}
+
+	pub.UID = "1"
+	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	pub.UID = "2"
+	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	pub.UID = "3"
+	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	pub.UID = "4"
+	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	pub.UID = "5"
+	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+
+	pubs, recovered, err := e.recoverHistory("channel", "2")
+	assert.NoError(t, err)
+	assert.True(t, recovered)
+	assert.Equal(t, 3, len(pubs))
+	assert.Equal(t, "5", pubs[0].UID)
+	assert.Equal(t, "4", pubs[1].UID)
+	assert.Equal(t, "3", pubs[2].UID)
+
+	pubs, recovered, err = e.recoverHistory("channel", "6")
+	assert.NoError(t, err)
+	assert.False(t, recovered)
+	assert.Equal(t, 5, len(pubs))
+
+	assert.NoError(t, e.removeHistory("channel"))
+	pubs, recovered, err = e.recoverHistory("channel", "2")
+	assert.NoError(t, err)
+	assert.False(t, recovered)
+	assert.Equal(t, 0, len(pubs))
+}
+
 func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 	c := dial()
 	defer c.close()
@@ -465,24 +506,6 @@ func BenchmarkRedisEnginePublish(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
-	e := newTestRedisEngine()
-	rawData := Raw([]byte("{}"))
-	pub := &Publication{UID: "test UID", Data: rawData}
-	for i := 0; i < 4; i++ {
-		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300, HistoryDropInactive: false})
-	}
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := e.history("channel", 0)
-			if err != nil {
-				panic(err)
-			}
-		}
-	})
-}
-
 func BenchmarkRedisEnginePublishParallel(b *testing.B) {
 	e := newTestRedisEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
@@ -499,11 +522,24 @@ func BenchmarkRedisEnginePublishParallel(b *testing.B) {
 func BenchmarkRedisEnginePublishWithHistory(b *testing.B) {
 	e := newTestRedisEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	pub := &Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 300, HistoryDropInactive: false})
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100, HistoryDropInactive: false})
 	}
+}
+
+func BenchmarkRedisEnginePublishWithHistoryParallel(b *testing.B) {
+	e := newTestRedisEngine()
+	rawData := Raw([]byte(`{"bench": true}`))
+	pub := &Publication{UID: "test-uid", Data: rawData}
+	b.SetParallelism(128)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			<-e.publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100, HistoryDropInactive: false})
+		}
+	})
 }
 
 func BenchmarkRedisEngineAddPresence(b *testing.B) {
@@ -571,4 +607,41 @@ func BenchmarkRedisEngineHistory(b *testing.B) {
 		}
 
 	}
+}
+
+func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
+	e := newTestRedisEngine()
+	rawData := Raw([]byte("{}"))
+	pub := &Publication{UID: "test-uid", Data: rawData}
+	for i := 0; i < 4; i++ {
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300, HistoryDropInactive: false})
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, err := e.history("channel", 0)
+			if err != nil {
+				panic(err)
+			}
+		}
+	})
+}
+
+func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
+	e := newTestRedisEngine()
+	rawData := Raw([]byte("{}"))
+	numMessages := 100
+	for i := 0; i < numMessages; i++ {
+		pub := &Publication{UID: "uid" + strconv.Itoa(i), Data: rawData}
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryDropInactive: false})
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _, err := e.recoverHistory("channel", "uid"+strconv.Itoa(numMessages-5))
+			if err != nil {
+				panic(err)
+			}
+		}
+	})
 }

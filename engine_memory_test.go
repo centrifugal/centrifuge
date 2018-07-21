@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -239,6 +240,7 @@ func BenchmarkMemoryEnginePublishParallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
 	pub := &Publication{UID: "test UID", Data: rawData}
+	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -250,18 +252,31 @@ func BenchmarkMemoryEnginePublishParallel(b *testing.B) {
 func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	pub := &Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 300, HistoryDropInactive: false})
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100, HistoryDropInactive: false})
 	}
+}
+
+func BenchmarkMemoryEnginePublishWithHistoryParallel(b *testing.B) {
+	e := testMemoryEngine()
+	rawData := Raw([]byte(`{"bench": true}`))
+	pub := &Publication{UID: "test-uid", Data: rawData}
+	b.SetParallelism(128)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			<-e.publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100, HistoryDropInactive: false})
+		}
+	})
 }
 
 func BenchmarkMemoryEngineAddPresence(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := e.addPresence("channel", "uid", &ClientInfo{}, 25*time.Second)
+		err := e.addPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 		if err != nil {
 			panic(err)
 		}
@@ -271,10 +286,9 @@ func BenchmarkMemoryEngineAddPresence(b *testing.B) {
 func BenchmarkMemoryEngineAddPresenceParallel(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
-	b.SetParallelism(12)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := e.addPresence("channel", "uid", &ClientInfo{}, 25*time.Second)
+			err := e.addPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 			if err != nil {
 				panic(err)
 			}
@@ -284,7 +298,7 @@ func BenchmarkMemoryEngineAddPresenceParallel(b *testing.B) {
 
 func BenchmarkMemoryEnginePresence(b *testing.B) {
 	e := testMemoryEngine()
-	e.addPresence("channel", "uid", &ClientInfo{}, 30*time.Second)
+	e.addPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := e.presence("channel")
@@ -296,7 +310,7 @@ func BenchmarkMemoryEnginePresence(b *testing.B) {
 
 func BenchmarkMemoryEnginePresenceParallel(b *testing.B) {
 	e := testMemoryEngine()
-	e.addPresence("channel", "uid", &ClientInfo{}, 30*time.Second)
+	e.addPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -328,7 +342,7 @@ func BenchmarkMemoryEngineHistory(b *testing.B) {
 func BenchmarkMemoryEngineHistoryParallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte("{}"))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	pub := &Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
 		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300, HistoryDropInactive: false})
 	}
@@ -336,6 +350,25 @@ func BenchmarkMemoryEngineHistoryParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, err := e.history("channel", 0)
+			if err != nil {
+				panic(err)
+			}
+		}
+	})
+}
+
+func BenchmarkMemoryEngineHistoryRecoverParallel(b *testing.B) {
+	e := testMemoryEngine()
+	rawData := Raw([]byte("{}"))
+	numMessages := 100
+	for i := 0; i < numMessages; i++ {
+		pub := &Publication{UID: "uid" + strconv.Itoa(i), Data: rawData}
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryDropInactive: false})
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _, err := e.recoverHistory("channel", "uid"+strconv.Itoa(numMessages-5))
 			if err != nil {
 				panic(err)
 			}
