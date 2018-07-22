@@ -41,6 +41,10 @@ func (t *testTransport) Encoding() Encoding {
 	return proto.EncodingJSON
 }
 
+func (t *testTransport) Info() TransportInfo {
+	return TransportInfo{}
+}
+
 func (t *testTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
