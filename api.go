@@ -356,13 +356,26 @@ func (h *apiExecutor) Info(ctx context.Context, cmd *apiproto.InfoRequest) *apip
 
 	resp := &apiproto.InfoResponse{}
 
-	info, err := h.node.info()
+	info, err := h.node.Info()
 	if err != nil {
 		h.node.logger.log(newLogEntry(LogLevelError, "error calling info", map[string]interface{}{"error": err.Error()}))
 		resp.Error = apiproto.ErrorInternal
 		return resp
 	}
 
-	resp.Result = info
+	nodes := make([]*apiproto.NodeResult, len(info.Nodes))
+	for i, nd := range info.Nodes {
+		nodes[i] = &apiproto.NodeResult{
+			UID:         nd.UID,
+			Name:        nd.Name,
+			NumClients:  nd.NumClients,
+			NumUsers:    nd.NumUsers,
+			NumChannels: nd.NumChannels,
+			Uptime:      nd.Uptime,
+		}
+	}
+	resp.Result = &apiproto.InfoResult{
+		Nodes: nodes,
+	}
 	return resp
 }

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/proto"
-	"github.com/centrifugal/centrifuge/internal/proto/apiproto"
 	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
@@ -27,40 +26,30 @@ import (
 // keeps useful references to things like engine, hub etc.
 type Node struct {
 	mu sync.RWMutex
-
 	// unique id for this node.
 	uid string
-
 	// startedAt is unix time of node start.
 	startedAt int64
-
 	// config for node.
 	config Config
-
 	// hub to manage client connections.
 	hub *Hub
-
 	// engine - in memory or redis.
 	engine Engine
-
 	// nodes contains registry of known nodes.
 	nodes *nodeRegistry
-
 	// shutdown is a flag which is only true when node is going to shut down.
 	shutdown bool
-
 	// shutdownCh is a channel which is closed when node shutdown initiated.
 	shutdownCh chan struct{}
-
 	// eventHub to manage event handlers binded to node.
 	eventHub *nodeEventHub
-
 	// logger allows to log throughout library code and proxy log entries to
 	// configured log handler.
 	logger *logger
-
-	// cache control encoder/decoder in Node.
+	// cache control encoder in Node.
 	controlEncoder controlproto.Encoder
+	// cache control decoder in Node.
 	controlDecoder controlproto.Decoder
 }
 
@@ -218,12 +207,28 @@ func (n *Node) Channels() ([]string, error) {
 	return n.engine.channels()
 }
 
-// info returns aggregated stats from all nodes.
-func (n *Node) info() (*apiproto.InfoResult, error) {
+// Info contains information about all known server nodes.
+type Info struct {
+	Nodes []NodeInfo
+}
+
+// NodeInfo contains information about node.
+type NodeInfo struct {
+	UID         string
+	Name        string
+	Version     string
+	NumClients  uint32
+	NumUsers    uint32
+	NumChannels uint32
+	Uptime      uint32
+}
+
+// Info returns aggregated stats from all nodes.
+func (n *Node) Info() (Info, error) {
 	nodes := n.nodes.list()
-	nodeResults := make([]*apiproto.NodeResult, len(nodes))
+	nodeResults := make([]NodeInfo, len(nodes))
 	for i, nd := range nodes {
-		nodeResults[i] = &apiproto.NodeResult{
+		nodeResults[i] = NodeInfo{
 			UID:         nd.UID,
 			Name:        nd.Name,
 			NumClients:  nd.NumClients,
@@ -233,7 +238,7 @@ func (n *Node) info() (*apiproto.InfoResult, error) {
 		}
 	}
 
-	return &apiproto.InfoResult{
+	return Info{
 		Nodes: nodeResults,
 	}, nil
 }
