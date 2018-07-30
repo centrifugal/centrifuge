@@ -130,6 +130,11 @@ func (n *Node) Run() error {
 	return nil
 }
 
+// Log allows to log entry.
+func (n *Node) Log(entry LogEntry) {
+	n.logger.log(entry)
+}
+
 // On allows access to NodeEventHub.
 func (n *Node) On() NodeEventHub {
 	return n.eventHub

@@ -71,22 +71,6 @@ var (
 		Help:       "Client command duration summary.",
 	}, []string{"method"})
 
-	apiHandlerDurationSummary = prometheus.NewSummary(prometheus.SummaryOpts{
-		Namespace:  metricsNamespace,
-		Subsystem:  "http",
-		Name:       "api_request_duration_seconds",
-		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
-		Help:       "Duration of API handler in general.",
-	})
-
-	apiCommandDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
-		Namespace:  metricsNamespace,
-		Subsystem:  "http",
-		Name:       "api_request_command_duration_seconds",
-		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
-		Help:       "Duration of API per command.",
-	}, []string{"method"})
-
 	transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
@@ -111,8 +95,6 @@ func init() {
 	prometheus.MustRegister(numChannelsGauge)
 	prometheus.MustRegister(commandDurationSummary)
 	prometheus.MustRegister(replyErrorCount)
-	prometheus.MustRegister(apiHandlerDurationSummary)
-	prometheus.MustRegister(apiCommandDurationSummary)
 	prometheus.MustRegister(transportConnectCount)
 	prometheus.MustRegister(transportMessagesSent)
 	prometheus.MustRegister(buildInfoGauge)
