@@ -79,8 +79,8 @@ func (e *TestEngine) presence(ch string) (map[string]*proto.ClientInfo, error) {
 	return map[string]*proto.ClientInfo{}, nil
 }
 
-func (e *TestEngine) presenceStats(ch string) (presenceStats, error) {
-	return presenceStats{}, nil
+func (e *TestEngine) presenceStats(ch string) (PresenceStats, error) {
+	return PresenceStats{}, nil
 }
 
 func (e *TestEngine) history(ch string, limit int) ([]*proto.Publication, error) {

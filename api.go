@@ -36,7 +36,7 @@ func (h *apiExecutor) Publish(ctx context.Context, cmd *apiproto.PublishRequest)
 		return resp
 	}
 
-	chOpts, ok := h.node.ChannelOpts(ch)
+	_, ok := h.node.ChannelOpts(ch)
 	if !ok {
 		resp.Error = apiproto.ErrorNamespaceNotFound
 		return resp
@@ -49,7 +49,7 @@ func (h *apiExecutor) Publish(ctx context.Context, cmd *apiproto.PublishRequest)
 		pub.UID = cmd.UID
 	}
 
-	err := <-h.node.publish(cmd.Channel, pub, &chOpts)
+	err := <-h.node.PublishAsync(cmd.Channel, pub)
 	if err != nil {
 		h.node.logger.log(newLogEntry(LogLevelError, "error publishing message in engine", map[string]interface{}{"error": err.Error()}))
 		resp.Error = apiproto.ErrorInternal
@@ -88,10 +88,11 @@ func (h *apiExecutor) Broadcast(ctx context.Context, cmd *apiproto.BroadcastRequ
 			return resp
 		}
 
-		chOpts, ok := h.node.ChannelOpts(ch)
+		_, ok := h.node.ChannelOpts(ch)
 		if !ok {
 			h.node.logger.log(newLogEntry(LogLevelError, "can't find namespace for channel", map[string]interface{}{"channel": ch}))
 			resp.Error = apiproto.ErrorNamespaceNotFound
+			return resp
 		}
 
 		pub := &Publication{
@@ -100,7 +101,7 @@ func (h *apiExecutor) Broadcast(ctx context.Context, cmd *apiproto.BroadcastRequ
 		if cmd.UID != "" {
 			pub.UID = cmd.UID
 		}
-		errs[i] = h.node.publish(ch, pub, &chOpts)
+		errs[i] = h.node.PublishAsync(ch, pub)
 	}
 
 	var firstErr error
@@ -239,7 +240,7 @@ func (h *apiExecutor) PresenceStats(ctx context.Context, cmd *apiproto.PresenceS
 		return resp
 	}
 
-	stats, err := h.node.presenceStats(cmd.Channel)
+	stats, err := h.node.PresenceStats(cmd.Channel)
 	if err != nil {
 		h.node.logger.log(newLogEntry(LogLevelError, "error calling presence stats", map[string]interface{}{"error": err.Error()}))
 		resp.Error = apiproto.ErrorInternal
