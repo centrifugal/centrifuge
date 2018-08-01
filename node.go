@@ -9,6 +9,7 @@ package centrifuge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -127,6 +128,11 @@ func (n *Node) Run() error {
 	go n.updateMetrics()
 
 	return nil
+}
+
+// Log allows to log entry.
+func (n *Node) Log(entry LogEntry) {
+	n.logger.log(entry)
 }
 
 // On allows access to NodeEventHub.
@@ -333,17 +339,25 @@ func makeErrChan(err error) <-chan error {
 
 // Publish sends a message to all clients subscribed on channel. All running nodes
 // will receive it and will send it to all clients on node subscribed on channel.
+// If provided ChannelOptions is nil then Node will search for channel options
+// automatically using configuration. If no channel options explicitly provided and
+// no channel options found in configuration then this method will
 func (n *Node) Publish(ch string, pub *Publication) error {
-	return <-n.publish(ch, pub, nil)
+	return <-n.PublishAsync(ch, pub)
 }
 
-func (n *Node) publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
-	if opts == nil {
-		chOpts, ok := n.ChannelOpts(ch)
-		if !ok {
-			return makeErrChan(ErrorNamespaceNotFound)
-		}
-		opts = &chOpts
+var (
+	// ErrNoChannelOptions returned when operation can't be performed because no
+	// appropriate channel options were found for channel.
+	ErrNoChannelOptions = errors.New("no channel options found")
+)
+
+// PublishAsync do the same as Publish but returns immediately after publishing
+// message to engine. Caller can inspect error waiting for it on returned channel.
+func (n *Node) PublishAsync(ch string, pub *Publication) <-chan error {
+	chOpts, ok := n.ChannelOpts(ch)
+	if !ok {
+		return makeErrChan(ErrNoChannelOptions)
 	}
 
 	messagesSentCount.WithLabelValues("publication").Inc()
@@ -352,7 +366,7 @@ func (n *Node) publish(ch string, pub *Publication, opts *ChannelOptions) <-chan
 		pub.UID = nuid.Next()
 	}
 
-	return n.engine.publish(ch, pub, opts)
+	return n.engine.publish(ch, pub, &chOpts)
 }
 
 // publishJoin allows to publish join message into channel when someone subscribes on it
@@ -576,8 +590,8 @@ func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
 	return presence, nil
 }
 
-// presenceStats returns presence stats from engine.
-func (n *Node) presenceStats(ch string) (presenceStats, error) {
+// PresenceStats returns presence stats from engine.
+func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
 	actionCount.WithLabelValues("presence_stats").Inc()
 	return n.engine.presenceStats(ch)
 }
