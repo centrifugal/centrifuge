@@ -845,7 +845,6 @@ func (c *Client) handleSend(params proto.Raw) *Disconnect {
 }
 
 type connectTokenClaims struct {
-	User       string    `json:"user"`
 	Info       proto.Raw `json:"info"`
 	Base64Info string    `json:"b64info"`
 	jwt.StandardClaims
@@ -926,7 +925,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 			return resp, DisconnectInvalidToken
 		}
 		if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
-			user = claims.User
+			user = claims.StandardClaims.Subject
 			info = claims.Info
 			b64info = claims.Base64Info
 			exp = claims.StandardClaims.ExpiresAt
@@ -1090,7 +1089,7 @@ func (c *Client) refreshCmd(cmd *proto.RefreshRequest) (*proto.RefreshResponse, 
 		return resp, DisconnectInvalidToken
 	}
 	if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
-		user = claims.User
+		user = claims.StandardClaims.Subject
 		info = claims.Info
 		b64info = claims.Base64Info
 		expireAt = claims.StandardClaims.ExpiresAt
