@@ -40,7 +40,7 @@ const (
 )
 
 const (
-	defaultPrefix         = "centrifuge" // TODO: not used now
+	defaultPrefix         = "centrifuge"
 	defaultReadTimeout    = 5 * time.Second
 	defaultWriteTimeout   = time.Second
 	defaultConnectTimeout = time.Second
@@ -305,6 +305,10 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 	}
 
 	for _, conf := range config.Shards {
+		prefix := conf.Prefix
+		if prefix == "" {
+			conf.Prefix = defaultPrefix
+		}
 		shard, err := newShard(n, conf)
 		if err != nil {
 			return nil, err
