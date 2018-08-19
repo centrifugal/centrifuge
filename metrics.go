@@ -71,6 +71,13 @@ var (
 		Help:       "Client command duration summary.",
 	}, []string{"method"})
 
+	recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "recover",
+		Help:      "Count of recover operations.",
+	}, []string{"recovered"})
+
 	transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
@@ -95,6 +102,7 @@ func init() {
 	prometheus.MustRegister(numChannelsGauge)
 	prometheus.MustRegister(commandDurationSummary)
 	prometheus.MustRegister(replyErrorCount)
+	prometheus.MustRegister(recoverCount)
 	prometheus.MustRegister(transportConnectCount)
 	prometheus.MustRegister(transportMessagesSent)
 	prometheus.MustRegister(buildInfoGauge)

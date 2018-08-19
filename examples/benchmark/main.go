@@ -131,7 +131,7 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket/", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/metrics", promhttp.Handler())
 
 	go func() {
