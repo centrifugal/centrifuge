@@ -92,11 +92,15 @@ func stringInSlice(a string, list []string) bool {
 func (c *Config) Validate() error {
 	errPrefix := "config error: "
 	pattern := "^[-a-zA-Z0-9_]{2,}$"
+	patternRegexp, err := regexp.Compile(pattern)
+	if err != nil {
+		return err
+	}
 
 	var nss []string
 	for _, n := range c.Namespaces {
 		name := n.Name
-		match, _ := regexp.MatchString(pattern, name)
+		match := patternRegexp.MatchString(name)
 		if !match {
 			return errors.New(errPrefix + "wrong namespace name – " + name)
 		}

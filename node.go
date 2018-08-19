@@ -526,11 +526,7 @@ func (n *Node) Unsubscribe(user string, ch string) error {
 		return err
 	}
 	// Second send unsubscribe control message to other nodes.
-	err = n.pubUnsubscribe(user, ch)
-	if err != nil {
-		return err
-	}
-	return nil
+	return n.pubUnsubscribe(user, ch)
 }
 
 // Disconnect allows to close all user connections to Centrifugo.
@@ -541,11 +537,7 @@ func (n *Node) Disconnect(user string, reconnect bool) error {
 		return err
 	}
 	// second send disconnect control message to other nodes
-	err = n.pubDisconnect(user, reconnect)
-	if err != nil {
-		return err
-	}
-	return nil
+	return n.pubDisconnect(user, reconnect)
 }
 
 // namespaceName returns namespace name from channel if exists.

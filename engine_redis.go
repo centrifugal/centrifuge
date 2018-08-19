@@ -40,7 +40,7 @@ const (
 )
 
 const (
-	defaultPrefix         = "centrifuge"
+	defaultPrefix         = "centrifuge" // TODO: not used now
 	defaultReadTimeout    = 5 * time.Second
 	defaultWriteTimeout   = time.Second
 	defaultConnectTimeout = time.Second
@@ -680,7 +680,11 @@ func (e *shard) runPubSub() {
 					}
 					switch chID {
 					case controlChannel:
-						e.eventHandler.HandleControl(n.Data)
+						err := e.eventHandler.HandleControl(n.Data)
+						if err != nil {
+							e.node.logger.log(newLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
+							continue
+						}
 					case pingChannel:
 						// Do nothing - this message just maintains connection open.
 					default:
@@ -978,65 +982,62 @@ func (e *shard) runDataPipeline() {
 
 	var drs []dataRequest
 
-	for {
-		select {
-		case dr := <-e.dataCh:
-			drs = append(drs, dr)
-			fillDataBatch(e.dataCh, &drs, redisDataChannelSize)
+	for dr := range e.dataCh {
+		drs = append(drs, dr)
+		fillDataBatch(e.dataCh, &drs, redisDataChannelSize)
 
-			conn := e.pool.Get()
+		conn := e.pool.Get()
 
-			for i := range drs {
-				switch drs[i].op {
-				case dataOpAddPresence:
-					e.addPresenceScript.SendHash(conn, drs[i].args...)
-				case dataOpRemovePresence:
-					e.remPresenceScript.SendHash(conn, drs[i].args...)
-				case dataOpPresence:
-					e.presenceScript.SendHash(conn, drs[i].args...)
-				case dataOpHistory:
-					conn.Send("LRANGE", drs[i].args...)
-				case dataOpHistoryRemove:
-					conn.Send("DEL", drs[i].args...)
-				case dataOpChannels:
-					conn.Send("PUBSUB", drs[i].args...)
-				case dataOpHistoryTouch:
-					conn.Send("SETEX", drs[i].args...)
-				}
+		for i := range drs {
+			switch drs[i].op {
+			case dataOpAddPresence:
+				e.addPresenceScript.SendHash(conn, drs[i].args...)
+			case dataOpRemovePresence:
+				e.remPresenceScript.SendHash(conn, drs[i].args...)
+			case dataOpPresence:
+				e.presenceScript.SendHash(conn, drs[i].args...)
+			case dataOpHistory:
+				conn.Send("LRANGE", drs[i].args...)
+			case dataOpHistoryRemove:
+				conn.Send("DEL", drs[i].args...)
+			case dataOpChannels:
+				conn.Send("PUBSUB", drs[i].args...)
+			case dataOpHistoryTouch:
+				conn.Send("SETEX", drs[i].args...)
 			}
-
-			err := conn.Flush()
-			if err != nil {
-				for i := range drs {
-					drs[i].done(nil, err)
-				}
-				e.node.logger.log(newLogEntry(LogLevelError, "error flushing data pipeline", map[string]interface{}{"error": err.Error()}))
-				conn.Close()
-				return
-			}
-			var noScriptError bool
-			for i := range drs {
-				reply, err := conn.Receive()
-				if err != nil {
-					// Check for NOSCRIPT error. In normal circumstances this should never happen.
-					// The only possible situation is when Redis scripts were flushed. In this case
-					// we will return from this func and load publish script from scratch.
-					// Redigo does the same check but for single EVALSHA command: see
-					// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
-					if e, ok := err.(redis.Error); ok && strings.HasPrefix(string(e), "NOSCRIPT ") {
-						noScriptError = true
-					}
-				}
-				drs[i].done(reply, err)
-			}
-			if noScriptError {
-				// Start this func from the beginning and LOAD missing script.
-				conn.Close()
-				return
-			}
-			conn.Close()
-			drs = nil
 		}
+
+		err := conn.Flush()
+		if err != nil {
+			for i := range drs {
+				drs[i].done(nil, err)
+			}
+			e.node.logger.log(newLogEntry(LogLevelError, "error flushing data pipeline", map[string]interface{}{"error": err.Error()}))
+			conn.Close()
+			return
+		}
+		var noScriptError bool
+		for i := range drs {
+			reply, err := conn.Receive()
+			if err != nil {
+				// Check for NOSCRIPT error. In normal circumstances this should never happen.
+				// The only possible situation is when Redis scripts were flushed. In this case
+				// we will return from this func and load publish script from scratch.
+				// Redigo does the same check but for single EVALSHA command: see
+				// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
+				if e, ok := err.(redis.Error); ok && strings.HasPrefix(string(e), "NOSCRIPT ") {
+					noScriptError = true
+				}
+			}
+			drs[i].done(reply, err)
+		}
+		if noScriptError {
+			// Start this func from the beginning and LOAD missing script.
+			conn.Close()
+			return
+		}
+		conn.Close()
+		drs = nil
 	}
 }
 

@@ -312,8 +312,7 @@ func (c *Client) Unsubscribe(ch string, resubscribe bool) error {
 	if err != nil {
 		return err
 	}
-	c.sendUnsub(ch, resubscribe)
-	return nil
+	return c.sendUnsub(ch, resubscribe)
 }
 
 func (c *Client) sendUnsub(ch string, resubscribe bool) error {
