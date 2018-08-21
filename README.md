@@ -39,7 +39,7 @@ To install globally into $GOPATH use:
 go get -u github.com/centrifugal/centrifuge
 ```
 
-But recommended way is using tools like `dep` or `vgo` to add this library as dependency to your project.
+But recommended way is using tools like `dep` or `go mod` to add this library as dependency to your project.
 
 ### Quick example
 
