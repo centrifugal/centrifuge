@@ -77,7 +77,7 @@
                 centrifuge.connect();
 
                 function handleSubscribe(ctx) {
-                    drawText('Subscribed on channel ' + ctx.channel);
+                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
                     if (ctx.isResubscribe) {
                         showPresence(sub);
                     }
