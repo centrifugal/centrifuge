@@ -430,14 +430,14 @@ var recoverTests = []struct {
 	HistoryLifetime int
 	NumPublications int
 	Last            string
-	Away            uint32
+	Since           uint32
 	NumRecovered    int
 	Recovered       bool
 }{
 	{"from_last_uid", 10, 60, 10, "7", 0, 2, true},
-	{"empty_last_uid_full_history", 10, 60, 10, "", 0, 10, false},
-	{"empty_last_uid_short_disconnect", 10, 60, 9, "", 19, 9, true},
-	{"empty_last_uid_long_disconnect", 10, 60, 9, "", 119, 9, false},
+	{"empty_last_uid_full_history", 10, 60, 10, "", uint32(time.Now().Unix()), 10, false},
+	{"empty_last_uid_short_disconnect", 10, 60, 9, "", uint32(time.Now().Unix()) - 19, 9, true},
+	{"empty_last_uid_long_disconnect", 10, 60, 9, "", uint32(time.Now().Unix()) - 59, 9, false},
 }
 
 func TestClientSubscribeRecover(t *testing.T) {
@@ -469,7 +469,7 @@ func TestClientSubscribeRecover(t *testing.T) {
 				Channel: "test",
 				Recover: true,
 				Last:    tt.Last,
-				Away:    tt.Away,
+				Since:   tt.Since,
 			})
 			assert.Nil(t, disconnect)
 			assert.Nil(t, subscribeResp.Error)

@@ -100,6 +100,7 @@ message ConnectResult {
     bool expires = 3 [(gogoproto.jsontag) = "expires,omitempty"];
     uint32 ttl = 4 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
     bytes data = 5 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false];
+    uint32 time = 6 [(gogoproto.jsontag) = "time,omitempty"];
 }
 
 message RefreshRequest {
@@ -117,7 +118,7 @@ message SubscribeRequest {
     string channel = 1 [(gogoproto.jsontag) = "channel"];
     bool recover = 2 [(gogoproto.jsontag) = "recover"];
     string last = 3 [(gogoproto.jsontag) = "last"];
-    uint32 away = 4 [(gogoproto.jsontag) = "away"];
+    uint32 since = 4 [(gogoproto.jsontag) = "since"];
     string token = 5  [(gogoproto.jsontag) = "token"];
 }
 

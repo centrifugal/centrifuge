@@ -1008,6 +1008,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		Version: version,
 		Expires: expires,
 		TTL:     ttl,
+		Time:    uint32(time.Now().Unix()), // TODO: int bounds check?
 	}
 
 	resp.Result = res
@@ -1367,8 +1368,9 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			if cmd.Last == "" {
 				// Client wants to recover publications but it seems that there were no
 				// messages in channel history before, so looks like client missed all
-				// existing messages. Though in this case we can't guarantee that messages
-				// were fully recovered.
+				// existing messages. We can only guarantee that state was successfully
+				// recovered if client passed a since value that fits HistoryLifetime
+				// interval and history contains less messages than HistorySize.
 				publications, err := c.node.History(channel)
 				if err != nil {
 					c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -1376,7 +1378,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 					res.Recovered = false
 				} else {
 					res.Publications = publications
-					res.Recovered = time.Duration(cmd.Away)*time.Second+time.Second < time.Duration(chOpts.HistoryLifetime)*time.Second && len(publications) < chOpts.HistorySize
+					res.Recovered = time.Now().Unix()-int64(cmd.Since)+int64(1) < int64(chOpts.HistoryLifetime) && len(publications) < chOpts.HistorySize
 				}
 			} else {
 				publications, found, err := c.node.recoverHistory(channel, cmd.Last)
@@ -1386,7 +1388,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 					res.Recovered = false
 				} else {
 					res.Publications = publications
-					res.Recovered = found || (time.Duration(cmd.Away)*time.Second+time.Second < time.Duration(chOpts.HistoryLifetime)*time.Second && len(publications) < chOpts.HistorySize)
+					res.Recovered = found || (time.Now().Unix()-int64(cmd.Since)+int64(1) < int64(chOpts.HistoryLifetime) && len(publications) < chOpts.HistorySize)
 				}
 			}
 			recoveredLabel := "no"

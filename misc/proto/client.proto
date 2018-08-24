@@ -91,6 +91,7 @@ message ConnectResult {
     bool expires = 3;
     uint32 ttl = 4;
     bytes data = 5;
+    uint32 time = 6;
 }
 
 message RefreshRequest {
@@ -108,7 +109,7 @@ message SubscribeRequest {
     string channel = 1;
     bool recover = 2;
     string last = 3;
-    uint32 away = 4;
+    uint32 since = 4;
     string token = 5 ;
 }
 
