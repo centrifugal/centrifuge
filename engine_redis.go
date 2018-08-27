@@ -626,10 +626,10 @@ func (e *shard) runPubSub() {
 
 	// Run subscriber goroutine.
 	go func() {
-		e.node.logger.log(newLogEntry(LogLevelDebug, "Starting RedisEngine Subscriber"))
+		e.node.logger.log(newLogEntry(LogLevelDebug, "starting RedisEngine Subscriber"))
 
 		defer func() {
-			e.node.logger.log(newLogEntry(LogLevelDebug, "Stopping RedisEngine Subscriber"))
+			e.node.logger.log(newLogEntry(LogLevelDebug, "stopping RedisEngine Subscriber"))
 		}()
 		for {
 			select {
@@ -651,7 +651,7 @@ func (e *shard) runPubSub() {
 				}
 
 				if opErr != nil {
-					e.node.logger.log(newLogEntry(LogLevelError, "RedisEngine Subscriber error", map[string]interface{}{"error": opErr.Error()}))
+					e.node.logger.log(newLogEntry(LogLevelError, "Redis engine subscriber error", map[string]interface{}{"error": opErr.Error()}))
 					r.done(opErr)
 
 					// Close conn, this should cause Receive to return with err below
@@ -736,7 +736,7 @@ func (e *shard) runPubSub() {
 		}
 	}
 
-	e.node.logger.log(newLogEntry(LogLevelDebug, fmt.Sprintf("Successfully subscribed to %d Redis channels", len(chIDs))))
+	e.node.logger.log(newLogEntry(LogLevelDebug, fmt.Sprintf("successfully subscribed to %d Redis channels", len(chIDs))))
 
 	for {
 		switch n := conn.Receive().(type) {

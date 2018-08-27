@@ -128,6 +128,7 @@ message SubscribeResult {
     repeated Publication publications = 3 [(gogoproto.jsontag) = "publications,omitempty"];
     bool expires = 4 [(gogoproto.jsontag) = "expires,omitempty"];
     uint32 ttl = 5 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
+    uint32 time = 6 [(gogoproto.jsontag) = "time,omitempty"];
 }
 
 message SubRefreshRequest {
@@ -179,11 +180,10 @@ message HistoryResult {
 }
 
 message PingRequest {
-    string data = 1 [(gogoproto.jsontag) = "data"];
 }
 
 message PingResult {
-    string data = 1 [(gogoproto.jsontag) = "data"];
+    uint32 time = 1 [(gogoproto.jsontag) = "time,omitempty"];
 }
 
 message RPCRequest{

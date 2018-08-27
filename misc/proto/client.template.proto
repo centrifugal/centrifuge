@@ -128,6 +128,7 @@ message SubscribeResult {
     repeated Publication publications = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "publications,omitempty"]{{end}};
     bool expires = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
     uint32 ttl = 5{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
+    uint32 time = 6{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "time,omitempty"]{{end}};
 }
 
 message SubRefreshRequest {
@@ -179,11 +180,10 @@ message HistoryResult {
 }
 
 message PingRequest {
-    string data = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "data"]{{end}};
 }
 
 message PingResult {
-    string data = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "data"]{{end}};
+    uint32 time = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "time,omitempty"]{{end}};
 }
 
 message RPCRequest{

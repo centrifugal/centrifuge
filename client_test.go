@@ -565,12 +565,33 @@ func TestClientPing(t *testing.T) {
 
 	connectClient(t, client)
 
-	pingResp, disconnect := client.pingCmd(&proto.PingRequest{
-		Data: "hi",
-	})
+	pingResp, disconnect := client.pingCmd(&proto.PingRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, pingResp.Error)
-	assert.Equal(t, "hi", pingResp.Result.Data)
+	assert.Empty(t, pingResp.Result)
+}
+
+func TestClientPingWithRecover(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	config.HistoryLifetime = 10
+	config.HistorySize = 10
+	config.HistoryRecover = true
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	pingResp, disconnect := client.pingCmd(&proto.PingRequest{})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, pingResp.Error)
+	assert.NotZero(t, pingResp.Result.Time)
 }
 
 func TestClientPresence(t *testing.T) {

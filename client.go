@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/proto"
@@ -125,6 +126,7 @@ type Client struct {
 	presenceTimer *time.Timer
 
 	disconnect *Disconnect
+	recovery   uint32
 
 	eventHub *ClientEventHub
 }
@@ -1361,6 +1363,9 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	}
 
 	if chOpts.HistoryRecover {
+		res.Time = uint32(time.Now().Unix())
+		atomic.StoreUint32(&c.recovery, 1)
+
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely)
@@ -1820,16 +1825,13 @@ func (c *Client) historyCmd(cmd *proto.HistoryRequest) (*proto.HistoryResponse, 
 
 // pingCmd handles ping command from client.
 func (c *Client) pingCmd(cmd *proto.PingRequest) (*proto.PingResponse, *Disconnect) {
-	var res *proto.PingResult
-	if cmd.Data != "" {
-		res = &proto.PingResult{
-			Data: cmd.Data,
+	resp := &proto.PingResponse{}
+	if atomic.LoadUint32(&c.recovery) == 1 {
+		// only pass server time to client in case it has at least one subscription
+		// to channel with recovery enabled.
+		resp.Result = &proto.PingResult{
+			Time: uint32(time.Now().Unix()),
 		}
 	}
-
-	resp := &proto.PingResponse{
-		Result: res,
-	}
-
 	return resp, nil
 }

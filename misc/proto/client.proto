@@ -119,6 +119,7 @@ message SubscribeResult {
     repeated Publication publications = 3;
     bool expires = 4;
     uint32 ttl = 5;
+    uint32 time = 6;
 }
 
 message SubRefreshRequest {
@@ -170,11 +171,10 @@ message HistoryResult {
 }
 
 message PingRequest {
-    string data = 1;
 }
 
 message PingResult {
-    string data = 1;
+    uint32 time = 1;
 }
 
 message RPCRequest{
