@@ -1407,9 +1407,9 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			lastPubUID, err := c.node.lastPublicationUID(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last publication ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			} else {
-				res.Last = lastPubUID
+				return nil, DisconnectServerError
 			}
+			res.Last = lastPubUID
 		}
 	}
 
