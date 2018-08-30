@@ -611,16 +611,13 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 // lastPublicationUID return last message id for channel.
-func (n *Node) lastPublicationUID(ch string) (string, error) {
-	actionCount.WithLabelValues("last_publication_uid").Inc()
-	publications, err := n.engine.history(ch, 1)
+func (n *Node) lastPublicationID(ch string) (uint64, error) {
+	actionCount.WithLabelValues("last_publication_id").Inc()
+	top, err := n.engine.historyIndex(ch)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
-	if len(publications) == 0 {
-		return "", nil
-	}
-	return publications[0].UID, nil
+	return top, nil
 }
 
 // privateChannel checks if channel private. In case of private channel

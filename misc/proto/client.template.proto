@@ -71,6 +71,7 @@ message Publication {
     string uid = 1{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"]{{end}};
     bytes data = 2{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
     ClientInfo info = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "info,omitempty"]{{end}};
+    uint64 id = 4{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id,omitempty"]{{end}};
 }
 
 message Join {

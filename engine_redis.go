@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -331,13 +332,15 @@ var (
 	// 1 round trip to Redis instead of 2.
 	// KEYS[1] - history list key
 	// KEYS[2] - history touch object key
+	// KEYS[3] - history index key
 	// ARGV[1] - channel to publish message to
 	// ARGV[2] - message payload
 	// ARGV[3] - history size ltrim right bound
 	// ARGV[4] - history lifetime
 	// ARGV[5] - history drop inactive flag - "0" or "1"
 	pubScriptSource = `
-local n = redis.call("publish", ARGV[1], ARGV[2])
+local i = redis.call("incr", KEYS[3]) 
+local n = redis.call("publish", ARGV[1], i .. ":" .. ARGV[2])
 local m = 0
 if ARGV[5] == "1" and n == 0 and redis.call("exists", KEYS[2]) == 0 then
   m = redis.call("lpushx", KEYS[1], ARGV[2])
@@ -403,7 +406,7 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		node:              n,
 		config:            conf,
 		pool:              newPool(n, conf),
-		pubScript:         redis.NewScript(2, pubScriptSource),
+		pubScript:         redis.NewScript(3, pubScriptSource),
 		addPresenceScript: redis.NewScript(2, addPresenceSource),
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
@@ -440,6 +443,10 @@ func (e *shard) getPresenceSetKey(ch string) channelID {
 
 func (e *shard) getHistoryKey(ch string) channelID {
 	return channelID(e.config.Prefix + ".history.list." + ch)
+}
+
+func (e *shard) getHistoryIndexKey(ch string) channelID {
+	return channelID(e.config.Prefix + ".history.index." + ch)
 }
 
 func (e *shard) getHistoryTouchKey(ch string) channelID {
@@ -535,6 +542,11 @@ func (e *RedisEngine) presenceStats(ch string) (PresenceStats, error) {
 // History - see engine interface description.
 func (e *RedisEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.shards[e.shardIndex(ch)].History(ch, limit)
+}
+
+// HistoryIndex - see engine interface description.
+func (e *RedisEngine) historyIndex(ch string) (uint64, error) {
+	return e.shards[e.shardIndex(ch)].HistoryIndex(ch)
 }
 
 // RecoverHistory - see engine interface description.
@@ -753,21 +765,23 @@ func (e *shard) runPubSub() {
 }
 
 func (e *shard) handleRedisClientMessage(chID channelID, data []byte) error {
-	var message proto.Push
-	err := message.Unmarshal(data)
+	var id uint64
+	parts := bytes.SplitN(data, []byte(":"), 2)
+	idInt, _ := strconv.Atoi(string(parts[0]))
+	id = uint64(idInt)
+	pushData := parts[1]
+	var push proto.Push
+	err := push.Unmarshal(pushData)
 	if err != nil {
 		return err
 	}
-	return e.handleClientPush(&message)
-}
-
-func (e *shard) handleClientPush(push *proto.Push) error {
 	switch push.Type {
 	case proto.PushTypePublication:
 		pub, err := e.pushDecoder.DecodePublication(push.Data)
 		if err != nil {
 			return err
 		}
+		pub.ID = id
 		e.eventHandler.HandlePublication(push.Channel, pub)
 	case proto.PushTypeJoin:
 		join, err := e.pushDecoder.DecodeJoin(push.Data)
@@ -791,6 +805,7 @@ type pubRequest struct {
 	message    []byte
 	historyKey channelID
 	touchKey   channelID
+	indexKey   channelID
 	opts       *ChannelOptions
 	err        *chan error
 }
@@ -857,7 +872,7 @@ func (e *shard) runPublishPipeline() {
 			conn := e.pool.Get()
 			for i := range prs {
 				if prs[i].opts != nil && prs[i].opts.HistorySize > 0 && prs[i].opts.HistoryLifetime > 0 {
-					e.pubScript.SendHash(conn, prs[i].historyKey, prs[i].touchKey, prs[i].channel, prs[i].message, prs[i].opts.HistorySize-1, prs[i].opts.HistoryLifetime, prs[i].opts.HistoryDropInactive)
+					e.pubScript.SendHash(conn, prs[i].historyKey, prs[i].touchKey, prs[i].indexKey, prs[i].channel, prs[i].message, prs[i].opts.HistorySize-1, prs[i].opts.HistoryLifetime, prs[i].opts.HistoryDropInactive)
 				} else {
 					conn.Send("PUBLISH", prs[i].channel, prs[i].message)
 				}
@@ -904,6 +919,7 @@ const (
 	dataOpRemovePresence
 	dataOpPresence
 	dataOpHistory
+	dataOpHistoryIndex
 	dataOpHistoryRemove
 	dataOpChannels
 	dataOpHistoryTouch
@@ -1002,6 +1018,8 @@ func (e *shard) runDataPipeline() {
 				e.presenceScript.SendHash(conn, drs[i].args...)
 			case dataOpHistory:
 				conn.Send("LRANGE", drs[i].args...)
+			case dataOpHistoryIndex:
+				conn.Send("GET", drs[i].args...)
 			case dataOpHistoryRemove:
 				conn.Send("DEL", drs[i].args...)
 			case dataOpChannels:
@@ -1069,6 +1087,7 @@ func (e *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 			message:    byteMessage,
 			historyKey: e.getHistoryKey(ch),
 			touchKey:   e.getHistoryTouchKey(ch),
+			indexKey:   e.getHistoryIndexKey(ch),
 			opts:       opts,
 			err:        &eChan,
 		}
@@ -1105,7 +1124,7 @@ func (e *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan 
 
 	pr := pubRequest{
 		channel: chID,
-		message: byteMessage,
+		message: append([]byte("0:"), byteMessage...),
 		err:     &eChan,
 	}
 	e.pubCh <- pr
@@ -1132,7 +1151,7 @@ func (e *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-ch
 
 	pr := pubRequest{
 		channel: chID,
-		message: byteMessage,
+		message: append([]byte("0:"), byteMessage...),
 		err:     &eChan,
 	}
 	e.pubCh <- pr
@@ -1260,6 +1279,25 @@ func (e *shard) History(ch string, limit int) ([]*Publication, error) {
 		return nil, resp.err
 	}
 	return sliceOfPubs(e, resp.reply, nil)
+}
+
+// History - see engine interface description.
+func (e *shard) HistoryIndex(ch string) (uint64, error) {
+	historyIndexKey := e.getHistoryIndexKey(ch)
+	dr := newDataRequest(dataOpHistoryIndex, []interface{}{historyIndexKey}, true)
+	e.dataCh <- dr
+	resp := dr.result()
+	if resp.err != nil {
+		return 0, resp.err
+	}
+	val, err := redis.Int64(resp.reply, nil)
+	if err != nil {
+		if err == redis.ErrNil {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return uint64(val), nil
 }
 
 // RecoverHistory - see engine interface description.

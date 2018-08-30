@@ -71,6 +71,7 @@ message Publication {
     string uid = 1 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
     bytes data = 2 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
     ClientInfo info = 3 [(gogoproto.jsontag) = "info,omitempty"];
+    uint64 id = 4 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id,omitempty"];
 }
 
 message Join {

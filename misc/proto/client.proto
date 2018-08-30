@@ -62,6 +62,7 @@ message Publication {
     string uid = 1;
     bytes data = 2;
     ClientInfo info = 3;
+    uint64 id = 4;
 }
 
 message Join {

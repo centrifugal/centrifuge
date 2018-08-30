@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"container/heap"
+	"strconv"
 	"sync"
 	"time"
 
@@ -52,6 +53,9 @@ func (e *MemoryEngine) publish(ch string, pub *Publication, opts *ChannelOptions
 			e.node.logger.log(newLogEntry(LogLevelError, "error adding into history hub", map[string]interface{}{"error": err.Error()}))
 		}
 	}
+
+	top := e.historyHub.incTop(ch)
+	pub.ID = top
 
 	eChan := make(chan error, 1)
 	eChan <- e.eventHandler.HandlePublication(ch, pub)
@@ -117,6 +121,12 @@ func (e *MemoryEngine) presenceStats(ch string) (PresenceStats, error) {
 // History - see engine interface description.
 func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.historyHub.get(ch, limit)
+}
+
+// History - see engine interface description.
+func (e *MemoryEngine) historyIndex(ch string) (uint64, error) {
+	top := e.historyHub.getTop(ch)
+	return top, nil
 }
 
 // RecoverHistory - see engine interface description.
@@ -237,6 +247,9 @@ type historyHub struct {
 	history   map[string]historyItem
 	queue     priority.Queue
 	nextCheck int64
+
+	topsMu sync.RWMutex
+	tops   map[string]uint64
 }
 
 func newHistoryHub() *historyHub {
@@ -244,6 +257,7 @@ func newHistoryHub() *historyHub {
 		history:   make(map[string]historyItem),
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
+		tops:      make(map[string]uint64),
 	}
 }
 
@@ -281,6 +295,33 @@ func (h *historyHub) expire() {
 		h.nextCheck = nextCheck
 		h.Unlock()
 	}
+}
+
+func (h *historyHub) incTop(ch string) uint64 {
+	var val uint64
+	h.topsMu.Lock()
+	top, ok := h.tops[ch]
+	if !ok {
+		h.tops[ch] = 1
+		val = 1
+	} else {
+		top++
+		h.tops[ch] = top
+		val = top
+	}
+	h.topsMu.Unlock()
+	return val
+}
+
+func (h *historyHub) getTop(ch string) uint64 {
+	h.topsMu.Lock()
+	defer h.topsMu.Unlock()
+	top, ok := h.tops[ch]
+	if !ok {
+		h.tops[ch] = 0
+		return 0
+	}
+	return top
 }
 
 func (h *historyHub) touch(ch string, opts *ChannelOptions) {
@@ -376,14 +417,21 @@ func (h *historyHub) remove(ch string) error {
 
 func (h *historyHub) recover(ch string, last string) ([]*Publication, bool, error) {
 
+	lastInt, _ := strconv.Atoi(last)
+
 	publications, err := h.get(ch, 0)
 	if err != nil {
 		return nil, false, err
 	}
 
+	top := h.getTop(ch)
+	if top <= uint64(lastInt) {
+		return nil, true, nil
+	}
+
 	position := -1
 	for index, msg := range publications {
-		if msg.UID == last {
+		if msg.ID == uint64(lastInt)+1 {
 			position = index
 			break
 		}
@@ -391,7 +439,7 @@ func (h *historyHub) recover(ch string, last string) ([]*Publication, bool, erro
 	if position > -1 {
 		// Provided last UID found in history. In this case we can be
 		// sure that all missed messages will be recovered.
-		return publications[0:position], true, nil
+		return publications[0 : position+1], true, nil
 	}
 	// Provided last UID not found in history messages. This means that
 	// client most probably missed too many messages or publication with
