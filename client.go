@@ -1370,7 +1370,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely)
 			// based on provided last publication uid seen by client.
-			if cmd.Last == "" {
+			if cmd.FromUID == "" && cmd.FromID == "0" { // TODO: fix this
 				// Client wants to recover publications but it seems that there were no
 				// messages in channel history before, so looks like client missed all
 				// existing messages. We can only guarantee that state was successfully
@@ -1386,7 +1386,8 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 					res.Recovered = false
 				}
 			} else {
-				publications, recovered, err := c.node.recoverHistory(channel, cmd.Last)
+				fromID, _ := strconv.Atoi(cmd.FromID)
+				publications, recovered, err := c.node.recoverHistory(channel, uint64(fromID), cmd.FromUID)
 				if err != nil {
 					c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					res.Publications = nil
@@ -1404,12 +1405,13 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 		} else {
 			// Client don't want to recover messages yet (fresh connect), we just return last
 			// publication uid here so it could recover later.
-			lastPubID, err := c.node.lastPublicationID(channel)
+			top, err := c.node.lastPublicationID(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last publication ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				return nil, DisconnectServerError
 			}
-			res.Last = fmt.Sprintf("%d", lastPubID)
+			res.LastUID = top.UID
+			res.LastID = fmt.Sprintf("%d", top.ID)
 		}
 	}
 

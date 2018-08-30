@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"container/heap"
-	"strconv"
 	"sync"
 	"time"
 
@@ -54,8 +53,8 @@ func (e *MemoryEngine) publish(ch string, pub *Publication, opts *ChannelOptions
 		}
 	}
 
-	top := e.historyHub.incTop(ch)
-	pub.ID = top
+	top := e.historyHub.incTop(ch, pub.UID)
+	pub.ID = top.ID
 
 	eChan := make(chan error, 1)
 	eChan <- e.eventHandler.HandlePublication(ch, pub)
@@ -124,14 +123,14 @@ func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) historyIndex(ch string) (uint64, error) {
+func (e *MemoryEngine) historyIndex(ch string) (channelTop, error) {
 	top := e.historyHub.getTop(ch)
 	return top, nil
 }
 
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, lastUID string) ([]*Publication, bool, error) {
-	return e.historyHub.recover(ch, lastUID)
+func (e *MemoryEngine) recoverHistory(ch string, fromID uint64, fromUID string) ([]*Publication, bool, error) {
+	return e.historyHub.recover(ch, fromID, fromUID)
 }
 
 // RemoveHistory - see engine interface description.
@@ -242,6 +241,11 @@ func (i historyItem) isExpired() bool {
 	return i.expireAt < time.Now().Unix()
 }
 
+type channelTop struct {
+	ID  uint64
+	UID string
+}
+
 type historyHub struct {
 	sync.RWMutex
 	history   map[string]historyItem
@@ -249,7 +253,7 @@ type historyHub struct {
 	nextCheck int64
 
 	topsMu sync.RWMutex
-	tops   map[string]uint64
+	tops   map[string]channelTop
 }
 
 func newHistoryHub() *historyHub {
@@ -257,7 +261,7 @@ func newHistoryHub() *historyHub {
 		history:   make(map[string]historyItem),
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
-		tops:      make(map[string]uint64),
+		tops:      make(map[string]channelTop),
 	}
 }
 
@@ -297,15 +301,19 @@ func (h *historyHub) expire() {
 	}
 }
 
-func (h *historyHub) incTop(ch string) uint64 {
-	var val uint64
+func (h *historyHub) incTop(ch string, uid string) channelTop {
+	var val channelTop
 	h.topsMu.Lock()
 	top, ok := h.tops[ch]
 	if !ok {
-		h.tops[ch] = 1
-		val = 1
+		val = channelTop{
+			ID:  1,
+			UID: uid,
+		}
+		h.tops[ch] = val
 	} else {
-		top++
+		top.ID++
+		top.UID = uid
 		h.tops[ch] = top
 		val = top
 	}
@@ -313,13 +321,17 @@ func (h *historyHub) incTop(ch string) uint64 {
 	return val
 }
 
-func (h *historyHub) getTop(ch string) uint64 {
+func (h *historyHub) getTop(ch string) channelTop {
 	h.topsMu.Lock()
 	defer h.topsMu.Unlock()
 	top, ok := h.tops[ch]
 	if !ok {
-		h.tops[ch] = 0
-		return 0
+		top := channelTop{
+			ID:  0,
+			UID: "",
+		}
+		h.tops[ch] = top
+		return top
 	}
 	return top
 }
@@ -415,36 +427,48 @@ func (h *historyHub) remove(ch string) error {
 	return nil
 }
 
-func (h *historyHub) recover(ch string, last string) ([]*Publication, bool, error) {
-
-	lastInt, _ := strconv.Atoi(last)
+func (h *historyHub) recover(ch string, fromID uint64, fromUID string) ([]*Publication, bool, error) {
 
 	publications, err := h.get(ch, 0)
 	if err != nil {
 		return nil, false, err
 	}
 
-	top := h.getTop(ch)
-	if top <= uint64(lastInt) {
-		return nil, true, nil
+	// top := h.getTop(ch)
+	// if top.ID <= fromID {
+	// 	return nil, true, nil
+	// }
+
+	if len(publications) > 0 {
+		if publications[0].ID == fromID && publications[0].UID == fromUID {
+			return nil, true, nil
+		}
+		if publications[0].ID < fromID {
+			return nil, false, nil
+		}
 	}
 
+	broken := false
 	position := -1
 	for index, msg := range publications {
-		if msg.ID == uint64(lastInt)+1 {
+		if msg.ID == fromID && msg.UID != fromUID {
+			broken = true
+		}
+		if msg.ID == fromID+1 {
 			position = index
 			break
 		}
 	}
 	if position > -1 {
-		// Provided last UID found in history. In this case we can be
-		// sure that all missed messages will be recovered.
-		return publications[0 : position+1], true, nil
+		// ID found in history. In this case we can be
+		// sure that all missed publications recovered.
+		return publications[0 : position+1], !broken, nil
 	}
-	// Provided last UID not found in history messages. This means that
-	// client most probably missed too many messages or publication with
-	// last UID already expired (or maybe wrong last uid provided but
+
+	// Provided ID not found in history. This means that
+	// client most probably missed too many messages or publications
+	// already expired (or maybe wrong last id provided but
 	// it's not a normal case). So we try to compensate as many as we
-	// can but get caller know about missing UID.
+	// can but get caller know that state is not recovered.
 	return publications, false, nil
 }

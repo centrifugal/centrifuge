@@ -134,6 +134,22 @@
                     });
                     input.val('');
                 });
+
+                // function reconnect() {
+                //     setTimeout(function() {
+                //         centrifuge.disconnect();
+                //         setTimeout(function(){
+                //             reconnect();
+                //         }, 11000);
+                //     }, 4000);
+                // }
+                // reconnect();
+
+                var counter = 0
+                setInterval(function(){
+                    sub.publish({"input": counter});
+                    counter++
+                }, 50);
             });
         </script>
     </head>

@@ -109,18 +109,20 @@ message RefreshResult {
 message SubscribeRequest {
     string channel = 1;
     bool recover = 2;
-    string last = 3;
-    uint32 since = 4;
-    string token = 5 ;
+    string from_uid = 3;
+    string from_id = 4;
+    uint32 since = 5;
+    string token = 6;
 }
 
 message SubscribeResult {
-    string last = 1;
-    bool recovered = 2;
-    repeated Publication publications = 3;
-    bool expires = 4;
-    uint32 ttl = 5;
-    uint32 time = 6;
+    string last_uid = 1;
+    string last_id = 2;
+    bool recovered = 3;
+    repeated Publication publications = 4;
+    bool expires = 5;
+    uint32 ttl = 6;
+    uint32 time = 7;
 }
 
 message SubRefreshRequest {

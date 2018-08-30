@@ -343,9 +343,9 @@ local i = redis.call("incr", KEYS[3])
 local n = redis.call("publish", ARGV[1], i .. ":" .. ARGV[2])
 local m = 0
 if ARGV[5] == "1" and n == 0 and redis.call("exists", KEYS[2]) == 0 then
-  m = redis.call("lpushx", KEYS[1], ARGV[2])
+  m = redis.call("lpushx", KEYS[1], i .. ":" .. ARGV[2])
 else
-  m = redis.call("lpush", KEYS[1], ARGV[2])
+  m = redis.call("lpush", KEYS[1], i .. ":" .. ARGV[2])
 end
 if m > 0 then
   redis.call("ltrim", KEYS[1], 0, ARGV[3])
@@ -1302,27 +1302,37 @@ func (e *shard) HistoryIndex(ch string) (uint64, error) {
 
 // RecoverHistory - see engine interface description.
 func (e *shard) RecoverHistory(ch string, last string) ([]*Publication, bool, error) {
+	lastInt, _ := strconv.Atoi(last)
+
 	publications, err := e.History(ch, 0)
 	if err != nil {
 		return nil, false, err
 	}
 
+	if len(publications) > 0 {
+		if publications[0].ID == uint64(lastInt) {
+			return nil, true, nil
+		}
+	}
+
 	position := -1
-	for index, msg := range publications {
-		if msg.UID == last {
+	for index, pub := range publications {
+		if pub.ID == uint64(lastInt)+1 {
 			position = index
 			break
 		}
 	}
 	if position > -1 {
-		// Last uid found in history.
-		return publications[0:position], true, nil
+		// ID found in history. In this case we can be
+		// sure that all missed publications recovered.
+		return publications[0 : position+1], true, nil
 	}
-	// Provided last UID not found in history messages. This means that
-	// client most probably missed too many messages or publication with
-	// last UID already expired (or maybe wrong last uid provided but
+
+	// Provided ID not found in history. This means that
+	// client most probably missed too many messages or publications
+	// already expired (or maybe wrong last id provided but
 	// it's not a normal case). So we try to compensate as many as we
-	// can but get caller know about missing UID.
+	// can but get caller know that state is not recovered.
 	return publications, false, nil
 }
 
@@ -1400,7 +1410,13 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 			return nil, errors.New("error getting Message value")
 		}
 
-		msg, err := n.pushDecoder.Decode(value)
+		var id uint64
+		parts := bytes.SplitN(value, []byte(":"), 2)
+		idInt, _ := strconv.Atoi(string(parts[0]))
+		id = uint64(idInt)
+		pushData := parts[1]
+
+		msg, err := n.pushDecoder.Decode(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Message: %v", err)
 		}
@@ -1413,6 +1429,7 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
+		publication.ID = id
 		msgs[i] = publication
 	}
 	return msgs, nil

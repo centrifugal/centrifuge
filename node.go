@@ -599,9 +599,9 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, lastUID string) ([]*Publication, bool, error) {
+func (n *Node) recoverHistory(ch string, fromID uint64, fromUID string) ([]*Publication, bool, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
-	return n.engine.recoverHistory(ch, lastUID)
+	return n.engine.recoverHistory(ch, fromID, fromUID)
 }
 
 // RemoveHistory removes channel history.
@@ -611,11 +611,11 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 // lastPublicationUID return last message id for channel.
-func (n *Node) lastPublicationID(ch string) (uint64, error) {
+func (n *Node) lastPublicationID(ch string) (channelTop, error) {
 	actionCount.WithLabelValues("last_publication_id").Inc()
 	top, err := n.engine.historyIndex(ch)
 	if err != nil {
-		return 0, err
+		return channelTop{}, err
 	}
 	return top, nil
 }
