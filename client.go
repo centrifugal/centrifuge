@@ -1370,33 +1370,33 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely)
 			// based on provided last publication uid seen by client.
-			if cmd.FromUID == "" && cmd.FromID == "0" { // TODO: fix this
-				// Client wants to recover publications but it seems that there were no
-				// messages in channel history before, so looks like client missed all
-				// existing messages. We can only guarantee that state was successfully
-				// recovered if client passed a since value that fits HistoryLifetime
-				// interval and history contains less messages than HistorySize.
-				publications, err := c.node.History(channel)
-				if err != nil {
-					c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-					res.Publications = nil
-					res.Recovered = false
-				} else {
-					res.Publications = publications
-					res.Recovered = false
-				}
+			// if cmd.FromUID == "" && cmd.FromID == "0" { // TODO: fix this
+			// 	// Client wants to recover publications but it seems that there were no
+			// 	// messages in channel history before, so looks like client missed all
+			// 	// existing messages. We can only guarantee that state was successfully
+			// 	// recovered if client passed a since value that fits HistoryLifetime
+			// 	// interval and history contains less messages than HistorySize.
+			// 	publications, err := c.node.History(channel)
+			// 	if err != nil {
+			// 		c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+			// 		res.Publications = nil
+			// 		res.Recovered = false
+			// 	} else {
+			// 		res.Publications = publications
+			// 		res.Recovered = false
+			// 	}
+			// } else {
+			fromID, _ := strconv.Atoi(cmd.FromID)
+			publications, recovered, err := c.node.recoverHistory(channel, uint64(fromID), cmd.FromUID)
+			if err != nil {
+				c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+				res.Publications = nil
+				res.Recovered = recovered
 			} else {
-				fromID, _ := strconv.Atoi(cmd.FromID)
-				publications, recovered, err := c.node.recoverHistory(channel, uint64(fromID), cmd.FromUID)
-				if err != nil {
-					c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-					res.Publications = nil
-					res.Recovered = recovered
-				} else {
-					res.Publications = publications
-					res.Recovered = recovered
-				}
+				res.Publications = publications
+				res.Recovered = recovered
 			}
+			// }
 			recoveredLabel := "no"
 			if res.Recovered {
 				recoveredLabel = "yes"

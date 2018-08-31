@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -295,7 +296,8 @@ func TestClientSubscribe(t *testing.T) {
 	})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, subscribeResp.Error)
-	assert.Empty(t, subscribeResp.Result.Last)
+	assert.Empty(t, subscribeResp.Result.LastUID)
+	assert.Empty(t, subscribeResp.Result.LastID)
 	assert.False(t, subscribeResp.Result.Recovered)
 	assert.Empty(t, subscribeResp.Result.Publications)
 	assert.Equal(t, 1, len(client.Channels()))
@@ -421,7 +423,7 @@ func TestClientSubscribeLast(t *testing.T) {
 
 	connectClient(t, client)
 	result := subscribeClient(t, client, "test")
-	assert.Equal(t, "9", result.Last)
+	assert.Equal(t, "9", result.LastUID)
 }
 
 var recoverTests = []struct {
@@ -429,18 +431,21 @@ var recoverTests = []struct {
 	HistorySize     int
 	HistoryLifetime int
 	NumPublications int
-	Last            string
-	Since           uint32
+	FromUID         string
+	FromID          uint64
 	NumRecovered    int
+	Sleep           int
 	Recovered       bool
 }{
-	{"from_last_uid", 10, 60, 10, "7", 0, 2, true},
-	{"empty_last_uid_full_history", 10, 60, 10, "", uint32(time.Now().Unix()), 10, false},
-	{"empty_last_uid_short_disconnect", 10, 60, 9, "", uint32(time.Now().Unix()) - 19, 9, true},
-	{"empty_last_uid_long_disconnect", 10, 60, 9, "", uint32(time.Now().Unix()) - 59, 9, false},
+	{"from_position", 10, 60, 10, "8", 8, 2, 0, true},
+	{"from_position_that_is_too_far", 10, 60, 20, "8", 8, 10, 0, false},
+	{"same_position_no_history_expected", 10, 60, 7, "7", 7, 0, 0, true},
+	{"empty_position_recover_expected", 10, 60, 4, "", 0, 4, 0, true},
+	{"broken_server_position", 10, 60, 5, "1", 4, 1, 0, false},
+	{"from_position_in_expired_stream", 10, 1, 10, "8", 8, 0, 3, false},
 }
 
-func TestClientSubscribeRecover(t *testing.T) {
+func TestClientSubscribeRecoverMemory(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := nodeWithMemoryEngine()
@@ -456,20 +461,22 @@ func TestClientSubscribeRecover(t *testing.T) {
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 			client, _ := newClient(newCtx, node, transport)
 
-			for i := 0; i < tt.NumPublications; i++ {
+			for i := 1; i <= tt.NumPublications; i++ {
 				node.Publish("test", &Publication{
 					UID:  strconv.Itoa(i),
 					Data: []byte(`{}`),
 				})
 			}
 
+			time.Sleep(time.Duration(tt.Sleep) * time.Second)
+
 			connectClient(t, client)
 
 			subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 				Channel: "test",
 				Recover: true,
-				Last:    tt.Last,
-				Since:   tt.Since,
+				FromID:  fmt.Sprintf("%d", tt.FromID),
+				FromUID: tt.FromUID,
 			})
 			assert.Nil(t, disconnect)
 			assert.Nil(t, subscribeResp.Error)

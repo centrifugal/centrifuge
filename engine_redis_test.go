@@ -3,6 +3,7 @@
 package centrifuge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/assert"
 )
@@ -644,4 +646,46 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 			}
 		}
 	})
+}
+
+func TestClientSubscribeRecoverRedis(t *testing.T) {
+	for _, tt := range recoverTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			c := dial()
+			defer c.close()
+
+			e := newTestRedisEngine()
+
+			config := e.node.Config()
+			config.HistorySize = tt.HistorySize
+			config.HistoryLifetime = tt.HistoryLifetime
+			config.HistoryRecover = true
+			e.node.Reload(config)
+
+			transport := newTestTransport()
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, e.node, transport)
+
+			for i := 1; i <= tt.NumPublications; i++ {
+				e.node.Publish("test", &Publication{
+					UID:  strconv.Itoa(i),
+					Data: []byte(`{}`),
+				})
+			}
+
+			connectClient(t, client)
+
+			subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+				Channel: "test",
+				Recover: true,
+				FromID:  fmt.Sprintf("%d", tt.LastID),
+				FromUID: tt.LastUID,
+			})
+			assert.Nil(t, disconnect)
+			assert.Nil(t, subscribeResp.Error)
+			assert.Equal(t, tt.NumRecovered, len(subscribeResp.Result.Publications))
+			assert.Equal(t, tt.Recovered, subscribeResp.Result.Recovered)
+		})
+	}
 }

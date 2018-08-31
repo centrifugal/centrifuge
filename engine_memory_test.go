@@ -361,14 +361,14 @@ func BenchmarkMemoryEngineHistoryRecoverParallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte("{}"))
 	numMessages := 100
-	for i := 0; i < numMessages; i++ {
+	for i := 1; i <= numMessages; i++ {
 		pub := &Publication{UID: "uid" + strconv.Itoa(i), Data: rawData}
 		<-e.publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryDropInactive: false})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := e.recoverHistory("channel", "uid"+strconv.Itoa(numMessages-5))
+			_, _, err := e.recoverHistory("channel", uint64(numMessages-5), "uid"+strconv.Itoa(numMessages-5))
 			if err != nil {
 				panic(err)
 			}

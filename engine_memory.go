@@ -428,16 +428,20 @@ func (h *historyHub) remove(ch string) error {
 }
 
 func (h *historyHub) recover(ch string, fromID uint64, fromUID string) ([]*Publication, bool, error) {
+	top := h.getTop(ch)
+
+	if fromID == top.ID {
+		return nil, true, nil
+	}
+
+	if top.ID <= fromID {
+		return nil, false, nil
+	}
 
 	publications, err := h.get(ch, 0)
 	if err != nil {
 		return nil, false, err
 	}
-
-	// top := h.getTop(ch)
-	// if top.ID <= fromID {
-	// 	return nil, true, nil
-	// }
 
 	if len(publications) > 0 {
 		if publications[0].ID == fromID && publications[0].UID == fromUID {
@@ -450,12 +454,15 @@ func (h *historyHub) recover(ch string, fromID uint64, fromUID string) ([]*Publi
 
 	broken := false
 	position := -1
-	for index, msg := range publications {
+
+	for i := len(publications) - 1; i >= 0; i-- {
+		msg := publications[i]
 		if msg.ID == fromID && msg.UID != fromUID {
 			broken = true
+			continue
 		}
 		if msg.ID == fromID+1 {
-			position = index
+			position = i
 			break
 		}
 	}
