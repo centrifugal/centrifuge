@@ -1363,6 +1363,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	}
 
 	if chOpts.HistoryRecover {
+		res.Recoverable = true
 		res.Time = uint32(time.Now().Unix())
 		atomic.StoreUint32(&c.recovery, 1)
 
@@ -1386,8 +1387,8 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			// 		res.Recovered = false
 			// 	}
 			// } else {
-			fromID, _ := strconv.Atoi(cmd.FromID)
-			publications, recovered, err := c.node.recoverHistory(channel, uint64(fromID), cmd.FromUID)
+			fromID, _ := strconv.Atoi(cmd.Since)
+			publications, recovered, err := c.node.recoverHistory(channel, uint64(fromID))
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				res.Publications = nil
@@ -1410,8 +1411,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last publication ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				return nil, DisconnectServerError
 			}
-			res.LastUID = top.UID
-			res.LastID = fmt.Sprintf("%d", top.ID)
+			res.Last = fmt.Sprintf("%d", top)
 		}
 	}
 

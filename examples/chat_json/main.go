@@ -54,6 +54,7 @@ func main() {
 	// not required if you don't use token authentication and
 	// private subscriptions verified by token.
 	cfg.Secret = "secret"
+	cfg.Publish = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{

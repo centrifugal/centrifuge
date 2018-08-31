@@ -550,8 +550,8 @@ func (e *RedisEngine) historyIndex(ch string) (uint64, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *RedisEngine) recoverHistory(ch string, lastUID string) ([]*Publication, bool, error) {
-	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, lastUID)
+func (e *RedisEngine) recoverHistory(ch string, since uint64) ([]*Publication, bool, error) {
+	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, since)
 }
 
 // RemoveHistory - see engine interface description.
@@ -1301,8 +1301,7 @@ func (e *shard) HistoryIndex(ch string) (uint64, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *shard) RecoverHistory(ch string, last string) ([]*Publication, bool, error) {
-	lastInt, _ := strconv.Atoi(last)
+func (e *shard) RecoverHistory(ch string, since uint64) ([]*Publication, bool, error) {
 
 	publications, err := e.History(ch, 0)
 	if err != nil {
@@ -1310,14 +1309,14 @@ func (e *shard) RecoverHistory(ch string, last string) ([]*Publication, bool, er
 	}
 
 	if len(publications) > 0 {
-		if publications[0].ID == uint64(lastInt) {
+		if publications[0].ID == since {
 			return nil, true, nil
 		}
 	}
 
 	position := -1
 	for index, pub := range publications {
-		if pub.ID == uint64(lastInt)+1 {
+		if pub.ID == since+1 {
 			position = index
 			break
 		}

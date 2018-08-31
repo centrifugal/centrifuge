@@ -109,15 +109,13 @@ message RefreshResult {
 message SubscribeRequest {
     string channel = 1;
     bool recover = 2;
-    string from_uid = 3;
-    string from_id = 4;
-    uint32 since = 5;
-    string token = 6;
+    string since = 3;
+    string token = 4;
 }
 
 message SubscribeResult {
-    string last_uid = 1;
-    string last_id = 2;
+    bool recoverable = 1;
+    string last = 2;
     bool recovered = 3;
     repeated Publication publications = 4;
     bool expires = 5;

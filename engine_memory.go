@@ -51,10 +51,9 @@ func (e *MemoryEngine) publish(ch string, pub *Publication, opts *ChannelOptions
 		if err != nil {
 			e.node.logger.log(newLogEntry(LogLevelError, "error adding into history hub", map[string]interface{}{"error": err.Error()}))
 		}
+		top := e.historyHub.incTop(ch)
+		pub.ID = top
 	}
-
-	top := e.historyHub.incTop(ch, pub.UID)
-	pub.ID = top.ID
 
 	eChan := make(chan error, 1)
 	eChan <- e.eventHandler.HandlePublication(ch, pub)
@@ -123,14 +122,14 @@ func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) historyIndex(ch string) (channelTop, error) {
+func (e *MemoryEngine) historyIndex(ch string) (uint64, error) {
 	top := e.historyHub.getTop(ch)
 	return top, nil
 }
 
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, fromID uint64, fromUID string) ([]*Publication, bool, error) {
-	return e.historyHub.recover(ch, fromID, fromUID)
+func (e *MemoryEngine) recoverHistory(ch string, fromID uint64) ([]*Publication, bool, error) {
+	return e.historyHub.recover(ch, fromID)
 }
 
 // RemoveHistory - see engine interface description.
@@ -253,7 +252,7 @@ type historyHub struct {
 	nextCheck int64
 
 	topsMu sync.RWMutex
-	tops   map[string]channelTop
+	tops   map[string]uint64
 }
 
 func newHistoryHub() *historyHub {
@@ -261,7 +260,7 @@ func newHistoryHub() *historyHub {
 		history:   make(map[string]historyItem),
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
-		tops:      make(map[string]channelTop),
+		tops:      make(map[string]uint64),
 	}
 }
 
@@ -301,19 +300,15 @@ func (h *historyHub) expire() {
 	}
 }
 
-func (h *historyHub) incTop(ch string, uid string) channelTop {
-	var val channelTop
+func (h *historyHub) incTop(ch string) uint64 {
+	var val uint64
 	h.topsMu.Lock()
 	top, ok := h.tops[ch]
 	if !ok {
-		val = channelTop{
-			ID:  1,
-			UID: uid,
-		}
+		val = 1
 		h.tops[ch] = val
 	} else {
-		top.ID++
-		top.UID = uid
+		top++
 		h.tops[ch] = top
 		val = top
 	}
@@ -321,15 +316,12 @@ func (h *historyHub) incTop(ch string, uid string) channelTop {
 	return val
 }
 
-func (h *historyHub) getTop(ch string) channelTop {
+func (h *historyHub) getTop(ch string) uint64 {
 	h.topsMu.Lock()
 	defer h.topsMu.Unlock()
 	top, ok := h.tops[ch]
 	if !ok {
-		top := channelTop{
-			ID:  0,
-			UID: "",
-		}
+		var top uint64
 		h.tops[ch] = top
 		return top
 	}
@@ -427,14 +419,14 @@ func (h *historyHub) remove(ch string) error {
 	return nil
 }
 
-func (h *historyHub) recover(ch string, fromID uint64, fromUID string) ([]*Publication, bool, error) {
+func (h *historyHub) recover(ch string, fromID uint64) ([]*Publication, bool, error) {
 	top := h.getTop(ch)
 
-	if fromID == top.ID {
+	if fromID == top {
 		return nil, true, nil
 	}
 
-	if top.ID <= fromID {
+	if top <= fromID {
 		return nil, false, nil
 	}
 
@@ -444,7 +436,7 @@ func (h *historyHub) recover(ch string, fromID uint64, fromUID string) ([]*Publi
 	}
 
 	if len(publications) > 0 {
-		if publications[0].ID == fromID && publications[0].UID == fromUID {
+		if publications[0].ID == fromID {
 			return nil, true, nil
 		}
 		if publications[0].ID < fromID {
@@ -452,15 +444,10 @@ func (h *historyHub) recover(ch string, fromID uint64, fromUID string) ([]*Publi
 		}
 	}
 
-	broken := false
 	position := -1
 
 	for i := len(publications) - 1; i >= 0; i-- {
 		msg := publications[i]
-		if msg.ID == fromID && msg.UID != fromUID {
-			broken = true
-			continue
-		}
 		if msg.ID == fromID+1 {
 			position = i
 			break
@@ -469,7 +456,7 @@ func (h *historyHub) recover(ch string, fromID uint64, fromUID string) ([]*Publi
 	if position > -1 {
 		// ID found in history. In this case we can be
 		// sure that all missed publications recovered.
-		return publications[0 : position+1], !broken, nil
+		return publications[0 : position+1], true, nil
 	}
 
 	// Provided ID not found in history. This means that

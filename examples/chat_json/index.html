@@ -16,7 +16,17 @@
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            var channel = "chat:index";
+            var channel = "chat_index";
+
+            function getParam(name, url) {
+                if (!url) url = window.location.href;
+                name = name.replace(/[\[\]]/g, '\\$&');
+                var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+                    results = regex.exec(url);
+                if (!results) return null;
+                if (!results[2]) return '';
+                return decodeURIComponent(results[2].replace(/\+/g, ' '));
+            }
 
             $(function() {
 
@@ -135,21 +145,26 @@
                     input.val('');
                 });
 
-                // function reconnect() {
-                //     setTimeout(function() {
-                //         centrifuge.disconnect();
-                //         setTimeout(function(){
-                //             reconnect();
-                //         }, 11000);
-                //     }, 4000);
-                // }
-                // reconnect();
+                if (getParam("disconnect") == "1") {
+                    function reconnect() {
+                        setTimeout(function() {
+                            centrifuge.disconnect();
+                            setTimeout(function(){
+                                reconnect();
+                            }, 11000);
+                        }, 4000);
+                    }
+                    reconnect();
+                }
 
-                var counter = 0
-                setInterval(function(){
-                    sub.publish({"input": counter});
-                    counter++
-                }, 50);
+                if (getParam("publish") == "1") {
+                    var publishInterval = parseInt(getParam("publishInterval")) || 1000;
+                    var counter = 0
+                    setInterval(function(){
+                        sub.publish({"input": counter});
+                        counter++
+                    }, publishInterval);
+                }
             });
         </script>
     </head>

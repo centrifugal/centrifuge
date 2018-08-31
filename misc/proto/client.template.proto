@@ -118,15 +118,13 @@ message RefreshResult {
 message SubscribeRequest {
     string channel = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "channel"]{{end}};
     bool recover = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recover"]{{end}};
-    string from_uid = 3{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "FromUID", (gogoproto.jsontag) = "from_uid,omitempty"]{{end}};
-    string from_id = 4{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "FromID", (gogoproto.jsontag) = "from_id,omitempty"]{{end}};
-    uint32 since = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "since"]{{end}};
-    string token = 6{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "token"]{{end}};
+    string since = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "since"]{{end}};
+    string token = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "token"]{{end}};
 }
 
 message SubscribeResult {
-    string last_uid = 1{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "LastUID", (gogoproto.jsontag) = "last_uid,omitempty"]{{end}};
-    string last_id = 2{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "LastID", (gogoproto.jsontag) = "last_id,omitempty"]{{end}};
+    bool recoverable = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recoverable,omitempty"]{{end}};
+    string last = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "last,omitempty"]{{end}};
     bool recovered = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recovered,omitempty"]{{end}};
     repeated Publication publications = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "publications,omitempty"]{{end}};
     bool expires = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
