@@ -87,15 +87,15 @@ func (e *TestEngine) history(ch string, limit int) ([]*proto.Publication, error)
 	return []*proto.Publication{}, nil
 }
 
-func (e *TestEngine) historyIndex(ch string) (channelTop, error) {
-	return channelTop{}, nil
+func (e *TestEngine) historyLastID(ch string) (uint64, error) {
+	return 0, nil
 }
 
 func (e *TestEngine) removeHistory(ch string) error {
 	return nil
 }
 
-func (e *TestEngine) recoverHistory(ch string, fromID uint64, fromUID string) ([]*proto.Publication, bool, error) {
+func (e *TestEngine) recoverHistory(ch string, fromID uint64) ([]*proto.Publication, bool, error) {
 	return []*proto.Publication{}, false, nil
 }
 

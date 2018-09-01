@@ -368,7 +368,7 @@ func BenchmarkMemoryEngineHistoryRecoverParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := e.recoverHistory("channel", uint64(numMessages-5), "uid"+strconv.Itoa(numMessages-5))
+			_, _, err := e.recoverHistory("channel", uint64(numMessages-5))
 			if err != nil {
 				panic(err)
 			}

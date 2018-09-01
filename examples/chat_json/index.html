@@ -16,7 +16,7 @@
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            var channel = "chat_index";
+            var channel = "chat:index";
 
             function getParam(name, url) {
                 if (!url) url = window.location.href;

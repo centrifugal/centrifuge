@@ -544,9 +544,9 @@ func (e *RedisEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.shards[e.shardIndex(ch)].History(ch, limit)
 }
 
-// HistoryIndex - see engine interface description.
-func (e *RedisEngine) historyIndex(ch string) (uint64, error) {
-	return e.shards[e.shardIndex(ch)].HistoryIndex(ch)
+// HistoryLastID - see engine interface description.
+func (e *RedisEngine) historyLastID(ch string) (uint64, error) {
+	return e.shards[e.shardIndex(ch)].HistoryLastID(ch)
 }
 
 // RecoverHistory - see engine interface description.
@@ -1282,7 +1282,7 @@ func (e *shard) History(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *shard) HistoryIndex(ch string) (uint64, error) {
+func (e *shard) HistoryLastID(ch string) (uint64, error) {
 	historyIndexKey := e.getHistoryIndexKey(ch)
 	dr := newDataRequest(dataOpHistoryIndex, []interface{}{historyIndexKey}, true)
 	e.dataCh <- dr

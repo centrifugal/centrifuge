@@ -296,8 +296,7 @@ func TestClientSubscribe(t *testing.T) {
 	})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, subscribeResp.Error)
-	assert.Empty(t, subscribeResp.Result.LastUID)
-	assert.Empty(t, subscribeResp.Result.LastID)
+	assert.Empty(t, subscribeResp.Result.Last)
 	assert.False(t, subscribeResp.Result.Recovered)
 	assert.Empty(t, subscribeResp.Result.Publications)
 	assert.Equal(t, 1, len(client.Channels()))
@@ -412,7 +411,11 @@ func TestClientSubscribeLast(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+
 	client, _ := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	result := subscribeClient(t, client, "test")
+	assert.Equal(t, "0", result.Last)
 
 	for i := 0; i < 10; i++ {
 		node.Publish("test", &Publication{
@@ -421,9 +424,10 @@ func TestClientSubscribeLast(t *testing.T) {
 		})
 	}
 
+	client, _ = newClient(newCtx, node, transport)
 	connectClient(t, client)
-	result := subscribeClient(t, client, "test")
-	assert.Equal(t, "9", result.LastUID)
+	result = subscribeClient(t, client, "test")
+	assert.Equal(t, "10", result.Last)
 }
 
 var recoverTests = []struct {
@@ -475,8 +479,7 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 			subscribeResp, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 				Channel: "test",
 				Recover: true,
-				FromID:  fmt.Sprintf("%d", tt.FromID),
-				FromUID: tt.FromUID,
+				Since:   fmt.Sprintf("%d", tt.FromID),
 			})
 			assert.Nil(t, disconnect)
 			assert.Nil(t, subscribeResp.Error)

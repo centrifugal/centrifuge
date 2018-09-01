@@ -17,6 +17,7 @@ type MemoryEngine struct {
 	eventHandler EngineEventHandler
 	presenceHub  *presenceHub
 	historyHub   *historyHub
+	// db           *badger.DB
 }
 
 // MemoryEngineConfig is a memory engine config.
@@ -24,10 +25,18 @@ type MemoryEngineConfig struct{}
 
 // NewMemoryEngine initializes Memory Engine.
 func NewMemoryEngine(n *Node, conf MemoryEngineConfig) (*MemoryEngine, error) {
+	// opts := badger.DefaultOptions
+	// opts.Dir = "/tmp/centrifuge"
+	// opts.ValueDir = "/tmp/centrifuge"
+	// db, err := badger.Open(opts)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
 	e := &MemoryEngine{
 		node:        n,
 		presenceHub: newPresenceHub(),
 		historyHub:  newHistoryHub(),
+		// db:          db,
 	}
 	e.historyHub.initialize()
 	return e, nil
@@ -40,6 +49,10 @@ func (e *MemoryEngine) run(h EngineEventHandler) error {
 	return nil
 }
 
+// func (e *MemoryEngine) shutdown(h EngineEventHandler) error {
+// 	return e.db.Close()
+// }
+
 // Publish adds message into history hub and calls node ClientMsg method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
 func (e *MemoryEngine) publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
@@ -51,8 +64,6 @@ func (e *MemoryEngine) publish(ch string, pub *Publication, opts *ChannelOptions
 		if err != nil {
 			e.node.logger.log(newLogEntry(LogLevelError, "error adding into history hub", map[string]interface{}{"error": err.Error()}))
 		}
-		top := e.historyHub.incTop(ch)
-		pub.ID = top
 	}
 
 	eChan := make(chan error, 1)
@@ -122,9 +133,8 @@ func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) historyIndex(ch string) (uint64, error) {
-	top := e.historyHub.getTop(ch)
-	return top, nil
+func (e *MemoryEngine) historyLastID(ch string) (uint64, error) {
+	return e.historyHub.getLastID(ch), nil
 }
 
 // RecoverHistory - see engine interface description.
@@ -251,6 +261,8 @@ type historyHub struct {
 	queue     priority.Queue
 	nextCheck int64
 
+	// db *badger.DB
+
 	topsMu sync.RWMutex
 	tops   map[string]uint64
 }
@@ -260,7 +272,8 @@ func newHistoryHub() *historyHub {
 		history:   make(map[string]historyItem),
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
-		tops:      make(map[string]uint64),
+		// db:        db,
+		tops: make(map[string]uint64),
 	}
 }
 
@@ -300,7 +313,7 @@ func (h *historyHub) expire() {
 	}
 }
 
-func (h *historyHub) incTop(ch string) uint64 {
+func (h *historyHub) nextID(ch string) uint64 {
 	var val uint64
 	h.topsMu.Lock()
 	top, ok := h.tops[ch]
@@ -316,7 +329,7 @@ func (h *historyHub) incTop(ch string) uint64 {
 	return val
 }
 
-func (h *historyHub) getTop(ch string) uint64 {
+func (h *historyHub) getLastID(ch string) uint64 {
 	h.topsMu.Lock()
 	defer h.topsMu.Unlock()
 	top, ok := h.tops[ch]
@@ -351,9 +364,11 @@ func (h *historyHub) touch(ch string, opts *ChannelOptions) {
 	}
 }
 
-func (h *historyHub) add(ch string, msg *Publication, opts *ChannelOptions, hasSubscribers bool) error {
+func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions, hasSubscribers bool) error {
 	h.Lock()
 	defer h.Unlock()
+
+	pub.ID = h.nextID(ch)
 
 	_, ok := h.history[ch]
 
@@ -366,12 +381,12 @@ func (h *historyHub) add(ch string, msg *Publication, opts *ChannelOptions, hasS
 	heap.Push(&h.queue, &priority.Item{Value: ch, Priority: expireAt})
 	if !ok {
 		h.history[ch] = historyItem{
-			messages: []*Publication{msg},
+			messages: []*Publication{pub},
 			expireAt: expireAt,
 		}
 	} else {
 		messages := h.history[ch].messages
-		messages = append([]*Publication{msg}, messages...)
+		messages = append([]*Publication{pub}, messages...)
 		if len(messages) > opts.HistorySize {
 			messages = messages[0:opts.HistorySize]
 		}
@@ -420,13 +435,13 @@ func (h *historyHub) remove(ch string) error {
 }
 
 func (h *historyHub) recover(ch string, fromID uint64) ([]*Publication, bool, error) {
-	top := h.getTop(ch)
+	lastID := h.getLastID(ch)
 
-	if fromID == top {
+	if fromID == lastID {
 		return nil, true, nil
 	}
 
-	if top <= fromID {
+	if lastID <= fromID {
 		return nil, false, nil
 	}
 
