@@ -68,10 +68,11 @@ message ClientInfo {
 }
 
 message Publication {
-    string uid = 1{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"]{{end}};
-    bytes data = 2{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
-    ClientInfo info = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "info,omitempty"]{{end}};
-    uint64 id = 4{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id,omitempty"]{{end}};
+    string seq = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "seq,omitempty"]{{end}};
+    string gen = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "gen,omitempty"]{{end}};
+    string uid = 3{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"]{{end}};
+    bytes data = 4{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
+    ClientInfo info = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "info,omitempty"]{{end}};
 }
 
 message Join {
@@ -101,7 +102,6 @@ message ConnectResult {
     bool expires = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
     uint32 ttl = 4{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
     bytes data = 5{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false]{{end}};
-    uint32 time = 6{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "time,omitempty"]{{end}};
 }
 
 message RefreshRequest {
@@ -129,7 +129,6 @@ message SubscribeResult {
     repeated Publication publications = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "publications,omitempty"]{{end}};
     bool expires = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};
     uint32 ttl = 6{{if env.Getenv "GOGO"}} [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"]{{end}};
-    uint32 time = 7{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "time,omitempty"]{{end}};
 }
 
 message SubRefreshRequest {
@@ -184,7 +183,6 @@ message PingRequest {
 }
 
 message PingResult {
-    uint32 time = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "time,omitempty"]{{end}};
 }
 
 message RPCRequest{

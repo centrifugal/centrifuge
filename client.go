@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/proto"
@@ -126,7 +125,6 @@ type Client struct {
 	presenceTimer *time.Timer
 
 	disconnect *Disconnect
-	recovery   uint32
 
 	eventHub *ClientEventHub
 }
@@ -1010,7 +1008,6 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		Version: version,
 		Expires: expires,
 		TTL:     ttl,
-		Time:    uint32(time.Now().Unix()), // TODO: int bounds check?
 	}
 
 	resp.Result = res
@@ -1364,31 +1361,10 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
-		res.Time = uint32(time.Now().Unix())
-		atomic.StoreUint32(&c.recovery, 1)
-
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
-			// publications automatically from history (we suppose here that history configured wisely)
-			// based on provided last publication uid seen by client.
-			// if cmd.FromUID == "" && cmd.FromID == "0" { // TODO: fix this
-			// 	// Client wants to recover publications but it seems that there were no
-			// 	// messages in channel history before, so looks like client missed all
-			// 	// existing messages. We can only guarantee that state was successfully
-			// 	// recovered if client passed a since value that fits HistoryLifetime
-			// 	// interval and history contains less messages than HistorySize.
-			// 	publications, err := c.node.History(channel)
-			// 	if err != nil {
-			// 		c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			// 		res.Publications = nil
-			// 		res.Recovered = false
-			// 	} else {
-			// 		res.Publications = publications
-			// 		res.Recovered = false
-			// 	}
-			// } else {
-			fromID, _ := strconv.Atoi(cmd.Since)
-			publications, recovered, err := c.node.recoverHistory(channel, uint64(fromID))
+			// publications automatically from history (we suppose here that history configured wisely).
+			publications, recovered, err := c.node.recoverHistory(channel, cmd.Since)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				res.Publications = nil
@@ -1397,15 +1373,14 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 				res.Publications = publications
 				res.Recovered = recovered
 			}
-			// }
 			recoveredLabel := "no"
 			if res.Recovered {
 				recoveredLabel = "yes"
 			}
 			recoverCount.WithLabelValues(recoveredLabel).Inc()
-		} else {
-			// Client don't want to recover messages yet (fresh connect), we just return last
-			// publication uid here so it could recover later.
+		}
+		if len(res.Publications) == 0 {
+			// Provide client a way to recover messages passing current publication state to it.
 			top, err := c.node.lastPublicationID(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last publication ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -1827,13 +1802,5 @@ func (c *Client) historyCmd(cmd *proto.HistoryRequest) (*proto.HistoryResponse, 
 
 // pingCmd handles ping command from client.
 func (c *Client) pingCmd(cmd *proto.PingRequest) (*proto.PingResponse, *Disconnect) {
-	resp := &proto.PingResponse{}
-	if atomic.LoadUint32(&c.recovery) == 1 {
-		// only pass server time to client in case it has at least one subscription
-		// to channel with recovery enabled.
-		resp.Result = &proto.PingResult{
-			Time: uint32(time.Now().Unix()),
-		}
-	}
-	return resp, nil
+	return &proto.PingResponse{}, nil
 }

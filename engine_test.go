@@ -56,20 +56,15 @@ func (s *testStore) last() (int, string) {
 }
 
 func (s *testStore) recover(seq int, gen string) ([]testMessage, bool) {
+	// Following 2 lines must be atomic.
 	lastSeq, currentGen := s.last()
 	messages := s.get()
 
 	broken := false
 	position := -1
 
-	if seq == 0 {
-		if len(messages) > 0 {
-			if messages[0].Sequence == seq+1 {
-				return messages, gen == currentGen
-			}
-			return messages, false
-		}
-		return nil, gen == currentGen && lastSeq == seq
+	if seq == 0 && len(messages) == 0 {
+		return nil, lastSeq == seq && gen == currentGen
 	}
 
 	for i := 0; i < len(messages); i++ {
@@ -79,6 +74,13 @@ func (s *testStore) recover(seq int, gen string) ([]testMessage, bool) {
 				broken = true
 			}
 			position = i + 1
+			break
+		}
+		if msg.Sequence == seq+1 {
+			if msg.Generation != gen {
+				broken = true
+			}
+			position = i
 			break
 		}
 	}
@@ -107,7 +109,6 @@ func TestCase01(t *testing.T) {
 
 func TestCase02(t *testing.T) {
 	s := newTestStore()
-
 	s.add(testMessage{})
 	messages, recovered := s.recover(0, "1212")
 	assert.Equal(t, 1, len(messages))
@@ -116,7 +117,6 @@ func TestCase02(t *testing.T) {
 
 func TestCase03(t *testing.T) {
 	s := newTestStore()
-
 	seq1, gen := s.add(testMessage{})
 	_, gen = s.add(testMessage{})
 	messages, recovered := s.recover(seq1, gen)
@@ -126,14 +126,10 @@ func TestCase03(t *testing.T) {
 
 func TestCase04(t *testing.T) {
 	s := newTestStore()
-
 	seq1, gen := s.add(testMessage{})
-	_, gen = s.add(testMessage{})
-	_, gen = s.add(testMessage{})
-	_, gen = s.add(testMessage{})
-	_, gen = s.add(testMessage{})
-	_, gen = s.add(testMessage{})
-	_, gen = s.add(testMessage{})
+	for i := 0; i < 6; i++ {
+		_, gen = s.add(testMessage{})
+	}
 	messages, recovered := s.recover(seq1, gen)
 	assert.Equal(t, 5, len(messages))
 	assert.False(t, recovered)
@@ -141,12 +137,10 @@ func TestCase04(t *testing.T) {
 
 func TestCase05(t *testing.T) {
 	s := newTestStore()
-
 	seq1, gen := s.add(testMessage{})
-	_, gen = s.add(testMessage{})
-	_, gen = s.add(testMessage{})
-	_, gen = s.add(testMessage{})
-	_, gen = s.add(testMessage{})
+	for i := 0; i < 4; i++ {
+		_, gen = s.add(testMessage{})
+	}
 	messages, recovered := s.recover(seq1, gen)
 	assert.Equal(t, 4, len(messages))
 	assert.True(t, recovered)
@@ -154,7 +148,6 @@ func TestCase05(t *testing.T) {
 
 func TestCase06(t *testing.T) {
 	s := newTestStore()
-
 	seq, gen := s.add(testMessage{})
 	messages, recovered := s.recover(seq, gen)
 	assert.Equal(t, 0, len(messages))
@@ -163,7 +156,6 @@ func TestCase06(t *testing.T) {
 
 func TestCase07(t *testing.T) {
 	s := newTestStore()
-
 	seq, gen := s.add(testMessage{})
 	time.Sleep(time.Second)
 	messages, recovered := s.recover(seq, gen)
@@ -173,7 +165,6 @@ func TestCase07(t *testing.T) {
 
 func TestCase08(t *testing.T) {
 	s := newTestStore()
-
 	seq, gen := s.add(testMessage{})
 
 	s = newTestStore()
@@ -208,5 +199,32 @@ func TestCase10(t *testing.T) {
 	time.Sleep(time.Second)
 	messages, recovered := s.recover(seq, gen)
 	assert.Equal(t, 0, len(messages))
+	assert.False(t, recovered)
+}
+
+func TestCase11(t *testing.T) {
+	s := newTestStore()
+	seq, gen := s.last()
+	for i := 0; i < 7; i++ {
+		s.add(testMessage{})
+	}
+	messages, recovered := s.recover(seq, gen)
+	assert.Equal(t, 5, len(messages))
+	assert.False(t, recovered)
+}
+
+func TestCase12(t *testing.T) {
+	s := newTestStore()
+	seq, gen := s.last()
+	for i := 0; i < 3; i++ {
+		s.add(testMessage{})
+	}
+	time.Sleep(time.Second)
+	s.messages = nil
+	for i := 0; i < 3; i++ {
+		s.add(testMessage{})
+	}
+	messages, recovered := s.recover(seq, gen)
+	assert.Equal(t, 3, len(messages))
 	assert.False(t, recovered)
 }

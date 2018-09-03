@@ -40,7 +40,6 @@ type Engine interface {
 	publishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error
 	// PublishControl allows to send control command data to all running nodes.
 	publishControl(data []byte) <-chan error
-
 	// Subscribe node on channel to listen all messages coming from channel.
 	subscribe(ch string) error
 	// Unsubscribe node from channel to stop listening messages from it.
@@ -64,7 +63,7 @@ type Engine interface {
 	// The case when publications can not be fully restored
 	// can happen if old Publications already removed from history
 	// due to size or lifetime limits.
-	recoverHistory(ch string, fromID uint64) ([]*Publication, bool, error)
+	recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

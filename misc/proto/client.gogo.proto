@@ -68,10 +68,11 @@ message ClientInfo {
 }
 
 message Publication {
-    string uid = 1 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
-    bytes data = 2 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
-    ClientInfo info = 3 [(gogoproto.jsontag) = "info,omitempty"];
-    uint64 id = 4 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id,omitempty"];
+    string seq = 1 [(gogoproto.jsontag) = "seq,omitempty"];
+    string gen = 2 [(gogoproto.jsontag) = "gen,omitempty"];
+    string uid = 3 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
+    bytes data = 4 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+    ClientInfo info = 5 [(gogoproto.jsontag) = "info,omitempty"];
 }
 
 message Join {
@@ -101,7 +102,6 @@ message ConnectResult {
     bool expires = 3 [(gogoproto.jsontag) = "expires,omitempty"];
     uint32 ttl = 4 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
     bytes data = 5 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false];
-    uint32 time = 6 [(gogoproto.jsontag) = "time,omitempty"];
 }
 
 message RefreshRequest {
@@ -129,7 +129,6 @@ message SubscribeResult {
     repeated Publication publications = 4 [(gogoproto.jsontag) = "publications,omitempty"];
     bool expires = 5 [(gogoproto.jsontag) = "expires,omitempty"];
     uint32 ttl = 6 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
-    uint32 time = 7 [(gogoproto.jsontag) = "time,omitempty"];
 }
 
 message SubRefreshRequest {
@@ -184,7 +183,6 @@ message PingRequest {
 }
 
 message PingResult {
-    uint32 time = 1 [(gogoproto.jsontag) = "time,omitempty"];
 }
 
 message RPCRequest{

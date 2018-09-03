@@ -550,7 +550,7 @@ func (e *RedisEngine) historyLastID(ch string) (uint64, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *RedisEngine) recoverHistory(ch string, since uint64) ([]*Publication, bool, error) {
+func (e *RedisEngine) recoverHistory(ch string, since string) ([]*Publication, bool, error) {
 	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, since)
 }
 
@@ -765,10 +765,8 @@ func (e *shard) runPubSub() {
 }
 
 func (e *shard) handleRedisClientMessage(chID channelID, data []byte) error {
-	var id uint64
 	parts := bytes.SplitN(data, []byte(":"), 2)
-	idInt, _ := strconv.Atoi(string(parts[0]))
-	id = uint64(idInt)
+	seq := string(parts[0])
 	pushData := parts[1]
 	var push proto.Push
 	err := push.Unmarshal(pushData)
@@ -781,7 +779,7 @@ func (e *shard) handleRedisClientMessage(chID channelID, data []byte) error {
 		if err != nil {
 			return err
 		}
-		pub.ID = id
+		pub.Seq = seq
 		e.eventHandler.HandlePublication(push.Channel, pub)
 	case proto.PushTypeJoin:
 		join, err := e.pushDecoder.DecodeJoin(push.Data)
@@ -1301,37 +1299,45 @@ func (e *shard) HistoryLastID(ch string) (uint64, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *shard) RecoverHistory(ch string, since uint64) ([]*Publication, bool, error) {
+func (e *shard) RecoverHistory(ch string, since string) ([]*Publication, bool, error) {
+
+	lastID, err := e.HistoryLastID(ch)
+	if err != nil {
+		return nil, false, err
+	}
 
 	publications, err := e.History(ch, 0)
 	if err != nil {
 		return nil, false, err
 	}
 
-	if len(publications) > 0 {
-		if publications[0].ID == since {
-			return nil, true, nil
-		}
+	startSeq, err := strconv.Atoi(since)
+	if err != nil {
+		return nil, false, err
 	}
 
+	// broken := false
 	position := -1
-	for index, pub := range publications {
-		if pub.ID == since+1 {
-			position = index
+
+	if startSeq == 0 && len(publications) == 0 {
+		return nil, lastID == uint64(startSeq), nil
+	}
+
+	for i := len(publications) - 1; i >= 0; i-- {
+		msg := publications[i]
+		if msg.Seq == since {
+			position = i
+			break
+		}
+		if msg.Seq == fmt.Sprintf("%d", startSeq+1) {
+			position = i - 1
 			break
 		}
 	}
 	if position > -1 {
-		// ID found in history. In this case we can be
-		// sure that all missed publications recovered.
-		return publications[0 : position+1], true, nil
+		return publications[0:position], true, nil
 	}
 
-	// Provided ID not found in history. This means that
-	// client most probably missed too many messages or publications
-	// already expired (or maybe wrong last id provided but
-	// it's not a normal case). So we try to compensate as many as we
-	// can but get caller know that state is not recovered.
 	return publications, false, nil
 }
 
@@ -1409,10 +1415,8 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 			return nil, errors.New("error getting Message value")
 		}
 
-		var id uint64
 		parts := bytes.SplitN(value, []byte(":"), 2)
-		idInt, _ := strconv.Atoi(string(parts[0]))
-		id = uint64(idInt)
+		seq := string(parts[0])
 		pushData := parts[1]
 
 		msg, err := n.pushDecoder.Decode(pushData)
@@ -1428,7 +1432,7 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
-		publication.ID = id
+		publication.Seq = seq
 		msgs[i] = publication
 	}
 	return msgs, nil

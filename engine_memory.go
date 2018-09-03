@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"container/heap"
+	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -138,8 +140,8 @@ func (e *MemoryEngine) historyLastID(ch string) (uint64, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, fromID uint64) ([]*Publication, bool, error) {
-	return e.historyHub.recover(ch, fromID)
+func (e *MemoryEngine) recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, error) {
+	return e.historyHub.recover(ch, sinceSeq)
 }
 
 // RemoveHistory - see engine interface description.
@@ -368,7 +370,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions, hasS
 	h.Lock()
 	defer h.Unlock()
 
-	pub.ID = h.nextID(ch)
+	pub.Seq = fmt.Sprintf("%d", h.nextID(ch))
 
 	_, ok := h.history[ch]
 
@@ -406,7 +408,10 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions, hasS
 func (h *historyHub) get(ch string, limit int) ([]*Publication, error) {
 	h.RLock()
 	defer h.RUnlock()
+	return h.getUnsafe(ch, limit)
+}
 
+func (h *historyHub) getUnsafe(ch string, limit int) ([]*Publication, error) {
 	hItem, ok := h.history[ch]
 	if !ok {
 		// return empty slice
@@ -434,50 +439,43 @@ func (h *historyHub) remove(ch string) error {
 	return nil
 }
 
-func (h *historyHub) recover(ch string, fromID uint64) ([]*Publication, bool, error) {
+func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, error) {
+	h.RLock()
+	defer h.RUnlock()
+
 	lastID := h.getLastID(ch)
 
-	if fromID == lastID {
-		return nil, true, nil
-	}
-
-	if lastID <= fromID {
-		return nil, false, nil
-	}
-
-	publications, err := h.get(ch, 0)
+	publications, err := h.getUnsafe(ch, 0)
 	if err != nil {
 		return nil, false, err
 	}
 
-	if len(publications) > 0 {
-		if publications[0].ID == fromID {
-			return nil, true, nil
-		}
-		if publications[0].ID < fromID {
-			return nil, false, nil
-		}
+	startSeq, err := strconv.Atoi(sinceSeq)
+	if err != nil {
+		return nil, false, err
 	}
 
+	// broken := false
 	position := -1
+
+	if startSeq == 0 && len(publications) == 0 {
+		return nil, lastID == uint64(startSeq), nil
+	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
 		msg := publications[i]
-		if msg.ID == fromID+1 {
+		if msg.Seq == sinceSeq {
 			position = i
+			break
+		}
+		if msg.Seq == fmt.Sprintf("%d", startSeq+1) {
+			position = i - 1
 			break
 		}
 	}
 	if position > -1 {
-		// ID found in history. In this case we can be
-		// sure that all missed publications recovered.
-		return publications[0 : position+1], true, nil
+		return publications[0:position], true, nil
 	}
 
-	// Provided ID not found in history. This means that
-	// client most probably missed too many messages or publications
-	// already expired (or maybe wrong last id provided but
-	// it's not a normal case). So we try to compensate as many as we
-	// can but get caller know that state is not recovered.
 	return publications, false, nil
 }

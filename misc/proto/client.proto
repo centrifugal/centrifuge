@@ -59,10 +59,11 @@ message ClientInfo {
 }
 
 message Publication {
-    string uid = 1;
-    bytes data = 2;
-    ClientInfo info = 3;
-    uint64 id = 4;
+    string seq = 1;
+    string gen = 2;
+    string uid = 3;
+    bytes data = 4;
+    ClientInfo info = 5;
 }
 
 message Join {
@@ -92,7 +93,6 @@ message ConnectResult {
     bool expires = 3;
     uint32 ttl = 4;
     bytes data = 5;
-    uint32 time = 6;
 }
 
 message RefreshRequest {
@@ -120,7 +120,6 @@ message SubscribeResult {
     repeated Publication publications = 4;
     bool expires = 5;
     uint32 ttl = 6;
-    uint32 time = 7;
 }
 
 message SubRefreshRequest {
@@ -175,7 +174,6 @@ message PingRequest {
 }
 
 message PingResult {
-    uint32 time = 1;
 }
 
 message RPCRequest{

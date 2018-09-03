@@ -18,8 +18,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
 	"github.com/centrifugal/centrifuge/internal/uuid"
-
-	"github.com/nats-io/nuid"
 )
 
 // Node is a heart of centrifuge library – it internally keeps and manages
@@ -361,11 +359,6 @@ func (n *Node) PublishAsync(ch string, pub *Publication) <-chan error {
 	}
 
 	messagesSentCount.WithLabelValues("publication").Inc()
-
-	if pub.UID == "" {
-		pub.UID = nuid.Next()
-	}
-
 	return n.engine.publish(ch, pub, &chOpts)
 }
 
@@ -599,9 +592,9 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, fromID uint64) ([]*Publication, bool, error) {
+func (n *Node) recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
-	return n.engine.recoverHistory(ch, fromID)
+	return n.engine.recoverHistory(ch, sinceSeq)
 }
 
 // RemoveHistory removes channel history.
