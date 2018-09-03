@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/proto"
@@ -126,6 +128,10 @@ type Client struct {
 
 	disconnect *Disconnect
 
+	inSubscribe uint32
+	pubBufferMu sync.Mutex
+	pubBuffer   []*Publication
+
 	eventHub *ClientEventHub
 }
 
@@ -141,6 +147,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 		node:      n,
 		transport: t,
 		eventHub:  &ClientEventHub{},
+		pubBuffer: make([]*Publication, 0),
 	}
 
 	config := n.Config()
@@ -408,6 +415,33 @@ func (c *Client) close(disconnect *Disconnect) error {
 	}
 
 	return nil
+}
+
+func (c *Client) isInSubscribe(ch string) bool {
+	return atomic.LoadUint32(&c.inSubscribe) == 1
+}
+
+func (c *Client) setInSubscribe(ch string) {
+	atomic.StoreUint32(&c.inSubscribe, 1)
+}
+
+func (c *Client) unsetInSubscribe(ch string) {
+	atomic.StoreUint32(&c.inSubscribe, 0)
+}
+
+func (c *Client) writePublication(ch string, pub *Publication, reply *preparedReply) error {
+	if c.isInSubscribe(ch) {
+		c.pubBufferMu.Lock()
+		if c.isInSubscribe(ch) {
+			c.pubBuffer = append(c.pubBuffer, pub)
+		} else {
+			c.pubBufferMu.Unlock()
+			return c.transport.Send(reply)
+		}
+		c.pubBufferMu.Unlock()
+		return nil
+	}
+	return c.transport.Send(reply)
 }
 
 // Lock must be held outside.
@@ -1341,6 +1375,9 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	c.channels[channel] = channelContext
 	c.mu.Unlock()
 
+	c.setInSubscribe(channel)
+	defer c.unsetInSubscribe(channel)
+
 	err := c.node.addSubscription(channel, c)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -1388,6 +1425,14 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 			}
 			res.Last = fmt.Sprintf("%d", top)
 		}
+		c.pubBufferMu.Lock()
+		if len(c.pubBuffer) > 0 {
+			res.Publications = append(res.Publications, c.pubBuffer...)
+			c.pubBuffer = nil
+			sort.Slice(res.Publications, func(i, j int) bool { return res.Publications[i].Seq > res.Publications[j].Seq })
+			res.Publications = sliceUniq(res.Publications)
+		}
+		c.pubBufferMu.Unlock()
 	}
 
 	if chOpts.JoinLeave {
@@ -1398,6 +1443,20 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest) (*proto.SubscribeResp
 	}
 	resp.Result = res
 	return resp, nil
+}
+
+func sliceUniq(s []*Publication) []*Publication {
+	seen := make(map[string]struct{}, len(s))
+	j := 0
+	for _, v := range s {
+		if _, ok := seen[v.Seq]; ok {
+			continue
+		}
+		seen[v.Seq] = struct{}{}
+		s[j] = v
+		j++
+	}
+	return s[:j]
 }
 
 func (c *Client) subRefreshCmd(cmd *proto.SubRefreshRequest) (*proto.SubRefreshResponse, *Disconnect) {

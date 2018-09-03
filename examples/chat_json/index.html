@@ -64,8 +64,7 @@
                         }
                         drawText('Now in this room: ' + count + ' clients');
                     }, function(err) {
-                        console.log("presence error", err);
-                        drawText("Presence error");
+                        drawText("Presence error: " + JSON.stringify(err));
                     });
                 }
 
@@ -106,8 +105,9 @@
                     drawText('Error subscribing on channel ' + err.channel);
                 }
 
+                var count = -1;
+
                 function handleMessage(message) {
-                    console.log("new message received", message);
                     var clientID;
                     if (message.info){
                         clientID = message.info.client;
@@ -115,6 +115,17 @@
                         clientID = null;
                     }
                     var inputText = message.data["input"].toString();
+                    var int = parseInt(inputText);
+                    if (count > -1) {
+                        if (int - count !== 1) {
+                            console.log(int - count, int, count);
+                            count = int;
+                        } else {
+                            count++;
+                        }
+                    } else {
+                        count = int;
+                    }
                     var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
@@ -151,8 +162,8 @@
                             centrifuge.disconnect();
                             setTimeout(function(){
                                 reconnect();
-                            }, 11000);
-                        }, 4000);
+                            }, 1000);
+                        }, 1000);
                     }
                     reconnect();
                 }

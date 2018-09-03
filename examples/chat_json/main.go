@@ -64,7 +64,7 @@ func main() {
 				Presence:        true,
 				JoinLeave:       true,
 				HistoryLifetime: 60,
-				HistorySize:     10,
+				HistorySize:     1000,
 				HistoryRecover:  true,
 			},
 		},

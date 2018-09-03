@@ -259,7 +259,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication) error {
 				}
 				jsonReply = newPreparedReply(reply, proto.EncodingJSON)
 			}
-			c.transport.Send(jsonReply)
+			c.writePublication(channel, pub, jsonReply)
 		} else if enc == proto.EncodingProtobuf {
 			if protobufReply == nil {
 				data, err := proto.GetPushEncoder(enc).EncodePublication(pub)
@@ -275,7 +275,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication) error {
 				}
 				protobufReply = newPreparedReply(reply, proto.EncodingProtobuf)
 			}
-			c.transport.Send(protobufReply)
+			c.writePublication(channel, pub, protobufReply)
 		}
 	}
 	return nil
