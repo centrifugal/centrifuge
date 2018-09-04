@@ -423,8 +423,12 @@ func (h *historyHub) getUnsafe(ch string, limit int) ([]*Publication, error) {
 		return []*Publication{}, nil
 	}
 	if limit == 0 || limit >= len(hItem.messages) {
-		return hItem.messages, nil
+		pubs := make([]*Publication, len(hItem.messages))
+		copy(pubs, hItem.messages)
+		return pubs, nil
 	}
+	pubs := make([]*Publication, len(hItem.messages[:limit]))
+	copy(pubs, hItem.messages[:limit])
 	return hItem.messages[:limit], nil
 }
 
@@ -469,7 +473,7 @@ func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, 
 			break
 		}
 		if msg.Seq == fmt.Sprintf("%d", startSeq+1) {
-			position = i - 1
+			position = i + 1
 			break
 		}
 	}

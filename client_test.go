@@ -793,3 +793,15 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 	assert.Nil(t, reply)
 	assert.Equal(t, DisconnectBadRequest, disconnect)
 }
+
+func TestUnique(t *testing.T) {
+	pubs := []*Publication{
+		&Publication{Seq: "101"},
+		&Publication{Seq: "100"},
+		&Publication{Seq: "99"},
+		&Publication{Seq: "98"},
+		&Publication{Seq: "98"},
+	}
+	pubs = sliceUniq(pubs)
+	assert.Equal(t, 4, len(pubs))
+}

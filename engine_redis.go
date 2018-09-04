@@ -1330,7 +1330,7 @@ func (e *shard) RecoverHistory(ch string, since string) ([]*Publication, bool, e
 			break
 		}
 		if msg.Seq == fmt.Sprintf("%d", startSeq+1) {
-			position = i - 1
+			position = i + 1
 			break
 		}
 	}

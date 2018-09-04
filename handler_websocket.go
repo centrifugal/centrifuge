@@ -338,7 +338,6 @@ func handleClientData(n *Node, c *Client, data []byte, transport Transport, writ
 
 	encoder := proto.GetReplyEncoder(enc)
 	decoder := proto.GetCommandDecoder(enc, data)
-	var numReplies int
 
 	for {
 		cmd, err := decoder.Decode()
@@ -352,7 +351,33 @@ func handleClientData(n *Node, c *Client, data []byte, transport Transport, writ
 			proto.PutReplyEncoder(enc, encoder)
 			return false
 		}
-		rep, disconnect := c.handle(cmd)
+		var encodeErr error
+		write := func(rep *proto.Reply) error {
+			encodeErr = encoder.Encode(rep)
+			if encodeErr != nil {
+				n.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
+			}
+			return encodeErr
+		}
+		flush := func() error {
+			buf := encoder.Finish()
+			if len(buf) > 0 {
+				disconnect := writer.write(buf)
+				if disconnect != nil {
+					if n.logger.enabled(LogLevelDebug) {
+						n.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+					}
+					c.close(disconnect)
+					proto.PutCommandDecoder(enc, decoder)
+					proto.PutReplyEncoder(enc, encoder)
+					return fmt.Errorf("flush error")
+				}
+			}
+			encoder.Reset()
+			return nil
+
+		}
+		disconnect := c.handle(cmd, write, flush)
 		if disconnect != nil {
 			n.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			c.close(disconnect)
@@ -360,22 +385,16 @@ func handleClientData(n *Node, c *Client, data []byte, transport Transport, writ
 			proto.PutReplyEncoder(enc, encoder)
 			return false
 		}
-		if rep != nil {
-			if rep.Error != nil {
-				n.logger.log(newLogEntry(LogLevelInfo, "error in reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Error()}))
-			}
-			err = encoder.Encode(rep)
-			numReplies++
-			if err != nil {
-				n.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-				c.close(DisconnectServerError)
-				return false
-			}
+
+		if encodeErr != nil {
+			c.close(DisconnectServerError)
+			return false
 		}
 	}
 
-	if numReplies > 0 {
-		disconnect := writer.write(encoder.Finish())
+	buf := encoder.Finish()
+	if len(buf) > 0 {
+		disconnect := writer.write(buf)
 		if disconnect != nil {
 			if n.logger.enabled(LogLevelDebug) {
 				n.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
