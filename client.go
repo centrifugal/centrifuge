@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -442,6 +443,90 @@ func (c *Client) clientInfo(ch string) *proto.ClientInfo {
 		ConnInfo: c.info,
 		ChanInfo: channelInfo,
 	}
+}
+
+// common data handling logic for Websocket and Sockjs handlers.
+func (c *Client) handleRawData(data []byte, writer *writer) bool {
+	if len(data) == 0 {
+		c.node.logger.log(newLogEntry(LogLevelError, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
+		c.close(DisconnectBadRequest)
+		return false
+	}
+
+	enc := c.transport.Encoding()
+
+	encoder := proto.GetReplyEncoder(enc)
+	decoder := proto.GetCommandDecoder(enc, data)
+
+	for {
+		cmd, err := decoder.Decode()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+			c.close(DisconnectBadRequest)
+			proto.PutCommandDecoder(enc, decoder)
+			proto.PutReplyEncoder(enc, encoder)
+			return false
+		}
+		var encodeErr error
+		write := func(rep *proto.Reply) error {
+			encodeErr = encoder.Encode(rep)
+			if encodeErr != nil {
+				c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
+			}
+			return encodeErr
+		}
+		flush := func() error {
+			buf := encoder.Finish()
+			if len(buf) > 0 {
+				disconnect := writer.write(buf)
+				if disconnect != nil {
+					if c.node.logger.enabled(LogLevelDebug) {
+						c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+					}
+					c.close(disconnect)
+					proto.PutCommandDecoder(enc, decoder)
+					proto.PutReplyEncoder(enc, encoder)
+					return fmt.Errorf("flush error")
+				}
+			}
+			encoder.Reset()
+			return nil
+		}
+		disconnect := c.handle(cmd, write, flush)
+		if disconnect != nil {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			c.close(disconnect)
+			proto.PutCommandDecoder(enc, decoder)
+			proto.PutReplyEncoder(enc, encoder)
+			return false
+		}
+		if encodeErr != nil {
+			c.close(DisconnectServerError)
+			return false
+		}
+	}
+
+	buf := encoder.Finish()
+	if len(buf) > 0 {
+		disconnect := writer.write(buf)
+		if disconnect != nil {
+			if c.node.logger.enabled(LogLevelDebug) {
+				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			}
+			c.close(disconnect)
+			proto.PutCommandDecoder(enc, decoder)
+			proto.PutReplyEncoder(enc, encoder)
+			return false
+		}
+	}
+
+	proto.PutCommandDecoder(enc, decoder)
+	proto.PutReplyEncoder(enc, encoder)
+
+	return true
 }
 
 // handle dispatches Command into correct command handler.
@@ -1407,7 +1492,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, writeFn func(*proto.R
 		}
 		if len(res.Publications) == 0 {
 			// Provide client a way to recover messages passing current publication state to it.
-			top, err := c.node.lastPublicationID(channel)
+			seq, err := c.node.lastPublicationSeq(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last publication ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				if chOpts.HistoryRecover {
@@ -1415,7 +1500,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, writeFn func(*proto.R
 				}
 				return DisconnectServerError
 			}
-			res.Last = fmt.Sprintf("%d", top)
+			res.Last = fmt.Sprintf("%d", seq)
 		}
 		c.pubBufferMu.Lock()
 		pubBufferLocked = true

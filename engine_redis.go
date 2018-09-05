@@ -544,9 +544,9 @@ func (e *RedisEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.shards[e.shardIndex(ch)].History(ch, limit)
 }
 
-// HistoryLastID - see engine interface description.
-func (e *RedisEngine) historyLastID(ch string) (uint64, error) {
-	return e.shards[e.shardIndex(ch)].HistoryLastID(ch)
+// HistorySequence - see engine interface description.
+func (e *RedisEngine) historySequence(ch string) (uint64, error) {
+	return e.shards[e.shardIndex(ch)].HistorySequence(ch)
 }
 
 // RecoverHistory - see engine interface description.
@@ -1280,7 +1280,7 @@ func (e *shard) History(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *shard) HistoryLastID(ch string) (uint64, error) {
+func (e *shard) HistorySequence(ch string) (uint64, error) {
 	historyIndexKey := e.getHistoryIndexKey(ch)
 	dr := newDataRequest(dataOpHistoryIndex, []interface{}{historyIndexKey}, true)
 	e.dataCh <- dr
@@ -1301,7 +1301,7 @@ func (e *shard) HistoryLastID(ch string) (uint64, error) {
 // RecoverHistory - see engine interface description.
 func (e *shard) RecoverHistory(ch string, since string) ([]*Publication, bool, error) {
 
-	lastID, err := e.HistoryLastID(ch)
+	lastSeq, err := e.HistorySequence(ch)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1320,7 +1320,7 @@ func (e *shard) RecoverHistory(ch string, since string) ([]*Publication, bool, e
 	position := -1
 
 	if startSeq == 0 && len(publications) == 0 {
-		return nil, lastID == uint64(startSeq), nil
+		return nil, lastSeq == uint64(startSeq), nil
 	}
 
 	for i := len(publications) - 1; i >= 0; i-- {

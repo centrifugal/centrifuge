@@ -604,9 +604,9 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 // lastPublicationUID return last message id for channel.
-func (n *Node) lastPublicationID(ch string) (uint64, error) {
-	actionCount.WithLabelValues("last_publication_id").Inc()
-	top, err := n.engine.historyLastID(ch)
+func (n *Node) lastPublicationSeq(ch string) (uint64, error) {
+	actionCount.WithLabelValues("last_publication_seq").Inc()
+	top, err := n.engine.historySequence(ch)
 	if err != nil {
 		return 0, err
 	}

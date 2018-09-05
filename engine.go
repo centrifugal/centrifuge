@@ -55,7 +55,7 @@ type Engine interface {
 	// last (most recent) message only, 2 - two last messages etc.
 	history(ch string, limit int) ([]*Publication, error)
 	//
-	historyLastID(ch string) (uint64, error)
+	historySequence(ch string) (uint64, error)
 	// recoverHistory allows to recover missed messages starting
 	// from last seen Publication UID provided by client. This method
 	// should return as many Publications as possible and boolean value

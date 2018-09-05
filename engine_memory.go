@@ -135,8 +135,8 @@ func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) historyLastID(ch string) (uint64, error) {
-	return e.historyHub.getLastID(ch), nil
+func (e *MemoryEngine) historySequence(ch string) (uint64, error) {
+	return e.historyHub.getSequence(ch), nil
 }
 
 // RecoverHistory - see engine interface description.
@@ -331,7 +331,7 @@ func (h *historyHub) nextID(ch string) uint64 {
 	return val
 }
 
-func (h *historyHub) getLastID(ch string) uint64 {
+func (h *historyHub) getSequence(ch string) uint64 {
 	h.topsMu.Lock()
 	defer h.topsMu.Unlock()
 	top, ok := h.tops[ch]
@@ -447,7 +447,7 @@ func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, 
 	h.RLock()
 	defer h.RUnlock()
 
-	lastID := h.getLastID(ch)
+	lastSeq := h.getSequence(ch)
 
 	publications, err := h.getUnsafe(ch, 0)
 	if err != nil {
@@ -463,7 +463,7 @@ func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, 
 	position := -1
 
 	if startSeq == 0 && len(publications) == 0 {
-		return nil, lastID == uint64(startSeq), nil
+		return nil, lastSeq == uint64(startSeq), nil
 	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
