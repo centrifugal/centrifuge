@@ -592,7 +592,7 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, error) {
+func (n *Node) recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
 	return n.engine.recoverHistory(ch, sinceSeq)
 }

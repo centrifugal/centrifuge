@@ -436,17 +436,15 @@ func (c *Client) isInSubscribe(ch string) bool {
 	return false
 }
 
-func (c *Client) setInSubscribe(ch string) {
+func (c *Client) setInSubscribe(ch string, flag bool) {
 	c.inSubscribeChMu.Lock()
-	atomic.StoreUint32(&c.inSubscribe, 1)
-	c.inSubscribeCh = ch
-	c.inSubscribeChMu.Unlock()
-}
-
-func (c *Client) unsetInSubscribe(ch string) {
-	c.inSubscribeChMu.Lock()
-	atomic.StoreUint32(&c.inSubscribe, 0)
-	c.inSubscribeCh = ""
+	if flag {
+		atomic.StoreUint32(&c.inSubscribe, 1)
+		c.inSubscribeCh = ch
+	} else {
+		atomic.StoreUint32(&c.inSubscribe, 0)
+		c.inSubscribeCh = ""
+	}
 	c.inSubscribeChMu.Unlock()
 }
 
@@ -1458,14 +1456,14 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, write func(*proto.Rep
 	c.mu.Unlock()
 
 	if chOpts.HistoryRecover {
-		c.setInSubscribe(channel)
+		c.setInSubscribe(channel, true)
 	}
 
 	err := c.node.addSubscription(channel, c)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		if chOpts.HistoryRecover {
-			c.unsetInSubscribe(channel)
+			c.setInSubscribe(channel, false)
 		}
 		return DisconnectServerError
 	}
@@ -1479,7 +1477,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, write func(*proto.Rep
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error adding presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			if chOpts.HistoryRecover {
-				c.unsetInSubscribe(channel)
+				c.setInSubscribe(channel, false)
 			}
 			return DisconnectServerError
 		}
@@ -1492,7 +1490,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, write func(*proto.Rep
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			publications, recovered, err := c.node.recoverHistory(channel, cmd.Since)
+			publications, recovered, _, err := c.node.recoverHistory(channel, cmd.Since)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				res.Publications = nil
@@ -1507,26 +1505,22 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, write func(*proto.Rep
 			}
 			recoverCount.WithLabelValues(recoveredLabel).Inc()
 		}
-		if len(res.Publications) == 0 {
+		if !res.Recovered {
 			// Provide client a way to recover messages passing current publication state to it.
 			seq, err := c.node.lastPublicationSeq(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last publication ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				if chOpts.HistoryRecover {
-					c.unsetInSubscribe(channel)
+					c.setInSubscribe(channel, false)
 				}
 				return DisconnectServerError
 			}
-			res.Last = fmt.Sprintf("%d", seq)
+			res.Last = strconv.FormatUint(seq, 10)
 		}
 		c.pubBufferMu.Lock()
 		pubBufferLocked = true
 		if len(c.pubBuffer) > 0 {
-			for _, pub := range c.pubBuffer {
-				if pub.Seq != cmd.Since {
-					res.Publications = append(res.Publications, pub)
-				}
-			}
+			res.Publications = append(res.Publications, c.pubBuffer...)
 			c.pubBuffer = nil
 		}
 		sort.Slice(res.Publications, func(i, j int) bool {
@@ -1541,14 +1535,14 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, write func(*proto.Rep
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))
 		if chOpts.HistoryRecover {
-			c.unsetInSubscribe(channel)
+			c.setInSubscribe(channel, false)
 		}
 		return DisconnectServerError
 	}
 	write(&proto.Reply{Result: replyRes})
 	if chOpts.HistoryRecover {
 		flush()
-		c.unsetInSubscribe(channel)
+		c.setInSubscribe(channel, false)
 	}
 	if pubBufferLocked {
 		c.pubBufferMu.Unlock()

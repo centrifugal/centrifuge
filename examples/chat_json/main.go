@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -123,16 +125,16 @@ func main() {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
 
-		// go func() {
-		// 	messageData, _ := json.Marshal("hello client " + client.ID())
-		// 	err := client.Send(messageData)
-		// 	if err != nil {
-		// 		if err == io.EOF {
-		// 			return
-		// 		}
-		// 		log.Fatalln(err.Error())
-		// 	}
-		// }()
+		go func() {
+			messageData, _ := json.Marshal("hello client " + client.ID())
+			err := client.Send(messageData)
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
+				log.Fatalln(err.Error())
+			}
+		}()
 
 		return centrifuge.ConnectReply{
 			Data: []byte(`{"timezone": "Moscow/Europe"}`),

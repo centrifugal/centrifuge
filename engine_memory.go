@@ -140,7 +140,7 @@ func (e *MemoryEngine) historySequence(ch string) (uint64, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, error) {
+func (e *MemoryEngine) recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, error) {
 	return e.historyHub.recover(ch, sinceSeq)
 }
 
@@ -443,7 +443,7 @@ func (h *historyHub) remove(ch string) error {
 	return nil
 }
 
-func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, error) {
+func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, uint64, error) {
 	h.RLock()
 	defer h.RUnlock()
 
@@ -451,19 +451,21 @@ func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, 
 
 	publications, err := h.getUnsafe(ch, 0)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, err
 	}
 
-	startSeq, err := strconv.Atoi(sinceSeq)
+	startSeq, err := strconv.ParseUint(sinceSeq, 10, 64)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, err
 	}
+
+	nextSeq := strconv.FormatUint(startSeq+1, 10)
 
 	// broken := false
 	position := -1
 
 	if startSeq == 0 && len(publications) == 0 {
-		return nil, lastSeq == uint64(startSeq), nil
+		return nil, lastSeq == uint64(startSeq), lastSeq, nil
 	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
@@ -472,14 +474,14 @@ func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, 
 			position = i
 			break
 		}
-		if msg.Seq == fmt.Sprintf("%d", startSeq+1) {
+		if msg.Seq == nextSeq {
 			position = i + 1
 			break
 		}
 	}
 	if position > -1 {
-		return publications[0:position], true, nil
+		return publications[0:position], true, lastSeq, nil
 	}
 
-	return publications, false, nil
+	return publications, false, lastSeq, nil
 }

@@ -63,7 +63,7 @@ type Engine interface {
 	// The case when publications can not be fully restored
 	// can happen if old Publications already removed from history
 	// due to size or lifetime limits.
-	recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, error)
+	recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

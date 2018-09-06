@@ -802,6 +802,6 @@ func TestUnique(t *testing.T) {
 		&Publication{Seq: "98"},
 		&Publication{Seq: "98"},
 	}
-	pubs = sliceUniq(pubs)
+	pubs = sliceUnique(pubs)
 	assert.Equal(t, 4, len(pubs))
 }

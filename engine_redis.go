@@ -550,7 +550,7 @@ func (e *RedisEngine) historySequence(ch string) (uint64, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *RedisEngine) recoverHistory(ch string, since string) ([]*Publication, bool, error) {
+func (e *RedisEngine) recoverHistory(ch string, since string) ([]*Publication, bool, uint64, error) {
 	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, since)
 }
 
@@ -1299,46 +1299,48 @@ func (e *shard) HistorySequence(ch string) (uint64, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *shard) RecoverHistory(ch string, since string) ([]*Publication, bool, error) {
+func (e *shard) RecoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, error) {
 
 	lastSeq, err := e.HistorySequence(ch)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, err
 	}
 
 	publications, err := e.History(ch, 0)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, err
 	}
 
-	startSeq, err := strconv.Atoi(since)
+	startSeq, err := strconv.ParseUint(sinceSeq, 10, 64)
 	if err != nil {
-		return nil, false, err
+		return nil, false, 0, err
 	}
+
+	nextSeq := strconv.FormatUint(startSeq+1, 10)
 
 	// broken := false
 	position := -1
 
 	if startSeq == 0 && len(publications) == 0 {
-		return nil, lastSeq == uint64(startSeq), nil
+		return nil, lastSeq == uint64(startSeq), lastSeq, nil
 	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
 		msg := publications[i]
-		if msg.Seq == since {
+		if msg.Seq == sinceSeq {
 			position = i
 			break
 		}
-		if msg.Seq == fmt.Sprintf("%d", startSeq+1) {
+		if msg.Seq == nextSeq {
 			position = i + 1
 			break
 		}
 	}
 	if position > -1 {
-		return publications[0:position], true, nil
+		return publications[0:position], true, lastSeq, nil
 	}
 
-	return publications, false, nil
+	return publications, false, lastSeq, nil
 }
 
 // RemoveHistory - see engine interface description.
