@@ -264,9 +264,9 @@ type historyHub struct {
 	nextCheck int64
 
 	// db *badger.DB
-
-	topsMu sync.RWMutex
-	tops   map[string]uint64
+	gen         string
+	sequencesMu sync.RWMutex
+	sequences   map[string]uint64
 }
 
 func newHistoryHub() *historyHub {
@@ -275,7 +275,8 @@ func newHistoryHub() *historyHub {
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
 		// db:        db,
-		tops: make(map[string]uint64),
+		gen:       fmt.Sprintf("%d", time.Now().Unix()),
+		sequences: make(map[string]uint64),
 	}
 }
 
@@ -315,29 +316,29 @@ func (h *historyHub) expire() {
 	}
 }
 
-func (h *historyHub) nextID(ch string) uint64 {
+func (h *historyHub) nextSeq(ch string) uint64 {
 	var val uint64
-	h.topsMu.Lock()
-	top, ok := h.tops[ch]
+	h.sequencesMu.Lock()
+	top, ok := h.sequences[ch]
 	if !ok {
 		val = 1
-		h.tops[ch] = val
+		h.sequences[ch] = val
 	} else {
 		top++
-		h.tops[ch] = top
+		h.sequences[ch] = top
 		val = top
 	}
-	h.topsMu.Unlock()
+	h.sequencesMu.Unlock()
 	return val
 }
 
 func (h *historyHub) getSequence(ch string) uint64 {
-	h.topsMu.Lock()
-	defer h.topsMu.Unlock()
-	top, ok := h.tops[ch]
+	h.sequencesMu.Lock()
+	defer h.sequencesMu.Unlock()
+	top, ok := h.sequences[ch]
 	if !ok {
 		var top uint64
-		h.tops[ch] = top
+		h.sequences[ch] = top
 		return top
 	}
 	return top
@@ -370,7 +371,8 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions, hasS
 	h.Lock()
 	defer h.Unlock()
 
-	pub.Seq = fmt.Sprintf("%d", h.nextID(ch))
+	pub.Seq = strconv.FormatUint(h.nextSeq(ch), 10)
+	pub.Gen = h.gen
 
 	_, ok := h.history[ch]
 

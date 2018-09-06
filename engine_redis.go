@@ -332,7 +332,7 @@ var (
 	// 1 round trip to Redis instead of 2.
 	// KEYS[1] - history list key
 	// KEYS[2] - history touch object key
-	// KEYS[3] - history index key
+	// KEYS[3] - history sequence key
 	// ARGV[1] - channel to publish message to
 	// ARGV[2] - message payload
 	// ARGV[3] - history size ltrim right bound
@@ -445,8 +445,8 @@ func (e *shard) getHistoryKey(ch string) channelID {
 	return channelID(e.config.Prefix + ".history.list." + ch)
 }
 
-func (e *shard) getHistoryIndexKey(ch string) channelID {
-	return channelID(e.config.Prefix + ".history.index." + ch)
+func (e *shard) gethistorySequenceKey(ch string) channelID {
+	return channelID(e.config.Prefix + ".history.sequence." + ch)
 }
 
 func (e *shard) getHistoryTouchKey(ch string) channelID {
@@ -917,7 +917,7 @@ const (
 	dataOpRemovePresence
 	dataOpPresence
 	dataOpHistory
-	dataOpHistoryIndex
+	dataOphistorySequence
 	dataOpHistoryRemove
 	dataOpChannels
 	dataOpHistoryTouch
@@ -1016,7 +1016,7 @@ func (e *shard) runDataPipeline() {
 				e.presenceScript.SendHash(conn, drs[i].args...)
 			case dataOpHistory:
 				conn.Send("LRANGE", drs[i].args...)
-			case dataOpHistoryIndex:
+			case dataOphistorySequence:
 				conn.Send("GET", drs[i].args...)
 			case dataOpHistoryRemove:
 				conn.Send("DEL", drs[i].args...)
@@ -1085,7 +1085,7 @@ func (e *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 			message:    byteMessage,
 			historyKey: e.getHistoryKey(ch),
 			touchKey:   e.getHistoryTouchKey(ch),
-			indexKey:   e.getHistoryIndexKey(ch),
+			indexKey:   e.gethistorySequenceKey(ch),
 			opts:       opts,
 			err:        &eChan,
 		}
@@ -1281,8 +1281,8 @@ func (e *shard) History(ch string, limit int) ([]*Publication, error) {
 
 // History - see engine interface description.
 func (e *shard) HistorySequence(ch string) (uint64, error) {
-	historyIndexKey := e.getHistoryIndexKey(ch)
-	dr := newDataRequest(dataOpHistoryIndex, []interface{}{historyIndexKey}, true)
+	historySequenceKey := e.gethistorySequenceKey(ch)
+	dr := newDataRequest(dataOphistorySequence, []interface{}{historySequenceKey}, true)
 	e.dataCh <- dr
 	resp := dr.result()
 	if resp.err != nil {
