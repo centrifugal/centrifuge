@@ -69,10 +69,9 @@ message ClientInfo {
 
 message Publication {
     string seq = 1 [(gogoproto.jsontag) = "seq,omitempty"];
-    string gen = 2 [(gogoproto.jsontag) = "gen,omitempty"];
-    string uid = 3 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
-    bytes data = 4 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
-    ClientInfo info = 5 [(gogoproto.jsontag) = "info,omitempty"];
+    string uid = 2 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
+    bytes data = 3 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+    ClientInfo info = 4 [(gogoproto.jsontag) = "info,omitempty"];
 }
 
 message Join {
@@ -119,7 +118,8 @@ message SubscribeRequest {
     string channel = 1 [(gogoproto.jsontag) = "channel"];
     bool recover = 2 [(gogoproto.jsontag) = "recover"];
     string since = 3 [(gogoproto.jsontag) = "since"];
-    string token = 4 [(gogoproto.jsontag) = "token"];
+    string gen = 4 [(gogoproto.jsontag) = "gen"];
+    string token = 5 [(gogoproto.jsontag) = "token"];
 }
 
 message SubscribeResult {
@@ -129,6 +129,7 @@ message SubscribeResult {
     repeated Publication publications = 4 [(gogoproto.jsontag) = "publications,omitempty"];
     bool expires = 5 [(gogoproto.jsontag) = "expires,omitempty"];
     uint32 ttl = 6 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
+    string gen = 7 [(gogoproto.jsontag) = "gen,omitempty"];
 }
 
 message SubRefreshRequest {

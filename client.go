@@ -1490,14 +1490,17 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, write func(*proto.Rep
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			publications, recovered, _, err := c.node.recoverHistory(channel, cmd.Since)
+			publications, recovered, _, gen, err := c.node.recoverHistory(channel, cmd.Since, cmd.Gen)
 			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error recovering", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				res.Publications = nil
-				res.Recovered = recovered
+				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+				if chOpts.HistoryRecover {
+					c.setInSubscribe(channel, false)
+				}
+				return DisconnectServerError
 			} else {
 				res.Publications = publications
 				res.Recovered = recovered
+				res.Gen = gen
 			}
 			recoveredLabel := "no"
 			if res.Recovered {
@@ -1507,7 +1510,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, write func(*proto.Rep
 		}
 		if !res.Recovered {
 			// Provide client a way to recover messages passing current publication state to it.
-			seq, err := c.node.lastPublicationSeq(channel)
+			seq, gen, err := c.node.lastPublicationSeq(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last publication ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				if chOpts.HistoryRecover {
@@ -1516,6 +1519,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, write func(*proto.Rep
 				return DisconnectServerError
 			}
 			res.Last = strconv.FormatUint(seq, 10)
+			res.Gen = gen
 		}
 		c.pubBufferMu.Lock()
 		pubBufferLocked = true

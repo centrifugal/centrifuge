@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"container/heap"
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -19,7 +18,6 @@ type MemoryEngine struct {
 	eventHandler EngineEventHandler
 	presenceHub  *presenceHub
 	historyHub   *historyHub
-	// db           *badger.DB
 }
 
 // MemoryEngineConfig is a memory engine config.
@@ -27,18 +25,10 @@ type MemoryEngineConfig struct{}
 
 // NewMemoryEngine initializes Memory Engine.
 func NewMemoryEngine(n *Node, conf MemoryEngineConfig) (*MemoryEngine, error) {
-	// opts := badger.DefaultOptions
-	// opts.Dir = "/tmp/centrifuge"
-	// opts.ValueDir = "/tmp/centrifuge"
-	// db, err := badger.Open(opts)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
 	e := &MemoryEngine{
 		node:        n,
 		presenceHub: newPresenceHub(),
 		historyHub:  newHistoryHub(),
-		// db:          db,
 	}
 	e.historyHub.initialize()
 	return e, nil
@@ -135,13 +125,14 @@ func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) historySequence(ch string) (uint64, error) {
-	return e.historyHub.getSequence(ch), nil
+func (e *MemoryEngine) historySequence(ch string) (uint64, string, error) {
+	seq, gen := e.historyHub.getSequence(ch)
+	return seq, gen, nil
 }
 
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, error) {
-	return e.historyHub.recover(ch, sinceSeq)
+func (e *MemoryEngine) recoverHistory(ch string, sinceSeq string, gen string) ([]*Publication, bool, uint64, string, error) {
+	return e.historyHub.recover(ch, sinceSeq, gen)
 }
 
 // RemoveHistory - see engine interface description.
@@ -275,7 +266,7 @@ func newHistoryHub() *historyHub {
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
 		// db:        db,
-		gen:       fmt.Sprintf("%d", time.Now().Unix()),
+		gen:       strconv.FormatInt(time.Now().Unix(), 10),
 		sequences: make(map[string]uint64),
 	}
 }
@@ -332,16 +323,16 @@ func (h *historyHub) nextSeq(ch string) uint64 {
 	return val
 }
 
-func (h *historyHub) getSequence(ch string) uint64 {
+func (h *historyHub) getSequence(ch string) (uint64, string) {
 	h.sequencesMu.Lock()
 	defer h.sequencesMu.Unlock()
 	top, ok := h.sequences[ch]
 	if !ok {
 		var top uint64
 		h.sequences[ch] = top
-		return top
+		return top, h.gen
 	}
-	return top
+	return top, h.gen
 }
 
 func (h *historyHub) touch(ch string, opts *ChannelOptions) {
@@ -372,7 +363,6 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions, hasS
 	defer h.Unlock()
 
 	pub.Seq = strconv.FormatUint(h.nextSeq(ch), 10)
-	pub.Gen = h.gen
 
 	_, ok := h.history[ch]
 
@@ -445,29 +435,28 @@ func (h *historyHub) remove(ch string) error {
 	return nil
 }
 
-func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, uint64, error) {
+func (h *historyHub) recover(ch string, sinceSeq string, gen string) ([]*Publication, bool, uint64, string, error) {
 	h.RLock()
 	defer h.RUnlock()
 
-	lastSeq := h.getSequence(ch)
+	lastSeq, currentGen := h.getSequence(ch)
 
 	publications, err := h.getUnsafe(ch, 0)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, "", err
 	}
 
 	startSeq, err := strconv.ParseUint(sinceSeq, 10, 64)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, "", err
 	}
 
 	nextSeq := strconv.FormatUint(startSeq+1, 10)
 
-	// broken := false
 	position := -1
 
 	if startSeq == 0 && len(publications) == 0 {
-		return nil, lastSeq == uint64(startSeq), lastSeq, nil
+		return nil, lastSeq == uint64(startSeq) && gen == currentGen, lastSeq, gen, nil
 	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
@@ -482,8 +471,8 @@ func (h *historyHub) recover(ch string, sinceSeq string) ([]*Publication, bool, 
 		}
 	}
 	if position > -1 {
-		return publications[0:position], true, lastSeq, nil
+		return publications[0:position], gen == currentGen, lastSeq, gen, nil
 	}
 
-	return publications, false, lastSeq, nil
+	return publications, false, lastSeq, gen, nil
 }

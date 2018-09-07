@@ -592,9 +592,9 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, error) {
+func (n *Node) recoverHistory(ch string, sinceSeq string, gen string) ([]*Publication, bool, uint64, string, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
-	return n.engine.recoverHistory(ch, sinceSeq)
+	return n.engine.recoverHistory(ch, sinceSeq, gen)
 }
 
 // RemoveHistory removes channel history.
@@ -604,13 +604,13 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 // lastPublicationUID return last message id for channel.
-func (n *Node) lastPublicationSeq(ch string) (uint64, error) {
+func (n *Node) lastPublicationSeq(ch string) (uint64, string, error) {
 	actionCount.WithLabelValues("last_publication_seq").Inc()
-	top, err := n.engine.historySequence(ch)
+	seq, gen, err := n.engine.historySequence(ch)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return top, nil
+	return seq, gen, nil
 }
 
 // privateChannel checks if channel private. In case of private channel

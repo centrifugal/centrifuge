@@ -85,6 +85,7 @@ type shard struct {
 	remPresenceScript *redis.Script
 	presenceScript    *redis.Script
 	lpopManyScript    *redis.Script
+	historySeqScript  *redis.Script
 	messagePrefix     string
 
 	pushEncoder proto.PushEncoder
@@ -339,19 +340,20 @@ var (
 	// ARGV[4] - history lifetime
 	// ARGV[5] - history drop inactive flag - "0" or "1"
 	pubScriptSource = `
-local i = redis.call("incr", KEYS[3]) 
-local n = redis.call("publish", ARGV[1], i .. ":" .. ARGV[2])
+local seq = redis.call("incr", KEYS[3])
+local payload = seq .. ":" .. ARGV[2]
+local num_subscribed_nodes = redis.call("publish", ARGV[1], payload)
 local m = 0
-if ARGV[5] == "1" and n == 0 and redis.call("exists", KEYS[2]) == 0 then
-  m = redis.call("lpushx", KEYS[1], i .. ":" .. ARGV[2])
+if ARGV[5] == "1" and num_subscribed_nodes == 0 and redis.call("exists", KEYS[2]) == 0 then
+  m = redis.call("lpushx", KEYS[1], payload)
 else
-  m = redis.call("lpush", KEYS[1], i .. ":" .. ARGV[2])
+  m = redis.call("lpush", KEYS[1], payload)
 end
 if m > 0 then
   redis.call("ltrim", KEYS[1], 0, ARGV[3])
   redis.call("expire", KEYS[1], ARGV[4])
 end
-return n
+return num_subscribed_nodes
 	`
 
 	// KEYS[1] - presence set key
@@ -398,6 +400,21 @@ if #entries > 0 then
 end
 return entries
 	`
+
+	// KEYS[1] - history sequence key
+	// KEYS[2] - history gen key
+	historySeqSource = `
+redis.replicate_commands()
+local seq = redis.call("get", KEYS[1])
+local gen
+if redis.call('EXISTS', KEYS[2]) ~= 0 then
+  gen = redis.call("get", KEYS[2])
+else
+  gen = redis.call('TIME')[1]
+  redis.call("set", KEYS[2], gen)
+end
+return {seq, gen}
+	`
 )
 
 // newShard initializes new Redis shard.
@@ -411,6 +428,7 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
 		lpopManyScript:    redis.NewScript(1, lpopManySource),
+		historySeqScript:  redis.NewScript(2, historySeqSource),
 		pushEncoder:       proto.NewProtobufPushEncoder(),
 		pushDecoder:       proto.NewProtobufPushDecoder(),
 	}
@@ -445,8 +463,12 @@ func (e *shard) getHistoryKey(ch string) channelID {
 	return channelID(e.config.Prefix + ".history.list." + ch)
 }
 
-func (e *shard) gethistorySequenceKey(ch string) channelID {
-	return channelID(e.config.Prefix + ".history.sequence." + ch)
+func (e *shard) gethistorySeqKey(ch string) channelID {
+	return channelID(e.config.Prefix + ".history.seq." + ch)
+}
+
+func (e *shard) gethistoryGenKey(ch string) channelID {
+	return channelID(e.config.Prefix + ".history.gen." + ch)
 }
 
 func (e *shard) getHistoryTouchKey(ch string) channelID {
@@ -545,12 +567,12 @@ func (e *RedisEngine) history(ch string, limit int) ([]*Publication, error) {
 }
 
 // HistorySequence - see engine interface description.
-func (e *RedisEngine) historySequence(ch string) (uint64, error) {
+func (e *RedisEngine) historySequence(ch string) (uint64, string, error) {
 	return e.shards[e.shardIndex(ch)].HistorySequence(ch)
 }
 
 // RecoverHistory - see engine interface description.
-func (e *RedisEngine) recoverHistory(ch string, since string) ([]*Publication, bool, uint64, error) {
+func (e *RedisEngine) recoverHistory(ch string, since string, gen string) ([]*Publication, bool, uint64, string, error) {
 	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, since)
 }
 
@@ -917,7 +939,7 @@ const (
 	dataOpRemovePresence
 	dataOpPresence
 	dataOpHistory
-	dataOphistorySequence
+	dataOphistorySeq
 	dataOpHistoryRemove
 	dataOpChannels
 	dataOpHistoryTouch
@@ -996,6 +1018,14 @@ func (e *shard) runDataPipeline() {
 		return
 	}
 
+	err = e.historySeqScript.Load(conn)
+	if err != nil {
+		e.node.logger.log(newLogEntry(LogLevelError, "error loading history seq Lua", map[string]interface{}{"error": err.Error()}))
+		// Can not proceed if script has not been loaded.
+		conn.Close()
+		return
+	}
+
 	conn.Close()
 
 	var drs []dataRequest
@@ -1016,8 +1046,8 @@ func (e *shard) runDataPipeline() {
 				e.presenceScript.SendHash(conn, drs[i].args...)
 			case dataOpHistory:
 				conn.Send("LRANGE", drs[i].args...)
-			case dataOphistorySequence:
-				conn.Send("GET", drs[i].args...)
+			case dataOphistorySeq:
+				e.historySeqScript.SendHash(conn, drs[i].args...)
 			case dataOpHistoryRemove:
 				conn.Send("DEL", drs[i].args...)
 			case dataOpChannels:
@@ -1085,7 +1115,7 @@ func (e *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 			message:    byteMessage,
 			historyKey: e.getHistoryKey(ch),
 			touchKey:   e.getHistoryTouchKey(ch),
-			indexKey:   e.gethistorySequenceKey(ch),
+			indexKey:   e.gethistorySeqKey(ch),
 			opts:       opts,
 			err:        &eChan,
 		}
@@ -1280,40 +1310,56 @@ func (e *shard) History(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *shard) HistorySequence(ch string) (uint64, error) {
-	historySequenceKey := e.gethistorySequenceKey(ch)
-	dr := newDataRequest(dataOphistorySequence, []interface{}{historySequenceKey}, true)
+func (e *shard) HistorySequence(ch string) (uint64, string, error) {
+	historySeqKey := e.gethistorySeqKey(ch)
+	historyGenKey := e.gethistoryGenKey(ch)
+	dr := newDataRequest(dataOphistorySeq, []interface{}{historySeqKey, historyGenKey}, true)
 	e.dataCh <- dr
 	resp := dr.result()
 	if resp.err != nil {
-		return 0, resp.err
+		return 0, "", resp.err
 	}
-	val, err := redis.Int64(resp.reply, nil)
+	results := resp.reply.([]interface{})
+
+	var seq uint64
+	val, err := redis.Int64(results[0], nil)
 	if err != nil {
-		if err == redis.ErrNil {
-			return 0, nil
+		if err != redis.ErrNil {
+			return 0, "", err
 		}
-		return 0, err
+		seq = 0
+	} else {
+		seq = uint64(val)
 	}
-	return uint64(val), nil
+
+	var gen string
+	gen, err = redis.String(results[1], nil)
+	if err != nil {
+		if err != redis.ErrNil {
+			return 0, "", err
+		}
+		gen = ""
+	}
+
+	return seq, gen, nil
 }
 
 // RecoverHistory - see engine interface description.
-func (e *shard) RecoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, error) {
+func (e *shard) RecoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, string, error) {
 
-	lastSeq, err := e.HistorySequence(ch)
+	lastSeq, _, err := e.HistorySequence(ch)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, "", err
 	}
 
 	publications, err := e.History(ch, 0)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, "", err
 	}
 
 	startSeq, err := strconv.ParseUint(sinceSeq, 10, 64)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, "", err
 	}
 
 	nextSeq := strconv.FormatUint(startSeq+1, 10)
@@ -1322,7 +1368,7 @@ func (e *shard) RecoverHistory(ch string, sinceSeq string) ([]*Publication, bool
 	position := -1
 
 	if startSeq == 0 && len(publications) == 0 {
-		return nil, lastSeq == uint64(startSeq), lastSeq, nil
+		return nil, lastSeq == uint64(startSeq), lastSeq, "", nil
 	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
@@ -1337,10 +1383,10 @@ func (e *shard) RecoverHistory(ch string, sinceSeq string) ([]*Publication, bool
 		}
 	}
 	if position > -1 {
-		return publications[0:position], true, lastSeq, nil
+		return publications[0:position], true, lastSeq, "", nil
 	}
 
-	return publications, false, lastSeq, nil
+	return publications, false, lastSeq, "", nil
 }
 
 // RemoveHistory - see engine interface description.

@@ -55,7 +55,7 @@ type Engine interface {
 	// last (most recent) message only, 2 - two last messages etc.
 	history(ch string, limit int) ([]*Publication, error)
 	//
-	historySequence(ch string) (uint64, error)
+	historySequence(ch string) (uint64, string, error)
 	// recoverHistory allows to recover missed messages starting
 	// from last seen Publication UID provided by client. This method
 	// should return as many Publications as possible and boolean value
@@ -63,7 +63,7 @@ type Engine interface {
 	// The case when publications can not be fully restored
 	// can happen if old Publications already removed from history
 	// due to size or lifetime limits.
-	recoverHistory(ch string, sinceSeq string) ([]*Publication, bool, uint64, error)
+	recoverHistory(ch string, sinceSeq string, gen string) ([]*Publication, bool, uint64, string, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
