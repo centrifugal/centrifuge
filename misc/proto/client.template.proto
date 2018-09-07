@@ -124,7 +124,7 @@ message SubscribeRequest {
 
 message SubscribeResult {
     bool recoverable = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recoverable,omitempty"]{{end}};
-    string last = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "last,omitempty"]{{end}};
+    string seq = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "seq,omitempty"]{{end}};
     bool recovered = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recovered,omitempty"]{{end}};
     repeated Publication publications = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "publications,omitempty"]{{end}};
     bool expires = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "expires,omitempty"]{{end}};

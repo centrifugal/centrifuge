@@ -115,7 +115,7 @@ message SubscribeRequest {
 
 message SubscribeResult {
     bool recoverable = 1;
-    string last = 2;
+    string seq = 2;
     bool recovered = 3;
     repeated Publication publications = 4;
     bool expires = 5;

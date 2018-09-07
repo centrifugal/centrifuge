@@ -124,7 +124,7 @@ message SubscribeRequest {
 
 message SubscribeResult {
     bool recoverable = 1 [(gogoproto.jsontag) = "recoverable,omitempty"];
-    string last = 2 [(gogoproto.jsontag) = "last,omitempty"];
+    string seq = 2 [(gogoproto.jsontag) = "seq,omitempty"];
     bool recovered = 3 [(gogoproto.jsontag) = "recovered,omitempty"];
     repeated Publication publications = 4 [(gogoproto.jsontag) = "publications,omitempty"];
     bool expires = 5 [(gogoproto.jsontag) = "expires,omitempty"];

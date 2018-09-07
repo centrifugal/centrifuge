@@ -603,7 +603,7 @@ func (n *Node) RemoveHistory(ch string) error {
 	return n.engine.removeHistory(ch)
 }
 
-// lastPublicationUID return last message id for channel.
+// lastPublicationSeq return last publication sequence and current generation for channel.
 func (n *Node) lastPublicationSeq(ch string) (uint64, string, error) {
 	actionCount.WithLabelValues("last_publication_seq").Inc()
 	seq, gen, err := n.engine.historySequence(ch)

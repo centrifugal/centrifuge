@@ -43,10 +43,6 @@ ignored = ["github.com/centrifugal/centrifuge/examples*"]
   branch = "master"
 
 [[constraint]]
-  name = "github.com/nats-io/nuid"
-  version = "1.0.0"
-
-[[constraint]]
   name = "github.com/prometheus/client_golang"
   version = "0.8.0"
 

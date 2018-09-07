@@ -95,9 +95,9 @@
                     var rpcRequest = {"method": "getCurrentYear"}
 
                     centrifuge.rpc(rpcRequest).then(function(data){
-                        drawText(JSON.stringify(data))
+                        drawText(JSON.stringify(data));
                     }, function(err) {
-                        drawText(JSON.stringify(err))
+                        drawText("RPC error: " + JSON.stringify(err));
                     });
                 }
 
