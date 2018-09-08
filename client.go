@@ -504,9 +504,9 @@ func (c *Client) handleRawData(data []byte, writer *writer) bool {
 					if c.node.logger.enabled(LogLevelDebug) {
 						c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 					}
-					c.close(disconnect)
 					proto.PutCommandDecoder(enc, decoder)
 					proto.PutReplyEncoder(enc, encoder)
+					c.close(disconnect)
 					return fmt.Errorf("flush error")
 				}
 			}
@@ -1501,6 +1501,11 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
+			_, err := strconv.ParseUint(cmd.Since, 10, 64)
+			if err != nil {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "malformed seq received", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+				return DisconnectBadRequest
+			}
 			publications, recovered, seq, gen, err := c.node.recoverHistory(channel, cmd.Since, cmd.Gen)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -1583,6 +1588,9 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 
 func (c *Client) writePublication(ch string, pub *Publication, reply *preparedReply) error {
 	if c.isInSubscribe(ch) {
+		// Client currently in process of subscribing to this channel. In this case we keep
+		// publications in slice buffer. Publications from this temporary buffer will be sent in
+		// subscribe reply.
 		c.pubBufferMu.Lock()
 		if c.isInSubscribe(ch) {
 			c.pubBuffer = append(c.pubBuffer, pub)
@@ -1593,6 +1601,14 @@ func (c *Client) writePublication(ch string, pub *Publication, reply *preparedRe
 		c.pubBufferMu.Unlock()
 		return nil
 	}
+	return c.transport.Send(reply)
+}
+
+func (c *Client) writeJoin(ch string, reply *preparedReply) error {
+	return c.transport.Send(reply)
+}
+
+func (c *Client) writeLeave(ch string, reply *preparedReply) error {
 	return c.transport.Send(reply)
 }
 

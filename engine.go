@@ -54,7 +54,7 @@ type Engine interface {
 	// messages (though limited by configured history_size). 1 means
 	// last (most recent) message only, 2 - two last messages etc.
 	history(ch string, limit int) ([]*Publication, error)
-	//
+	// historySequence allows to get current sequence and generation of channel.
 	historySequence(ch string) (uint64, string, error)
 	// recoverHistory allows to recover missed messages starting
 	// from last seen Publication UID provided by client. This method

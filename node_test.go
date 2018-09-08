@@ -95,8 +95,12 @@ func (e *TestEngine) removeHistory(ch string) error {
 	return nil
 }
 
-func (e *TestEngine) recoverHistory(ch string, fromID uint64) ([]*proto.Publication, bool, error) {
-	return []*proto.Publication{}, false, nil
+func (e *TestEngine) recoverHistory(ch string, sinceSeq string, gen string) ([]*proto.Publication, bool, uint64, string, error) {
+	return []*proto.Publication{}, false, 0, "", nil
+}
+
+func (e *TestEngine) historySequence(ch string) (uint64, string, error) {
+	return 0, "", nil
 }
 
 func (e *TestEngine) channels() ([]string, error) {
