@@ -105,8 +105,6 @@
                     drawText('Error subscribing on channel ' + err.channel);
                 }
 
-                var count = -1;
-
                 function handleMessage(message) {
                     var clientID;
                     if (message.info){
@@ -115,17 +113,6 @@
                         clientID = null;
                     }
                     var inputText = message.data["input"].toString();
-                    var int = parseInt(inputText);
-                    if (count > -1) {
-                        if (int - count !== 1) {
-                            console.log(int - count, int, count);
-                            count = int;
-                        } else {
-                            count++;
-                        }
-                    } else {
-                        count = int;
-                    }
                     var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
@@ -162,8 +149,8 @@
                             centrifuge.disconnect();
                             setTimeout(function(){
                                 reconnect();
-                            }, 500);
-                        }, 500);
+                            }, 11000);
+                        }, 4000);
                     }
                     reconnect();
                 }
