@@ -1512,7 +1512,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 			}
 
 			currentSeq = recovery.Seq
-			currentGen = recovery.Seq
+			currentGen = recovery.Gen
 			currentEpoch = recovery.Epoch
 
 			res.Publications = publications
@@ -1538,11 +1538,8 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 		}
 
 		res.Epoch = currentEpoch
-		if !res.Recovered {
-			// Provide client a way to recover messages passing current publication state to it.
-			res.Seq = currentSeq
-			res.Gen = currentGen
-		}
+		res.Seq = currentSeq
+		res.Gen = currentGen
 
 		c.pubBufferMu.Lock()
 		pubBufferLocked = true

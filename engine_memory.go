@@ -451,9 +451,13 @@ func (h *historyHub) recover(ch string, since recovery) ([]*Publication, bool, r
 
 	currentSeq, currentGen, currentEpoch := h.getSequence(ch)
 
+	if currentSeq == since.Seq && since.Gen == currentGen && since.Epoch == currentEpoch {
+		return nil, true, recovery{currentSeq, currentGen, currentEpoch}, nil
+	}
+
 	publications, err := h.getUnsafe(ch, 0)
 	if err != nil {
-		return nil, false, recovery{0, 0, ""}, err
+		return nil, false, recovery{}, err
 	}
 
 	nextSeq := since.Seq + 1
@@ -465,11 +469,6 @@ func (h *historyHub) recover(ch string, since recovery) ([]*Publication, bool, r
 	}
 
 	position := -1
-
-	if since.Seq == 0 && since.Gen == 0 && len(publications) == 0 {
-		recovered := currentSeq == since.Seq && since.Gen == currentGen && since.Epoch == currentEpoch
-		return nil, recovered, recovery{currentSeq, currentGen, currentEpoch}, nil
-	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
 		msg := publications[i]

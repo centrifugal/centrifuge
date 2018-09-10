@@ -1353,6 +1353,10 @@ func (e *shard) RecoverHistory(ch string, since recovery) ([]*Publication, bool,
 		return nil, false, recovery{}, err
 	}
 
+	if currentRecovery.Seq == since.Seq && since.Gen == currentRecovery.Gen && since.Epoch == currentRecovery.Epoch {
+		return nil, true, currentRecovery, nil
+	}
+
 	publications, err := e.History(ch, 0)
 	if err != nil {
 		return nil, false, recovery{}, err
@@ -1367,11 +1371,6 @@ func (e *shard) RecoverHistory(ch string, since recovery) ([]*Publication, bool,
 	}
 
 	position := -1
-
-	if since.Seq == 0 && since.Gen == 0 && len(publications) == 0 {
-		recovered := currentRecovery.Seq == since.Seq && since.Gen == currentRecovery.Gen && since.Epoch == currentRecovery.Epoch
-		return nil, recovered, currentRecovery, nil
-	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
 		msg := publications[i]
