@@ -125,14 +125,14 @@ func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) historySequence(ch string) (uint64, string, error) {
-	seq, gen := e.historyHub.getSequence(ch)
-	return seq, gen, nil
+func (e *MemoryEngine) historyRecoveryData(ch string) (recovery, error) {
+	seq, gen, epoch := e.historyHub.getSequence(ch)
+	return recovery{seq, gen, epoch}, nil
 }
 
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, sinceSeq string, gen string) ([]*Publication, bool, uint64, string, error) {
-	return e.historyHub.recover(ch, sinceSeq, gen)
+func (e *MemoryEngine) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+	return e.historyHub.recover(ch, since)
 }
 
 // RemoveHistory - see engine interface description.
@@ -255,7 +255,7 @@ type historyHub struct {
 	nextCheck int64
 
 	// db *badger.DB
-	gen         string
+	epoch       string
 	sequencesMu sync.RWMutex
 	sequences   map[string]uint64
 }
@@ -266,7 +266,7 @@ func newHistoryHub() *historyHub {
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
 		// db:        db,
-		gen:       strconv.FormatInt(time.Now().Unix(), 10),
+		epoch:     strconv.FormatInt(time.Now().Unix(), 10),
 		sequences: make(map[string]uint64),
 	}
 }
@@ -307,7 +307,7 @@ func (h *historyHub) expire() {
 	}
 }
 
-func (h *historyHub) nextSeq(ch string) uint64 {
+func (h *historyHub) next(ch string) (uint32, uint32) {
 	var val uint64
 	h.sequencesMu.Lock()
 	top, ok := h.sequences[ch]
@@ -320,19 +320,24 @@ func (h *historyHub) nextSeq(ch string) uint64 {
 		val = top
 	}
 	h.sequencesMu.Unlock()
-	return val
+	return unpackUint64(val)
 }
 
-func (h *historyHub) getSequence(ch string) (uint64, string) {
+func unpackUint64(val uint64) (uint32, uint32) {
+	return uint32(val), uint32(val >> 32)
+}
+
+func (h *historyHub) getSequence(ch string) (uint32, uint32, string) {
 	h.sequencesMu.Lock()
 	defer h.sequencesMu.Unlock()
-	top, ok := h.sequences[ch]
+	val, ok := h.sequences[ch]
 	if !ok {
 		var top uint64
 		h.sequences[ch] = top
-		return top, h.gen
+		return 0, 0, h.epoch
 	}
-	return top, h.gen
+	seq, gen := unpackUint64(val)
+	return seq, gen, h.epoch
 }
 
 func (h *historyHub) touch(ch string, opts *ChannelOptions) {
@@ -362,7 +367,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions, hasS
 	h.Lock()
 	defer h.Unlock()
 
-	pub.Seq = strconv.FormatUint(h.nextSeq(ch), 10)
+	pub.Seq, pub.Gen = h.next(ch)
 
 	_, ok := h.history[ch]
 
@@ -435,44 +440,51 @@ func (h *historyHub) remove(ch string) error {
 	return nil
 }
 
-func (h *historyHub) recover(ch string, sinceSeq string, gen string) ([]*Publication, bool, uint64, string, error) {
+const (
+	maxSeq = 4294967295
+	maxGen = 4294967295
+)
+
+func (h *historyHub) recover(ch string, since recovery) ([]*Publication, bool, recovery, error) {
 	h.RLock()
 	defer h.RUnlock()
 
-	lastSeq, currentGen := h.getSequence(ch)
+	currentSeq, currentGen, currentEpoch := h.getSequence(ch)
 
 	publications, err := h.getUnsafe(ch, 0)
 	if err != nil {
-		return nil, false, 0, "", err
+		return nil, false, recovery{0, 0, ""}, err
 	}
 
-	startSeq, err := strconv.ParseUint(sinceSeq, 10, 64)
-	if err != nil {
-		return nil, false, 0, "", err
-	}
+	nextSeq := since.Seq + 1
+	nextGen := since.Gen
 
-	nextSeq := strconv.FormatUint(startSeq+1, 10)
+	if nextSeq > maxSeq {
+		nextSeq = 0
+		nextGen = nextGen + 1
+	}
 
 	position := -1
 
-	if startSeq == 0 && len(publications) == 0 {
-		return nil, lastSeq == uint64(startSeq) && gen == currentGen, lastSeq, gen, nil
+	if since.Seq == 0 && since.Gen == 0 && len(publications) == 0 {
+		recovered := currentSeq == since.Seq && since.Gen == currentGen && since.Epoch == currentEpoch
+		return nil, recovered, recovery{currentSeq, currentGen, currentEpoch}, nil
 	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
 		msg := publications[i]
-		if msg.Seq == sinceSeq {
+		if msg.Seq == since.Seq && msg.Gen == since.Gen {
 			position = i
 			break
 		}
-		if msg.Seq == nextSeq {
+		if msg.Seq == nextSeq && msg.Gen == nextGen {
 			position = i + 1
 			break
 		}
 	}
 	if position > -1 {
-		return publications[0:position], gen == currentGen, lastSeq, gen, nil
+		return publications[0:position], since.Epoch == currentEpoch, recovery{currentSeq, currentGen, currentEpoch}, nil
 	}
 
-	return publications, false, lastSeq, gen, nil
+	return publications, false, recovery{currentSeq, currentGen, currentEpoch}, nil
 }

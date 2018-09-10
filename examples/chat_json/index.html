@@ -172,8 +172,11 @@
                     var publishInterval = parseInt(getParam("publishInterval")) || 1000;
                     var counter = 0
                     setInterval(function(){
-                        sub.publish({"input": counter});
-                        counter++
+                        sub.publish({"input": counter.toString()}).then(function() {
+                        }, function(err) {
+                            drawText("Publish error: " + JSON.stringify(err));
+                        });
+                        counter++;
                     }, publishInterval);
                 }
             });

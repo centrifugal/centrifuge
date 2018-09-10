@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -460,7 +459,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	connectClient(t, client)
 
 	result := subscribeClient(t, client, "test")
-	assert.Equal(t, "0", result.Seq)
+	assert.Equal(t, uint32(0), result.Seq)
 
 	for i := 0; i < 10; i++ {
 		node.Publish("test", &Publication{
@@ -472,7 +471,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	client, _ = newClient(newCtx, node, transport)
 	connectClient(t, client)
 	result = subscribeClient(t, client, "test")
-	assert.Equal(t, "10", result.Seq)
+	assert.Equal(t, uint32(10), result.Seq)
 }
 
 var recoverTests = []struct {
@@ -480,7 +479,7 @@ var recoverTests = []struct {
 	HistorySize     int
 	HistoryLifetime int
 	NumPublications int
-	SinceSeq        uint64
+	SinceSeq        uint32
 	NumRecovered    int
 	Sleep           int
 	Recovered       bool
@@ -521,13 +520,13 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 			replies := []*proto.Reply{}
 			rw := testReplyWriter(&replies)
 
-			_, gen, _ := node.engine.historySequence("test")
-			sinceSeq := fmt.Sprintf("%d", tt.SinceSeq)
+			recovery, _ := node.engine.historyRecoveryData("test")
 			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 				Channel: "test",
 				Recover: true,
-				Since:   sinceSeq,
-				Gen:     gen,
+				Seq:     tt.SinceSeq,
+				Gen:     recovery.Gen,
+				Epoch:   recovery.Epoch,
 			}, rw)
 			assert.Nil(t, disconnect)
 			assert.Nil(t, replies[0].Error)
@@ -848,12 +847,17 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 
 func TestUnique(t *testing.T) {
 	pubs := []*Publication{
-		&Publication{Seq: "101"},
-		&Publication{Seq: "100"},
-		&Publication{Seq: "99"},
-		&Publication{Seq: "98"},
-		&Publication{Seq: "98"},
+		&Publication{Seq: 101, Gen: 0},
+		&Publication{Seq: 101, Gen: 1},
+		&Publication{Seq: 101, Gen: 1},
+		&Publication{Seq: 100, Gen: 2},
+		&Publication{Seq: 99},
+		&Publication{Seq: 98},
+		&Publication{Seq: 4294967295, Gen: 0},
+		&Publication{Seq: 4294967295, Gen: 1},
+		&Publication{Seq: 4294967295, Gen: 4294967295},
+		&Publication{Seq: 4294967295, Gen: 4294967295},
 	}
-	pubs = sliceUnique(pubs)
-	assert.Equal(t, 4, len(pubs))
+	pubs = uniquePublications(pubs)
+	assert.Equal(t, 8, len(pubs))
 }

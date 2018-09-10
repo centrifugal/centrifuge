@@ -22,6 +22,13 @@ type EngineEventHandler interface {
 	HandleControl([]byte) error
 }
 
+// recovery contains fields to rely in recovery process.
+type recovery struct {
+	Seq   uint32
+	Gen   uint32
+	Epoch string
+}
+
 // Engine is responsible for PUB/SUB mechanics, channel history and
 // presence information.
 type Engine interface {
@@ -54,8 +61,8 @@ type Engine interface {
 	// messages (though limited by configured history_size). 1 means
 	// last (most recent) message only, 2 - two last messages etc.
 	history(ch string, limit int) ([]*Publication, error)
-	// historySequence allows to get current sequence and generation of channel.
-	historySequence(ch string) (uint64, string, error)
+	// historyRecoveryData allows to get current recovery state for channel.
+	historyRecoveryData(ch string) (recovery, error)
 	// recoverHistory allows to recover missed messages starting
 	// from last seen Publication UID provided by client. This method
 	// should return as many Publications as possible and boolean value
@@ -63,7 +70,7 @@ type Engine interface {
 	// The case when publications can not be fully restored
 	// can happen if old Publications already removed from history
 	// due to size or lifetime limits.
-	recoverHistory(ch string, sinceSeq string, gen string) ([]*Publication, bool, uint64, string, error)
+	recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

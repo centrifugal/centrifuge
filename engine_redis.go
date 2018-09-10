@@ -340,8 +340,8 @@ var (
 	// ARGV[4] - history lifetime
 	// ARGV[5] - history drop inactive flag - "0" or "1"
 	pubScriptSource = `
-local seq = redis.call("incr", KEYS[3])
-local payload = seq .. ":" .. ARGV[2]
+local sequence = redis.call("incr", KEYS[3])
+local payload = sequence .. ":" .. ARGV[2]
 local num_subscribed_nodes = redis.call("publish", ARGV[1], payload)
 local m = 0
 if ARGV[5] == "1" and num_subscribed_nodes == 0 and redis.call("exists", KEYS[2]) == 0 then
@@ -467,8 +467,8 @@ func (e *shard) gethistorySeqKey(ch string) channelID {
 	return channelID(e.config.Prefix + ".history.seq." + ch)
 }
 
-func (e *shard) gethistoryGenKey(ch string) channelID {
-	return channelID(e.config.Prefix + ".history.gen." + ch)
+func (e *shard) gethistoryEpochKey(ch string) channelID {
+	return channelID(e.config.Prefix + ".history.epoch." + ch)
 }
 
 func (e *shard) getHistoryTouchKey(ch string) channelID {
@@ -567,13 +567,13 @@ func (e *RedisEngine) history(ch string, limit int) ([]*Publication, error) {
 }
 
 // HistorySequence - see engine interface description.
-func (e *RedisEngine) historySequence(ch string) (uint64, string, error) {
+func (e *RedisEngine) historyRecoveryData(ch string) (recovery, error) {
 	return e.shards[e.shardIndex(ch)].HistorySequence(ch)
 }
 
 // RecoverHistory - see engine interface description.
-func (e *RedisEngine) recoverHistory(ch string, since string, gen string) ([]*Publication, bool, uint64, string, error) {
-	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, since, gen)
+func (e *RedisEngine) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, since)
 }
 
 // RemoveHistory - see engine interface description.
@@ -788,7 +788,7 @@ func (e *shard) runPubSub() {
 
 func (e *shard) handleRedisClientMessage(chID channelID, data []byte) error {
 	parts := bytes.SplitN(data, []byte(":"), 2)
-	seq := string(parts[0])
+	sequence, _ := strconv.ParseUint(string(parts[0]), 10, 64)
 	pushData := parts[1]
 	var push proto.Push
 	err := push.Unmarshal(pushData)
@@ -801,7 +801,9 @@ func (e *shard) handleRedisClientMessage(chID channelID, data []byte) error {
 		if err != nil {
 			return err
 		}
+		seq, gen := unpackUint64(sequence)
 		pub.Seq = seq
+		pub.Gen = gen
 		e.eventHandler.HandlePublication(push.Channel, pub)
 	case proto.PushTypeJoin:
 		join, err := e.pushDecoder.DecodeJoin(push.Data)
@@ -1310,83 +1312,83 @@ func (e *shard) History(ch string, limit int) ([]*Publication, error) {
 }
 
 // History - see engine interface description.
-func (e *shard) HistorySequence(ch string) (uint64, string, error) {
+func (e *shard) HistorySequence(ch string) (recovery, error) {
 	historySeqKey := e.gethistorySeqKey(ch)
-	historyGenKey := e.gethistoryGenKey(ch)
-	dr := newDataRequest(dataOphistorySeq, []interface{}{historySeqKey, historyGenKey}, true)
+	historyEpochKey := e.gethistoryEpochKey(ch)
+	dr := newDataRequest(dataOphistorySeq, []interface{}{historySeqKey, historyEpochKey}, true)
 	e.dataCh <- dr
 	resp := dr.result()
 	if resp.err != nil {
-		return 0, "", resp.err
+		return recovery{}, resp.err
 	}
 	results := resp.reply.([]interface{})
 
-	var seq uint64
-	val, err := redis.Int64(results[0], nil)
+	sequence, err := redis.Int64(results[0], nil)
 	if err != nil {
 		if err != redis.ErrNil {
-			return 0, "", err
+			return recovery{}, err
 		}
-		seq = 0
-	} else {
-		seq = uint64(val)
+		sequence = 0
 	}
 
-	var gen string
-	gen, err = redis.String(results[1], nil)
+	seq, gen := unpackUint64(uint64(sequence))
+
+	var epoch string
+	epoch, err = redis.String(results[1], nil)
 	if err != nil {
 		if err != redis.ErrNil {
-			return 0, "", err
+			return recovery{}, err
 		}
-		gen = ""
+		epoch = ""
 	}
 
-	return seq, gen, nil
+	return recovery{seq, gen, epoch}, nil
 }
 
 // RecoverHistory - see engine interface description.
-func (e *shard) RecoverHistory(ch string, sinceSeq string, gen string) ([]*Publication, bool, uint64, string, error) {
+func (e *shard) RecoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
 
-	lastSeq, currentGen, err := e.HistorySequence(ch)
+	currentRecovery, err := e.HistorySequence(ch)
 	if err != nil {
-		return nil, false, 0, "", err
+		return nil, false, recovery{}, err
 	}
 
 	publications, err := e.History(ch, 0)
 	if err != nil {
-		return nil, false, 0, "", err
+		return nil, false, recovery{}, err
 	}
 
-	startSeq, err := strconv.ParseUint(sinceSeq, 10, 64)
-	if err != nil {
-		return nil, false, 0, "", err
+	nextSeq := since.Seq + 1
+	nextGen := since.Gen
+
+	if nextSeq > maxSeq {
+		nextSeq = 0
+		nextGen = nextGen + 1
 	}
 
-	nextSeq := strconv.FormatUint(startSeq+1, 10)
-
-	// broken := false
 	position := -1
 
-	if startSeq == 0 && len(publications) == 0 {
-		return nil, lastSeq == uint64(startSeq) && gen == currentGen, lastSeq, "", nil
+	if since.Seq == 0 && since.Gen == 0 && len(publications) == 0 {
+		recovered := currentRecovery.Seq == since.Seq && since.Gen == currentRecovery.Gen && since.Epoch == currentRecovery.Epoch
+		return nil, recovered, currentRecovery, nil
 	}
 
 	for i := len(publications) - 1; i >= 0; i-- {
 		msg := publications[i]
-		if msg.Seq == sinceSeq {
+		if msg.Seq == since.Seq && msg.Gen == since.Gen {
 			position = i
 			break
 		}
-		if msg.Seq == nextSeq {
+		if msg.Seq == nextSeq && msg.Gen == nextGen {
 			position = i + 1
 			break
 		}
 	}
 	if position > -1 {
-		return publications[0:position], gen == currentGen, lastSeq, "", nil
+		return publications[0:position], currentRecovery.Epoch == since.Epoch, currentRecovery, nil
 	}
 
-	return publications, false, lastSeq, "", nil
+	return publications, false, currentRecovery, nil
 }
 
 // RemoveHistory - see engine interface description.
@@ -1464,7 +1466,7 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 		}
 
 		parts := bytes.SplitN(value, []byte(":"), 2)
-		seq := string(parts[0])
+		sequence, _ := strconv.ParseUint(string(parts[0]), 10, 64)
 		pushData := parts[1]
 
 		msg, err := n.pushDecoder.Decode(pushData)
@@ -1480,7 +1482,10 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
+
+		seq, gen := unpackUint64(sequence)
 		publication.Seq = seq
+		publication.Gen = gen
 		msgs[i] = publication
 	}
 	return msgs, nil

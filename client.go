@@ -1495,18 +1495,14 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
 
-		var currentSeq uint64
-		var currentGen string
+		var currentSeq uint32
+		var currentGen uint32
+		var currentEpoch string
 
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			_, err := strconv.ParseUint(cmd.Since, 10, 64)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "malformed seq received", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				return DisconnectBadRequest
-			}
-			publications, recovered, seq, gen, err := c.node.recoverHistory(channel, cmd.Since, cmd.Gen)
+			publications, recovered, recovery, err := c.node.recoverHistory(channel, recovery{cmd.Seq, cmd.Gen, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				if chOpts.HistoryRecover {
@@ -1515,8 +1511,9 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 				return DisconnectServerError
 			}
 
-			currentSeq = seq
-			currentGen = gen
+			currentSeq = recovery.Seq
+			currentGen = recovery.Seq
+			currentEpoch = recovery.Epoch
 
 			res.Publications = publications
 			res.Recovered = recovered
@@ -1527,7 +1524,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 			}
 			recoverCount.WithLabelValues(recoveredLabel).Inc()
 		} else {
-			seq, gen, err := c.node.lastPublicationSeq(channel)
+			recovery, err := c.node.currentRecoveryData(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting last publication ID for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				if chOpts.HistoryRecover {
@@ -1535,14 +1532,16 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 				}
 				return DisconnectServerError
 			}
-			currentSeq = seq
-			currentGen = gen
+			currentSeq = recovery.Seq
+			currentGen = recovery.Gen
+			currentEpoch = recovery.Epoch
 		}
 
-		res.Gen = currentGen
+		res.Epoch = currentEpoch
 		if !res.Recovered {
 			// Provide client a way to recover messages passing current publication state to it.
-			res.Seq = strconv.FormatUint(currentSeq, 10)
+			res.Seq = currentSeq
+			res.Gen = currentGen
 		}
 
 		c.pubBufferMu.Lock()
@@ -1552,11 +1551,12 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 			c.pubBuffer = nil
 		}
 		sort.Slice(res.Publications, func(i, j int) bool {
-			seqi, _ := strconv.ParseUint(res.Publications[i].Seq, 10, 64)
-			seqj, _ := strconv.ParseUint(res.Publications[j].Seq, 10, 64)
-			return seqi > seqj
+			if res.Publications[i].Gen != res.Publications[j].Gen {
+				return res.Publications[i].Gen > res.Publications[j].Gen
+			}
+			return res.Publications[i].Seq > res.Publications[j].Seq
 		})
-		res.Publications = sliceUnique(res.Publications)
+		res.Publications = uniquePublications(res.Publications)
 	}
 
 	replyRes, err := proto.GetResultEncoder(c.transport.Encoding()).EncodeSubscribeResult(res)
@@ -1612,12 +1612,13 @@ func (c *Client) writeLeave(ch string, reply *preparedReply) error {
 	return c.transport.Send(reply)
 }
 
-func sliceUnique(s []*Publication) []*Publication {
-	keys := make(map[string]struct{})
+func uniquePublications(s []*Publication) []*Publication {
+	keys := make(map[uint64]struct{})
 	list := []*Publication{}
 	for _, entry := range s {
-		if _, value := keys[entry.Seq]; !value {
-			keys[entry.Seq] = struct{}{}
+		val := (uint64(entry.Seq))<<32 | uint64(entry.Gen)
+		if _, value := keys[val]; !value {
+			keys[val] = struct{}{}
 			list = append(list, entry)
 		}
 	}
