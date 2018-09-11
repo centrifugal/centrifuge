@@ -206,7 +206,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 
 		for {
 			if msg, err := sess.Recv(); err == nil {
-				ok := handleClientData(s.node, c, []byte(msg), transport, writer)
+				ok := c.handleRawData([]byte(msg), writer)
 				if !ok {
 					return
 				}

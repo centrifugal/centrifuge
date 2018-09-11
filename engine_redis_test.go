@@ -3,6 +3,7 @@
 package centrifuge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/assert"
 )
@@ -248,21 +250,24 @@ func TestRedisEngineRecover(t *testing.T) {
 	pub.UID = "5"
 	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
 
-	pubs, recovered, err := e.recoverHistory("channel", "2")
+	r, err := e.historyRecoveryData("channel")
+	assert.NoError(t, err)
+
+	pubs, recovered, _, err := e.recoverHistory("channel", recovery{2, 0, r.Epoch})
 	assert.NoError(t, err)
 	assert.True(t, recovered)
 	assert.Equal(t, 3, len(pubs))
-	assert.Equal(t, "5", pubs[0].UID)
-	assert.Equal(t, "4", pubs[1].UID)
-	assert.Equal(t, "3", pubs[2].UID)
+	assert.Equal(t, uint32(5), pubs[0].Seq)
+	assert.Equal(t, uint32(4), pubs[1].Seq)
+	assert.Equal(t, uint32(3), pubs[2].Seq)
 
-	pubs, recovered, err = e.recoverHistory("channel", "6")
+	pubs, recovered, _, err = e.recoverHistory("channel", recovery{6, 0, r.Epoch})
 	assert.NoError(t, err)
 	assert.False(t, recovered)
 	assert.Equal(t, 5, len(pubs))
 
 	assert.NoError(t, e.removeHistory("channel"))
-	pubs, recovered, err = e.recoverHistory("channel", "2")
+	pubs, recovered, _, err = e.recoverHistory("channel", recovery{2, 0, r.Epoch})
 	assert.NoError(t, err)
 	assert.False(t, recovered)
 	assert.Equal(t, 0, len(pubs))
@@ -632,16 +637,68 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	numMessages := 100
 	for i := 0; i < numMessages; i++ {
-		pub := &Publication{UID: "uid" + strconv.Itoa(i), Data: rawData}
+		pub := &Publication{Data: rawData}
 		<-e.publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryDropInactive: false})
 	}
+	r, err := e.historyRecoveryData("channel")
+	assert.NoError(b, err)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := e.recoverHistory("channel", "uid"+strconv.Itoa(numMessages-5))
+			_, _, _, err := e.recoverHistory("channel", recovery{uint32(numMessages - 5), 0, r.Epoch})
 			if err != nil {
 				panic(err)
 			}
 		}
 	})
+}
+
+func TestClientSubscribeRecoverRedis(t *testing.T) {
+	for _, tt := range recoverTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			c := dial()
+			defer c.close()
+
+			e := newTestRedisEngine()
+
+			config := e.node.Config()
+			config.HistorySize = tt.HistorySize
+			config.HistoryLifetime = tt.HistoryLifetime
+			config.HistoryRecover = true
+			e.node.Reload(config)
+
+			transport := newTestTransport()
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, e.node, transport)
+
+			for i := 1; i <= tt.NumPublications; i++ {
+				e.node.Publish("test", &Publication{
+					UID:  strconv.Itoa(i),
+					Data: []byte(`{}`),
+				})
+			}
+
+			time.Sleep(time.Duration(tt.Sleep) * time.Second)
+
+			connectClient(t, client)
+
+			replies := []*proto.Reply{}
+			rw := testReplyWriter(&replies)
+
+			recovery, _ := e.historyRecoveryData("test")
+			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+				Channel: "test",
+				Recover: true,
+				Seq:     tt.SinceSeq,
+				Gen:     recovery.Gen,
+				Epoch:   recovery.Epoch,
+			}, rw)
+			assert.Nil(t, disconnect)
+			assert.Nil(t, replies[0].Error)
+			res := extractSubscribeResult(replies)
+			assert.Equal(t, tt.NumRecovered, len(res.Publications))
+			assert.Equal(t, tt.Recovered, res.Recovered)
+		})
+	}
 }

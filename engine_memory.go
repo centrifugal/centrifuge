@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"container/heap"
+	"strconv"
 	"sync"
 	"time"
 
@@ -39,6 +40,10 @@ func (e *MemoryEngine) run(h EngineEventHandler) error {
 	e.eventHandler = h
 	return nil
 }
+
+// func (e *MemoryEngine) shutdown(h EngineEventHandler) error {
+// 	return e.db.Close()
+// }
 
 // Publish adds message into history hub and calls node ClientMsg method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
@@ -119,9 +124,15 @@ func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.historyHub.get(ch, limit)
 }
 
+// History - see engine interface description.
+func (e *MemoryEngine) historyRecoveryData(ch string) (recovery, error) {
+	seq, gen, epoch := e.historyHub.getSequence(ch)
+	return recovery{seq, gen, epoch}, nil
+}
+
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, lastUID string) ([]*Publication, bool, error) {
-	return e.historyHub.recover(ch, lastUID)
+func (e *MemoryEngine) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+	return e.historyHub.recover(ch, since)
 }
 
 // RemoveHistory - see engine interface description.
@@ -232,11 +243,21 @@ func (i historyItem) isExpired() bool {
 	return i.expireAt < time.Now().Unix()
 }
 
+type channelTop struct {
+	ID  uint64
+	UID string
+}
+
 type historyHub struct {
 	sync.RWMutex
 	history   map[string]historyItem
 	queue     priority.Queue
 	nextCheck int64
+
+	// db *badger.DB
+	epoch       string
+	sequencesMu sync.RWMutex
+	sequences   map[string]uint64
 }
 
 func newHistoryHub() *historyHub {
@@ -244,6 +265,9 @@ func newHistoryHub() *historyHub {
 		history:   make(map[string]historyItem),
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
+		// db:        db,
+		epoch:     strconv.FormatInt(time.Now().Unix(), 10),
+		sequences: make(map[string]uint64),
 	}
 }
 
@@ -283,6 +307,39 @@ func (h *historyHub) expire() {
 	}
 }
 
+func (h *historyHub) next(ch string) (uint32, uint32) {
+	var val uint64
+	h.sequencesMu.Lock()
+	top, ok := h.sequences[ch]
+	if !ok {
+		val = 1
+		h.sequences[ch] = val
+	} else {
+		top++
+		h.sequences[ch] = top
+		val = top
+	}
+	h.sequencesMu.Unlock()
+	return unpackUint64(val)
+}
+
+func unpackUint64(val uint64) (uint32, uint32) {
+	return uint32(val), uint32(val >> 32)
+}
+
+func (h *historyHub) getSequence(ch string) (uint32, uint32, string) {
+	h.sequencesMu.Lock()
+	defer h.sequencesMu.Unlock()
+	val, ok := h.sequences[ch]
+	if !ok {
+		var top uint64
+		h.sequences[ch] = top
+		return 0, 0, h.epoch
+	}
+	seq, gen := unpackUint64(val)
+	return seq, gen, h.epoch
+}
+
 func (h *historyHub) touch(ch string, opts *ChannelOptions) {
 	h.Lock()
 	defer h.Unlock()
@@ -306,9 +363,11 @@ func (h *historyHub) touch(ch string, opts *ChannelOptions) {
 	}
 }
 
-func (h *historyHub) add(ch string, msg *Publication, opts *ChannelOptions, hasSubscribers bool) error {
+func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions, hasSubscribers bool) error {
 	h.Lock()
 	defer h.Unlock()
+
+	pub.Seq, pub.Gen = h.next(ch)
 
 	_, ok := h.history[ch]
 
@@ -321,12 +380,12 @@ func (h *historyHub) add(ch string, msg *Publication, opts *ChannelOptions, hasS
 	heap.Push(&h.queue, &priority.Item{Value: ch, Priority: expireAt})
 	if !ok {
 		h.history[ch] = historyItem{
-			messages: []*Publication{msg},
+			messages: []*Publication{pub},
 			expireAt: expireAt,
 		}
 	} else {
 		messages := h.history[ch].messages
-		messages = append([]*Publication{msg}, messages...)
+		messages = append([]*Publication{pub}, messages...)
 		if len(messages) > opts.HistorySize {
 			messages = messages[0:opts.HistorySize]
 		}
@@ -346,7 +405,10 @@ func (h *historyHub) add(ch string, msg *Publication, opts *ChannelOptions, hasS
 func (h *historyHub) get(ch string, limit int) ([]*Publication, error) {
 	h.RLock()
 	defer h.RUnlock()
+	return h.getUnsafe(ch, limit)
+}
 
+func (h *historyHub) getUnsafe(ch string, limit int) ([]*Publication, error) {
 	hItem, ok := h.history[ch]
 	if !ok {
 		// return empty slice
@@ -358,8 +420,12 @@ func (h *historyHub) get(ch string, limit int) ([]*Publication, error) {
 		return []*Publication{}, nil
 	}
 	if limit == 0 || limit >= len(hItem.messages) {
-		return hItem.messages, nil
+		pubs := make([]*Publication, len(hItem.messages))
+		copy(pubs, hItem.messages)
+		return pubs, nil
 	}
+	pubs := make([]*Publication, len(hItem.messages[:limit]))
+	copy(pubs, hItem.messages[:limit])
 	return hItem.messages[:limit], nil
 }
 
@@ -374,29 +440,50 @@ func (h *historyHub) remove(ch string) error {
 	return nil
 }
 
-func (h *historyHub) recover(ch string, last string) ([]*Publication, bool, error) {
+const (
+	maxSeq = 4294967295 // maximum uint32 value
+	maxGen = 4294967295 // maximum uint32 value
+)
 
-	publications, err := h.get(ch, 0)
+func (h *historyHub) recover(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+	h.RLock()
+	defer h.RUnlock()
+
+	currentSeq, currentGen, currentEpoch := h.getSequence(ch)
+
+	if currentSeq == since.Seq && since.Gen == currentGen && since.Epoch == currentEpoch {
+		return nil, true, recovery{currentSeq, currentGen, currentEpoch}, nil
+	}
+
+	publications, err := h.getUnsafe(ch, 0)
 	if err != nil {
-		return nil, false, err
+		return nil, false, recovery{}, err
+	}
+
+	nextSeq := since.Seq + 1
+	nextGen := since.Gen
+
+	if nextSeq > maxSeq {
+		nextSeq = 0
+		nextGen = nextGen + 1
 	}
 
 	position := -1
-	for index, msg := range publications {
-		if msg.UID == last {
-			position = index
+
+	for i := len(publications) - 1; i >= 0; i-- {
+		msg := publications[i]
+		if msg.Seq == since.Seq && msg.Gen == since.Gen {
+			position = i
+			break
+		}
+		if msg.Seq == nextSeq && msg.Gen == nextGen {
+			position = i + 1
 			break
 		}
 	}
 	if position > -1 {
-		// Provided last UID found in history. In this case we can be
-		// sure that all missed messages will be recovered.
-		return publications[0:position], true, nil
+		return publications[0:position], since.Epoch == currentEpoch, recovery{currentSeq, currentGen, currentEpoch}, nil
 	}
-	// Provided last UID not found in history messages. This means that
-	// client most probably missed too many messages or publication with
-	// last UID already expired (or maybe wrong last uid provided but
-	// it's not a normal case). So we try to compensate as many as we
-	// can but get caller know about missing UID.
-	return publications, false, nil
+
+	return publications, false, recovery{currentSeq, currentGen, currentEpoch}, nil
 }

@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -84,6 +85,7 @@ type shard struct {
 	remPresenceScript *redis.Script
 	presenceScript    *redis.Script
 	lpopManyScript    *redis.Script
+	historySeqScript  *redis.Script
 	messagePrefix     string
 
 	pushEncoder proto.PushEncoder
@@ -331,24 +333,27 @@ var (
 	// 1 round trip to Redis instead of 2.
 	// KEYS[1] - history list key
 	// KEYS[2] - history touch object key
+	// KEYS[3] - history sequence key
 	// ARGV[1] - channel to publish message to
 	// ARGV[2] - message payload
 	// ARGV[3] - history size ltrim right bound
 	// ARGV[4] - history lifetime
 	// ARGV[5] - history drop inactive flag - "0" or "1"
 	pubScriptSource = `
-local n = redis.call("publish", ARGV[1], ARGV[2])
+local sequence = redis.call("incr", KEYS[3])
+local payload = sequence .. ":" .. ARGV[2]
+local num_subscribed_nodes = redis.call("publish", ARGV[1], payload)
 local m = 0
-if ARGV[5] == "1" and n == 0 and redis.call("exists", KEYS[2]) == 0 then
-  m = redis.call("lpushx", KEYS[1], ARGV[2])
+if ARGV[5] == "1" and num_subscribed_nodes == 0 and redis.call("exists", KEYS[2]) == 0 then
+  m = redis.call("lpushx", KEYS[1], payload)
 else
-  m = redis.call("lpush", KEYS[1], ARGV[2])
+  m = redis.call("lpush", KEYS[1], payload)
 end
 if m > 0 then
   redis.call("ltrim", KEYS[1], 0, ARGV[3])
   redis.call("expire", KEYS[1], ARGV[4])
 end
-return n
+return num_subscribed_nodes
 	`
 
 	// KEYS[1] - presence set key
@@ -395,6 +400,21 @@ if #entries > 0 then
 end
 return entries
 	`
+
+	// KEYS[1] - history sequence key
+	// KEYS[2] - history gen key
+	historySeqSource = `
+redis.replicate_commands()
+local seq = redis.call("get", KEYS[1])
+local gen
+if redis.call('EXISTS', KEYS[2]) ~= 0 then
+  gen = redis.call("get", KEYS[2])
+else
+  gen = redis.call('TIME')[1]
+  redis.call("set", KEYS[2], gen)
+end
+return {seq, gen}
+	`
 )
 
 // newShard initializes new Redis shard.
@@ -403,11 +423,12 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		node:              n,
 		config:            conf,
 		pool:              newPool(n, conf),
-		pubScript:         redis.NewScript(2, pubScriptSource),
+		pubScript:         redis.NewScript(3, pubScriptSource),
 		addPresenceScript: redis.NewScript(2, addPresenceSource),
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
 		lpopManyScript:    redis.NewScript(1, lpopManySource),
+		historySeqScript:  redis.NewScript(2, historySeqSource),
 		pushEncoder:       proto.NewProtobufPushEncoder(),
 		pushDecoder:       proto.NewProtobufPushDecoder(),
 	}
@@ -440,6 +461,14 @@ func (e *shard) getPresenceSetKey(ch string) channelID {
 
 func (e *shard) getHistoryKey(ch string) channelID {
 	return channelID(e.config.Prefix + ".history.list." + ch)
+}
+
+func (e *shard) gethistorySeqKey(ch string) channelID {
+	return channelID(e.config.Prefix + ".history.seq." + ch)
+}
+
+func (e *shard) gethistoryEpochKey(ch string) channelID {
+	return channelID(e.config.Prefix + ".history.epoch." + ch)
 }
 
 func (e *shard) getHistoryTouchKey(ch string) channelID {
@@ -537,9 +566,14 @@ func (e *RedisEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.shards[e.shardIndex(ch)].History(ch, limit)
 }
 
+// HistorySequence - see engine interface description.
+func (e *RedisEngine) historyRecoveryData(ch string) (recovery, error) {
+	return e.shards[e.shardIndex(ch)].HistorySequence(ch)
+}
+
 // RecoverHistory - see engine interface description.
-func (e *RedisEngine) recoverHistory(ch string, lastUID string) ([]*Publication, bool, error) {
-	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, lastUID)
+func (e *RedisEngine) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, since)
 }
 
 // RemoveHistory - see engine interface description.
@@ -753,21 +787,23 @@ func (e *shard) runPubSub() {
 }
 
 func (e *shard) handleRedisClientMessage(chID channelID, data []byte) error {
-	var message proto.Push
-	err := message.Unmarshal(data)
+	parts := bytes.SplitN(data, []byte(":"), 2)
+	sequence, _ := strconv.ParseUint(string(parts[0]), 10, 64)
+	pushData := parts[1]
+	var push proto.Push
+	err := push.Unmarshal(pushData)
 	if err != nil {
 		return err
 	}
-	return e.handleClientPush(&message)
-}
-
-func (e *shard) handleClientPush(push *proto.Push) error {
 	switch push.Type {
 	case proto.PushTypePublication:
 		pub, err := e.pushDecoder.DecodePublication(push.Data)
 		if err != nil {
 			return err
 		}
+		seq, gen := unpackUint64(sequence)
+		pub.Seq = seq
+		pub.Gen = gen
 		e.eventHandler.HandlePublication(push.Channel, pub)
 	case proto.PushTypeJoin:
 		join, err := e.pushDecoder.DecodeJoin(push.Data)
@@ -791,6 +827,7 @@ type pubRequest struct {
 	message    []byte
 	historyKey channelID
 	touchKey   channelID
+	indexKey   channelID
 	opts       *ChannelOptions
 	err        *chan error
 }
@@ -857,7 +894,7 @@ func (e *shard) runPublishPipeline() {
 			conn := e.pool.Get()
 			for i := range prs {
 				if prs[i].opts != nil && prs[i].opts.HistorySize > 0 && prs[i].opts.HistoryLifetime > 0 {
-					e.pubScript.SendHash(conn, prs[i].historyKey, prs[i].touchKey, prs[i].channel, prs[i].message, prs[i].opts.HistorySize-1, prs[i].opts.HistoryLifetime, prs[i].opts.HistoryDropInactive)
+					e.pubScript.SendHash(conn, prs[i].historyKey, prs[i].touchKey, prs[i].indexKey, prs[i].channel, prs[i].message, prs[i].opts.HistorySize-1, prs[i].opts.HistoryLifetime, prs[i].opts.HistoryDropInactive)
 				} else {
 					conn.Send("PUBLISH", prs[i].channel, prs[i].message)
 				}
@@ -904,6 +941,7 @@ const (
 	dataOpRemovePresence
 	dataOpPresence
 	dataOpHistory
+	dataOphistorySeq
 	dataOpHistoryRemove
 	dataOpChannels
 	dataOpHistoryTouch
@@ -982,6 +1020,14 @@ func (e *shard) runDataPipeline() {
 		return
 	}
 
+	err = e.historySeqScript.Load(conn)
+	if err != nil {
+		e.node.logger.log(newLogEntry(LogLevelError, "error loading history seq Lua", map[string]interface{}{"error": err.Error()}))
+		// Can not proceed if script has not been loaded.
+		conn.Close()
+		return
+	}
+
 	conn.Close()
 
 	var drs []dataRequest
@@ -1002,6 +1048,8 @@ func (e *shard) runDataPipeline() {
 				e.presenceScript.SendHash(conn, drs[i].args...)
 			case dataOpHistory:
 				conn.Send("LRANGE", drs[i].args...)
+			case dataOphistorySeq:
+				e.historySeqScript.SendHash(conn, drs[i].args...)
 			case dataOpHistoryRemove:
 				conn.Send("DEL", drs[i].args...)
 			case dataOpChannels:
@@ -1069,6 +1117,7 @@ func (e *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 			message:    byteMessage,
 			historyKey: e.getHistoryKey(ch),
 			touchKey:   e.getHistoryTouchKey(ch),
+			indexKey:   e.gethistorySeqKey(ch),
 			opts:       opts,
 			err:        &eChan,
 		}
@@ -1105,7 +1154,7 @@ func (e *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan 
 
 	pr := pubRequest{
 		channel: chID,
-		message: byteMessage,
+		message: append([]byte("0:"), byteMessage...),
 		err:     &eChan,
 	}
 	e.pubCh <- pr
@@ -1132,7 +1181,7 @@ func (e *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-ch
 
 	pr := pubRequest{
 		channel: chID,
-		message: byteMessage,
+		message: append([]byte("0:"), byteMessage...),
 		err:     &eChan,
 	}
 	e.pubCh <- pr
@@ -1262,30 +1311,83 @@ func (e *shard) History(ch string, limit int) ([]*Publication, error) {
 	return sliceOfPubs(e, resp.reply, nil)
 }
 
+// History - see engine interface description.
+func (e *shard) HistorySequence(ch string) (recovery, error) {
+	historySeqKey := e.gethistorySeqKey(ch)
+	historyEpochKey := e.gethistoryEpochKey(ch)
+	dr := newDataRequest(dataOphistorySeq, []interface{}{historySeqKey, historyEpochKey}, true)
+	e.dataCh <- dr
+	resp := dr.result()
+	if resp.err != nil {
+		return recovery{}, resp.err
+	}
+	results := resp.reply.([]interface{})
+
+	sequence, err := redis.Int64(results[0], nil)
+	if err != nil {
+		if err != redis.ErrNil {
+			return recovery{}, err
+		}
+		sequence = 0
+	}
+
+	seq, gen := unpackUint64(uint64(sequence))
+
+	var epoch string
+	epoch, err = redis.String(results[1], nil)
+	if err != nil {
+		if err != redis.ErrNil {
+			return recovery{}, err
+		}
+		epoch = ""
+	}
+
+	return recovery{seq, gen, epoch}, nil
+}
+
 // RecoverHistory - see engine interface description.
-func (e *shard) RecoverHistory(ch string, last string) ([]*Publication, bool, error) {
+func (e *shard) RecoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+
+	currentRecovery, err := e.HistorySequence(ch)
+	if err != nil {
+		return nil, false, recovery{}, err
+	}
+
+	if currentRecovery.Seq == since.Seq && since.Gen == currentRecovery.Gen && since.Epoch == currentRecovery.Epoch {
+		return nil, true, currentRecovery, nil
+	}
+
 	publications, err := e.History(ch, 0)
 	if err != nil {
-		return nil, false, err
+		return nil, false, recovery{}, err
+	}
+
+	nextSeq := since.Seq + 1
+	nextGen := since.Gen
+
+	if nextSeq > maxSeq {
+		nextSeq = 0
+		nextGen = nextGen + 1
 	}
 
 	position := -1
-	for index, msg := range publications {
-		if msg.UID == last {
-			position = index
+
+	for i := len(publications) - 1; i >= 0; i-- {
+		msg := publications[i]
+		if msg.Seq == since.Seq && msg.Gen == since.Gen {
+			position = i
+			break
+		}
+		if msg.Seq == nextSeq && msg.Gen == nextGen {
+			position = i + 1
 			break
 		}
 	}
 	if position > -1 {
-		// Last uid found in history.
-		return publications[0:position], true, nil
+		return publications[0:position], currentRecovery.Epoch == since.Epoch, currentRecovery, nil
 	}
-	// Provided last UID not found in history messages. This means that
-	// client most probably missed too many messages or publication with
-	// last UID already expired (or maybe wrong last uid provided but
-	// it's not a normal case). So we try to compensate as many as we
-	// can but get caller know about missing UID.
-	return publications, false, nil
+
+	return publications, false, currentRecovery, nil
 }
 
 // RemoveHistory - see engine interface description.
@@ -1362,7 +1464,11 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 			return nil, errors.New("error getting Message value")
 		}
 
-		msg, err := n.pushDecoder.Decode(value)
+		parts := bytes.SplitN(value, []byte(":"), 2)
+		sequence, _ := strconv.ParseUint(string(parts[0]), 10, 64)
+		pushData := parts[1]
+
+		msg, err := n.pushDecoder.Decode(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Message: %v", err)
 		}
@@ -1375,6 +1481,10 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
+
+		seq, gen := unpackUint64(sequence)
+		publication.Seq = seq
+		publication.Gen = gen
 		msgs[i] = publication
 	}
 	return msgs, nil

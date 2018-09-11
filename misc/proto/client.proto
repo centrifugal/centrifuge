@@ -59,9 +59,11 @@ message ClientInfo {
 }
 
 message Publication {
-    string uid = 1;
-    bytes data = 2;
-    ClientInfo info = 3;
+    uint32 seq = 1;
+    uint32 gen = 2;
+    string uid = 3;
+    bytes data = 4;
+    ClientInfo info = 5;
 }
 
 message Join {
@@ -91,7 +93,6 @@ message ConnectResult {
     bool expires = 3;
     uint32 ttl = 4;
     bytes data = 5;
-    uint32 time = 6;
 }
 
 message RefreshRequest {
@@ -107,19 +108,22 @@ message RefreshResult {
 
 message SubscribeRequest {
     string channel = 1;
-    bool recover = 2;
-    string last = 3;
-    uint32 since = 4;
-    string token = 5 ;
+    string token = 2;
+    bool recover = 3;
+    uint32 seq = 4;
+    uint32 gen = 5;
+    string epoch = 6;
 }
 
 message SubscribeResult {
-    string last = 1;
-    bool recovered = 2;
-    repeated Publication publications = 3;
-    bool expires = 4;
-    uint32 ttl = 5;
-    uint32 time = 6;
+    bool expires = 1;
+    uint32 ttl = 2;
+    bool recoverable = 3;
+    uint32 seq = 4;
+    uint32 gen = 5;
+    string epoch = 6;   
+    repeated Publication publications = 7;
+    bool recovered = 8;
 }
 
 message SubRefreshRequest {
@@ -174,7 +178,6 @@ message PingRequest {
 }
 
 message PingResult {
-    uint32 time = 1;
 }
 
 message RPCRequest{

@@ -9,7 +9,7 @@
         </style>
         <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.11.2/jquery.min.js"></script>
         <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/c2/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -17,6 +17,16 @@
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
             var channel = "chat:index";
+
+            function getParam(name, url) {
+                if (!url) url = window.location.href;
+                name = name.replace(/[\[\]]/g, '\\$&');
+                var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+                    results = regex.exec(url);
+                if (!results) return null;
+                if (!results[2]) return '';
+                return decodeURIComponent(results[2].replace(/\+/g, ' '));
+            }
 
             $(function() {
 
@@ -54,8 +64,7 @@
                         }
                         drawText('Now in this room: ' + count + ' clients');
                     }, function(err) {
-                        console.log("presence error", err);
-                        drawText("Presence error");
+                        drawText("Presence error: " + JSON.stringify(err));
                     });
                 }
 
@@ -86,9 +95,9 @@
                     var rpcRequest = {"method": "getCurrentYear"}
 
                     centrifuge.rpc(rpcRequest).then(function(data){
-                        drawText(JSON.stringify(data))
+                        drawText(JSON.stringify(data));
                     }, function(err) {
-                        drawText(JSON.stringify(err))
+                        drawText("RPC error: " + JSON.stringify(err));
                     });
                 }
 
@@ -97,7 +106,6 @@
                 }
 
                 function handleMessage(message) {
-                    console.log("new message received", message);
                     var clientID;
                     if (message.info){
                         clientID = message.info.client;
@@ -134,6 +142,30 @@
                     });
                     input.val('');
                 });
+
+                if (getParam("disconnect") == "1") {
+                    function reconnect() {
+                        setTimeout(function() {
+                            centrifuge.disconnect();
+                            setTimeout(function(){
+                                reconnect();
+                            }, 11000);
+                        }, 4000);
+                    }
+                    reconnect();
+                }
+
+                if (getParam("publish") == "1") {
+                    var publishInterval = parseInt(getParam("publishInterval")) || 1000;
+                    var counter = 0
+                    setInterval(function(){
+                        sub.publish({"input": counter.toString()}).then(function() {
+                        }, function(err) {
+                            drawText("Publish error: " + JSON.stringify(err));
+                        });
+                        counter++;
+                    }, publishInterval);
+                }
             });
         </script>
     </head>

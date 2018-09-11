@@ -259,7 +259,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication) error {
 				}
 				jsonReply = newPreparedReply(reply, proto.EncodingJSON)
 			}
-			c.transport.Send(jsonReply)
+			c.writePublication(channel, pub, jsonReply)
 		} else if enc == proto.EncodingProtobuf {
 			if protobufReply == nil {
 				data, err := proto.GetPushEncoder(enc).EncodePublication(pub)
@@ -275,7 +275,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication) error {
 				}
 				protobufReply = newPreparedReply(reply, proto.EncodingProtobuf)
 			}
-			c.transport.Send(protobufReply)
+			c.writePublication(channel, pub, protobufReply)
 		}
 	}
 	return nil
@@ -317,7 +317,7 @@ func (h *Hub) broadcastJoin(channel string, join *proto.Join) error {
 				}
 				jsonReply = newPreparedReply(reply, proto.EncodingJSON)
 			}
-			c.transport.Send(jsonReply)
+			c.writeJoin(channel, jsonReply)
 		} else if enc == proto.EncodingProtobuf {
 			if protobufReply == nil {
 				data, err := proto.GetPushEncoder(enc).EncodeJoin(join)
@@ -333,7 +333,7 @@ func (h *Hub) broadcastJoin(channel string, join *proto.Join) error {
 				}
 				protobufReply = newPreparedReply(reply, proto.EncodingProtobuf)
 			}
-			c.transport.Send(protobufReply)
+			c.writeJoin(channel, protobufReply)
 		}
 	}
 	return nil
@@ -375,7 +375,7 @@ func (h *Hub) broadcastLeave(channel string, leave *proto.Leave) error {
 				}
 				jsonReply = newPreparedReply(reply, proto.EncodingJSON)
 			}
-			c.transport.Send(jsonReply)
+			c.writeLeave(channel, jsonReply)
 		} else if enc == proto.EncodingProtobuf {
 			if protobufReply == nil {
 				data, err := proto.GetPushEncoder(enc).EncodeLeave(leave)
@@ -391,7 +391,7 @@ func (h *Hub) broadcastLeave(channel string, leave *proto.Leave) error {
 				}
 				protobufReply = newPreparedReply(reply, proto.EncodingProtobuf)
 			}
-			c.transport.Send(protobufReply)
+			c.writeLeave(channel, protobufReply)
 		}
 	}
 	return nil

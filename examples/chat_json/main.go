@@ -54,6 +54,7 @@ func main() {
 	// not required if you don't use token authentication and
 	// private subscriptions verified by token.
 	cfg.Secret = "secret"
+	cfg.Publish = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
@@ -63,7 +64,7 @@ func main() {
 				Presence:        true,
 				JoinLeave:       true,
 				HistoryLifetime: 60,
-				HistorySize:     10,
+				HistorySize:     1000,
 				HistoryRecover:  true,
 			},
 		},
@@ -141,6 +142,19 @@ func main() {
 	})
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
+
+	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+		Shards: []centrifuge.RedisShardConfig{
+			centrifuge.RedisShardConfig{
+				Host: "localhost",
+				Port: 6379,
+			},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	node.SetEngine(engine)
 
 	if err := node.Run(); err != nil {
 		panic(err)

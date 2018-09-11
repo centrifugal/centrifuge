@@ -18,8 +18,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
 	"github.com/centrifugal/centrifuge/internal/uuid"
-
-	"github.com/nats-io/nuid"
 )
 
 // Node is a heart of centrifuge library – it internally keeps and manages
@@ -361,11 +359,6 @@ func (n *Node) PublishAsync(ch string, pub *Publication) <-chan error {
 	}
 
 	messagesSentCount.WithLabelValues("publication").Inc()
-
-	if pub.UID == "" {
-		pub.UID = nuid.Next()
-	}
-
 	return n.engine.publish(ch, pub, &chOpts)
 }
 
@@ -599,9 +592,9 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, lastUID string) ([]*Publication, bool, error) {
+func (n *Node) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
-	return n.engine.recoverHistory(ch, lastUID)
+	return n.engine.recoverHistory(ch, since)
 }
 
 // RemoveHistory removes channel history.
@@ -610,17 +603,10 @@ func (n *Node) RemoveHistory(ch string) error {
 	return n.engine.removeHistory(ch)
 }
 
-// lastPublicationUID return last message id for channel.
-func (n *Node) lastPublicationUID(ch string) (string, error) {
-	actionCount.WithLabelValues("last_publication_uid").Inc()
-	publications, err := n.engine.history(ch, 1)
-	if err != nil {
-		return "", err
-	}
-	if len(publications) == 0 {
-		return "", nil
-	}
-	return publications[0].UID, nil
+// lastPublicationSeq return last publication sequence and current generation for channel.
+func (n *Node) currentRecoveryData(ch string) (recovery, error) {
+	actionCount.WithLabelValues("history_recovery_data").Inc()
+	return n.engine.historyRecoveryData(ch)
 }
 
 // privateChannel checks if channel private. In case of private channel

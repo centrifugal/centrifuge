@@ -68,9 +68,11 @@ message ClientInfo {
 }
 
 message Publication {
-    string uid = 1 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
-    bytes data = 2 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
-    ClientInfo info = 3 [(gogoproto.jsontag) = "info,omitempty"];
+    uint32 seq = 1 [(gogoproto.jsontag) = "seq,omitempty"];
+    uint32 gen = 2 [(gogoproto.jsontag) = "gen,omitempty"];
+    string uid = 3 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid,omitempty"];
+    bytes data = 4 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+    ClientInfo info = 5 [(gogoproto.jsontag) = "info,omitempty"];
 }
 
 message Join {
@@ -100,7 +102,6 @@ message ConnectResult {
     bool expires = 3 [(gogoproto.jsontag) = "expires,omitempty"];
     uint32 ttl = 4 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
     bytes data = 5 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false];
-    uint32 time = 6 [(gogoproto.jsontag) = "time,omitempty"];
 }
 
 message RefreshRequest {
@@ -116,19 +117,22 @@ message RefreshResult {
 
 message SubscribeRequest {
     string channel = 1 [(gogoproto.jsontag) = "channel"];
-    bool recover = 2 [(gogoproto.jsontag) = "recover"];
-    string last = 3 [(gogoproto.jsontag) = "last"];
-    uint32 since = 4 [(gogoproto.jsontag) = "since"];
-    string token = 5  [(gogoproto.jsontag) = "token"];
+    string token = 2 [(gogoproto.jsontag) = "token"];
+    bool recover = 3 [(gogoproto.jsontag) = "recover"];
+    uint32 seq = 4 [(gogoproto.jsontag) = "seq"];
+    uint32 gen = 5 [(gogoproto.jsontag) = "gen"];
+    string epoch = 6 [(gogoproto.jsontag) = "epoch"];
 }
 
 message SubscribeResult {
-    string last = 1 [(gogoproto.jsontag) = "last,omitempty"];
-    bool recovered = 2 [(gogoproto.jsontag) = "recovered,omitempty"];
-    repeated Publication publications = 3 [(gogoproto.jsontag) = "publications,omitempty"];
-    bool expires = 4 [(gogoproto.jsontag) = "expires,omitempty"];
-    uint32 ttl = 5 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
-    uint32 time = 6 [(gogoproto.jsontag) = "time,omitempty"];
+    bool expires = 1 [(gogoproto.jsontag) = "expires,omitempty"];
+    uint32 ttl = 2 [(gogoproto.customname) = "TTL", (gogoproto.jsontag) = "ttl,omitempty"];
+    bool recoverable = 3 [(gogoproto.jsontag) = "recoverable,omitempty"];
+    uint32 seq = 4 [(gogoproto.jsontag) = "seq,omitempty"];
+    uint32 gen = 5 [(gogoproto.jsontag) = "gen,omitempty"];
+    string epoch = 6 [(gogoproto.jsontag) = "epoch,omitempty"];   
+    repeated Publication publications = 7 [(gogoproto.jsontag) = "publications,omitempty"];
+    bool recovered = 8 [(gogoproto.jsontag) = "recovered,omitempty"];
 }
 
 message SubRefreshRequest {
@@ -183,7 +187,6 @@ message PingRequest {
 }
 
 message PingResult {
-    uint32 time = 1 [(gogoproto.jsontag) = "time,omitempty"];
 }
 
 message RPCRequest{

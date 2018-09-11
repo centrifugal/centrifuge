@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -318,77 +317,10 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			ok := handleClientData(s.node, c, data, transport, writer)
+			ok := c.handleRawData(data, writer)
 			if !ok {
 				return
 			}
 		}
 	}()
-}
-
-// common data handling logic for Websocket and Sockjs handlers.
-func handleClientData(n *Node, c *Client, data []byte, transport Transport, writer *writer) bool {
-	if len(data) == 0 {
-		n.logger.log(newLogEntry(LogLevelError, "empty client request received"))
-		c.close(DisconnectBadRequest)
-		return false
-	}
-
-	enc := transport.Encoding()
-
-	encoder := proto.GetReplyEncoder(enc)
-	decoder := proto.GetCommandDecoder(enc, data)
-	var numReplies int
-
-	for {
-		cmd, err := decoder.Decode()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			n.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-			c.close(DisconnectBadRequest)
-			proto.PutCommandDecoder(enc, decoder)
-			proto.PutReplyEncoder(enc, encoder)
-			return false
-		}
-		rep, disconnect := c.handle(cmd)
-		if disconnect != nil {
-			n.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-			c.close(disconnect)
-			proto.PutCommandDecoder(enc, decoder)
-			proto.PutReplyEncoder(enc, encoder)
-			return false
-		}
-		if rep != nil {
-			if rep.Error != nil {
-				n.logger.log(newLogEntry(LogLevelInfo, "error in reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Error()}))
-			}
-			err = encoder.Encode(rep)
-			numReplies++
-			if err != nil {
-				n.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-				c.close(DisconnectServerError)
-				return false
-			}
-		}
-	}
-
-	if numReplies > 0 {
-		disconnect := writer.write(encoder.Finish())
-		if disconnect != nil {
-			if n.logger.enabled(LogLevelDebug) {
-				n.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-			}
-			c.close(disconnect)
-			proto.PutCommandDecoder(enc, decoder)
-			proto.PutReplyEncoder(enc, encoder)
-			return false
-		}
-	}
-
-	proto.PutCommandDecoder(enc, decoder)
-	proto.PutReplyEncoder(enc, encoder)
-
-	return true
 }
