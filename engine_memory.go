@@ -441,8 +441,8 @@ func (h *historyHub) remove(ch string) error {
 }
 
 const (
-	maxSeq = 4294967295
-	maxGen = 4294967295
+	maxSeq = 4294967295 // maximum uint32 value
+	maxGen = 4294967295 // maximum uint32 value
 )
 
 func (h *historyHub) recover(ch string, since recovery) ([]*Publication, bool, recovery, error) {

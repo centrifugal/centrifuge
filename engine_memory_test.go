@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"context"
-	"strconv"
 	"testing"
 	"time"
 
@@ -362,7 +361,7 @@ func BenchmarkMemoryEngineHistoryRecoverParallel(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	numMessages := 100
 	for i := 1; i <= numMessages; i++ {
-		pub := &Publication{UID: "uid" + strconv.Itoa(i), Data: rawData}
+		pub := &Publication{Data: rawData}
 		<-e.publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryDropInactive: false})
 	}
 	b.ResetTimer()

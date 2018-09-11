@@ -489,6 +489,7 @@ var recoverTests = []struct {
 	{"same_position_no_history_expected", 10, 60, 7, 7, 0, 0, true},
 	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
 	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
+	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
 }
 
 func TestClientSubscribeRecoverMemory(t *testing.T) {
