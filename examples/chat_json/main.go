@@ -143,18 +143,18 @@ func main() {
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
-	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		Shards: []centrifuge.RedisShardConfig{
-			centrifuge.RedisShardConfig{
-				Host: "localhost",
-				Port: 6379,
-			},
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
-	node.SetEngine(engine)
+	// engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+	// 	Shards: []centrifuge.RedisShardConfig{
+	// 		centrifuge.RedisShardConfig{
+	// 			Host: "localhost",
+	// 			Port: 6379,
+	// 		},
+	// 	},
+	// })
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// node.SetEngine(engine)
 
 	if err := node.Run(); err != nil {
 		panic(err)
