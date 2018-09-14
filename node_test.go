@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"encoding/json"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,10 @@ func (e *TestEngine) name() string {
 }
 
 func (e *TestEngine) run(h EngineEventHandler) error {
+	return nil
+}
+
+func (e *TestEngine) shutdown(ctx context.Context) error {
 	return nil
 }
 
@@ -95,12 +100,8 @@ func (e *TestEngine) removeHistory(ch string) error {
 	return nil
 }
 
-func (e *TestEngine) recoverHistory(ch string, since recovery) ([]*proto.Publication, bool, recovery, error) {
+func (e *TestEngine) recoverHistory(ch string, since *recovery) ([]*proto.Publication, bool, recovery, error) {
 	return []*proto.Publication{}, false, recovery{0, 0, ""}, nil
-}
-
-func (e *TestEngine) historyRecoveryData(ch string) (recovery, error) {
-	return recovery{0, 0, ""}, nil
 }
 
 func (e *TestEngine) channels() ([]string, error) {

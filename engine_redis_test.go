@@ -250,10 +250,10 @@ func TestRedisEngineRecover(t *testing.T) {
 	pub.UID = "5"
 	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
 
-	r, err := e.historyRecoveryData("channel")
+	_, _, r, err := e.recoverHistory("channel", nil)
 	assert.NoError(t, err)
 
-	pubs, recovered, _, err := e.recoverHistory("channel", recovery{2, 0, r.Epoch})
+	pubs, recovered, _, err := e.recoverHistory("channel", &recovery{2, 0, r.Epoch})
 	assert.NoError(t, err)
 	assert.True(t, recovered)
 	assert.Equal(t, 3, len(pubs))
@@ -261,13 +261,13 @@ func TestRedisEngineRecover(t *testing.T) {
 	assert.Equal(t, uint32(4), pubs[1].Seq)
 	assert.Equal(t, uint32(3), pubs[2].Seq)
 
-	pubs, recovered, _, err = e.recoverHistory("channel", recovery{6, 0, r.Epoch})
+	pubs, recovered, _, err = e.recoverHistory("channel", &recovery{6, 0, r.Epoch})
 	assert.NoError(t, err)
 	assert.False(t, recovered)
 	assert.Equal(t, 5, len(pubs))
 
 	assert.NoError(t, e.removeHistory("channel"))
-	pubs, recovered, _, err = e.recoverHistory("channel", recovery{2, 0, r.Epoch})
+	pubs, recovered, _, err = e.recoverHistory("channel", &recovery{2, 0, r.Epoch})
 	assert.NoError(t, err)
 	assert.False(t, recovered)
 	assert.Equal(t, 0, len(pubs))
@@ -640,12 +640,12 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 		pub := &Publication{Data: rawData}
 		<-e.publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryDropInactive: false})
 	}
-	r, err := e.historyRecoveryData("channel")
+	_, _, r, err := e.recoverHistory("channel", nil)
 	assert.NoError(b, err)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := e.recoverHistory("channel", recovery{uint32(numMessages - 5), 0, r.Epoch})
+			_, _, _, err := e.recoverHistory("channel", &recovery{uint32(numMessages - 5), 0, r.Epoch})
 			if err != nil {
 				panic(err)
 			}
@@ -686,7 +686,7 @@ func TestClientSubscribeRecoverRedis(t *testing.T) {
 			replies := []*proto.Reply{}
 			rw := testReplyWriter(&replies)
 
-			recovery, _ := e.historyRecoveryData("test")
+			_, _, recovery, _ := e.recoverHistory("test", nil)
 			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 				Channel: "test",
 				Recover: true,

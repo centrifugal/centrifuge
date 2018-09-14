@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"container/heap"
+	"context"
 	"strconv"
 	"sync"
 	"time"
@@ -41,9 +42,9 @@ func (e *MemoryEngine) run(h EngineEventHandler) error {
 	return nil
 }
 
-// func (e *MemoryEngine) shutdown(h EngineEventHandler) error {
-// 	return e.db.Close()
-// }
+func (e *MemoryEngine) shutdown(ctx context.Context) error {
+	return nil
+}
 
 // Publish adds message into history hub and calls node ClientMsg method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
@@ -124,14 +125,8 @@ func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.historyHub.get(ch, limit)
 }
 
-// History - see engine interface description.
-func (e *MemoryEngine) historyRecoveryData(ch string) (recovery, error) {
-	seq, gen, epoch := e.historyHub.getSequence(ch)
-	return recovery{seq, gen, epoch}, nil
-}
-
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+func (e *MemoryEngine) recoverHistory(ch string, since *recovery) ([]*Publication, bool, recovery, error) {
 	return e.historyHub.recover(ch, since)
 }
 
@@ -243,18 +238,12 @@ func (i historyItem) isExpired() bool {
 	return i.expireAt < time.Now().Unix()
 }
 
-type channelTop struct {
-	ID  uint64
-	UID string
-}
-
 type historyHub struct {
 	sync.RWMutex
 	history   map[string]historyItem
 	queue     priority.Queue
 	nextCheck int64
 
-	// db *badger.DB
 	epoch       string
 	sequencesMu sync.RWMutex
 	sequences   map[string]uint64
@@ -265,7 +254,6 @@ func newHistoryHub() *historyHub {
 		history:   make(map[string]historyItem),
 		queue:     priority.MakeQueue(),
 		nextCheck: 0,
-		// db:        db,
 		epoch:     strconv.FormatInt(time.Now().Unix(), 10),
 		sequences: make(map[string]uint64),
 	}
@@ -445,11 +433,14 @@ const (
 	maxGen = 4294967295 // maximum uint32 value
 )
 
-func (h *historyHub) recover(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+func (h *historyHub) recover(ch string, since *recovery) ([]*Publication, bool, recovery, error) {
 	h.RLock()
 	defer h.RUnlock()
 
 	currentSeq, currentGen, currentEpoch := h.getSequence(ch)
+	if since == nil {
+		return nil, false, recovery{currentSeq, currentGen, currentEpoch}, nil
+	}
 
 	if currentSeq == since.Seq && since.Gen == currentGen && since.Epoch == currentEpoch {
 		return nil, true, recovery{currentSeq, currentGen, currentEpoch}, nil

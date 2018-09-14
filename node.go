@@ -149,6 +149,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	n.shutdown = true
 	close(n.shutdownCh)
 	n.mu.Unlock()
+	defer n.engine.shutdown(ctx)
 	return n.hub.shutdown(ctx)
 }
 
@@ -594,7 +595,7 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 // recoverHistory recovers publications since last UID seen by client.
 func (n *Node) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
-	return n.engine.recoverHistory(ch, since)
+	return n.engine.recoverHistory(ch, &since)
 }
 
 // RemoveHistory removes channel history.
@@ -603,10 +604,11 @@ func (n *Node) RemoveHistory(ch string) error {
 	return n.engine.removeHistory(ch)
 }
 
-// lastPublicationSeq return last publication sequence and current generation for channel.
-func (n *Node) currentRecoveryData(ch string) (recovery, error) {
-	actionCount.WithLabelValues("history_recovery_data").Inc()
-	return n.engine.historyRecoveryData(ch)
+// currentRecoveryState returns current recovery state for channel.
+func (n *Node) currentRecoveryState(ch string) (recovery, error) {
+	actionCount.WithLabelValues("history_recovery_state").Inc()
+	_, _, recovery, err := n.engine.recoverHistory(ch, nil)
+	return recovery, err
 }
 
 // privateChannel checks if channel private. In case of private channel

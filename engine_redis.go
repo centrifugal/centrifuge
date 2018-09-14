@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -498,6 +499,10 @@ func (e *RedisEngine) run(h EngineEventHandler) error {
 	return nil
 }
 
+func (e *RedisEngine) shutdown(ctx context.Context) error {
+	return nil
+}
+
 // Publish - see engine interface description.
 func (e *RedisEngine) publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
 	return e.shards[e.shardIndex(ch)].Publish(ch, pub, opts)
@@ -566,13 +571,8 @@ func (e *RedisEngine) history(ch string, limit int) ([]*Publication, error) {
 	return e.shards[e.shardIndex(ch)].History(ch, limit)
 }
 
-// HistorySequence - see engine interface description.
-func (e *RedisEngine) historyRecoveryData(ch string) (recovery, error) {
-	return e.shards[e.shardIndex(ch)].HistorySequence(ch)
-}
-
 // RecoverHistory - see engine interface description.
-func (e *RedisEngine) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+func (e *RedisEngine) recoverHistory(ch string, since *recovery) ([]*Publication, bool, recovery, error) {
 	return e.shards[e.shardIndex(ch)].RecoverHistory(ch, since)
 }
 
@@ -1346,11 +1346,15 @@ func (e *shard) HistorySequence(ch string) (recovery, error) {
 }
 
 // RecoverHistory - see engine interface description.
-func (e *shard) RecoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+func (e *shard) RecoverHistory(ch string, since *recovery) ([]*Publication, bool, recovery, error) {
 
 	currentRecovery, err := e.HistorySequence(ch)
 	if err != nil {
 		return nil, false, recovery{}, err
+	}
+
+	if since == nil {
+		return nil, false, currentRecovery, nil
 	}
 
 	if currentRecovery.Seq == since.Seq && since.Gen == currentRecovery.Gen && since.Epoch == currentRecovery.Epoch {

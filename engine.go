@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"time"
 )
 
@@ -34,6 +35,16 @@ type recovery struct {
 type Engine interface {
 	// Run called once on start when engine already set to node.
 	run(EngineEventHandler) error
+	// Shutdown when called should clean up engine resources if needed.
+	shutdown(ctx context.Context) error
+
+	// Subscribe node on channel to listen all messages coming from channel.
+	subscribe(ch string) error
+	// Unsubscribe node from channel to stop listening messages from it.
+	unsubscribe(ch string) error
+	// Channels returns slice of currently active channels (with
+	// one or more subscribers) on all running nodes.
+	channels() ([]string, error)
 
 	// Publish allows to send Publication into channel. This message should
 	// be delivered to all clients subscribed on this channel at moment on
@@ -47,13 +58,6 @@ type Engine interface {
 	publishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error
 	// PublishControl allows to send control command data to all running nodes.
 	publishControl(data []byte) <-chan error
-	// Subscribe node on channel to listen all messages coming from channel.
-	subscribe(ch string) error
-	// Unsubscribe node from channel to stop listening messages from it.
-	unsubscribe(ch string) error
-	// Channels returns slice of currently active channels (with
-	// one or more subscribers) on all running nodes.
-	channels() ([]string, error)
 
 	// History returns a slice of history messages for channel.
 	// limit argument sets the max amount of messages that must
@@ -61,16 +65,16 @@ type Engine interface {
 	// messages (though limited by configured history_size). 1 means
 	// last (most recent) message only, 2 - two last messages etc.
 	history(ch string, limit int) ([]*Publication, error)
-	// historyRecoveryData allows to get current recovery state for channel.
-	historyRecoveryData(ch string) (recovery, error)
-	// recoverHistory allows to recover missed messages starting
-	// from last seen Publication UID provided by client. This method
-	// should return as many Publications as possible and boolean value
-	// indicating whether lastUID was found in publications or not
-	// The case when publications can not be fully restored
-	// can happen if old Publications already removed from history
-	// due to size or lifetime limits.
-	recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error)
+	// recoverHistory allows to recover missed publications starting
+	// from position provided by client. This method should return as many
+	// Publications as possible and boolean value indicating whether
+	// publications were fully recovered or not.
+	// For example the case when publications can not be fully restored
+	// can happen if old Publications already removed from history due to size
+	// or lifetime limits.
+	// If since argument is nil then method should no try to recover publications
+	// and must only return current recovery state for channel.
+	recoverHistory(ch string, since *recovery) ([]*Publication, bool, recovery, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
