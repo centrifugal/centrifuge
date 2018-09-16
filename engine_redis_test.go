@@ -489,6 +489,26 @@ func TestConsistentIndex(t *testing.T) {
 	assert.True(t, sameFraction > 0.7)
 }
 
+func TestExtractPushData(t *testing.T) {
+	data := []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	pushData, seq, gen := extractPushData(data)
+	assert.Equal(t, uint32(16901), seq)
+	assert.Equal(t, uint32(0), gen)
+	assert.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
+
+	data = []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	pushData, seq, gen = extractPushData(data)
+	assert.Equal(t, uint32(0), seq)
+	assert.Equal(t, uint32(0), gen)
+	assert.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
+
+	data = []byte(`__4294967337__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	pushData, seq, gen = extractPushData(data)
+	assert.Equal(t, uint32(41), seq)
+	assert.Equal(t, uint32(1), gen)
+	assert.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
+}
+
 func BenchmarkRedisEngineConsistentIndex(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		consistentIndex(strconv.Itoa(i), 4)
