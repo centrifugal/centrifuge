@@ -127,24 +127,24 @@ func TestRedisEngine(t *testing.T) {
 	pub = &Publication{UID: "test UID", Data: rawData}
 
 	// test adding history
-	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1, HistoryDropInactive: false}))
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
 	h, err := e.history("channel", 0)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(h))
 	assert.Equal(t, h[0].UID, "test UID")
 
 	// test history limit
-	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1, HistoryDropInactive: false}))
-	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1, HistoryDropInactive: false}))
-	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1, HistoryDropInactive: false}))
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
 	h, err = e.history("channel", 2)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(h))
 
 	// test history limit greater than history size
-	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
-	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
-	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1, HistoryDropInactive: false}))
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
 
 	// ask all history.
 	h, err = e.history("channel", 0)
@@ -167,66 +167,6 @@ func TestRedisEngine(t *testing.T) {
 	// test publishing leave message.
 	leaveMessage := Leave{}
 	assert.NoError(t, <-e.publishLeave("channel", &leaveMessage, nil))
-}
-
-func TestRedisEnginePublishHistoryDropInactive(t *testing.T) {
-
-	c := dial()
-	defer c.close()
-
-	e := newTestRedisEngine()
-
-	rawData := Raw([]byte("{}"))
-	pub := &Publication{UID: "test UID", Data: rawData}
-
-	// 1. add history with DropInactive = true should be a no-op if history is empty
-	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: true}))
-	h, err := e.history("channel", 0)
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(h))
-
-	// 2. add history with DropInactive = false should always work
-	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: false}))
-	h, err = e.history("channel", 0)
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(h))
-
-	// 3. add with DropInactive = true should work immediately since there should be something in history
-	// for 5 seconds from above
-	assert.NoError(t, nil, <-e.publish("channel", pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 5, HistoryDropInactive: true}))
-	h, err = e.history("channel", 0)
-	assert.NoError(t, err)
-	assert.Equal(t, 2, len(h))
-}
-
-// Test drop inactive edge case - see analogue in Memory Engine tests for more description.
-func TestRedisEngineDropInactive(t *testing.T) {
-	c := dial()
-	defer c.close()
-
-	e := newTestRedisEngine()
-
-	config := e.node.Config()
-	config.HistoryDropInactive = true
-	config.HistoryLifetime = 5
-	config.HistorySize = 2
-	e.node.Reload(config)
-
-	pub := newTestPublication()
-
-	opts, _ := e.node.ChannelOpts("channel")
-
-	assert.Nil(t, <-e.publish("channel", pub, &opts))
-	h, err := e.history("channel", 0)
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(h))
-
-	e.unsubscribe("channel")
-
-	assert.NoError(t, <-e.publish("channel", pub, &opts))
-	h, err = e.history("channel", 0)
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(h))
 }
 
 func TestRedisEngineRecover(t *testing.T) {
@@ -527,7 +467,7 @@ func BenchmarkRedisEnginePublish(b *testing.B) {
 	pub := &Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0, HistoryDropInactive: false})
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
 	}
 }
 
@@ -539,7 +479,7 @@ func BenchmarkRedisEnginePublishParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			<-e.publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0, HistoryDropInactive: false})
+			<-e.publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
 		}
 	})
 }
@@ -550,7 +490,7 @@ func BenchmarkRedisEnginePublishWithHistory(b *testing.B) {
 	pub := &Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100, HistoryDropInactive: false})
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
 	}
 }
 
@@ -562,7 +502,7 @@ func BenchmarkRedisEnginePublishWithHistoryParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			<-e.publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100, HistoryDropInactive: false})
+			<-e.publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
 		}
 	})
 }
@@ -622,7 +562,7 @@ func BenchmarkRedisEngineHistory(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test UID", Data: rawData}
 	for i := 0; i < 4; i++ {
-		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300, HistoryDropInactive: false})
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -639,7 +579,7 @@ func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
-		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300, HistoryDropInactive: false})
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -658,7 +598,7 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 	numMessages := 100
 	for i := 0; i < numMessages; i++ {
 		pub := &Publication{Data: rawData}
-		<-e.publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryDropInactive: false})
+		<-e.publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
 	}
 	_, _, r, err := e.recoverHistory("channel", nil)
 	assert.NoError(b, err)
