@@ -471,6 +471,22 @@ func BenchmarkRedisEnginePublish(b *testing.B) {
 	}
 }
 
+func BenchmarkRedisEngineSubscribeParallel(b *testing.B) {
+	e := newTestRedisEngine()
+	i := 0
+	b.SetParallelism(128)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i++
+			err := e.subscribe("subscribe" + strconv.Itoa(i))
+			if err != nil {
+				panic(err)
+			}
+		}
+	})
+}
+
 func BenchmarkRedisEnginePublishParallel(b *testing.B) {
 	e := newTestRedisEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
