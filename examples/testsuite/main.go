@@ -90,7 +90,7 @@ func testCustomHeader(fn ResolveFunc) *centrifuge.Node {
 
 func testJWTAuth(fn ResolveFunc) *centrifuge.Node {
 	// Use this token in client:
-	// eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0c3VpdGVfand0IiwiZXhwIjoxNTM0NjY0MjE0fQ.pFyddmlMVYQWmed3dfzuHOViNew9DP2yHjzE20unFb4
+	// eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0c3VpdGVfand0In0.hPmHsVqvtY88PvK4EmJlcdwNuKFuy3BGaF7dMaKdPlw
 	cfg := centrifuge.DefaultConfig
 	cfg.Secret = "secret"
 	node, _ := centrifuge.New(cfg)
