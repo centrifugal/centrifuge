@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
-	"time"
 
 	_ "net/http/pprof"
 
@@ -30,9 +29,8 @@ func authMiddleware(h http.Handler) http.Handler {
 		// Our middleware logic goes here...
 		ctx := r.Context()
 		ctx = centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID:   "42",
-			ExpireAt: time.Now().Unix() + 10,
-			Info:     []byte(`{"name": "Alexander"}`),
+			UserID: "42",
+			Info:   []byte(`{"name": "Alexander"}`),
 		})
 		r = r.WithContext(ctx)
 		h.ServeHTTP(w, r)
