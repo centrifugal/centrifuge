@@ -4,11 +4,9 @@ package centrifuge
 type LogLevel int
 
 const (
-	// LogLevelNone means no logging.
-	LogLevelNone LogLevel = iota
 	// LogLevelDebug turns on debug logs - its generally too much for production in normal
 	// conditions but can help when developing and investigating problems in production.
-	LogLevelDebug
+	LogLevelDebug LogLevel = iota
 	// LogLevelInfo is logs useful server information. This includes various information
 	// about problems with client connections which is not Centrifugo errors but
 	// in most situations malformed client behaviour.
@@ -17,22 +15,24 @@ const (
 	// Centrifugo and maybe effort from developers/administrators to make things
 	// work again.
 	LogLevelError
+	// LogLevelNone means no logging.
+	LogLevelNone
 )
 
 // levelToString matches LogLevel to its string representation.
 var levelToString = map[LogLevel]string{
-	LogLevelNone:  "none",
 	LogLevelDebug: "debug",
 	LogLevelInfo:  "info",
 	LogLevelError: "error",
+	LogLevelNone:  "none",
 }
 
 // LogStringToLevel matches level string to LogLevel.
 var LogStringToLevel = map[string]LogLevel{
-	"none":  LogLevelNone,
 	"debug": LogLevelDebug,
 	"info":  LogLevelInfo,
 	"error": LogLevelError,
+	"none":  LogLevelNone,
 }
 
 // LogLevelToString transforms Level to its string representation.

@@ -55,6 +55,8 @@ type (
 	channelID string
 )
 
+var errRedisOpTimeout = errors.New("operation timed out")
+
 const (
 	// redisControlChannelSuffix is a suffix for control channel.
 	redisControlChannelSuffix = ".control"
@@ -153,16 +155,19 @@ func newSubRequest(chIDs []channelID, subscribe bool) subRequest {
 	}
 }
 
+// done should only be called once for subRequest.
 func (sr *subRequest) done(err error) {
 	sr.err <- err
 }
 
-func (sr *subRequest) result(ctx context.Context) error {
+func (sr *subRequest) result(timeout time.Duration) error {
+	timer := acquireTimer(timeout)
+	defer releaseTimer(timer)
 	select {
 	case err := <-sr.err:
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-timer.C:
+		return errRedisOpTimeout
 	}
 }
 
@@ -832,11 +837,10 @@ func (s *shard) runPubSub() {
 						return
 					}
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout())
-				err := r.result(ctx)
-				cancel()
+				err := r.result(s.readTimeout())
 				if err != nil {
 					s.node.logger.log(newLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
+					closeDoneOnce()
 					return
 				}
 				batch = nil
@@ -855,11 +859,10 @@ func (s *shard) runPubSub() {
 					return
 				}
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout())
-			err := r.result(ctx)
-			cancel()
+			err := r.result(s.readTimeout())
 			if err != nil {
 				s.node.logger.log(newLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
+				closeDoneOnce()
 				return
 			}
 		}
@@ -918,15 +921,15 @@ type pubRequest struct {
 	historyKey channelID
 	indexKey   channelID
 	opts       *ChannelOptions
-	err        *chan error
+	err        chan error
 }
 
 func (pr *pubRequest) done(err error) {
-	*(pr.err) <- err
+	pr.err <- err
 }
 
 func (pr *pubRequest) result() error {
-	return <-*(pr.err)
+	return <-pr.err
 }
 
 func fillPublishBatch(ch chan pubRequest, prs *[]pubRequest) {
@@ -1195,7 +1198,7 @@ func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 			historyKey: s.getHistoryKey(ch),
 			indexKey:   s.gethistorySeqKey(ch),
 			opts:       opts,
-			err:        &eChan,
+			err:        eChan,
 		}
 		s.pubCh <- pr
 		return eChan
@@ -1204,7 +1207,7 @@ func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 	pr := pubRequest{
 		channel: chID,
 		message: byteMessage,
-		err:     &eChan,
+		err:     eChan,
 	}
 	s.pubCh <- pr
 	return eChan
@@ -1231,7 +1234,7 @@ func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan 
 	pr := pubRequest{
 		channel: chID,
 		message: byteMessage,
-		err:     &eChan,
+		err:     eChan,
 	}
 	s.pubCh <- pr
 	return eChan
@@ -1258,7 +1261,7 @@ func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-ch
 	pr := pubRequest{
 		channel: chID,
 		message: byteMessage,
-		err:     &eChan,
+		err:     eChan,
 	}
 	s.pubCh <- pr
 	return eChan
@@ -1273,7 +1276,7 @@ func (s *shard) PublishControl(data []byte) <-chan error {
 	pr := pubRequest{
 		channel: chID,
 		message: data,
-		err:     &eChan,
+		err:     eChan,
 	}
 	s.pubCh <- pr
 	return eChan
@@ -1289,15 +1292,15 @@ func (s *shard) Subscribe(ch string) error {
 	select {
 	case s.subCh <- r:
 	default:
+		timer := acquireTimer(s.readTimeout())
+		defer releaseTimer(timer)
 		select {
 		case s.subCh <- r:
-		case <-time.After(s.readTimeout()):
-			return errors.New("timeout")
+		case <-timer.C:
+			return errRedisOpTimeout
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout())
-	defer cancel()
-	return r.result(ctx)
+	return r.result(s.readTimeout())
 }
 
 // Unsubscribe - see engine interface description.
@@ -1313,12 +1316,10 @@ func (s *shard) Unsubscribe(ch string) error {
 		select {
 		case s.subCh <- r:
 		case <-time.After(s.readTimeout()):
-			return errors.New("timeout")
+			return errRedisOpTimeout
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.readTimeout())
-	defer cancel()
-	return r.result(ctx)
+	return r.result(s.readTimeout())
 }
 
 // AddPresence - see engine interface description.

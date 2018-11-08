@@ -93,7 +93,7 @@ func main() {
 		return centrifuge.ConnectReply{}
 	})
 
-	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
+	node.SetLogHandler(centrifuge.LogLevelNone, handleLog)
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
 		Shards: []centrifuge.RedisShardConfig{
