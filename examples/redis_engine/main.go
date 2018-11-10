@@ -21,7 +21,7 @@ var (
 )
 
 func handleLog(e centrifuge.LogEntry) {
-	log.Printf("%s: %v", e.Message, e.Fields)
+	log.Printf("[centrifuge] %s: %v", e.Message, e.Fields)
 }
 
 func authMiddleware(h http.Handler) http.Handler {
@@ -93,7 +93,7 @@ func main() {
 		return centrifuge.ConnectReply{}
 	})
 
-	node.SetLogHandler(centrifuge.LogLevelNone, handleLog)
+	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
 		Shards: []centrifuge.RedisShardConfig{

@@ -15,15 +15,13 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/proto"
+	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/FZambia/sentinel"
 	"github.com/gomodule/redigo/redis"
 )
 
 const (
-	// redisSubscribeChannelSize is the size for the internal buffered channels RedisEngine
-	// uses to synchronize subscribe/unsubscribe.
-	redisSubscribeChannelSize = 1024
 	// redisPubSubWorkerChannelSize sets buffer size of channel to which we send all
 	// messages received from Redis PUB/SUB connection to process in separate goroutine.
 	redisPubSubWorkerChannelSize = 1024
@@ -32,19 +30,16 @@ const (
 	// sense to keep a sane limit given how many subscriptions a single Centrifugo instance might
 	// be handling.
 	redisSubscribeBatchLimit = 512
-	// redisPublishChannelSize is the size for the internal buffered channel RedisEngine uses
-	// to collect publish requests.
-	redisPublishChannelSize = 1024
 	// redisPublishBatchLimit is a maximum limit of publish requests one batched publish
 	// operation can contain.
 	redisPublishBatchLimit = 512
-	// redisDataChannelSize is a buffer size of channel with data operation requests.
-	redisDataChannelSize = 256
+	// redisDataBatchSize is a max amount of data requests in one batch.
+	redisDataBatchSize = 64
 )
 
 const (
 	defaultPrefix         = "centrifuge"
-	defaultReadTimeout    = 5 * time.Second
+	defaultReadTimeout    = time.Second
 	defaultWriteTimeout   = time.Second
 	defaultConnectTimeout = time.Second
 	defaultPoolSize       = 256
@@ -160,15 +155,8 @@ func (sr *subRequest) done(err error) {
 	sr.err <- err
 }
 
-func (sr *subRequest) result(timeout time.Duration) error {
-	timer := acquireTimer(timeout)
-	defer releaseTimer(timer)
-	select {
-	case err := <-sr.err:
-		return err
-	case <-timer.C:
-		return errRedisOpTimeout
-	}
+func (sr *subRequest) result() error {
+	return <-sr.err
 }
 
 func newPool(n *Node, conf RedisShardConfig) *redis.Pool {
@@ -579,9 +567,9 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		pushEncoder:       proto.NewProtobufPushEncoder(),
 		pushDecoder:       proto.NewProtobufPushDecoder(),
 	}
-	shard.pubCh = make(chan pubRequest, redisPublishChannelSize)
-	shard.subCh = make(chan subRequest, redisSubscribeChannelSize)
-	shard.dataCh = make(chan dataRequest, redisDataChannelSize)
+	shard.pubCh = make(chan pubRequest)
+	shard.subCh = make(chan subRequest)
+	shard.dataCh = make(chan dataRequest)
 	shard.messagePrefix = conf.Prefix + redisClientChannelPrefix
 	return shard, nil
 }
@@ -827,17 +815,7 @@ func (s *shard) runPubSub() {
 		for i, ch := range chIDs {
 			if len(batch) > 0 && i%redisSubscribeBatchLimit == 0 {
 				r := newSubRequest(batch, true)
-				select {
-				case s.subCh <- r:
-				default:
-					select {
-					case s.subCh <- r:
-					case <-time.After(s.readTimeout()):
-						closeDoneOnce()
-						return
-					}
-				}
-				err := r.result(s.readTimeout())
+				err := s.sendSubscribe(r)
 				if err != nil {
 					s.node.logger.log(newLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 					closeDoneOnce()
@@ -849,17 +827,7 @@ func (s *shard) runPubSub() {
 		}
 		if len(batch) > 0 {
 			r := newSubRequest(batch, true)
-			select {
-			case s.subCh <- r:
-			default:
-				select {
-				case s.subCh <- r:
-				case <-time.After(s.readTimeout()):
-					closeDoneOnce()
-					return
-				}
-			}
-			err := r.result(s.readTimeout())
+			err := s.sendSubscribe(r)
 			if err != nil {
 				s.node.logger.log(newLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 				closeDoneOnce()
@@ -1116,7 +1084,7 @@ func (s *shard) runDataPipeline() {
 
 	for dr := range s.dataCh {
 		drs = append(drs, dr)
-		fillDataBatch(s.dataCh, &drs, redisDataChannelSize)
+		fillDataBatch(s.dataCh, &drs, redisDataBatchSize)
 
 		conn := s.pool.Get()
 
@@ -1200,7 +1168,18 @@ func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 			opts:       opts,
 			err:        eChan,
 		}
-		s.pubCh <- pr
+		select {
+		case s.pubCh <- pr:
+		default:
+			timer := timers.AcquireTimer(s.readTimeout())
+			defer timers.ReleaseTimer(timer)
+			select {
+			case s.pubCh <- pr:
+			case <-timer.C:
+				eChan <- errRedisOpTimeout
+				return eChan
+			}
+		}
 		return eChan
 	}
 
@@ -1209,7 +1188,14 @@ func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 		message: byteMessage,
 		err:     eChan,
 	}
-	s.pubCh <- pr
+	timer := timers.AcquireTimer(s.readTimeout())
+	defer timers.ReleaseTimer(timer)
+	select {
+	case s.pubCh <- pr:
+	case <-timer.C:
+		eChan <- errRedisOpTimeout
+		return eChan
+	}
 	return eChan
 }
 
@@ -1236,7 +1222,14 @@ func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan 
 		message: byteMessage,
 		err:     eChan,
 	}
-	s.pubCh <- pr
+	timer := timers.AcquireTimer(s.readTimeout())
+	defer timers.ReleaseTimer(timer)
+	select {
+	case s.pubCh <- pr:
+	case <-timer.C:
+		eChan <- errRedisOpTimeout
+		return eChan
+	}
 	return eChan
 }
 
@@ -1263,7 +1256,14 @@ func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-ch
 		message: byteMessage,
 		err:     eChan,
 	}
-	s.pubCh <- pr
+	timer := timers.AcquireTimer(s.readTimeout())
+	defer timers.ReleaseTimer(timer)
+	select {
+	case s.pubCh <- pr:
+	case <-timer.C:
+		eChan <- errRedisOpTimeout
+		return eChan
+	}
 	return eChan
 }
 
@@ -1282,25 +1282,28 @@ func (s *shard) PublishControl(data []byte) <-chan error {
 	return eChan
 }
 
-// Subscribe - see engine interface description.
-func (s *shard) Subscribe(ch string) error {
-	if s.node.logger.enabled(LogLevelDebug) {
-		s.node.logger.log(newLogEntry(LogLevelDebug, "subscribe node on channel", map[string]interface{}{"channel": ch}))
-	}
-	channel := s.messageChannelID(ch)
-	r := newSubRequest([]channelID{channel}, true)
+func (s *shard) sendSubscribe(r subRequest) error {
 	select {
 	case s.subCh <- r:
 	default:
-		timer := acquireTimer(s.readTimeout())
-		defer releaseTimer(timer)
+		timer := timers.AcquireTimer(s.readTimeout())
+		defer timers.ReleaseTimer(timer)
 		select {
 		case s.subCh <- r:
 		case <-timer.C:
 			return errRedisOpTimeout
 		}
 	}
-	return r.result(s.readTimeout())
+	return r.result()
+}
+
+// Subscribe - see engine interface description.
+func (s *shard) Subscribe(ch string) error {
+	if s.node.logger.enabled(LogLevelDebug) {
+		s.node.logger.log(newLogEntry(LogLevelDebug, "subscribe node on channel", map[string]interface{}{"channel": ch}))
+	}
+	r := newSubRequest([]channelID{s.messageChannelID(ch)}, true)
+	return s.sendSubscribe(r)
 }
 
 // Unsubscribe - see engine interface description.
@@ -1308,18 +1311,21 @@ func (s *shard) Unsubscribe(ch string) error {
 	if s.node.logger.enabled(LogLevelDebug) {
 		s.node.logger.log(newLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]interface{}{"channel": ch}))
 	}
-	channel := s.messageChannelID(ch)
-	r := newSubRequest([]channelID{channel}, false)
+	r := newSubRequest([]channelID{s.messageChannelID(ch)}, false)
+	return s.sendSubscribe(r)
+}
+
+func (s *shard) getDataResponse(r dataRequest) *dataResponse {
 	select {
-	case s.subCh <- r:
+	case s.dataCh <- r:
 	default:
 		select {
-		case s.subCh <- r:
+		case s.dataCh <- r:
 		case <-time.After(s.readTimeout()):
-			return errRedisOpTimeout
+			return &dataResponse{nil, errRedisOpTimeout}
 		}
 	}
-	return r.result(s.readTimeout())
+	return r.result()
 }
 
 // AddPresence - see engine interface description.
@@ -1332,8 +1338,7 @@ func (s *shard) AddPresence(ch string, uid string, info *ClientInfo, expire int)
 	hashKey := s.getPresenceHashKey(ch)
 	setKey := s.getPresenceSetKey(ch)
 	dr := newDataRequest(dataOpAddPresence, []interface{}{setKey, hashKey, expire, expireAt, uid, infoJSON})
-	s.dataCh <- dr
-	resp := dr.result()
+	resp := s.getDataResponse(dr)
 	return resp.err
 }
 
@@ -1342,8 +1347,7 @@ func (s *shard) RemovePresence(ch string, uid string) error {
 	hashKey := s.getPresenceHashKey(ch)
 	setKey := s.getPresenceSetKey(ch)
 	dr := newDataRequest(dataOpRemovePresence, []interface{}{setKey, hashKey, uid})
-	s.dataCh <- dr
-	resp := dr.result()
+	resp := s.getDataResponse(dr)
 	return resp.err
 }
 
@@ -1353,8 +1357,7 @@ func (s *shard) Presence(ch string) (map[string]*ClientInfo, error) {
 	setKey := s.getPresenceSetKey(ch)
 	now := int(time.Now().Unix())
 	dr := newDataRequest(dataOpPresence, []interface{}{setKey, hashKey, now})
-	s.dataCh <- dr
-	resp := dr.result()
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
 	}
@@ -1394,8 +1397,7 @@ func (s *shard) History(ch string, limit int) ([]*Publication, error) {
 	}
 	historyKey := s.getHistoryKey(ch)
 	dr := newDataRequest(dataOpHistory, []interface{}{historyKey, 0, rangeBound})
-	s.dataCh <- dr
-	resp := dr.result()
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
 	}
@@ -1407,8 +1409,7 @@ func (s *shard) HistorySequence(ch string) (recovery, error) {
 	historySeqKey := s.gethistorySeqKey(ch)
 	historyEpochKey := s.gethistoryEpochKey(ch)
 	dr := newDataRequest(dataOphistorySeq, []interface{}{historySeqKey, historyEpochKey})
-	s.dataCh <- dr
-	resp := dr.result()
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return recovery{}, resp.err
 	}
@@ -1489,20 +1490,15 @@ func (s *shard) RecoverHistory(ch string, since *recovery) ([]*Publication, bool
 func (s *shard) RemoveHistory(ch string) error {
 	historyKey := s.getHistoryKey(ch)
 	dr := newDataRequest(dataOpHistoryRemove, []interface{}{historyKey})
-	s.dataCh <- dr
-	resp := dr.result()
-	if resp.err != nil {
-		return resp.err
-	}
-	return nil
+	resp := s.getDataResponse(dr)
+	return resp.err
 }
 
 // Channels - see engine interface description.
 // Requires Redis >= 2.8.0 (http://redis.io/commands/pubsub)
 func (s *shard) Channels() ([]string, error) {
 	dr := newDataRequest(dataOpChannels, []interface{}{"CHANNELS", s.messagePrefix + "*"})
-	s.dataCh <- dr
-	resp := dr.result()
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
 	}

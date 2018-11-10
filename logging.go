@@ -4,9 +4,11 @@ package centrifuge
 type LogLevel int
 
 const (
+	// LogLevelNone means no logging.
+	LogLevelNone LogLevel = iota
 	// LogLevelDebug turns on debug logs - its generally too much for production in normal
 	// conditions but can help when developing and investigating problems in production.
-	LogLevelDebug LogLevel = iota
+	LogLevelDebug
 	// LogLevelInfo is logs useful server information. This includes various information
 	// about problems with client connections which is not Centrifugo errors but
 	// in most situations malformed client behaviour.
@@ -15,8 +17,6 @@ const (
 	// Centrifugo and maybe effort from developers/administrators to make things
 	// work again.
 	LogLevelError
-	// LogLevelNone means no logging.
-	LogLevelNone
 )
 
 // levelToString matches LogLevel to its string representation.
@@ -89,7 +89,7 @@ func (l *logger) log(entry LogEntry) {
 	if l == nil {
 		return
 	}
-	if entry.Level >= l.level {
+	if l.enabled(entry.Level) {
 		l.handler(entry)
 	}
 }
@@ -99,5 +99,5 @@ func (l *logger) enabled(level LogLevel) bool {
 	if l == nil {
 		return false
 	}
-	return level >= l.level
+	return level >= l.level && l.level != LogLevelNone
 }
