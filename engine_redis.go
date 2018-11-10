@@ -181,7 +181,7 @@ func newPool(n *Node, conf RedisShardConfig) *redis.Pool {
 
 	poolSize := defaultPoolSize
 
-	maxIdle := 10
+	maxIdle := 64
 	if poolSize < maxIdle {
 		maxIdle = poolSize
 	}
