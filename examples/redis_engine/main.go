@@ -21,7 +21,7 @@ var (
 )
 
 func handleLog(e centrifuge.LogEntry) {
-	log.Printf("%s: %v", e.Message, e.Fields)
+	log.Printf("[centrifuge] %s: %v", e.Message, e.Fields)
 }
 
 func authMiddleware(h http.Handler) http.Handler {
