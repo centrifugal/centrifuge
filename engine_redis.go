@@ -1222,13 +1222,17 @@ func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan 
 		message: byteMessage,
 		err:     eChan,
 	}
-	timer := timers.AcquireTimer(s.readTimeout())
-	defer timers.ReleaseTimer(timer)
 	select {
 	case s.pubCh <- pr:
-	case <-timer.C:
-		eChan <- errRedisOpTimeout
-		return eChan
+	default:
+		timer := timers.AcquireTimer(s.readTimeout())
+		defer timers.ReleaseTimer(timer)
+		select {
+		case s.pubCh <- pr:
+		case <-timer.C:
+			eChan <- errRedisOpTimeout
+			return eChan
+		}
 	}
 	return eChan
 }
@@ -1256,13 +1260,17 @@ func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-ch
 		message: byteMessage,
 		err:     eChan,
 	}
-	timer := timers.AcquireTimer(s.readTimeout())
-	defer timers.ReleaseTimer(timer)
 	select {
 	case s.pubCh <- pr:
-	case <-timer.C:
-		eChan <- errRedisOpTimeout
-		return eChan
+	default:
+		timer := timers.AcquireTimer(s.readTimeout())
+		defer timers.ReleaseTimer(timer)
+		select {
+		case s.pubCh <- pr:
+		case <-timer.C:
+			eChan <- errRedisOpTimeout
+			return eChan
+		}
 	}
 	return eChan
 }
