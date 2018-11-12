@@ -33,8 +33,8 @@ const (
 	// redisPublishBatchLimit is a maximum limit of publish requests one batched publish
 	// operation can contain.
 	redisPublishBatchLimit = 512
-	// redisDataBatchSize is a max amount of data requests in one batch.
-	redisDataBatchSize = 64
+	// redisDataBatchLimit is a max amount of data requests in one batch.
+	redisDataBatchLimit = 64
 )
 
 const (
@@ -128,9 +128,9 @@ type RedisShardConfig struct {
 	// than node ping publish interval in order to prevent timing out Pubsub connection's
 	// Receive call.
 	ReadTimeout time.Duration
-	// WriteTimeout is a timeout on write operations
+	// WriteTimeout is a timeout on write operations.
 	WriteTimeout time.Duration
-	// ConnectTimeout is a timeout on connect operation
+	// ConnectTimeout is a timeout on connect operation.
 	ConnectTimeout time.Duration
 }
 
@@ -900,17 +900,6 @@ func (pr *pubRequest) result() error {
 	return <-pr.err
 }
 
-func fillPublishBatch(ch chan pubRequest, prs *[]pubRequest) {
-	for len(*prs) < redisPublishBatchLimit {
-		select {
-		case pr := <-ch:
-			*prs = append(*prs, pr)
-		default:
-			return
-		}
-	}
-}
-
 func (s *shard) runPublishPipeline() {
 	conn := s.pool.Get()
 
@@ -945,7 +934,15 @@ func (s *shard) runPublishPipeline() {
 			conn.Close()
 		case pr := <-s.pubCh:
 			prs = append(prs, pr)
-			fillPublishBatch(s.pubCh, &prs)
+		loop:
+			for len(prs) < redisPublishBatchLimit {
+				select {
+				case pr := <-s.pubCh:
+					prs = append(prs, pr)
+				default:
+					break loop
+				}
+			}
 			conn := s.pool.Get()
 			for i := range prs {
 				if prs[i].opts != nil && prs[i].opts.HistorySize > 0 && prs[i].opts.HistoryLifetime > 0 {
@@ -1031,17 +1028,6 @@ func (dr *dataRequest) result() *dataResponse {
 	return <-dr.resp
 }
 
-func fillDataBatch(ch <-chan dataRequest, batch *[]dataRequest, maxSize int) {
-	for len(*batch) < maxSize {
-		select {
-		case req := <-ch:
-			*batch = append(*batch, req)
-		default:
-			return
-		}
-	}
-}
-
 func (s *shard) runDataPipeline() {
 
 	conn := s.pool.Get()
@@ -1084,7 +1070,15 @@ func (s *shard) runDataPipeline() {
 
 	for dr := range s.dataCh {
 		drs = append(drs, dr)
-		fillDataBatch(s.dataCh, &drs, redisDataBatchSize)
+	loop:
+		for len(drs) < redisDataBatchLimit {
+			select {
+			case req := <-s.dataCh:
+				drs = append(drs, req)
+			default:
+				break loop
+			}
+		}
 
 		conn := s.pool.Get()
 
