@@ -23,8 +23,8 @@ enum MethodType {
 
 message Command {
     string uid = 1 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid"];
-    MethodType Method = 2 [(gogoproto.jsontag) = "method"];
-    bytes Params = 3 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "params", (gogoproto.nullable) = false];
+    MethodType method = 2 [(gogoproto.jsontag) = "method"];
+    bytes params = 3 [(gogoproto.customtype) = "github.com/centrifugal/centrifuge/internal/proto.Raw", (gogoproto.jsontag) = "params", (gogoproto.nullable) = false];
 }
 
 message Node {
