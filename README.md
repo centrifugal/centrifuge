@@ -176,9 +176,7 @@ Also create file `index.html` near `main.go` with content:
 <html>
     <head>
         <meta charset="utf-8">
-        <!-- Note that we use client from c2 branch of centrifuge-js because its not released yet -->
-        <!-- TODO: use client from master branch after client release -->
-        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/c2/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
     </head>
     <body>
         <input type="text" id="input" />
