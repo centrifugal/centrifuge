@@ -56,4 +56,4 @@ ignored = ["github.com/centrifugal/centrifuge/examples*"]
 
 [[constraint]]
   name = "github.com/FZambia/eagle"
-  branch = "master"
+  version = "0.0.1"
