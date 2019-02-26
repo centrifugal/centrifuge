@@ -406,18 +406,18 @@ return entries
 	`
 
 	// KEYS[1] - history sequence key
-	// KEYS[2] - history gen key
+	// KEYS[2] - history epoch key
 	historySeqSource = `
 redis.replicate_commands()
 local seq = redis.call("get", KEYS[1])
-local gen
+local epoch
 if redis.call('EXISTS', KEYS[2]) ~= 0 then
-  gen = redis.call("get", KEYS[2])
+  epoch = redis.call("get", KEYS[2])
 else
-  gen = redis.call('TIME')[1]
-  redis.call("set", KEYS[2], gen)
+  epoch = redis.call('TIME')[1]
+  redis.call("set", KEYS[2], epoch)
 end
-return {seq, gen}
+return {seq, epoch}
 	`
 )
 
@@ -1406,8 +1406,7 @@ func (s *shard) History(ch string, limit int) ([]*Publication, error) {
 	return sliceOfPubs(s, resp.reply, nil)
 }
 
-// History - see engine interface description.
-func (s *shard) HistorySequence(ch string) (recovery, error) {
+func (s *shard) historySequence(ch string) (recovery, error) {
 	historySeqKey := s.gethistorySeqKey(ch)
 	historyEpochKey := s.gethistoryEpochKey(ch)
 	dr := newDataRequest(dataOphistorySeq, []interface{}{historySeqKey, historyEpochKey})
@@ -1442,7 +1441,7 @@ func (s *shard) HistorySequence(ch string) (recovery, error) {
 // RecoverHistory - see engine interface description.
 func (s *shard) RecoverHistory(ch string, since *recovery) ([]*Publication, bool, recovery, error) {
 
-	currentRecovery, err := s.HistorySequence(ch)
+	currentRecovery, err := s.historySequence(ch)
 	if err != nil {
 		return nil, false, recovery{}, err
 	}

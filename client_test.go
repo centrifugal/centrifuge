@@ -484,6 +484,7 @@ var recoverTests = []struct {
 	Sleep           int
 	Recovered       bool
 }{
+	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
 	{"from_position", 10, 60, 10, 8, 2, 0, true},
 	{"from_position_that_is_too_far", 10, 60, 20, 8, 10, 0, false},
 	{"same_position_no_history_expected", 10, 60, 7, 7, 0, 0, true},
