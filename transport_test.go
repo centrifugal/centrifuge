@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const numQueueMessages = 100
+const numQueueMessages = 4
 
 type benchmarkTransport struct {
 	f     *os.File
