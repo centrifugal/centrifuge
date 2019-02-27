@@ -569,7 +569,7 @@ func (c *Client) handle(cmd *proto.Command, writeFn func(*proto.Reply) error, fl
 	write := func(rep *proto.Reply) error {
 		rep.ID = cmd.ID
 		if rep.Error != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "error in reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Error()}))
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Error()}))
 			replyErrorCount.WithLabelValues(strings.ToLower(proto.MethodType_name[int32(method)]), strconv.FormatUint(uint64(rep.Error.Code), 10)).Inc()
 		}
 		return writeFn(rep)
@@ -735,13 +735,7 @@ func (c *Client) handleSubscribe(params proto.Raw, rw *replyWriter) *Disconnect 
 		c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding subscribe", map[string]interface{}{"error": err.Error()}))
 		return DisconnectBadRequest
 	}
-	disconnect := c.subscribeCmd(cmd, rw)
-	if disconnect == nil {
-		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "client subscribed to channel", map[string]interface{}{"client": c.uid, "user": c.user, "channel": cmd.Channel}))
-		}
-	}
-	return disconnect
+	return c.subscribeCmd(cmd, rw)
 }
 
 func (c *Client) handleSubRefresh(params proto.Raw, rw *replyWriter) *Disconnect {
@@ -1584,6 +1578,10 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 			Info: *info,
 		}
 		go c.node.publishJoin(channel, join, &chOpts)
+	}
+
+	if c.node.logger.enabled(LogLevelDebug) {
+		c.node.logger.log(newLogEntry(LogLevelDebug, "client subscribed to channel", map[string]interface{}{"client": c.uid, "user": c.user, "channel": cmd.Channel}))
 	}
 
 	return nil
