@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -92,6 +93,13 @@ func New(c Config) (*Node, error) {
 	return n, nil
 }
 
+// index chooses bucket number in range [0, numBuckets).
+func index(s string, numBuckets int) int {
+	hash := fnv.New64a()
+	hash.Write([]byte(s))
+	return int(hash.Sum64() % uint64(numBuckets))
+}
+
 func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
 }
@@ -135,7 +143,7 @@ func (n *Node) Reload(c Config) error {
 // after engine set to Node.
 func (n *Node) Run() error {
 	eventHandler := &engineEventHandler{n}
-	if err := n.engine.run(eventHandler); err != nil {
+	if err := n.engine.Run(eventHandler); err != nil {
 		return err
 	}
 	err := n.initMetrics()
@@ -159,6 +167,11 @@ func (n *Node) Log(entry LogEntry) {
 	n.logger.log(entry)
 }
 
+// LogEnabled allows to log entry.
+func (n *Node) LogEnabled(level LogLevel) bool {
+	return n.logger.enabled(level)
+}
+
 // On allows access to NodeEventHub.
 func (n *Node) On() NodeEventHub {
 	return n.eventHub
@@ -175,7 +188,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	n.shutdown = true
 	close(n.shutdownCh)
 	n.mu.Unlock()
-	defer n.engine.shutdown(ctx)
+	defer n.engine.Shutdown(ctx)
 	return n.hub.shutdown(ctx)
 }
 
@@ -274,7 +287,7 @@ func (n *Node) cleanNodeInfo() {
 // This is a snapshot of state mostly useful for understanding what's going on
 // with system.
 func (n *Node) Channels() ([]string, error) {
-	return n.engine.channels()
+	return n.engine.Channels()
 }
 
 // Info contains information about all known server nodes.
@@ -439,7 +452,7 @@ func (n *Node) PublishAsync(ch string, pub *Publication) <-chan error {
 		return makeErrChan(ErrNoChannelOptions)
 	}
 	messagesSentCount.WithLabelValues("publication").Inc()
-	return n.engine.publish(ch, pub, &chOpts)
+	return n.engine.Publish(ch, pub, &chOpts)
 }
 
 // publishJoin allows to publish join message into channel when someone subscribes on it
@@ -453,7 +466,7 @@ func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-
 		opts = &chOpts
 	}
 	messagesSentCount.WithLabelValues("join").Inc()
-	return n.engine.publishJoin(ch, join, opts)
+	return n.engine.PublishJoin(ch, join, opts)
 }
 
 // publishLeave allows to publish join message into channel when someone subscribes on it
@@ -467,7 +480,7 @@ func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions)
 		opts = &chOpts
 	}
 	messagesSentCount.WithLabelValues("leave").Inc()
-	return n.engine.publishLeave(ch, leave, opts)
+	return n.engine.PublishLeave(ch, leave, opts)
 }
 
 // publishControl publishes message into control channel so all running
@@ -478,7 +491,7 @@ func (n *Node) publishControl(cmd *controlproto.Command) <-chan error {
 	if err != nil {
 		return makeErrChan(err)
 	}
-	return n.engine.publishControl(data)
+	return n.engine.PublishControl(data)
 }
 
 func (n *Node) getMetrics(metrics eagle.Metrics) *controlproto.Metrics {
@@ -584,7 +597,7 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 		return err
 	}
 	if first {
-		err := n.engine.subscribe(ch)
+		err := n.engine.Subscribe(ch)
 		if err != nil {
 			n.hub.removeSub(ch, c)
 			return err
@@ -605,7 +618,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 		return err
 	}
 	if empty {
-		return n.engine.unsubscribe(ch)
+		return n.engine.Unsubscribe(ch)
 	}
 	return nil
 }
@@ -662,19 +675,19 @@ func (n *Node) addPresence(ch string, uid string, info *proto.ClientInfo) error 
 	expire := n.config.ClientPresenceExpireInterval
 	n.mu.RUnlock()
 	actionCount.WithLabelValues("add_presence").Inc()
-	return n.engine.addPresence(ch, uid, info, expire)
+	return n.engine.AddPresence(ch, uid, info, expire)
 }
 
 // removePresence proxies presence removing to engine.
 func (n *Node) removePresence(ch string, uid string) error {
 	actionCount.WithLabelValues("remove_presence").Inc()
-	return n.engine.removePresence(ch, uid)
+	return n.engine.RemovePresence(ch, uid)
 }
 
 // Presence returns a map with information about active clients in channel.
 func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
 	actionCount.WithLabelValues("presence").Inc()
-	presence, err := n.engine.presence(ch)
+	presence, err := n.engine.Presence(ch)
 	if err != nil {
 		return nil, err
 	}
@@ -684,13 +697,13 @@ func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
 // PresenceStats returns presence stats from engine.
 func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
 	actionCount.WithLabelValues("presence_stats").Inc()
-	return n.engine.presenceStats(ch)
+	return n.engine.PresenceStats(ch)
 }
 
 // History returns a slice of last messages published into project channel.
 func (n *Node) History(ch string) ([]*Publication, error) {
 	actionCount.WithLabelValues("history").Inc()
-	pubs, err := n.engine.history(ch, 0)
+	pubs, err := n.engine.History(ch, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -698,21 +711,21 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, since recovery) ([]*Publication, bool, recovery, error) {
+func (n *Node) recoverHistory(ch string, since Recovery) ([]*Publication, bool, Recovery, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
-	return n.engine.recoverHistory(ch, &since)
+	return n.engine.RecoverHistory(ch, &since)
 }
 
 // RemoveHistory removes channel history.
 func (n *Node) RemoveHistory(ch string) error {
 	actionCount.WithLabelValues("remove_history").Inc()
-	return n.engine.removeHistory(ch)
+	return n.engine.RemoveHistory(ch)
 }
 
 // currentRecoveryState returns current recovery state for channel.
-func (n *Node) currentRecoveryState(ch string) (recovery, error) {
+func (n *Node) currentRecoveryState(ch string) (Recovery, error) {
 	actionCount.WithLabelValues("history_recovery_state").Inc()
-	_, _, recovery, err := n.engine.recoverHistory(ch, nil)
+	_, _, recovery, err := n.engine.RecoverHistory(ch, nil)
 	return recovery, err
 }
 

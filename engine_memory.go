@@ -37,18 +37,19 @@ func NewMemoryEngine(n *Node, conf MemoryEngineConfig) (*MemoryEngine, error) {
 
 // Run runs memory engine - we do not have any logic here as Memory Engine ready to work
 // just after initialization.
-func (e *MemoryEngine) run(h EngineEventHandler) error {
+func (e *MemoryEngine) Run(h EngineEventHandler) error {
 	e.eventHandler = h
 	return nil
 }
 
-func (e *MemoryEngine) shutdown(ctx context.Context) error {
+// Shutdown ...
+func (e *MemoryEngine) Shutdown(ctx context.Context) error {
 	return nil
 }
 
 // Publish adds message into history hub and calls node ClientMsg method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
-func (e *MemoryEngine) publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
+func (e *MemoryEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
 
 	if opts != nil && opts.HistorySize > 0 && opts.HistoryLifetime > 0 {
 		err := e.historyHub.add(ch, pub, opts)
@@ -65,73 +66,73 @@ func (e *MemoryEngine) publish(ch string, pub *Publication, opts *ChannelOptions
 }
 
 // PublishJoin - see engine interface description.
-func (e *MemoryEngine) publishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
+func (e *MemoryEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
 	eChan := make(chan error, 1)
 	eChan <- e.eventHandler.HandleJoin(ch, join)
 	return eChan
 }
 
 // PublishLeave - see engine interface description.
-func (e *MemoryEngine) publishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
+func (e *MemoryEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
 	eChan := make(chan error, 1)
 	eChan <- e.eventHandler.HandleLeave(ch, leave)
 	return eChan
 }
 
 // PublishControl - see Engine interface description.
-func (e *MemoryEngine) publishControl(data []byte) <-chan error {
+func (e *MemoryEngine) PublishControl(data []byte) <-chan error {
 	eChan := make(chan error, 1)
 	eChan <- e.eventHandler.HandleControl(data)
 	return eChan
 }
 
 // Subscribe is noop here.
-func (e *MemoryEngine) subscribe(ch string) error {
+func (e *MemoryEngine) Subscribe(ch string) error {
 	return nil
 }
 
 // Unsubscribe node from channel.
-func (e *MemoryEngine) unsubscribe(ch string) error {
+func (e *MemoryEngine) Unsubscribe(ch string) error {
 	return nil
 }
 
 // AddPresence - see engine interface description.
-func (e *MemoryEngine) addPresence(ch string, uid string, info *ClientInfo, exp time.Duration) error {
+func (e *MemoryEngine) AddPresence(ch string, uid string, info *ClientInfo, exp time.Duration) error {
 	return e.presenceHub.add(ch, uid, info)
 }
 
 // RemovePresence - see engine interface description.
-func (e *MemoryEngine) removePresence(ch string, uid string) error {
+func (e *MemoryEngine) RemovePresence(ch string, uid string) error {
 	return e.presenceHub.remove(ch, uid)
 }
 
 // Presence - see engine interface description.
-func (e *MemoryEngine) presence(ch string) (map[string]*ClientInfo, error) {
+func (e *MemoryEngine) Presence(ch string) (map[string]*ClientInfo, error) {
 	return e.presenceHub.get(ch)
 }
 
 // PresenceStats - see engine interface description.
-func (e *MemoryEngine) presenceStats(ch string) (PresenceStats, error) {
+func (e *MemoryEngine) PresenceStats(ch string) (PresenceStats, error) {
 	return e.presenceHub.getStats(ch)
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) history(ch string, limit int) ([]*Publication, error) {
+func (e *MemoryEngine) History(ch string, limit int) ([]*Publication, error) {
 	return e.historyHub.get(ch, limit)
 }
 
 // RecoverHistory - see engine interface description.
-func (e *MemoryEngine) recoverHistory(ch string, since *recovery) ([]*Publication, bool, recovery, error) {
+func (e *MemoryEngine) RecoverHistory(ch string, since *Recovery) ([]*Publication, bool, Recovery, error) {
 	return e.historyHub.recover(ch, since)
 }
 
 // RemoveHistory - see engine interface description.
-func (e *MemoryEngine) removeHistory(ch string) error {
+func (e *MemoryEngine) RemoveHistory(ch string) error {
 	return e.historyHub.remove(ch)
 }
 
 // Channels - see engine interface description.
-func (e *MemoryEngine) channels() ([]string, error) {
+func (e *MemoryEngine) Channels() ([]string, error) {
 	return e.node.hub.Channels(), nil
 }
 
@@ -400,22 +401,22 @@ const (
 	maxGen = 4294967295 // maximum uint32 value
 )
 
-func (h *historyHub) recover(ch string, since *recovery) ([]*Publication, bool, recovery, error) {
+func (h *historyHub) recover(ch string, since *Recovery) ([]*Publication, bool, Recovery, error) {
 	h.RLock()
 	defer h.RUnlock()
 
 	currentSeq, currentGen, currentEpoch := h.getSequence(ch)
 	if since == nil {
-		return nil, false, recovery{currentSeq, currentGen, currentEpoch}, nil
+		return nil, false, Recovery{currentSeq, currentGen, currentEpoch}, nil
 	}
 
 	if currentSeq == since.Seq && since.Gen == currentGen && since.Epoch == currentEpoch {
-		return nil, true, recovery{currentSeq, currentGen, currentEpoch}, nil
+		return nil, true, Recovery{currentSeq, currentGen, currentEpoch}, nil
 	}
 
 	publications, err := h.getUnsafe(ch, 0)
 	if err != nil {
-		return nil, false, recovery{}, err
+		return nil, false, Recovery{}, err
 	}
 
 	nextSeq := since.Seq + 1
@@ -440,8 +441,8 @@ func (h *historyHub) recover(ch string, since *recovery) ([]*Publication, bool, 
 		}
 	}
 	if position > -1 {
-		return publications[0:position], since.Epoch == currentEpoch, recovery{currentSeq, currentGen, currentEpoch}, nil
+		return publications[0:position], since.Epoch == currentEpoch, Recovery{currentSeq, currentGen, currentEpoch}, nil
 	}
 
-	return publications, false, recovery{currentSeq, currentGen, currentEpoch}, nil
+	return publications, false, Recovery{currentSeq, currentGen, currentEpoch}, nil
 }

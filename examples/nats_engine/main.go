@@ -14,7 +14,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/centrifuge/engine/redisengine"
+	"github.com/centrifugal/centrifuge/engine/natsengine"
 )
 
 var (
@@ -96,17 +96,8 @@ func main() {
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
-	engine, err := redisengine.New(node, redisengine.Config{
-		Shards: []redisengine.ShardConfig{
-			redisengine.ShardConfig{
-				Host: "localhost",
-				Port: 6379,
-			},
-			redisengine.ShardConfig{
-				Host: "localhost",
-				Port: 6380,
-			},
-		},
+	engine, err := natsengine.New(node, natsengine.Config{
+		Prefix: "centrifuge-nats-engine-example",
 	})
 	if err != nil {
 		panic(err)

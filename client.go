@@ -1502,7 +1502,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			publications, recovered, recovery, err := c.node.recoverHistory(channel, recovery{cmd.Seq, cmd.Gen, cmd.Epoch})
+			publications, recovered, recovery, err := c.node.recoverHistory(channel, Recovery{cmd.Seq, cmd.Gen, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				if chOpts.HistoryRecover {
