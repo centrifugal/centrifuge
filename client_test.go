@@ -522,13 +522,16 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 			replies := []*proto.Reply{}
 			rw := testReplyWriter(&replies)
 
-			_, _, recovery, _ := node.engine.recoverHistory("test", nil)
+			_, recoveryPosition, _ := node.engine.History("test", HistoryFilter{
+				Limit: 0,
+				Since: nil,
+			})
 			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 				Channel: "test",
 				Recover: true,
 				Seq:     tt.SinceSeq,
-				Gen:     recovery.Gen,
-				Epoch:   recovery.Epoch,
+				Gen:     recoveryPosition.Gen,
+				Epoch:   recoveryPosition.Epoch,
 			}, rw)
 			assert.Nil(t, disconnect)
 			assert.Nil(t, replies[0].Error)

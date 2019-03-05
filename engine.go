@@ -23,10 +23,24 @@ type EngineEventHandler interface {
 	HandleControl([]byte) error
 }
 
-// Recovery contains fields to rely in recovery process.
-type Recovery struct {
-	Seq   uint32
-	Gen   uint32
+// HistoryFilter allows to filter history according to fields set.
+type HistoryFilter struct {
+	// Since used to recover missed messages since provided RecoveryPosition.
+	Since *RecoveryPosition
+	// Limit number of publications to return.
+	Limit int
+}
+
+// RecoveryPosition contains fields to rely in recovery process.
+type RecoveryPosition struct {
+	// Seq defines publication sequence.
+	Seq uint32
+	// Gen defines publication generation. The reason why we use both seq and gen
+	// is the fact that Javascript can't properly work with big numbers.
+	Gen uint32
+	// Epoch of sequence and generation. Allows to handle situations when storage
+	// lost seq and gen for some reason and we don't want to improperly decide
+	// that publications were successfully recovered.
 	Epoch string
 }
 
@@ -59,22 +73,9 @@ type Engine interface {
 	// PublishControl allows to send control command data to all running nodes.
 	PublishControl(data []byte) <-chan error
 
-	// History returns a slice of history messages for channel.
-	// limit argument sets the max amount of messages that must
-	// be returned. 0 means no limit - i.e. return all history
-	// messages (though limited by configured history_size). 1 means
-	// last (most recent) message only, 2 - two last messages etc.
-	History(ch string, limit int) ([]*Publication, error)
-	// recoverHistory allows to recover missed publications starting
-	// from position provided by client. This method should return as many
-	// Publications as possible and boolean value indicating whether
-	// publications were fully recovered or not.
-	// For example the case when publications can not be fully restored
-	// can happen if old Publications already removed from history due to size
-	// or lifetime limits.
-	// If since argument is nil then method should no try to recover publications
-	// and must only return current recovery state for channel.
-	RecoverHistory(ch string, since *Recovery) ([]*Publication, bool, Recovery, error)
+	// History returns a slice of publications published into channel.
+	// HistoryFilter allows to set several filtering options.
+	History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

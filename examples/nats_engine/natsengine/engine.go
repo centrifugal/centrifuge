@@ -1,3 +1,4 @@
+// Package natsengine defines custom Nats engine for Centrifuge library.
 package natsengine
 
 import (
@@ -17,12 +18,14 @@ type (
 	channelID string
 )
 
-// Config ...
+// Config of NatsEngine.
 type Config struct {
-	Prefix string
+	Servers string
+	Prefix  string
 }
 
-// NatsEngine ...
+// NatsEngine is an engine on top of Nats messaging system. It only supports
+// PUB/SUB without history and presence features.
 type NatsEngine struct {
 	node         *centrifuge.Node
 	config       Config
@@ -36,7 +39,7 @@ type NatsEngine struct {
 	pushDecoder protocent.PushDecoder
 }
 
-// New ...
+// New creates NatsEngine.
 func New(n *centrifuge.Node, conf Config) (*NatsEngine, error) {
 	e := &NatsEngine{
 		node:        n,
@@ -49,7 +52,7 @@ func New(n *centrifuge.Node, conf Config) (*NatsEngine, error) {
 }
 
 func (e *NatsEngine) controlChannel() channelID {
-	return channelID(e.config.Prefix + "." + "control")
+	return channelID(e.config.Prefix + ".control")
 }
 
 func (e *NatsEngine) clientChannel(ch string) channelID {
@@ -59,7 +62,11 @@ func (e *NatsEngine) clientChannel(ch string) channelID {
 // Run runs engine after node initialized.
 func (e *NatsEngine) Run(h centrifuge.EngineEventHandler) error {
 	e.eventHandler = h
-	nc, err := nats.Connect(nats.DefaultURL, nats.ReconnectBufSize(-1), nats.MaxReconnects(math.MaxInt64))
+	servers := e.config.Servers
+	if servers == "" {
+		servers = nats.DefaultURL
+	}
+	nc, err := nats.Connect(servers, nats.ReconnectBufSize(-1), nats.MaxReconnects(math.MaxInt64))
 	if err != nil {
 		return err
 	}
@@ -71,7 +78,7 @@ func (e *NatsEngine) Run(h centrifuge.EngineEventHandler) error {
 	return nil
 }
 
-// Shutdown ...
+// Shutdown is not implemented.
 func (e *NatsEngine) Shutdown(ctx context.Context) error {
 	return nil
 }
@@ -84,7 +91,12 @@ func (e *NatsEngine) Publish(ch string, pub *centrifuge.Publication, opts *centr
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.pushEncoder.Encode(protocent.NewPublicationPush(ch, data))
+	push := &protocent.Push{
+		Type:    protocent.PushTypePublication,
+		Channel: ch,
+		Data:    data,
+	}
+	byteMessage, err := e.pushEncoder.Encode(push)
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -101,7 +113,12 @@ func (e *NatsEngine) PublishJoin(ch string, join *centrifuge.Join, opts *centrif
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.pushEncoder.Encode(protocent.NewJoinPush(ch, data))
+	push := &protocent.Push{
+		Type:    protocent.PushTypeJoin,
+		Channel: ch,
+		Data:    data,
+	}
+	byteMessage, err := e.pushEncoder.Encode(push)
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -118,7 +135,12 @@ func (e *NatsEngine) PublishLeave(ch string, leave *centrifuge.Leave, opts *cent
 		eChan <- err
 		return eChan
 	}
-	byteMessage, err := e.pushEncoder.Encode(protocent.NewLeavePush(ch, data))
+	push := &protocent.Push{
+		Type:    protocent.PushTypeLeave,
+		Channel: ch,
+		Data:    data,
+	}
+	byteMessage, err := e.pushEncoder.Encode(push)
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -195,6 +217,21 @@ func (e *NatsEngine) Unsubscribe(ch string) error {
 	return nil
 }
 
+// Channels - see engine interface description.
+func (e *NatsEngine) Channels() ([]string, error) {
+	return nil, nil
+}
+
+// History - see engine interface description.
+func (e *NatsEngine) History(ch string, filter centrifuge.HistoryFilter) ([]*centrifuge.Publication, centrifuge.RecoveryPosition, error) {
+	return nil, centrifuge.RecoveryPosition{}, nil
+}
+
+// RemoveHistory - see engine interface description.
+func (e *NatsEngine) RemoveHistory(ch string) error {
+	return nil
+}
+
 // AddPresence - see engine interface description.
 func (e *NatsEngine) AddPresence(ch string, uid string, info *centrifuge.ClientInfo, exp time.Duration) error {
 	return nil
@@ -213,24 +250,4 @@ func (e *NatsEngine) Presence(ch string) (map[string]*centrifuge.ClientInfo, err
 // PresenceStats - see engine interface description.
 func (e *NatsEngine) PresenceStats(ch string) (centrifuge.PresenceStats, error) {
 	return centrifuge.PresenceStats{}, nil
-}
-
-// History - see engine interface description.
-func (e *NatsEngine) History(ch string, limit int) ([]*centrifuge.Publication, error) {
-	return nil, nil
-}
-
-// RecoverHistory - see engine interface description.
-func (e *NatsEngine) RecoverHistory(ch string, since *centrifuge.Recovery) ([]*centrifuge.Publication, bool, centrifuge.Recovery, error) {
-	return nil, false, centrifuge.Recovery{}, nil
-}
-
-// RemoveHistory - see engine interface description.
-func (e *NatsEngine) RemoveHistory(ch string) error {
-	return nil
-}
-
-// Channels - see engine interface description.
-func (e *NatsEngine) Channels() ([]string, error) {
-	return nil, nil
 }

@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"container/heap"
 	"context"
+	"math"
 	"strconv"
 	"sync"
 	"time"
@@ -10,10 +11,16 @@ import (
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
-// MemoryEngine allows to run Centrifugo without using Redis at all.
-// All data managed inside process memory. With this engine you can
-// only run single Centrifugo node. If you need to scale you should
-// use Redis engine instead.
+// MemoryEngine is builtin default engine which allows to run
+// Centrifugo without any external brokers/storages. All data
+// managed inside process memory.
+// With this engine you can only run single Centrifuge node. If
+// you need to scale you should use another engine implementation
+// instead – for example Redis engine.
+// Running single node can be sufficient for many use cases especially
+// when you need maximum performance and do not too many online clients.
+// Consider configuring your load balancer to have one backup Centrifuge
+// node for HA in this case.
 type MemoryEngine struct {
 	node         *Node
 	eventHandler EngineEventHandler
@@ -117,13 +124,8 @@ func (e *MemoryEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) History(ch string, limit int) ([]*Publication, error) {
-	return e.historyHub.get(ch, limit)
-}
-
-// RecoverHistory - see engine interface description.
-func (e *MemoryEngine) RecoverHistory(ch string, since *Recovery) ([]*Publication, bool, Recovery, error) {
-	return e.historyHub.recover(ch, since)
+func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
+	return e.historyHub.get(ch, filter)
 }
 
 // RemoveHistory - see engine interface description.
@@ -133,7 +135,7 @@ func (e *MemoryEngine) RemoveHistory(ch string) error {
 
 // Channels - see engine interface description.
 func (e *MemoryEngine) Channels() ([]string, error) {
-	return e.node.hub.Channels(), nil
+	return e.node.Hub().Channels(), nil
 }
 
 type presenceHub struct {
@@ -358,31 +360,86 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) erro
 	return nil
 }
 
-func (h *historyHub) get(ch string, limit int) ([]*Publication, error) {
+func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
 	h.RLock()
 	defer h.RUnlock()
-	return h.getUnsafe(ch, limit)
+	return h.getUnsafe(ch, filter)
 }
 
-func (h *historyHub) getUnsafe(ch string, limit int) ([]*Publication, error) {
+func (h *historyHub) getPublications(ch string) []*Publication {
 	hItem, ok := h.history[ch]
 	if !ok {
-		// return empty slice
-		return []*Publication{}, nil
+		return []*Publication{}
 	}
 	if hItem.isExpired() {
-		// return empty slice
 		delete(h.history, ch)
-		return []*Publication{}, nil
+		return []*Publication{}
 	}
-	if limit == 0 || limit >= len(hItem.messages) {
-		pubs := make([]*Publication, len(hItem.messages))
-		copy(pubs, hItem.messages)
-		return pubs, nil
+	pubs := hItem.messages
+	for i := len(pubs)/2 - 1; i >= 0; i-- {
+		opp := len(pubs) - 1 - i
+		pubs[i], pubs[opp] = pubs[opp], pubs[i]
 	}
-	pubs := make([]*Publication, len(hItem.messages[:limit]))
-	copy(pubs, hItem.messages[:limit])
-	return hItem.messages[:limit], nil
+	pubsCopy := make([]*Publication, len(pubs))
+	copy(pubsCopy, pubs)
+	return pubsCopy
+}
+
+func (h *historyHub) getUnsafe(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
+	latestSeq, latestGen, latestEpoch := h.getSequence(ch)
+	latestPosition := RecoveryPosition{Seq: latestSeq, Gen: latestGen, Epoch: latestEpoch}
+
+	if filter.Since == nil {
+		if filter.Limit == 0 {
+			return nil, latestPosition, nil
+		}
+		allPubs := h.getPublications(ch)
+		if filter.Limit == -1 || filter.Limit >= len(allPubs) {
+			return allPubs, latestPosition, nil
+		}
+		return allPubs[:filter.Limit], latestPosition, nil
+	}
+
+	allPubs := h.getPublications(ch)
+	since := filter.Since
+
+	if latestSeq == since.Seq && since.Gen == latestGen && since.Epoch == latestEpoch {
+		return nil, latestPosition, nil
+	}
+
+	nextSeq := since.Seq + 1
+	nextGen := since.Gen
+	if nextSeq > maxSeq {
+		nextSeq = 0
+		nextGen = nextGen + 1
+	}
+
+	position := -1
+
+	for i := 0; i < len(allPubs); i++ {
+		pub := allPubs[i]
+		if pub.Seq == since.Seq && pub.Gen == since.Gen {
+			position = i + 1
+			break
+		}
+		if pub.Seq == nextSeq && pub.Gen == nextGen {
+			position = i
+			break
+		}
+	}
+
+	if position > -1 {
+		pubs := allPubs[position:]
+		if filter.Limit >= 0 {
+			return pubs[:filter.Limit], latestPosition, nil
+		}
+		return pubs, latestPosition, nil
+	}
+
+	if filter.Limit >= 0 {
+		return allPubs[:filter.Limit], latestPosition, nil
+	}
+	return allPubs, latestPosition, nil
 }
 
 func (h *historyHub) remove(ch string) error {
@@ -397,52 +454,6 @@ func (h *historyHub) remove(ch string) error {
 }
 
 const (
-	maxSeq = 4294967295 // maximum uint32 value
-	maxGen = 4294967295 // maximum uint32 value
+	maxSeq = math.MaxUint32 // maximum uint32 value
+	maxGen = math.MaxUint32 // maximum uint32 value
 )
-
-func (h *historyHub) recover(ch string, since *Recovery) ([]*Publication, bool, Recovery, error) {
-	h.RLock()
-	defer h.RUnlock()
-
-	currentSeq, currentGen, currentEpoch := h.getSequence(ch)
-	if since == nil {
-		return nil, false, Recovery{currentSeq, currentGen, currentEpoch}, nil
-	}
-
-	if currentSeq == since.Seq && since.Gen == currentGen && since.Epoch == currentEpoch {
-		return nil, true, Recovery{currentSeq, currentGen, currentEpoch}, nil
-	}
-
-	publications, err := h.getUnsafe(ch, 0)
-	if err != nil {
-		return nil, false, Recovery{}, err
-	}
-
-	nextSeq := since.Seq + 1
-	nextGen := since.Gen
-
-	if nextSeq > maxSeq {
-		nextSeq = 0
-		nextGen = nextGen + 1
-	}
-
-	position := -1
-
-	for i := len(publications) - 1; i >= 0; i-- {
-		msg := publications[i]
-		if msg.Seq == since.Seq && msg.Gen == since.Gen {
-			position = i
-			break
-		}
-		if msg.Seq == nextSeq && msg.Gen == nextGen {
-			position = i + 1
-			break
-		}
-	}
-	if position > -1 {
-		return publications[0:position], since.Epoch == currentEpoch, Recovery{currentSeq, currentGen, currentEpoch}, nil
-	}
-
-	return publications, false, Recovery{currentSeq, currentGen, currentEpoch}, nil
-}

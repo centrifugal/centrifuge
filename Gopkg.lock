@@ -10,14 +10,6 @@
   version = "v0.0.1"
 
 [[projects]]
-  branch = "master"
-  digest = "1:8570565984496503275fff7c8463819c0765546967c5cfa44e39e23dc9a965a3"
-  name = "github.com/FZambia/go-logger"
-  packages = ["."]
-  pruneopts = ""
-  revision = "5312b752874cb31cbcfe0a0198efd06b5ac01d19"
-
-[[projects]]
   digest = "1:8e379117c74df8f21127a82e1599de345efad7770fa91dd2ea20195471014fb4"
   name = "github.com/FZambia/sentinel"
   packages = ["."]
@@ -108,41 +100,6 @@
   version = "v1.0.0"
 
 [[projects]]
-  digest = "1:2b5ed2cf6e8623bddd5653cffb8c6e462c2390b70186eb01546539aa177bb194"
-  name = "github.com/nats-io/go-nats"
-  packages = [
-    "encoders/builtin",
-    "util",
-  ]
-  pruneopts = ""
-  revision = "70fe06cee50d4b6f98248d9675fb55f2a3aa7228"
-  version = "v1.7.2"
-
-[[projects]]
-  digest = "1:2b5ed2cf6e8623bddd5653cffb8c6e462c2390b70186eb01546539aa177bb194"
-  name = "github.com/nats-io/nats"
-  packages = ["."]
-  pruneopts = ""
-  revision = "70fe06cee50d4b6f98248d9675fb55f2a3aa7228"
-  version = "v1.7.2"
-
-[[projects]]
-  digest = "1:0006112541eed60bdfa279c8965c038865f05a677d980305dae7a0eec5bd133c"
-  name = "github.com/nats-io/nkeys"
-  packages = ["."]
-  pruneopts = ""
-  revision = "1546a3320a8f195a5b5c84aef8309377c2e411d5"
-  version = "v0.0.2"
-
-[[projects]]
-  digest = "1:be61e8224b84064109eaba8157cbb4bbe6ca12443e182b6624fdfa1c0dcf53d9"
-  name = "github.com/nats-io/nuid"
-  packages = ["."]
-  pruneopts = ""
-  revision = "289cccf02c178dc782430d534e3c1f5b72af807f"
-  version = "v1.0.0"
-
-[[projects]]
   digest = "1:256484dbbcd271f9ecebc6795b2df8cad4c458dd0f5fd82a8c2fa0c29f233411"
   name = "github.com/pmezard/go-difflib"
   packages = ["difflib"]
@@ -199,23 +156,11 @@
   revision = "12b6f73e6084dad08a7c6e575284b177ecafbc71"
   version = "v1.2.1"
 
-[[projects]]
-  branch = "master"
-  digest = "1:7a77b79efe106f3304dcf50dc86836151758f246169b527722552a5eb2ae14fc"
-  name = "golang.org/x/crypto"
-  packages = [
-    "ed25519",
-    "ed25519/internal/edwards25519",
-  ]
-  pruneopts = ""
-  revision = "8dd112bcdc25174059e45e07517d9fc663123347"
-
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
   input-imports = [
     "github.com/FZambia/eagle",
-    "github.com/FZambia/go-logger",
     "github.com/FZambia/sentinel",
     "github.com/dgrijalva/jwt-go",
     "github.com/gogo/protobuf/gogoproto",
@@ -224,7 +169,6 @@
     "github.com/gomodule/redigo/redis",
     "github.com/gorilla/websocket",
     "github.com/igm/sockjs-go/sockjs",
-    "github.com/nats-io/nats",
     "github.com/prometheus/client_golang/prometheus",
     "github.com/stretchr/testify/assert",
   ]

@@ -1495,14 +1495,14 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
 
-		var currentSeq uint32
-		var currentGen uint32
-		var currentEpoch string
+		var latestSeq uint32
+		var latestGen uint32
+		var latestEpoch string
 
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			publications, recovered, recovery, err := c.node.recoverHistory(channel, Recovery{cmd.Seq, cmd.Gen, cmd.Epoch})
+			publications, recoveryPosition, err := c.node.recoverHistory(channel, RecoveryPosition{cmd.Seq, cmd.Gen, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				if chOpts.HistoryRecover {
@@ -1511,11 +1511,25 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 				return DisconnectServerError
 			}
 
-			currentSeq = recovery.Seq
-			currentGen = recovery.Gen
-			currentEpoch = recovery.Epoch
+			latestSeq = recoveryPosition.Seq
+			latestGen = recoveryPosition.Gen
+			latestEpoch = recoveryPosition.Epoch
 
 			res.Publications = publications
+
+			nextSeq := cmd.Seq + 1
+			nextGen := cmd.Gen
+			if nextSeq > maxSeq {
+				nextSeq = 0
+				nextGen = nextGen + 1
+			}
+			var recovered bool
+			if len(publications) == 0 {
+				recovered = latestSeq == cmd.Seq && latestGen == cmd.Gen && latestEpoch == cmd.Epoch
+			} else {
+				recovered = publications[0].Seq == nextSeq && publications[0].Gen == nextGen && latestEpoch == cmd.Epoch
+			}
+
 			res.Recovered = recovered
 
 			recoveredLabel := "no"
@@ -1532,14 +1546,14 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 				}
 				return DisconnectServerError
 			}
-			currentSeq = recovery.Seq
-			currentGen = recovery.Gen
-			currentEpoch = recovery.Epoch
+			latestSeq = recovery.Seq
+			latestGen = recovery.Gen
+			latestEpoch = recovery.Epoch
 		}
 
-		res.Epoch = currentEpoch
-		res.Seq = currentSeq
-		res.Gen = currentGen
+		res.Epoch = latestEpoch
+		res.Seq = latestSeq
+		res.Gen = latestGen
 
 		c.pubBufferMu.Lock()
 		pubBufferLocked = true

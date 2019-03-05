@@ -1,4 +1,4 @@
-package redisengine
+package centrifuge
 
 import (
 	"errors"
@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge"
 	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/assert"
 )
@@ -73,8 +72,8 @@ func newTestRedisEngine() *RedisEngine {
 }
 
 func NewTestRedisEngineWithPrefix(prefix string) *RedisEngine {
-	n, _ := centrifuge.New(centrifuge.Config{})
-	redisConf := ShardConfig{
+	n, _ := New(Config{})
+	redisConf := RedisShardConfig{
 		Host:        testRedisHost,
 		Port:        testRedisPort,
 		Password:    testRedisPassword,
@@ -82,7 +81,7 @@ func NewTestRedisEngineWithPrefix(prefix string) *RedisEngine {
 		Prefix:      prefix,
 		ReadTimeout: 100 * time.Second,
 	}
-	e, _ := New(n, Config{Shards: []ShardConfig{redisConf}})
+	e, _ := NewRedisEngine(n, RedisEngineConfig{Shards: []RedisShardConfig{redisConf}})
 	n.SetEngine(e)
 	err := n.Run()
 	if err != nil {
@@ -91,9 +90,6 @@ func NewTestRedisEngineWithPrefix(prefix string) *RedisEngine {
 	return e
 }
 
-func newTestPublication() *centrifuge.Publication {
-	return &centrifuge.Publication{Data: []byte("{}")}
-}
 func TestRedisEngine(t *testing.T) {
 	c := dial()
 	defer c.close()
@@ -114,7 +110,7 @@ func TestRedisEngine(t *testing.T) {
 	assert.NoError(t, e.Unsubscribe("channel"))
 
 	// test adding presence
-	assert.NoError(t, e.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 25*time.Second))
+	assert.NoError(t, e.AddPresence("channel", "uid", &ClientInfo{}, 25*time.Second))
 
 	p, err := e.Presence("channel")
 	assert.NoError(t, err)
@@ -123,12 +119,12 @@ func TestRedisEngine(t *testing.T) {
 	err = e.RemovePresence("channel", "uid")
 	assert.NoError(t, err)
 
-	rawData := centrifuge.Raw([]byte("{}"))
-	pub = &centrifuge.Publication{UID: "test UID", Data: rawData}
+	rawData := Raw([]byte("{}"))
+	pub = &Publication{UID: "test UID", Data: rawData}
 
 	// test adding history
-	assert.NoError(t, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
-	h, _, err := e.History("channel", centrifuge.HistoryFilter{
+	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	h, _, err := e.History("channel", HistoryFilter{
 		Limit: -1,
 	})
 	assert.NoError(t, err)
@@ -136,29 +132,29 @@ func TestRedisEngine(t *testing.T) {
 	assert.Equal(t, h[0].UID, "test UID")
 
 	// test history limit
-	assert.NoError(t, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
-	h, _, err = e.History("channel", centrifuge.HistoryFilter{
+	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	h, _, err = e.History("channel", HistoryFilter{
 		Limit: 2,
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(h))
 
 	// test history limit greater than history size
-	assert.NoError(t, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
+	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
 
 	// ask all history.
-	h, _, err = e.History("channel", centrifuge.HistoryFilter{
+	h, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(h))
 
 	// ask more history than history_size.
-	h, _, err = e.History("channel", centrifuge.HistoryFilter{
+	h, _, err = e.History("channel", HistoryFilter{
 		Limit: 2,
 	})
 	assert.NoError(t, err)
@@ -169,11 +165,11 @@ func TestRedisEngine(t *testing.T) {
 	assert.NoError(t, nil, err)
 
 	// test publishing join message.
-	joinMessage := centrifuge.Join{}
+	joinMessage := Join{}
 	assert.NoError(t, <-e.PublishJoin("channel", &joinMessage, nil))
 
 	// test publishing leave message.
-	leaveMessage := centrifuge.Leave{}
+	leaveMessage := Leave{}
 	assert.NoError(t, <-e.PublishLeave("channel", &leaveMessage, nil))
 }
 
@@ -184,29 +180,29 @@ func TestRedisEngineRecover(t *testing.T) {
 
 	e := newTestRedisEngine()
 
-	rawData := centrifuge.Raw([]byte("{}"))
-	pub := &centrifuge.Publication{Data: rawData}
+	rawData := Raw([]byte("{}"))
+	pub := &Publication{Data: rawData}
 
 	pub.UID = "1"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
 	pub.UID = "2"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
 	pub.UID = "3"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
 	pub.UID = "4"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
 	pub.UID = "5"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
 
-	_, r, err := e.History("channel", centrifuge.HistoryFilter{
+	_, r, err := e.History("channel", HistoryFilter{
 		Limit: 0,
 		Since: nil,
 	})
 	assert.NoError(t, err)
 
-	pubs, _, err := e.History("channel", centrifuge.HistoryFilter{
+	pubs, _, err := e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &centrifuge.RecoveryPosition{Seq: 2, Gen: 0, Epoch: r.Epoch},
+		Since: &RecoveryPosition{Seq: 2, Gen: 0, Epoch: r.Epoch},
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, 3, len(pubs))
@@ -214,17 +210,17 @@ func TestRedisEngineRecover(t *testing.T) {
 	assert.Equal(t, uint32(4), pubs[1].Seq)
 	assert.Equal(t, uint32(5), pubs[2].Seq)
 
-	pubs, _, err = e.History("channel", centrifuge.HistoryFilter{
+	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &centrifuge.RecoveryPosition{Seq: 6, Gen: 0, Epoch: r.Epoch},
+		Since: &RecoveryPosition{Seq: 6, Gen: 0, Epoch: r.Epoch},
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, 5, len(pubs))
 
 	assert.NoError(t, e.RemoveHistory("channel"))
-	pubs, _, err = e.History("channel", centrifuge.HistoryFilter{
+	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &centrifuge.RecoveryPosition{Seq: 2, Gen: 0, Epoch: r.Epoch},
+		Since: &RecoveryPosition{Seq: 2, Gen: 0, Epoch: r.Epoch},
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(pubs))
@@ -480,23 +476,23 @@ func BenchmarkRedisEngineIndex(b *testing.B) {
 
 func BenchmarkRedisEnginePublish(b *testing.B) {
 	e := newTestRedisEngine()
-	rawData := centrifuge.Raw([]byte(`{"bench": true}`))
-	pub := &centrifuge.Publication{UID: "test UID", Data: rawData}
+	rawData := Raw([]byte(`{"bench": true}`))
+	pub := &Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
 	}
 }
 
 func BenchmarkRedisEnginePublishParallel(b *testing.B) {
 	e := newTestRedisEngine()
-	rawData := centrifuge.Raw([]byte(`{"bench": true}`))
-	pub := &centrifuge.Publication{UID: "test UID", Data: rawData}
+	rawData := Raw([]byte(`{"bench": true}`))
+	pub := &Publication{UID: "test UID", Data: rawData}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
 		}
 	})
 }
@@ -532,23 +528,23 @@ func BenchmarkRedisEngineSubscribeParallel(b *testing.B) {
 
 func BenchmarkRedisEnginePublishWithHistory(b *testing.B) {
 	e := newTestRedisEngine()
-	rawData := centrifuge.Raw([]byte(`{"bench": true}`))
-	pub := &centrifuge.Publication{UID: "test-uid", Data: rawData}
+	rawData := Raw([]byte(`{"bench": true}`))
+	pub := &Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
 	}
 }
 
 func BenchmarkRedisEnginePublishWithHistoryParallel(b *testing.B) {
 	e := newTestRedisEngine()
-	rawData := centrifuge.Raw([]byte(`{"bench": true}`))
-	pub := &centrifuge.Publication{UID: "test-uid", Data: rawData}
+	rawData := Raw([]byte(`{"bench": true}`))
+	pub := &Publication{UID: "test-uid", Data: rawData}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+			<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
 		}
 	})
 }
@@ -557,7 +553,7 @@ func BenchmarkRedisEngineAddPresence(b *testing.B) {
 	e := newTestRedisEngine()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := e.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 		if err != nil {
 			panic(err)
 		}
@@ -569,7 +565,7 @@ func BenchmarkRedisEngineAddPresenceParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := e.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+			err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 			if err != nil {
 				panic(err)
 			}
@@ -579,7 +575,7 @@ func BenchmarkRedisEngineAddPresenceParallel(b *testing.B) {
 
 func BenchmarkRedisEnginePresence(b *testing.B) {
 	e := newTestRedisEngine()
-	e.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+	e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := e.Presence("channel")
@@ -591,7 +587,7 @@ func BenchmarkRedisEnginePresence(b *testing.B) {
 
 func BenchmarkRedisEnginePresenceParallel(b *testing.B) {
 	e := newTestRedisEngine()
-	e.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+	e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -605,14 +601,14 @@ func BenchmarkRedisEnginePresenceParallel(b *testing.B) {
 
 func BenchmarkRedisEngineHistory(b *testing.B) {
 	e := newTestRedisEngine()
-	rawData := centrifuge.Raw([]byte("{}"))
-	pub := &centrifuge.Publication{UID: "test UID", Data: rawData}
+	rawData := Raw([]byte("{}"))
+	pub := &Publication{UID: "test UID", Data: rawData}
 	for i := 0; i < 4; i++ {
-		<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, err := e.History("channel", centrifuge.HistoryFilter{
+		_, _, err := e.History("channel", HistoryFilter{
 			Limit: -1,
 		})
 		if err != nil {
@@ -624,15 +620,15 @@ func BenchmarkRedisEngineHistory(b *testing.B) {
 
 func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
 	e := newTestRedisEngine()
-	rawData := centrifuge.Raw([]byte("{}"))
-	pub := &centrifuge.Publication{UID: "test-uid", Data: rawData}
+	rawData := Raw([]byte("{}"))
+	pub := &Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
-		<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := e.History("channel", centrifuge.HistoryFilter{
+			_, _, err := e.History("channel", HistoryFilter{
 				Limit: -1,
 			})
 			if err != nil {
@@ -644,22 +640,22 @@ func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
 
 func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 	e := newTestRedisEngine()
-	rawData := centrifuge.Raw([]byte("{}"))
+	rawData := Raw([]byte("{}"))
 	numMessages := 100
 	for i := 0; i < numMessages; i++ {
-		pub := &centrifuge.Publication{Data: rawData}
-		<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
+		pub := &Publication{Data: rawData}
+		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
 	}
-	_, r, err := e.History("channel", centrifuge.HistoryFilter{
+	_, r, err := e.History("channel", HistoryFilter{
 		Limit: 0,
 	})
 	assert.NoError(b, err)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := e.History("channel", centrifuge.HistoryFilter{
+			_, _, err := e.History("channel", HistoryFilter{
 				Limit: -1,
-				Since: &centrifuge.RecoveryPosition{Seq: uint32(numMessages - 5), Gen: 0, Epoch: r.Epoch},
+				Since: &RecoveryPosition{Seq: uint32(numMessages - 5), Gen: 0, Epoch: r.Epoch},
 			})
 			if err != nil {
 				panic(err)
@@ -702,10 +698,10 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 // 			e.node.Reload(config)
 
 // 			for i := 1; i <= tt.NumPublications; i++ {
-// 				<-e.Publish("test", &centrifuge.Publication{
+// 				<-e.Publish("test", &Publication{
 // 					UID:  strconv.Itoa(i),
 // 					Data: []byte(`{}`),
-// 				}, &centrifuge.ChannelOptions{
+// 				}, &ChannelOptions{
 // 					HistoryLifetime: tt.HistoryLifetime,
 // 					HistorySize:     tt.HistorySize,
 // 					HistoryRecover:  true,
@@ -719,7 +715,7 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 // 			replies := []*proto.Reply{}
 // 			rw := testReplyWriter(&replies)
 
-// 			_, recoveryPosition, _ := e.History("test", centrifuge.HistoryFilter{
+// 			_, recoveryPosition, _ := e.History("test", HistoryFilter{
 // 				Limit: 0,
 // 			})
 // 			disconnect := client.subscribeCmd(&proto.SubscribeRequest{

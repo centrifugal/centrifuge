@@ -24,87 +24,75 @@ func NewTestEngine() *TestEngine {
 	return &TestEngine{}
 }
 
-func (e *TestEngine) name() string {
-	return "test engine"
-}
-
-func (e *TestEngine) run(h EngineEventHandler) error {
+func (e *TestEngine) Run(h EngineEventHandler) error {
 	return nil
 }
 
-func (e *TestEngine) shutdown(ctx context.Context) error {
+func (e *TestEngine) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (e *TestEngine) publish(ch string, pub *proto.Publication, opts *ChannelOptions) <-chan error {
+func (e *TestEngine) Publish(ch string, pub *proto.Publication, opts *ChannelOptions) <-chan error {
 	atomic.AddInt32(&e.publishCount, 1)
 	eChan := make(chan error, 1)
 	eChan <- nil
 	return eChan
 }
 
-func (e *TestEngine) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-chan error {
+func (e *TestEngine) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-chan error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
 	eChan := make(chan error, 1)
 	eChan <- nil
 	return eChan
 }
 
-func (e *TestEngine) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) <-chan error {
+func (e *TestEngine) PublishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) <-chan error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
 	eChan := make(chan error, 1)
 	eChan <- nil
 	return eChan
 }
 
-func (e *TestEngine) publishControl(msg []byte) <-chan error {
+func (e *TestEngine) PublishControl(msg []byte) <-chan error {
 	atomic.AddInt32(&e.publishControlCount, 1)
 	eChan := make(chan error, 1)
 	eChan <- nil
 	return eChan
 }
 
-func (e *TestEngine) subscribe(ch string) error {
+func (e *TestEngine) Subscribe(ch string) error {
 	return nil
 }
 
-func (e *TestEngine) unsubscribe(ch string) error {
+func (e *TestEngine) Unsubscribe(ch string) error {
 	return nil
 }
 
-func (e *TestEngine) addPresence(ch string, uid string, info *proto.ClientInfo, expire time.Duration) error {
+func (e *TestEngine) AddPresence(ch string, uid string, info *proto.ClientInfo, expire time.Duration) error {
 	return nil
 }
 
-func (e *TestEngine) removePresence(ch string, uid string) error {
+func (e *TestEngine) RemovePresence(ch string, uid string) error {
 	return nil
 }
 
-func (e *TestEngine) presence(ch string) (map[string]*proto.ClientInfo, error) {
+func (e *TestEngine) Presence(ch string) (map[string]*proto.ClientInfo, error) {
 	return map[string]*proto.ClientInfo{}, nil
 }
 
-func (e *TestEngine) presenceStats(ch string) (PresenceStats, error) {
+func (e *TestEngine) PresenceStats(ch string) (PresenceStats, error) {
 	return PresenceStats{}, nil
 }
 
-func (e *TestEngine) history(ch string, limit int) ([]*proto.Publication, error) {
-	return []*proto.Publication{}, nil
+func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*proto.Publication, RecoveryPosition, error) {
+	return []*proto.Publication{}, RecoveryPosition{}, nil
 }
 
-func (e *TestEngine) historyLastID(ch string) (uint64, error) {
-	return 0, nil
-}
-
-func (e *TestEngine) removeHistory(ch string) error {
+func (e *TestEngine) RemoveHistory(ch string) error {
 	return nil
 }
 
-func (e *TestEngine) recoverHistory(ch string, since *recovery) ([]*proto.Publication, bool, recovery, error) {
-	return []*proto.Publication{}, false, recovery{0, 0, ""}, nil
-}
-
-func (e *TestEngine) channels() ([]string, error) {
+func (e *TestEngine) Channels() ([]string, error) {
 	return []string{}, nil
 }
 

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,7 +13,6 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/centrifuge/engine/redisengine"
 )
 
 var (
@@ -96,25 +94,25 @@ func main() {
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
-	engine, err := redisengine.New(node, redisengine.Config{
-		Shards: []redisengine.ShardConfig{
-			redisengine.ShardConfig{
+	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+		Shards: []centrifuge.RedisShardConfig{
+			centrifuge.RedisShardConfig{
 				Host: "localhost",
 				Port: 6379,
 			},
-			redisengine.ShardConfig{
+			centrifuge.RedisShardConfig{
 				Host: "localhost",
 				Port: 6380,
 			},
 		},
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	node.SetEngine(engine)
 
 	if err := node.Run(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
@@ -122,10 +120,10 @@ func main() {
 
 	go func() {
 		if err := http.ListenAndServe(":"+strconv.Itoa(*port), nil); err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 	}()
 
 	waitExitSignal(node)
-	fmt.Println("exiting")
+	log.Println("bye!")
 }

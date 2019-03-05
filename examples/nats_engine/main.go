@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,7 +13,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/centrifuge/engine/natsengine"
+	"github.com/centrifugal/centrifuge/examples/nats_engine/natsengine"
 )
 
 var (
@@ -100,12 +99,12 @@ func main() {
 		Prefix: "centrifuge-nats-engine-example",
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	node.SetEngine(engine)
 
 	if err := node.Run(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
@@ -113,10 +112,10 @@ func main() {
 
 	go func() {
 		if err := http.ListenAndServe(":"+strconv.Itoa(*port), nil); err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 	}()
 
 	waitExitSignal(node)
-	fmt.Println("exiting")
+	log.Println("bye!")
 }

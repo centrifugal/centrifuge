@@ -703,17 +703,20 @@ func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
 // History returns a slice of last messages published into project channel.
 func (n *Node) History(ch string) ([]*Publication, error) {
 	actionCount.WithLabelValues("history").Inc()
-	pubs, err := n.engine.History(ch, 0)
-	if err != nil {
-		return nil, err
-	}
-	return pubs, nil
+	pubs, _, err := n.engine.History(ch, HistoryFilter{
+		Limit: -1,
+		Since: nil,
+	})
+	return pubs, err
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, since Recovery) ([]*Publication, bool, Recovery, error) {
+func (n *Node) recoverHistory(ch string, since RecoveryPosition) ([]*Publication, RecoveryPosition, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
-	return n.engine.RecoverHistory(ch, &since)
+	return n.engine.History(ch, HistoryFilter{
+		Limit: -1,
+		Since: &since,
+	})
 }
 
 // RemoveHistory removes channel history.
@@ -723,10 +726,13 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 // currentRecoveryState returns current recovery state for channel.
-func (n *Node) currentRecoveryState(ch string) (Recovery, error) {
+func (n *Node) currentRecoveryState(ch string) (RecoveryPosition, error) {
 	actionCount.WithLabelValues("history_recovery_state").Inc()
-	_, _, recovery, err := n.engine.RecoverHistory(ch, nil)
-	return recovery, err
+	_, recoveryPosition, err := n.engine.History(ch, HistoryFilter{
+		Limit: 0,
+		Since: nil,
+	})
+	return recoveryPosition, err
 }
 
 // privateChannel checks if channel private. In case of private channel

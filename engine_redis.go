@@ -1,4 +1,4 @@
-package redisengine
+package centrifuge
 
 import (
 	"bytes"
@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"math"
 	"net"
 	"runtime"
 	"strconv"
@@ -15,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge"
 	"github.com/centrifugal/centrifuge/internal/timers"
 	"github.com/centrifugal/centrifuge/protocent"
 
@@ -67,17 +65,17 @@ const (
 // This engine allows to scale Centrifugo - you can run several Centrifugo instances
 // connected to the same Redis and load balance clients between instances.
 type RedisEngine struct {
-	node     *centrifuge.Node
+	node     *Node
 	sharding bool
 	shards   []*shard
 }
 
 // shard has everything to connect to Redis instance.
 type shard struct {
-	node              *centrifuge.Node
+	node              *Node
 	engine            *RedisEngine
-	eventHandler      centrifuge.EngineEventHandler
-	config            ShardConfig
+	eventHandler      EngineEventHandler
+	config            RedisShardConfig
 	pool              *redis.Pool
 	subCh             chan subRequest
 	pubCh             chan pubRequest
@@ -93,13 +91,13 @@ type shard struct {
 	pushDecoder protocent.PushDecoder
 }
 
-// Config of Redis Engine.
-type Config struct {
-	Shards []ShardConfig
+// RedisEngineConfig is a config for Redis Engine.
+type RedisEngineConfig struct {
+	Shards []RedisShardConfig
 }
 
-// ShardConfig is struct with Redis Engine options.
-type ShardConfig struct {
+// RedisShardConfig is struct with Redis Engine options.
+type RedisShardConfig struct {
 	// Host is Redis server host.
 	Host string
 	// Port is Redis server port.
@@ -160,7 +158,7 @@ func (sr *subRequest) result() error {
 	return <-sr.err
 }
 
-func newPool(n *centrifuge.Node, conf ShardConfig) *redis.Pool {
+func newPool(n *Node, conf RedisShardConfig) *redis.Pool {
 
 	host := conf.Host
 	port := conf.Port
@@ -172,9 +170,9 @@ func newPool(n *centrifuge.Node, conf ShardConfig) *redis.Pool {
 
 	usingPassword := password != ""
 	if !useSentinel {
-		n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelInfo, fmt.Sprintf("Redis: %s/%d, using password: %v", serverAddr, db, usingPassword)))
+		n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: %s/%d, using password: %v", serverAddr, db, usingPassword)))
 	} else {
-		n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelInfo, fmt.Sprintf("Redis: Sentinel for name: %s, db: %d, using password: %v", conf.MasterName, db, usingPassword)))
+		n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: Sentinel for name: %s, db: %d, using password: %v", conf.MasterName, db, usingPassword)))
 	}
 
 	var lastMu sync.Mutex
@@ -201,7 +199,7 @@ func newPool(n *centrifuge.Node, conf ShardConfig) *redis.Pool {
 				}
 				c, err := redis.Dial("tcp", addr, opts...)
 				if err != nil {
-					n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error dialing to Sentinel", map[string]interface{}{"error": err.Error()}))
+					n.Log(NewLogEntry(LogLevelError, "error dialing to Sentinel", map[string]interface{}{"error": err.Error()}))
 					return nil, err
 				}
 				return c, nil
@@ -211,13 +209,13 @@ func newPool(n *centrifuge.Node, conf ShardConfig) *redis.Pool {
 		// Periodically discover new Sentinels.
 		go func() {
 			if err := sntnl.Discover(); err != nil {
-				n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
+				n.Log(NewLogEntry(LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
 			}
 			for {
 				select {
 				case <-time.After(30 * time.Second):
 					if err := sntnl.Discover(); err != nil {
-						n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
+						n.Log(NewLogEntry(LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
 					}
 				}
 			}
@@ -238,7 +236,7 @@ func newPool(n *centrifuge.Node, conf ShardConfig) *redis.Pool {
 				}
 				lastMu.Lock()
 				if serverAddr != lastMaster {
-					n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelInfo, "Redis master discovered", map[string]interface{}{"addr": serverAddr}))
+					n.Log(NewLogEntry(LogLevelInfo, "Redis master discovered", map[string]interface{}{"addr": serverAddr}))
 					lastMaster = serverAddr
 				}
 				lastMu.Unlock()
@@ -273,14 +271,14 @@ func newPool(n *centrifuge.Node, conf ShardConfig) *redis.Pool {
 			}
 			c, err := redis.Dial("tcp", serverAddr, opts...)
 			if err != nil {
-				n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error()}))
+				n.Log(NewLogEntry(LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error()}))
 				return nil, err
 			}
 
 			if password != "" {
 				if _, err := c.Do("AUTH", password); err != nil {
 					c.Close()
-					n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error auth in Redis", map[string]interface{}{"error": err.Error()}))
+					n.Log(NewLogEntry(LogLevelError, "error auth in Redis", map[string]interface{}{"error": err.Error()}))
 					return nil, err
 				}
 			}
@@ -288,7 +286,7 @@ func newPool(n *centrifuge.Node, conf ShardConfig) *redis.Pool {
 			if db != 0 {
 				if _, err := c.Do("SELECT", db); err != nil {
 					c.Close()
-					n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error selecting Redis db", map[string]interface{}{"error": err.Error()}))
+					n.Log(NewLogEntry(LogLevelError, "error selecting Redis db", map[string]interface{}{"error": err.Error()}))
 					return nil, err
 				}
 			}
@@ -308,8 +306,8 @@ func newPool(n *centrifuge.Node, conf ShardConfig) *redis.Pool {
 	}
 }
 
-// New initializes Redis Engine.
-func New(n *centrifuge.Node, config Config) (*RedisEngine, error) {
+// NewRedisEngine initializes Redis Engine.
+func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 
 	var shards []*shard
 
@@ -318,7 +316,7 @@ func New(n *centrifuge.Node, config Config) (*RedisEngine, error) {
 	}
 
 	if len(config.Shards) > 1 {
-		n.Log(centrifuge.NewLogEntry(centrifuge.LogLevelInfo, fmt.Sprintf("Redis sharding enabled: %d shards", len(config.Shards))))
+		n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis sharding enabled: %d shards", len(config.Shards))))
 	}
 
 	for _, conf := range config.Shards {
@@ -432,7 +430,7 @@ func (e *RedisEngine) name() string {
 }
 
 // Run runs engine after node initialized.
-func (e *RedisEngine) Run(h centrifuge.EngineEventHandler) error {
+func (e *RedisEngine) Run(h EngineEventHandler) error {
 	for _, shard := range e.shards {
 		shard.engine = e
 		err := shard.Run(h)
@@ -449,17 +447,17 @@ func (e *RedisEngine) Shutdown(ctx context.Context) error {
 }
 
 // Publish - see engine interface description.
-func (e *RedisEngine) Publish(ch string, pub *centrifuge.Publication, opts *centrifuge.ChannelOptions) <-chan error {
+func (e *RedisEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
 	return e.getShard(ch).Publish(ch, pub, opts)
 }
 
 // PublishJoin - see engine interface description.
-func (e *RedisEngine) PublishJoin(ch string, join *centrifuge.Join, opts *centrifuge.ChannelOptions) <-chan error {
+func (e *RedisEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
 	return e.getShard(ch).PublishJoin(ch, join, opts)
 }
 
 // PublishLeave - see engine interface description.
-func (e *RedisEngine) PublishLeave(ch string, leave *centrifuge.Leave, opts *centrifuge.ChannelOptions) <-chan error {
+func (e *RedisEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
 	return e.getShard(ch).PublishLeave(ch, leave, opts)
 }
 
@@ -491,7 +489,7 @@ func (e *RedisEngine) Unsubscribe(ch string) error {
 }
 
 // AddPresence - see engine interface description.
-func (e *RedisEngine) AddPresence(ch string, uid string, info *centrifuge.ClientInfo, exp time.Duration) error {
+func (e *RedisEngine) AddPresence(ch string, uid string, info *ClientInfo, exp time.Duration) error {
 	expire := int(exp.Seconds())
 	return e.getShard(ch).AddPresence(ch, uid, info, expire)
 }
@@ -502,17 +500,17 @@ func (e *RedisEngine) RemovePresence(ch string, uid string) error {
 }
 
 // Presence - see engine interface description.
-func (e *RedisEngine) Presence(ch string) (map[string]*centrifuge.ClientInfo, error) {
+func (e *RedisEngine) Presence(ch string) (map[string]*ClientInfo, error) {
 	return e.getShard(ch).Presence(ch)
 }
 
 // PresenceStats - see engine interface description.
-func (e *RedisEngine) PresenceStats(ch string) (centrifuge.PresenceStats, error) {
+func (e *RedisEngine) PresenceStats(ch string) (PresenceStats, error) {
 	return e.getShard(ch).PresenceStats(ch)
 }
 
 // History - see engine interface description.
-func (e *RedisEngine) History(ch string, filter centrifuge.HistoryFilter) ([]*centrifuge.Publication, centrifuge.RecoveryPosition, error) {
+func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
 	return e.getShard(ch).History(ch, filter)
 }
 
@@ -547,7 +545,7 @@ func (e *RedisEngine) Channels() ([]string, error) {
 }
 
 // newShard initializes new Redis shard.
-func newShard(n *centrifuge.Node, conf ShardConfig) (*shard, error) {
+func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 	shard := &shard{
 		node:              n,
 		config:            conf,
@@ -600,7 +598,7 @@ func (s *shard) gethistoryEpochKey(ch string) channelID {
 }
 
 // Run runs Redis shard.
-func (s *shard) Run(h centrifuge.EngineEventHandler) error {
+func (s *shard) Run(h EngineEventHandler) error {
 	s.eventHandler = h
 	go s.runForever(func() {
 		s.runPublishPipeline()
@@ -640,9 +638,9 @@ func (s *shard) runPubSub() {
 		numWorkers = runtime.NumCPU()
 	}
 
-	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, fmt.Sprintf("running Redis PUB/SUB, num workers: %d", numWorkers)))
+	s.node.Log(NewLogEntry(LogLevelDebug, fmt.Sprintf("running Redis PUB/SUB, num workers: %d", numWorkers)))
 	defer func() {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "stopping Redis PUB/SUB"))
+		s.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis PUB/SUB"))
 	}()
 
 	poolConn := s.pool.Get()
@@ -667,9 +665,9 @@ func (s *shard) runPubSub() {
 
 	// Run subscriber goroutine.
 	go func() {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "starting RedisEngine Subscriber"))
+		s.node.Log(NewLogEntry(LogLevelDebug, "starting RedisEngine Subscriber"))
 		defer func() {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "stopping RedisEngine Subscriber"))
+			s.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisEngine Subscriber"))
 		}()
 		for {
 			select {
@@ -775,7 +773,7 @@ func (s *shard) runPubSub() {
 					case controlChannel:
 						err := s.eventHandler.HandleControl(n.Data)
 						if err != nil {
-							s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
+							s.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
 							continue
 						}
 					case pingChannel:
@@ -783,7 +781,7 @@ func (s *shard) runPubSub() {
 					default:
 						err := s.handleRedisClientMessage(chID, n.Data)
 						if err != nil {
-							s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
+							s.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
 							continue
 						}
 					}
@@ -810,7 +808,7 @@ func (s *shard) runPubSub() {
 				r := newSubRequest(batch, true)
 				err := s.sendSubscribe(r)
 				if err != nil {
-					s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
+					s.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 					closeDoneOnce()
 					return
 				}
@@ -822,7 +820,7 @@ func (s *shard) runPubSub() {
 			r := newSubRequest(batch, true)
 			err := s.sendSubscribe(r)
 			if err != nil {
-				s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
+				s.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 				closeDoneOnce()
 				return
 			}
@@ -837,7 +835,7 @@ func (s *shard) runPubSub() {
 			workers[index(n.Channel, numWorkers)] <- n
 		case redis.Subscription:
 		case error:
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
+			s.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
 			return
 		}
 	}
@@ -881,7 +879,7 @@ type pubRequest struct {
 	message    []byte
 	historyKey channelID
 	indexKey   channelID
-	opts       *centrifuge.ChannelOptions
+	opts       *ChannelOptions
 	err        chan error
 }
 
@@ -898,7 +896,7 @@ func (s *shard) runPublishPipeline() {
 
 	err := s.pubScript.Load(conn)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error loading publish Lua script", map[string]interface{}{"error": err.Error()}))
+		s.node.Log(NewLogEntry(LogLevelError, "error loading publish Lua script", map[string]interface{}{"error": err.Error()}))
 		// Can not proceed if script has not been loaded - because we use EVALSHA command for
 		// publishing with history.
 		conn.Close()
@@ -920,7 +918,7 @@ func (s *shard) runPublishPipeline() {
 			conn := s.pool.Get()
 			err := conn.Send("PUBLISH", s.pingChannelID(), nil)
 			if err != nil {
-				s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error publish ping to Redis channel", map[string]interface{}{"error": err.Error()}))
+				s.node.Log(NewLogEntry(LogLevelError, "error publish ping to Redis channel", map[string]interface{}{"error": err.Error()}))
 				conn.Close()
 				return
 			}
@@ -949,7 +947,7 @@ func (s *shard) runPublishPipeline() {
 				for i := range prs {
 					prs[i].done(err)
 				}
-				s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error flushing publish pipeline", map[string]interface{}{"error": err.Error()}))
+				s.node.Log(NewLogEntry(LogLevelError, "error flushing publish pipeline", map[string]interface{}{"error": err.Error()}))
 				conn.Close()
 				return
 			}
@@ -1026,7 +1024,7 @@ func (s *shard) runDataPipeline() {
 
 	err := s.addPresenceScript.Load(conn)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error loading add presence Lua", map[string]interface{}{"error": err.Error()}))
+		s.node.Log(NewLogEntry(LogLevelError, "error loading add presence Lua", map[string]interface{}{"error": err.Error()}))
 		// Can not proceed if script has not been loaded.
 		conn.Close()
 		return
@@ -1034,7 +1032,7 @@ func (s *shard) runDataPipeline() {
 
 	err = s.presenceScript.Load(conn)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error loading presence Lua", map[string]interface{}{"error": err.Error()}))
+		s.node.Log(NewLogEntry(LogLevelError, "error loading presence Lua", map[string]interface{}{"error": err.Error()}))
 		// Can not proceed if script has not been loaded.
 		conn.Close()
 		return
@@ -1042,7 +1040,7 @@ func (s *shard) runDataPipeline() {
 
 	err = s.remPresenceScript.Load(conn)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error loading remove presence Lua", map[string]interface{}{"error": err.Error()}))
+		s.node.Log(NewLogEntry(LogLevelError, "error loading remove presence Lua", map[string]interface{}{"error": err.Error()}))
 		// Can not proceed if script has not been loaded.
 		conn.Close()
 		return
@@ -1050,7 +1048,7 @@ func (s *shard) runDataPipeline() {
 
 	err = s.historyScript.Load(conn)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error loading history seq Lua", map[string]interface{}{"error": err.Error()}))
+		s.node.Log(NewLogEntry(LogLevelError, "error loading history seq Lua", map[string]interface{}{"error": err.Error()}))
 		// Can not proceed if script has not been loaded.
 		conn.Close()
 		return
@@ -1096,7 +1094,7 @@ func (s *shard) runDataPipeline() {
 			for i := range drs {
 				drs[i].done(nil, err)
 			}
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error flushing data pipeline", map[string]interface{}{"error": err.Error()}))
+			s.node.Log(NewLogEntry(LogLevelError, "error flushing data pipeline", map[string]interface{}{"error": err.Error()}))
 			conn.Close()
 			return
 		}
@@ -1126,7 +1124,7 @@ func (s *shard) runDataPipeline() {
 }
 
 // Publish - see engine interface description.
-func (s *shard) Publish(ch string, pub *centrifuge.Publication, opts *centrifuge.ChannelOptions) <-chan error {
+func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
 
 	eChan := make(chan error, 1)
 
@@ -1189,7 +1187,7 @@ func (s *shard) Publish(ch string, pub *centrifuge.Publication, opts *centrifuge
 }
 
 // PublishJoin - see engine interface description.
-func (s *shard) PublishJoin(ch string, join *centrifuge.Join, opts *centrifuge.ChannelOptions) <-chan error {
+func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
 
 	eChan := make(chan error, 1)
 
@@ -1232,7 +1230,7 @@ func (s *shard) PublishJoin(ch string, join *centrifuge.Join, opts *centrifuge.C
 }
 
 // PublishLeave - see engine interface description.
-func (s *shard) PublishLeave(ch string, leave *centrifuge.Leave, opts *centrifuge.ChannelOptions) <-chan error {
+func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
 
 	eChan := make(chan error, 1)
 
@@ -1306,8 +1304,8 @@ func (s *shard) sendSubscribe(r subRequest) error {
 
 // Subscribe - see engine interface description.
 func (s *shard) Subscribe(ch string) error {
-	if s.node.LogEnabled(centrifuge.LogLevelDebug) {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "subscribe node on channel", map[string]interface{}{"channel": ch}))
+	if s.node.LogEnabled(LogLevelDebug) {
+		s.node.Log(NewLogEntry(LogLevelDebug, "subscribe node on channel", map[string]interface{}{"channel": ch}))
 	}
 	r := newSubRequest([]channelID{s.messageChannelID(ch)}, true)
 	return s.sendSubscribe(r)
@@ -1315,8 +1313,8 @@ func (s *shard) Subscribe(ch string) error {
 
 // Unsubscribe - see engine interface description.
 func (s *shard) Unsubscribe(ch string) error {
-	if s.node.LogEnabled(centrifuge.LogLevelDebug) {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "unsubscribe node from channel", map[string]interface{}{"channel": ch}))
+	if s.node.LogEnabled(LogLevelDebug) {
+		s.node.Log(NewLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]interface{}{"channel": ch}))
 	}
 	r := newSubRequest([]channelID{s.messageChannelID(ch)}, false)
 	return s.sendSubscribe(r)
@@ -1336,7 +1334,7 @@ func (s *shard) getDataResponse(r dataRequest) *dataResponse {
 }
 
 // AddPresence - see engine interface description.
-func (s *shard) AddPresence(ch string, uid string, info *centrifuge.ClientInfo, expire int) error {
+func (s *shard) AddPresence(ch string, uid string, info *ClientInfo, expire int) error {
 	infoJSON, err := info.Marshal()
 	if err != nil {
 		return err
@@ -1359,7 +1357,7 @@ func (s *shard) RemovePresence(ch string, uid string) error {
 }
 
 // Presence - see engine interface description.
-func (s *shard) Presence(ch string) (map[string]*centrifuge.ClientInfo, error) {
+func (s *shard) Presence(ch string) (map[string]*ClientInfo, error) {
 	hashKey := s.getPresenceHashKey(ch)
 	setKey := s.getPresenceSetKey(ch)
 	now := int(time.Now().Unix())
@@ -1372,10 +1370,10 @@ func (s *shard) Presence(ch string) (map[string]*centrifuge.ClientInfo, error) {
 }
 
 // Presence - see engine interface description.
-func (s *shard) PresenceStats(ch string) (centrifuge.PresenceStats, error) {
+func (s *shard) PresenceStats(ch string) (PresenceStats, error) {
 	presence, err := s.Presence(ch)
 	if err != nil {
-		return centrifuge.PresenceStats{}, err
+		return PresenceStats{}, err
 	}
 
 	numClients := len(presence)
@@ -1390,14 +1388,14 @@ func (s *shard) PresenceStats(ch string) (centrifuge.PresenceStats, error) {
 		}
 	}
 
-	return centrifuge.PresenceStats{
+	return PresenceStats{
 		NumClients: numClients,
 		NumUsers:   numUsers,
 	}, nil
 }
 
 // History - see engine interface description.
-func (s *shard) History(ch string, filter centrifuge.HistoryFilter) ([]*centrifuge.Publication, centrifuge.RecoveryPosition, error) {
+func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
 	historySeqKey := s.gethistorySeqKey(ch)
 	historyEpochKey := s.gethistoryEpochKey(ch)
 	historyKey := s.getHistoryKey(ch)
@@ -1405,14 +1403,14 @@ func (s *shard) History(ch string, filter centrifuge.HistoryFilter) ([]*centrifu
 	dr := newDataRequest(dataOpHistory, []interface{}{historySeqKey, historyEpochKey, historyKey, 1, -1})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
-		return nil, centrifuge.RecoveryPosition{}, resp.err
+		return nil, RecoveryPosition{}, resp.err
 	}
 	results := resp.reply.([]interface{})
 
 	sequence, err := redis.Int64(results[0], nil)
 	if err != nil {
 		if err != redis.ErrNil {
-			return nil, centrifuge.RecoveryPosition{}, err
+			return nil, RecoveryPosition{}, err
 		}
 		sequence = 0
 	}
@@ -1423,17 +1421,17 @@ func (s *shard) History(ch string, filter centrifuge.HistoryFilter) ([]*centrifu
 	epoch, err = redis.String(results[1], nil)
 	if err != nil {
 		if err != redis.ErrNil {
-			return nil, centrifuge.RecoveryPosition{}, err
+			return nil, RecoveryPosition{}, err
 		}
 		epoch = ""
 	}
 
 	publications, err := sliceOfPubs(s, results[2], nil)
 	if err != nil {
-		return nil, centrifuge.RecoveryPosition{}, err
+		return nil, RecoveryPosition{}, err
 	}
 
-	latestPosition := centrifuge.RecoveryPosition{Seq: seq, Gen: gen, Epoch: epoch}
+	latestPosition := RecoveryPosition{Seq: seq, Gen: gen, Epoch: epoch}
 
 	since := filter.Since
 	if since == nil {
@@ -1482,15 +1480,6 @@ func (s *shard) History(ch string, filter centrifuge.HistoryFilter) ([]*centrifu
 	return publications, latestPosition, nil
 }
 
-const (
-	maxSeq = math.MaxUint32 // maximum uint32 value
-	maxGen = math.MaxUint32 // maximum uint32 value
-)
-
-func unpackUint64(val uint64) (uint32, uint32) {
-	return uint32(val), uint32(val >> 32)
-}
-
 // RemoveHistory - see engine interface description.
 func (s *shard) RemoveHistory(ch string) error {
 	historyKey := s.getHistoryKey(ch)
@@ -1523,7 +1512,7 @@ func (s *shard) Channels() ([]string, error) {
 	return channels, nil
 }
 
-func mapStringClientInfo(result interface{}, err error) (map[string]*centrifuge.ClientInfo, error) {
+func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {
 	values, err := redis.Values(result, err)
 	if err != nil {
 		return nil, err
@@ -1531,14 +1520,14 @@ func mapStringClientInfo(result interface{}, err error) (map[string]*centrifuge.
 	if len(values)%2 != 0 {
 		return nil, errors.New("mapStringClientInfo expects even number of values result")
 	}
-	m := make(map[string]*centrifuge.ClientInfo, len(values)/2)
+	m := make(map[string]*ClientInfo, len(values)/2)
 	for i := 0; i < len(values); i += 2 {
 		key, okKey := values[i].([]byte)
 		value, okValue := values[i+1].([]byte)
 		if !okKey || !okValue {
 			return nil, errors.New("ScanMap key not a bulk string value")
 		}
-		var f centrifuge.ClientInfo
+		var f ClientInfo
 		err = f.Unmarshal(value)
 		if err != nil {
 			return nil, errors.New("can not unmarshal value to ClientInfo")
@@ -1559,12 +1548,12 @@ func extractPushData(data []byte) ([]byte, uint32, uint32) {
 	return data, seq, gen
 }
 
-func sliceOfPubs(n *shard, result interface{}, err error) ([]*centrifuge.Publication, error) {
+func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error) {
 	values, err := redis.Values(result, err)
 	if err != nil {
 		return nil, err
 	}
-	msgs := make([]*centrifuge.Publication, len(values))
+	msgs := make([]*Publication, len(values))
 
 	j := 0
 	for i := len(values) - 1; i >= 0; i-- {
@@ -1616,11 +1605,4 @@ func consistentIndex(s string, numBuckets int) int {
 	}
 
 	return int(b)
-}
-
-// index chooses bucket number in range [0, numBuckets).
-func index(s string, numBuckets int) int {
-	hash := fnv.New64a()
-	hash.Write([]byte(s))
-	return int(hash.Sum64() % uint64(numBuckets))
 }
