@@ -86,7 +86,7 @@ type HistoryManager interface {
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
-	AddHistory(ch string, pub *Publication, opts *ChannelOptions, onDone func(seq uint64, err error)) <-chan error
+	AddHistory(ch string, pub *Publication, opts *ChannelOptions) (uint64, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

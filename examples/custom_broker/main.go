@@ -106,7 +106,6 @@ func main() {
 	}
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		DisablePublish: true,
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
 				Host: "localhost",

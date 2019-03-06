@@ -113,16 +113,8 @@ func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication,
 }
 
 // AddHistory - see engine interface description.
-func (e *MemoryEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions, onDone func(seq uint64, err error)) <-chan error {
-	eChan := make(chan error, 1)
-	var err error
-	var index uint64
-	if opts != nil && opts.HistorySize > 0 && opts.HistoryLifetime > 0 {
-		index, err = e.historyHub.add(ch, pub, opts)
-	}
-	onDone(index, err)
-	eChan <- err
-	return eChan
+func (e *MemoryEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (uint64, error) {
+	return e.historyHub.add(ch, pub, opts)
 }
 
 // RemoveHistory - see engine interface description.

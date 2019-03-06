@@ -489,6 +489,7 @@ var (
 // PublishAsync do the same as Publish but returns immediately after publishing
 // message to engine. Caller can inspect error waiting for it on returned channel.
 func (n *Node) PublishAsync(ch string, pub *Publication) <-chan error {
+	errCh := make(chan error, 1)
 	chOpts, ok := n.ChannelOpts(ch)
 	if !ok {
 		return makeErrChan(ErrNoChannelOptions)
@@ -497,17 +498,17 @@ func (n *Node) PublishAsync(ch string, pub *Publication) <-chan error {
 	if n.historyManager != nil && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
 		mu := n.pubLock(ch)
 		mu.Lock()
-		return n.historyManager.AddHistory(ch, pub, &chOpts, func(index uint64, err error) {
-			if err != nil {
-				mu.Unlock()
-				return
-			}
-			seq, gen := unpackUint64(index)
-			pub.Seq = seq
-			pub.Gen = gen
-			n.broker.Publish(ch, pub, &chOpts)
+		index, err := n.historyManager.AddHistory(ch, pub, &chOpts)
+		if err != nil {
 			mu.Unlock()
-		})
+			errCh <- err
+			return errCh
+		}
+		pub.Seq, pub.Gen = unpackUint64(index)
+		n.broker.Publish(ch, pub, &chOpts)
+		mu.Unlock()
+		errCh <- nil
+		return errCh
 	}
 	return n.broker.Publish(ch, pub, &chOpts)
 }

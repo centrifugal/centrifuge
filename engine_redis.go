@@ -84,13 +84,13 @@ type shard struct {
 	remPresenceScript *redis.Script
 	presenceScript    *redis.Script
 	historyScript     *redis.Script
+	addHistoryScript  *redis.Script
 	messagePrefix     string
 }
 
 // RedisEngineConfig is a config for Redis Engine.
 type RedisEngineConfig struct {
-	Shards         []RedisShardConfig
-	DisablePublish bool
+	Shards []RedisShardConfig
 }
 
 // RedisShardConfig is struct with Redis Engine options.
@@ -357,6 +357,21 @@ redis.call("expire", KEYS[1], ARGV[4])
 return redis.call("publish", ARGV[1], payload)
 	`
 
+	// addHistorySource ...
+	// KEYS[1] - history list key
+	// KEYS[2] - history sequence key
+	// ARGV[1] - message payload
+	// ARGV[2] - history size ltrim right bound
+	// ARGV[3] - history lifetime
+	addHistorySource = `
+	local sequence = redis.call("incr", KEYS[2])
+	local payload = "__" .. sequence .. "__" .. ARGV[1]
+	redis.call("lpush", KEYS[1], payload)
+	redis.call("ltrim", KEYS[1], 0, ARGV[2])
+	redis.call("expire", KEYS[1], ARGV[3])
+	return sequence
+		`
+
 	// KEYS[1] - presence set key
 	// KEYS[2] - presence hash key
 	// ARGV[1] - key expire seconds
@@ -441,9 +456,7 @@ func (e *RedisEngine) Run(h BrokerEventHandler) error {
 
 // Publish - see engine interface description.
 func (e *RedisEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
-	errCh := make(chan error, 1)
-	errCh <- nil
-	return errCh
+	return e.getShard(ch).Publish(ch, pub, opts)
 }
 
 // PublishJoin - see engine interface description.
@@ -510,8 +523,8 @@ func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, 
 }
 
 // AddHistory - see engine interface description.
-func (e *RedisEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions, onDone func(seq uint64, err error)) <-chan error {
-	return e.getShard(ch).AddHistory(ch, pub, opts, onDone, e.config.DisablePublish)
+func (e *RedisEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (uint64, error) {
+	return e.getShard(ch).AddHistory(ch, pub, opts)
 }
 
 // RemoveHistory - see engine interface description.
@@ -555,11 +568,15 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
 		historyScript:     redis.NewScript(3, historySource),
+		addHistoryScript:  redis.NewScript(2, addHistorySource),
 	}
 	shard.pubCh = make(chan pubRequest)
 	shard.subCh = make(chan subRequest)
 	shard.dataCh = make(chan dataRequest)
 	shard.messagePrefix = conf.Prefix + redisClientChannelPrefix
+	go shard.runForever(func() {
+		shard.runDataPipeline()
+	})
 	return shard, nil
 }
 
@@ -595,7 +612,7 @@ func (s *shard) gethistoryEpochKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".history.epoch." + ch)
 }
 
-// Run runs Redis shard.
+// Run Redis shard.
 func (s *shard) Run(h BrokerEventHandler) error {
 	s.eventHandler = h
 	go s.runForever(func() {
@@ -603,9 +620,6 @@ func (s *shard) Run(h BrokerEventHandler) error {
 	})
 	go s.runForever(func() {
 		s.runPubSub()
-	})
-	go s.runForever(func() {
-		s.runDataPipeline()
 	})
 	return nil
 }
@@ -985,6 +999,7 @@ const (
 	dataOpRemovePresence
 	dataOpPresence
 	dataOpHistory
+	dataOpAddHistory
 	dataOpHistoryRemove
 	dataOpChannels
 )
@@ -1055,6 +1070,14 @@ func (s *shard) runDataPipeline() {
 		return
 	}
 
+	err = s.addHistoryScript.Load(conn)
+	if err != nil {
+		s.node.Log(NewLogEntry(LogLevelError, "error loading add history Lua", map[string]interface{}{"error": err.Error()}))
+		// Can not proceed if script has not been loaded.
+		conn.Close()
+		return
+	}
+
 	conn.Close()
 
 	var drs []dataRequest
@@ -1083,6 +1106,8 @@ func (s *shard) runDataPipeline() {
 				s.presenceScript.SendHash(conn, drs[i].args...)
 			case dataOpHistory:
 				s.historyScript.SendHash(conn, drs[i].args...)
+			case dataOpAddHistory:
+				s.addHistoryScript.SendHash(conn, drs[i].args...)
 			case dataOpHistoryRemove:
 				conn.Send("DEL", drs[i].args...)
 			case dataOpChannels:
@@ -1156,13 +1181,17 @@ func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 		message: byteMessage,
 		err:     eChan,
 	}
-	timer := timers.AcquireTimer(s.readTimeout())
-	defer timers.ReleaseTimer(timer)
 	select {
 	case s.pubCh <- pr:
-	case <-timer.C:
-		eChan <- errRedisOpTimeout
-		return eChan
+	default:
+		timer := timers.AcquireTimer(s.readTimeout())
+		defer timers.ReleaseTimer(timer)
+		select {
+		case s.pubCh <- pr:
+		case <-timer.C:
+			eChan <- errRedisOpTimeout
+			return eChan
+		}
 	}
 	return eChan
 }
@@ -1305,9 +1334,11 @@ func (s *shard) getDataResponse(r dataRequest) *dataResponse {
 	select {
 	case s.dataCh <- r:
 	default:
+		timer := timers.AcquireTimer(s.readTimeout())
+		defer timers.ReleaseTimer(timer)
 		select {
 		case s.dataCh <- r:
-		case <-time.After(s.readTimeout()):
+		case <-timer.C:
 			return &dataResponse{nil, errRedisOpTimeout}
 		}
 	}
@@ -1461,19 +1492,10 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 	return publications, latestPosition, nil
 }
 
-func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, onDone func(index uint64, err error), disablePublish bool) <-chan error {
-	eChan := make(chan error, 1)
-	if !disablePublish {
-		defer onDone(0, ErrPublished)
-	}
-
+func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (uint64, error) {
 	data, err := pub.Marshal()
 	if err != nil {
-		if disablePublish {
-			onDone(0, err)
-		}
-		eChan <- err
-		return eChan
+		return 0, err
 	}
 	push := &Push{
 		Type:    PushTypePublication,
@@ -1482,42 +1504,21 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, on
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		if disablePublish {
-			onDone(0, err)
-		}
-		eChan <- err
-		return eChan
+		return 0, err
 	}
 
-	chID := s.messageChannelID(ch)
-
-	pr := pubRequest{
-		channel:    chID,
-		message:    byteMessage,
-		historyKey: s.getHistoryKey(ch),
-		indexKey:   s.gethistorySeqKey(ch),
-		opts:       opts,
-		err:        eChan,
+	historyKey := s.getHistoryKey(ch)
+	sequenceKey := s.gethistorySeqKey(ch)
+	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, sequenceKey, byteMessage, opts.HistorySize, opts.HistoryLifetime})
+	resp := s.getDataResponse(dr)
+	if resp.err != nil {
+		return 0, resp.err
 	}
-	select {
-	case s.pubCh <- pr:
-	default:
-		timer := timers.AcquireTimer(s.readTimeout())
-		defer timers.ReleaseTimer(timer)
-		select {
-		case s.pubCh <- pr:
-		case <-timer.C:
-			if disablePublish {
-				onDone(0, errRedisOpTimeout)
-			}
-			eChan <- errRedisOpTimeout
-			return eChan
-		}
+	index, err := redis.Int64(resp.reply, nil)
+	if err != nil {
+		return 0, resp.err
 	}
-	if disablePublish {
-		onDone(2, nil)
-	}
-	return eChan
+	return uint64(index), nil
 }
 
 // RemoveHistory - see engine interface description.
