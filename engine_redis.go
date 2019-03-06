@@ -854,9 +854,9 @@ func (s *shard) runPubSub() {
 }
 
 func (s *shard) handleRedisClientMessage(chID channelID, data []byte) error {
-	pushData, seq, gen := extractPushData(data)
+	// pushData, seq, gen := extractPushData(data)
 	var push Push
-	err := push.Unmarshal(pushData)
+	err := push.Unmarshal(data)
 	if err != nil {
 		return err
 	}
@@ -867,8 +867,8 @@ func (s *shard) handleRedisClientMessage(chID channelID, data []byte) error {
 		if err != nil {
 			return err
 		}
-		pub.Seq = seq
-		pub.Gen = gen
+		// pub.Seq = seq
+		// pub.Gen = gen
 		s.eventHandler.HandlePublication(push.Channel, &pub)
 	case PushTypeJoin:
 		var join Join

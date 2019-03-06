@@ -64,4 +64,9 @@ var (
 		Reason:    "write error",
 		Reconnect: true,
 	}
+	// DisconnectInsufficientState ...
+	DisconnectInsufficientState = &Disconnect{
+		Reason:    "insufficient state",
+		Reconnect: true,
+	}
 )

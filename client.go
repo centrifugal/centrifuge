@@ -101,13 +101,18 @@ func SetCredentials(ctx context.Context, creds *Credentials) context.Context {
 
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
-	Info     proto.Raw
-	expireAt int64
+	Info             proto.Raw
+	expireAt         int64
+	lastPubTime      int64
+	recoveryPosition RecoveryPosition
 }
 
 // Client represents client connection to server.
 type Client struct {
 	mu sync.RWMutex
+
+	// presenceMu allows to sync presence routine with client closing.
+	presenceMu sync.Mutex
 
 	ctx       context.Context
 	node      *Node
@@ -198,52 +203,70 @@ func (c *Client) updateChannelPresence(ch string) error {
 	return c.node.addPresence(ch, c.uid, info)
 }
 
+func (c *Client) checkSubscriptionExpiration(channel string, channelContext ChannelContext, delay time.Duration) bool {
+	now := time.Now().Unix()
+	expireAt := channelContext.expireAt
+	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
+		// Subscription expired.
+		if c.eventHub.subRefreshHandler != nil {
+			// Give subscription a chance to be refreshed via SubRefreshHandler.
+			reply := c.eventHub.subRefreshHandler(SubRefreshEvent{Channel: channel})
+			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
+				return false
+			}
+			ctx := c.channels[channel]
+			if len(reply.Info) > 0 {
+				ctx.Info = reply.Info
+			}
+			ctx.expireAt = reply.ExpireAt
+			c.channels[channel] = ctx
+		} else {
+			// The only way subscription could be refreshed in this case is via
+			// SUB_REFRESH command sent from client but looks like that command
+			// with new refreshed token have not been received in configured window.
+			return false
+		}
+	}
+	return true
+}
+
 // updatePresence updates presence info for all client channels.
 // At moment it also checks for expired subscriptions. As this happens
 // once in configured presence ping interval then subscription
 // expiration time resolution is pretty big. Though on practice
 // this should be reasonable for most use cases.
 func (c *Client) updatePresence() {
+	c.presenceMu.Lock()
+	defer c.presenceMu.Unlock()
 	config := c.node.Config()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		return
 	}
+	channels := make(map[string]ChannelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
-		now := time.Now().Unix()
-		expireAt := channelContext.expireAt
-		if expireAt > 0 && now > expireAt+int64(config.ClientExpiredSubCloseDelay.Seconds()) {
-			// Subscription expired.
-			if c.eventHub.subRefreshHandler != nil {
-				// Give subscription a chance to be refreshed via SubRefreshHandler.
-				reply := c.eventHub.subRefreshHandler(SubRefreshEvent{Channel: channel})
-				if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
-					// Ideally we should deal with single expired subscription in this
-					// case - i.e. unsubscribe client from channel and give an advice
-					// to resubscribe. But there is scenario when browser goes online
-					// after computer was in sleeping mode which I have not managed to
-					// handle reliably on client side when unsubscribe with resubscribe
-					// flag was used. So I decided to stick with disconnect for now -
-					// it seems to work fine and drastically simplifies client code.
-					go c.Close(DisconnectSubExpired)
-					// No need to update channel presence.
-					continue
-				}
-				ctx := c.channels[channel]
-				if len(reply.Info) > 0 {
-					ctx.Info = reply.Info
-				}
-				ctx.expireAt = reply.ExpireAt
-				c.channels[channel] = ctx
-			} else {
-				// The only way subscription could be refreshed in this case is via
-				// SUB_REFRESH command sent from client but looks like that command
-				// with new refreshed token have not been received in configured window.
-				go c.Close(DisconnectSubExpired)
-				// No need to update channel presence.
-				continue
-			}
+		channels[channel] = channelContext
+	}
+	c.mu.Unlock()
+	for channel, channelContext := range channels {
+		if !c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay) {
+			// Ideally we should deal with single expired subscription in this
+			// case - i.e. unsubscribe client from channel and give an advice
+			// to resubscribe. But there is scenario when browser goes online
+			// after computer was in sleeping mode which I have not managed to
+			// handle reliably on client side when unsubscribe with resubscribe
+			// flag was used. So I decided to stick with disconnect for now -
+			// it seems to work fine and drastically simplifies client code.
+			go c.Close(DisconnectSubExpired)
+			// No need to proceed after close.
+			return
+		}
+
+		if !c.checkPosition(channel, channelContext) {
+			go c.Close(DisconnectInsufficientState)
+			// No need to proceed after close.
+			return
 		}
 
 		err := c.updateChannelPresence(channel)
@@ -251,14 +274,37 @@ func (c *Client) updatePresence() {
 			c.node.logger.log(newLogEntry(LogLevelError, "error updating presence for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
+	c.mu.Lock()
 	c.addPresenceUpdate()
+	c.mu.Unlock()
 }
 
 // Lock must be held outside.
 func (c *Client) addPresenceUpdate() {
-	config := c.node.Config()
-	presenceInterval := config.ClientPresencePingInterval
-	c.presenceTimer = time.AfterFunc(presenceInterval, c.updatePresence)
+	// config := c.node.Config()
+	// presenceInterval := config.ClientPresencePingInterval
+	c.presenceTimer = time.AfterFunc(50*time.Millisecond, c.updatePresence)
+}
+
+// Lock must be held outside.
+func (c *Client) checkPosition(ch string, channelContext ChannelContext) bool {
+	needCheckPosition := channelContext.lastPubTime == 0 || time.Now().Unix()-channelContext.lastPubTime > 25
+	if !needCheckPosition {
+		return true
+	}
+	position := channelContext.recoveryPosition
+	chOpts, ok := c.node.ChannelOpts(ch)
+	if !ok {
+		return true
+	}
+	if !chOpts.HistoryRecover {
+		return true
+	}
+	streamPosition, err := c.node.currentRecoveryState(ch)
+	if err != nil {
+		return true
+	}
+	return streamPosition.Seq == position.Seq && streamPosition.Gen == position.Gen && streamPosition.Epoch == position.Epoch
 }
 
 // ID returns unique client connection id.
@@ -364,6 +410,8 @@ func (c *Client) Close(disconnect *Disconnect) error {
 
 // close client connection with specific disconnect reason.
 func (c *Client) close(disconnect *Disconnect) error {
+	c.presenceMu.Lock()
+	defer c.presenceMu.Unlock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1454,14 +1502,6 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 		}
 	}
 
-	channelContext := ChannelContext{
-		Info:     channelInfo,
-		expireAt: expireAt,
-	}
-	c.mu.Lock()
-	c.channels[channel] = channelContext
-	c.mu.Unlock()
-
 	if chOpts.HistoryRecover {
 		c.setInSubscribe(channel, true)
 	}
@@ -1492,13 +1532,12 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 
 	var pubBufferLocked bool
 
+	var latestSeq uint32
+	var latestGen uint32
+	var latestEpoch string
+
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
-
-		var latestSeq uint32
-		var latestGen uint32
-		var latestEpoch string
-
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
@@ -1594,11 +1633,59 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 		go c.node.publishJoin(channel, join, &chOpts)
 	}
 
+	channelContext := ChannelContext{
+		Info:     channelInfo,
+		expireAt: expireAt,
+		recoveryPosition: RecoveryPosition{
+			Seq:   latestSeq,
+			Gen:   latestGen,
+			Epoch: latestEpoch,
+		},
+	}
+	c.mu.Lock()
+	c.channels[channel] = channelContext
+	c.mu.Unlock()
+
 	if c.node.logger.enabled(LogLevelDebug) {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "client subscribed to channel", map[string]interface{}{"client": c.uid, "user": c.user, "channel": cmd.Channel}))
 	}
 
 	return nil
+}
+
+func nextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
+	var nextSeq uint32
+	nextGen := currentGen
+	if currentSeq == maxSeq {
+		nextSeq = 0
+		nextGen++
+	} else {
+		nextSeq = currentSeq + 1
+	}
+	return nextSeq, nextGen
+}
+
+func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, reply *preparedReply) error {
+	if pub.Seq > 0 || pub.Gen > 0 {
+		c.mu.Lock()
+		channelContext, ok := c.channels[ch]
+		if !ok {
+			c.mu.Unlock()
+			return nil
+		}
+		nextSeq, nextGen := nextSeqGen(channelContext.recoveryPosition.Seq, channelContext.recoveryPosition.Gen)
+		if pub.Seq != nextSeq || pub.Gen != nextGen {
+			go c.Close(DisconnectInsufficientState)
+			c.mu.Unlock()
+			return nil
+		}
+		channelContext.lastPubTime = time.Now().Unix()
+		channelContext.recoveryPosition.Seq = pub.Seq
+		channelContext.recoveryPosition.Gen = pub.Gen
+		c.channels[ch] = channelContext
+		c.mu.Unlock()
+	}
+	return c.transport.Send(reply)
 }
 
 func (c *Client) writePublication(ch string, pub *Publication, reply *preparedReply) error {
@@ -1611,12 +1698,12 @@ func (c *Client) writePublication(ch string, pub *Publication, reply *preparedRe
 			c.pubBuffer = append(c.pubBuffer, pub)
 		} else {
 			c.pubBufferMu.Unlock()
-			return c.transport.Send(reply)
+			return c.writePublicationUpdatePosition(ch, pub, reply)
 		}
 		c.pubBufferMu.Unlock()
 		return nil
 	}
-	return c.transport.Send(reply)
+	return c.writePublicationUpdatePosition(ch, pub, reply)
 }
 
 func (c *Client) writeJoin(ch string, reply *preparedReply) error {
@@ -1739,11 +1826,12 @@ func (c *Client) subRefreshCmd(cmd *proto.SubRefreshRequest) (*proto.SubRefreshR
 		res.TTL = uint32(expireAt - now)
 	}
 
-	channelContext := ChannelContext{
-		Info:     channelInfo,
-		expireAt: expireAt,
-	}
 	c.mu.Lock()
+	channelContext, ok := c.channels[channel]
+	if ok {
+		channelContext.Info = channelInfo
+		channelContext.expireAt = expireAt
+	}
 	c.channels[channel] = channelContext
 	c.mu.Unlock()
 
