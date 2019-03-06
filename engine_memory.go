@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"container/heap"
-	"context"
 	"math"
 	"strconv"
 	"sync"
@@ -11,21 +10,21 @@ import (
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
-// MemoryEngine is builtin default engine which allows to run
-// Centrifugo without any external brokers/storages. All data
-// managed inside process memory.
-// With this engine you can only run single Centrifuge node. If
-// you need to scale you should use another engine implementation
-// instead – for example Redis engine.
-// Running single node can be sufficient for many use cases especially
-// when you need maximum performance and do not too many online clients.
-// Consider configuring your load balancer to have one backup Centrifuge
-// node for HA in this case.
+// MemoryEngine is builtin default engine which allows to run Centrifuge-based
+// server without any external brokers/storages. All data managed inside process
+// memory.
+//
+// With this engine you can only run single Centrifuge node. If you need to scale
+// you should use another engine implementation instead – for example Redis engine.
+//
+// Running single node can be sufficient for many use cases especially when you
+// need maximum performance and do not too many online clients. Consider configuring
+// your load balancer to have one backup Centrifuge node for HA in this case.
 type MemoryEngine struct {
 	node         *Node
-	eventHandler EngineEventHandler
 	presenceHub  *presenceHub
 	historyHub   *historyHub
+	eventHandler BrokerEventHandler
 }
 
 // MemoryEngineConfig is a memory engine config.
@@ -44,29 +43,14 @@ func NewMemoryEngine(n *Node, conf MemoryEngineConfig) (*MemoryEngine, error) {
 
 // Run runs memory engine - we do not have any logic here as Memory Engine ready to work
 // just after initialization.
-func (e *MemoryEngine) Run(h EngineEventHandler) error {
+func (e *MemoryEngine) Run(h BrokerEventHandler) error {
 	e.eventHandler = h
-	return nil
-}
-
-// Shutdown ...
-func (e *MemoryEngine) Shutdown(ctx context.Context) error {
 	return nil
 }
 
 // Publish adds message into history hub and calls node ClientMsg method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
 func (e *MemoryEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
-
-	if opts != nil && opts.HistorySize > 0 && opts.HistoryLifetime > 0 {
-		err := e.historyHub.add(ch, pub, opts)
-		if err != nil {
-			eChan := make(chan error, 1)
-			eChan <- err
-			return eChan
-		}
-	}
-
 	eChan := make(chan error, 1)
 	eChan <- e.eventHandler.HandlePublication(ch, pub)
 	return eChan
@@ -126,6 +110,19 @@ func (e *MemoryEngine) PresenceStats(ch string) (PresenceStats, error) {
 // History - see engine interface description.
 func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
 	return e.historyHub.get(ch, filter)
+}
+
+// AddHistory - see engine interface description.
+func (e *MemoryEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions, onDone func(seq uint64, err error)) <-chan error {
+	eChan := make(chan error, 1)
+	var err error
+	var index uint64
+	if opts != nil && opts.HistorySize > 0 && opts.HistoryLifetime > 0 {
+		index, err = e.historyHub.add(ch, pub, opts)
+	}
+	onDone(index, err)
+	eChan <- err
+	return eChan
 }
 
 // RemoveHistory - see engine interface description.
@@ -293,7 +290,7 @@ func (h *historyHub) expire() {
 	}
 }
 
-func (h *historyHub) next(ch string) (uint32, uint32) {
+func (h *historyHub) next(ch string) uint64 {
 	var val uint64
 	h.sequencesMu.Lock()
 	top, ok := h.sequences[ch]
@@ -306,7 +303,7 @@ func (h *historyHub) next(ch string) (uint32, uint32) {
 		val = top
 	}
 	h.sequencesMu.Unlock()
-	return unpackUint64(val)
+	return val
 }
 
 func unpackUint64(val uint64) (uint32, uint32) {
@@ -326,11 +323,12 @@ func (h *historyHub) getSequence(ch string) (uint32, uint32, string) {
 	return seq, gen, h.epoch
 }
 
-func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) error {
+func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (uint64, error) {
 	h.Lock()
 	defer h.Unlock()
 
-	pub.Seq, pub.Gen = h.next(ch)
+	index := h.next(ch)
+	pub.Seq, pub.Gen = unpackUint64(index)
 
 	_, ok := h.history[ch]
 
@@ -357,7 +355,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) erro
 		h.nextCheck = expireAt
 	}
 
-	return nil
+	return index, nil
 }
 
 func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {

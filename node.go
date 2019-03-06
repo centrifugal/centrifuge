@@ -37,8 +37,12 @@ type Node struct {
 	config Config
 	// hub to manage client connections.
 	hub *Hub
-	// engine - in memory or redis.
-	engine Engine
+	// broker ...
+	broker Broker
+	// historyManager ...
+	historyManager HistoryManager
+	// presenceManager ...
+	presenceManager PresenceManager
 	// nodes contains registry of known nodes.
 	nodes *nodeRegistry
 	// shutdown is a flag which is only true when node is going to shut down.
@@ -56,6 +60,8 @@ type Node struct {
 	controlDecoder controlproto.Decoder
 	// subLocks synchronizes access to adding/removing subscriptions.
 	subLocks map[int]*sync.Mutex
+	// pubLocks ...
+	pubLocks map[int]*sync.Mutex
 
 	metricsMu       sync.Mutex
 	metricsExporter *eagle.Eagle
@@ -64,6 +70,7 @@ type Node struct {
 
 const (
 	numSubLocks = 16384
+	numPubLocks = 16384
 )
 
 // New creates Node, the only required argument is config.
@@ -73,6 +80,11 @@ func New(c Config) (*Node, error) {
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)
 	for i := 0; i < numSubLocks; i++ {
 		subLocks[i] = &sync.Mutex{}
+	}
+
+	pubLocks := make(map[int]*sync.Mutex, numPubLocks)
+	for i := 0; i < numPubLocks; i++ {
+		pubLocks[i] = &sync.Mutex{}
 	}
 
 	n := &Node{
@@ -87,6 +99,7 @@ func New(c Config) (*Node, error) {
 		controlDecoder: controlproto.NewProtobufDecoder(),
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
+		pubLocks:       pubLocks,
 	}
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
@@ -102,6 +115,10 @@ func index(s string, numBuckets int) int {
 
 func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
+}
+
+func (n *Node) pubLock(ch string) *sync.Mutex {
+	return n.pubLocks[index(ch, numPubLocks)]
 }
 
 // SetLogHandler sets LogHandler to handle log messages with
@@ -120,7 +137,24 @@ func (n *Node) Config() Config {
 
 // SetEngine binds engine to node.
 func (n *Node) SetEngine(e Engine) {
-	n.engine = e
+	n.broker = e.(Broker)
+	n.historyManager = e.(HistoryManager)
+	n.presenceManager = e.(PresenceManager)
+}
+
+// SetBroker ...
+func (n *Node) SetBroker(b Broker) {
+	n.broker = b
+}
+
+// SetHistoryManager ...
+func (n *Node) SetHistoryManager(m HistoryManager) {
+	n.historyManager = m
+}
+
+// SetPresenceManager ...
+func (n *Node) SetPresenceManager(m PresenceManager) {
+	n.presenceManager = m
 }
 
 // Hub returns node's Hub.
@@ -142,8 +176,8 @@ func (n *Node) Reload(c Config) error {
 // Run performs node startup actions. At moment must be called once on start
 // after engine set to Node.
 func (n *Node) Run() error {
-	eventHandler := &engineEventHandler{n}
-	if err := n.engine.Run(eventHandler); err != nil {
+	eventHandler := &brokerEventHandler{n}
+	if err := n.broker.Run(eventHandler); err != nil {
 		return err
 	}
 	err := n.initMetrics()
@@ -188,7 +222,15 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	n.shutdown = true
 	close(n.shutdownCh)
 	n.mu.Unlock()
-	defer n.engine.Shutdown(ctx)
+	if closer, ok := n.broker.(Closer); ok {
+		defer closer.Close(ctx)
+	}
+	if closer, ok := n.historyManager.(Closer); ok {
+		defer closer.Close(ctx)
+	}
+	if closer, ok := n.presenceManager.(Closer); ok {
+		defer closer.Close(ctx)
+	}
 	return n.hub.shutdown(ctx)
 }
 
@@ -287,7 +329,7 @@ func (n *Node) cleanNodeInfo() {
 // This is a snapshot of state mostly useful for understanding what's going on
 // with system.
 func (n *Node) Channels() ([]string, error) {
-	return n.engine.Channels()
+	return n.broker.Channels()
 }
 
 // Info contains information about all known server nodes.
@@ -452,7 +494,22 @@ func (n *Node) PublishAsync(ch string, pub *Publication) <-chan error {
 		return makeErrChan(ErrNoChannelOptions)
 	}
 	messagesSentCount.WithLabelValues("publication").Inc()
-	return n.engine.Publish(ch, pub, &chOpts)
+	if n.historyManager != nil && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
+		mu := n.pubLock(ch)
+		mu.Lock()
+		return n.historyManager.AddHistory(ch, pub, &chOpts, func(index uint64, err error) {
+			if err != nil {
+				mu.Unlock()
+				return
+			}
+			seq, gen := unpackUint64(index)
+			pub.Seq = seq
+			pub.Gen = gen
+			n.broker.Publish(ch, pub, &chOpts)
+			mu.Unlock()
+		})
+	}
+	return n.broker.Publish(ch, pub, &chOpts)
 }
 
 // publishJoin allows to publish join message into channel when someone subscribes on it
@@ -466,7 +523,7 @@ func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-
 		opts = &chOpts
 	}
 	messagesSentCount.WithLabelValues("join").Inc()
-	return n.engine.PublishJoin(ch, join, opts)
+	return n.broker.PublishJoin(ch, join, opts)
 }
 
 // publishLeave allows to publish join message into channel when someone subscribes on it
@@ -480,7 +537,7 @@ func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions)
 		opts = &chOpts
 	}
 	messagesSentCount.WithLabelValues("leave").Inc()
-	return n.engine.PublishLeave(ch, leave, opts)
+	return n.broker.PublishLeave(ch, leave, opts)
 }
 
 // publishControl publishes message into control channel so all running
@@ -491,7 +548,7 @@ func (n *Node) publishControl(cmd *controlproto.Command) <-chan error {
 	if err != nil {
 		return makeErrChan(err)
 	}
-	return n.engine.PublishControl(data)
+	return n.broker.PublishControl(data)
 }
 
 func (n *Node) getMetrics(metrics eagle.Metrics) *controlproto.Metrics {
@@ -597,7 +654,7 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 		return err
 	}
 	if first {
-		err := n.engine.Subscribe(ch)
+		err := n.broker.Subscribe(ch)
 		if err != nil {
 			n.hub.removeSub(ch, c)
 			return err
@@ -618,7 +675,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 		return err
 	}
 	if empty {
-		return n.engine.Unsubscribe(ch)
+		return n.broker.Unsubscribe(ch)
 	}
 	return nil
 }
@@ -671,23 +728,32 @@ func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
 
 // addPresence proxies presence adding to engine.
 func (n *Node) addPresence(ch string, uid string, info *proto.ClientInfo) error {
+	if n.presenceManager == nil {
+		return nil
+	}
 	n.mu.RLock()
 	expire := n.config.ClientPresenceExpireInterval
 	n.mu.RUnlock()
 	actionCount.WithLabelValues("add_presence").Inc()
-	return n.engine.AddPresence(ch, uid, info, expire)
+	return n.presenceManager.AddPresence(ch, uid, info, expire)
 }
 
 // removePresence proxies presence removing to engine.
 func (n *Node) removePresence(ch string, uid string) error {
+	if n.presenceManager == nil {
+		return nil
+	}
 	actionCount.WithLabelValues("remove_presence").Inc()
-	return n.engine.RemovePresence(ch, uid)
+	return n.presenceManager.RemovePresence(ch, uid)
 }
 
 // Presence returns a map with information about active clients in channel.
 func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
+	if n.presenceManager == nil {
+		return nil, nil
+	}
 	actionCount.WithLabelValues("presence").Inc()
-	presence, err := n.engine.Presence(ch)
+	presence, err := n.presenceManager.Presence(ch)
 	if err != nil {
 		return nil, err
 	}
@@ -696,14 +762,17 @@ func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
 
 // PresenceStats returns presence stats from engine.
 func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
+	if n.presenceManager == nil {
+		return PresenceStats{}, nil
+	}
 	actionCount.WithLabelValues("presence_stats").Inc()
-	return n.engine.PresenceStats(ch)
+	return n.presenceManager.PresenceStats(ch)
 }
 
 // History returns a slice of last messages published into project channel.
 func (n *Node) History(ch string) ([]*Publication, error) {
 	actionCount.WithLabelValues("history").Inc()
-	pubs, _, err := n.engine.History(ch, HistoryFilter{
+	pubs, _, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
 		Since: nil,
 	})
@@ -713,7 +782,7 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 // recoverHistory recovers publications since last UID seen by client.
 func (n *Node) recoverHistory(ch string, since RecoveryPosition) ([]*Publication, RecoveryPosition, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
-	return n.engine.History(ch, HistoryFilter{
+	return n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
 		Since: &since,
 	})
@@ -722,13 +791,13 @@ func (n *Node) recoverHistory(ch string, since RecoveryPosition) ([]*Publication
 // RemoveHistory removes channel history.
 func (n *Node) RemoveHistory(ch string) error {
 	actionCount.WithLabelValues("remove_history").Inc()
-	return n.engine.RemoveHistory(ch)
+	return n.historyManager.RemoveHistory(ch)
 }
 
 // currentRecoveryState returns current recovery state for channel.
 func (n *Node) currentRecoveryState(ch string) (RecoveryPosition, error) {
 	actionCount.WithLabelValues("history_recovery_state").Inc()
-	_, recoveryPosition, err := n.engine.History(ch, HistoryFilter{
+	_, recoveryPosition, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: 0,
 		Since: nil,
 	})
@@ -870,22 +939,27 @@ func (h *nodeEventHub) Connect(handler ConnectHandler) {
 	h.connectHandler = handler
 }
 
-type engineEventHandler struct {
+// brokerEventHandler ...
+type brokerEventHandler struct {
 	node *Node
 }
 
-func (h *engineEventHandler) HandlePublication(ch string, pub *Publication) error {
+// HandlePublication ...
+func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication) error {
 	return h.node.handlePublication(ch, pub)
 }
 
-func (h *engineEventHandler) HandleJoin(ch string, join *Join) error {
+// HandleJoin ...
+func (h *brokerEventHandler) HandleJoin(ch string, join *Join) error {
 	return h.node.handleJoin(ch, join)
 }
 
-func (h *engineEventHandler) HandleLeave(ch string, leave *Leave) error {
+// HandleLeave ...
+func (h *brokerEventHandler) HandleLeave(ch string, leave *Leave) error {
 	return h.node.handleLeave(ch, leave)
 }
 
-func (h *engineEventHandler) HandleControl(data []byte) error {
+// HandleControl ...
+func (h *brokerEventHandler) HandleControl(data []byte) error {
 	return h.node.handleControl(data)
 }

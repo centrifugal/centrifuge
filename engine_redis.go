@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/timers"
-	"github.com/centrifugal/centrifuge/protocent"
 
 	"github.com/FZambia/sentinel"
 	"github.com/gomodule/redigo/redis"
@@ -67,14 +65,15 @@ const (
 type RedisEngine struct {
 	node     *Node
 	sharding bool
+	config   RedisEngineConfig
 	shards   []*shard
 }
 
 // shard has everything to connect to Redis instance.
 type shard struct {
 	node              *Node
+	eventHandler      BrokerEventHandler
 	engine            *RedisEngine
-	eventHandler      EngineEventHandler
 	config            RedisShardConfig
 	pool              *redis.Pool
 	subCh             chan subRequest
@@ -86,14 +85,12 @@ type shard struct {
 	presenceScript    *redis.Script
 	historyScript     *redis.Script
 	messagePrefix     string
-
-	pushEncoder protocent.PushEncoder
-	pushDecoder protocent.PushDecoder
 }
 
 // RedisEngineConfig is a config for Redis Engine.
 type RedisEngineConfig struct {
-	Shards []RedisShardConfig
+	Shards         []RedisShardConfig
+	DisablePublish bool
 }
 
 // RedisShardConfig is struct with Redis Engine options.
@@ -334,6 +331,7 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 	e := &RedisEngine{
 		node:     n,
 		shards:   shards,
+		config:   config,
 		sharding: len(shards) > 1,
 	}
 	return e, nil
@@ -430,7 +428,7 @@ func (e *RedisEngine) name() string {
 }
 
 // Run runs engine after node initialized.
-func (e *RedisEngine) Run(h EngineEventHandler) error {
+func (e *RedisEngine) Run(h BrokerEventHandler) error {
 	for _, shard := range e.shards {
 		shard.engine = e
 		err := shard.Run(h)
@@ -441,14 +439,11 @@ func (e *RedisEngine) Run(h EngineEventHandler) error {
 	return nil
 }
 
-// Shutdown ...
-func (e *RedisEngine) Shutdown(ctx context.Context) error {
-	return nil
-}
-
 // Publish - see engine interface description.
 func (e *RedisEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
-	return e.getShard(ch).Publish(ch, pub, opts)
+	errCh := make(chan error, 1)
+	errCh <- nil
+	return errCh
 }
 
 // PublishJoin - see engine interface description.
@@ -514,6 +509,11 @@ func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, 
 	return e.getShard(ch).History(ch, filter)
 }
 
+// AddHistory - see engine interface description.
+func (e *RedisEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions, onDone func(seq uint64, err error)) <-chan error {
+	return e.getShard(ch).AddHistory(ch, pub, opts, onDone, e.config.DisablePublish)
+}
+
 // RemoveHistory - see engine interface description.
 func (e *RedisEngine) RemoveHistory(ch string) error {
 	return e.getShard(ch).RemoveHistory(ch)
@@ -555,8 +555,6 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
 		historyScript:     redis.NewScript(3, historySource),
-		pushEncoder:       protocent.NewProtobufPushEncoder(),
-		pushDecoder:       protocent.NewProtobufPushDecoder(),
 	}
 	shard.pubCh = make(chan pubRequest)
 	shard.subCh = make(chan subRequest)
@@ -598,7 +596,7 @@ func (s *shard) gethistoryEpochKey(ch string) channelID {
 }
 
 // Run runs Redis shard.
-func (s *shard) Run(h EngineEventHandler) error {
+func (s *shard) Run(h BrokerEventHandler) error {
 	s.eventHandler = h
 	go s.runForever(func() {
 		s.runPublishPipeline()
@@ -843,32 +841,35 @@ func (s *shard) runPubSub() {
 
 func (s *shard) handleRedisClientMessage(chID channelID, data []byte) error {
 	pushData, seq, gen := extractPushData(data)
-	var push protocent.Push
+	var push Push
 	err := push.Unmarshal(pushData)
 	if err != nil {
 		return err
 	}
 	switch push.Type {
-	case protocent.PushTypePublication:
-		pub, err := s.pushDecoder.DecodePublication(push.Data)
+	case PushTypePublication:
+		var pub Publication
+		err := pub.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
 		pub.Seq = seq
 		pub.Gen = gen
-		s.eventHandler.HandlePublication(push.Channel, pub)
-	case protocent.PushTypeJoin:
-		join, err := s.pushDecoder.DecodeJoin(push.Data)
+		s.eventHandler.HandlePublication(push.Channel, &pub)
+	case PushTypeJoin:
+		var join Join
+		err := join.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		s.eventHandler.HandleJoin(push.Channel, join)
-	case protocent.PushTypeLeave:
-		leave, err := s.pushDecoder.DecodeLeave(push.Data)
+		s.eventHandler.HandleJoin(push.Channel, &join)
+	case PushTypeLeave:
+		var leave Leave
+		err := leave.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		s.eventHandler.HandleLeave(push.Channel, leave)
+		s.eventHandler.HandleLeave(push.Channel, &leave)
 	default:
 	}
 	return nil
@@ -1123,52 +1124,32 @@ func (s *shard) runDataPipeline() {
 	}
 }
 
+var (
+	// ErrPublished returned to indicate that node should not publish message to broker.
+	ErrPublished = errors.New("message published")
+)
+
 // Publish - see engine interface description.
 func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
-
 	eChan := make(chan error, 1)
 
-	data, err := s.pushEncoder.EncodePublication(pub)
+	data, err := pub.Marshal()
 	if err != nil {
 		eChan <- err
 		return eChan
 	}
-	push := &protocent.Push{
-		Type:    protocent.PushTypePublication,
+	push := &Push{
+		Type:    PushTypePublication,
 		Channel: ch,
 		Data:    data,
 	}
-	byteMessage, err := s.pushEncoder.Encode(push)
+	byteMessage, err := push.Marshal()
 	if err != nil {
 		eChan <- err
 		return eChan
 	}
 
 	chID := s.messageChannelID(ch)
-
-	if opts != nil && opts.HistorySize > 0 && opts.HistoryLifetime > 0 {
-		pr := pubRequest{
-			channel:    chID,
-			message:    byteMessage,
-			historyKey: s.getHistoryKey(ch),
-			indexKey:   s.gethistorySeqKey(ch),
-			opts:       opts,
-			err:        eChan,
-		}
-		select {
-		case s.pubCh <- pr:
-		default:
-			timer := timers.AcquireTimer(s.readTimeout())
-			defer timers.ReleaseTimer(timer)
-			select {
-			case s.pubCh <- pr:
-			case <-timer.C:
-				eChan <- errRedisOpTimeout
-				return eChan
-			}
-		}
-		return eChan
-	}
 
 	pr := pubRequest{
 		channel: chID,
@@ -1191,17 +1172,17 @@ func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan 
 
 	eChan := make(chan error, 1)
 
-	data, err := s.pushEncoder.EncodeJoin(join)
+	data, err := join.Marshal()
 	if err != nil {
 		eChan <- err
 		return eChan
 	}
-	push := &protocent.Push{
-		Type:    protocent.PushTypeLeave,
+	push := &Push{
+		Type:    PushTypeLeave,
 		Channel: ch,
 		Data:    data,
 	}
-	byteMessage, err := s.pushEncoder.Encode(push)
+	byteMessage, err := push.Marshal()
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -1234,17 +1215,17 @@ func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-ch
 
 	eChan := make(chan error, 1)
 
-	data, err := s.pushEncoder.EncodeLeave(leave)
+	data, err := leave.Marshal()
 	if err != nil {
 		eChan <- err
 		return eChan
 	}
-	push := &protocent.Push{
-		Type:    protocent.PushTypeLeave,
+	push := &Push{
+		Type:    PushTypeLeave,
 		Channel: ch,
 		Data:    data,
 	}
-	byteMessage, err := s.pushEncoder.Encode(push)
+	byteMessage, err := push.Marshal()
 	if err != nil {
 		eChan <- err
 		return eChan
@@ -1480,6 +1461,65 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 	return publications, latestPosition, nil
 }
 
+func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, onDone func(index uint64, err error), disablePublish bool) <-chan error {
+	eChan := make(chan error, 1)
+	if !disablePublish {
+		defer onDone(0, ErrPublished)
+	}
+
+	data, err := pub.Marshal()
+	if err != nil {
+		if disablePublish {
+			onDone(0, err)
+		}
+		eChan <- err
+		return eChan
+	}
+	push := &Push{
+		Type:    PushTypePublication,
+		Channel: ch,
+		Data:    data,
+	}
+	byteMessage, err := push.Marshal()
+	if err != nil {
+		if disablePublish {
+			onDone(0, err)
+		}
+		eChan <- err
+		return eChan
+	}
+
+	chID := s.messageChannelID(ch)
+
+	pr := pubRequest{
+		channel:    chID,
+		message:    byteMessage,
+		historyKey: s.getHistoryKey(ch),
+		indexKey:   s.gethistorySeqKey(ch),
+		opts:       opts,
+		err:        eChan,
+	}
+	select {
+	case s.pubCh <- pr:
+	default:
+		timer := timers.AcquireTimer(s.readTimeout())
+		defer timers.ReleaseTimer(timer)
+		select {
+		case s.pubCh <- pr:
+		case <-timer.C:
+			if disablePublish {
+				onDone(0, errRedisOpTimeout)
+			}
+			eChan <- errRedisOpTimeout
+			return eChan
+		}
+	}
+	if disablePublish {
+		onDone(2, nil)
+	}
+	return eChan
+}
+
 // RemoveHistory - see engine interface description.
 func (s *shard) RemoveHistory(ch string) error {
 	historyKey := s.getHistoryKey(ch)
@@ -1553,7 +1593,7 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 	if err != nil {
 		return nil, err
 	}
-	msgs := make([]*Publication, len(values))
+	pubs := make([]*Publication, len(values))
 
 	j := 0
 	for i := len(values) - 1; i >= 0; i-- {
@@ -1564,26 +1604,28 @@ func sliceOfPubs(n *shard, result interface{}, err error) ([]*Publication, error
 
 		pushData, seq, gen := extractPushData(value)
 
-		msg, err := n.pushDecoder.Decode(pushData)
+		var push Push
+		err := push.Unmarshal(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Message: %v", err)
 		}
 
-		if msg.Type != protocent.PushTypePublication {
-			return nil, fmt.Errorf("wrong message type in history: %d", msg.Type)
+		if push.Type != PushTypePublication {
+			return nil, fmt.Errorf("wrong message type in history: %d", push.Type)
 		}
 
-		publication, err := n.pushDecoder.DecodePublication(msg.Data)
+		var pub Publication
+		err = pub.Unmarshal(push.Data)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
 
-		publication.Seq = seq
-		publication.Gen = gen
-		msgs[j] = publication
+		pub.Seq = seq
+		pub.Gen = gen
+		pubs[j] = &pub
 		j++
 	}
-	return msgs, nil
+	return pubs, nil
 }
 
 // consistentIndex is an adapted function from https://github.com/dgryski/go-jump

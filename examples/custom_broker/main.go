@@ -13,7 +13,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/centrifuge/examples/nats_engine/natsengine"
+	"github.com/centrifugal/centrifuge/examples/custom_broker/natsbroker"
 )
 
 var (
@@ -57,9 +57,12 @@ func main() {
 		centrifuge.ChannelNamespace{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:   true,
-				JoinLeave: true,
-				Presence:  true,
+				Publish:         true,
+				JoinLeave:       true,
+				Presence:        true,
+				HistoryLifetime: 60,
+				HistorySize:     1000,
+				HistoryRecover:  true,
 			},
 		},
 	}
@@ -95,13 +98,29 @@ func main() {
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
-	engine, err := natsengine.New(node, natsengine.Config{
+	broker, err := natsbroker.New(node, natsbroker.Config{
 		Prefix: "centrifuge-nats-engine-example",
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+		DisablePublish: true,
+		Shards: []centrifuge.RedisShardConfig{
+			centrifuge.RedisShardConfig{
+				Host: "localhost",
+				Port: 6379,
+			},
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 	node.SetEngine(engine)
+	node.SetBroker(broker)
+	// node.SetHistoryManager(nil)
+	// node.SetPresenceManager(nil)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)

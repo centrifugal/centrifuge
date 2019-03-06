@@ -1,4 +1,4 @@
-package natsengine
+package natsbroker
 
 import (
 	"strconv"
@@ -7,51 +7,51 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-func newTestNatsEngine() *NatsEngine {
-	return NewTestNatsEngineWithPrefix("centrifuge-test")
+func newTestNatsBroker() *NatsBroker {
+	return NewTestNatsBrokerWithPrefix("centrifuge-test")
 }
 
-func NewTestNatsEngineWithPrefix(prefix string) *NatsEngine {
+func NewTestNatsBrokerWithPrefix(prefix string) *NatsBroker {
 	n, _ := centrifuge.New(centrifuge.Config{})
-	e, _ := New(n, Config{Prefix: prefix})
-	n.SetEngine(e)
+	b, _ := New(n, Config{Prefix: prefix})
+	n.SetBroker(b)
 	err := n.Run()
 	if err != nil {
 		panic(err)
 	}
-	return e
+	return b
 }
 
 func BenchmarkNatsEnginePublish(b *testing.B) {
-	e := newTestNatsEngine()
+	broker := newTestNatsBroker()
 	rawData := centrifuge.Raw([]byte(`{"bench": true}`))
 	pub := &centrifuge.Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		<-broker.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
 	}
 }
 
 func BenchmarkNatsEnginePublishParallel(b *testing.B) {
-	e := newTestNatsEngine()
+	broker := newTestNatsBroker()
 	rawData := centrifuge.Raw([]byte(`{"bench": true}`))
 	pub := &centrifuge.Publication{UID: "test UID", Data: rawData}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			<-e.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			<-broker.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
 		}
 	})
 }
 
 func BenchmarkNatsEngineSubscribe(b *testing.B) {
-	e := newTestNatsEngine()
+	broker := newTestNatsBroker()
 	j := 0
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		j++
-		err := e.Subscribe("subscribe" + strconv.Itoa(j))
+		err := broker.Subscribe("subscribe" + strconv.Itoa(j))
 		if err != nil {
 			panic(err)
 		}
@@ -59,14 +59,14 @@ func BenchmarkNatsEngineSubscribe(b *testing.B) {
 }
 
 func BenchmarkNatsEngineSubscribeParallel(b *testing.B) {
-	e := newTestNatsEngine()
+	broker := newTestNatsBroker()
 	i := 0
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i++
-			err := e.Subscribe("subscribe" + strconv.Itoa(i))
+			err := broker.Subscribe("subscribe" + strconv.Itoa(i))
 			if err != nil {
 				panic(err)
 			}

@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	_ "net/http/pprof"
 
@@ -56,9 +57,12 @@ func main() {
 		centrifuge.ChannelNamespace{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:   true,
-				JoinLeave: true,
-				Presence:  true,
+				Publish:         true,
+				JoinLeave:       true,
+				Presence:        true,
+				HistoryLifetime: 60,
+				HistorySize:     1000,
+				HistoryRecover:  true,
 			},
 		},
 	}
@@ -86,6 +90,14 @@ func main() {
 			log.Printf("user %s disconnected, disconnect: %#v", client.UserID(), e.Disconnect)
 			return centrifuge.DisconnectReply{}
 		})
+
+		go func() {
+			for {
+				time.Sleep(time.Second)
+				pubs, _ := node.History("chat:index")
+				println(len(pubs))
+			}
+		}()
 
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())

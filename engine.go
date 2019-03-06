@@ -11,8 +11,8 @@ type PresenceStats struct {
 	NumUsers   int
 }
 
-// EngineEventHandler can handle messages received from PUB/SUB system.
-type EngineEventHandler interface {
+// BrokerEventHandler can handle messages received from PUB/SUB system.
+type BrokerEventHandler interface {
 	// Publication must register callback func to handle Publications received.
 	HandlePublication(ch string, pub *Publication) error
 	// Join must register callback func to handle Join messages received.
@@ -44,13 +44,17 @@ type RecoveryPosition struct {
 	Epoch string
 }
 
-// Engine is responsible for PUB/SUB mechanics, channel history and
-// presence information.
-type Engine interface {
-	// Run called once on start when engine already set to node.
-	Run(EngineEventHandler) error
-	// Shutdown when called should clean up engine resources if needed.
-	Shutdown(ctx context.Context) error
+// Closer ...
+type Closer interface {
+	// Close when called should clean up used resources if needed.
+	Close(ctx context.Context) error
+}
+
+// Broker is responsible for PUB/SUB mechanics.
+type Broker interface {
+	// Run called once on start when broker already set to node. At
+	// this moment node is ready to process broker events.
+	Run(BrokerEventHandler) error
 
 	// Subscribe node on channel to listen all messages coming from channel.
 	Subscribe(ch string) error
@@ -72,15 +76,25 @@ type Engine interface {
 	PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error
 	// PublishControl allows to send control command data to all running nodes.
 	PublishControl(data []byte) <-chan error
+}
 
+// HistoryManager is responsible for dealing with channel history management.
+type HistoryManager interface {
 	// History returns a slice of publications published into channel.
 	// HistoryFilter allows to set several filtering options.
 	History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error)
+	// AddHistory adds Publication to channel history. Storage should
+	// automatically maintain history size and lifetime according to
+	// channel options if needed.
+	AddHistory(ch string, pub *Publication, opts *ChannelOptions, onDone func(seq uint64, err error)) <-chan error
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
 	RemoveHistory(ch string) error
+}
 
+// PresenceManager is responsible for channel presence management.
+type PresenceManager interface {
 	// Presence returns actual presence information for channel.
 	Presence(ch string) (map[string]*ClientInfo, error)
 	// PresenseStats returns short stats of current presence data
@@ -95,4 +109,12 @@ type Engine interface {
 	// RemovePresence removes presence information for connection
 	// with specified identifier.
 	RemovePresence(ch string, clientID string) error
+}
+
+// Engine is responsible for PUB/SUB mechanics, channel history and
+// presence information.
+type Engine interface {
+	Broker
+	HistoryManager
+	PresenceManager
 }
