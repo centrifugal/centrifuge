@@ -522,7 +522,7 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 			replies := []*proto.Reply{}
 			rw := testReplyWriter(&replies)
 
-			_, recoveryPosition, _ := node.engine.History("test", HistoryFilter{
+			_, recoveryPosition, _ := node.historyManager.History("test", HistoryFilter{
 				Limit: 0,
 				Since: nil,
 			})

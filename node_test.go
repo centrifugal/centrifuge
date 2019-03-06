@@ -24,7 +24,7 @@ func NewTestEngine() *TestEngine {
 	return &TestEngine{}
 }
 
-func (e *TestEngine) Run(h EngineEventHandler) error {
+func (e *TestEngine) Run(h BrokerEventHandler) error {
 	return nil
 }
 
@@ -86,6 +86,10 @@ func (e *TestEngine) PresenceStats(ch string) (PresenceStats, error) {
 
 func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*proto.Publication, RecoveryPosition, error) {
 	return []*proto.Publication{}, RecoveryPosition{}, nil
+}
+
+func (e *TestEngine) AddHistory(ch string, pub *proto.Publication, opts *ChannelOptions) (uint64, error) {
+	return 0, nil
 }
 
 func (e *TestEngine) RemoveHistory(ch string) error {
