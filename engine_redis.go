@@ -1515,7 +1515,7 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (u
 
 	historyKey := s.getHistoryKey(ch)
 	sequenceKey := s.gethistorySeqKey(ch)
-	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, sequenceKey, byteMessage, opts.HistorySize, opts.HistoryLifetime})
+	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, sequenceKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return 0, resp.err

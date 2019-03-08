@@ -41,7 +41,8 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	pub.UID = "test UID"
 
 	// test adding history.
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	assert.NoError(t, err)
 	h, _, err := e.History("channel", HistoryFilter{
 		Limit: -1,
 		Since: nil,
@@ -51,9 +52,12 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	assert.Equal(t, h[0].UID, "test UID")
 
 	// test history limit.
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	assert.NoError(t, err)
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	assert.NoError(t, err)
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	assert.NoError(t, err)
 	h, _, err = e.History("channel", HistoryFilter{
 		Limit: 2,
 		Since: nil,
@@ -62,9 +66,12 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	assert.Equal(t, 2, len(h))
 
 	// test history limit greater than history size
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	assert.NoError(t, err)
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	assert.NoError(t, err)
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	assert.NoError(t, err)
 	h, _, err = e.History("channel", HistoryFilter{
 		Limit: 2,
 		Since: nil,
@@ -109,56 +116,68 @@ func TestMemoryPresenceHub(t *testing.T) {
 	assert.Equal(t, 1, len(p))
 }
 
-// func TestMemoryHistoryHub(t *testing.T) {
-// 	h := newHistoryHub()
-// 	h.initialize()
-// 	h.RLock()
-// 	assert.Equal(t, 0, len(h.history))
-// 	h.RUnlock()
-// 	ch1 := "channel1"
-// 	ch2 := "channel2"
-// 	pub := newTestPublication()
-// 	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-// 	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-// 	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+func TestMemoryHistoryHub(t *testing.T) {
+	h := newHistoryHub()
+	h.initialize()
+	h.RLock()
+	assert.Equal(t, 0, len(h.history))
+	h.RUnlock()
+	ch1 := "channel1"
+	ch2 := "channel2"
+	pub := newTestPublication()
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 
-// 	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 
-// 	hist, err := h.get(ch1, 0)
-// 	assert.Equal(t, nil, err)
-// 	assert.Equal(t, 1, len(hist))
-// 	hist, err = h.get(ch2, 0)
-// 	assert.Equal(t, nil, err)
-// 	assert.Equal(t, 2, len(hist))
-// 	time.Sleep(2 * time.Second)
+	hist, _, err := h.get(ch1, HistoryFilter{
+		Limit: -1,
+	})
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 1, len(hist))
+	hist, _, err = h.get(ch2, HistoryFilter{
+		Limit: -1,
+	})
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 2, len(hist))
+	time.Sleep(2 * time.Second)
 
-// 	// test that history cleaned up by periodic task
-// 	h.RLock()
-// 	assert.Equal(t, 0, len(h.history))
-// 	h.RUnlock()
-// 	hist, err = h.get(ch1, 0)
-// 	assert.Equal(t, nil, err)
-// 	assert.Equal(t, 0, len(hist))
+	// test that history cleaned up by periodic task
+	h.RLock()
+	assert.Equal(t, 0, len(h.history))
+	h.RUnlock()
+	hist, _, err = h.get(ch1, HistoryFilter{
+		Limit: -1,
+	})
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 0, len(hist))
 
-// 	// test history messages limit
-// 	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-// 	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-// 	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-// 	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-// 	hist, err = h.get(ch1, 0)
-// 	assert.Equal(t, nil, err)
-// 	assert.Equal(t, 4, len(hist))
-// 	hist, err = h.get(ch1, 1)
-// 	assert.Equal(t, nil, err)
-// 	assert.Equal(t, 1, len(hist))
+	// test history messages limit
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	hist, _, err = h.get(ch1, HistoryFilter{
+		Limit: -1,
+	})
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 4, len(hist))
+	hist, _, err = h.get(ch1, HistoryFilter{
+		Limit: 1,
+	})
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 1, len(hist))
 
-// 	// test history limit greater than history size
-// 	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-// 	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-// 	hist, err = h.get(ch1, 2)
-// 	assert.Equal(t, nil, err)
-// 	assert.Equal(t, 1, len(hist))
-// }
+	// test history limit greater than history size
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	hist, _, err = h.get(ch1, HistoryFilter{
+		Limit: 2,
+	})
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 1, len(hist))
+}
 
 func BenchmarkMemoryEnginePublish(b *testing.B) {
 	e := testMemoryEngine()

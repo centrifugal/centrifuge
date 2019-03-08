@@ -366,12 +366,13 @@ func (h *historyHub) getPublications(ch string) []*Publication {
 		return []*Publication{}
 	}
 	pubs := hItem.messages
-	for i := len(pubs)/2 - 1; i >= 0; i-- {
-		opp := len(pubs) - 1 - i
-		pubs[i], pubs[opp] = pubs[opp], pubs[i]
-	}
 	pubsCopy := make([]*Publication, len(pubs))
 	copy(pubsCopy, pubs)
+
+	for i := len(pubsCopy)/2 - 1; i >= 0; i-- {
+		opp := len(pubsCopy) - 1 - i
+		pubsCopy[i], pubsCopy[opp] = pubsCopy[opp], pubsCopy[i]
+	}
 	return pubsCopy
 }
 
@@ -391,6 +392,7 @@ func (h *historyHub) getUnsafe(ch string, filter HistoryFilter) ([]*Publication,
 	}
 
 	allPubs := h.getPublications(ch)
+
 	since := filter.Since
 
 	if latestSeq == since.Seq && since.Gen == latestGen && since.Epoch == latestEpoch {

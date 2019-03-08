@@ -98,9 +98,8 @@ func TestRedisEngine(t *testing.T) {
 
 	assert.Equal(t, e.name(), "Redis")
 
-	channels, err := e.Channels()
+	_, err := e.Channels()
 	assert.NoError(t, err)
-	assert.Equal(t, 0, len(channels))
 
 	pub := newTestPublication()
 
@@ -123,7 +122,8 @@ func TestRedisEngine(t *testing.T) {
 	pub = &Publication{UID: "test UID", Data: rawData}
 
 	// test adding history
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	assert.NoError(t, err)
 	h, _, err := e.History("channel", HistoryFilter{
 		Limit: -1,
 	})
@@ -132,9 +132,12 @@ func TestRedisEngine(t *testing.T) {
 	assert.Equal(t, h[0].UID, "test UID")
 
 	// test history limit
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	assert.NoError(t, err)
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	assert.NoError(t, err)
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	assert.NoError(t, err)
 	h, _, err = e.History("channel", HistoryFilter{
 		Limit: 2,
 	})
@@ -142,9 +145,12 @@ func TestRedisEngine(t *testing.T) {
 	assert.Equal(t, 2, len(h))
 
 	// test history limit greater than history size
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
-	assert.NoError(t, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	assert.NoError(t, err)
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	assert.NoError(t, err)
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	assert.NoError(t, err)
 
 	// ask all history.
 	h, _, err = e.History("channel", HistoryFilter{
@@ -184,15 +190,20 @@ func TestRedisEngineRecover(t *testing.T) {
 	pub := &Publication{Data: rawData}
 
 	pub.UID = "1"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	_, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+	assert.NoError(t, err)
 	pub.UID = "2"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+	assert.NoError(t, err)
 	pub.UID = "3"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+	assert.NoError(t, err)
 	pub.UID = "4"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+	assert.NoError(t, err)
 	pub.UID = "5"
-	assert.NoError(t, nil, <-e.Publish("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2}))
+	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+	assert.NoError(t, err)
 
 	_, r, err := e.History("channel", HistoryFilter{
 		Limit: 0,
@@ -664,72 +675,17 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 	})
 }
 
-// var recoverTests = []struct {
-// 	Name            string
-// 	HistorySize     int
-// 	HistoryLifetime int
-// 	NumPublications int
-// 	SinceSeq        uint32
-// 	NumRecovered    int
-// 	Sleep           int
-// 	Recovered       bool
-// }{
-// 	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
-// 	{"from_position", 10, 60, 10, 8, 2, 0, true},
-// 	{"from_position_that_is_too_far", 10, 60, 20, 8, 10, 0, false},
-// 	{"same_position_no_history_expected", 10, 60, 7, 7, 0, 0, true},
-// 	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
-// 	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
-// 	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
-// }
-
-// func TestClientSubscribeRecoverRedis(t *testing.T) {
-// 	for _, tt := range recoverTests {
-// 		t.Run(tt.Name, func(t *testing.T) {
-// 			c := dial()
-// 			defer c.close()
-
-// 			e := newTestRedisEngine()
-
-// 			config := e.node.Config()
-// 			config.HistorySize = tt.HistorySize
-// 			config.HistoryLifetime = tt.HistoryLifetime
-// 			config.HistoryRecover = true
-// 			e.node.Reload(config)
-
-// 			for i := 1; i <= tt.NumPublications; i++ {
-// 				<-e.Publish("test", &Publication{
-// 					UID:  strconv.Itoa(i),
-// 					Data: []byte(`{}`),
-// 				}, &ChannelOptions{
-// 					HistoryLifetime: tt.HistoryLifetime,
-// 					HistorySize:     tt.HistorySize,
-// 					HistoryRecover:  true,
-// 				})
-// 			}
-
-// 			time.Sleep(time.Duration(tt.Sleep) * time.Second)
-
-// 			connectClient(t, client)
-
-// 			replies := []*proto.Reply{}
-// 			rw := testReplyWriter(&replies)
-
-// 			_, recoveryPosition, _ := e.History("test", HistoryFilter{
-// 				Limit: 0,
-// 			})
-// 			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
-// 				Channel: "test",
-// 				Recover: true,
-// 				Seq:     tt.SinceSeq,
-// 				Gen:     recovery.Gen,
-// 				Epoch:   recovery.Epoch,
-// 			}, rw)
-// 			assert.Nil(t, disconnect)
-// 			assert.Nil(t, replies[0].Error)
-// 			res := extractSubscribeResult(replies)
-// 			assert.Equal(t, tt.NumRecovered, len(res.Publications))
-// 			assert.Equal(t, tt.Recovered, res.Recovered)
-// 		})
-// 	}
-// }
+func nodeWithRedisEngine() *Node {
+	c := DefaultConfig
+	n, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	e := newTestRedisEngine()
+	n.SetEngine(e)
+	err = n.Run()
+	if err != nil {
+		panic(err)
+	}
+	return n
+}

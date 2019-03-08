@@ -1577,7 +1577,6 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 			} else {
 				recovered = publications[0].Seq == nextSeq && publications[0].Gen == nextGen && latestEpoch == cmd.Epoch
 			}
-
 			res.Recovered = recovered
 
 			recoveredLabel := "no"
