@@ -72,7 +72,6 @@ type RedisEngine struct {
 // shard has everything to connect to Redis instance.
 type shard struct {
 	node              *Node
-	eventHandler      BrokerEventHandler
 	engine            *RedisEngine
 	config            RedisShardConfig
 	pool              *redis.Pool
@@ -614,12 +613,11 @@ func (s *shard) gethistoryEpochKey(ch string) channelID {
 
 // Run Redis shard.
 func (s *shard) Run(h BrokerEventHandler) error {
-	s.eventHandler = h
 	go s.runForever(func() {
 		s.runPublishPipeline()
 	})
 	go s.runForever(func() {
-		s.runPubSub()
+		s.runPubSub(h)
 	})
 	return nil
 }
@@ -643,7 +641,7 @@ func (s *shard) runForever(fn func()) {
 	}
 }
 
-func (s *shard) runPubSub() {
+func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 
 	numWorkers := s.config.PubSubNumWorkers
 	if numWorkers == 0 {
@@ -664,7 +662,6 @@ func (s *shard) runPubSub() {
 	}
 
 	conn := redis.PubSubConn{Conn: poolConn}
-	defer conn.Close()
 
 	done := make(chan struct{})
 	var doneOnce sync.Once
@@ -783,7 +780,7 @@ func (s *shard) runPubSub() {
 					}
 					switch chID {
 					case controlChannel:
-						err := s.eventHandler.HandleControl(n.Data)
+						err := eventHandler.HandleControl(n.Data)
 						if err != nil {
 							s.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
 							continue
@@ -791,7 +788,7 @@ func (s *shard) runPubSub() {
 					case pingChannel:
 						// Do nothing - this message just maintains connection open.
 					default:
-						err := s.handleRedisClientMessage(chID, n.Data)
+						err := s.handleRedisClientMessage(eventHandler, chID, n.Data)
 						if err != nil {
 							s.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
 							continue
@@ -853,7 +850,7 @@ func (s *shard) runPubSub() {
 	}
 }
 
-func (s *shard) handleRedisClientMessage(chID channelID, data []byte) error {
+func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, chID channelID, data []byte) error {
 	// NOTE: this is mostly for backwards compatibility at moment - now
 	// publications do not have sequence prefix when sen over PUB/SUB.
 	// Though if we decide to return to 1 RTT history save and publish
@@ -875,21 +872,21 @@ func (s *shard) handleRedisClientMessage(chID channelID, data []byte) error {
 			pub.Seq = seq
 			pub.Gen = gen
 		}
-		s.eventHandler.HandlePublication(push.Channel, &pub)
+		eventHandler.HandlePublication(push.Channel, &pub)
 	case PushTypeJoin:
 		var join Join
 		err := join.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		s.eventHandler.HandleJoin(push.Channel, &join)
+		eventHandler.HandleJoin(push.Channel, &join)
 	case PushTypeLeave:
 		var leave Leave
 		err := leave.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		s.eventHandler.HandleLeave(push.Channel, &leave)
+		eventHandler.HandleLeave(push.Channel, &leave)
 	default:
 	}
 	return nil
