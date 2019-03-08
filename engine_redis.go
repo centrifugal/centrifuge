@@ -854,9 +854,13 @@ func (s *shard) runPubSub() {
 }
 
 func (s *shard) handleRedisClientMessage(chID channelID, data []byte) error {
-	// pushData, seq, gen := extractPushData(data)
+	// NOTE: this is mostly for backwards compatibility at moment - now
+	// publications do not have sequence prefix when sen over PUB/SUB.
+	// Though if we decide to return to 1 RTT history save and publish
+	// in case of Redis engine this still can be useful.
+	pushData, seq, gen := extractPushData(data)
 	var push Push
-	err := push.Unmarshal(data)
+	err := push.Unmarshal(pushData)
 	if err != nil {
 		return err
 	}
@@ -867,8 +871,10 @@ func (s *shard) handleRedisClientMessage(chID channelID, data []byte) error {
 		if err != nil {
 			return err
 		}
-		// pub.Seq = seq
-		// pub.Gen = gen
+		if seq > 0 || gen > 0 {
+			pub.Seq = seq
+			pub.Gen = gen
+		}
 		s.eventHandler.HandlePublication(push.Channel, &pub)
 	case PushTypeJoin:
 		var join Join

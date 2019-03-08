@@ -281,14 +281,23 @@ func (c *Client) updatePresence() {
 
 // Lock must be held outside.
 func (c *Client) addPresenceUpdate() {
-	// config := c.node.Config()
-	// presenceInterval := config.ClientPresencePingInterval
-	c.presenceTimer = time.AfterFunc(50*time.Millisecond, c.updatePresence)
+	config := c.node.Config()
+	presenceInterval := config.ClientPresencePingInterval
+	c.presenceTimer = time.AfterFunc(presenceInterval, c.updatePresence)
 }
+
+const (
+	// insufficientStateDelaySeconds used as minimal interval in seconds we use to
+	// prevent insufficient state check. If we recently received message from channel
+	// then we can delay calling channel history till next time. This drastically
+	// optimizes number of history calls in channels with pretty message rate.
+	insufficientStateDelaySeconds = 25
+)
 
 // Lock must be held outside.
 func (c *Client) checkPosition(ch string, channelContext ChannelContext) bool {
-	needCheckPosition := channelContext.lastPubTime == 0 || time.Now().Unix()-channelContext.lastPubTime > 25
+	now := time.Now().Unix()
+	needCheckPosition := channelContext.lastPubTime == 0 || now-channelContext.lastPubTime > insufficientStateDelaySeconds
 	if !needCheckPosition {
 		return true
 	}

@@ -105,6 +105,9 @@ func main() {
 		log.Fatal(err)
 	}
 
+	node.SetBroker(broker)
+
+	// Let Redis engine do the rest.
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
@@ -116,8 +119,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	node.SetEngine(engine)
-	node.SetBroker(broker)
+	node.SetHistoryManager(engine)
+	node.SetPresenceManager(engine)
+
+	// If you only need unreliable PUB/SUB streaming then you can go without Redis.
+	// Make sure you don't use channels with history and presence options enabled
+	// in that case. Just remove Redis engine initialization above and uncomment
+	// the following two lines of code:
 	// node.SetHistoryManager(nil)
 	// node.SetPresenceManager(nil)
 
