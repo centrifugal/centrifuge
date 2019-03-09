@@ -50,31 +50,23 @@ func (e *MemoryEngine) Run(h BrokerEventHandler) error {
 
 // Publish adds message into history hub and calls node ClientMsg method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
-func (e *MemoryEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
-	eChan := make(chan error, 1)
-	eChan <- e.eventHandler.HandlePublication(ch, pub)
-	return eChan
+func (e *MemoryEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) error {
+	return e.eventHandler.HandlePublication(ch, pub)
 }
 
 // PublishJoin - see engine interface description.
-func (e *MemoryEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
-	eChan := make(chan error, 1)
-	eChan <- e.eventHandler.HandleJoin(ch, join)
-	return eChan
+func (e *MemoryEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) error {
+	return e.eventHandler.HandleJoin(ch, join)
 }
 
 // PublishLeave - see engine interface description.
-func (e *MemoryEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
-	eChan := make(chan error, 1)
-	eChan <- e.eventHandler.HandleLeave(ch, leave)
-	return eChan
+func (e *MemoryEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
+	return e.eventHandler.HandleLeave(ch, leave)
 }
 
 // PublishControl - see Engine interface description.
-func (e *MemoryEngine) PublishControl(data []byte) <-chan error {
-	eChan := make(chan error, 1)
-	eChan <- e.eventHandler.HandleControl(data)
-	return eChan
+func (e *MemoryEngine) PublishControl(data []byte) error {
+	return e.eventHandler.HandleControl(data)
 }
 
 // Subscribe is noop here.
@@ -113,7 +105,7 @@ func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication,
 }
 
 // AddHistory - see engine interface description.
-func (e *MemoryEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (uint64, error) {
+func (e *MemoryEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
 	return e.historyHub.add(ch, pub, opts)
 }
 
@@ -315,7 +307,7 @@ func (h *historyHub) getSequence(ch string) (uint32, uint32, string) {
 	return seq, gen, h.epoch
 }
 
-func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (uint64, error) {
+func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -347,7 +339,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (uin
 		h.nextCheck = expireAt
 	}
 
-	return index, nil
+	return pub, nil
 }
 
 func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {

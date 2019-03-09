@@ -70,13 +70,13 @@ type Broker interface {
 	// be delivered to all clients subscribed on this channel at moment on
 	// any Centrifuge node. The returned value is channel in which we will
 	// send error as soon as engine finishes publish operation.
-	Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error
+	Publish(ch string, pub *Publication, opts *ChannelOptions) error
 	// PublishJoin publishes Join Push message into channel.
-	PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error
+	PublishJoin(ch string, join *Join, opts *ChannelOptions) error
 	// PublishLeave publishes Leave Push message into channel.
-	PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error
+	PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error
 	// PublishControl allows to send control command data to all running nodes.
-	PublishControl(data []byte) <-chan error
+	PublishControl(data []byte) error
 
 	// Channels returns slice of currently active channels (with one or more
 	// subscribers) on all running nodes. This is possible with Redis but can
@@ -94,10 +94,12 @@ type HistoryManager interface {
 	History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
-	// channel options if needed. The returned value is incremental
-	// sequence number which will be transformed to Seq and Gen of
-	// Publication before publishing to Broker.
-	AddHistory(ch string, pub *Publication, opts *ChannelOptions) (uint64, error)
+	// channel options if needed.
+	// The returned value is Publication ready to be published to Broker.
+	// If returned Publication is nil then node will not try to publish
+	// it to Broker at all. This is useful for situations when engine can
+	// atomically save Publication to history and publish it to channel.
+	AddHistory(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

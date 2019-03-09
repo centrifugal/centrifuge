@@ -78,12 +78,10 @@ func (b *NatsBroker) Close(ctx context.Context) error {
 }
 
 // Publish - see engine interface description.
-func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, opts *centrifuge.ChannelOptions) <-chan error {
-	eChan := make(chan error, 1)
+func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, opts *centrifuge.ChannelOptions) error {
 	data, err := pub.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 	push := &centrifuge.Push{
 		Type:    centrifuge.PushTypePublication,
@@ -92,20 +90,16 @@ func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, opts *centr
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
-	eChan <- b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
-	return eChan
+	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
 // PublishJoin - see engine interface description.
-func (b *NatsBroker) PublishJoin(ch string, join *centrifuge.Join, opts *centrifuge.ChannelOptions) <-chan error {
-	eChan := make(chan error, 1)
+func (b *NatsBroker) PublishJoin(ch string, join *centrifuge.Join, opts *centrifuge.ChannelOptions) error {
 	data, err := join.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 	push := &centrifuge.Push{
 		Type:    centrifuge.PushTypeJoin,
@@ -114,20 +108,16 @@ func (b *NatsBroker) PublishJoin(ch string, join *centrifuge.Join, opts *centrif
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
-	eChan <- b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
-	return eChan
+	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
 // PublishLeave - see engine interface description.
-func (b *NatsBroker) PublishLeave(ch string, leave *centrifuge.Leave, opts *centrifuge.ChannelOptions) <-chan error {
-	eChan := make(chan error, 1)
+func (b *NatsBroker) PublishLeave(ch string, leave *centrifuge.Leave, opts *centrifuge.ChannelOptions) error {
 	data, err := leave.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 	push := &centrifuge.Push{
 		Type:    centrifuge.PushTypeLeave,
@@ -136,18 +126,14 @@ func (b *NatsBroker) PublishLeave(ch string, leave *centrifuge.Leave, opts *cent
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
-	eChan <- b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
-	return eChan
+	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
 // PublishControl - see engine interface description.
-func (b *NatsBroker) PublishControl(data []byte) <-chan error {
-	eChan := make(chan error, 1)
-	eChan <- b.nc.Publish(string(b.controlChannel()), data)
-	return eChan
+func (b *NatsBroker) PublishControl(data []byte) error {
+	return b.nc.Publish(string(b.controlChannel()), data)
 }
 
 func (b *NatsBroker) handleClientMessage(chID channelID, data []byte) error {

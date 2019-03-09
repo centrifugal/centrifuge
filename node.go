@@ -60,8 +60,6 @@ type Node struct {
 	controlDecoder controlproto.Decoder
 	// subLocks synchronizes access to adding/removing subscriptions.
 	subLocks map[int]*sync.Mutex
-	// pubLocks ...
-	pubLocks map[int]*sync.Mutex
 
 	metricsMu       sync.Mutex
 	metricsExporter *eagle.Eagle
@@ -70,7 +68,6 @@ type Node struct {
 
 const (
 	numSubLocks = 16384
-	numPubLocks = 16384
 )
 
 // New creates Node, the only required argument is config.
@@ -80,11 +77,6 @@ func New(c Config) (*Node, error) {
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)
 	for i := 0; i < numSubLocks; i++ {
 		subLocks[i] = &sync.Mutex{}
-	}
-
-	pubLocks := make(map[int]*sync.Mutex, numPubLocks)
-	for i := 0; i < numPubLocks; i++ {
-		pubLocks[i] = &sync.Mutex{}
 	}
 
 	n := &Node{
@@ -99,7 +91,6 @@ func New(c Config) (*Node, error) {
 		controlDecoder: controlproto.NewProtobufDecoder(),
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
-		pubLocks:       pubLocks,
 	}
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
@@ -115,10 +106,6 @@ func index(s string, numBuckets int) int {
 
 func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
-}
-
-func (n *Node) pubLock(ch string) *sync.Mutex {
-	return n.pubLocks[index(ch, numPubLocks)]
 }
 
 // SetLogHandler sets LogHandler to handle log messages with
@@ -465,19 +452,31 @@ func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
 	return n.hub.broadcastLeave(ch, leave)
 }
 
-func makeErrChan(err error) <-chan error {
-	ret := make(chan error, 1)
-	ret <- err
-	return ret
-}
-
 // Publish sends a message to all clients subscribed on channel. All running nodes
 // will receive it and will send it to all clients on node subscribed on channel.
 // If provided ChannelOptions is nil then Node will search for channel options
 // automatically using configuration. If no channel options explicitly provided and
 // no channel options found in configuration then this method will
 func (n *Node) Publish(ch string, pub *Publication) error {
-	return <-n.PublishAsync(ch, pub)
+	chOpts, ok := n.ChannelOpts(ch)
+	if !ok {
+		return ErrNoChannelOptions
+	}
+	messagesSentCount.WithLabelValues("publication").Inc()
+	if n.historyManager != nil && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
+		pub, err := n.historyManager.AddHistory(ch, pub, &chOpts)
+		if err != nil {
+			return err
+		}
+		if pub != nil {
+			// Publication added to history, no need to handle Publish error here.
+			// In this case we rely on the fact that clients will eventually restore
+			// Publication from history.
+			n.broker.Publish(ch, pub, &chOpts)
+		}
+		return nil
+	}
+	return n.broker.Publish(ch, pub, &chOpts)
 }
 
 var (
@@ -486,40 +485,13 @@ var (
 	ErrNoChannelOptions = errors.New("no channel options found")
 )
 
-// PublishAsync do the same as Publish but returns immediately after publishing
-// message to engine. Caller can inspect error waiting for it on returned channel.
-func (n *Node) PublishAsync(ch string, pub *Publication) <-chan error {
-	errCh := make(chan error, 1)
-	chOpts, ok := n.ChannelOpts(ch)
-	if !ok {
-		return makeErrChan(ErrNoChannelOptions)
-	}
-	messagesSentCount.WithLabelValues("publication").Inc()
-	if n.historyManager != nil && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
-		mu := n.pubLock(ch)
-		mu.Lock()
-		index, err := n.historyManager.AddHistory(ch, pub, &chOpts)
-		if err != nil {
-			mu.Unlock()
-			errCh <- err
-			return errCh
-		}
-		pub.Seq, pub.Gen = unpackUint64(index)
-		n.broker.Publish(ch, pub, &chOpts)
-		mu.Unlock()
-		errCh <- nil
-		return errCh
-	}
-	return n.broker.Publish(ch, pub, &chOpts)
-}
-
 // publishJoin allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-chan error {
+func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
-			return makeErrChan(ErrorNamespaceNotFound)
+			return ErrorNamespaceNotFound
 		}
 		opts = &chOpts
 	}
@@ -529,11 +501,11 @@ func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-
 
 // publishLeave allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) <-chan error {
+func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
-			return makeErrChan(ErrorNamespaceNotFound)
+			return ErrorNamespaceNotFound
 		}
 		opts = &chOpts
 	}
@@ -543,11 +515,11 @@ func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions)
 
 // publishControl publishes message into control channel so all running
 // nodes will receive and handle it.
-func (n *Node) publishControl(cmd *controlproto.Command) <-chan error {
+func (n *Node) publishControl(cmd *controlproto.Command) error {
 	messagesSentCount.WithLabelValues("control").Inc()
 	data, err := n.controlEncoder.EncodeCommand(cmd)
 	if err != nil {
-		return makeErrChan(err)
+		return err
 	}
 	return n.broker.PublishControl(data)
 }
@@ -596,7 +568,7 @@ func (n *Node) pubNode() error {
 		n.logger.log(newLogEntry(LogLevelError, "error handling node command", map[string]interface{}{"error": err.Error()}))
 	}
 
-	return <-n.publishControl(cmd)
+	return n.publishControl(cmd)
 }
 
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
@@ -612,7 +584,7 @@ func (n *Node) pubUnsubscribe(user string, ch string) error {
 		Method: controlproto.MethodTypeUnsubscribe,
 		Params: params,
 	}
-	return <-n.publishControl(cmd)
+	return n.publishControl(cmd)
 }
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
@@ -627,7 +599,7 @@ func (n *Node) pubDisconnect(user string, reconnect bool) error {
 		Method: controlproto.MethodTypeDisconnect,
 		Params: params,
 	}
-	return <-n.publishControl(cmd)
+	return n.publishControl(cmd)
 }
 
 // addClient registers authenticated connection in clientConnectionHub

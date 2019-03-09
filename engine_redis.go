@@ -78,7 +78,6 @@ type shard struct {
 	subCh             chan subRequest
 	pubCh             chan pubRequest
 	dataCh            chan dataRequest
-	pubScript         *redis.Script
 	addPresenceScript *redis.Script
 	remPresenceScript *redis.Script
 	presenceScript    *redis.Script
@@ -89,7 +88,8 @@ type shard struct {
 
 // RedisEngineConfig is a config for Redis Engine.
 type RedisEngineConfig struct {
-	Shards []RedisShardConfig
+	PublishOnHistoryAdd bool
+	Shards              []RedisShardConfig
 }
 
 // RedisShardConfig is struct with Redis Engine options.
@@ -337,37 +337,22 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 }
 
 var (
-	// pubScriptSource contains lua script we register in Redis to call when publishing
-	// client message. It publishes message into channel and adds message to history
-	// list maintaining history size and expiration time. This is an optimization to make
-	// 1 round trip to Redis instead of 2.
-	// KEYS[1] - history list key
-	// KEYS[2] - history sequence key
-	// ARGV[1] - channel to publish message to
-	// ARGV[2] - message payload
-	// ARGV[3] - history size ltrim right bound
-	// ARGV[4] - history lifetime
-	pubScriptSource = `
-local sequence = redis.call("incr", KEYS[2])
-local payload = "__" .. sequence .. "__" .. ARGV[2]
-redis.call("lpush", KEYS[1], payload)
-redis.call("ltrim", KEYS[1], 0, ARGV[3])
-redis.call("expire", KEYS[1], ARGV[4])
-return redis.call("publish", ARGV[1], payload)
-	`
-
 	// addHistorySource ...
 	// KEYS[1] - history list key
 	// KEYS[2] - history sequence key
 	// ARGV[1] - message payload
 	// ARGV[2] - history size ltrim right bound
 	// ARGV[3] - history lifetime
+	// ARGV[4] - channel to publish message to if needed.
 	addHistorySource = `
 	local sequence = redis.call("incr", KEYS[2])
 	local payload = "__" .. sequence .. "__" .. ARGV[1]
 	redis.call("lpush", KEYS[1], payload)
 	redis.call("ltrim", KEYS[1], 0, ARGV[2])
 	redis.call("expire", KEYS[1], ARGV[3])
+	if ARGV[4] ~= '' then
+		redis.call("publish", ARGV[4], payload)
+	end
 	return sequence
 		`
 
@@ -454,35 +439,31 @@ func (e *RedisEngine) Run(h BrokerEventHandler) error {
 }
 
 // Publish - see engine interface description.
-func (e *RedisEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
+func (e *RedisEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) error {
 	return e.getShard(ch).Publish(ch, pub, opts)
 }
 
 // PublishJoin - see engine interface description.
-func (e *RedisEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
+func (e *RedisEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) error {
 	return e.getShard(ch).PublishJoin(ch, join, opts)
 }
 
 // PublishLeave - see engine interface description.
-func (e *RedisEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
+func (e *RedisEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
 	return e.getShard(ch).PublishLeave(ch, leave, opts)
 }
 
 // PublishControl - see engine interface description.
-func (e *RedisEngine) PublishControl(data []byte) <-chan error {
+func (e *RedisEngine) PublishControl(data []byte) error {
 	var err error
 	for _, shard := range e.shards {
-		err = <-shard.PublishControl(data)
+		err = shard.PublishControl(data)
 		if err != nil {
 			continue
 		}
-		errCh := make(chan error, 1)
-		errCh <- nil
-		return errCh
+		return nil
 	}
-	errCh := make(chan error, 1)
-	errCh <- fmt.Errorf("publish control error, all shards failed: last error: %v", err)
-	return errCh
+	return fmt.Errorf("publish control error, all shards failed: last error: %v", err)
 }
 
 // Subscribe - see engine interface description.
@@ -522,8 +503,8 @@ func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, 
 }
 
 // AddHistory - see engine interface description.
-func (e *RedisEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (uint64, error) {
-	return e.getShard(ch).AddHistory(ch, pub, opts)
+func (e *RedisEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
+	return e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd)
 }
 
 // RemoveHistory - see engine interface description.
@@ -562,7 +543,6 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		node:              n,
 		config:            conf,
 		pool:              newPool(n, conf),
-		pubScript:         redis.NewScript(2, pubScriptSource),
 		addPresenceScript: redis.NewScript(2, addPresenceSource),
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
@@ -910,19 +890,6 @@ func (pr *pubRequest) result() error {
 }
 
 func (s *shard) runPublishPipeline() {
-	conn := s.pool.Get()
-
-	err := s.pubScript.Load(conn)
-	if err != nil {
-		s.node.Log(NewLogEntry(LogLevelError, "error loading publish Lua script", map[string]interface{}{"error": err.Error()}))
-		// Can not proceed if script has not been loaded - because we use EVALSHA command for
-		// publishing with history.
-		conn.Close()
-		return
-	}
-
-	conn.Close()
-
 	var prs []pubRequest
 
 	pingTicker := time.NewTicker(time.Second)
@@ -954,11 +921,7 @@ func (s *shard) runPublishPipeline() {
 			}
 			conn := s.pool.Get()
 			for i := range prs {
-				if prs[i].opts != nil && prs[i].opts.HistorySize > 0 && prs[i].opts.HistoryLifetime > 0 {
-					s.pubScript.SendHash(conn, prs[i].historyKey, prs[i].indexKey, prs[i].channel, prs[i].message, prs[i].opts.HistorySize-1, prs[i].opts.HistoryLifetime)
-				} else {
-					conn.Send("PUBLISH", prs[i].channel, prs[i].message)
-				}
+				conn.Send("PUBLISH", prs[i].channel, prs[i].message)
 			}
 			err := conn.Flush()
 			if err != nil {
@@ -1158,13 +1121,12 @@ var (
 )
 
 // Publish - see engine interface description.
-func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-chan error {
+func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) error {
 	eChan := make(chan error, 1)
 
 	data, err := pub.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 	push := &Push{
 		Type:    PushTypePublication,
@@ -1173,8 +1135,7 @@ func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 
 	chID := s.messageChannelID(ch)
@@ -1192,22 +1153,20 @@ func (s *shard) Publish(ch string, pub *Publication, opts *ChannelOptions) <-cha
 		select {
 		case s.pubCh <- pr:
 		case <-timer.C:
-			eChan <- errRedisOpTimeout
-			return eChan
+			return errRedisOpTimeout
 		}
 	}
-	return eChan
+	return <-eChan
 }
 
 // PublishJoin - see engine interface description.
-func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan error {
+func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) error {
 
 	eChan := make(chan error, 1)
 
 	data, err := join.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 	push := &Push{
 		Type:    PushTypeLeave,
@@ -1216,8 +1175,7 @@ func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan 
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 
 	chID := s.messageChannelID(ch)
@@ -1235,22 +1193,20 @@ func (s *shard) PublishJoin(ch string, join *Join, opts *ChannelOptions) <-chan 
 		select {
 		case s.pubCh <- pr:
 		case <-timer.C:
-			eChan <- errRedisOpTimeout
-			return eChan
+			return errRedisOpTimeout
 		}
 	}
-	return eChan
+	return <-eChan
 }
 
 // PublishLeave - see engine interface description.
-func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-chan error {
+func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
 
 	eChan := make(chan error, 1)
 
 	data, err := leave.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 	push := &Push{
 		Type:    PushTypeLeave,
@@ -1259,8 +1215,7 @@ func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-ch
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		eChan <- err
-		return eChan
+		return err
 	}
 
 	chID := s.messageChannelID(ch)
@@ -1278,15 +1233,14 @@ func (s *shard) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) <-ch
 		select {
 		case s.pubCh <- pr:
 		case <-timer.C:
-			eChan <- errRedisOpTimeout
-			return eChan
+			return errRedisOpTimeout
 		}
 	}
-	return eChan
+	return <-eChan
 }
 
 // PublishControl - see engine interface description.
-func (s *shard) PublishControl(data []byte) <-chan error {
+func (s *shard) PublishControl(data []byte) error {
 	eChan := make(chan error, 1)
 
 	chID := s.controlChannelID()
@@ -1296,8 +1250,18 @@ func (s *shard) PublishControl(data []byte) <-chan error {
 		message: data,
 		err:     eChan,
 	}
-	s.pubCh <- pr
-	return eChan
+	select {
+	case s.pubCh <- pr:
+	default:
+		timer := timers.AcquireTimer(s.readTimeout())
+		defer timers.ReleaseTimer(timer)
+		select {
+		case s.pubCh <- pr:
+		case <-timer.C:
+			return errRedisOpTimeout
+		}
+	}
+	return <-eChan
 }
 
 func (s *shard) sendSubscribe(r subRequest) error {
@@ -1495,10 +1459,10 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 	return publications, latestPosition, nil
 }
 
-func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (uint64, error) {
+func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, publishOnHistoryAdd bool) (*Publication, error) {
 	data, err := pub.Marshal()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	push := &Push{
 		Type:    PushTypePublication,
@@ -1507,21 +1471,34 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (u
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		return 0, err
+		return nil, err
+	}
+
+	var publishChannel channelID
+	if publishOnHistoryAdd {
+		publishChannel = s.messageChannelID(ch)
 	}
 
 	historyKey := s.getHistoryKey(ch)
 	sequenceKey := s.gethistorySeqKey(ch)
-	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, sequenceKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime})
+	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, sequenceKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
-		return 0, resp.err
+		return nil, resp.err
 	}
+
+	if publishOnHistoryAdd {
+		return nil, nil
+	}
+
 	index, err := redis.Int64(resp.reply, nil)
 	if err != nil {
-		return 0, resp.err
+		return nil, resp.err
 	}
-	return uint64(index), nil
+	seq, gen := unpackUint64(uint64(index))
+	pub.Seq = seq
+	pub.Gen = gen
+	return pub, nil
 }
 
 // RemoveHistory - see engine interface description.

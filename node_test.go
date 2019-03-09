@@ -32,32 +32,24 @@ func (e *TestEngine) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (e *TestEngine) Publish(ch string, pub *proto.Publication, opts *ChannelOptions) <-chan error {
+func (e *TestEngine) Publish(ch string, pub *proto.Publication, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishCount, 1)
-	eChan := make(chan error, 1)
-	eChan <- nil
-	return eChan
+	return nil
 }
 
-func (e *TestEngine) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) <-chan error {
+func (e *TestEngine) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
-	eChan := make(chan error, 1)
-	eChan <- nil
-	return eChan
+	return nil
 }
 
-func (e *TestEngine) PublishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) <-chan error {
+func (e *TestEngine) PublishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
-	eChan := make(chan error, 1)
-	eChan <- nil
-	return eChan
+	return nil
 }
 
-func (e *TestEngine) PublishControl(msg []byte) <-chan error {
+func (e *TestEngine) PublishControl(msg []byte) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
-	eChan := make(chan error, 1)
-	eChan <- nil
-	return eChan
+	return nil
 }
 
 func (e *TestEngine) Subscribe(ch string) error {
@@ -88,8 +80,8 @@ func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*proto.Publicat
 	return []*proto.Publication{}, RecoveryPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(ch string, pub *proto.Publication, opts *ChannelOptions) (uint64, error) {
-	return 0, nil
+func (e *TestEngine) AddHistory(ch string, pub *proto.Publication, opts *ChannelOptions) (*Publication, error) {
+	return pub, nil
 }
 
 func (e *TestEngine) RemoveHistory(ch string) error {

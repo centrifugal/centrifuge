@@ -28,7 +28,7 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	assert.NotEqual(t, nil, e.historyHub)
 	assert.NotEqual(t, nil, e.presenceHub)
 
-	err := <-e.Publish("channel", newTestPublication(), nil)
+	err := e.Publish("channel", newTestPublication(), nil)
 	assert.NoError(t, err)
 
 	assert.NoError(t, e.AddPresence("channel", "uid", &ClientInfo{}, time.Second))
@@ -185,7 +185,7 @@ func BenchmarkMemoryEnginePublish(b *testing.B) {
 	pub := &Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
 	}
 }
 
@@ -197,7 +197,7 @@ func BenchmarkMemoryEnginePublishParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
 		}
 	})
 }
@@ -208,7 +208,7 @@ func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
 	pub := &Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+		e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
 	}
 }
 
@@ -220,7 +220,7 @@ func BenchmarkMemoryEnginePublishWithHistoryParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+			e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
 		}
 	})
 }
@@ -280,7 +280,7 @@ func BenchmarkMemoryEngineHistory(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test UID", Data: rawData}
 	for i := 0; i < 4; i++ {
-		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -300,7 +300,7 @@ func BenchmarkMemoryEngineHistoryParallel(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
-		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -322,7 +322,7 @@ func BenchmarkMemoryEngineHistoryRecoverParallel(b *testing.B) {
 	numMessages := 100
 	for i := 1; i <= numMessages; i++ {
 		pub := &Publication{Data: rawData}
-		<-e.Publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
+		e.Publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

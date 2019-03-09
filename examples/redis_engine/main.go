@@ -98,6 +98,7 @@ func main() {
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+		PublishOnHistoryAdd: false,
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
 				Host: "localhost",
