@@ -452,17 +452,27 @@ func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
 	return n.hub.broadcastLeave(ch, leave)
 }
 
-func (n *Node) publish(ch string, data []byte, info *ClientInfo) error {
+func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...PublishOption) error {
 	chOpts, ok := n.ChannelOpts(ch)
 	if !ok {
 		return ErrNoChannelOptions
 	}
+
+	publishOpts := &PublishOptions{}
+	for _, opt := range opts {
+		opt(publishOpts)
+	}
+
 	pub := &Publication{
 		Data: data,
 		Info: info,
 	}
+
 	messagesSentCount.WithLabelValues("publication").Inc()
-	if n.historyManager != nil && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
+
+	// If history enabled for channel we add Publication to history first and then
+	// publish to Broker.
+	if n.historyManager != nil && !publishOpts.SkipHistory && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
 		pub, err := n.historyManager.AddHistory(ch, pub, &chOpts)
 		if err != nil {
 			return err
@@ -475,13 +485,15 @@ func (n *Node) publish(ch string, data []byte, info *ClientInfo) error {
 		}
 		return nil
 	}
+	// If no history enabled - just publish to Broker. In this case we want to handle
+	// error as message will be lost forever otherwise.
 	return n.broker.Publish(ch, pub, &chOpts)
 }
 
 // Publish sends data to all clients subscribed on channel. All running nodes
 // will receive it and will send it to all clients on node subscribed on channel.
-func (n *Node) Publish(ch string, data []byte) error {
-	return n.publish(ch, data, nil)
+func (n *Node) Publish(ch string, data []byte, opts ...PublishOption) error {
+	return n.publish(ch, data, nil, opts...)
 }
 
 var (
