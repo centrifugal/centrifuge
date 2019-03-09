@@ -452,15 +452,14 @@ func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
 	return n.hub.broadcastLeave(ch, leave)
 }
 
-// Publish sends a message to all clients subscribed on channel. All running nodes
-// will receive it and will send it to all clients on node subscribed on channel.
-// If provided ChannelOptions is nil then Node will search for channel options
-// automatically using configuration. If no channel options explicitly provided and
-// no channel options found in configuration then this method will
-func (n *Node) Publish(ch string, pub *Publication) error {
+func (n *Node) publish(ch string, data []byte, info *ClientInfo) error {
 	chOpts, ok := n.ChannelOpts(ch)
 	if !ok {
 		return ErrNoChannelOptions
+	}
+	pub := &Publication{
+		Data: data,
+		Info: info,
 	}
 	messagesSentCount.WithLabelValues("publication").Inc()
 	if n.historyManager != nil && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
@@ -477,6 +476,12 @@ func (n *Node) Publish(ch string, pub *Publication) error {
 		return nil
 	}
 	return n.broker.Publish(ch, pub, &chOpts)
+}
+
+// Publish sends data to all clients subscribed on channel. All running nodes
+// will receive it and will send it to all clients on node subscribed on channel.
+func (n *Node) Publish(ch string, data []byte) error {
+	return n.publish(ch, data, nil)
 }
 
 var (

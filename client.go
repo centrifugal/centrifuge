@@ -1965,15 +1965,11 @@ func (c *Client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 		return resp, nil
 	}
 
-	pub := &Publication{
-		Data: data,
-		Info: info,
-	}
-
 	if c.eventHub.publishHandler != nil {
 		reply := c.eventHub.publishHandler(PublishEvent{
-			Channel:     ch,
-			Publication: pub,
+			Channel: ch,
+			Data:    data,
+			Info:    info,
 		})
 		if reply.Disconnect != nil {
 			return resp, reply.Disconnect
@@ -1984,7 +1980,7 @@ func (c *Client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 		}
 	}
 
-	err := c.node.Publish(ch, pub)
+	err := c.node.publish(ch, data, info)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error publishing", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		resp.Error = ErrorInternal

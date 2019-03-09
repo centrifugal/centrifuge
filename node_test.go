@@ -189,9 +189,6 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		node.Publish("bench", &Publication{
-			UID:  "test",
-			Data: payload,
-		})
+		node.Publish("bench", payload)
 	}
 }

@@ -3,6 +3,7 @@
 package centrifuge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/assert"
 )
@@ -690,4 +692,59 @@ func nodeWithRedisEngine() *Node {
 		panic(err)
 	}
 	return n
+}
+
+func TestClientSubscribeRecoverRedis(t *testing.T) {
+	c := dial()
+	defer c.close()
+
+	for _, tt := range recoverTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := nodeWithRedisEngine()
+
+			config := node.Config()
+			config.HistorySize = tt.HistorySize
+			config.HistoryLifetime = tt.HistoryLifetime
+			config.HistoryRecover = true
+			node.Reload(config)
+
+			transport := newTestTransport()
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+
+			channel := "test_recovery_redis_" + tt.Name
+
+			for i := 1; i <= tt.NumPublications; i++ {
+				node.Publish(channel, &Publication{
+					Data: []byte(`{"n": ` + strconv.Itoa(i) + `}`),
+				})
+			}
+
+			time.Sleep(time.Duration(tt.Sleep) * time.Second)
+
+			connectClient(t, client)
+
+			replies := []*proto.Reply{}
+			rw := testReplyWriter(&replies)
+
+			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
+				Limit: 0,
+				Since: nil,
+			})
+			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+				Channel: channel,
+				Recover: true,
+				Seq:     tt.SinceSeq,
+				Gen:     recoveryPosition.Gen,
+				Epoch:   recoveryPosition.Epoch,
+			}, rw)
+			assert.Nil(t, disconnect)
+			assert.NotEmpty(t, replies)
+			assert.Nil(t, replies[0].Error)
+			res := extractSubscribeResult(replies)
+			assert.Equal(t, tt.NumRecovered, len(res.Publications))
+			assert.Equal(t, tt.Recovered, res.Recovered)
+		})
+	}
 }

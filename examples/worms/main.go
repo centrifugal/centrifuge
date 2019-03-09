@@ -57,7 +57,7 @@ func main() {
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
 			var ev event
 			_ = json.Unmarshal(e.Data, &ev)
-			node.Publish("moving", &centrifuge.Publication{Data: []byte(ev.Payload)})
+			node.Publish("moving", []byte(ev.Payload))
 			return centrifuge.MessageReply{}
 		})
 

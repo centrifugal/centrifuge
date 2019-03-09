@@ -462,10 +462,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	assert.Equal(t, uint32(0), result.Seq)
 
 	for i := 0; i < 10; i++ {
-		node.Publish("test", &Publication{
-			UID:  strconv.Itoa(i),
-			Data: []byte("{}"),
-		})
+		node.Publish("test", []byte("{}"))
 	}
 
 	client, _ = newClient(newCtx, node, transport)
@@ -653,10 +650,7 @@ func TestClientHistory(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	for i := 0; i < 10; i++ {
-		node.Publish("test", &Publication{
-			UID:  strconv.Itoa(i),
-			Data: []byte(`{}`),
-		})
+		node.Publish("test", []byte(`{}`))
 	}
 
 	connectClient(t, client)
@@ -837,9 +831,7 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 			channel := "test_recovery_memory_" + tt.Name
 
 			for i := 1; i <= tt.NumPublications; i++ {
-				node.Publish(channel, &Publication{
-					Data: []byte(`{"n": ` + strconv.Itoa(i) + `}`),
-				})
+				node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
 			}
 
 			time.Sleep(time.Duration(tt.Sleep) * time.Second)
@@ -862,61 +854,6 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 				Epoch:   recoveryPosition.Epoch,
 			}, rw)
 			assert.Nil(t, disconnect)
-			assert.Nil(t, replies[0].Error)
-			res := extractSubscribeResult(replies)
-			assert.Equal(t, tt.NumRecovered, len(res.Publications))
-			assert.Equal(t, tt.Recovered, res.Recovered)
-		})
-	}
-}
-
-func TestClientSubscribeRecoverRedis(t *testing.T) {
-	c := dial()
-	defer c.close()
-
-	for _, tt := range recoverTests {
-		t.Run(tt.Name, func(t *testing.T) {
-			node := nodeWithRedisEngine()
-
-			config := node.Config()
-			config.HistorySize = tt.HistorySize
-			config.HistoryLifetime = tt.HistoryLifetime
-			config.HistoryRecover = true
-			node.Reload(config)
-
-			transport := newTestTransport()
-			ctx := context.Background()
-			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := newClient(newCtx, node, transport)
-
-			channel := "test_recovery_redis_" + tt.Name
-
-			for i := 1; i <= tt.NumPublications; i++ {
-				node.Publish(channel, &Publication{
-					Data: []byte(`{"n": ` + strconv.Itoa(i) + `}`),
-				})
-			}
-
-			time.Sleep(time.Duration(tt.Sleep) * time.Second)
-
-			connectClient(t, client)
-
-			replies := []*proto.Reply{}
-			rw := testReplyWriter(&replies)
-
-			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
-				Limit: 0,
-				Since: nil,
-			})
-			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
-				Channel: channel,
-				Recover: true,
-				Seq:     tt.SinceSeq,
-				Gen:     recoveryPosition.Gen,
-				Epoch:   recoveryPosition.Epoch,
-			}, rw)
-			assert.Nil(t, disconnect)
-			assert.NotEmpty(t, replies)
 			assert.Nil(t, replies[0].Error)
 			res := extractSubscribeResult(replies)
 			assert.Equal(t, tt.NumRecovered, len(res.Publications))
