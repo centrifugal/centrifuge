@@ -716,9 +716,7 @@ func TestClientSubscribeRecoverRedis(t *testing.T) {
 			channel := "test_recovery_redis_" + tt.Name
 
 			for i := 1; i <= tt.NumPublications; i++ {
-				node.Publish(channel, &Publication{
-					Data: []byte(`{"n": ` + strconv.Itoa(i) + `}`),
-				})
+				node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
 			}
 
 			time.Sleep(time.Duration(tt.Sleep) * time.Second)
