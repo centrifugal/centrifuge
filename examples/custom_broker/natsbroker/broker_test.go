@@ -28,7 +28,10 @@ func BenchmarkNatsEnginePublish(b *testing.B) {
 	pub := &centrifuge.Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		<-broker.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		err := broker.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -40,7 +43,10 @@ func BenchmarkNatsEnginePublishParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			<-broker.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			err := broker.Publish("channel", pub, &centrifuge.ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			if err != nil {
+				panic(err)
+			}
 		}
 	})
 }
