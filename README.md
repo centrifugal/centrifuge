@@ -1,5 +1,5 @@
 [![Join the chat at https://gitter.im/centrifugal/centrifuge](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/centrifugal/centrifuge?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-[![Build Status](https://travis-ci.org/centrifugal/centrifuge.svg)](https://travis-ci.org/centrifugal/centrifuge)
+[![Build Status](https://travis-ci.org/centrifugal/centrifuge.svg?branch=master)](https://travis-ci.org/centrifugal/centrifuge)
 [![GoDoc](https://godoc.org/github.com/centrifugal/centrifuge?status.svg)](https://godoc.org/github.com/centrifugal/centrifuge)
 
 **Work in progress**. *This library has no stable release yet so API can be changed.*
@@ -23,11 +23,14 @@ Features:
 * Message recovery mechanism for channels to survive short network disconnects
 * MIT license
 
-Clients (also work in progress but with most features already supported):
+Client libraries:
 
-* [centrifuge-js](https://github.com/centrifugal/centrifuge-js) – for browser, NodeJS and React Native.
-* [centrifuge-go](https://github.com/centrifugal/centrifuge-go) - for Go language.
-* [centrifuge-mobile](https://github.com/centrifugal/centrifuge-mobile) - for iOS and Android using `centrifuge-go` and `gomobile` project.
+* [centrifuge-js](https://github.com/centrifugal/centrifuge-js) – for browser, NodeJS and React Native
+* [centrifuge-go](https://github.com/centrifugal/centrifuge-go) - for Go language
+* [centrifuge-mobile](https://github.com/centrifugal/centrifuge-mobile) - for iOS and Android using `centrifuge-go` as basis and `gomobile` project to create bindings
+* [centrifuge-dart](https://github.com/centrifugal/centrifuge-dart) - for Dart and Flutter
+* [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
+* [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java (coming soon)
 
 [Godoc](https://godoc.org/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/examples)
 
