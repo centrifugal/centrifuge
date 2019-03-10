@@ -214,7 +214,10 @@ func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
 	pub := &Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+		chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
+		var err error
+		pub, err = e.AddHistory("channel", pub, chOpts)
+		err = e.Publish("channel", pub, chOpts)
 		if err != nil {
 			panic(err)
 		}
@@ -229,7 +232,10 @@ func BenchmarkMemoryEnginePublishWithHistoryParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+			chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
+			var err error
+			pub, err = e.AddHistory("channel", pub, chOpts)
+			err = e.Publish("channel", pub, chOpts)
 			if err != nil {
 				panic(err)
 			}
@@ -292,7 +298,7 @@ func BenchmarkMemoryEngineHistory(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test UID", Data: rawData}
 	for i := 0; i < 4; i++ {
-		e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -303,7 +309,6 @@ func BenchmarkMemoryEngineHistory(b *testing.B) {
 		if err != nil {
 			panic(err)
 		}
-
 	}
 }
 
@@ -312,7 +317,7 @@ func BenchmarkMemoryEngineHistoryParallel(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
-		e.Publish("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -334,7 +339,7 @@ func BenchmarkMemoryEngineHistoryRecoverParallel(b *testing.B) {
 	numMessages := 100
 	for i := 1; i <= numMessages; i++ {
 		pub := &Publication{Data: rawData}
-		e.Publish("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
+		e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
