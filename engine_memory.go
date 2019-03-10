@@ -391,12 +391,7 @@ func (h *historyHub) getUnsafe(ch string, filter HistoryFilter) ([]*Publication,
 		return nil, latestPosition, nil
 	}
 
-	nextSeq := since.Seq + 1
-	nextGen := since.Gen
-	if nextSeq > maxSeq {
-		nextSeq = 0
-		nextGen = nextGen + 1
-	}
+	nextSeq, nextGen := nextSeqGen(since.Seq, since.Gen)
 
 	position := -1
 
@@ -438,6 +433,6 @@ func (h *historyHub) remove(ch string) error {
 }
 
 const (
-	maxSeq = math.MaxUint32 // maximum uint32 value
-	maxGen = math.MaxUint32 // maximum uint32 value
+	maxSeq uint32 = math.MaxUint32 // maximum uint32 value
+	maxGen uint32 = math.MaxUint32 // maximum uint32 value
 )

@@ -1424,12 +1424,7 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 		return nil, latestPosition, nil
 	}
 
-	nextSeq := since.Seq + 1
-	nextGen := since.Gen
-	if nextSeq > maxSeq {
-		nextSeq = 0
-		nextGen = nextGen + 1
-	}
+	nextSeq, nextGen := nextSeqGen(since.Seq, since.Gen)
 
 	position := -1
 
