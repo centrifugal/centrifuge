@@ -1661,18 +1661,6 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	return nil
 }
 
-func nextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
-	var nextSeq uint32
-	nextGen := currentGen
-	if currentSeq == maxSeq {
-		nextSeq = 0
-		nextGen++
-	} else {
-		nextSeq = currentSeq + 1
-	}
-	return nextSeq, nextGen
-}
-
 func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, reply *preparedReply) error {
 	if pub.Seq > 0 || pub.Gen > 0 {
 		c.mu.Lock()

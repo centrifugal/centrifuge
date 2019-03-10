@@ -48,28 +48,6 @@ func testReplyWriter(replies *[]*proto.Reply) *replyWriter {
 	}
 }
 
-func TestNextSeqGen(t *testing.T) {
-	nextSeq, nextGen := nextSeqGen(0, 0)
-	assert.Equal(t, uint32(1), nextSeq)
-	assert.Equal(t, uint32(0), nextGen)
-
-	nextSeq, nextGen = nextSeqGen(1, 0)
-	assert.Equal(t, uint32(2), nextSeq)
-	assert.Equal(t, uint32(0), nextGen)
-
-	nextSeq, nextGen = nextSeqGen(1, 1)
-	assert.Equal(t, uint32(2), nextSeq)
-	assert.Equal(t, uint32(1), nextGen)
-
-	nextSeq, nextGen = nextSeqGen(maxSeq, 0)
-	assert.Equal(t, uint32(0), nextSeq)
-	assert.Equal(t, uint32(1), nextGen)
-
-	nextSeq, nextGen = nextSeqGen(maxSeq-1, 0)
-	assert.Equal(t, maxSeq, nextSeq)
-	assert.Equal(t, uint32(0), nextGen)
-}
-
 func TestClientEventHub(t *testing.T) {
 	h := ClientEventHub{}
 	handler := func(e DisconnectEvent) DisconnectReply {
