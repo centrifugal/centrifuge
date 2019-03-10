@@ -185,7 +185,10 @@ func BenchmarkMemoryEnginePublish(b *testing.B) {
 	pub := &Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -197,7 +200,10 @@ func BenchmarkMemoryEnginePublishParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			if err != nil {
+				panic(err)
+			}
 		}
 	})
 }
@@ -208,7 +214,10 @@ func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
 	pub := &Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+		err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -220,7 +229,10 @@ func BenchmarkMemoryEnginePublishWithHistoryParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+			err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 100, HistoryLifetime: 100})
+			if err != nil {
+				panic(err)
+			}
 		}
 	})
 }
