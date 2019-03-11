@@ -13,6 +13,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/centrifuge/examples/custom_broker/natsbroker"
 )
 
 var (
@@ -97,23 +98,36 @@ func main() {
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
+	broker, err := natsbroker.New(node, natsbroker.Config{
+		Prefix: "centrifuge-nats-engine-example",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	node.SetBroker(broker)
+
+	// Let Redis engine do the rest.
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		PublishOnHistoryAdd: false,
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
 				Host: "localhost",
 				Port: 6379,
-			},
-			centrifuge.RedisShardConfig{
-				Host: "localhost",
-				Port: 6380,
 			},
 		},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	node.SetEngine(engine)
+	node.SetHistoryManager(engine)
+	node.SetPresenceManager(engine)
+
+	// If you only need unreliable PUB/SUB streaming then you can go without Redis.
+	// Make sure you don't use channels with history and presence options enabled
+	// in that case. Just remove Redis engine initialization above and uncomment
+	// the following two lines of code:
+	// node.SetHistoryManager(nil)
+	// node.SetPresenceManager(nil)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)

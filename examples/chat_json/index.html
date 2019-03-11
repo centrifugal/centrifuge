@@ -102,7 +102,7 @@
                 }
 
                 function handleSubscribeError(err) {
-                    drawText('Error subscribing on channel ' + err.channel);
+                    drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
                 }
 
                 function handleMessage(message) {

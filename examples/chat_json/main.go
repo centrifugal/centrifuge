@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -143,21 +142,8 @@ func main() {
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
-	// engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-	// 	Shards: []centrifuge.RedisShardConfig{
-	// 		centrifuge.RedisShardConfig{
-	// 			Host: "localhost",
-	// 			Port: 6379,
-	// 		},
-	// 	},
-	// })
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// node.SetEngine(engine)
-
 	if err := node.Run(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
@@ -170,10 +156,10 @@ func main() {
 
 	go func() {
 		if err := http.ListenAndServe(":8000", nil); err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
 	}()
 
 	waitExitSignal(node)
-	fmt.Println("exiting")
+	log.Println("bye!")
 }

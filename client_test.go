@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -346,6 +347,109 @@ func TestClientSubscribe(t *testing.T) {
 	assert.Equal(t, ErrorAlreadySubscribed, replies[0].Error)
 }
 
+func TestClientSubscribeReceivePublication(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	transport.sink = make(chan *preparedReply, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	replies := []*proto.Reply{}
+	rw := testReplyWriter(&replies)
+
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "test",
+	}, rw)
+	assert.Nil(t, disconnect)
+	assert.Nil(t, replies[0].Error)
+
+	done := make(chan struct{})
+	go func() {
+		for reply := range transport.sink {
+			if strings.Contains(string(reply.Data()), "test message") {
+				close(done)
+			}
+		}
+	}()
+
+	err := node.Publish("test", []byte(`{"text": "test message"}`))
+	assert.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		assert.Fail(t, "timeout receiving publication")
+	case <-done:
+	}
+}
+
+func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	config := node.Config()
+	config.HistoryLifetime = 100
+	config.HistorySize = 10
+	node.Reload(config)
+	transport := newTestTransport()
+	transport.sink = make(chan *preparedReply, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	replies := []*proto.Reply{}
+	rw := testReplyWriter(&replies)
+
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "test",
+	}, rw)
+	assert.Nil(t, disconnect)
+	assert.Nil(t, replies[0].Error)
+
+	done := make(chan struct{})
+	go func() {
+		var seq uint32 = 1
+		for reply := range transport.sink {
+			if strings.Contains(string(reply.Data()), "test message") {
+				var push struct {
+					Result struct {
+						Channel string
+						Data    struct {
+							Seq uint32
+						}
+					}
+				}
+				err := json.Unmarshal(reply.Data(), &push)
+				assert.NoError(t, err)
+				if push.Result.Data.Seq != seq {
+					assert.Fail(t, "wrong seq")
+				}
+				seq++
+				if seq > 3 {
+					close(done)
+				}
+			}
+		}
+	}()
+
+	// Send 3 publications, expect client to receive them with
+	// incremental sequence numbers.
+	err := node.Publish("test", []byte(`{"text": "test message 1"}`))
+	assert.NoError(t, err)
+	err = node.Publish("test", []byte(`{"text": "test message 2"}`))
+	assert.NoError(t, err)
+	err = node.Publish("test", []byte(`{"text": "test message 3"}`))
+	assert.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		assert.Fail(t, "timeout receiving publications")
+	case <-done:
+	}
+}
+
 func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
@@ -462,81 +566,13 @@ func TestClientSubscribeLast(t *testing.T) {
 	assert.Equal(t, uint32(0), result.Seq)
 
 	for i := 0; i < 10; i++ {
-		node.Publish("test", &Publication{
-			UID:  strconv.Itoa(i),
-			Data: []byte("{}"),
-		})
+		node.Publish("test", []byte("{}"))
 	}
 
 	client, _ = newClient(newCtx, node, transport)
 	connectClient(t, client)
 	result = subscribeClient(t, client, "test")
 	assert.Equal(t, uint32(10), result.Seq)
-}
-
-var recoverTests = []struct {
-	Name            string
-	HistorySize     int
-	HistoryLifetime int
-	NumPublications int
-	SinceSeq        uint32
-	NumRecovered    int
-	Sleep           int
-	Recovered       bool
-}{
-	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
-	{"from_position", 10, 60, 10, 8, 2, 0, true},
-	{"from_position_that_is_too_far", 10, 60, 20, 8, 10, 0, false},
-	{"same_position_no_history_expected", 10, 60, 7, 7, 0, 0, true},
-	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
-	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
-	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
-}
-
-func TestClientSubscribeRecoverMemory(t *testing.T) {
-	for _, tt := range recoverTests {
-		t.Run(tt.Name, func(t *testing.T) {
-			node := nodeWithMemoryEngine()
-
-			config := node.Config()
-			config.HistorySize = tt.HistorySize
-			config.HistoryLifetime = tt.HistoryLifetime
-			config.HistoryRecover = true
-			node.Reload(config)
-
-			transport := newTestTransport()
-			ctx := context.Background()
-			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := newClient(newCtx, node, transport)
-
-			for i := 1; i <= tt.NumPublications; i++ {
-				node.Publish("test", &Publication{
-					Data: []byte(`{}`),
-				})
-			}
-
-			time.Sleep(time.Duration(tt.Sleep) * time.Second)
-
-			connectClient(t, client)
-
-			replies := []*proto.Reply{}
-			rw := testReplyWriter(&replies)
-
-			_, _, recovery, _ := node.engine.recoverHistory("test", nil)
-			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
-				Channel: "test",
-				Recover: true,
-				Seq:     tt.SinceSeq,
-				Gen:     recovery.Gen,
-				Epoch:   recovery.Epoch,
-			}, rw)
-			assert.Nil(t, disconnect)
-			assert.Nil(t, replies[0].Error)
-			res := extractSubscribeResult(replies)
-			assert.Equal(t, tt.NumRecovered, len(res.Publications))
-			assert.Equal(t, tt.Recovered, res.Recovered)
-		})
-	}
 }
 
 func TestClientUnsubscribe(t *testing.T) {
@@ -718,10 +754,7 @@ func TestClientHistory(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	for i := 0; i < 10; i++ {
-		node.Publish("test", &Publication{
-			UID:  strconv.Itoa(i),
-			Data: []byte(`{}`),
-		})
+		node.Publish("test", []byte(`{}`))
 	}
 
 	connectClient(t, client)
@@ -862,4 +895,73 @@ func TestUnique(t *testing.T) {
 	}
 	pubs = uniquePublications(pubs)
 	assert.Equal(t, 8, len(pubs))
+}
+
+var recoverTests = []struct {
+	Name            string
+	HistorySize     int
+	HistoryLifetime int
+	NumPublications int
+	SinceSeq        uint32
+	NumRecovered    int
+	Sleep           int
+	Recovered       bool
+}{
+	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
+	{"from_position", 10, 60, 10, 8, 2, 0, true},
+	{"from_position_that_is_too_far", 10, 60, 20, 8, 10, 0, false},
+	{"same_position_no_history_expected", 10, 60, 7, 7, 0, 0, true},
+	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
+	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
+	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
+}
+
+func TestClientSubscribeRecoverMemory(t *testing.T) {
+	for _, tt := range recoverTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := nodeWithMemoryEngine()
+
+			config := node.Config()
+			config.HistorySize = tt.HistorySize
+			config.HistoryLifetime = tt.HistoryLifetime
+			config.HistoryRecover = true
+			node.Reload(config)
+
+			transport := newTestTransport()
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+
+			channel := "test_recovery_memory_" + tt.Name
+
+			for i := 1; i <= tt.NumPublications; i++ {
+				node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
+			}
+
+			time.Sleep(time.Duration(tt.Sleep) * time.Second)
+
+			connectClient(t, client)
+
+			replies := []*proto.Reply{}
+			rw := testReplyWriter(&replies)
+
+			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
+				Limit: 0,
+				Since: nil,
+			})
+
+			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+				Channel: channel,
+				Recover: true,
+				Seq:     tt.SinceSeq,
+				Gen:     recoveryPosition.Gen,
+				Epoch:   recoveryPosition.Epoch,
+			}, rw)
+			assert.Nil(t, disconnect)
+			assert.Nil(t, replies[0].Error)
+			res := extractSubscribeResult(replies)
+			assert.Equal(t, tt.NumRecovered, len(res.Publications))
+			assert.Equal(t, tt.Recovered, res.Recovered)
+		})
+	}
 }
