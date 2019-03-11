@@ -1,4 +1,4 @@
-// Package natsbroker defines custom Nats engine for Centrifuge library.
+// Package natsbroker defines custom Nats Broker for Centrifuge library.
 package natsbroker
 
 import (
