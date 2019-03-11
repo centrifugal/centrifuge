@@ -30,7 +30,7 @@ Client libraries:
 * [centrifuge-mobile](https://github.com/centrifugal/centrifuge-mobile) - for iOS and Android using `centrifuge-go` as basis and `gomobile` project to create bindings
 * [centrifuge-dart](https://github.com/centrifugal/centrifuge-dart) - for Dart and Flutter
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
-* [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java (coming soon)
+* [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 
 [Godoc](https://godoc.org/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/examples)
 
