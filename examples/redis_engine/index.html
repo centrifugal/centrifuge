@@ -74,7 +74,7 @@
                 }
 
                 function handleSubscribeError(err) {
-                    drawText('Error subscribing on channel ' + err.channel);
+                    drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
                     console.log("subscription failed", err);
                 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/centrifugal/centrifuge"
@@ -77,7 +78,7 @@ func (b *NatsBroker) Close(ctx context.Context) error {
 	return nil
 }
 
-// Publish - see engine interface description.
+// Publish - see Engine interface description.
 func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, opts *centrifuge.ChannelOptions) error {
 	data, err := pub.Marshal()
 	if err != nil {
@@ -95,7 +96,7 @@ func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, opts *centr
 	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
-// PublishJoin - see engine interface description.
+// PublishJoin - see Engine interface description.
 func (b *NatsBroker) PublishJoin(ch string, join *centrifuge.Join, opts *centrifuge.ChannelOptions) error {
 	data, err := join.Marshal()
 	if err != nil {
@@ -113,7 +114,7 @@ func (b *NatsBroker) PublishJoin(ch string, join *centrifuge.Join, opts *centrif
 	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
-// PublishLeave - see engine interface description.
+// PublishLeave - see Engine interface description.
 func (b *NatsBroker) PublishLeave(ch string, leave *centrifuge.Leave, opts *centrifuge.ChannelOptions) error {
 	data, err := leave.Marshal()
 	if err != nil {
@@ -131,7 +132,7 @@ func (b *NatsBroker) PublishLeave(ch string, leave *centrifuge.Leave, opts *cent
 	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
-// PublishControl - see engine interface description.
+// PublishControl - see Engine interface description.
 func (b *NatsBroker) PublishControl(data []byte) error {
 	return b.nc.Publish(string(b.controlChannel()), data)
 }
@@ -177,8 +178,12 @@ func (b *NatsBroker) handleControl(m *nats.Msg) {
 	b.eventHandler.HandleControl(m.Data)
 }
 
-// Subscribe ...
+// Subscribe - see Engine interface description.
 func (b *NatsBroker) Subscribe(ch string) error {
+	if strings.Contains(ch, "*") {
+		// Do not support wildcard subscriptions.
+		return centrifuge.ErrorBadRequest
+	}
 	b.subsMu.Lock()
 	defer b.subsMu.Unlock()
 	subClient, err := b.nc.Subscribe(string(b.clientChannel(ch)), b.handleClient)
@@ -189,7 +194,7 @@ func (b *NatsBroker) Subscribe(ch string) error {
 	return nil
 }
 
-// Unsubscribe ...
+// Unsubscribe - see Engine interface description.
 func (b *NatsBroker) Unsubscribe(ch string) error {
 	b.subsMu.Lock()
 	defer b.subsMu.Unlock()
@@ -200,7 +205,7 @@ func (b *NatsBroker) Unsubscribe(ch string) error {
 	return nil
 }
 
-// Channels - see engine interface description.
+// Channels - see Engine interface description.
 func (b *NatsBroker) Channels() ([]string, error) {
 	return nil, nil
 }

@@ -1521,6 +1521,10 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 		if chOpts.HistoryRecover {
 			c.setInSubscribe(channel, false)
 		}
+		if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
+			rw.write(&proto.Reply{Error: clientErr})
+			return nil
+		}
 		return DisconnectServerError
 	}
 
