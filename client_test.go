@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -344,6 +345,109 @@ func TestClientSubscribe(t *testing.T) {
 	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorAlreadySubscribed, replies[0].Error)
+}
+
+func TestClientSubscribeReceivePublication(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	transport.sink = make(chan *preparedReply, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	replies := []*proto.Reply{}
+	rw := testReplyWriter(&replies)
+
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "test",
+	}, rw)
+	assert.Nil(t, disconnect)
+	assert.Nil(t, replies[0].Error)
+
+	done := make(chan struct{})
+	go func() {
+		for reply := range transport.sink {
+			if strings.Contains(string(reply.Data()), "test message") {
+				close(done)
+			}
+		}
+	}()
+
+	err := node.Publish("test", []byte(`{"text": "test message"}`))
+	assert.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		assert.Fail(t, "timeout receiving publication")
+	case <-done:
+	}
+}
+
+func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	config := node.Config()
+	config.HistoryLifetime = 100
+	config.HistorySize = 10
+	node.Reload(config)
+	transport := newTestTransport()
+	transport.sink = make(chan *preparedReply, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	replies := []*proto.Reply{}
+	rw := testReplyWriter(&replies)
+
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: "test",
+	}, rw)
+	assert.Nil(t, disconnect)
+	assert.Nil(t, replies[0].Error)
+
+	done := make(chan struct{})
+	go func() {
+		var seq uint32 = 1
+		for reply := range transport.sink {
+			if strings.Contains(string(reply.Data()), "test message") {
+				var push struct {
+					Result struct {
+						Channel string
+						Data    struct {
+							Seq uint32
+						}
+					}
+				}
+				err := json.Unmarshal(reply.Data(), &push)
+				assert.NoError(t, err)
+				if push.Result.Data.Seq != seq {
+					assert.Fail(t, "wrong seq")
+				}
+				seq++
+				if seq > 3 {
+					close(done)
+				}
+			}
+		}
+	}()
+
+	// Send 3 publications, expect client to receive them with
+	// incremental sequence numbers.
+	err := node.Publish("test", []byte(`{"text": "test message 1"}`))
+	assert.NoError(t, err)
+	err = node.Publish("test", []byte(`{"text": "test message 2"}`))
+	assert.NoError(t, err)
+	err = node.Publish("test", []byte(`{"text": "test message 3"}`))
+	assert.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		assert.Fail(t, "timeout receiving publications")
+	case <-done:
+	}
 }
 
 func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
