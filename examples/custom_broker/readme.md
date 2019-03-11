@@ -1,25 +1,27 @@
-In this example we show how to used custom Broker implementation based on [Nats](https://nats.io/) messaging server. Here Nats handles PUB/SUB stuff while history and presence information managed by Redis.
+This example shows how to use custom Broker implementation based on [Nats](https://nats.io/) messaging server. Here Nats handles PUB/SUB stuff while history and presence information managed by Redis.
 
-To start install dependencies first:
+Note that it's also possible to run this example without Redis at all (for example if you only need unreliable but insanely fast and scalable PUB/SUB without message recovery or presence features Redis provides) - just follow comments in `main.go` to disable Redis. 
+
+To start example you have to install dependencies first:
 
 ```
 dep ensure
 ```
 
-Start Nats server locally:
+Then start Nats server locally:
 
 ```
 go get github.com/nats-io/gnatsd
 gnatsd
 ```
 
-Start Redis:
+And start Redis:
 
 ```
 redis-server
 ```
 
-Then start example:
+Finally start example:
 
 ```
 go run main.go
