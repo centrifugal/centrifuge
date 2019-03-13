@@ -33,7 +33,7 @@ Client libraries:
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 
-[Godoc](https://godoc.org/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/examples)
+[Godoc](https://godoc.org/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples)
 
 ### Installation
 
