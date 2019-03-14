@@ -1,8 +1,9 @@
 [![Join the chat at https://gitter.im/centrifugal/centrifuge](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/centrifugal/centrifuge?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![Join the chat at https://t.me/joinchat/ABFVWBE0AhkyyhREoaboXQ](https://img.shields.io/badge/Telegram-Group-blue.svg)](https://t.me/joinchat/ABFVWBE0AhkyyhREoaboXQ)
 [![Build Status](https://travis-ci.org/centrifugal/centrifuge.svg?branch=master)](https://travis-ci.org/centrifugal/centrifuge)
 [![GoDoc](https://godoc.org/github.com/centrifugal/centrifuge?status.svg)](https://godoc.org/github.com/centrifugal/centrifuge)
 
-**Work in progress**. *This library has no stable release yet so API can be changed.*
+**This library has no v1 release yet so API can be changed. Use with strict versioning.**
 
 Centrifuge library represents real-time core for [Centrifugo](https://github.com/centrifugal/centrifugo) server. It's also aimed to be a general purpose real-time messaging library for Go programming language.
 
@@ -32,7 +33,7 @@ Client libraries:
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 
-[Godoc](https://godoc.org/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/examples)
+[Godoc](https://godoc.org/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples)
 
 ### Installation
 
