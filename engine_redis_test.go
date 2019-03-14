@@ -183,6 +183,32 @@ func TestRedisEngine(t *testing.T) {
 	assert.NoError(t, e.PublishLeave("channel", &leaveMessage, nil))
 }
 
+func TestRedisCurrentPosition(t *testing.T) {
+	c := dial()
+	defer c.close()
+	e := newTestRedisEngine()
+
+	channel := "test-current-position"
+
+	_, recoveryPosition, err := e.History(channel, HistoryFilter{
+		Limit: 0,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(0), recoveryPosition.Seq)
+	assert.Equal(t, uint32(0), recoveryPosition.Gen)
+
+	pub := &Publication{Data: Raw([]byte("{}"))}
+	_, err = e.AddHistory(channel, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+	assert.NoError(t, err)
+
+	_, recoveryPosition, err = e.History(channel, HistoryFilter{
+		Limit: 0,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(1), recoveryPosition.Seq)
+	assert.Equal(t, uint32(0), recoveryPosition.Gen)
+}
+
 func TestRedisEngineRecover(t *testing.T) {
 
 	c := dial()

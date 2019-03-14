@@ -406,8 +406,8 @@ else
   epoch = redis.call('TIME')[1]
   redis.call("set", KEYS[2], epoch)
 end
-local pubs
-if ARGV[1] ~= 0 then
+local pubs = nil
+if ARGV[1] ~= "0" then
 	pubs = redis.call("lrange", KEYS[3], 0, ARGV[2])
 end
 return {seq, epoch, pubs}
@@ -1379,7 +1379,14 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 	historyEpochKey := s.gethistoryEpochKey(ch)
 	historyKey := s.getHistoryKey(ch)
 
-	dr := newDataRequest(dataOpHistory, []interface{}{historySeqKey, historyEpochKey, historyKey, 1, -1})
+	var includePubs = true
+	var rightBound = -1
+	if filter.Limit == 0 {
+		rightBound = 0
+		includePubs = false
+	}
+
+	dr := newDataRequest(dataOpHistory, []interface{}{historySeqKey, historyEpochKey, historyKey, includePubs, rightBound})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, RecoveryPosition{}, resp.err
@@ -1405,9 +1412,12 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 		epoch = ""
 	}
 
-	publications, err := sliceOfPubs(s, results[2], nil)
-	if err != nil {
-		return nil, RecoveryPosition{}, err
+	var publications []*Publication
+	if includePubs {
+		publications, err = sliceOfPubs(s, results[2], nil)
+		if err != nil {
+			return nil, RecoveryPosition{}, err
+		}
 	}
 
 	latestPosition := RecoveryPosition{Seq: seq, Gen: gen, Epoch: epoch}
