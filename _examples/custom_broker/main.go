@@ -13,7 +13,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/centrifuge/examples/custom_broker/natsbroker"
+	"github.com/centrifugal/centrifuge/_examples/custom_broker/natsbroker"
 )
 
 var (
