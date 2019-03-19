@@ -27,6 +27,10 @@ ignored = ["github.com/centrifugal/centrifuge/examples*"]
   version = "1.0.0"
 
 [[constraint]]
+  name = "github.com/valyala/bytebufferpool"
+  version = "1.0.0"
+
+[[constraint]]
   name = "github.com/gomodule/redigo"
   version = "2.0.0"
 
