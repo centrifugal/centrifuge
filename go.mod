@@ -12,4 +12,5 @@ require (
 	github.com/igm/sockjs-go v0.0.0-20180629114527-4e63e74d3787
 	github.com/prometheus/client_golang v0.9.2
 	github.com/stretchr/testify v1.3.0
+	github.com/valyala/bytebufferpool v1.0.0
 )

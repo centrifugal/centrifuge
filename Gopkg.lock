@@ -159,6 +159,14 @@
   revision = "ffdc059bfe9ce6a4e144ba849dbedead332c6053"
   version = "v1.3.0"
 
+[[projects]]
+  digest = "1:857a9ecd5cb13379ecc8f798f6e6b6b574c98b9355657d91e068275f1120aaf7"
+  name = "github.com/valyala/bytebufferpool"
+  packages = ["."]
+  pruneopts = ""
+  revision = "e746df99fe4a3986f4d4f79e13c1e0117ce9c2f7"
+  version = "v1.0.0"
+
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
@@ -174,6 +182,7 @@
     "github.com/igm/sockjs-go/sockjs",
     "github.com/prometheus/client_golang/prometheus",
     "github.com/stretchr/testify/assert",
+    "github.com/valyala/bytebufferpool",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1
