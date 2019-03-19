@@ -10,7 +10,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 
 	"github.com/igm/sockjs-go/sockjs"
-	"github.com/valyala/bytebufferpool"
 )
 
 const (
@@ -74,18 +73,18 @@ func (t *sockjsTransport) write(data ...[]byte) error {
 			}
 			transportMessagesSent.WithLabelValues(transportSockJS).Inc()
 		} else {
-			buf := bytebufferpool.Get()
+			buf := getBuffer()
 			for _, payload := range data {
 				buf.Write(payload)
 			}
 			err := t.session.Send(buf.String())
 			if err != nil {
 				go t.Close(DisconnectWriteError)
-				bytebufferpool.Put(buf)
+				putBuffer(buf)
 				return err
 			}
+			putBuffer(buf)
 			transportMessagesSent.WithLabelValues(transportSockJS).Add(float64(len(data)))
-			bytebufferpool.Put(buf)
 		}
 		return nil
 	}

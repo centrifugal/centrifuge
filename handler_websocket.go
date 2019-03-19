@@ -10,7 +10,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 
 	"github.com/gorilla/websocket"
-	"github.com/valyala/bytebufferpool"
 )
 
 const (
@@ -128,17 +127,17 @@ func (t *websocketTransport) write(data ...[]byte) error {
 				return err
 			}
 		} else {
-			buf := bytebufferpool.Get()
+			buf := getBuffer()
 			for _, payload := range data {
 				buf.Write(payload)
 			}
 			err := t.conn.WriteMessage(messageType, buf.Bytes())
 			if err != nil {
 				go t.Close(DisconnectWriteError)
-				bytebufferpool.Put(buf)
+				putBuffer(buf)
 				return err
 			}
-			bytebufferpool.Put(buf)
+			putBuffer(buf)
 		}
 		if t.opts.writeTimeout > 0 {
 			t.conn.SetWriteDeadline(time.Time{})
