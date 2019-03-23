@@ -306,6 +306,12 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelConte
 	if err != nil {
 		return true
 	}
+	c.mu.Lock()
+	if channelContext, ok = c.channels[ch]; ok {
+		channelContext.positionCheckTime = now
+		c.channels[ch] = channelContext
+	}
+	c.mu.Unlock()
 	return streamPosition.Seq == position.Seq && streamPosition.Gen == position.Gen && streamPosition.Epoch == position.Epoch
 }
 
