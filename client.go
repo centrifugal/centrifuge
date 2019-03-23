@@ -190,11 +190,11 @@ func (c *Client) closeUnauthenticated() {
 }
 
 // updateChannelPresence updates client presence info for channel so it
-// won't expire until client disconnect
+// won't expire until client disconnect.
 func (c *Client) updateChannelPresence(ch string) error {
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
-		return ErrorNamespaceNotFound
+		return nil
 	}
 	if !chOpts.Presence {
 		return nil
@@ -214,12 +214,15 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
 				return false
 			}
-			ctx := c.channels[channel]
-			if len(reply.Info) > 0 {
-				ctx.Info = reply.Info
+			c.mu.Lock()
+			if ctx, ok := c.channels[channel]; ok {
+				if len(reply.Info) > 0 {
+					ctx.Info = reply.Info
+				}
+				ctx.expireAt = reply.ExpireAt
+				c.channels[channel] = ctx
 			}
-			ctx.expireAt = reply.ExpireAt
-			c.channels[channel] = ctx
+			c.mu.Unlock()
 		} else {
 			// The only way subscription could be refreshed in this case is via
 			// SUB_REFRESH command sent from client but looks like that command
@@ -230,11 +233,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 	return true
 }
 
-// updatePresence updates presence info for all client channels.
-// At moment it also checks for expired subscriptions. As this happens
-// once in configured presence ping interval then subscription
-// expiration time resolution is pretty big. Though on practice
-// this should be reasonable for most use cases.
+// updatePresence used for various periodic actions we need to do with client connections.
 func (c *Client) updatePresence() {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
