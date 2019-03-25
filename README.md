@@ -7,25 +7,21 @@
 
 Centrifuge library is a real-time core of [Centrifugo](https://github.com/centrifugal/centrifugo) server. It's also aimed to be a general purpose real-time messaging library for Go programming language.
 
-Message transports:
-
-* Websocket transport with JSON or binary Protobuf protocol
-* SockJS polyfill library support (JSON only)
-
 Features:
 
 * Fast and optimized for low-latency communication with thousands of client connections
-* JSON and binary Protobuf protocol support 
+* WebSocket with JSON or binary Protobuf protocol
+* SockJS polyfill library support for browsers where WebSocket not available (JSON only)
 * Built-in horizontal scalability with Redis PUB/SUB, Redis sharding, Sentinel for HA
-* Possibility to register custom PUB/SUB broker, history and presence storage
-* Native authentication over middleware or JWT-based.
+* Possibility to register custom PUB/SUB broker, history and presence storage implementations
+* Native authentication over middleware or JWT-based
 * Bidirectional asynchronous message communication and RPC calls
 * Channel (room) concept to broadcast message to all channel subscribers
 * Presence information for channels (show all active clients in channel)
 * History information for channels (last messages published into channel)
 * Join/leave events for channels (aka client goes online/offline)
 * Message recovery mechanism for channels to survive short network disconnects or node restart
-* MIT license
+* Client libraries for main application environments (see below)
 
 Client libraries:
 
