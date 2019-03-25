@@ -37,11 +37,11 @@ type Node struct {
 	config Config
 	// hub to manage client connections.
 	hub *Hub
-	// broker ...
+	// broker is responsible for PUB/SUB mechanics.
 	broker Broker
-	// historyManager ...
+	// historyManager is responsible for managing channel Publication history.
 	historyManager HistoryManager
-	// presenceManager ...
+	// presenceManager is responsible for presence information management.
 	presenceManager PresenceManager
 	// nodes contains registry of known nodes.
 	nodes *nodeRegistry
@@ -129,17 +129,17 @@ func (n *Node) SetEngine(e Engine) {
 	n.presenceManager = e.(PresenceManager)
 }
 
-// SetBroker ...
+// SetBroker allows to set Broker implementation to use.
 func (n *Node) SetBroker(b Broker) {
 	n.broker = b
 }
 
-// SetHistoryManager ...
+// SetHistoryManager allows to set HistoryManager to use.
 func (n *Node) SetHistoryManager(m HistoryManager) {
 	n.historyManager = m
 }
 
-// SetPresenceManager ...
+// SetPresenceManager allows to set PresenceManager to use.
 func (n *Node) SetPresenceManager(m PresenceManager) {
 	n.presenceManager = m
 }
@@ -929,7 +929,6 @@ func (h *nodeEventHub) Connect(handler ConnectHandler) {
 	h.connectHandler = handler
 }
 
-// brokerEventHandler ...
 type brokerEventHandler struct {
 	node *Node
 }
