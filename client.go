@@ -79,26 +79,6 @@ func (c *ClientEventHub) Publish(h PublishHandler) {
 	c.publishHandler = h
 }
 
-// Credentials allows to authenticate connection when set into context.
-type Credentials struct {
-	UserID   string
-	ExpireAt int64
-	Info     []byte
-}
-
-// credentialsContextKeyType is special type to safely use
-// context for setting and getting Credentials.
-type credentialsContextKeyType int
-
-// CredentialsContextKey allows Go code to set Credentials into context.
-var credentialsContextKey credentialsContextKeyType
-
-// SetCredentials allows to set connection Credentials to context.
-func SetCredentials(ctx context.Context, creds *Credentials) context.Context {
-	ctx = context.WithValue(ctx, credentialsContextKey, creds)
-	return ctx
-}
-
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
 	Info              proto.Raw
@@ -125,6 +105,8 @@ type Client struct {
 	user string
 	exp  int64
 	info proto.Raw
+
+	connectData proto.Raw
 
 	channels map[string]ChannelContext
 
@@ -699,6 +681,24 @@ func (c *Client) expire() {
 			}
 			c.mu.Unlock()
 		}
+	} else if c.node.credentialsResolver != nil {
+		c.mu.RLock()
+		connectData := c.connectData
+		c.mu.RUnlock()
+		reply := c.node.credentialsResolver.Resolve(context.Background(), c.Transport(), CredentialsResolveMeta{
+			ConnectData: connectData,
+		})
+		if reply.Disconnect == nil && reply.Error == nil {
+			credentials := reply.Credentials
+			if credentials.ExpireAt > 0 {
+				c.mu.Lock()
+				c.exp = credentials.ExpireAt
+				if credentials.Info != nil {
+					c.info = credentials.Info
+				}
+				c.mu.Unlock()
+			}
+		}
 	}
 
 	c.mu.RLock()
@@ -1071,6 +1071,22 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
 
+	if c.node.credentialsResolver != nil {
+		credentialsReply := c.node.credentialsResolver.Resolve(context.Background(), c.Transport(), CredentialsResolveMeta{
+			ConnectData: cmd.Data,
+		})
+		if credentialsReply.Disconnect != nil {
+			return resp, credentialsReply.Disconnect
+		}
+		if credentialsReply.Error != nil {
+			resp.Error = credentialsReply.Error
+			return resp, nil
+		}
+		c.mu.Lock()
+		c.ctx = SetCredentials(c.ctx, credentialsReply.Credentials)
+		c.mu.Unlock()
+	}
+
 	var credentials *Credentials
 	if val := c.ctx.Value(credentialsContextKey); val != nil {
 		if creds, ok := val.(*Credentials); ok {
@@ -1200,6 +1216,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	if c.staleTimer != nil {
 		c.staleTimer.Stop()
 	}
+	c.connectData = cmd.Data
 	c.addPresenceUpdate()
 	c.mu.Unlock()
 

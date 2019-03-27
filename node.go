@@ -64,6 +64,8 @@ type Node struct {
 	metricsMu       sync.Mutex
 	metricsExporter *eagle.Eagle
 	metricsSnapshot *eagle.Metrics
+
+	credentialsResolver CredentialsResolver
 }
 
 const (
@@ -122,7 +124,12 @@ func (n *Node) Config() Config {
 	return c
 }
 
-// SetEngine binds engine to node.
+// SetCredentialsResolver binds CredentialsResolver to node.
+func (n *Node) SetCredentialsResolver(r CredentialsResolver) {
+	n.credentialsResolver = r
+}
+
+// SetEngine binds Engine to node.
 func (n *Node) SetEngine(e Engine) {
 	n.broker = e.(Broker)
 	n.historyManager = e.(HistoryManager)
