@@ -14,6 +14,7 @@ type PushEncoder interface {
 	EncodeJoin(*Join) ([]byte, error)
 	EncodeLeave(*Leave) ([]byte, error)
 	EncodeUnsub(*Unsub) ([]byte, error)
+	EncodeSession(*Session) ([]byte, error)
 }
 
 // JSONPushEncoder ...
@@ -55,6 +56,11 @@ func (e *JSONPushEncoder) EncodeUnsub(message *Unsub) ([]byte, error) {
 	return json.Marshal(message)
 }
 
+// EncodeSession ...
+func (e *JSONPushEncoder) EncodeSession(message *Session) ([]byte, error) {
+	return json.Marshal(message)
+}
+
 // ProtobufPushEncoder ...
 type ProtobufPushEncoder struct {
 }
@@ -91,6 +97,11 @@ func (e *ProtobufPushEncoder) EncodeLeave(message *Leave) ([]byte, error) {
 
 // EncodeUnsub ...
 func (e *ProtobufPushEncoder) EncodeUnsub(message *Unsub) ([]byte, error) {
+	return message.Marshal()
+}
+
+// EncodeSession ...
+func (e *ProtobufPushEncoder) EncodeSession(message *Session) ([]byte, error) {
 	return message.Marshal()
 }
 

@@ -172,7 +172,32 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 		c.mu.Unlock()
 	}
 
+	if 1 > 0 {
+		c.sendSession()
+	}
+
 	return c, nil
+}
+
+func (c *Client) sendSession() error {
+	pushEncoder := proto.GetPushEncoder(c.transport.Encoding())
+
+	data, err := pushEncoder.EncodeSession(&proto.Session{Data: Raw(`{"session_data": "test"}`)})
+	if err != nil {
+		return err
+	}
+	result, err := pushEncoder.Encode(proto.NewSessionPush(data))
+	if err != nil {
+		return err
+	}
+
+	reply := newPreparedReply(&proto.Reply{
+		Result: result,
+	}, c.transport.Encoding())
+
+	c.transport.Send(reply)
+
+	return nil
 }
 
 // closeUnauthenticated closes connection if it's not authenticated yet.

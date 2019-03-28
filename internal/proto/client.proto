@@ -52,6 +52,12 @@ enum PushType {
     LEAVE = 2 [(gogoproto.enumvalue_customname) = "PushTypeLeave"];
     UNSUB = 3 [(gogoproto.enumvalue_customname) = "PushTypeUnsub"];
     MESSAGE = 4 [(gogoproto.enumvalue_customname) = "PushTypeMessage"];
+    SESSION = 5 [(gogoproto.enumvalue_customname) = "PushTypeSession"];
+}
+
+
+message Session {
+    bytes data = 1 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
 }
 
 message Push {

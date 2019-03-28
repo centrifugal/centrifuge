@@ -43,6 +43,12 @@ enum PushType {
     LEAVE = 2;
     UNSUB = 3;
     MESSAGE = 4;
+    SESSION = 5;
+}
+
+
+message Session {
+    bytes data = 1;
 }
 
 message Push {

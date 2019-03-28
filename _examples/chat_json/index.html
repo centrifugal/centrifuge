@@ -9,7 +9,7 @@
         </style>
         <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.11.2/jquery.min.js"></script>
         <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -33,10 +33,13 @@
                 var input = $("#input");
                 var container = $('#messages');
 
-                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
+                    onSessionData: function(c, data) {
+                        let sessData = data["session_data"];
+                        c.setConnectData({"modified_session_data": sessData.toUpperCase()});
+                    }
+                });
                 // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs');
-
-                centrifuge.setConnectData({"user-agent": navigator.userAgent});
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){

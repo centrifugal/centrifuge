@@ -44,6 +44,14 @@ func NewUnsubPush(ch string, data Raw) *Push {
 	}
 }
 
+// NewSessionPush returns initialized async session message.
+func NewSessionPush(data Raw) *Push {
+	return &Push{
+		Type: PushTypeSession,
+		Data: data,
+	}
+}
+
 // ConnectResponse ...
 type ConnectResponse struct {
 	Error  *Error         `json:"error,omitempty"`
