@@ -68,6 +68,7 @@ type Config struct {
 	// ClientUserConnectionLimit limits number of client connections from user with the
 	// same ID. 0 - unlimited.
 	ClientUserConnectionLimit int
+
 	// ChannelPrivatePrefix is a prefix in channel name which indicates that
 	// channel is private.
 	ChannelPrivatePrefix string

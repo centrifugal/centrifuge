@@ -165,6 +165,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 	}
 
 	config := n.Config()
+
 	staleCloseDelay := config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !c.authenticated {
 		c.mu.Lock()
@@ -172,17 +173,25 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 		c.mu.Unlock()
 	}
 
-	if 1 > 0 {
-		c.sendSession()
+	if n.sessionResolver != nil {
+		sessionReply := n.sessionResolver.Resolve(context.Background(), t, SessionResolveMeta{})
+		if sessionReply.Disconnect != nil {
+			go c.Close(sessionReply.Disconnect)
+			return c, nil
+		}
+		err := c.sendSession(sessionReply.Data)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return c, nil
 }
 
-func (c *Client) sendSession() error {
+func (c *Client) sendSession(data Raw) error {
 	pushEncoder := proto.GetPushEncoder(c.transport.Encoding())
 
-	data, err := pushEncoder.EncodeSession(&proto.Session{Data: Raw(`{"session_data": "test"}`)})
+	data, err := pushEncoder.EncodeSession(&proto.Session{Data: data})
 	if err != nil {
 		return err
 	}
