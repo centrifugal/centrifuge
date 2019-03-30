@@ -4,10 +4,12 @@ import (
 	"context"
 )
 
-// SessionResolveMeta ...
+// SessionResolveMeta contains additional data for SessionResolver.
 type SessionResolveMeta struct{}
 
-// SessionReply ...
+// SessionReply is a reply of SessionResover with instructions to library.
+// Disconnect if provived allows to close connection, Data is a custom data
+// to send in Session push.
 type SessionReply struct {
 	Disconnect *Disconnect
 	Data       Raw
