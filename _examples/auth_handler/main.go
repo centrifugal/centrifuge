@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	_ "net/http/pprof"
 
@@ -18,19 +15,6 @@ import (
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
-}
-
-type customCredentialsResolver struct{}
-
-func (r *customCredentialsResolver) Resolve(ctx context.Context, t centrifuge.Transport, meta centrifuge.CredentialsResolveMeta) centrifuge.CredentialsReply {
-	log.Printf("resolving credentials for client connected over %s", t.Name())
-	return centrifuge.CredentialsReply{
-		Credentials: &centrifuge.Credentials{
-			UserID:   "72",
-			ExpireAt: time.Now().Unix() + 10,
-			Info:     []byte(`{"name": "Resolved User"}`),
-		},
-	}
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -69,16 +53,17 @@ func main() {
 	}
 
 	node, _ := centrifuge.New(cfg)
-	node.SetCredentialsResolver(&customCredentialsResolver{})
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Auth(func(ctx context.Context, t centrifuge.Transport, e centrifuge.AuthEvent) centrifuge.AuthReply {
+		log.Printf("authenticating client connection over %s", t.Name())
+		return centrifuge.AuthReply{
+			Credentials: &centrifuge.Credentials{
+				UserID: "72",
+			},
+		}
+	})
 
-		// client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		// 	log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-		// 	return centrifuge.RefreshReply{
-		// 		ExpireAt: time.Now().Unix() + 10,
-		// 	}
-		// })
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -114,21 +99,6 @@ func main() {
 
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
-
-		go func() {
-			messageData, _ := json.Marshal("hello client " + client.ID())
-			err := client.Send(messageData)
-			if err != nil {
-				if err == io.EOF {
-					return
-				}
-				log.Fatalln(err.Error())
-			}
-		}()
-
-		return centrifuge.ConnectReply{
-			Data: []byte(`{"timezone": "Moscow/Europe"}`),
-		}
 	})
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)

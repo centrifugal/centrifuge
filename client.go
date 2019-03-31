@@ -106,8 +106,6 @@ type Client struct {
 	exp  int64
 	info proto.Raw
 
-	connectData proto.Raw
-
 	channels map[string]ChannelContext
 
 	staleTimer    *time.Timer
@@ -681,24 +679,6 @@ func (c *Client) expire() {
 			}
 			c.mu.Unlock()
 		}
-	} else if c.node.credentialsResolver != nil {
-		c.mu.RLock()
-		connectData := c.connectData
-		c.mu.RUnlock()
-		reply := c.node.credentialsResolver.Resolve(context.Background(), c.Transport(), CredentialsResolveMeta{
-			ConnectData: connectData,
-		})
-		if reply.Disconnect == nil && reply.Error == nil {
-			credentials := reply.Credentials
-			if credentials.ExpireAt > 0 {
-				c.mu.Lock()
-				c.exp = credentials.ExpireAt
-				if credentials.Info != nil {
-					c.info = credentials.Info
-				}
-				c.mu.Unlock()
-			}
-		}
 	}
 
 	c.mu.RLock()
@@ -757,7 +737,13 @@ func (c *Client) handleConnect(params proto.Raw, rw *replyWriter) *Disconnect {
 			return DisconnectServerError
 		}
 	}
+
 	rw.write(&proto.Reply{Result: replyRes})
+	rw.flush()
+	if c.node.eventHub.connectHandler != nil {
+		c.node.eventHub.connectHandler(c.ctx, c)
+	}
+
 	return nil
 }
 
@@ -1071,26 +1057,34 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
 
-	if c.node.credentialsResolver != nil {
-		credentialsReply := c.node.credentialsResolver.Resolve(context.Background(), c.Transport(), CredentialsResolveMeta{
-			ConnectData: cmd.Data,
+	var credentials *Credentials
+
+	if c.node.eventHub.authHandler != nil {
+		reply := c.node.eventHub.authHandler(c.ctx, c.transport, AuthEvent{
+			ClientID: c.ID(),
+			Data:     cmd.Data,
+			Token:    cmd.Token,
 		})
-		if credentialsReply.Disconnect != nil {
-			return resp, credentialsReply.Disconnect
+		if reply.Disconnect != nil {
+			return nil, reply.Disconnect
 		}
-		if credentialsReply.Error != nil {
-			resp.Error = credentialsReply.Error
+		if reply.Error != nil {
+			resp.Error = reply.Error
 			return resp, nil
 		}
-		c.mu.Lock()
-		c.ctx = SetCredentials(c.ctx, credentialsReply.Credentials)
-		c.mu.Unlock()
+		if reply.Data != nil {
+			resp.Result.Data = reply.Data
+		}
+		if reply.Credentials != nil {
+			credentials = reply.Credentials
+		}
 	}
 
-	var credentials *Credentials
-	if val := c.ctx.Value(credentialsContextKey); val != nil {
-		if creds, ok := val.(*Credentials); ok {
-			credentials = creds
+	if credentials == nil {
+		if val := c.ctx.Value(credentialsContextKey); val != nil {
+			if creds, ok := val.(*Credentials); ok {
+				credentials = creds
+			}
 		}
 	}
 
@@ -1106,7 +1100,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		c.mu.Unlock()
 	} else if cmd.Token != "" {
 		// Explicit auth Credentials not provided in context, try to look
-		// for credentials in connect token.
+		// for credentials in connect JWT.
 		token := cmd.Token
 
 		var user string
@@ -1216,7 +1210,6 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	if c.staleTimer != nil {
 		c.staleTimer.Stop()
 	}
-	c.connectData = cmd.Data
 	c.addPresenceUpdate()
 	c.mu.Unlock()
 
@@ -1231,22 +1224,6 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		c.mu.Lock()
 		c.expireTimer = time.AfterFunc(duration, c.expire)
 		c.mu.Unlock()
-	}
-
-	if c.node.eventHub.connectHandler != nil {
-		reply := c.node.eventHub.connectHandler(c.ctx, c, ConnectEvent{
-			Data: cmd.Data,
-		})
-		if reply.Disconnect != nil {
-			return resp, reply.Disconnect
-		}
-		if reply.Error != nil {
-			resp.Error = reply.Error
-			return resp, nil
-		}
-		if reply.Data != nil {
-			resp.Result.Data = reply.Data
-		}
 	}
 
 	if c.eventHub.refreshHandler != nil {

@@ -21,21 +21,3 @@ func SetCredentials(ctx context.Context, creds *Credentials) context.Context {
 	ctx = context.WithValue(ctx, credentialsContextKey, creds)
 	return ctx
 }
-
-// CredentialsResolveMeta ...
-type CredentialsResolveMeta struct {
-	ConnectData Raw
-}
-
-// CredentialsReply ...
-type CredentialsReply struct {
-	Error       *Error
-	Disconnect  *Disconnect
-	Credentials *Credentials
-}
-
-// CredentialsResolver allows to resolve connection credentials in custom way.
-// Credential resolving happens after connect command received from client.
-type CredentialsResolver interface {
-	Resolve(context.Context, Transport, CredentialsResolveMeta) CredentialsReply
-}

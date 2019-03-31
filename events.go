@@ -4,20 +4,26 @@ import (
 	"context"
 )
 
-// ConnectEvent contains fields related to connect event.
-type ConnectEvent struct {
-	Data Raw
+// AuthEvent contains fields related to auth event.
+type AuthEvent struct {
+	ClientID string
+	Token    string
+	Data     Raw
 }
 
-// ConnectReply contains fields determining the reaction on connect event.
-type ConnectReply struct {
-	Error      *Error
-	Disconnect *Disconnect
-	Data       Raw
+// AuthReply contains fields determining the reaction on auth event.
+type AuthReply struct {
+	Error       *Error
+	Disconnect  *Disconnect
+	Credentials *Credentials
+	Data        Raw
 }
+
+// AuthHandler called when new client authenticates on server.
+type AuthHandler func(context.Context, Transport, AuthEvent) AuthReply
 
 // ConnectHandler called when new client connects to server.
-type ConnectHandler func(context.Context, *Client, ConnectEvent) ConnectReply
+type ConnectHandler func(context.Context, *Client)
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {

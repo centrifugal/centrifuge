@@ -76,14 +76,13 @@ func testCustomHeader(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 		authHeader := client.Transport().Info().Request.Header.Get("Authorization")
 		if authHeader != "testsuite" {
 			fn(fmt.Errorf("No valid Authorization header found"))
 		} else {
 			fn(nil)
 		}
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
@@ -95,14 +94,13 @@ func testJWTAuth(fn ResolveFunc) *centrifuge.Node {
 	cfg.Secret = "secret"
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 		if client.UserID() != "testsuite_jwt" {
 			fn(fmt.Errorf("Wrong user id: %s", client.UserID()))
 		} else {
 			fn(nil)
 		}
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
@@ -111,7 +109,7 @@ func testSimpleSubscribe(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
@@ -122,8 +120,6 @@ func testSimpleSubscribe(fn ResolveFunc) *centrifuge.Node {
 			}
 			return centrifuge.SubscribeReply{}
 		})
-
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
@@ -141,7 +137,7 @@ func testReceiveRPCReceiveMessageJSON(fn ResolveFunc) *centrifuge.Node {
 	}
 	jsonData, _ := json.Marshal(message)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
@@ -163,8 +159,6 @@ func testReceiveRPCReceiveMessageJSON(fn ResolveFunc) *centrifuge.Node {
 			}
 			return centrifuge.MessageReply{}
 		})
-
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
@@ -175,7 +169,7 @@ func testReceiveRPCReceiveMessageProtobuf(fn ResolveFunc) *centrifuge.Node {
 
 	message := []byte("boom 👻 boom")
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
@@ -192,8 +186,6 @@ func testReceiveRPCReceiveMessageProtobuf(fn ResolveFunc) *centrifuge.Node {
 			}
 			return centrifuge.MessageReply{}
 		})
-
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }

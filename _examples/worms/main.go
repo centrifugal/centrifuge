@@ -52,7 +52,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
 			var ev event
@@ -77,7 +77,6 @@ func main() {
 		})
 
 		log.Printf("worm connected via %s", client.Transport().Name())
-		return centrifuge.ConnectReply{}
 	})
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)

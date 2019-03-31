@@ -69,7 +69,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -93,7 +93,6 @@ func main() {
 
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
-		return centrifuge.ConnectReply{}
 	})
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
