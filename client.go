@@ -79,26 +79,6 @@ func (c *ClientEventHub) Publish(h PublishHandler) {
 	c.publishHandler = h
 }
 
-// Credentials allows to authenticate connection when set into context.
-type Credentials struct {
-	UserID   string
-	ExpireAt int64
-	Info     []byte
-}
-
-// credentialsContextKeyType is special type to safely use
-// context for setting and getting Credentials.
-type credentialsContextKeyType int
-
-// CredentialsContextKey allows Go code to set Credentials into context.
-var credentialsContextKey credentialsContextKeyType
-
-// SetCredentials allows to set connection Credentials to context.
-func SetCredentials(ctx context.Context, creds *Credentials) context.Context {
-	ctx = context.WithValue(ctx, credentialsContextKey, creds)
-	return ctx
-}
-
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
 	Info              proto.Raw
@@ -791,7 +771,13 @@ func (c *Client) handleConnect(params proto.Raw, rw *replyWriter) *Disconnect {
 			return DisconnectServerError
 		}
 	}
+
 	rw.write(&proto.Reply{Result: replyRes})
+	rw.flush()
+	if c.node.eventHub.connectHandler != nil {
+		c.node.eventHub.connectHandler(c.ctx, c)
+	}
+
 	return nil
 }
 
@@ -1106,9 +1092,43 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	userConnectionLimit := config.ClientUserConnectionLimit
 
 	var credentials *Credentials
-	if val := c.ctx.Value(credentialsContextKey); val != nil {
-		if creds, ok := val.(*Credentials); ok {
-			credentials = creds
+	var authData proto.Raw
+
+	if c.node.eventHub.authHandler != nil {
+		reply := c.node.eventHub.authHandler(c.ctx, c.transport, AuthEvent{
+			ClientID: c.ID(),
+			Data:     cmd.Data,
+			Token:    cmd.Token,
+		})
+		if reply.Disconnect != nil {
+			return nil, reply.Disconnect
+		}
+		if reply.Error != nil {
+			resp.Error = reply.Error
+			return resp, nil
+		}
+		if reply.Data != nil {
+			resp.Result.Data = reply.Data
+		}
+		if reply.Credentials != nil {
+			credentials = reply.Credentials
+		}
+		if reply.Context != nil {
+			c.mu.Lock()
+			c.ctx = reply.Context
+			c.mu.Unlock()
+		}
+		if reply.Data != nil {
+			authData = reply.Data
+		}
+	}
+
+	if credentials == nil {
+		// Try to find Credentials in context.
+		if val := c.ctx.Value(credentialsContextKey); val != nil {
+			if creds, ok := val.(*Credentials); ok {
+				credentials = creds
+			}
 		}
 	}
 
@@ -1123,8 +1143,9 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		c.exp = credentials.ExpireAt
 		c.mu.Unlock()
 	} else if cmd.Token != "" {
-		// Explicit auth Credentials not provided in context, try to look
-		// for credentials in connect token.
+		// Explicit auth Credentials not provided in auth handler and in context, try
+		// to extract credentials from connection JWT.
+		// TODO: JWT stuff should be outside library.
 		token := cmd.Token
 
 		var user string
@@ -1250,28 +1271,15 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		c.mu.Unlock()
 	}
 
-	if c.node.eventHub.connectHandler != nil {
-		reply := c.node.eventHub.connectHandler(c.ctx, c, ConnectEvent{
-			Data: cmd.Data,
-		})
-		if reply.Disconnect != nil {
-			return resp, reply.Disconnect
-		}
-		if reply.Error != nil {
-			resp.Error = reply.Error
-			return resp, nil
-		}
-		if reply.Data != nil {
-			resp.Result.Data = reply.Data
-		}
-	}
-
 	if c.eventHub.refreshHandler != nil {
 		resp.Result.Expires = false
 		resp.Result.TTL = 0
 	}
 
 	resp.Result.Client = c.uid
+	if authData != nil {
+		resp.Result.Data = authData
+	}
 
 	return resp, nil
 }

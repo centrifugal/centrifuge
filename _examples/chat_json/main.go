@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -71,7 +71,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
 			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
@@ -124,20 +124,19 @@ func main() {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
 
+		// Connect handler should not block, so start separate goroutine to
+		// periodically send messages to client.
 		go func() {
-			messageData, _ := json.Marshal("hello client " + client.ID())
-			err := client.Send(messageData)
-			if err != nil {
-				if err == io.EOF {
-					return
+			for {
+				err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+				if err != nil {
+					if err != io.EOF {
+						log.Println(err.Error())
+					}
 				}
-				log.Fatalln(err.Error())
+				time.Sleep(5 * time.Second)
 			}
 		}()
-
-		return centrifuge.ConnectReply{
-			Data: []byte(`{"timezone": "Moscow/Europe"}`),
-		}
 	})
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)

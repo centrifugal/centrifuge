@@ -133,7 +133,7 @@ func (n *Node) Config() Config {
 	return c
 }
 
-// SetEngine binds engine to node.
+// SetEngine binds Engine to node.
 func (n *Node) SetEngine(e Engine) {
 	n.broker = e.(Broker)
 	n.historyManager = e.(HistoryManager)
@@ -926,6 +926,13 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 // All its methods are not goroutine-safe as handlers must be
 // registered once before Node Run method called.
 type NodeEventHub interface {
+	// Auth happens when client sends Connect command to server. In this handler client
+	// can reject connection or provide Credentials for it.
+	Auth(handler AuthHandler)
+	// Connect called after client connection has been successfully established,
+	// authenticated and connect reply already sent to client. This is a place
+	// where application should set all required connection event callbacks and
+	// can start communicating with client.
 	Connect(handler ConnectHandler)
 }
 
@@ -933,6 +940,12 @@ type NodeEventHub interface {
 // All its methods are not goroutine-safe.
 type nodeEventHub struct {
 	connectHandler ConnectHandler
+	authHandler    AuthHandler
+}
+
+// Auth ...
+func (h *nodeEventHub) Auth(handler AuthHandler) {
+	h.authHandler = handler
 }
 
 // Connect allows to set ConnectHandler.
