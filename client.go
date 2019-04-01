@@ -1058,6 +1058,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	userConnectionLimit := config.ClientUserConnectionLimit
 
 	var credentials *Credentials
+	var authData proto.Raw
 
 	if c.node.eventHub.authHandler != nil {
 		reply := c.node.eventHub.authHandler(c.ctx, c.transport, AuthEvent{
@@ -1078,9 +1079,18 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
 		}
+		if reply.Context != nil {
+			c.mu.Lock()
+			c.ctx = reply.Context
+			c.mu.Unlock()
+		}
+		if reply.Data != nil {
+			authData = reply.Data
+		}
 	}
 
 	if credentials == nil {
+		// Try to find Credentials in context.
 		if val := c.ctx.Value(credentialsContextKey); val != nil {
 			if creds, ok := val.(*Credentials); ok {
 				credentials = creds
@@ -1099,8 +1109,9 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 		c.exp = credentials.ExpireAt
 		c.mu.Unlock()
 	} else if cmd.Token != "" {
-		// Explicit auth Credentials not provided in context, try to look
-		// for credentials in connect JWT.
+		// Explicit auth Credentials not provided in auth handler and in context, try
+		// to extract credentials from connection JWT.
+		// TODO: JWT stuff should be outside library.
 		token := cmd.Token
 
 		var user string
@@ -1232,6 +1243,9 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	}
 
 	resp.Result.Client = c.uid
+	if authData != nil {
+		resp.Result.Data = authData
+	}
 
 	return resp, nil
 }
