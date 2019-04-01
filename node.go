@@ -64,8 +64,6 @@ type Node struct {
 	metricsMu       sync.Mutex
 	metricsExporter *eagle.Eagle
 	metricsSnapshot *eagle.Metrics
-
-	sessionResolver SessionResolver
 }
 
 const (
@@ -108,15 +106,6 @@ func index(s string, numBuckets int) int {
 
 func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
-}
-
-// SetSessionResolver allows to set Session resolver to node. SessionResolver
-// can be used when you want server to send client Session push with some data
-// after connection established. Client can then react to Session push sending
-// some data based on data in Session push in Connect command. This for example
-// allows to digest auth over Centrifuge connection.
-func (n *Node) SetSessionResolver(r SessionResolver) {
-	n.sessionResolver = r
 }
 
 // SetLogHandler sets LogHandler to handle log messages with
@@ -926,6 +915,9 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 // All its methods are not goroutine-safe as handlers must be
 // registered once before Node Run method called.
 type NodeEventHub interface {
+	// Session allows to set custom handler to generate data to be sent to client
+	// in Session push.
+	Session(handler SessionHandler)
 	// Auth happens when client sends Connect command to server. In this handler client
 	// can reject connection or provide Credentials for it.
 	Auth(handler AuthHandler)
@@ -939,8 +931,19 @@ type NodeEventHub interface {
 // nodeEventHub can deal with events binded to Node.
 // All its methods are not goroutine-safe.
 type nodeEventHub struct {
-	connectHandler ConnectHandler
+	// sessionHandler allows to set Session resolver to node. SessionResolver
+	// can be used when you want server to send client Session push with some data
+	// after connection established. Client can then react to Session push sending
+	// some data based on data in Session push in Connect command. This for example
+	// allows to digest auth over Centrifuge connection.
+	sessionHandler SessionHandler
 	authHandler    AuthHandler
+	connectHandler ConnectHandler
+}
+
+// Session ...
+func (h *nodeEventHub) Session(handler SessionHandler) {
+	h.sessionHandler = handler
 }
 
 // Auth ...

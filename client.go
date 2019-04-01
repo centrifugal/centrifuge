@@ -153,11 +153,18 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 		c.mu.Unlock()
 	}
 
-	if n.sessionResolver != nil {
-		sessionReply := n.sessionResolver.Resolve(context.Background(), t, SessionResolveMeta{})
+	if n.eventHub.sessionHandler != nil {
+		sessionReply := n.eventHub.sessionHandler(context.Background(), t, SessionEvent{
+			ClientID: c.uid,
+		})
 		if sessionReply.Disconnect != nil {
 			go c.Close(sessionReply.Disconnect)
 			return c, nil
+		}
+		if sessionReply.Context != nil {
+			c.mu.Lock()
+			c.ctx = sessionReply.Context
+			c.mu.Unlock()
 		}
 		err := c.sendSession(sessionReply.Data)
 		if err != nil {

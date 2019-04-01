@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	_ "net/http/pprof"
 
@@ -30,15 +34,6 @@ func authMiddleware(h http.Handler) http.Handler {
 	})
 }
 
-type customSessionResolver struct{}
-
-func (r *customSessionResolver) Resolve(ctx context.Context, t centrifuge.Transport, meta centrifuge.SessionResolveMeta) centrifuge.SessionReply {
-	log.Printf("resolving session for client connected over %s", t.Name())
-	return centrifuge.SessionReply{
-		Data: centrifuge.Raw(`{"nounce": "random string"}`),
-	}
-}
-
 func waitExitSignal(n *centrifuge.Node) {
 	sigs := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
@@ -51,7 +46,27 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
+var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func randString(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(b)
+}
+
+type nonceType int
+
+const nonceContextKey nonceType = 0
+
+type connectData struct {
+	Digest string `json:"digest"`
+}
+
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	cfg := centrifuge.DefaultConfig
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
@@ -69,9 +84,41 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.SetSessionResolver(&customSessionResolver{})
+	node.On().Session(func(ctx context.Context, t centrifuge.Transport, e centrifuge.SessionEvent) centrifuge.SessionReply {
+		nonce := randString(10)
+		log.Printf("sending nonce to client: %s", nonce)
+		ctx = context.WithValue(ctx, nonceContextKey, nonce)
+		return centrifuge.SessionReply{
+			Context: ctx,
+			Data:    centrifuge.Raw(`{"nounce": "` + nonce + `"}`),
+		}
+	})
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Auth(func(ctx context.Context, t centrifuge.Transport, e centrifuge.AuthEvent) centrifuge.AuthReply {
+		log.Printf("authenticating client connection over %s", t.Name())
+
+		var data connectData
+		err := json.Unmarshal(e.Data, &data)
+		if err != nil {
+			return centrifuge.AuthReply{
+				Disconnect: centrifuge.DisconnectBadRequest,
+			}
+		}
+
+		if nonceSent, ok := ctx.Value(nonceContextKey).(string); ok && strings.ToUpper(nonceSent) == data.Digest {
+			return centrifuge.AuthReply{
+				Credentials: &centrifuge.Credentials{
+					UserID: "97",
+				},
+			}
+		}
+
+		return centrifuge.AuthReply{
+			Disconnect: centrifuge.DisconnectBadRequest,
+		}
+	})
+
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -95,10 +142,6 @@ func main() {
 
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
-
-		return centrifuge.ConnectReply{
-			Data: []byte(`{"timezone": "Moscow/Europe"}`),
-		}
 	})
 
 	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
