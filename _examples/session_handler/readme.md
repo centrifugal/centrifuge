@@ -1,4 +1,4 @@
-Example demonstrates oversimplified digest auth workflow. Server sends random string to client and expects it to be transformed to upper case by client.
+Example demonstrates oversimplified digest auth workflow. Server sends random string in first message and expects it to be transformed to upper case by client.
 
 To start example locally install dependencies first:
 
