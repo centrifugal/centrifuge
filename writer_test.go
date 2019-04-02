@@ -1,7 +1,5 @@
 package centrifuge
 
-package centrifuge
-
 import (
 	"bytes"
 	"os"
