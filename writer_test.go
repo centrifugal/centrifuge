@@ -1,12 +1,13 @@
 package centrifuge
 
+package centrifuge
+
 import (
 	"bytes"
 	"os"
 	"sync/atomic"
 	"testing"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -134,11 +135,4 @@ func TestWriterDisconnect(t *testing.T) {
 	w.onWrite(transport.write)
 	disconnect := w.enqueue([]byte("test"))
 	assert.NotNil(t, disconnect)
-}
-
-func TestReply(t *testing.T) {
-	reply := proto.Reply{}
-	prepared := newPreparedReply(&reply, proto.EncodingJSON)
-	data := prepared.Data()
-	assert.NotNil(t, data)
 }

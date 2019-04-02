@@ -103,3 +103,10 @@ func TestHubSubscriptions(t *testing.T) {
 	assert.False(t, h.NumSubscribers("test1") > 0)
 	assert.False(t, h.NumSubscribers("test2") > 0)
 }
+
+func TestPreparedReply(t *testing.T) {
+	reply := proto.Reply{}
+	prepared := newPreparedReply(&reply, proto.EncodingJSON)
+	data := prepared.Data()
+	assert.NotNil(t, data)
+}
