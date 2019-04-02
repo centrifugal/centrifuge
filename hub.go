@@ -68,7 +68,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 		go func(cc *Client) {
 			defer func() { <-sem }()
 			defer func() { closeFinishedCh <- struct{}{} }()
-			cc.close(advice)
+			cc.Close(advice)
 		}(client)
 	}
 
@@ -87,10 +87,13 @@ func (h *Hub) shutdown(ctx context.Context) error {
 
 func (h *Hub) disconnect(user string, reconnect bool) error {
 	userConnections := h.userConnections(user)
-	advice := &Disconnect{Reason: "disconnect", Reconnect: reconnect}
+	advice := DisconnectForceNoReconnect
+	if reconnect {
+		advice = DisconnectForceReconnect
+	}
 	for _, c := range userConnections {
 		go func(cc *Client) {
-			cc.close(advice)
+			cc.Close(advice)
 		}(c)
 	}
 	return nil

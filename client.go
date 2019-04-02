@@ -147,6 +147,8 @@ type Client struct {
 	inSubscribeCh   string
 	pubBufferMu     sync.Mutex
 	pubBuffer       []*Publication
+
+	messageWriter *writer
 }
 
 // newClient initializes new Client.
@@ -155,16 +157,50 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{
-		ctx:       ctx,
-		uid:       uuidObject.String(),
-		node:      n,
-		transport: t,
-		eventHub:  &ClientEventHub{},
-		pubBuffer: make([]*Publication, 0),
-	}
 
 	config := n.Config()
+
+	messageWriterConf := writerConfig{
+		MaxQueueSize: config.ClientQueueMaxSize,
+	}
+	messageWriter := newWriter(messageWriterConf)
+	messageWriter.onWrite(func(data ...[]byte) error {
+		if len(data) == 1 {
+			// no need in extra byte buffers in this path.
+			payload := data[0]
+			err := t.Write(payload)
+			if err != nil {
+				go t.Close(DisconnectWriteError)
+				return err
+			}
+			transportMessagesSent.WithLabelValues(t.Name()).Inc()
+		} else {
+			buf := getBuffer()
+			for _, payload := range data {
+				buf.Write(payload)
+			}
+			err := t.Write(buf.Bytes())
+			if err != nil {
+				go t.Close(DisconnectWriteError)
+				putBuffer(buf)
+				return err
+			}
+			putBuffer(buf)
+			transportMessagesSent.WithLabelValues(t.Name()).Add(float64(len(data)))
+		}
+		return nil
+	})
+
+	c := &Client{
+		ctx:           ctx,
+		uid:           uuidObject.String(),
+		node:          n,
+		transport:     t,
+		eventHub:      &ClientEventHub{},
+		pubBuffer:     make([]*Publication, 0),
+		messageWriter: messageWriter,
+	}
+
 	staleCloseDelay := config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !c.authenticated {
 		c.mu.Lock()
@@ -185,8 +221,19 @@ func (c *Client) closeUnauthenticated() {
 	closed := c.closed
 	c.mu.RUnlock()
 	if !authenticated && !closed {
-		c.close(DisconnectStale)
+		c.Close(DisconnectStale)
 	}
+}
+
+func (c *Client) transportSend(reply *preparedReply) error {
+	data := reply.Data()
+	disconnect := c.messageWriter.enqueue(data)
+	if disconnect != nil {
+		// Close in goroutine to not block message broadcast.
+		go c.Close(disconnect)
+		return io.EOF
+	}
+	return nil
 }
 
 // updateChannelPresence updates client presence info for channel so it
@@ -365,7 +412,7 @@ func (c *Client) Send(data Raw) error {
 		Result: result,
 	}, c.transport.Encoding())
 
-	return c.transport.Send(reply)
+	return c.transportSend(reply)
 }
 
 // Unsubscribe allows to unsubscribe client from channel.
@@ -400,23 +447,13 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 		Result: result,
 	}, c.transport.Encoding())
 
-	c.transport.Send(reply)
+	c.transportSend(reply)
 
 	return nil
 }
 
-// Close closes client connection.
+// Close client connection with specific disconnect reason.
 func (c *Client) Close(disconnect *Disconnect) error {
-	c.mu.Lock()
-	c.disconnect = disconnect
-	c.mu.Unlock()
-	// Closed transport will cause transport connection handler to
-	// return and thus calling client's close method.
-	return c.transport.Close(disconnect)
-}
-
-// close client connection with specific disconnect reason.
-func (c *Client) close(disconnect *Disconnect) error {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.mu.Lock()
@@ -466,15 +503,17 @@ func (c *Client) close(disconnect *Disconnect) error {
 	}
 	c.mu.Unlock()
 
+	// Send messages remaining in queue.
+	c.messageWriter.close()
+
+	c.transport.Close(disconnect)
+
 	if disconnect != nil && disconnect.Reason != "" {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": disconnect.Reason, "reconnect": disconnect.Reconnect}))
 	}
-
 	if disconnect != nil {
 		serverDisconnectCount.WithLabelValues(strconv.Itoa(disconnect.Code)).Inc()
 	}
-	c.transport.Close(disconnect)
-
 	if c.eventHub.disconnectHandler != nil {
 		c.eventHub.disconnectHandler(DisconnectEvent{
 			Disconnect: disconnect,
@@ -522,10 +561,10 @@ func (c *Client) clientInfo(ch string) *proto.ClientInfo {
 }
 
 // common data handling logic for Websocket and Sockjs handlers.
-func (c *Client) handleRawData(data []byte, writer *writer) bool {
+func (c *Client) handleRawData(data []byte) bool {
 	if len(data) == 0 {
 		c.node.logger.log(newLogEntry(LogLevelError, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-		c.close(DisconnectBadRequest)
+		c.Close(DisconnectBadRequest)
 		return false
 	}
 
@@ -541,7 +580,7 @@ func (c *Client) handleRawData(data []byte, writer *writer) bool {
 				break
 			}
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-			c.close(DisconnectBadRequest)
+			c.Close(DisconnectBadRequest)
 			proto.PutCommandDecoder(enc, decoder)
 			proto.PutReplyEncoder(enc, encoder)
 			return false
@@ -557,14 +596,14 @@ func (c *Client) handleRawData(data []byte, writer *writer) bool {
 		flush := func() error {
 			buf := encoder.Finish()
 			if len(buf) > 0 {
-				disconnect := writer.write(buf)
+				disconnect := c.messageWriter.enqueue(buf)
 				if disconnect != nil {
 					if c.node.logger.enabled(LogLevelDebug) {
 						c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 					}
 					proto.PutCommandDecoder(enc, decoder)
 					proto.PutReplyEncoder(enc, encoder)
-					c.close(disconnect)
+					c.Close(disconnect)
 					return fmt.Errorf("flush error")
 				}
 			}
@@ -574,25 +613,25 @@ func (c *Client) handleRawData(data []byte, writer *writer) bool {
 		disconnect := c.handle(cmd, write, flush)
 		if disconnect != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-			c.close(disconnect)
+			c.Close(disconnect)
 			proto.PutCommandDecoder(enc, decoder)
 			proto.PutReplyEncoder(enc, encoder)
 			return false
 		}
 		if encodeErr != nil {
-			c.close(DisconnectServerError)
+			c.Close(DisconnectServerError)
 			return false
 		}
 	}
 
 	buf := encoder.Finish()
 	if len(buf) > 0 {
-		disconnect := writer.write(buf)
+		disconnect := c.messageWriter.enqueue(buf)
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			}
-			c.close(disconnect)
+			c.Close(disconnect)
 			proto.PutCommandDecoder(enc, decoder)
 			proto.PutReplyEncoder(enc, encoder)
 			return false
@@ -732,7 +771,7 @@ func (c *Client) expire() {
 		return
 	}
 
-	c.close(DisconnectExpired)
+	c.Close(DisconnectExpired)
 }
 
 func (c *Client) handleConnect(params proto.Raw, rw *replyWriter) *Disconnect {
@@ -1689,7 +1728,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, rep
 		c.channels[ch] = channelContext
 		c.mu.Unlock()
 	}
-	return c.transport.Send(reply)
+	return c.transportSend(reply)
 }
 
 func (c *Client) writePublication(ch string, pub *Publication, reply *preparedReply) error {
@@ -1711,11 +1750,11 @@ func (c *Client) writePublication(ch string, pub *Publication, reply *preparedRe
 }
 
 func (c *Client) writeJoin(ch string, reply *preparedReply) error {
-	return c.transport.Send(reply)
+	return c.transportSend(reply)
 }
 
 func (c *Client) writeLeave(ch string, reply *preparedReply) error {
-	return c.transport.Send(reply)
+	return c.transportSend(reply)
 }
 
 func uniquePublications(s []*Publication) []*Publication {

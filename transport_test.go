@@ -120,7 +120,7 @@ func TestWriter(t *testing.T) {
 	w := newWriter(writerConfig{MaxMessagesInFrame: 4})
 	transport := newFakeTransport()
 	w.onWrite(transport.write)
-	disconnect := w.write([]byte("test"))
+	disconnect := w.enqueue([]byte("test"))
 	assert.Nil(t, disconnect)
 	<-transport.ch
 	assert.Equal(t, transport.count, 1)
@@ -132,7 +132,7 @@ func TestWriterDisconnect(t *testing.T) {
 	w := newWriter(writerConfig{MaxQueueSize: 1})
 	transport := newFakeTransport()
 	w.onWrite(transport.write)
-	disconnect := w.write([]byte("test"))
+	disconnect := w.enqueue([]byte("test"))
 	assert.NotNil(t, disconnect)
 }
 

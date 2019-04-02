@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strconv"
 	"strings"
 	"testing"
@@ -91,7 +92,7 @@ func TestClientClosedState(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
-	err := client.close(nil)
+	err := client.Close(nil)
 	assert.NoError(t, err)
 	assert.True(t, client.closed)
 }
@@ -350,7 +351,7 @@ func TestClientSubscribe(t *testing.T) {
 func TestClientSubscribeReceivePublication(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
-	transport.sink = make(chan *preparedReply, 100)
+	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
@@ -368,8 +369,8 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		for reply := range transport.sink {
-			if strings.Contains(string(reply.Data()), "test message") {
+		for data := range transport.sink {
+			if strings.Contains(string(data), "test message") {
 				close(done)
 			}
 		}
@@ -392,7 +393,7 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	config.HistorySize = 10
 	node.Reload(config)
 	transport := newTestTransport()
-	transport.sink = make(chan *preparedReply, 100)
+	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
@@ -411,24 +412,30 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		var seq uint32 = 1
-		for reply := range transport.sink {
-			if strings.Contains(string(reply.Data()), "test message") {
-				var push struct {
-					Result struct {
-						Channel string
-						Data    struct {
-							Seq uint32
+		for data := range transport.sink {
+			if strings.Contains(string(data), "test message") {
+				dec := json.NewDecoder(strings.NewReader(string(data)))
+				for {
+					var push struct {
+						Result struct {
+							Channel string
+							Data    struct {
+								Seq uint32
+							}
 						}
 					}
-				}
-				err := json.Unmarshal(reply.Data(), &push)
-				assert.NoError(t, err)
-				if push.Result.Data.Seq != seq {
-					assert.Fail(t, "wrong seq")
-				}
-				seq++
-				if seq > 3 {
-					close(done)
+					err := dec.Decode(&push)
+					if err == io.EOF {
+						break
+					}
+					assert.NoError(t, err)
+					if push.Result.Data.Seq != seq {
+						assert.Fail(t, "wrong seq")
+					}
+					seq++
+					if seq > 3 {
+						close(done)
+					}
 				}
 			}
 		}
@@ -829,11 +836,12 @@ func TestClientSend(t *testing.T) {
 	err := client.Send([]byte(`{}`))
 	assert.NoError(t, err)
 
-	err = transport.Close(nil)
+	err = client.Close(nil)
 	assert.NoError(t, err)
 
 	err = client.Send([]byte(`{}`))
 	assert.Error(t, err)
+	assert.Equal(t, io.EOF, err)
 }
 
 func TestClientClose(t *testing.T) {
@@ -848,7 +856,7 @@ func TestClientClose(t *testing.T) {
 	err := client.Close(DisconnectShutdown)
 	assert.NoError(t, err)
 	assert.True(t, transport.closed)
-	assert.Equal(t, client.disconnect, DisconnectShutdown)
+	assert.Equal(t, DisconnectShutdown, transport.disconnect)
 }
 
 func TestClientHandleMalformedCommand(t *testing.T) {

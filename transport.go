@@ -57,7 +57,7 @@ type Transport interface {
 type transport interface {
 	Transport
 	// Send sends data to session.
-	Send(*preparedReply) error
+	Write([]byte) error
 	// Close closes transport.
 	Close(*Disconnect) error
 }
@@ -155,7 +155,7 @@ func (w *writer) runWriteRoutine() {
 	}
 }
 
-func (w *writer) write(data []byte) *Disconnect {
+func (w *writer) enqueue(data []byte) *Disconnect {
 	ok := w.messages.Add(data)
 	if !ok {
 		return DisconnectNormal
