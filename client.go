@@ -160,6 +160,15 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 
 	config := n.Config()
 
+	c := &Client{
+		ctx:       ctx,
+		uid:       uuidObject.String(),
+		node:      n,
+		transport: t,
+		eventHub:  &ClientEventHub{},
+		pubBuffer: make([]*Publication, 0),
+	}
+
 	messageWriterConf := writerConfig{
 		MaxQueueSize: config.ClientQueueMaxSize,
 	}
@@ -170,7 +179,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 			payload := data[0]
 			err := t.Write(payload)
 			if err != nil {
-				go t.Close(DisconnectWriteError)
+				go c.Close(DisconnectWriteError)
 				return err
 			}
 			transportMessagesSent.WithLabelValues(t.Name()).Inc()
@@ -181,7 +190,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 			}
 			err := t.Write(buf.Bytes())
 			if err != nil {
-				go t.Close(DisconnectWriteError)
+				go c.Close(DisconnectWriteError)
 				putBuffer(buf)
 				return err
 			}
@@ -191,15 +200,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 		return nil
 	})
 
-	c := &Client{
-		ctx:           ctx,
-		uid:           uuidObject.String(),
-		node:          n,
-		transport:     t,
-		eventHub:      &ClientEventHub{},
-		pubBuffer:     make([]*Publication, 0),
-		messageWriter: messageWriter,
-	}
+	c.messageWriter = messageWriter
 
 	staleCloseDelay := config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !c.authenticated {
@@ -503,7 +504,7 @@ func (c *Client) Close(disconnect *Disconnect) error {
 	}
 	c.mu.Unlock()
 
-	// Send messages remaining in queue.
+	// Close writer and send messages remaining in writer queue if any.
 	c.messageWriter.close()
 
 	c.transport.Close(disconnect)
