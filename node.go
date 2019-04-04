@@ -92,6 +92,11 @@ func New(c Config) (*Node, error) {
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
 	}
+
+	if c.LogHandler != nil {
+		n.logger = newLogger(c.LogLevel, c.LogHandler)
+	}
+
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
 	return n, nil
@@ -106,12 +111,6 @@ func index(s string, numBuckets int) int {
 
 func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
-}
-
-// SetLogHandler sets LogHandler to handle log messages with
-// severity higher than specific LogLevel.
-func (n *Node) SetLogHandler(level LogLevel, handler LogHandler) {
-	n.logger = newLogger(level, handler)
 }
 
 // Config returns a copy of node Config.
@@ -917,29 +916,29 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 type NodeEventHub interface {
 	// Auth happens when client sends Connect command to server. In this handler client
 	// can reject connection or provide Credentials for it.
-	Auth(handler AuthHandler)
+	ClientConnecting(handler ConnectingHandler)
 	// Connect called after client connection has been successfully established,
 	// authenticated and connect reply already sent to client. This is a place
 	// where application should set all required connection event callbacks and
 	// can start communicating with client.
-	Connect(handler ConnectHandler)
+	ClientConnected(handler ConnectedHandler)
 }
 
 // nodeEventHub can deal with events binded to Node.
 // All its methods are not goroutine-safe.
 type nodeEventHub struct {
-	connectHandler ConnectHandler
-	authHandler    AuthHandler
+	connectingHandler ConnectingHandler
+	connectedHandler  ConnectedHandler
 }
 
-// Auth ...
-func (h *nodeEventHub) Auth(handler AuthHandler) {
-	h.authHandler = handler
+// ClientConnecting ...
+func (h *nodeEventHub) ClientConnecting(handler ConnectingHandler) {
+	h.connectingHandler = handler
 }
 
-// Connect allows to set ConnectHandler.
-func (h *nodeEventHub) Connect(handler ConnectHandler) {
-	h.connectHandler = handler
+// Connect allows to set ConnectedHandler.
+func (h *nodeEventHub) ClientConnected(handler ConnectedHandler) {
+	h.connectedHandler = handler
 }
 
 type brokerEventHandler struct {

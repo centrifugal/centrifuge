@@ -54,16 +54,16 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Auth(func(ctx context.Context, t centrifuge.Transport, e centrifuge.AuthEvent) centrifuge.AuthReply {
-		log.Printf("authenticating client connection over %s", t.Name())
-		return centrifuge.AuthReply{
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.Transport, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		log.Printf("authenticating client connection with id: %s dialed via %s (%s proto)", e.ClientID, t.Name(), t.Encoding())
+		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "72",
 			},
 		}
 	})
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -97,11 +97,8 @@ func main() {
 			return centrifuge.DisconnectReply{}
 		})
 
-		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+		log.Printf("client with id %s successfully connected as user %s", client.ID(), client.UserID())
 	})
-
-	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
