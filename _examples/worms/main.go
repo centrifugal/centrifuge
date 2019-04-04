@@ -48,11 +48,14 @@ func waitExitSignal(n *centrifuge.Node) {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
+
 	cfg.Anonymous = true
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
 			var ev event
@@ -78,8 +81,6 @@ func main() {
 
 		log.Printf("worm connected via %s", client.Transport().Name())
 	})
-
-	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
 	if err := node.Run(); err != nil {
 		panic(err)

@@ -781,8 +781,8 @@ func (c *Client) handleConnect(params proto.Raw, rw *replyWriter) *Disconnect {
 
 	rw.write(&proto.Reply{Result: replyRes})
 	rw.flush()
-	if c.node.eventHub.connectHandler != nil {
-		c.node.eventHub.connectHandler(c.ctx, c)
+	if c.node.eventHub.connectedHandler != nil {
+		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
 
 	return nil
@@ -1101,8 +1101,8 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	var credentials *Credentials
 	var authData proto.Raw
 
-	if c.node.eventHub.authHandler != nil {
-		reply := c.node.eventHub.authHandler(c.ctx, c.transport, AuthEvent{
+	if c.node.eventHub.connectingHandler != nil {
+		reply := c.node.eventHub.connectingHandler(c.ctx, c.transport, ConnectEvent{
 			ClientID: c.ID(),
 			Data:     cmd.Data,
 			Token:    cmd.Token,

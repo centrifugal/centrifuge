@@ -92,6 +92,11 @@ func New(c Config) (*Node, error) {
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
 	}
+
+	if c.LogHandler != nil {
+		n.logger = newLogger(c.LogLevel, c.LogHandler)
+	}
+
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
 	return n, nil
@@ -106,12 +111,6 @@ func index(s string, numBuckets int) int {
 
 func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
-}
-
-// SetLogHandler sets LogHandler to handle log messages with
-// severity higher than specific LogLevel.
-func (n *Node) SetLogHandler(level LogLevel, handler LogHandler) {
-	n.logger = newLogger(level, handler)
 }
 
 // Config returns a copy of node Config.
@@ -920,12 +919,12 @@ type NodeEventHub interface {
 	Session(handler SessionHandler)
 	// Auth happens when client sends Connect command to server. In this handler client
 	// can reject connection or provide Credentials for it.
-	Auth(handler AuthHandler)
+	ClientConnecting(handler ConnectingHandler)
 	// Connect called after client connection has been successfully established,
 	// authenticated and connect reply already sent to client. This is a place
 	// where application should set all required connection event callbacks and
 	// can start communicating with client.
-	Connect(handler ConnectHandler)
+	ClientConnected(handler ConnectedHandler)
 }
 
 // nodeEventHub can deal with events binded to Node.
@@ -936,9 +935,9 @@ type nodeEventHub struct {
 	// after connection established. Client can then react to Session push sending
 	// some data based on data in Session push in Connect command. This for example
 	// allows to digest auth over Centrifuge connection.
-	sessionHandler SessionHandler
-	authHandler    AuthHandler
-	connectHandler ConnectHandler
+	sessionHandler    SessionHandler
+	connectingHandler ConnectingHandler
+	connectedHandler  ConnectedHandler
 }
 
 // Session ...
@@ -946,36 +945,36 @@ func (h *nodeEventHub) Session(handler SessionHandler) {
 	h.sessionHandler = handler
 }
 
-// Auth ...
-func (h *nodeEventHub) Auth(handler AuthHandler) {
-	h.authHandler = handler
+// ClientConnecting ...
+func (h *nodeEventHub) ClientConnecting(handler ConnectingHandler) {
+	h.connectingHandler = handler
 }
 
-// Connect allows to set ConnectHandler.
-func (h *nodeEventHub) Connect(handler ConnectHandler) {
-	h.connectHandler = handler
+// Connect allows to set ConnectedHandler.
+func (h *nodeEventHub) ClientConnected(handler ConnectedHandler) {
+	h.connectedHandler = handler
 }
 
 type brokerEventHandler struct {
 	node *Node
 }
 
-// HandlePublication ...
+// HandlePublication allows to handle Publication from Broker.
 func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication) error {
 	return h.node.handlePublication(ch, pub)
 }
 
-// HandleJoin ...
+// HandleJoin allows to handle Join message from Broker.
 func (h *brokerEventHandler) HandleJoin(ch string, join *Join) error {
 	return h.node.handleJoin(ch, join)
 }
 
-// HandleLeave ...
+// HandleLeave allows to handle Leave message from Broker.
 func (h *brokerEventHandler) HandleLeave(ch string, leave *Leave) error {
 	return h.node.handleLeave(ch, leave)
 }
 
-// HandleControl ...
+// HandleControl allows to handle Control data from Broker.
 func (h *brokerEventHandler) HandleControl(data []byte) error {
 	return h.node.handleControl(data)
 }
