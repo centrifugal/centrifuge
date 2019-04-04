@@ -54,6 +54,8 @@ func main() {
 	// private subscriptions verified by token.
 	cfg.Secret = "secret"
 	cfg.Publish = true
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
@@ -71,7 +73,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
 			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
@@ -138,8 +140,6 @@ func main() {
 			}
 		}()
 	})
-
-	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)

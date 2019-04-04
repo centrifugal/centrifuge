@@ -103,7 +103,7 @@ func createCentrifugeNode() (*centrifuge.Node, error) {
 		return nil, err
 	}
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("client %s subscribes on channel %s", client.UserID(), e.Channel)

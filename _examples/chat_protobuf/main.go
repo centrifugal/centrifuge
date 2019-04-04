@@ -51,6 +51,8 @@ func main() {
 	// not required if you don't use token authentication and
 	// private subscriptions verified by token.
 	cfg.Secret = "secret"
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
@@ -65,7 +67,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -119,8 +121,6 @@ func main() {
 			}
 		}()
 	})
-
-	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
