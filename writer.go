@@ -7,15 +7,16 @@ import (
 )
 
 type writerConfig struct {
+	WriteFn            func(...[]byte) error
 	MaxQueueSize       int
 	MaxMessagesInFrame int
 }
 
 // writer helps to manage per-connection message queue.
 type writer struct {
-	mu       sync.Mutex
-	config   writerConfig
-	writeFn  func(...[]byte) error
+	mu     sync.Mutex
+	config writerConfig
+
 	messages queue.Queue
 	closed   bool
 }
@@ -83,13 +84,13 @@ func (w *writer) runWriteRoutine() {
 			}
 			if len(msgs) > 0 {
 				w.mu.Lock()
-				writeErr = w.writeFn(msgs...)
+				writeErr = w.config.WriteFn(msgs...)
 				w.mu.Unlock()
 			}
 		} else {
 			// Write single message without allocating new [][]byte slice.
 			w.mu.Lock()
-			writeErr = w.writeFn(msg)
+			writeErr = w.config.WriteFn(msg)
 			w.mu.Unlock()
 		}
 		if writeErr != nil {
@@ -110,10 +111,6 @@ func (w *writer) enqueue(data []byte) *Disconnect {
 	return nil
 }
 
-func (w *writer) onWrite(writeFn func(...[]byte) error) {
-	w.writeFn = writeFn
-}
-
 func (w *writer) close() error {
 	w.mu.Lock()
 	if w.closed {
@@ -126,7 +123,7 @@ func (w *writer) close() error {
 	remaining := w.messages.CloseRemaining()
 	if len(remaining) > 0 {
 		w.mu.Lock()
-		w.writeFn(remaining...)
+		w.config.WriteFn(remaining...)
 		w.mu.Unlock()
 	}
 

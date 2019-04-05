@@ -171,36 +171,35 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 
 	messageWriterConf := writerConfig{
 		MaxQueueSize: config.ClientQueueMaxSize,
-	}
-	messageWriter := newWriter(messageWriterConf)
-	messageWriter.onWrite(func(data ...[]byte) error {
-		if len(data) == 1 {
-			// no need in extra byte buffers in this path.
-			payload := data[0]
-			err := t.Write(payload)
-			if err != nil {
-				go c.Close(DisconnectWriteError)
-				return err
-			}
-			transportMessagesSent.WithLabelValues(t.Name()).Inc()
-		} else {
-			buf := getBuffer()
-			for _, payload := range data {
-				buf.Write(payload)
-			}
-			err := t.Write(buf.Bytes())
-			if err != nil {
-				go c.Close(DisconnectWriteError)
+		WriteFn: func(data ...[]byte) error {
+			if len(data) == 1 {
+				// no need in extra byte buffers in this path.
+				payload := data[0]
+				err := t.Write(payload)
+				if err != nil {
+					go c.Close(DisconnectWriteError)
+					return err
+				}
+				transportMessagesSent.WithLabelValues(t.Name()).Inc()
+			} else {
+				buf := getBuffer()
+				for _, payload := range data {
+					buf.Write(payload)
+				}
+				err := t.Write(buf.Bytes())
+				if err != nil {
+					go c.Close(DisconnectWriteError)
+					putBuffer(buf)
+					return err
+				}
 				putBuffer(buf)
-				return err
+				transportMessagesSent.WithLabelValues(t.Name()).Add(float64(len(data)))
 			}
-			putBuffer(buf)
-			transportMessagesSent.WithLabelValues(t.Name()).Add(float64(len(data)))
-		}
-		return nil
-	})
+			return nil
+		},
+	}
 
-	c.messageWriter = messageWriter
+	c.messageWriter = newWriter(messageWriterConf)
 
 	staleCloseDelay := config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !c.authenticated {
