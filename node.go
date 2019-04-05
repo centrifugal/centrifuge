@@ -911,41 +911,50 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 }
 
 // NodeEventHub can deal with events binded to Node.
-// All its methods are not goroutine-safe as handlers must be
-// registered once before Node Run method called.
+// All methods are not goroutine-safe as handlers must be
+// called to register event handlers once before Node Run
+// method called.
+//
+// Client connection related events happen according to the
+// following timeline:
+// -- ClientSession -- ClientConnecting -- ClientConnected --
 type NodeEventHub interface {
-	// Session allows to set custom handler to generate data to be sent to client
-	// in Session push.
-	Session(handler SessionHandler)
-	// Auth happens when client sends Connect command to server. In this handler client
-	// can reject connection or provide Credentials for it.
+	// ClientSession allows to set custom handler to generate data to be sent to client
+	// in Session push. This step is optional and only required when you need to send
+	// first message from server to client (Session Push). Client can then react to Session
+	// push sending some data based on data in Session push in Connect command. This for
+	// example allows to implement digest auth over Centrifuge connection.
+	// By default Session Push is not used and client sends first message to server with
+	// Connect command.
+	ClientSession(handler SessionHandler)
+	// ClientConnecting happens when client sends Connect command to server. In this
+	// handler server can reject connection or optionally provide authentication
+	// Credentials for it.
 	ClientConnecting(handler ConnectingHandler)
-	// Connect called after client connection has been successfully established,
-	// authenticated and connect reply already sent to client. This is a place
+	// ClientConnected called after client connection has been successfully established,
+	// authenticated and Connect Reply already sent to client. This is a place
 	// where application should set all required connection event callbacks and
-	// can start communicating with client.
+	// can start communicating with client - for example send asynchronous messages to it.
 	ClientConnected(handler ConnectedHandler)
 }
 
 // nodeEventHub can deal with events binded to Node.
 // All its methods are not goroutine-safe.
 type nodeEventHub struct {
-	// sessionHandler allows to set Session resolver to node. SessionResolver
+	// sessionHandler is an optional SessionHandler. Session
 	// can be used when you want server to send client Session push with some data
-	// after connection established. Client can then react to Session push sending
-	// some data based on data in Session push in Connect command. This for example
-	// allows to digest auth over Centrifuge connection.
+	// after connection established.
 	sessionHandler    SessionHandler
 	connectingHandler ConnectingHandler
 	connectedHandler  ConnectedHandler
 }
 
-// Session ...
-func (h *nodeEventHub) Session(handler SessionHandler) {
+// ClientSession allows to set SessionHandler.
+func (h *nodeEventHub) ClientSession(handler SessionHandler) {
 	h.sessionHandler = handler
 }
 
-// ClientConnecting ...
+// ClientConnecting allows to set ConnectingHandler.
 func (h *nodeEventHub) ClientConnecting(handler ConnectingHandler) {
 	h.connectingHandler = handler
 }

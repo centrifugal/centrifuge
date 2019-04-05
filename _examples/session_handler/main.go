@@ -51,6 +51,8 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 
 	cfg := centrifuge.DefaultConfig
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
@@ -67,7 +69,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Session(func(ctx context.Context, t centrifuge.Transport, e centrifuge.SessionEvent) centrifuge.SessionReply {
+	node.On().ClientSession(func(ctx context.Context, t centrifuge.Transport, e centrifuge.SessionEvent) centrifuge.SessionReply {
 		nonce := randString(10)
 		log.Printf("sending nonce to client: %s", nonce)
 		ctx = context.WithValue(ctx, nonceContextKey, nonce)
@@ -77,7 +79,7 @@ func main() {
 		}
 	})
 
-	node.On().Auth(func(ctx context.Context, t centrifuge.Transport, e centrifuge.AuthEvent) centrifuge.AuthReply {
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.Transport, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		log.Printf("authenticating client connection over %s", t.Name())
 
 		var data struct {
@@ -86,18 +88,18 @@ func main() {
 		json.Unmarshal(e.Data, &data)
 
 		if nonceSent, ok := ctx.Value(nonceContextKey).(string); ok && strings.ToUpper(nonceSent) == data.Digest {
-			return centrifuge.AuthReply{
+			return centrifuge.ConnectReply{
 				Credentials: &centrifuge.Credentials{
 					UserID: "97",
 				},
 			}
 		}
-		return centrifuge.AuthReply{
+		return centrifuge.ConnectReply{
 			Disconnect: centrifuge.DisconnectBadRequest,
 		}
 	})
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -122,8 +124,6 @@ func main() {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
 	})
-
-	node.SetLogHandler(centrifuge.LogLevelDebug, handleLog)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)

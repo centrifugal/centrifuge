@@ -166,9 +166,11 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 			c.ctx = sessionReply.Context
 			c.mu.Unlock()
 		}
-		err := c.sendSession(sessionReply.Data)
-		if err != nil {
-			return nil, err
+		if sessionReply.Data != nil {
+			err := c.sendSession(sessionReply.Data)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
