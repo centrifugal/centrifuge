@@ -228,7 +228,7 @@ func (c *Client) sendSession(data Raw) error {
 		Result: result,
 	}, c.transport.Encoding())
 
-	c.transport.Send(reply)
+	c.transportSend(reply)
 
 	return nil
 }
