@@ -12,23 +12,24 @@ import (
 )
 
 type testTransport struct {
-	mu     sync.Mutex
-	sink   chan *preparedReply
-	closed bool
+	mu         sync.Mutex
+	sink       chan []byte
+	closed     bool
+	disconnect *Disconnect
 }
 
 func newTestTransport() *testTransport {
 	return &testTransport{}
 }
 
-func (t *testTransport) Send(rep *preparedReply) error {
+func (t *testTransport) Write(data []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return io.EOF
 	}
 	if t.sink != nil {
-		t.sink <- rep
+		t.sink <- data
 	}
 	return nil
 }
@@ -48,6 +49,7 @@ func (t *testTransport) Info() TransportInfo {
 func (t *testTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.disconnect = disconnect
 	t.closed = true
 	return nil
 }
@@ -100,4 +102,11 @@ func TestHubSubscriptions(t *testing.T) {
 	assert.Equal(t, h.NumChannels(), 0)
 	assert.False(t, h.NumSubscribers("test1") > 0)
 	assert.False(t, h.NumSubscribers("test2") > 0)
+}
+
+func TestPreparedReply(t *testing.T) {
+	reply := proto.Reply{}
+	prepared := newPreparedReply(&reply, proto.EncodingJSON)
+	data := prepared.Data()
+	assert.NotNil(t, data)
 }
