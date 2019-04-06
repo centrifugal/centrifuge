@@ -85,10 +85,12 @@ func init() {
 func main() {
 	cfg := centrifuge.DefaultConfig
 	cfg.Publish = true
+	cfg.LogLevel = centrifuge.LogLevelError
+	cfg.LogHandler = handleLog
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -122,10 +124,7 @@ func main() {
 		})
 
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), client.Transport().Name(), client.Transport().Encoding())
-		return centrifuge.ConnectReply{}
 	})
-
-	node.SetLogHandler(centrifuge.LogLevelError, handleLog)
 
 	if err := node.Run(); err != nil {
 		panic(err)

@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	_ "net/http/pprof"
@@ -15,25 +13,8 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-var (
-	port = flag.Int("port", 8000, "Port to bind app to")
-)
-
 func handleLog(e centrifuge.LogEntry) {
-	log.Printf("[centrifuge] %s: %v", e.Message, e.Fields)
-}
-
-func authMiddleware(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Our middleware logic goes here...
-		ctx := r.Context()
-		ctx = centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID: "42",
-			Info:   []byte(`{"name": "Alexander"}`),
-		})
-		r = r.WithContext(ctx)
-		h.ServeHTTP(w, r)
-	})
+	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -49,18 +30,21 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
-	flag.Parse()
-
 	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
+
+	// Set secret to handle requests with JWT auth too. This is
+	// not required if you don't use token authentication and
+	// private subscriptions verified by token.
+	cfg.Secret = "secret"
+	cfg.Publish = true
+
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:         true,
-				JoinLeave:       true,
 				Presence:        true,
+				JoinLeave:       true,
 				HistoryLifetime: 60,
 				HistorySize:     1000,
 				HistoryRecover:  true,
@@ -69,6 +53,15 @@ func main() {
 	}
 
 	node, _ := centrifuge.New(cfg)
+
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.Transport, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		log.Printf("authenticating client connection with id: %s dialed via %s (%s proto)", e.ClientID, t.Name(), t.Encoding())
+		return centrifuge.ConnectReply{
+			Credentials: &centrifuge.Credentials{
+				UserID: "72",
+			},
+		}
+	})
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
@@ -87,42 +80,35 @@ func main() {
 			return centrifuge.PublishReply{}
 		})
 
+		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
+			log.Printf("RPC from user: %s, data: %s", client.UserID(), string(e.Data))
+			return centrifuge.RPCReply{
+				Data: []byte(`{"year": "2018"}`),
+			}
+		})
+
+		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
+			log.Printf("Message from user: %s, data: %s", client.UserID(), string(e.Data))
+			return centrifuge.MessageReply{}
+		})
+
 		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
 			log.Printf("user %s disconnected, disconnect: %#v", client.UserID(), e.Disconnect)
 			return centrifuge.DisconnectReply{}
 		})
 
-		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+		log.Printf("client with id %s successfully connected as user %s", client.ID(), client.UserID())
 	})
-
-	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		PublishOnHistoryAdd: false,
-		Shards: []centrifuge.RedisShardConfig{
-			centrifuge.RedisShardConfig{
-				Host: "localhost",
-				Port: 6379,
-			},
-			centrifuge.RedisShardConfig{
-				Host: "localhost",
-				Port: 6380,
-			},
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	node.SetEngine(engine)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
-		if err := http.ListenAndServe(":"+strconv.Itoa(*port), nil); err != nil {
+		if err := http.ListenAndServe(":8000", nil); err != nil {
 			log.Fatal(err)
 		}
 	}()

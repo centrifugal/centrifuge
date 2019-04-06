@@ -43,7 +43,6 @@ type TestCaseFunc func(fn ResolveFunc) *centrifuge.Node
 // RegisterTestCase ...
 func RegisterTestCase(ctx context.Context, port int, tc TestCaseFunc, name string, auth bool) {
 	n := tc(handleTestResult(name))
-	n.SetLogHandler(centrifuge.LogLevelError, handleLog)
 
 	if err := n.Run(); err != nil {
 		panic(err)
@@ -74,16 +73,17 @@ func RegisterTestCase(ctx context.Context, port int, tc TestCaseFunc, name strin
 
 func testCustomHeader(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 		authHeader := client.Transport().Info().Request.Header.Get("Authorization")
 		if authHeader != "testsuite" {
 			fn(fmt.Errorf("No valid Authorization header found"))
 		} else {
 			fn(nil)
 		}
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
@@ -93,25 +93,28 @@ func testJWTAuth(fn ResolveFunc) *centrifuge.Node {
 	// eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0c3VpdGVfand0In0.hPmHsVqvtY88PvK4EmJlcdwNuKFuy3BGaF7dMaKdPlw
 	cfg := centrifuge.DefaultConfig
 	cfg.Secret = "secret"
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 		if client.UserID() != "testsuite_jwt" {
 			fn(fmt.Errorf("Wrong user id: %s", client.UserID()))
 		} else {
 			fn(nil)
 		}
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
 
 func testSimpleSubscribe(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
@@ -122,8 +125,6 @@ func testSimpleSubscribe(fn ResolveFunc) *centrifuge.Node {
 			}
 			return centrifuge.SubscribeReply{}
 		})
-
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
@@ -134,6 +135,8 @@ type testsuiteMessage struct {
 
 func testReceiveRPCReceiveMessageJSON(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
 	node, _ := centrifuge.New(cfg)
 
 	message := testsuiteMessage{
@@ -141,7 +144,7 @@ func testReceiveRPCReceiveMessageJSON(fn ResolveFunc) *centrifuge.Node {
 	}
 	jsonData, _ := json.Marshal(message)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
@@ -163,19 +166,19 @@ func testReceiveRPCReceiveMessageJSON(fn ResolveFunc) *centrifuge.Node {
 			}
 			return centrifuge.MessageReply{}
 		})
-
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
 
 func testReceiveRPCReceiveMessageProtobuf(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
+	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogHandler = handleLog
 	node, _ := centrifuge.New(cfg)
 
 	message := []byte("boom 👻 boom")
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
@@ -192,8 +195,6 @@ func testReceiveRPCReceiveMessageProtobuf(fn ResolveFunc) *centrifuge.Node {
 			}
 			return centrifuge.MessageReply{}
 		})
-
-		return centrifuge.ConnectReply{}
 	})
 	return node
 }
