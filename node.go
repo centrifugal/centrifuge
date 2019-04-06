@@ -941,9 +941,6 @@ type NodeEventHub interface {
 // nodeEventHub can deal with events binded to Node.
 // All its methods are not goroutine-safe.
 type nodeEventHub struct {
-	// sessionHandler is an optional SessionHandler. Session
-	// can be used when you want server to send client Session push with some data
-	// after connection established.
 	sessionHandler    SessionHandler
 	connectingHandler ConnectingHandler
 	connectedHandler  ConnectedHandler

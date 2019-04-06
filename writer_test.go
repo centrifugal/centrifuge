@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -74,8 +73,10 @@ func runWrite(w *writer, t *benchmarkTransport) {
 func BenchmarkWriteMerge(b *testing.B) {
 	transport := newBenchmarkTransport()
 	defer transport.close()
-	writer := newWriter(writerConfig{MaxMessagesInFrame: 4})
-	writer.onWrite(transport.writeCombined)
+	writer := newWriter(writerConfig{
+		MaxMessagesInFrame: 4,
+		WriteFn:            transport.writeCombined,
+	})
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -87,8 +88,7 @@ func BenchmarkWriteMerge(b *testing.B) {
 func BenchmarkWriteMergeDisabled(b *testing.B) {
 	transport := newBenchmarkTransport()
 	defer transport.close()
-	writer := newWriter(writerConfig{MaxMessagesInFrame: 1})
-	writer.onWrite(transport.writeCombined)
+	writer := newWriter(writerConfig{MaxMessagesInFrame: 1, WriteFn: transport.writeCombined})
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -117,10 +117,9 @@ func (t *fakeTransport) write(bufs ...[]byte) error {
 }
 
 func TestWriter(t *testing.T) {
-	w := newWriter(writerConfig{MaxMessagesInFrame: 4})
 	transport := newFakeTransport()
-	w.onWrite(transport.write)
-	disconnect := w.write([]byte("test"))
+	w := newWriter(writerConfig{MaxMessagesInFrame: 4, WriteFn: transport.write})
+	disconnect := w.enqueue([]byte("test"))
 	assert.Nil(t, disconnect)
 	<-transport.ch
 	assert.Equal(t, transport.count, 1)
@@ -129,16 +128,8 @@ func TestWriter(t *testing.T) {
 }
 
 func TestWriterDisconnect(t *testing.T) {
-	w := newWriter(writerConfig{MaxQueueSize: 1})
 	transport := newFakeTransport()
-	w.onWrite(transport.write)
-	disconnect := w.write([]byte("test"))
+	w := newWriter(writerConfig{MaxQueueSize: 1, WriteFn: transport.write})
+	disconnect := w.enqueue([]byte("test"))
 	assert.NotNil(t, disconnect)
-}
-
-func TestReply(t *testing.T) {
-	reply := proto.Reply{}
-	prepared := newPreparedReply(&reply, proto.EncodingJSON)
-	data := prepared.Data()
-	assert.NotNil(t, data)
 }

@@ -7,6 +7,34 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 )
 
+// preparedReply is structure for encoding reply only once.
+type preparedReply struct {
+	Enc   proto.Encoding
+	Reply *proto.Reply
+	data  []byte
+	once  sync.Once
+}
+
+// newPreparedReply initializes PreparedReply.
+func newPreparedReply(reply *proto.Reply, enc proto.Encoding) *preparedReply {
+	return &preparedReply{
+		Reply: reply,
+		Enc:   enc,
+	}
+}
+
+// Data returns data associated with reply which is only calculated once.
+func (r *preparedReply) Data() []byte {
+	r.once.Do(func() {
+		encoder := proto.GetReplyEncoder(r.Enc)
+		encoder.Encode(r.Reply)
+		data := encoder.Finish()
+		proto.PutReplyEncoder(r.Enc, encoder)
+		r.data = data
+	})
+	return r.data
+}
+
 // Hub manages client connections.
 type Hub struct {
 	mu sync.RWMutex
@@ -68,7 +96,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 		go func(cc *Client) {
 			defer func() { <-sem }()
 			defer func() { closeFinishedCh <- struct{}{} }()
-			cc.close(advice)
+			cc.Close(advice)
 		}(client)
 	}
 
@@ -87,10 +115,13 @@ func (h *Hub) shutdown(ctx context.Context) error {
 
 func (h *Hub) disconnect(user string, reconnect bool) error {
 	userConnections := h.userConnections(user)
-	advice := &Disconnect{Reason: "disconnect", Reconnect: reconnect}
+	advice := DisconnectForceNoReconnect
+	if reconnect {
+		advice = DisconnectForceReconnect
+	}
 	for _, c := range userConnections {
 		go func(cc *Client) {
-			cc.close(advice)
+			cc.Close(advice)
 		}(c)
 	}
 	return nil
