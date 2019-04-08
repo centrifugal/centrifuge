@@ -24,6 +24,11 @@
                 var container = $('#messages');
 
                 var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
+                    // Define onSessionData callback which will be called as soon as
+                    // Session push received from server after dialing to server. If this
+                    // callback is not set then client won't wait Session push and will 
+                    // work the usual way when first message (Connect command) is sent 
+                    // from client to server. 
                     onSessionData: function(c, data) {
                         let sessData = data["nounce"];
                         c.setConnectData({"digest": sessData.toUpperCase()});

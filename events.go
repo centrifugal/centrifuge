@@ -14,7 +14,8 @@ type SessionEvent struct {
 // Disconnect if provived allows to close connection, Data is a custom data
 // to send in Session push.
 type SessionReply struct {
-	// Context allows to return new context most probobly derived from previous context.
+	// Context allows to return new context most probably derived from
+	// previous context.
 	Context context.Context
 	// Disconnect client.
 	Disconnect *Disconnect
@@ -44,8 +45,8 @@ type ConnectReply struct {
 	// Disconnect client.
 	Disconnect *Disconnect
 	// Credentials should be set if app wants to authenticate connection.
-	// This field still optional as auth could be provided through HTTP middleware
-	// or via JWT token.
+	// This field still optional as auth could be provided through HTTP
+	// middleware or via JWT token.
 	Credentials *Credentials
 	// Data allows to set custom data in connect reply.
 	Data Raw

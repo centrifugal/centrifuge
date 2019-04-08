@@ -2,6 +2,8 @@ Example demonstrates oversimplified digest auth workflow.
 
 Server sends random string in first message and expects it to be transformed to upper case by client. If condition is valid client connection is accepted, otherwise disconnected.
 
+Also note that client library must be configured to wait session message from server.
+
 To start example locally install dependencies first:
 
 ```
