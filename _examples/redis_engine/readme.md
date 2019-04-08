@@ -21,13 +21,13 @@ redis-server --port 6380
 Then start 2 instances of this app on different ports:
 
 ```
-go run main.go -port 8000
+GO111MODULE=on go run main.go -port 8000
 ```
 
 And:
 
 ```
-go run main.go -port 8001
+GO111MODULE=on go run main.go -port 8001
 ```
 
 Then go to http://localhost:8000 and to http://localhost:8001 in another browser tab. You will see simple chat app in both browser tabs, try writing a chat message in one browser tab and you should see it appears in another tab.

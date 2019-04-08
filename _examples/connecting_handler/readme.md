@@ -1,10 +1,9 @@
 Example demonstrates using auth event handler.
 
-To start example locally install dependencies first:
+To start example run the following command from example directory:
 
 ```
-dep init
-dep ensure
+GO111MODULE=on go run main.go
 ```
 
 Then go to http://localhost:8000 to see Websocket connection in action.
