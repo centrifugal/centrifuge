@@ -21,6 +21,7 @@ Features:
 * History information for channels (last messages published into channel)
 * Join/leave events for channels (aka client goes online/offline)
 * Message recovery mechanism for channels to survive short network disconnects or node restart
+* Prometheus instrumentation
 * Client libraries for main application environments (see below)
 
 Client libraries:
