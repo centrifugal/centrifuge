@@ -1716,8 +1716,8 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	return nil
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, reply *preparedReply) error {
-	if pub.Seq > 0 || pub.Gen > 0 {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, reply *preparedReply, chOpts *ChannelOptions) error {
+	if chOpts.HistoryRecover {
 		c.mu.Lock()
 		channelContext, ok := c.channels[ch]
 		if !ok {
@@ -1739,7 +1739,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, rep
 	return c.transportSend(reply)
 }
 
-func (c *Client) writePublication(ch string, pub *Publication, reply *preparedReply) error {
+func (c *Client) writePublication(ch string, pub *Publication, reply *preparedReply, chOpts *ChannelOptions) error {
 	if c.isInSubscribe(ch) {
 		// Client currently in process of subscribing to this channel. In this case we keep
 		// publications in slice buffer. Publications from this temporary buffer will be sent in
@@ -1749,12 +1749,12 @@ func (c *Client) writePublication(ch string, pub *Publication, reply *preparedRe
 			c.pubBuffer = append(c.pubBuffer, pub)
 		} else {
 			c.pubBufferMu.Unlock()
-			return c.writePublicationUpdatePosition(ch, pub, reply)
+			return c.writePublicationUpdatePosition(ch, pub, reply, chOpts)
 		}
 		c.pubBufferMu.Unlock()
 		return nil
 	}
-	return c.writePublicationUpdatePosition(ch, pub, reply)
+	return c.writePublicationUpdatePosition(ch, pub, reply, chOpts)
 }
 
 func (c *Client) writeJoin(ch string, reply *preparedReply) error {

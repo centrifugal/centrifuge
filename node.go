@@ -419,7 +419,11 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastPublication(ch, pub)
+	chOpts, ok := n.ChannelOpts(ch)
+	if !ok {
+		return ErrNoChannelOptions
+	}
+	return n.hub.broadcastPublication(ch, pub, &chOpts)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
