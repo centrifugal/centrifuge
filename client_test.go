@@ -336,6 +336,7 @@ func TestClientSubscribe(t *testing.T) {
 	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "test2",
 	}, rw)
+	assert.Nil(t, disconnect)
 	assert.Equal(t, 2, len(client.Channels()))
 	assert.Equal(t, 1, node.Hub().NumClients())
 	assert.Equal(t, 2, node.Hub().NumChannels())
@@ -890,16 +891,16 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 
 func TestUnique(t *testing.T) {
 	pubs := []*Publication{
-		&Publication{Seq: 101, Gen: 0},
-		&Publication{Seq: 101, Gen: 1},
-		&Publication{Seq: 101, Gen: 1},
-		&Publication{Seq: 100, Gen: 2},
-		&Publication{Seq: 99},
-		&Publication{Seq: 98},
-		&Publication{Seq: 4294967295, Gen: 0},
-		&Publication{Seq: 4294967295, Gen: 1},
-		&Publication{Seq: 4294967295, Gen: 4294967295},
-		&Publication{Seq: 4294967295, Gen: 4294967295},
+		{Seq: 101, Gen: 0},
+		{Seq: 101, Gen: 1},
+		{Seq: 101, Gen: 1},
+		{Seq: 100, Gen: 2},
+		{Seq: 99},
+		{Seq: 98},
+		{Seq: 4294967295, Gen: 0},
+		{Seq: 4294967295, Gen: 1},
+		{Seq: 4294967295, Gen: 4294967295},
+		{Seq: 4294967295, Gen: 4294967295},
 	}
 	pubs = uniquePublications(pubs)
 	assert.Equal(t, 8, len(pubs))

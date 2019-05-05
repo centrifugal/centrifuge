@@ -117,8 +117,8 @@ func TestCaseAbstractRecover02(t *testing.T) {
 
 func TestCaseAbstractRecover03(t *testing.T) {
 	s := newTestStore()
-	seq1, gen := s.add(testMessage{})
-	_, gen = s.add(testMessage{})
+	seq1, _ := s.add(testMessage{})
+	_, gen := s.add(testMessage{})
 	messages, recovered := s.recover(seq1, gen)
 	assert.Equal(t, 1, len(messages))
 	assert.True(t, recovered)

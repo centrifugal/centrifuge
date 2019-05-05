@@ -107,7 +107,7 @@ func TestRedisEngine(t *testing.T) {
 
 	pub := newTestPublication()
 
-	err = e.Publish("channel", pub, nil)
+	assert.NoError(t, e.Publish("channel", pub, nil))
 	assert.NoError(t, e.Publish("channel", pub, nil))
 	assert.NoError(t, e.Subscribe("channel"))
 	assert.NoError(t, e.Unsubscribe("channel"))
@@ -582,6 +582,9 @@ func BenchmarkRedisEnginePublishWithHistory(b *testing.B) {
 		chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 		var err error
 		pub, err = e.AddHistory("channel", pub, chOpts)
+		if err != nil {
+			panic(err)
+		}
 		err = e.Publish("channel", pub, chOpts)
 		if err != nil {
 			panic(err)
@@ -600,6 +603,9 @@ func BenchmarkRedisEnginePublishWithHistoryParallel(b *testing.B) {
 			chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 			var err error
 			pub, err = e.AddHistory("channel", pub, chOpts)
+			if err != nil {
+				panic(err)
+			}
 			err = e.Publish("channel", pub, chOpts)
 			if err != nil {
 				panic(err)

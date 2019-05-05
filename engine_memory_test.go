@@ -217,6 +217,9 @@ func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
 		chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 		var err error
 		pub, err = e.AddHistory("channel", pub, chOpts)
+		if err != nil {
+			panic(err)
+		}
 		err = e.Publish("channel", pub, chOpts)
 		if err != nil {
 			panic(err)
@@ -235,6 +238,9 @@ func BenchmarkMemoryEnginePublishWithHistoryParallel(b *testing.B) {
 			chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 			var err error
 			pub, err = e.AddHistory("channel", pub, chOpts)
+			if err != nil {
+				panic(err)
+			}
 			err = e.Publish("channel", pub, chOpts)
 			if err != nil {
 				panic(err)
