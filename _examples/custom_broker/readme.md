@@ -5,8 +5,8 @@ Note that it's also possible to run this example without Redis at all (for examp
 Start Nats server locally:
 
 ```
-go get github.com/nats-io/gnatsd
-gnatsd
+go get github.com/nats-io/nats-server
+nats-server
 ```
 
 And start Redis:
