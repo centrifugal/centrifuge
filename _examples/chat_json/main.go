@@ -73,14 +73,13 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.Transport, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		return centrifuge.ConnectReply{
+			Data: centrifuge.Raw(`{}`),
+		}
+	})
 
-		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			return centrifuge.RefreshReply{
-				ExpireAt: time.Now().Unix() + 10,
-			}
-		})
+	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -139,6 +138,13 @@ func main() {
 				time.Sleep(5 * time.Second)
 			}
 		}()
+	})
+
+	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 10,
+		}
 	})
 
 	if err := node.Run(); err != nil {
