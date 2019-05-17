@@ -96,13 +96,6 @@ func main() {
 			return centrifuge.MessageReply{}
 		})
 
-		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			return centrifuge.RefreshReply{
-				ExpireAt: time.Now().Unix() + 60,
-			}
-		})
-
 		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
 			log.Printf("user %s disconnected, disconnect: %#v", client.UserID(), e.Disconnect)
 			return centrifuge.DisconnectReply{}
@@ -120,6 +113,13 @@ func main() {
 				log.Fatalln(err.Error())
 			}
 		}()
+	})
+
+	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 10,
+		}
 	})
 
 	if err := node.Run(); err != nil {
