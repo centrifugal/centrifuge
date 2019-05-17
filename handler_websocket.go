@@ -257,7 +257,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		default:
 		}
 
-		c, err := newClient(r.Context(), s.node, transport)
+		c, err := NewClient(r.Context(), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
 			return

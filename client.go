@@ -124,8 +124,8 @@ type Client struct {
 	messageWriter *writer
 }
 
-// newClient initializes new Client.
-func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
+// NewClient initializes new Client.
+func NewClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 	uuidObject, err := uuid.NewV4()
 	if err != nil {
 		return nil, err
@@ -140,6 +140,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 		transport: t,
 		eventHub:  &ClientEventHub{},
 		pubBuffer: make([]*Publication, 0),
+		channels:  make(map[string]ChannelContext),
 	}
 
 	messageWriterConf := writerConfig{
@@ -182,6 +183,97 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 	}
 
 	return c, nil
+}
+
+// NewConnectedClient initializes new Client.
+func NewConnectedClient(ctx context.Context, n *Node, t transport) (*Client, error) {
+	uuidObject, err := uuid.NewV4()
+	if err != nil {
+		return nil, err
+	}
+
+	config := n.Config()
+
+	c := &Client{
+		ctx:       ctx,
+		uid:       uuidObject.String(),
+		node:      n,
+		transport: t,
+		eventHub:  &ClientEventHub{},
+		pubBuffer: make([]*Publication, 0),
+		channels:  make(map[string]ChannelContext),
+	}
+
+	messageWriterConf := writerConfig{
+		MaxQueueSize: config.ClientQueueMaxSize,
+		WriteFn: func(data ...[]byte) error {
+			if len(data) == 1 {
+				// no need in extra byte buffers in this path.
+				payload := data[0]
+				err := t.Write(payload)
+				if err != nil {
+					go c.Close(DisconnectWriteError)
+					return err
+				}
+				transportMessagesSent.WithLabelValues(t.Name()).Inc()
+			} else {
+				buf := getBuffer()
+				for _, payload := range data {
+					buf.Write(payload)
+				}
+				err := t.Write(buf.Bytes())
+				if err != nil {
+					go c.Close(DisconnectWriteError)
+					putBuffer(buf)
+					return err
+				}
+				putBuffer(buf)
+				transportMessagesSent.WithLabelValues(t.Name()).Add(float64(len(data)))
+			}
+			return nil
+		},
+	}
+
+	c.messageWriter = newWriter(messageWriterConf)
+
+	err = c.Connect()
+	if err != nil {
+		c.Close(DisconnectServerError)
+		return nil, err
+	}
+
+	return c, nil
+}
+
+// Connect ...
+func (c *Client) Connect() error {
+	resp, _ := c.connectCmd(&proto.ConnectRequest{})
+	if resp.Error != nil {
+		return resp.Error
+	}
+	if c.node.eventHub.connectedHandler != nil {
+		c.node.eventHub.connectedHandler(c.ctx, c)
+	}
+	return nil
+}
+
+// Subscribe ...
+func (c *Client) Subscribe(channel string) error {
+	c.subscribeCmd(&proto.SubscribeRequest{
+		Channel: channel,
+	}, dummyReplyWriter())
+	return nil
+}
+
+func dummyReplyWriter() *replyWriter {
+	return &replyWriter{
+		write: func(rep *proto.Reply) error {
+			return nil
+		},
+		flush: func() error {
+			return nil
+		},
+	}
 }
 
 // closeUnauthenticated closes connection if it's not authenticated yet.
@@ -1246,7 +1338,6 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	// Client successfully connected.
 	c.mu.Lock()
 	c.authenticated = true
-	c.channels = make(map[string]ChannelContext)
 	if c.staleTimer != nil {
 		c.staleTimer.Stop()
 	}

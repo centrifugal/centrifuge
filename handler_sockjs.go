@@ -152,7 +152,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 		default:
 		}
 
-		c, err := newClient(sess.Request().Context(), s.node, transport)
+		c, err := NewClient(sess.Request().Context(), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportSockJS}))
 			return
