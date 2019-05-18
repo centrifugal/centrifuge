@@ -104,7 +104,7 @@ func main() {
 						log.Println(err.Error())
 					}
 				}
-				time.Sleep(1 * time.Second)
+				time.Sleep(5 * time.Second)
 			}
 		}()
 	})
@@ -114,10 +114,10 @@ func main() {
 	}
 
 	http.Handle("/connection/eventsource", authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(http.StatusOK)
 
 		transport := &eventsourceTransport{
 			messages: make(chan []byte, 128),
@@ -131,10 +131,20 @@ func main() {
 		}
 		defer client.Close(nil)
 
-		// err = client.Subscribe("chat:index")
-		// if err != nil {
-		// 	return
-		// }
+		subErr, disconnect := client.Subscribe("chat:index")
+		if disconnect != nil {
+			if !disconnect.Reconnect {
+				// Non-200 status code says client to stop reconnecting.
+				w.WriteHeader(http.StatusBadRequest)
+			}
+			return
+		}
+		if subErr != nil {
+			log.Printf("subscribe error: %v", err)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
 
 		flusher := w.(http.Flusher)
 		notifier := w.(http.CloseNotifier)

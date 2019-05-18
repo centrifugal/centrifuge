@@ -258,22 +258,28 @@ func (c *Client) Connect() error {
 }
 
 // Subscribe ...
-func (c *Client) Subscribe(channel string) error {
-	c.subscribeCmd(&proto.SubscribeRequest{
+func (c *Client) Subscribe(channel string) (*Error, *Disconnect) {
+	var subError *Error
+	disconnect := c.subscribeCmd(&proto.SubscribeRequest{
 		Channel: channel,
-	}, dummyReplyWriter())
-	return nil
-}
-
-func dummyReplyWriter() *replyWriter {
-	return &replyWriter{
+	}, &replyWriter{
 		write: func(rep *proto.Reply) error {
+			if rep.Error != nil {
+				subError = rep.Error
+			}
 			return nil
 		},
 		flush: func() error {
 			return nil
 		},
+	})
+	if disconnect != nil {
+		return nil, disconnect
 	}
+	if subError != nil {
+		return subError, nil
+	}
+	return nil, nil
 }
 
 // closeUnauthenticated closes connection if it's not authenticated yet.
