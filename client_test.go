@@ -240,7 +240,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	// Set refresh handler to tell library that server-side refresh must be used.
-	client.On().Refresh(func(e RefreshEvent) RefreshReply {
+	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
 		return RefreshReply{}
 	})
 
@@ -267,7 +267,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	// Set refresh handler to tell library that server-side refresh must be used.
-	client.On().Refresh(func(e RefreshEvent) RefreshReply {
+	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
 		return RefreshReply{}
 	})
 
