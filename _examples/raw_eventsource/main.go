@@ -58,20 +58,6 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 
-	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		centrifuge.ChannelNamespace{
-			Name: "chat",
-			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:         true,
-				Presence:        true,
-				JoinLeave:       true,
-				HistoryLifetime: 60,
-				HistorySize:     1000,
-				HistoryRecover:  true,
-			},
-		},
-	}
-
 	node, _ := centrifuge.New(cfg)
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
@@ -109,6 +95,19 @@ func main() {
 		}()
 	})
 
+	// Publish to channel periodically.
+	go func() {
+		for {
+			err := node.Publish("eventsource_channel", centrifuge.Raw(`{"channel time": "`+strconv.FormatInt(time.Now().Unix(), 10)+`"}`))
+			if err != nil {
+				if err != io.EOF {
+					log.Println(err.Error())
+				}
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
+
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
@@ -144,7 +143,7 @@ func main() {
 			return
 		}
 
-		subErr, disconnect := client.Subscribe("chat:index")
+		subErr, disconnect := client.Subscribe("eventsource_channel")
 		if disconnect != nil {
 			if !disconnect.Reconnect {
 				// Non-200 status code says Eventsource client to stop reconnecting.

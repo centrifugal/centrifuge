@@ -9,12 +9,6 @@
         </style>
         <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.11.2/jquery.min.js"></script>
         <script type="text/javascript">
-
-            // helper functions to work with escaping html.
-            var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
-            function replaceTag(tag) {return tagsToReplace[tag] || tag;}
-            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
-
             $(function() {
 
                 var eventSource = new EventSource('http://localhost:8000/connection/eventsource');
@@ -45,16 +39,6 @@
                 function drawText(text) {
                     container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
                 }
-
-                $('#form').submit(function(event) {
-                    event.preventDefault();
-                    sub.publish({"input": input.val()}).then(function() {
-                        // console.log('message accepted by server');
-                    }, function(err) {
-                        // console.log('error publishing message', err);
-                    });
-                    input.val('');
-                });
             });
         </script>
     </head>
