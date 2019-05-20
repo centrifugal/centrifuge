@@ -185,79 +185,25 @@ func NewClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 	return c, nil
 }
 
-// NewConnectedClient initializes new Client.
-func NewConnectedClient(ctx context.Context, n *Node, t transport) (*Client, error) {
-	uuidObject, err := uuid.NewV4()
-	if err != nil {
-		return nil, err
+// Connect allows to trigger connect routine with client. This allows to initiate
+// it on server side just after transport connection established.
+func (c *Client) Connect() (*Error, *Disconnect) {
+	resp, disconnect := c.connectCmd(&proto.ConnectRequest{})
+	if disconnect != nil {
+		return nil, disconnect
 	}
-
-	config := n.Config()
-
-	c := &Client{
-		ctx:       ctx,
-		uid:       uuidObject.String(),
-		node:      n,
-		transport: t,
-		eventHub:  &ClientEventHub{},
-		pubBuffer: make([]*Publication, 0),
-		channels:  make(map[string]ChannelContext),
-	}
-
-	messageWriterConf := writerConfig{
-		MaxQueueSize: config.ClientQueueMaxSize,
-		WriteFn: func(data ...[]byte) error {
-			if len(data) == 1 {
-				// no need in extra byte buffers in this path.
-				payload := data[0]
-				err := t.Write(payload)
-				if err != nil {
-					go c.Close(DisconnectWriteError)
-					return err
-				}
-				transportMessagesSent.WithLabelValues(t.Name()).Inc()
-			} else {
-				buf := getBuffer()
-				for _, payload := range data {
-					buf.Write(payload)
-				}
-				err := t.Write(buf.Bytes())
-				if err != nil {
-					go c.Close(DisconnectWriteError)
-					putBuffer(buf)
-					return err
-				}
-				putBuffer(buf)
-				transportMessagesSent.WithLabelValues(t.Name()).Add(float64(len(data)))
-			}
-			return nil
-		},
-	}
-
-	c.messageWriter = newWriter(messageWriterConf)
-
-	err = c.Connect()
-	if err != nil {
-		c.Close(DisconnectServerError)
-		return nil, err
-	}
-
-	return c, nil
-}
-
-// Connect ...
-func (c *Client) Connect() error {
-	resp, _ := c.connectCmd(&proto.ConnectRequest{})
 	if resp.Error != nil {
-		return resp.Error
+		return resp.Error, nil
 	}
 	if c.node.eventHub.connectedHandler != nil {
 		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
-	return nil
+	return nil, nil
 }
 
-// Subscribe ...
+// Subscribe client to channel on server side. This means that client will start
+// receiving all messages published into channel and should be ready to process
+// them.
 func (c *Client) Subscribe(channel string) (*Error, *Disconnect) {
 	var subError *Error
 	disconnect := c.subscribeCmd(&proto.SubscribeRequest{
@@ -1694,6 +1640,8 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	var latestGen uint32
 	var latestEpoch string
 
+	var recoveredPubs []*Publication
+
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
 		if cmd.Recover {
@@ -1712,7 +1660,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 			latestGen = recoveryPosition.Gen
 			latestEpoch = recoveryPosition.Epoch
 
-			res.Publications = publications
+			recoveredPubs = publications
 
 			nextSeq := cmd.Seq + 1
 			nextGen := cmd.Gen
@@ -1754,16 +1702,16 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 		c.pubBufferMu.Lock()
 		pubBufferLocked = true
 		if len(c.pubBuffer) > 0 {
-			res.Publications = append(res.Publications, c.pubBuffer...)
+			recoveredPubs = append(recoveredPubs, c.pubBuffer...)
 			c.pubBuffer = nil
 		}
-		sort.Slice(res.Publications, func(i, j int) bool {
-			if res.Publications[i].Gen != res.Publications[j].Gen {
-				return res.Publications[i].Gen > res.Publications[j].Gen
+		sort.Slice(recoveredPubs, func(i, j int) bool {
+			if recoveredPubs[i].Gen != recoveredPubs[j].Gen {
+				return recoveredPubs[i].Gen > recoveredPubs[j].Gen
 			}
-			return res.Publications[i].Seq > res.Publications[j].Seq
+			return recoveredPubs[i].Seq > recoveredPubs[j].Seq
 		})
-		res.Publications = uniquePublications(res.Publications)
+		recoveredPubs = uniquePublications(recoveredPubs)
 	}
 
 	replyRes, err := proto.GetResultEncoder(c.transport.Encoding()).EncodeSubscribeResult(res)
@@ -1776,6 +1724,23 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	}
 	rw.write(&proto.Reply{Result: replyRes})
 	if chOpts.HistoryRecover {
+		pushEncoder := proto.GetPushEncoder(c.transport.Encoding())
+		for _, pub := range recoveredPubs {
+			data, err := pushEncoder.EncodePublication(pub)
+			if err != nil {
+				c.setInSubscribe(channel, false)
+				return DisconnectServerError
+			}
+			messageBytes, err := pushEncoder.Encode(proto.NewPublicationPush(channel, data))
+			if err != nil {
+				c.setInSubscribe(channel, false)
+				return DisconnectServerError
+			}
+			reply := &proto.Reply{
+				Result: messageBytes,
+			}
+			rw.write(reply)
+		}
 		rw.flush()
 		c.setInSubscribe(channel, false)
 	}

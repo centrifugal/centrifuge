@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -127,17 +125,17 @@ func main() {
 
 		// Connect handler should not block, so start separate goroutine to
 		// periodically send messages to client.
-		go func() {
-			for {
-				err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-				if err != nil {
-					if err != io.EOF {
-						log.Println(err.Error())
-					}
-				}
-				time.Sleep(5 * time.Second)
-			}
-		}()
+		// go func() {
+		// 	for {
+		// 		err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+		// 		if err != nil {
+		// 			if err != io.EOF {
+		// 				log.Println(err.Error())
+		// 			}
+		// 		}
+		// 		time.Sleep(5 * time.Second)
+		// 	}
+		// }()
 	})
 
 	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {

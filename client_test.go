@@ -69,7 +69,7 @@ func TestSetCredentials(t *testing.T) {
 func TestNewClient(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
-	client, err := newClient(context.Background(), node, transport)
+	client, err := NewClient(context.Background(), node, transport)
 	assert.NoError(t, err)
 	assert.NotNil(t, client)
 }
@@ -77,7 +77,7 @@ func TestNewClient(t *testing.T) {
 func TestClientInitialState(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	assert.Equal(t, client.uid, client.ID())
 	assert.NotNil(t, "", client.user)
 	assert.Equal(t, 0, len(client.Channels()))
@@ -91,7 +91,7 @@ func TestClientInitialState(t *testing.T) {
 func TestClientClosedState(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	err := client.Close(nil)
 	assert.NoError(t, err)
 	assert.True(t, client.closed)
@@ -100,7 +100,7 @@ func TestClientClosedState(t *testing.T) {
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	_, disconnect := client.connectCmd(&proto.ConnectRequest{})
 	assert.NotNil(t, disconnect)
 	assert.Equal(t, disconnect, DisconnectBadRequest)
@@ -114,7 +114,7 @@ func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, resp.Error)
@@ -130,7 +130,7 @@ func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, resp.Error)
@@ -141,7 +141,7 @@ func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 func TestClientConnectWithMalformedToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	_, disconnect := client.connectCmd(&proto.ConnectRequest{
 		Token: "bad bad token",
 	})
@@ -157,7 +157,7 @@ func TestClientConnectWithValidToken(t *testing.T) {
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
 		Token: getConnToken("42", 0),
 	})
@@ -174,7 +174,7 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
 		Token: getConnToken("42", time.Now().Unix()+10),
 	})
@@ -192,7 +192,7 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
 	})
@@ -209,7 +209,7 @@ func TestClientTokenRefresh(t *testing.T) {
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
 	})
@@ -237,7 +237,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 		UserID:   "42",
 		ExpireAt: time.Now().Unix() + 60,
 	})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	// Set refresh handler to tell library that server-side refresh must be used.
 	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
@@ -264,7 +264,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 		UserID:   "42",
 		ExpireAt: time.Now().Unix() - 60,
 	})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	// Set refresh handler to tell library that server-side refresh must be used.
 	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
@@ -311,7 +311,7 @@ func TestClientSubscribe(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -355,7 +355,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -397,7 +397,7 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -463,7 +463,7 @@ func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -487,7 +487,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -528,7 +528,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -567,7 +567,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 	connectClient(t, client)
 
 	result := subscribeClient(t, client, "test")
@@ -577,7 +577,7 @@ func TestClientSubscribeLast(t *testing.T) {
 		node.Publish("test", []byte("{}"))
 	}
 
-	client, _ = newClient(newCtx, node, transport)
+	client, _ = NewClient(newCtx, node, transport)
 	connectClient(t, client)
 	result = subscribeClient(t, client, "test")
 	assert.Equal(t, uint32(10), result.Seq)
@@ -588,7 +588,7 @@ func TestClientUnsubscribe(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
@@ -618,7 +618,7 @@ func TestClientPublish(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -665,7 +665,7 @@ func TestClientPing(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -687,7 +687,7 @@ func TestClientPingWithRecover(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
@@ -708,7 +708,7 @@ func TestClientPresence(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
@@ -759,7 +759,7 @@ func TestClientHistory(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	for i := 0; i < 10; i++ {
 		node.Publish("test", []byte(`{}`))
@@ -798,7 +798,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 	time.Sleep(100 * time.Millisecond)
 	client.mu.Lock()
 	assert.True(t, client.closed)
@@ -815,7 +815,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
@@ -830,7 +830,7 @@ func TestClientSend(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -850,7 +850,7 @@ func TestClientClose(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -865,7 +865,7 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -939,7 +939,7 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 			transport := newTestTransport()
 			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := newClient(newCtx, node, transport)
+			client, _ := NewClient(newCtx, node, transport)
 
 			channel := "test_recovery_memory_" + tt.Name
 

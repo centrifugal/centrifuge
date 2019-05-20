@@ -125,22 +125,35 @@ func main() {
 			req:      req,
 		}
 
-		client, err := centrifuge.NewConnectedClient(req.Context(), node, transport)
+		client, err := centrifuge.NewClient(req.Context(), node, transport)
 		if err != nil {
 			return
 		}
 		defer client.Close(nil)
 
+		connErr, disconnect := client.Connect()
+		if disconnect != nil {
+			if !disconnect.Reconnect {
+				// Non-200 status code says Eventsource client to stop reconnecting.
+				w.WriteHeader(http.StatusBadRequest)
+			}
+			return
+		}
+		if connErr != nil {
+			log.Printf("connect error: %v", connErr)
+			return
+		}
+
 		subErr, disconnect := client.Subscribe("chat:index")
 		if disconnect != nil {
 			if !disconnect.Reconnect {
-				// Non-200 status code says client to stop reconnecting.
+				// Non-200 status code says Eventsource client to stop reconnecting.
 				w.WriteHeader(http.StatusBadRequest)
 			}
 			return
 		}
 		if subErr != nil {
-			log.Printf("subscribe error: %v", err)
+			log.Printf("subscribe error: %v", subErr)
 			return
 		}
 
