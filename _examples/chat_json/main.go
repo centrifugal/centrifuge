@@ -147,13 +147,6 @@ func main() {
 		}
 	})
 
-	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 10,
-		}
-	})
-
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}

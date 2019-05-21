@@ -1640,8 +1640,6 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	var latestGen uint32
 	var latestEpoch string
 
-	var recoveredPubs []*Publication
-
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
 		if cmd.Recover {
@@ -1660,7 +1658,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 			latestGen = recoveryPosition.Gen
 			latestEpoch = recoveryPosition.Epoch
 
-			recoveredPubs = publications
+			res.Publications = publications
 
 			nextSeq := cmd.Seq + 1
 			nextGen := cmd.Gen
@@ -1702,16 +1700,16 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 		c.pubBufferMu.Lock()
 		pubBufferLocked = true
 		if len(c.pubBuffer) > 0 {
-			recoveredPubs = append(recoveredPubs, c.pubBuffer...)
+			res.Publications = append(res.Publications, c.pubBuffer...)
 			c.pubBuffer = nil
 		}
-		sort.Slice(recoveredPubs, func(i, j int) bool {
-			if recoveredPubs[i].Gen != recoveredPubs[j].Gen {
-				return recoveredPubs[i].Gen > recoveredPubs[j].Gen
+		sort.Slice(res.Publications, func(i, j int) bool {
+			if res.Publications[i].Gen != res.Publications[j].Gen {
+				return res.Publications[i].Gen > res.Publications[j].Gen
 			}
-			return recoveredPubs[i].Seq > recoveredPubs[j].Seq
+			return res.Publications[i].Seq > res.Publications[j].Seq
 		})
-		recoveredPubs = uniquePublications(recoveredPubs)
+		res.Publications = uniquePublications(res.Publications)
 	}
 
 	replyRes, err := proto.GetResultEncoder(c.transport.Encoding()).EncodeSubscribeResult(res)
@@ -1724,23 +1722,6 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	}
 	rw.write(&proto.Reply{Result: replyRes})
 	if chOpts.HistoryRecover {
-		pushEncoder := proto.GetPushEncoder(c.transport.Encoding())
-		for _, pub := range recoveredPubs {
-			data, err := pushEncoder.EncodePublication(pub)
-			if err != nil {
-				c.setInSubscribe(channel, false)
-				return DisconnectServerError
-			}
-			messageBytes, err := pushEncoder.Encode(proto.NewPublicationPush(channel, data))
-			if err != nil {
-				c.setInSubscribe(channel, false)
-				return DisconnectServerError
-			}
-			reply := &proto.Reply{
-				Result: messageBytes,
-			}
-			rw.write(reply)
-		}
 		rw.flush()
 		c.setInSubscribe(channel, false)
 	}
