@@ -16,7 +16,6 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/centrifuge/internal/proto"
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -205,7 +204,7 @@ func (t *eventsourceTransport) Name() string {
 	return "raw-eventsource"
 }
 
-func (t *eventsourceTransport) Encoding() proto.Encoding {
+func (t *eventsourceTransport) Encoding() centrifuge.Encoding {
 	return "json"
 }
 
