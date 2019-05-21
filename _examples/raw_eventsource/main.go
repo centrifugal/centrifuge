@@ -17,7 +17,6 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/centrifugal/centrifuge/internal/proto"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -47,14 +46,10 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
+const exampleChannel = "eventsource"
+
 func main() {
 	cfg := centrifuge.DefaultConfig
-
-	// Set secret to handle requests with JWT auth too. This is
-	// not required if you don't use token authentication and
-	// private subscriptions verified by token.
-	cfg.Secret = "secret"
-	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 
@@ -95,10 +90,10 @@ func main() {
 		}()
 	})
 
-	// Publish to channel periodically.
+	// Also publish to channel periodically.
 	go func() {
 		for {
-			err := node.Publish("eventsource_channel", centrifuge.Raw(`{"channel time": "`+strconv.FormatInt(time.Now().Unix(), 10)+`"}`))
+			err := node.Publish(exampleChannel, centrifuge.Raw(`{"channel time": "`+strconv.FormatInt(time.Now().Unix(), 10)+`"}`))
 			if err != nil {
 				if err != io.EOF {
 					log.Println(err.Error())
@@ -118,11 +113,7 @@ func main() {
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("Connection", "keep-alive")
 
-		transport := &eventsourceTransport{
-			messages: make(chan []byte, 128),
-			closeCh:  make(chan struct{}),
-			req:      req,
-		}
+		transport := newEventsourceTransport(req)
 
 		client, err := centrifuge.NewClient(req.Context(), node, transport)
 		if err != nil {
@@ -130,7 +121,7 @@ func main() {
 		}
 		defer client.Close(nil)
 
-		connErr, disconnect := client.Connect()
+		connectErr, disconnect := client.Connect()
 		if disconnect != nil {
 			if !disconnect.Reconnect {
 				// Non-200 status code says Eventsource client to stop reconnecting.
@@ -138,12 +129,12 @@ func main() {
 			}
 			return
 		}
-		if connErr != nil {
-			log.Printf("connect error: %v", connErr)
+		if connectErr != nil {
+			log.Printf("connect error: %v", connectErr)
 			return
 		}
 
-		subErr, disconnect := client.Subscribe("eventsource_channel")
+		subscribeErr, disconnect := client.Subscribe(exampleChannel)
 		if disconnect != nil {
 			if !disconnect.Reconnect {
 				// Non-200 status code says Eventsource client to stop reconnecting.
@@ -151,8 +142,8 @@ func main() {
 			}
 			return
 		}
-		if subErr != nil {
-			log.Printf("subscribe error: %v", subErr)
+		if subscribeErr != nil {
+			log.Printf("subscribe error: %v", subscribeErr)
 			return
 		}
 
@@ -182,7 +173,6 @@ func main() {
 			}
 		}
 	})))
-	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
@@ -201,6 +191,14 @@ type eventsourceTransport struct {
 	messages chan []byte
 	closeCh  chan struct{}
 	closed   bool
+}
+
+func newEventsourceTransport(req *http.Request) *eventsourceTransport {
+	return &eventsourceTransport{
+		messages: make(chan []byte, 128),
+		closeCh:  make(chan struct{}),
+		req:      req,
+	}
 }
 
 func (t *eventsourceTransport) Name() string {
