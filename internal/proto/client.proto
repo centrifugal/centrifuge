@@ -52,6 +52,8 @@ enum PushType {
     LEAVE = 2 [(gogoproto.enumvalue_customname) = "PushTypeLeave"];
     UNSUB = 3 [(gogoproto.enumvalue_customname) = "PushTypeUnsub"];
     MESSAGE = 4 [(gogoproto.enumvalue_customname) = "PushTypeMessage"];
+    CONN = 5 [(gogoproto.enumvalue_customname) = "PushTypeConn"];
+    SUB = 6 [(gogoproto.enumvalue_customname) = "PushTypeSub"];
 }
 
 message Push {
@@ -89,6 +91,20 @@ message Unsub {
 
 message Message {
     bytes data = 1 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+}
+
+message Conn {
+    string client = 1 [(gogoproto.jsontag) = "client"];
+    string version = 2 [(gogoproto.jsontag) = "version"];
+    bytes data = 3 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false];
+}
+
+message Sub {
+    bool recoverable = 1 [(gogoproto.jsontag) = "recoverable,omitempty"];
+    uint32 seq = 2 [(gogoproto.jsontag) = "seq,omitempty"];
+    uint32 gen = 3 [(gogoproto.jsontag) = "gen,omitempty"];
+    string epoch = 4 [(gogoproto.jsontag) = "epoch,omitempty"];   
+    bool recovered = 5 [(gogoproto.jsontag) = "recovered,omitempty"];
 }
 
 message ConnectRequest {

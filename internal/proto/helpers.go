@@ -44,6 +44,23 @@ func NewUnsubPush(ch string, data Raw) *Push {
 	}
 }
 
+// NewConnPush returns initialized async conn message.
+func NewConnPush(data Raw) *Push {
+	return &Push{
+		Type: PushTypeConn,
+		Data: data,
+	}
+}
+
+// NewSubPush returns initialized async sub message.
+func NewSubPush(ch string, data Raw) *Push {
+	return &Push{
+		Type:    PushTypeSub,
+		Channel: ch,
+		Data:    data,
+	}
+}
+
 // ConnectResponse ...
 type ConnectResponse struct {
 	Error  *Error         `json:"error,omitempty"`

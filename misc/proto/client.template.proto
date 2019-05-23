@@ -52,6 +52,8 @@ enum PushType {
     LEAVE = 2{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeLeave"]{{end}};
     UNSUB = 3{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeUnsub"]{{end}};
     MESSAGE = 4{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeMessage"]{{end}};
+    CONN = 5{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeConn"]{{end}};
+    SUB = 6{{if env.Getenv "GOGO"}} [(gogoproto.enumvalue_customname) = "PushTypeSub"]{{end}};
 }
 
 message Push {
@@ -89,6 +91,20 @@ message Unsub {
 
 message Message {
     bytes data = 1{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false]{{end}};
+}
+
+message Conn {
+    string client = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "client"]{{end}};
+    string version = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "version"]{{end}};
+    bytes data = 3{{if env.Getenv "GOGO"}} [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data,omitempty", (gogoproto.nullable) = false]{{end}};
+}
+
+message Sub {
+    bool recoverable = 1{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recoverable,omitempty"]{{end}};
+    uint32 seq = 2{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "seq,omitempty"]{{end}};
+    uint32 gen = 3{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "gen,omitempty"]{{end}};
+    string epoch = 4{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "epoch,omitempty"]{{end}};   
+    bool recovered = 5{{if env.Getenv "GOGO"}} [(gogoproto.jsontag) = "recovered,omitempty"]{{end}};
 }
 
 message ConnectRequest {

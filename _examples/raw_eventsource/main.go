@@ -45,12 +45,23 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
-const exampleChannel = "eventsource"
+const exampleChannel = "chat_eventsource"
 
 func main() {
 	cfg := centrifuge.DefaultConfig
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
+	cfg.Namespaces = []centrifuge.ChannelNamespace{
+		centrifuge.ChannelNamespace{
+			Name: "chat",
+			ChannelOptions: centrifuge.ChannelOptions{
+				JoinLeave:       true,
+				HistoryLifetime: 300,
+				HistorySize:     100,
+				HistoryRecover:  true,
+			},
+		},
+	}
 
 	node, _ := centrifuge.New(cfg)
 
@@ -111,42 +122,17 @@ func main() {
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
 
 		transport := newEventsourceTransport(req)
 
-		client, err := centrifuge.NewClient(req.Context(), node, transport)
+		client, err := centrifuge.NewClient(req.Context(), node, transport, centrifuge.Unidirectional())
 		if err != nil {
 			return
 		}
 		defer client.Close(nil)
 
-		connectErr, disconnect := client.Connect()
-		if disconnect != nil {
-			if !disconnect.Reconnect {
-				// Non-200 status code says Eventsource client to stop reconnecting.
-				w.WriteHeader(http.StatusBadRequest)
-			}
-			return
-		}
-		if connectErr != nil {
-			log.Printf("connect error: %v", connectErr)
-			return
-		}
-
-		subscribeErr, disconnect := client.Subscribe(exampleChannel)
-		if disconnect != nil {
-			if !disconnect.Reconnect {
-				// Non-200 status code says Eventsource client to stop reconnecting.
-				w.WriteHeader(http.StatusBadRequest)
-			}
-			return
-		}
-		if subscribeErr != nil {
-			log.Printf("subscribe error: %v", subscribeErr)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
+		client.Subscribe(exampleChannel)
 
 		flusher := w.(http.Flusher)
 		notifier := w.(http.CloseNotifier)

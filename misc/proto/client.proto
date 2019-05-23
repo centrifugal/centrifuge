@@ -43,6 +43,8 @@ enum PushType {
     LEAVE = 2;
     UNSUB = 3;
     MESSAGE = 4;
+    CONN = 5;
+    SUB = 6;
 }
 
 message Push {
@@ -80,6 +82,20 @@ message Unsub {
 
 message Message {
     bytes data = 1;
+}
+
+message Conn {
+    string client = 1;
+    string version = 2;
+    bytes data = 3;
+}
+
+message Sub {
+    bool recoverable = 1;
+    uint32 seq = 2;
+    uint32 gen = 3;
+    string epoch = 4;   
+    bool recovered = 5;
 }
 
 message ConnectRequest {
