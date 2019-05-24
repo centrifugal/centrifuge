@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -89,7 +90,7 @@ type Client struct {
 
 	ctx       context.Context
 	node      *Node
-	transport transport
+	transport Transport
 
 	closed        bool
 	authenticated bool
@@ -140,7 +141,7 @@ func Unidirectional() ClientOption {
 }
 
 // NewClient initializes new Client.
-func NewClient(ctx context.Context, n *Node, t transport, opts ...ClientOption) (*Client, error) {
+func NewClient(ctx context.Context, n *Node, t Transport, opts ...ClientOption) (*Client, error) {
 
 	clientOptions := &ClientOptions{}
 	for _, opt := range opts {
@@ -256,10 +257,10 @@ func (c *Client) connect() (*Error, *Disconnect) {
 	return nil, nil
 }
 
-// Subscribe client to channel on server side. This means that client will start
-// receiving all messages published into channel and should be ready to process
-// them.
-func (c *Client) Subscribe(channel string) (*Error, *Disconnect) {
+// Subscribe unidirectional client to channel on server side. This means that client
+// will start receiving all messages published into channel and should be ready to
+// process them. Not goroutine-safe.
+func (c *Client) Subscribe(channel string) error {
 	enc := c.transport.Encoding()
 	encoder := proto.GetReplyEncoder(enc)
 
@@ -299,12 +300,14 @@ func (c *Client) Subscribe(channel string) (*Error, *Disconnect) {
 	rw.flush()
 
 	if disconnect != nil {
-		return nil, disconnect
+		go c.Close(disconnect)
+		return errors.New("disconnect")
 	}
 	if subError != nil {
-		return subError, nil
+		go c.Close(DisconnectServerError)
+		return subError
 	}
-	return nil, nil
+	return nil
 }
 
 // closeUnauthenticated closes connection if it's not authenticated yet.
@@ -467,8 +470,8 @@ func (c *Client) UserID() string {
 	return c.user
 }
 
-// Transport returns transport used by client connection.
-func (c *Client) Transport() Transport {
+// Transport returns transport details used by client connection.
+func (c *Client) Transport() TransportDetails {
 	return c.transport
 }
 
@@ -656,8 +659,8 @@ func (c *Client) clientInfo(ch string) *proto.ClientInfo {
 	}
 }
 
-// common data handling logic for Websocket and Sockjs handlers.
-func (c *Client) handleRawData(data []byte) bool {
+// handle raw data encoded with Centrifuge protocol.
+func (c *Client) handle(data []byte) bool {
 	if len(data) == 0 {
 		c.node.logger.log(newLogEntry(LogLevelError, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
 		c.Close(DisconnectBadRequest)
@@ -706,7 +709,7 @@ func (c *Client) handleRawData(data []byte) bool {
 			encoder.Reset()
 			return nil
 		}
-		disconnect := c.handle(cmd, write, flush)
+		disconnect := c.handleCommand(cmd, write, flush)
 		if disconnect != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			c.Close(disconnect)
@@ -746,7 +749,7 @@ type replyWriter struct {
 }
 
 // handle dispatches Command into correct command handler.
-func (c *Client) handle(cmd *proto.Command, writeFn func(*proto.Reply) error, flush func() error) *Disconnect {
+func (c *Client) handleCommand(cmd *proto.Command, writeFn func(*proto.Reply) error, flush func() error) *Disconnect {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()

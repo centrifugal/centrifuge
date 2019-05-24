@@ -273,7 +273,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			ok := c.handleRawData(data)
+			ok := c.handle(data)
 			if !ok {
 				return
 			}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -45,7 +46,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
-const exampleChannel = "chat_eventsource"
+var exampleChannel = "chat:eventsource"
 
 func main() {
 	cfg := centrifuge.DefaultConfig
@@ -84,6 +85,13 @@ func main() {
 
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+
+		err := client.Subscribe(exampleChannel)
+		if err != nil {
+			// In case of subscribe error client will be disconnected automatically
+			// with server error. Here we just don't need to proceed.
+			return
+		}
 
 		// Connect handler should not block, so start separate goroutine to
 		// periodically send messages to client.
@@ -132,10 +140,9 @@ func main() {
 		}
 		defer client.Close(nil)
 
-		client.Subscribe(exampleChannel)
-
 		flusher := w.(http.Flusher)
 		notifier := w.(http.CloseNotifier)
+		fmt.Fprintf(w, "\r\n")
 		flusher.Flush()
 		for {
 			select {

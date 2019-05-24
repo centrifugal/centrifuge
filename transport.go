@@ -12,8 +12,8 @@ type TransportInfo struct {
 	Request *http.Request
 }
 
-// Transport abstracts a connection transport between server and client.
-type Transport interface {
+// TransportDetails has read-only transport description methods.
+type TransportDetails interface {
 	// Name returns a name of transport used for client connection.
 	Name() string
 	// Encoding returns transport encoding used.
@@ -22,9 +22,10 @@ type Transport interface {
 	Info() TransportInfo
 }
 
-type transport interface {
-	Transport
-	// Send sends data to session.
+// Transport abstracts a connection transport between server and client.
+type Transport interface {
+	TransportDetails
+	// Send sends data encoded using Centrifuge protocol to session.
 	Write([]byte) error
 	// Close closes transport.
 	Close(*Disconnect) error

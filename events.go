@@ -31,7 +31,7 @@ type ConnectReply struct {
 }
 
 // ConnectingHandler called when new client authenticates on server.
-type ConnectingHandler func(context.Context, Transport, ConnectEvent) ConnectReply
+type ConnectingHandler func(context.Context, TransportDetails, ConnectEvent) ConnectReply
 
 // ConnectedHandler called when new client connects to server.
 type ConnectedHandler func(context.Context, *Client)
