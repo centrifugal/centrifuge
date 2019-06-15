@@ -476,3 +476,8 @@ func (h *Hub) NumSubscribers(ch string) int {
 	}
 	return len(conns)
 }
+
+// GetClient returns Client by ID
+func (h *Hub) GetClient(uid string) (*Client, bool) {
+	return h.conns[uid]
+}
