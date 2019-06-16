@@ -21,6 +21,8 @@ type BrokerEventHandler interface {
 	HandleLeave(ch string, leave *Leave) error
 	// Control must register callback func to handle Control data received.
 	HandleControl([]byte) error
+	// Send must register callback func to handle Send received.
+	HandleSend(uid string, data Raw) error
 }
 
 // HistoryFilter allows to filter history according to fields set.
@@ -84,6 +86,10 @@ type Broker interface {
 	// be used for admin needs to better understand state of system. So it's not
 	// a big problem if another Broker implementation won't support this method.
 	Channels() ([]string, error)
+	
+	// Send allows to send Raw to client by uid. Raw should
+	// be delivered to client on any of Centrifuge node.
+	Send(uid string, data Raw) error
 }
 
 // HistoryManager is responsible for dealing with channel history management.
