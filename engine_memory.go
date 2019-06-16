@@ -119,6 +119,12 @@ func (e *MemoryEngine) Channels() ([]string, error) {
 	return e.node.Hub().Channels(), nil
 }
 
+// Send calls node ClientMsg method to handle message.
+// We don't have any PUB/SUB here as Memory Engine is single node only.
+func (e *MemoryEngine) Send(uid string, data Raw) error {
+	return e.eventHandler.HandleSend(uid, data)
+}
+
 type presenceHub struct {
 	sync.RWMutex
 	presence map[string]map[string]*ClientInfo
