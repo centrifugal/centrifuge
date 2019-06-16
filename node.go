@@ -452,6 +452,13 @@ func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
 	return n.hub.broadcastLeave(ch, leave)
 }
 
+// handleSend handles messages sent to client by uid and
+// coming from engine. The goal of method is to deliver this message
+// to client if it exist on this node.
+func (n *Node) handleSend(uid string, data Raw) error {
+	return n.hub.send(uid, data)
+}
+
 func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...PublishOption) error {
 	chOpts, ok := n.ChannelOpts(ch)
 	if !ok {
@@ -494,6 +501,16 @@ func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...Publish
 // will receive it and will send it to all clients on node subscribed on channel.
 func (n *Node) Publish(ch string, data []byte, opts ...PublishOption) error {
 	return n.publish(ch, data, nil, opts...)
+}
+
+func (n *Node) send(uid string, data []byte) error {
+	return n.broker.Send(uid, data)
+}
+
+// Send sends data to client by uid. All running nodes
+// will receive it and will try find client on node to send data.
+func (n *Node) Send(uid string, data []byte) error {
+	return n.send(uid, data)
 }
 
 var (
@@ -984,4 +1001,9 @@ func (h *brokerEventHandler) HandleLeave(ch string, leave *Leave) error {
 // HandleControl ...
 func (h *brokerEventHandler) HandleControl(data []byte) error {
 	return h.node.handleControl(data)
+}
+
+// HandleSend ...
+func (h *brokerEventHandler) HandleSend(uid string, data Raw) error {
+	return h.node.handleSend(uid, data)
 }
