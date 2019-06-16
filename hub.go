@@ -428,6 +428,19 @@ func (h *Hub) broadcastLeave(channel string, leave *proto.Leave) error {
 	return nil
 }
 
+// send sends message to client by uid.
+func (h *Hub) send(uid string, data Raw) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	c, ok := h.conns[uid]
+	if !ok {
+		return nil
+	}
+
+	return c.Send(data)
+}
+
 // NumClients returns total number of client connections.
 func (h *Hub) NumClients() int {
 	h.mu.RLock()
@@ -475,9 +488,4 @@ func (h *Hub) NumSubscribers(ch string) int {
 		return 0
 	}
 	return len(conns)
-}
-
-// GetClient returns Client by ID
-func (h *Hub) GetClient(uid string) (*Client, bool) {
-	return h.conns[uid]
 }
