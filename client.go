@@ -2067,7 +2067,7 @@ func (c *Client) presenceCmd(cmd *proto.PresenceRequest) (*proto.PresenceRespons
 		return resp, nil
 	}
 
-	if !chOpts.Presence {
+	if !chOpts.Presence || chOpts.PresenceDisableForClient {
 		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
@@ -2117,7 +2117,7 @@ func (c *Client) presenceStatsCmd(cmd *proto.PresenceStatsRequest) (*proto.Prese
 		return resp, nil
 	}
 
-	if !chOpts.Presence {
+	if !chOpts.Presence || chOpts.PresenceDisableForClient {
 		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
@@ -2167,7 +2167,7 @@ func (c *Client) historyCmd(cmd *proto.HistoryRequest) (*proto.HistoryResponse, 
 		return resp, nil
 	}
 
-	if chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0 {
+	if (chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0) || chOpts.HistoryDisableForClient {
 		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
