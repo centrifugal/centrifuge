@@ -122,6 +122,8 @@ type Client struct {
 	pubBuffer       []*Publication
 
 	messageWriter *writer
+
+	personalChannel string
 }
 
 // newClient initializes new Client.
@@ -404,6 +406,29 @@ func (c *Client) Unsubscribe(ch string, resubscribe bool) error {
 	return c.sendUnsub(ch, resubscribe)
 }
 
+func (c *Client) subscribePersonal() (string, *Error) {
+	channel := c.node.PersonalChannel(c.user)
+	err := c.node.addSubscription(channel, c)
+	if err != nil {
+		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		return "", ErrorInternal
+	}
+	if c.node.logger.enabled(LogLevelDebug) {
+		c.node.logger.log(newLogEntry(LogLevelDebug, "client subscribed to personal channel", map[string]interface{}{"client": c.uid, "user": c.user, "channel": channel}))
+	}
+	return channel, nil
+}
+
+func (c *Client) unsubscribePersonal(ch string) error {
+	err := c.node.removeSubscription(ch, c)
+	if err == nil {
+		if c.node.logger.enabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "client unsubscribed from personal channel", map[string]interface{}{"client": c.uid, "user": c.user, "channel": ch}))
+		}
+	}
+	return err
+}
+
 func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 	pushEncoder := proto.GetPushEncoder(c.transport.Encoding())
 
@@ -441,6 +466,7 @@ func (c *Client) Close(disconnect *Disconnect) error {
 	}
 
 	channels := c.channels
+	personalChannel := c.personalChannel
 	c.mu.Unlock()
 
 	if len(channels) > 0 {
@@ -450,6 +476,13 @@ func (c *Client) Close(disconnect *Disconnect) error {
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
+		}
+	}
+
+	if personalChannel != "" {
+		err := c.unsubscribePersonal(personalChannel)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing from personal channel", map[string]interface{}{"channel": personalChannel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 
@@ -1088,6 +1121,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	clientAnonymous := config.ClientAnonymous
 	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
+	usePersonalChannel := config.ClientSubscribePersonal
 
 	var credentials *Credentials
 	var authData proto.Raw
@@ -1257,6 +1291,17 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding client", map[string]interface{}{"client": c.uid, "error": err.Error()}))
 		return resp, DisconnectServerError
+	}
+
+	if usePersonalChannel && c.user != "" {
+		ch, err := c.subscribePersonal()
+		if err != nil {
+			resp.Error = err
+			return resp, nil
+		}
+		c.mu.Lock()
+		c.personalChannel = ch
+		c.mu.Unlock()
 	}
 
 	if exp > 0 {
@@ -1762,6 +1807,10 @@ func (c *Client) writeJoin(ch string, reply *preparedReply) error {
 }
 
 func (c *Client) writeLeave(ch string, reply *preparedReply) error {
+	return c.transportSend(reply)
+}
+
+func (c *Client) writeMessage(reply *preparedReply) error {
 	return c.transportSend(reply)
 }
 

@@ -56,6 +56,7 @@ func main() {
 	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
+	cfg.ClientSubscribePersonal = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
@@ -133,6 +134,8 @@ func main() {
 				if err != nil {
 					if err != io.EOF {
 						log.Println(err.Error())
+					} else {
+						return
 					}
 				}
 				time.Sleep(5 * time.Second)
@@ -150,6 +153,16 @@ func main() {
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
+
+	go func() {
+		for {
+			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal channel data"}`))
+			if err != nil {
+				log.Println(err.Error())
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/connection/sockjs/", authMiddleware(centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{

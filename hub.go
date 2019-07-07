@@ -428,6 +428,68 @@ func (h *Hub) broadcastLeave(channel string, leave *proto.Leave) error {
 	return nil
 }
 
+// broadcastMessage sends message to all clients subscribed on personal channel.
+func (h *Hub) broadcastMessage(channel string, data proto.Raw) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	// get connections currently subscribed on channel
+	channelSubscriptions, ok := h.subs[channel]
+	if !ok {
+		return nil
+	}
+
+	var jsonReply *preparedReply
+	var protobufReply *preparedReply
+
+	message := &proto.Message{
+		Data: data,
+	}
+
+	// iterate over them and send message individually
+	for uid := range channelSubscriptions {
+		c, ok := h.conns[uid]
+		if !ok {
+			continue
+		}
+		enc := c.Transport().Encoding()
+		if enc == proto.EncodingJSON {
+			if jsonReply == nil {
+				data, err := proto.GetPushEncoder(enc).EncodeMessage(message)
+				if err != nil {
+					return err
+				}
+				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewMessagePush(data))
+				if err != nil {
+					return err
+				}
+				reply := &proto.Reply{
+					Result: messageBytes,
+				}
+				jsonReply = newPreparedReply(reply, proto.EncodingJSON)
+			}
+			c.writeMessage(jsonReply)
+		} else if enc == proto.EncodingProtobuf {
+			if protobufReply == nil {
+				data, err := proto.GetPushEncoder(enc).EncodeMessage(message)
+				if err != nil {
+					return err
+				}
+				messageBytes, err := proto.GetPushEncoder(enc).Encode(proto.NewMessagePush(data))
+				if err != nil {
+					return err
+				}
+				reply := &proto.Reply{
+					Result: messageBytes,
+				}
+				protobufReply = newPreparedReply(reply, proto.EncodingProtobuf)
+			}
+			c.writeMessage(protobufReply)
+		}
+	}
+	return nil
+}
+
 // NumClients returns total number of client connections.
 func (h *Hub) NumClients() int {
 	h.mu.RLock()

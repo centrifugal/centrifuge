@@ -423,6 +423,9 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
+	if n.isPersonalChannel(ch) {
+		return n.hub.broadcastMessage(ch, pub.Data)
+	}
 	chOpts, ok := n.ChannelOpts(ch)
 	if !ok {
 		return ErrNoChannelOptions
@@ -714,6 +717,17 @@ func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.config.channelOpts(n.namespaceName(ch))
+}
+
+func (n *Node) isPersonalChannel(ch string) bool {
+	config := n.Config()
+	return config.ClientSubscribePersonal && strings.HasPrefix(ch, config.ClientPersonalChannelPrefix)
+}
+
+// PersonalChannel returns personal channel for user based on node configuration.
+func (n *Node) PersonalChannel(user string) string {
+	config := n.Config()
+	return config.ClientPersonalChannelPrefix + config.ChannelUserBoundary + user
 }
 
 // addPresence proxies presence adding to engine.
