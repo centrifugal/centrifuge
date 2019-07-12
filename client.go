@@ -472,6 +472,11 @@ func (c *Client) Close(disconnect *Disconnect) error {
 	if len(channels) > 0 {
 		// Unsubscribe from all channels.
 		for channel := range c.channels {
+			if channel == personalChannel {
+				// Will be unsubscribed separately as there is less work
+				// to do than with general channels.
+				continue
+			}
 			err := c.unsubscribe(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -1441,7 +1446,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	}
 
 	config := c.node.Config()
-
+	personalChannel := c.personalChannel
 	secret := config.Secret
 	channelMaxLength := config.ChannelMaxLength
 	channelLimit := config.ClientChannelLimit
@@ -1469,7 +1474,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	_, ok := c.channels[channel]
 	c.mu.RUnlock()
 
-	if ok {
+	if ok || channel == personalChannel {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		rw.write(&proto.Reply{Error: ErrorAlreadySubscribed})
 		return nil

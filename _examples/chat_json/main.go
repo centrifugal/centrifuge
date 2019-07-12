@@ -156,7 +156,7 @@ func main() {
 
 	go func() {
 		for {
-			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal channel data"}`))
+			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal notification"}`))
 			if err != nil {
 				log.Println(err.Error())
 			}

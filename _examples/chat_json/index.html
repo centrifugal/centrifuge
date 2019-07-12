@@ -45,7 +45,7 @@
                 });
 
                 centrifuge.on('message', function(data) {
-                    drawText(JSON.stringify(data));
+                    drawText('Message: ' + JSON.stringify(data));
                     // echo data back to server.
                     centrifuge.send(data);
                 });
@@ -62,7 +62,7 @@
                         for (var key in result.presence){
                             count++;
                         }
-                        drawText('Now in this room: ' + count + ' clients');
+                        drawText('Presence: now in this room – ' + count + ' clients');
                     }, function(err) {
                         drawText("Presence error: " + JSON.stringify(err));
                     });
@@ -95,7 +95,7 @@
                     var rpcRequest = {"method": "getCurrentYear"}
 
                     centrifuge.rpc(rpcRequest).then(function(data){
-                        drawText(JSON.stringify(data));
+                        drawText('RPC reply:' + JSON.stringify(data));
                     }, function(err) {
                         drawText("RPC error: " + JSON.stringify(err));
                     });
