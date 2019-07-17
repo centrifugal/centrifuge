@@ -788,6 +788,57 @@ func TestClientHistory(t *testing.T) {
 	assert.Nil(t, historyResp.Result)
 }
 
+func TestClientHistoryDisabled(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	config.HistorySize = 10
+	config.HistoryLifetime = 60
+	config.HistoryDisableForClient = true
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.Publish("test", []byte(`{}`))
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	historyResp, disconnect := client.historyCmd(&proto.HistoryRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorNotAvailable, historyResp.Error)
+}
+
+func TestClientPresenceDisabled(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	config.Presence = true
+	config.PresenceDisableForClient = true
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.Publish("test", []byte(`{}`))
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	presenceResp, disconnect := client.presenceCmd(&proto.PresenceRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorNotAvailable, presenceResp.Error)
+}
+
 func TestClientCloseUnauthenticated(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
