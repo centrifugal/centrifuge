@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -16,6 +17,11 @@ import (
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+type clientMessage struct {
+	Timestamp int64  `json:"timestamp"`
+	Input     string `json:"input"`
+}
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
@@ -102,7 +108,18 @@ func main() {
 
 		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			return centrifuge.PublishReply{}
+			var msg clientMessage
+			err := json.Unmarshal(e.Data, &msg)
+			if err != nil {
+				return centrifuge.PublishReply{
+					Error: centrifuge.ErrorBadRequest,
+				}
+			}
+			msg.Timestamp = time.Now().Unix()
+			data, _ := json.Marshal(msg)
+			return centrifuge.PublishReply{
+				Data: data,
+			}
 		})
 
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {

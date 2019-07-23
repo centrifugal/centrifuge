@@ -2034,6 +2034,9 @@ func (c *Client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 			resp.Error = reply.Error
 			return resp, nil
 		}
+		if reply.Data != nil {
+			data = reply.Data
+		}
 	}
 
 	err := c.node.publish(ch, data, info)

@@ -12,6 +12,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func getConnToken(user string, exp int64) string {
@@ -658,6 +659,128 @@ func TestClientPublish(t *testing.T) {
 	})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, publishResp.Error)
+}
+
+type testBrokerEventHandler struct {
+	// Publication must register callback func to handle Publications received.
+	HandlePublicationFunc func(ch string, pub *Publication) error
+	// Join must register callback func to handle Join messages received.
+	HandleJoinFunc func(ch string, join *Join) error
+	// Leave must register callback func to handle Leave messages received.
+	HandleLeaveFunc func(ch string, leave *Leave) error
+	// Control must register callback func to handle Control data received.
+	HandleControlFunc func([]byte) error
+}
+
+func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication) error {
+	if b.HandlePublicationFunc != nil {
+		return b.HandlePublicationFunc(ch, pub)
+	}
+	return nil
+}
+
+func (b *testBrokerEventHandler) HandleJoin(ch string, join *Join) error {
+	if b.HandleJoinFunc != nil {
+		return b.HandleJoinFunc(ch, join)
+	}
+	return nil
+}
+
+func (b *testBrokerEventHandler) HandleLeave(ch string, leave *Leave) error {
+	if b.HandleLeaveFunc != nil {
+		return b.HandleLeaveFunc(ch, leave)
+	}
+	return nil
+}
+
+func (b *testBrokerEventHandler) HandleControl(data []byte) error {
+	if b.HandleControlFunc != nil {
+		return b.HandleControlFunc(data)
+	}
+	return nil
+}
+
+type testClientMessage struct {
+	Input     string `json:"input"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+func TestClientPublishHandler(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	node.broker.(*MemoryEngine).eventHandler = &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication) error {
+			var msg testClientMessage
+			err := json.Unmarshal(pub.Data, &msg)
+			require.NoError(t, err)
+			if msg.Input == "with timestamp" {
+				require.True(t, msg.Timestamp > 0)
+			} else {
+				require.Zero(t, msg.Timestamp)
+			}
+			return nil
+		},
+	}
+
+	config := node.Config()
+	config.Publish = true
+	node.Reload(config)
+
+	subscribeClient(t, client, "test")
+
+	client.eventHub.publishHandler = func(e PublishEvent) PublishReply {
+		var msg testClientMessage
+		err := json.Unmarshal(e.Data, &msg)
+		require.NoError(t, err)
+		if msg.Input == "with disconnect" {
+			return PublishReply{
+				Disconnect: DisconnectBadRequest,
+			}
+		}
+		if msg.Input == "with error" {
+			return PublishReply{
+				Error: ErrorBadRequest,
+			}
+		}
+		if msg.Input == "with timestamp" {
+			msg.Timestamp = time.Now().Unix()
+			data, _ := json.Marshal(msg)
+			return PublishReply{Data: data}
+		}
+		return PublishReply{}
+	}
+	publishResp, disconnect := client.publishCmd(&proto.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "no time"}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, publishResp.Error)
+
+	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "with timestamp"}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, publishResp.Error)
+
+	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "with error"}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorBadRequest, publishResp.Error)
+
+	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "with disconnect"}`),
+	})
+	assert.Equal(t, DisconnectBadRequest, disconnect)
 }
 
 func TestClientPing(t *testing.T) {
