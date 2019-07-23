@@ -99,6 +99,7 @@ type PublishEvent struct {
 type PublishReply struct {
 	Error      *Error
 	Disconnect *Disconnect
+	Data       Raw
 }
 
 // PublishHandler called when client publishes into channel.
