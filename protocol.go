@@ -33,3 +33,11 @@ var (
 	PushTypeJoin        = proto.PushTypeJoin
 	PushTypeLeave       = proto.PushTypeLeave
 )
+
+// Encoding types
+var (
+	// EncodingJSON ...
+	EncodingJSON = proto.EncodingJSON
+	// EncodingProtobuf ...
+	EncodingProtobuf = proto.EncodingProtobuf
+)

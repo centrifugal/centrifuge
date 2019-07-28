@@ -95,7 +95,7 @@ func (t *websocketTransport) Write(data []byte) error {
 			t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
 		}
 		if t.opts.writeTimeout > 0 {
-			t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
+			_ = t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
 		}
 
 		var messageType = websocket.TextMessage
@@ -109,7 +109,7 @@ func (t *websocketTransport) Write(data []byte) error {
 		}
 
 		if t.opts.writeTimeout > 0 {
-			t.conn.SetWriteDeadline(time.Time{})
+			_ = t.conn.SetWriteDeadline(time.Time{})
 		}
 		return nil
 	}
@@ -135,7 +135,7 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 			return err
 		}
 		msg := websocket.FormatCloseMessage(disconnect.Code, string(reason))
-		t.conn.WriteControl(websocket.CloseMessage, msg, deadline)
+		_ = t.conn.WriteControl(websocket.CloseMessage, msg, deadline)
 		return t.conn.Close()
 	}
 	return t.conn.Close()
@@ -230,8 +230,11 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 	if pingInterval > 0 {
 		pongWait := pingInterval * 10 / 9
-		conn.SetReadDeadline(time.Now().Add(pongWait))
-		conn.SetPongHandler(func(string) error { conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+		conn.SetPongHandler(func(string) error {
+			_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+			return nil
+		})
 	}
 
 	var enc = proto.EncodingJSON

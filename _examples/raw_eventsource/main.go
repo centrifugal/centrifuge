@@ -101,6 +101,8 @@ func main() {
 				if err != nil {
 					if err != io.EOF {
 						log.Println(err.Error())
+					} else {
+						return
 					}
 				}
 				time.Sleep(5 * time.Second)
@@ -113,9 +115,7 @@ func main() {
 		for {
 			err := node.Publish(exampleChannel, centrifuge.Raw(`{"channel time": "`+strconv.FormatInt(time.Now().Unix(), 10)+`"}`))
 			if err != nil {
-				if err != io.EOF {
-					log.Println(err.Error())
-				}
+				log.Println(err.Error())
 			}
 			time.Sleep(5 * time.Second)
 		}

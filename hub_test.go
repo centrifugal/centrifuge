@@ -65,7 +65,7 @@ func TestHub(t *testing.T) {
 	assert.Equal(t, 1, len(conns))
 	assert.Equal(t, 1, h.NumClients())
 	assert.Equal(t, 1, h.NumUsers())
-	h.remove(c)
+	_ = h.remove(c)
 	assert.Equal(t, len(h.users), 0)
 	assert.Equal(t, 1, len(conns))
 }
