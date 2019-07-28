@@ -28,8 +28,16 @@ type (
 )
 
 // Push types.
-var (
+const (
 	PushTypePublication = proto.PushTypePublication
 	PushTypeJoin        = proto.PushTypeJoin
 	PushTypeLeave       = proto.PushTypeLeave
+)
+
+// Encoding types.
+const (
+	// EncodingJSON ...
+	EncodingJSON = proto.EncodingJSON
+	// EncodingProtobuf ...
+	EncodingProtobuf = proto.EncodingProtobuf
 )

@@ -148,9 +148,10 @@ func main() {
 			for {
 				err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
 				if err != nil {
-					if err != io.EOF {
-						log.Println(err.Error())
+					if err == io.EOF {
+						return
 					}
+					log.Println(err.Error())
 				}
 				time.Sleep(5 * time.Second)
 			}
