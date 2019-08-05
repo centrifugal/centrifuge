@@ -734,7 +734,9 @@ func (c *Client) expire() {
 			duration := time.Duration(ttl) * time.Second
 
 			c.mu.Lock()
-			c.expireTimer = time.AfterFunc(duration, c.expire)
+			if !c.closed {
+				c.expireTimer = time.AfterFunc(duration, c.expire)
+			}
 			c.mu.Unlock()
 		}
 	}
