@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-
 	"github.com/igm/sockjs-go/sockjs"
 )
 
@@ -34,8 +32,12 @@ func (t *sockjsTransport) Name() string {
 	return transportSockJS
 }
 
-func (t *sockjsTransport) Encoding() proto.Encoding {
-	return proto.EncodingJSON
+func (t *sockjsTransport) Protocol() ProtocolType {
+	return ProtocolTypeJSON
+}
+
+func (t *sockjsTransport) Encoding() EncodingType {
+	return EncodingTypeJSON
 }
 
 func (t *sockjsTransport) Info() TransportInfo {

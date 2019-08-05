@@ -38,8 +38,12 @@ func (t *testTransport) Name() string {
 	return "test_transport"
 }
 
-func (t *testTransport) Encoding() Encoding {
-	return proto.EncodingJSON
+func (t *testTransport) Protocol() ProtocolType {
+	return proto.ProtocolTypeJSON
+}
+
+func (t *testTransport) Encoding() EncodingType {
+	return proto.EncodingTypeJSON
 }
 
 func (t *testTransport) Info() TransportInfo {
@@ -106,7 +110,7 @@ func TestHubSubscriptions(t *testing.T) {
 
 func TestPreparedReply(t *testing.T) {
 	reply := proto.Reply{}
-	prepared := newPreparedReply(&reply, proto.EncodingJSON)
+	prepared := newPreparedReply(&reply, proto.ProtocolTypeJSON)
 	data := prepared.Data()
 	assert.NotNil(t, data)
 }

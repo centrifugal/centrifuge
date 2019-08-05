@@ -102,7 +102,7 @@ func main() {
 		})
 
 		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
 		go func() {
 			err := client.Send([]byte("hello"))

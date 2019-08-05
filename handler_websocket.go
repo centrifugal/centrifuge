@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-
 	"github.com/gorilla/websocket"
 )
 
@@ -28,7 +26,8 @@ type websocketTransport struct {
 }
 
 type websocketTransportOptions struct {
-	enc                proto.Encoding
+	encType            EncodingType
+	protoType          ProtocolType
 	pingInterval       time.Duration
 	writeTimeout       time.Duration
 	compressionMinSize int
@@ -76,8 +75,12 @@ func (t *websocketTransport) Name() string {
 	return transportWebsocket
 }
 
-func (t *websocketTransport) Encoding() proto.Encoding {
-	return t.opts.enc
+func (t *websocketTransport) Protocol() ProtocolType {
+	return t.opts.protoType
+}
+
+func (t *websocketTransport) Encoding() EncodingType {
+	return t.opts.encType
 }
 
 func (t *websocketTransport) Info() TransportInfo {
@@ -99,7 +102,7 @@ func (t *websocketTransport) Write(data []byte) error {
 		}
 
 		var messageType = websocket.TextMessage
-		if t.Encoding() == proto.EncodingProtobuf {
+		if t.Protocol() == ProtocolTypeProtobuf {
 			messageType = websocket.BinaryMessage
 		}
 
@@ -234,9 +237,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		conn.SetPongHandler(func(string) error { conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 	}
 
-	var enc = proto.EncodingJSON
-	if r.URL.Query().Get("format") == "protobuf" {
-		enc = proto.EncodingProtobuf
+	var protocol = ProtocolTypeJSON
+	if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
+		protocol = ProtocolTypeProtobuf
+	}
+
+	var enc = EncodingTypeJSON
+	if r.URL.Query().Get("encoding") == "binary" {
+		enc = EncodingTypeBinary
 	}
 
 	// Separate goroutine for better GC of caller's data.
@@ -245,7 +253,8 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
-			enc:                enc,
+			encType:            enc,
+			protoType:          protocol,
 		}
 
 		transport := newWebsocketTransport(conn, r, opts)

@@ -16,8 +16,13 @@ type TransportInfo struct {
 type Transport interface {
 	// Name returns a name of transport used for client connection.
 	Name() string
-	// Encoding returns transport encoding used.
-	Encoding() Encoding
+	// Protocol returns underlying transport protocol type used.
+	// At moment this can be for example a JSON streaming based protocol
+	// or Protobuf length-delimited protocol.
+	Protocol() ProtocolType
+	// Encoding() returns payload encoding type used by client. By default
+	// server assumes that payload passed as JSON.
+	Encoding() EncodingType
 	// Info returns transport information.
 	Info() TransportInfo
 }
