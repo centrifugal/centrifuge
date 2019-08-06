@@ -127,6 +127,14 @@ type RedisShardConfig struct {
 	WriteTimeout time.Duration
 	// ConnectTimeout is a timeout on connect operation.
 	ConnectTimeout time.Duration
+
+	// SequenceExpireInterval sets a time of sequence key expiration in Redis. By default
+	// history sequence keys do not expire, though in some cases when channels
+	// created for only short time and then not used anymore this behaviour can
+	// lead to constant space grows in Redis during application lifetime. Setting
+	// a reasonable value to this option (much bigger than history retention period)
+	// can help with this problem.
+	SequenceExpireInterval time.Duration
 }
 
 // subRequest is an internal request to subscribe or unsubscribe from one or more channels
@@ -344,8 +352,12 @@ var (
 	// ARGV[2] - history size ltrim right bound
 	// ARGV[3] - history lifetime
 	// ARGV[4] - channel to publish message to if needed.
+	// ARGV[5] - sequence key expiration time.
 	addHistorySource = `
 	local sequence = redis.call("incr", KEYS[2])
+	if ARGV[5] ~= '0' then
+		redis.call("expire", KEYS[2], ARGV[5])
+	end
 	local payload = "__" .. sequence .. "__" .. ARGV[1]
 	redis.call("lpush", KEYS[1], payload)
 	redis.call("ltrim", KEYS[1], 0, ARGV[2])
@@ -396,14 +408,18 @@ return redis.call("hgetall", KEYS[2])
 	// KEYS[3] - history list key
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
+	// ARGV[3] - sequence key expiration time.
 	historySource = `
 redis.replicate_commands()
 local seq = redis.call("get", KEYS[1])
+if ARGV[3] ~= '0' and seq ~= false then
+	redis.call("expire", KEYS[1], ARGV[3])
+end
 local epoch
-if redis.call('EXISTS', KEYS[2]) ~= 0 then
+if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("get", KEYS[2])
 else
-  epoch = redis.call('TIME')[1]
+  epoch = redis.call('time')[1]
   redis.call("set", KEYS[2], epoch)
 end
 local pubs = nil
@@ -1386,7 +1402,9 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 		includePubs = false
 	}
 
-	dr := newDataRequest(dataOpHistory, []interface{}{historySeqKey, historyEpochKey, historyKey, includePubs, rightBound})
+	sequenceKeyExpireSeconds := int(s.config.SequenceExpireInterval.Seconds())
+
+	dr := newDataRequest(dataOpHistory, []interface{}{historySeqKey, historyEpochKey, historyKey, includePubs, rightBound, sequenceKeyExpireSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, RecoveryPosition{}, resp.err
@@ -1486,7 +1504,8 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 
 	historyKey := s.getHistoryKey(ch)
 	sequenceKey := s.gethistorySeqKey(ch)
-	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, sequenceKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel})
+	sequenceKeyExpireSeconds := int(s.config.SequenceExpireInterval.Seconds())
+	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, sequenceKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, sequenceKeyExpireSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
