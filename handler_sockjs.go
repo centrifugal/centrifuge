@@ -92,6 +92,11 @@ type SockjsConfig struct {
 	// WebsocketWriteBufferSize is a parameter that is used for raw websocket Upgrader.
 	// If set to zero reasonable default value will be used.
 	WebsocketWriteBufferSize int
+
+	// Origin configures CORS origin to be set on outgoing responses. If set to the empty
+	// string, it will default to the incoming `Origin` header, or "*" if the Origin header
+	// isn't set.
+	Origin string
 }
 
 // SockjsHandler accepts SockJS connections.
@@ -115,6 +120,7 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	options.SockJSURL = c.URL
 
 	options.HeartbeatDelay = c.HeartbeatDelay
+	options.Origin = c.Origin
 
 	s := &SockjsHandler{
 		node:   n,
