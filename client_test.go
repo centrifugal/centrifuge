@@ -277,7 +277,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	assert.Equal(t, ErrorExpired, resp.Error)
 }
 
-func connectClient(t *testing.T, client *Client) *proto.ConnectResult {
+func connectClient(t testing.TB, client *Client) *proto.ConnectResult {
 	connectResp, disconnect := client.connectCmd(&proto.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, connectResp.Error)
@@ -295,7 +295,7 @@ func extractSubscribeResult(replies []*proto.Reply) *proto.SubscribeResult {
 	return &res
 }
 
-func subscribeClient(t *testing.T, client *Client, ch string) *proto.SubscribeResult {
+func subscribeClient(t testing.TB, client *Client, ch string) *proto.SubscribeResult {
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
 
