@@ -182,7 +182,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 // BenchmarkWebsocketHandler allows to benchmark full flow with one real
 // Websocket connection subscribed to one channel. This is not very representative
 // in terms of time for operation as network IO involved but useful to look at
-// total allocs and difference between JSON and Protobuf cases.
+// total allocs and difference between JSON and Protobuf cases using various buffer sizes.
 func BenchmarkWebsocketHandler(b *testing.B) {
 	n := nodeWithMemoryEngine()
 	c := n.Config()

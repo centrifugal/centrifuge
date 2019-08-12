@@ -180,7 +180,7 @@ func (b *NatsBroker) handleControl(m *nats.Msg) {
 
 // Subscribe - see Engine interface description.
 func (b *NatsBroker) Subscribe(ch string) error {
-	if strings.Contains(ch, "*") {
+	if strings.Contains(ch, "*") || strings.Contains(ch, ">") {
 		// Do not support wildcard subscriptions.
 		return centrifuge.ErrorBadRequest
 	}

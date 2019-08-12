@@ -165,32 +165,32 @@ func NewClient(ctx context.Context, n *Node, t Transport, opts ...ClientOption) 
 		channels:  make(map[string]ChannelContext),
 	}
 
+	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
+
 	messageWriterConf := writerConfig{
 		MaxQueueSize: config.ClientQueueMaxSize,
-		WriteFn: func(data ...[]byte) error {
-			if len(data) == 1 {
-				// no need in extra byte buffers in this path.
-				payload := data[0]
-				err := t.Write(payload)
-				if err != nil {
-					go c.Close(DisconnectWriteError)
-					return err
-				}
-				transportMessagesSent.WithLabelValues(t.Name()).Inc()
-			} else {
-				buf := getBuffer()
-				for _, payload := range data {
-					buf.Write(payload)
-				}
-				err := t.Write(buf.Bytes())
-				if err != nil {
-					go c.Close(DisconnectWriteError)
-					putBuffer(buf)
-					return err
-				}
-				putBuffer(buf)
-				transportMessagesSent.WithLabelValues(t.Name()).Add(float64(len(data)))
+		WriteFn: func(data []byte) error {
+			err := t.Write(data)
+			if err != nil {
+				go c.Close(DisconnectWriteError)
+				return err
 			}
+			transportMessagesSentCounter.Inc()
+			return nil
+		},
+		WriteManyFn: func(data ...[]byte) error {
+			buf := getBuffer()
+			for _, payload := range data {
+				buf.Write(payload)
+			}
+			err := t.Write(buf.Bytes())
+			if err != nil {
+				go c.Close(DisconnectWriteError)
+				putBuffer(buf)
+				return err
+			}
+			putBuffer(buf)
+			transportMessagesSentCounter.Add(float64(len(data)))
 			return nil
 		},
 	}
@@ -860,7 +860,9 @@ func (c *Client) expire() {
 			duration := time.Duration(ttl) * time.Second
 
 			c.mu.Lock()
-			c.expireTimer = time.AfterFunc(duration, c.expire)
+			if !c.closed {
+				c.expireTimer = time.AfterFunc(duration, c.expire)
+			}
 			c.mu.Unlock()
 		}
 	}
@@ -1768,6 +1770,10 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter, useP
 				if chOpts.HistoryRecover {
 					c.setInSubscribe(channel, false)
 				}
+				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
+					rw.write(&proto.Reply{Error: clientErr})
+					return clientErr, nil
+				}
 				return nil, DisconnectServerError
 			}
 
@@ -1802,6 +1808,9 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter, useP
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting recovery state for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				if chOpts.HistoryRecover {
 					c.setInSubscribe(channel, false)
+				}
+				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
+					return clientErr, nil
 				}
 				return nil, DisconnectServerError
 			}
@@ -2227,6 +2236,9 @@ func (c *Client) publishCmd(cmd *proto.PublishRequest) (*proto.PublishResponse, 
 			resp.Error = reply.Error
 			return resp, nil
 		}
+		if reply.Data != nil {
+			data = reply.Data
+		}
 	}
 
 	err := c.node.publish(ch, data, info)
@@ -2268,7 +2280,7 @@ func (c *Client) presenceCmd(cmd *proto.PresenceRequest) (*proto.PresenceRespons
 		return resp, nil
 	}
 
-	if !chOpts.Presence {
+	if !chOpts.Presence || chOpts.PresenceDisableForClient {
 		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
@@ -2276,6 +2288,10 @@ func (c *Client) presenceCmd(cmd *proto.PresenceRequest) (*proto.PresenceRespons
 	presence, err := c.node.Presence(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting presence", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
+		if clientErr, ok := err.(*Error); ok {
+			resp.Error = clientErr
+			return resp, nil
+		}
 		resp.Error = ErrorInternal
 		return resp, nil
 	}
@@ -2314,7 +2330,7 @@ func (c *Client) presenceStatsCmd(cmd *proto.PresenceStatsRequest) (*proto.Prese
 		return resp, nil
 	}
 
-	if !chOpts.Presence {
+	if !chOpts.Presence || chOpts.PresenceDisableForClient {
 		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
@@ -2364,7 +2380,7 @@ func (c *Client) historyCmd(cmd *proto.HistoryRequest) (*proto.HistoryResponse, 
 		return resp, nil
 	}
 
-	if chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0 {
+	if (chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0) || chOpts.HistoryDisableForClient {
 		resp.Error = ErrorNotAvailable
 		return resp, nil
 	}
