@@ -98,8 +98,11 @@ func BenchmarkWriteMerge(b *testing.B) {
 func BenchmarkWriteMergeDisabled(b *testing.B) {
 	transport := newBenchmarkTransport()
 	defer transport.close()
-	writer := newWriter(writerConfig{MaxMessagesInFrame: 1, WriteManyFn: transport.writeCombined})
-
+	writer := newWriter(writerConfig{
+		MaxMessagesInFrame: 1,
+		WriteFn:            transport.writeSingle,
+		WriteManyFn:        transport.writeCombined,
+	})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		runWrite(writer, transport)
@@ -134,7 +137,11 @@ func (t *fakeTransport) write(buf []byte) error {
 
 func TestWriter(t *testing.T) {
 	transport := newFakeTransport()
-	w := newWriter(writerConfig{MaxMessagesInFrame: 4, WriteFn: transport.write, WriteManyFn: transport.writeMany})
+	w := newWriter(writerConfig{
+		MaxMessagesInFrame: 4,
+		WriteFn:            transport.write,
+		WriteManyFn:        transport.writeMany,
+	})
 	disconnect := w.enqueue([]byte("test"))
 	assert.Nil(t, disconnect)
 	<-transport.ch
@@ -145,7 +152,11 @@ func TestWriter(t *testing.T) {
 
 func TestWriterDisconnect(t *testing.T) {
 	transport := newFakeTransport()
-	w := newWriter(writerConfig{MaxQueueSize: 1, WriteFn: transport.write, WriteManyFn: transport.writeMany})
+	w := newWriter(writerConfig{
+		MaxQueueSize: 1,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	})
 	disconnect := w.enqueue([]byte("test"))
 	assert.NotNil(t, disconnect)
 }

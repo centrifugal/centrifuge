@@ -142,7 +142,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 		pubBuffer: make([]*Publication, 0),
 	}
 
-	transportMessagesSentWriter := transportMessagesSent.WithLabelValues(t.Name())
+	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
 
 	messageWriterConf := writerConfig{
 		MaxQueueSize: config.ClientQueueMaxSize,
@@ -152,7 +152,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 				go c.Close(DisconnectWriteError)
 				return err
 			}
-			transportMessagesSentWriter.Inc()
+			transportMessagesSentCounter.Inc()
 			return nil
 		},
 		WriteManyFn: func(data ...[]byte) error {
@@ -167,7 +167,7 @@ func newClient(ctx context.Context, n *Node, t transport) (*Client, error) {
 				return err
 			}
 			putBuffer(buf)
-			transportMessagesSentWriter.Add(float64(len(data)))
+			transportMessagesSentCounter.Add(float64(len(data)))
 			return nil
 		},
 	}
