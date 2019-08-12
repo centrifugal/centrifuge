@@ -16,10 +16,21 @@ type testTransport struct {
 	sink       chan []byte
 	closed     bool
 	disconnect *Disconnect
+	encoding   Encoding
 }
 
 func newTestTransport() *testTransport {
-	return &testTransport{}
+	return &testTransport{
+		encoding: EncodingJSON,
+	}
+}
+
+func (t *testTransport) setEncoding(enc Encoding) {
+	t.encoding = enc
+}
+
+func (t *testTransport) setSink(sink chan []byte) {
+	t.sink = sink
 }
 
 func (t *testTransport) Write(data []byte) error {
@@ -39,7 +50,7 @@ func (t *testTransport) Name() string {
 }
 
 func (t *testTransport) Encoding() Encoding {
-	return proto.EncodingJSON
+	return t.encoding
 }
 
 func (t *testTransport) Info() TransportInfo {
