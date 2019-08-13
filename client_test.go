@@ -710,7 +710,7 @@ func TestClientPublishHandler(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -923,7 +923,7 @@ func TestClientHistoryDisabled(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	node.Publish("test", []byte(`{}`))
 
@@ -948,7 +948,7 @@ func TestClientPresenceDisabled(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	node.Publish("test", []byte(`{}`))
 

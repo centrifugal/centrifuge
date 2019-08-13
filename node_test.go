@@ -200,13 +200,14 @@ func newFakeConn(b testing.TB, node *Node, channel string, enc Encoding, sink ch
 	transport.setSink(sink)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 	connectClient(b, client)
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect, err := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: channel,
-	}, rw)
+	}, rw, false)
+	assert.Nil(b, err)
 	assert.Nil(b, disconnect)
 }
 
