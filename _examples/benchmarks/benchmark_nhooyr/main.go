@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -16,23 +16,49 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-
 	"nhooyr.io/websocket"
 )
 
-func handleLog(e centrifuge.LogEntry) {
-	log.Printf("%s: %v", e.Message, e.Fields)
+var dataBytes []byte
+
+func init() {
+	data := map[string]interface{}{
+		"_id":        "5adece493c1a23736b037c52",
+		"isActive":   false,
+		"balance":    "$2,199.02",
+		"picture":    "http://placehold.it/32x32",
+		"age":        25,
+		"eyeColor":   "blue",
+		"name":       "Swanson Walker",
+		"gender":     "male",
+		"company":    "SHADEASE",
+		"email":      "swansonwalker@shadease.com",
+		"phone":      "+1 (885) 410-3991",
+		"address":    "768 Paerdegat Avenue, Gouglersville, Oklahoma, 5380",
+		"registered": "2016-01-24T07:40:09 -03:00",
+		"latitude":   -71.336378,
+		"longitude":  -28.155956,
+		"tags": []string{
+			"magna",
+			"nostrud",
+			"irure",
+			"aliquip",
+			"culpa",
+			"sint",
+		},
+		"greeting":      "Hello, Swanson Walker! You have 9 unread messages.",
+		"favoriteFruit": "apple",
+	}
+
+	var err error
+	dataBytes, err = json.Marshal(data)
+	if err != nil {
+		panic(err.Error())
+	}
 }
 
-func authMiddleware(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID: "42",
-		})
-		r = r.WithContext(newCtx)
-		h.ServeHTTP(w, r)
-	})
+func handleLog(e centrifuge.LogEntry) {
+	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -84,8 +110,8 @@ func (t *customWebsocketTransport) Encoding() centrifuge.Encoding {
 	return t.enc
 }
 
-func (t *customWebsocketTransport) Info() centrifuge.TransportInfo {
-	return centrifuge.TransportInfo{
+func (t *customWebsocketTransport) Meta() centrifuge.TransportMeta {
+	return centrifuge.TransportMeta{
 		Request: t.request,
 	}
 }
@@ -173,29 +199,14 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 }
 
 func main() {
+	log.Printf("NumCPU: %d", runtime.NumCPU())
+
 	cfg := centrifuge.DefaultConfig
 
-	// Set secret to handle requests with JWT auth too. This is
-	// not required if you don't use token authentication and
-	// private subscriptions verified by token.
-	cfg.Secret = "secret"
 	cfg.Publish = true
-	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogLevel = centrifuge.LogLevelError
 	cfg.LogHandler = handleLog
-
-	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		centrifuge.ChannelNamespace{
-			Name: "chat",
-			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:         true,
-				Presence:        true,
-				JoinLeave:       true,
-				HistoryLifetime: 60,
-				HistorySize:     1000,
-				HistoryRecover:  true,
-			},
-		},
-	}
+	cfg.ClientInsecure = true
 
 	node, _ := centrifuge.New(cfg)
 
@@ -207,50 +218,39 @@ func main() {
 		})
 
 		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
+			// log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
 			return centrifuge.UnsubscribeReply{}
 		})
 
 		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			// Do not log here - lots of publications expected.
 			return centrifuge.PublishReply{}
 		})
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
-			log.Printf("Message from user: %s, data: %s", client.UserID(), string(e.Data))
+			// Do not log here - lots of messages expected.
+			err := client.Send(dataBytes)
+			if err != nil {
+				if err != io.EOF {
+					log.Fatalln("error senfing to client:", err.Error())
+				}
+			}
 			return centrifuge.MessageReply{}
 		})
 
 		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %#v", client.UserID(), e.Disconnect)
+			log.Printf("user %s disconnected", client.UserID())
 			return centrifuge.DisconnectReply{}
 		})
 
-		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
-
-		// Connect handler should not block, so start separate goroutine to
-		// periodically send messages to client.
-		go func() {
-			for {
-				err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-				if err != nil {
-					if err != io.EOF {
-						log.Println(err.Error())
-					} else {
-						return
-					}
-				}
-				time.Sleep(5 * time.Second)
-			}
-		}()
+		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), client.Transport().Name(), client.Transport().Encoding())
 	})
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(newWebsocketHandler(node)))
+	http.Handle("/connection/websocket", newWebsocketHandler(node))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

@@ -9,27 +9,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
+	"time"
 
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %+v", e.Message, e.Fields)
-}
-
-func authMiddleware(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID: "42",
-		})
-		r = r.WithContext(newCtx)
-		h.ServeHTTP(w, r)
-	})
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -83,10 +73,14 @@ func init() {
 }
 
 func main() {
+	log.Printf("NumCPU: %d", runtime.NumCPU())
+
 	cfg := centrifuge.DefaultConfig
 	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelError
 	cfg.LogHandler = handleLog
+	cfg.ClientInsecure = true
+	cfg.ClientMessageWriteTimeout = time.Second
 
 	node, _ := centrifuge.New(cfg)
 
@@ -130,8 +124,7 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
-	http.Handle("/metrics", promhttp.Handler())
+	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}))
 
 	go func() {
 		if err := http.ListenAndServe(":8000", nil); err != nil {

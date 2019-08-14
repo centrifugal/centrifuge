@@ -53,8 +53,8 @@ func (t *testTransport) Encoding() Encoding {
 	return t.encoding
 }
 
-func (t *testTransport) Info() TransportInfo {
-	return TransportInfo{}
+func (t *testTransport) Meta() TransportMeta {
+	return TransportMeta{}
 }
 
 func (t *testTransport) Close(disconnect *Disconnect) error {

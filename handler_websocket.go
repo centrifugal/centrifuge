@@ -80,8 +80,8 @@ func (t *websocketTransport) Encoding() proto.Encoding {
 	return t.opts.enc
 }
 
-func (t *websocketTransport) Info() TransportInfo {
-	return TransportInfo{
+func (t *websocketTransport) Meta() TransportMeta {
+	return TransportMeta{
 		Request: t.req,
 	}
 }

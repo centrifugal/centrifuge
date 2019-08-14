@@ -38,8 +38,8 @@ func (t *sockjsTransport) Encoding() proto.Encoding {
 	return proto.EncodingJSON
 }
 
-func (t *sockjsTransport) Info() TransportInfo {
-	return TransportInfo{
+func (t *sockjsTransport) Meta() TransportMeta {
+	return TransportMeta{
 		Request: t.session.Request(),
 	}
 }

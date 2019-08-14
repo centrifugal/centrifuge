@@ -201,8 +201,8 @@ func (t *eventsourceTransport) Encoding() centrifuge.Encoding {
 	return "json"
 }
 
-func (t *eventsourceTransport) Info() centrifuge.TransportInfo {
-	return centrifuge.TransportInfo{
+func (t *eventsourceTransport) Meta() centrifuge.TransportMeta {
+	return centrifuge.TransportMeta{
 		Request: t.req,
 	}
 }
