@@ -125,7 +125,9 @@ func (t *customWebsocketTransport) Write(data []byte) error {
 		if t.Encoding() == centrifuge.EncodingProtobuf {
 			messageType = websocket.MessageBinary
 		}
-		err := t.conn.Write(context.Background(), messageType, data)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := t.conn.Write(ctx, messageType, data)
 		if err != nil {
 			return err
 		}
@@ -251,7 +253,6 @@ func main() {
 	}
 
 	http.Handle("/connection/websocket", newWebsocketHandler(node))
-	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
 		if err := http.ListenAndServe(":8000", nil); err != nil {

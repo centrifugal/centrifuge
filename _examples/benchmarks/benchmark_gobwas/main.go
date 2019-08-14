@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	workers   = flag.Int("workers", 1024, "max workers count")
+	workers   = flag.Int("workers", 128, "max workers count")
 	queue     = flag.Int("queue", 1, "workers task queue size")
 	ioTimeout = flag.Duration("io_timeout", time.Second, "i/o operations timeout")
 )
@@ -259,20 +259,20 @@ func main() {
 		if err == nil {
 			err = <-accept
 		}
+
 		if err != nil {
-			if err != ErrScheduleTimeout {
-				goto cooldown
+			cooldown := func() {
+				delay := 5 * time.Millisecond
+				log.Printf("accept error: %v; retrying in %s", err, delay)
+				time.Sleep(delay)
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				goto cooldown
+			if err == ErrScheduleTimeout {
+				cooldown()
+			} else if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				cooldown()
+			} else {
+				log.Fatalf("accept error: %v", err)
 			}
-
-			log.Fatalf("accept error: %v", err)
-
-		cooldown:
-			delay := 5 * time.Millisecond
-			log.Printf("accept error: %v; retrying in %s", err, delay)
-			time.Sleep(delay)
 		}
 
 		poller.Resume(acceptDesc)
