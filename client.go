@@ -471,7 +471,7 @@ func (c *Client) UserID() string {
 }
 
 // Transport returns transport details used by client connection.
-func (c *Client) Transport() TransportDetails {
+func (c *Client) Transport() TransportInfo {
 	return c.transport
 }
 

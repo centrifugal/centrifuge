@@ -54,7 +54,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportDetails, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		log.Printf("authenticating client connection with id: %s dialed via %s (%s proto)", e.ClientID, t.Name(), t.Encoding())
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
