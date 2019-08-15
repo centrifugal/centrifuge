@@ -94,6 +94,11 @@ type SockjsConfig struct {
 	// WebsocketWriteBufferSize is a parameter that is used for raw websocket Upgrader.
 	// If set to zero reasonable default value will be used.
 	WebsocketWriteBufferSize int
+
+	// WriteTimeout is maximum time of write message operation.
+	// Slow client will be disconnected.
+	// By default DefaultWebsocketWriteTimeout will be used.
+	WebsocketWriteTimeout time.Duration
 }
 
 // SockjsHandler accepts SockJS connections.
@@ -117,6 +122,11 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	options.SockJSURL = c.URL
 
 	options.HeartbeatDelay = c.HeartbeatDelay
+	wsWriteTimeout := c.WebsocketWriteTimeout
+	if wsWriteTimeout == 0 {
+		wsWriteTimeout = DefaultWebsocketWriteTimeout
+	}
+	options.WebsocketWriteTimeout = wsWriteTimeout
 
 	s := &SockjsHandler{
 		node:   n,

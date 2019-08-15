@@ -144,6 +144,13 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 	return t.conn.Close()
 }
 
+// Defaults.
+const (
+	DefaultWebsocketPingInterval     = 25 * time.Second
+	DefaultWebsocketWriteTimeout     = 1 * time.Second
+	DefaultWebsocketMessageSizeLimit = 65536 // 64KB
+)
+
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
 	// Compression allows to enable websocket permessage-deflate
@@ -173,6 +180,19 @@ type WebsocketConfig struct {
 	// CheckOrigin func to provide custom origin check logic.
 	// nil means allow all origins.
 	CheckOrigin func(r *http.Request) bool
+
+	// PingInterval sets interval server will send ping messages to clients.
+	// By default DefaultPingInterval will be used.
+	PingInterval time.Duration
+
+	// WriteTimeout is maximum time of write message operation.
+	// Slow client will be disconnected.
+	// By default DefaultWebsocketWriteTimeout will be used.
+	WriteTimeout time.Duration
+
+	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
+	// By default DefaultWebsocketMaxMessageSize will be used.
+	MessageSizeLimit int
 }
 
 // WebsocketHandler handles websocket client connections.
@@ -223,13 +243,21 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	config := s.node.Config()
-	pingInterval := config.ClientPingInterval
-	writeTimeout := config.ClientMessageWriteTimeout
-	maxRequestSize := config.ClientRequestMaxSize
+	pingInterval := s.config.PingInterval
+	if pingInterval == 0 {
+		pingInterval = DefaultWebsocketPingInterval
+	}
+	writeTimeout := s.config.WriteTimeout
+	if writeTimeout == 0 {
+		writeTimeout = DefaultWebsocketWriteTimeout
+	}
+	messageSizeLimit := s.config.MessageSizeLimit
+	if messageSizeLimit == 0 {
+		messageSizeLimit = DefaultWebsocketMessageSizeLimit
+	}
 
-	if maxRequestSize > 0 {
-		conn.SetReadLimit(int64(maxRequestSize))
+	if messageSizeLimit > 0 {
+		conn.SetReadLimit(int64(messageSizeLimit))
 	}
 	if pingInterval > 0 {
 		pongWait := pingInterval * 10 / 9
