@@ -82,7 +82,7 @@ func TestClientInitialState(t *testing.T) {
 	assert.Equal(t, client.uid, client.ID())
 	assert.NotNil(t, "", client.user)
 	assert.Equal(t, 0, len(client.Channels()))
-	assert.Equal(t, proto.EncodingJSON, client.Transport().Encoding())
+	assert.Equal(t, proto.ProtocolTypeJSON, client.Transport().Protocol())
 	assert.Equal(t, "test_transport", client.Transport().Name())
 	assert.False(t, client.closed)
 	assert.False(t, client.authenticated)

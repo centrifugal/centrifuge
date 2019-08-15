@@ -16,17 +16,17 @@ type testTransport struct {
 	sink       chan []byte
 	closed     bool
 	disconnect *Disconnect
-	encoding   Encoding
+	protoType  ProtocolType
 }
 
 func newTestTransport() *testTransport {
 	return &testTransport{
-		encoding: EncodingJSON,
+		protoType: ProtocolTypeJSON,
 	}
 }
 
-func (t *testTransport) setEncoding(enc Encoding) {
-	t.encoding = enc
+func (t *testTransport) setProtocolType(pType ProtocolType) {
+	t.protoType = pType
 }
 
 func (t *testTransport) setSink(sink chan []byte) {
@@ -49,8 +49,12 @@ func (t *testTransport) Name() string {
 	return "test_transport"
 }
 
-func (t *testTransport) Encoding() Encoding {
-	return t.encoding
+func (t *testTransport) Protocol() ProtocolType {
+	return proto.ProtocolTypeJSON
+}
+
+func (t *testTransport) Encoding() EncodingType {
+	return proto.EncodingTypeJSON
 }
 
 func (t *testTransport) Meta() TransportMeta {
@@ -117,7 +121,7 @@ func TestHubSubscriptions(t *testing.T) {
 
 func TestPreparedReply(t *testing.T) {
 	reply := proto.Reply{}
-	prepared := newPreparedReply(&reply, proto.EncodingJSON)
+	prepared := newPreparedReply(&reply, proto.ProtocolTypeJSON)
 	data := prepared.Data()
 	assert.NotNil(t, data)
 }

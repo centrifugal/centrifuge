@@ -194,9 +194,9 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 	}
 }
 
-func newFakeConn(b testing.TB, node *Node, channel string, enc Encoding, sink chan []byte) {
+func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
 	transport := newTestTransport()
-	transport.setEncoding(enc)
+	transport.setProtocolType(protoType)
 	transport.setSink(sink)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
@@ -212,11 +212,11 @@ func newFakeConn(b testing.TB, node *Node, channel string, enc Encoding, sink ch
 }
 
 func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte) {
-	newFakeConn(b, node, channel, EncodingJSON, sink)
+	newFakeConn(b, node, channel, ProtocolTypeJSON, sink)
 }
 
 func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []byte) {
-	newFakeConn(b, node, channel, EncodingProtobuf, sink)
+	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink)
 }
 
 func BenchmarkBroadcastMemoryEngine(b *testing.B) {
