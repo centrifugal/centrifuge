@@ -667,10 +667,10 @@ func (c *Client) Handle(data []byte) bool {
 		return false
 	}
 
-	enc := c.transport.Protocol()
+	protoType := c.transport.Protocol()
 
-	encoder := proto.GetReplyEncoder(enc)
-	decoder := proto.GetCommandDecoder(enc, data)
+	encoder := proto.GetReplyEncoder(protoType)
+	decoder := proto.GetCommandDecoder(protoType, data)
 
 	for {
 		cmd, err := decoder.Decode()
@@ -680,8 +680,8 @@ func (c *Client) Handle(data []byte) bool {
 			}
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
 			c.Close(DisconnectBadRequest)
-			proto.PutCommandDecoder(enc, decoder)
-			proto.PutReplyEncoder(enc, encoder)
+			proto.PutCommandDecoder(protoType, decoder)
+			proto.PutReplyEncoder(protoType, encoder)
 			return false
 		}
 		var encodeErr error
@@ -700,8 +700,8 @@ func (c *Client) Handle(data []byte) bool {
 					if c.node.logger.enabled(LogLevelDebug) {
 						c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 					}
-					proto.PutCommandDecoder(enc, decoder)
-					proto.PutReplyEncoder(enc, encoder)
+					proto.PutCommandDecoder(protoType, decoder)
+					proto.PutReplyEncoder(protoType, encoder)
 					c.Close(disconnect)
 					return fmt.Errorf("flush error")
 				}
@@ -713,8 +713,8 @@ func (c *Client) Handle(data []byte) bool {
 		if disconnect != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			c.Close(disconnect)
-			proto.PutCommandDecoder(enc, decoder)
-			proto.PutReplyEncoder(enc, encoder)
+			proto.PutCommandDecoder(protoType, decoder)
+			proto.PutReplyEncoder(protoType, encoder)
 			return false
 		}
 		if encodeErr != nil {
@@ -731,14 +731,14 @@ func (c *Client) Handle(data []byte) bool {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			}
 			c.Close(disconnect)
-			proto.PutCommandDecoder(enc, decoder)
-			proto.PutReplyEncoder(enc, encoder)
+			proto.PutCommandDecoder(protoType, decoder)
+			proto.PutReplyEncoder(protoType, encoder)
 			return false
 		}
 	}
 
-	proto.PutCommandDecoder(enc, decoder)
-	proto.PutReplyEncoder(enc, encoder)
+	proto.PutCommandDecoder(protoType, decoder)
+	proto.PutReplyEncoder(protoType, encoder)
 
 	return true
 }
