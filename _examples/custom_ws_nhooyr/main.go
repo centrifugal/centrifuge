@@ -61,17 +61,17 @@ type customWebsocketTransport struct {
 	closed  bool
 	closeCh chan struct{}
 
-	conn    *websocket.Conn
-	enc     centrifuge.Encoding
-	request *http.Request
+	conn      *websocket.Conn
+	protoType centrifuge.ProtocolType
+	request   *http.Request
 }
 
-func newWebsocketTransport(conn *websocket.Conn, enc centrifuge.Encoding, r *http.Request) *customWebsocketTransport {
+func newWebsocketTransport(conn *websocket.Conn, protoType centrifuge.ProtocolType, r *http.Request) *customWebsocketTransport {
 	return &customWebsocketTransport{
-		conn:    conn,
-		enc:     enc,
-		request: r,
-		closeCh: make(chan struct{}),
+		conn:      conn,
+		protoType: protoType,
+		request:   r,
+		closeCh:   make(chan struct{}),
 	}
 }
 
@@ -79,8 +79,12 @@ func (t *customWebsocketTransport) Name() string {
 	return websocketTransportName
 }
 
-func (t *customWebsocketTransport) Encoding() centrifuge.Encoding {
-	return t.enc
+func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
+	return t.protoType
+}
+
+func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
+	return centrifuge.EncodingTypeJSON
 }
 
 func (t *customWebsocketTransport) Meta() centrifuge.TransportMeta {
@@ -95,7 +99,7 @@ func (t *customWebsocketTransport) Write(data []byte) error {
 		return nil
 	default:
 		var messageType = websocket.MessageText
-		if t.Encoding() == centrifuge.EncodingProtobuf {
+		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
 			messageType = websocket.MessageBinary
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -136,12 +140,12 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var enc = centrifuge.EncodingJSON
+	var protoType = centrifuge.ProtocolTypeJSON
 	if r.URL.Query().Get("format") == "protobuf" {
-		enc = centrifuge.EncodingProtobuf
+		protoType = centrifuge.ProtocolTypeProtobuf
 	}
 
-	transport := newWebsocketTransport(conn, enc, r)
+	transport := newWebsocketTransport(conn, protoType, r)
 
 	select {
 	case <-s.node.NotifyShutdown():

@@ -197,8 +197,12 @@ func (t *eventsourceTransport) Name() string {
 	return "raw-eventsource"
 }
 
-func (t *eventsourceTransport) Encoding() centrifuge.Encoding {
-	return "json"
+func (t *eventsourceTransport) Protocol() centrifuge.ProtocolType {
+	return centrifuge.ProtocolTypeJSON
+}
+
+func (t *eventsourceTransport) Encoding() centrifuge.EncodingType {
+	return centrifuge.EncodingTypeJSON
 }
 
 func (t *eventsourceTransport) Meta() centrifuge.TransportMeta {

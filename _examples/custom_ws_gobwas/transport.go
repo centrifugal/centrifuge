@@ -18,15 +18,15 @@ type customWebsocketTransport struct {
 	closed  bool
 	closeCh chan struct{}
 
-	conn net.Conn
-	enc  centrifuge.Encoding
+	conn      net.Conn
+	protoType centrifuge.ProtocolType
 }
 
-func newWebsocketTransport(conn net.Conn, enc centrifuge.Encoding) *customWebsocketTransport {
+func newWebsocketTransport(conn net.Conn, protoType centrifuge.ProtocolType) *customWebsocketTransport {
 	return &customWebsocketTransport{
-		conn:    conn,
-		enc:     enc,
-		closeCh: make(chan struct{}),
+		conn:      conn,
+		protoType: protoType,
+		closeCh:   make(chan struct{}),
 	}
 }
 
@@ -34,8 +34,12 @@ func (t *customWebsocketTransport) Name() string {
 	return websocketTransportName
 }
 
-func (t *customWebsocketTransport) Encoding() centrifuge.Encoding {
-	return t.enc
+func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
+	return t.protoType
+}
+
+func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
+	return centrifuge.EncodingTypeJSON
 }
 
 func (t *customWebsocketTransport) Meta() centrifuge.TransportMeta {
