@@ -157,12 +157,12 @@ func main() {
 		// io.ReadWriter.
 		safeConn := deadliner{conn, *ioTimeout}
 
-		enc := "json"
+		protoType := centrifuge.ProtocolTypeJSON
 
 		upgrader := ws.Upgrader{
 			OnRequest: func(uri []byte) error {
 				if strings.Contains(string(uri), "format=protobuf") {
-					enc = "protobuf"
+					protoType = centrifuge.ProtocolTypeProtobuf
 				}
 				return nil
 			},
@@ -178,7 +178,7 @@ func main() {
 
 		log.Printf("%s: established websocket connection: %+v", nameConn(conn), hs)
 
-		transport := newWebsocketTransport(safeConn, centrifuge.Encoding(enc))
+		transport := newWebsocketTransport(safeConn, protoType)
 		client, err := centrifuge.NewClient(context.Background(), node, transport)
 		if err != nil {
 			log.Printf("%s: client create error: %v", nameConn(conn), err)
