@@ -80,7 +80,6 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelError
 	cfg.LogHandler = handleLog
 	cfg.ClientInsecure = true
-	cfg.ClientMessageWriteTimeout = time.Second
 
 	node, _ := centrifuge.New(cfg)
 
@@ -124,7 +123,9 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}))
+	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+		WriteTimeout: time.Second,
+	}))
 
 	go func() {
 		if err := http.ListenAndServe(":8000", nil); err != nil {
