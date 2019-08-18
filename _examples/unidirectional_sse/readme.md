@@ -1,4 +1,4 @@
-Example demonstrates how to build simple event bus with custom Eventsource transport.
+Example demonstrates how to build simple event bus with custom Server-Sent Events (Eventsource) transport.
 
 There is no additional client required for client side as no complex bidirectional logic involved – client subscribed on channel server-side and just receives everything that was published into channel.
 
