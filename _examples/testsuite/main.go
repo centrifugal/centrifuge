@@ -78,7 +78,7 @@ func testCustomHeader(fn ResolveFunc) *centrifuge.Node {
 	node, _ := centrifuge.New(cfg)
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
-		authHeader := client.Transport().Info().Request.Header.Get("Authorization")
+		authHeader := client.Transport().Meta().Request.Header.Get("Authorization")
 		if authHeader != "testsuite" {
 			fn(fmt.Errorf("No valid Authorization header found"))
 		} else {

@@ -16,17 +16,17 @@ type testTransport struct {
 	sink       chan []byte
 	closed     bool
 	disconnect *Disconnect
-	encoding   Encoding
+	protoType  ProtocolType
 }
 
 func newTestTransport() *testTransport {
 	return &testTransport{
-		encoding: EncodingJSON,
+		protoType: ProtocolTypeJSON,
 	}
 }
 
-func (t *testTransport) setEncoding(enc Encoding) {
-	t.encoding = enc
+func (t *testTransport) setProtocolType(pType ProtocolType) {
+	t.protoType = pType
 }
 
 func (t *testTransport) setSink(sink chan []byte) {
@@ -49,12 +49,16 @@ func (t *testTransport) Name() string {
 	return "test_transport"
 }
 
-func (t *testTransport) Encoding() Encoding {
-	return t.encoding
+func (t *testTransport) Protocol() ProtocolType {
+	return proto.ProtocolTypeJSON
 }
 
-func (t *testTransport) Info() TransportInfo {
-	return TransportInfo{}
+func (t *testTransport) Encoding() EncodingType {
+	return proto.EncodingTypeJSON
+}
+
+func (t *testTransport) Meta() TransportMeta {
+	return TransportMeta{}
 }
 
 func (t *testTransport) Close(disconnect *Disconnect) error {
@@ -67,7 +71,7 @@ func (t *testTransport) Close(disconnect *Disconnect) error {
 
 func TestHub(t *testing.T) {
 	h := newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	c.user = "test"
 	h.add(c)
@@ -76,7 +80,7 @@ func TestHub(t *testing.T) {
 	assert.Equal(t, 1, len(conns))
 	assert.Equal(t, 1, h.NumClients())
 	assert.Equal(t, 1, h.NumUsers())
-	h.remove(c)
+	_ = h.remove(c)
 	assert.Equal(t, len(h.users), 0)
 	assert.Equal(t, 1, len(conns))
 }
@@ -86,7 +90,7 @@ func TestHubShutdown(t *testing.T) {
 	err := h.shutdown(context.Background())
 	assert.NoError(t, err)
 	h = newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	h.add(c)
 	err = h.shutdown(context.Background())
@@ -95,7 +99,7 @@ func TestHubShutdown(t *testing.T) {
 
 func TestHubSubscriptions(t *testing.T) {
 	h := newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	h.addSub("test1", c)
 	h.addSub("test2", c)
@@ -117,7 +121,7 @@ func TestHubSubscriptions(t *testing.T) {
 
 func TestPreparedReply(t *testing.T) {
 	reply := proto.Reply{}
-	prepared := newPreparedReply(&reply, proto.EncodingJSON)
+	prepared := newPreparedReply(&reply, proto.ProtocolTypeJSON)
 	data := prepared.Data()
 	assert.NotNil(t, data)
 }

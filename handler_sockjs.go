@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-
 	"github.com/igm/sockjs-go/sockjs"
 )
 
@@ -34,12 +32,16 @@ func (t *sockjsTransport) Name() string {
 	return transportSockJS
 }
 
-func (t *sockjsTransport) Encoding() proto.Encoding {
-	return proto.EncodingJSON
+func (t *sockjsTransport) Protocol() ProtocolType {
+	return ProtocolTypeJSON
 }
 
-func (t *sockjsTransport) Info() TransportInfo {
-	return TransportInfo{
+func (t *sockjsTransport) Encoding() EncodingType {
+	return EncodingTypeJSON
+}
+
+func (t *sockjsTransport) Meta() TransportMeta {
+	return TransportMeta{
 		Request: t.session.Request(),
 	}
 }
@@ -92,6 +94,11 @@ type SockjsConfig struct {
 	// WebsocketWriteBufferSize is a parameter that is used for raw websocket Upgrader.
 	// If set to zero reasonable default value will be used.
 	WebsocketWriteBufferSize int
+
+	// WriteTimeout is maximum time of write message operation.
+	// Slow client will be disconnected.
+	// By default DefaultWebsocketWriteTimeout will be used.
+	WebsocketWriteTimeout time.Duration
 }
 
 // SockjsHandler accepts SockJS connections.
@@ -115,6 +122,11 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	options.SockJSURL = c.URL
 
 	options.HeartbeatDelay = c.HeartbeatDelay
+	wsWriteTimeout := c.WebsocketWriteTimeout
+	if wsWriteTimeout == 0 {
+		wsWriteTimeout = DefaultWebsocketWriteTimeout
+	}
+	options.WebsocketWriteTimeout = wsWriteTimeout
 
 	s := &SockjsHandler{
 		node:   n,
@@ -152,7 +164,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 		default:
 		}
 
-		c, err := newClient(sess.Request().Context(), s.node, transport)
+		c, err := NewClient(sess.Request().Context(), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportSockJS}))
 			return
@@ -165,7 +177,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 
 		for {
 			if msg, err := sess.Recv(); err == nil {
-				ok := c.handleRawData([]byte(msg))
+				ok := c.Handle([]byte(msg))
 				if !ok {
 					return
 				}

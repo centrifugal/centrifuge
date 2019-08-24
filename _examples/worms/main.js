@@ -20,7 +20,7 @@ $(function(){
 
 	var clients = [];
 	var worms = [];
-    
+	
     var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
     centrifuge.subscribe("moving", function(message) {
