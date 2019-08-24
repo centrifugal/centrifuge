@@ -86,13 +86,6 @@ func main() {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
 
-		err := client.Subscribe(exampleChannel)
-		if err != nil {
-			// In case of subscribe error client will be disconnected automatically
-			// with server error. Here we just don't need to proceed.
-			return
-		}
-
 		// Connect handler should not block, so start separate goroutine to
 		// periodically send messages to client.
 		go func() {
@@ -113,7 +106,7 @@ func main() {
 	// Also publish to channel periodically.
 	go func() {
 		for {
-			err := node.Publish(exampleChannel, centrifuge.Raw(`{"channel time": "`+strconv.FormatInt(time.Now().Unix(), 10)+`"}`))
+			err := node.Publish(exampleChannel, centrifuge.Raw(`{"server_time": "`+strconv.FormatInt(time.Now().Unix(), 10)+`"}`))
 			if err != nil {
 				log.Println(err.Error())
 			}
@@ -139,6 +132,13 @@ func main() {
 			return
 		}
 		defer client.Close(nil)
+
+		err = client.Subscribe(exampleChannel)
+		if err != nil {
+			// In case of subscribe error client will be disconnected automatically
+			// with server error. Here we just don't need to proceed.
+			return
+		}
 
 		flusher := w.(http.Flusher)
 		notifier := w.(http.CloseNotifier)

@@ -263,6 +263,7 @@ func (c *Client) connect() (*Error, *Disconnect) {
 func (c *Client) Subscribe(channel string) error {
 	protoType := c.transport.Protocol()
 	encoder := proto.GetReplyEncoder(protoType)
+	defer proto.PutReplyEncoder(protoType, encoder)
 
 	var encodeErr error
 
@@ -282,7 +283,6 @@ func (c *Client) Subscribe(channel string) error {
 				if c.node.logger.enabled(LogLevelDebug) {
 					c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 				}
-				proto.PutReplyEncoder(protoType, encoder)
 				c.Close(disconnect)
 				return fmt.Errorf("flush error")
 			}

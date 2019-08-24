@@ -20,10 +20,10 @@
 
                 eventSource.onerror = function(e) {
                     if (this.readyState == EventSource.CONNECTING) {
-                        console.log("eventsource connection reconnecting");
+                        drawText("eventsource connection reconnecting");
                         console.log(e);
                     } else {
-                        console.log("eventsource connection closing");
+                        drawText("eventsource connection closing");
                         console.log(e);
                     }
                 };
