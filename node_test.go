@@ -204,10 +204,9 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	connectClient(b, client)
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
-	disconnect, err := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: channel,
-	}, rw, false)
-	assert.Nil(b, err)
+	}, rw)
 	assert.Nil(b, disconnect)
 }
 

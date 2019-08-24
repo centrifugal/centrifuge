@@ -299,9 +299,9 @@ func subscribeClient(t testing.TB, client *Client, ch string) *proto.SubscribeRe
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
 
-	_, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: ch,
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Nil(t, replies[0].Error)
 	return extractSubscribeResult(replies)
@@ -321,9 +321,9 @@ func TestClientSubscribe(t *testing.T) {
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
 
-	_, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "test1",
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Equal(t, 1, len(replies))
 	assert.Nil(t, replies[0].Error)
@@ -334,18 +334,18 @@ func TestClientSubscribe(t *testing.T) {
 	assert.Equal(t, 1, len(client.Channels()))
 
 	replies = nil
-	_, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "test2",
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Equal(t, 2, len(client.Channels()))
 	assert.Equal(t, 1, node.Hub().NumClients())
 	assert.Equal(t, 2, node.Hub().NumChannels())
 
 	replies = nil
-	_, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "test2",
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorAlreadySubscribed, replies[0].Error)
 }
@@ -363,9 +363,9 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
 
-	_, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "test",
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Nil(t, replies[0].Error)
 
@@ -405,9 +405,9 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
 
-	_, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "test",
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Nil(t, replies[0].Error)
 
@@ -471,9 +471,9 @@ func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
 
-	_, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "$test1",
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorPermissionDenied, replies[0].Error)
 }
@@ -495,26 +495,26 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
 
-	_, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$wrong_channel", "wrong client", 0),
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorPermissionDenied, replies[0].Error)
 
 	replies = nil
-	_, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$wrong_channel", client.ID(), 0),
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorPermissionDenied, replies[0].Error)
 
 	replies = nil
-	_, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), 0),
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Nil(t, replies[0].Error)
 }
@@ -536,18 +536,18 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	replies := []*proto.Reply{}
 	rw := testReplyWriter(&replies)
 
-	_, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), 10),
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorTokenExpired, replies[0].Error)
 
 	replies = nil
-	_, disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), time.Now().Unix()+10),
-	}, rw, false)
+	}, rw)
 	assert.Nil(t, disconnect)
 	assert.Nil(t, replies[0].Error, "token is valid and not expired yet")
 	res := extractSubscribeResult(replies)
@@ -1133,13 +1133,13 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 				Since: nil,
 			})
 
-			_, disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
 				Channel: channel,
 				Recover: true,
 				Seq:     tt.SinceSeq,
 				Gen:     recoveryPosition.Gen,
 				Epoch:   recoveryPosition.Epoch,
-			}, rw, false)
+			}, rw)
 			assert.Nil(t, disconnect)
 			assert.Nil(t, replies[0].Error)
 			res := extractSubscribeResult(replies)
