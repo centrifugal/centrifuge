@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/igm/sockjs-go/sockjs"
 )
 
@@ -87,6 +88,14 @@ type SockjsConfig struct {
 	// HeartbeatDelay sets how often to send heartbeat frames to clients.
 	HeartbeatDelay time.Duration
 
+	// CheckOrigin allows to decide whether to use CORS or not in XHR case.
+	// When false returned then CORS headers won't be set.
+	CheckOrigin func(*http.Request) bool
+
+	// WebsocketCheckOrigin allows to set custom CheckOrigin func for underlying
+	// gorilla Websocket based Upgrader.
+	WebsocketCheckOrigin func(*http.Request) bool
+
 	// WebsocketReadBufferSize is a parameter that is used for raw websocket Upgrader.
 	// If set to zero reasonable default value will be used.
 	WebsocketReadBufferSize int
@@ -110,16 +119,18 @@ type SockjsHandler struct {
 
 // NewSockjsHandler creates new SockjsHandler.
 func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
-	sockjs.WebSocketReadBufSize = c.WebsocketReadBufferSize
-	sockjs.WebSocketWriteBufSize = c.WebsocketWriteBufferSize
-
 	options := sockjs.DefaultOptions
-
+	options.WebsocketUpgrader = &websocket.Upgrader{
+		ReadBufferSize:  c.WebsocketReadBufferSize,
+		WriteBufferSize: c.WebsocketWriteBufferSize,
+		CheckOrigin:     c.WebsocketCheckOrigin,
+	}
 	// Override sockjs url. It's important to use the same SockJS
 	// library version on client and server sides when using iframe
 	// based SockJS transports, otherwise SockJS will raise error
 	// about version mismatch.
 	options.SockJSURL = c.URL
+	options.CheckOrigin = c.CheckOrigin
 
 	options.HeartbeatDelay = c.HeartbeatDelay
 	wsWriteTimeout := c.WebsocketWriteTimeout
