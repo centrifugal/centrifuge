@@ -10,12 +10,12 @@
   version = "v0.0.1"
 
 [[projects]]
-  digest = "1:8e379117c74df8f21127a82e1599de345efad7770fa91dd2ea20195471014fb4"
+  digest = "1:74304fe46313d93f638aa2e11177aa5a08e6b39af503dce2fed216eaeaeed23d"
   name = "github.com/FZambia/sentinel"
   packages = ["."]
   pruneopts = ""
-  revision = "e69a8dc549bb0aabdc63fbfd9e8bfe971a368153"
-  version = "v1.0.0"
+  revision = "f57c7b5fd3c67c6f12bf1a29d757af6e5add30b4"
+  version = "v1.1.0"
 
 [[projects]]
   branch = "master"
