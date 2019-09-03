@@ -4,15 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/centrifugal/centrifuge"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
-	"github.com/gin-gonic/gin"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/centrifugal/centrifuge"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
+	"github.com/gin-gonic/gin"
 )
 
 type clientMessage struct {
@@ -24,19 +25,26 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
-//At the resolver level we only have access to context.Context inside centrifuge, but we need the gin context
-//So we create a gin middleware to add its context to the context.Context used by centrifuge websocket server
+type contextKey int
+
+var ginContextKey contextKey
+
+// GinContextToContextMiddleware - at the resolver level we only have access
+// to context.Context inside centrifuge, but we need the gin context. So we
+// create a gin middleware to add its context to the context.Context used by
+// centrifuge websocket server.
 func GinContextToContextMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := context.WithValue(c.Request.Context(), "GinContextKey", c)
+		ctx := context.WithValue(c.Request.Context(), ginContextKey, c)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
 }
 
-//We recover the gin context from the context.Context struct where we added it just above
+// GinContextFromContext - we recover the gin context from the context.Context
+// struct where we added it just above
 func GinContextFromContext(ctx context.Context) (*gin.Context, error) {
-	ginContext := ctx.Value("GinContextKey")
+	ginContext := ctx.Value(ginContextKey)
 	if ginContext == nil {
 		err := fmt.Errorf("could not retrieve gin.Context")
 		return nil, err
@@ -49,18 +57,18 @@ func GinContextFromContext(ctx context.Context) (*gin.Context, error) {
 	return gc, nil
 }
 
-//Finally we can use gin context in the auth middleware of centrifuge!
+// Finally we can use gin context in the auth middleware of centrifuge.
 func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		//We get gin ctx from context.Context struct
+		// We get gin ctx from context.Context struct.
 		gc, err := GinContextFromContext(ctx)
 		if err != nil {
 			fmt.Printf("Failed to retrieve gin context")
 			fmt.Print(err.Error())
 			return
 		}
-		//And now we can access gin session!
+		// And now we can access gin session.
 		s := sessions.Default(gc)
 		username := s.Get("user").(string)
 		if username != "" {
@@ -105,16 +113,7 @@ func main() {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{
-				ExpireAt: time.Now().Unix() + 10,
-			}
-		})
-
-		client.On().SubRefresh(func(e centrifuge.SubRefreshEvent) centrifuge.SubRefreshReply {
-			log.Printf("user %s subscription on channel %s is going to expire, refreshing", client.UserID(), e.Channel)
-			return centrifuge.SubRefreshReply{
-				ExpireAt: time.Now().Unix() + 10,
-			}
+			return centrifuge.SubscribeReply{}
 		})
 
 		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
@@ -181,7 +180,8 @@ func main() {
 		}
 	})
 
-	//We also start a separate goroutine for centrifuge itself, since we still need to run gin web server.
+	// We also start a separate goroutine for centrifuge itself, since we
+	// still need to run gin web server.
 	go func() {
 		if err := node.Run(); err != nil {
 			log.Fatal(err)
@@ -192,7 +192,7 @@ func main() {
 	store := cookie.NewStore([]byte("secret_string"))
 	r.Use(sessions.Sessions("session_name", store))
 	r.LoadHTMLFiles("./login_form.html", "./chat.html")
-	//Here we tell gin to use the middleware we created just above
+	// Here we tell gin to use the middleware we created just above
 	r.Use(GinContextToContextMiddleware())
 
 	r.GET("/login", func(c *gin.Context) {
