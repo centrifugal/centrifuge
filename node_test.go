@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -190,5 +191,67 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		node.Publish("bench", payload)
+	}
+}
+
+func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
+	transport := newTestTransport()
+	transport.setProtocolType(protoType)
+	transport.setSink(sink)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := NewClient(newCtx, node, transport)
+	connectClient(b, client)
+	replies := []*proto.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+		Channel: channel,
+	}, rw)
+	assert.Nil(b, disconnect)
+}
+
+func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte) {
+	newFakeConn(b, node, channel, ProtocolTypeJSON, sink)
+}
+
+func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []byte) {
+	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink)
+}
+
+func BenchmarkBroadcastMemoryEngine(b *testing.B) {
+	benchmarks := []struct {
+		name           string
+		getFakeConn    func(b testing.TB, n *Node, channel string, sink chan []byte)
+		numSubscribers int
+	}{
+		{"JSON", newFakeConnJSON, 1},
+		{"Protobuf", newFakeConnProtobuf, 1},
+		{"JSON", newFakeConnJSON, 10000},
+		{"Protobuf", newFakeConnProtobuf, 10000},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(fmt.Sprintf("%s_%d_subscribers", bm.name, bm.numSubscribers), func(b *testing.B) {
+			n := nodeWithMemoryEngine()
+			c := n.Config()
+			c.ClientInsecure = true
+			n.Reload(c)
+			payload := []byte(`{"input": "test"}`)
+			sink := make(chan []byte, bm.numSubscribers)
+			for i := 0; i < bm.numSubscribers; i++ {
+				bm.getFakeConn(b, n, "test", sink)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				err := n.Publish("test", payload)
+				if err != nil {
+					panic(err)
+				}
+				for j := 0; j < bm.numSubscribers; j++ {
+					<-sink
+				}
+			}
+			b.ReportAllocs()
+		})
 	}
 }

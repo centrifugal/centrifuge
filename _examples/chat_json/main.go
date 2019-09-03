@@ -79,7 +79,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.Transport, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
 			Data: centrifuge.Raw(`{}`),
 		}
@@ -140,7 +140,7 @@ func main() {
 		})
 
 		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
 		// Connect handler should not block, so start separate goroutine to
 		// periodically send messages to client.

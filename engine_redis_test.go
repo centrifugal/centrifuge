@@ -762,7 +762,7 @@ func TestClientSubscribeRecoverRedis(t *testing.T) {
 			transport := newTestTransport()
 			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := newClient(newCtx, node, transport)
+			client, _ := NewClient(newCtx, node, transport)
 
 			channel := "test_recovery_redis_" + tt.Name
 
