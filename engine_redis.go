@@ -345,14 +345,14 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 }
 
 var (
-	// addHistorySource ...
+	// Add to history and optionally publish.
 	// KEYS[1] - history list key
 	// KEYS[2] - history sequence key
 	// ARGV[1] - message payload
 	// ARGV[2] - history size ltrim right bound
 	// ARGV[3] - history lifetime
-	// ARGV[4] - channel to publish message to if needed.
-	// ARGV[5] - sequence key expiration time.
+	// ARGV[4] - channel to publish message to if needed
+	// ARGV[5] - sequence key expiration time
 	addHistorySource = `
 	local sequence = redis.call("incr", KEYS[2])
 	if ARGV[5] ~= '0' then
@@ -368,47 +368,13 @@ var (
 	return sequence
 		`
 
-	// KEYS[1] - presence set key
-	// KEYS[2] - presence hash key
-	// ARGV[1] - key expire seconds
-	// ARGV[2] - expire at for set member
-	// ARGV[3] - uid
-	// ARGV[4] - info payload
-	addPresenceSource = `
-redis.call("zadd", KEYS[1], ARGV[2], ARGV[3])
-redis.call("hset", KEYS[2], ARGV[3], ARGV[4])
-redis.call("expire", KEYS[1], ARGV[1])
-redis.call("expire", KEYS[2], ARGV[1])
-	`
-
-	// KEYS[1] - presence set key
-	// KEYS[2] - presence hash key
-	// ARGV[1] - uid
-	remPresenceSource = `
-redis.call("hdel", KEYS[2], ARGV[1])
-redis.call("zrem", KEYS[1], ARGV[1])
-	`
-
-	// KEYS[1] - presence set key
-	// KEYS[2] - presence hash key
-	// ARGV[1] - now string
-	presenceSource = `
-local expired = redis.call("zrangebyscore", KEYS[1], "0", ARGV[1])
-if #expired > 0 then
-  for num = 1, #expired do
-    redis.call("hdel", KEYS[2], expired[num])
-  end
-  redis.call("zremrangebyscore", KEYS[1], "0", ARGV[1])
-end
-return redis.call("hgetall", KEYS[2])
-	`
-
+	// Retrieve channel history information.
 	// KEYS[1] - history sequence key
 	// KEYS[2] - history epoch key
 	// KEYS[3] - history list key
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
-	// ARGV[3] - sequence key expiration time.
+	// ARGV[3] - sequence key expiration time
 	historySource = `
 redis.replicate_commands()
 local seq = redis.call("get", KEYS[1])
@@ -427,6 +393,44 @@ if ARGV[1] ~= "0" then
 	pubs = redis.call("lrange", KEYS[3], 0, ARGV[2])
 end
 return {seq, epoch, pubs}
+	`
+
+	// Add/update client presence information.
+	// KEYS[1] - presence set key
+	// KEYS[2] - presence hash key
+	// ARGV[1] - key expire seconds
+	// ARGV[2] - expire at for set member
+	// ARGV[3] - client ID
+	// ARGV[4] - info payload
+	addPresenceSource = `
+redis.call("zadd", KEYS[1], ARGV[2], ARGV[3])
+redis.call("hset", KEYS[2], ARGV[3], ARGV[4])
+redis.call("expire", KEYS[1], ARGV[1])
+redis.call("expire", KEYS[2], ARGV[1])
+	`
+
+	// Remove client presense.
+	// KEYS[1] - presence set key
+	// KEYS[2] - presence hash key
+	// ARGV[1] - client ID
+	remPresenceSource = `
+redis.call("hdel", KEYS[2], ARGV[1])
+redis.call("zrem", KEYS[1], ARGV[1])
+	`
+
+	// Get presence information.
+	// KEYS[1] - presence set key
+	// KEYS[2] - presence hash key
+	// ARGV[1] - current timestamp in seconds
+	presenceSource = `
+local expired = redis.call("zrangebyscore", KEYS[1], "0", ARGV[1])
+if #expired > 0 then
+  for num = 1, #expired do
+    redis.call("hdel", KEYS[2], expired[num])
+  end
+  redis.call("zremrangebyscore", KEYS[1], "0", ARGV[1])
+end
+return redis.call("hgetall", KEYS[2])
 	`
 )
 

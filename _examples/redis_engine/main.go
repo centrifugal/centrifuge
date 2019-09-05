@@ -101,13 +101,13 @@ func main() {
 		PublishOnHistoryAdd: false,
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
-				Host:                   "localhost",
-				Port:                   6379,
+				Host: "localhost",
+				Port: 6379,
 				SequenceExpireInterval: 7 * 24 * time.Hour, // reasonably large expiration intreval.
 			},
 			centrifuge.RedisShardConfig{
-				Host:                   "localhost",
-				Port:                   6380,
+				Host: "localhost",
+				Port: 6380,
 				SequenceExpireInterval: 7 * 24 * time.Hour,
 			},
 		},
