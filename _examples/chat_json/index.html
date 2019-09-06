@@ -33,12 +33,8 @@
                 var input = $("#input");
                 var container = $('#messages');
 
-                // var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
-                var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
-                    sockjsTransports: [
-                        "xhr-polling"
-                    ]
-                });
+                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+                // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs');
 
                 centrifuge.setConnectData({"user-agent": navigator.userAgent});
 
