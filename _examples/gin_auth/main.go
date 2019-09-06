@@ -161,14 +161,18 @@ func main() {
 		// periodically send messages to client.
 		go func() {
 			for {
-				err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-				if err != nil {
-					if err == io.EOF {
-						return
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+					err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+					if err != nil {
+						if err == io.EOF {
+							return
+						}
+						log.Println(err.Error())
 					}
-					log.Println(err.Error())
 				}
-				time.Sleep(5 * time.Second)
 			}
 		}()
 	})
