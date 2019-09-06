@@ -85,6 +85,13 @@ func main() {
 		}
 	})
 
+	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 10,
+		}
+	})
+
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
@@ -146,23 +153,20 @@ func main() {
 		// periodically send messages to client.
 		go func() {
 			for {
-				err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-				if err != nil {
-					if err == io.EOF {
-						return
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+					err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+					if err != nil {
+						if err == io.EOF {
+							return
+						}
+						log.Println(err.Error())
 					}
-					log.Println(err.Error())
 				}
-				time.Sleep(5 * time.Second)
 			}
 		}()
-	})
-
-	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 10,
-		}
 	})
 
 	if err := node.Run(); err != nil {

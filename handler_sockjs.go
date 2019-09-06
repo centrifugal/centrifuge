@@ -175,7 +175,9 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 		default:
 		}
 
-		c, err := NewClient(sess.Request().Context(), s.node, transport)
+		ch := make(chan struct{})
+		defer close(ch)
+		c, err := NewClient(newCustomCancelContext(sess.Request().Context(), ch), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportSockJS}))
 			return
