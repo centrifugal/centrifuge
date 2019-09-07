@@ -41,12 +41,6 @@ func (t *sockjsTransport) Encoding() EncodingType {
 	return EncodingTypeJSON
 }
 
-func (t *sockjsTransport) Meta() TransportMeta {
-	return TransportMeta{
-		Request: t.session.Request(),
-	}
-}
-
 func (t *sockjsTransport) Write(data []byte) error {
 	select {
 	case <-t.closeCh:
