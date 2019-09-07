@@ -11,6 +11,5 @@ require (
 	github.com/gorilla/websocket v1.4.1
 	github.com/igm/sockjs-go v0.0.0-20190813134216-1a1bca4e69c3
 	github.com/prometheus/client_golang v0.9.2
-	github.com/stretchr/testify v1.4.0
-	nhooyr.io/websocket v1.5.1
+	github.com/stretchr/testify v1.3.0
 )
