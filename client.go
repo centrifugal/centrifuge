@@ -124,19 +124,8 @@ type Client struct {
 	messageWriter *writer
 }
 
-// ClientOptions ...
-type ClientOptions struct{}
-
-// ClientOption ...
-type ClientOption func(*ClientOptions)
-
 // NewClient initializes new Client.
-func NewClient(ctx context.Context, n *Node, t Transport, opts ...ClientOption) (*Client, error) {
-
-	clientOptions := &ClientOptions{}
-	for _, opt := range opts {
-		opt(clientOptions)
-	}
+func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 
 	uuidObject, err := uuid.NewV4()
 	if err != nil {
