@@ -42,12 +42,6 @@ func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
 
-func (t *customWebsocketTransport) Meta() centrifuge.TransportMeta {
-	return centrifuge.TransportMeta{
-		Request: nil,
-	}
-}
-
 func (t *customWebsocketTransport) read() ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

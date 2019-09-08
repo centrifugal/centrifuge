@@ -57,10 +57,6 @@ func (t *testTransport) Encoding() EncodingType {
 	return proto.EncodingTypeJSON
 }
 
-func (t *testTransport) Meta() TransportMeta {
-	return TransportMeta{}
-}
-
 func (t *testTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()

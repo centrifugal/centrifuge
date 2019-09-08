@@ -18,7 +18,6 @@ const (
 type websocketTransport struct {
 	mu        sync.RWMutex
 	conn      *websocket.Conn
-	req       *http.Request
 	closed    bool
 	closeCh   chan struct{}
 	opts      *websocketTransportOptions
@@ -33,10 +32,9 @@ type websocketTransportOptions struct {
 	compressionMinSize int
 }
 
-func newWebsocketTransport(conn *websocket.Conn, req *http.Request, opts *websocketTransportOptions) *websocketTransport {
+func newWebsocketTransport(conn *websocket.Conn, opts *websocketTransportOptions) *websocketTransport {
 	transport := &websocketTransport{
 		conn:    conn,
-		req:     req,
 		closeCh: make(chan struct{}),
 		opts:    opts,
 	}
@@ -81,12 +79,6 @@ func (t *websocketTransport) Protocol() ProtocolType {
 
 func (t *websocketTransport) Encoding() EncodingType {
 	return t.opts.encType
-}
-
-func (t *websocketTransport) Meta() TransportMeta {
-	return TransportMeta{
-		Request: t.req,
-	}
 }
 
 func (t *websocketTransport) Write(data []byte) error {
@@ -288,7 +280,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			protoType:          protocol,
 		}
 
-		transport := newWebsocketTransport(conn, r, opts)
+		transport := newWebsocketTransport(conn, opts)
 
 		select {
 		case <-s.node.NotifyShutdown():
