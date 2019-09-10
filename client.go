@@ -537,6 +537,13 @@ func (c *Client) clientInfo(ch string) *proto.ClientInfo {
 
 // Handle raw data encoded with Centrifuge protocol. Not goroutine-safe.
 func (c *Client) Handle(data []byte) bool {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false
+	}
+	c.mu.Unlock()
+
 	if len(data) == 0 {
 		c.node.logger.log(newLogEntry(LogLevelError, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
 		c.Close(DisconnectBadRequest)
