@@ -144,7 +144,6 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 		case <-tm.C:
 		}
 		timers.ReleaseTimer(tm)
-
 		return t.conn.Close()
 	}
 	return t.conn.Close()
@@ -318,16 +317,19 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}(time.Now())
 		defer c.Close(nil)
 
+		sem := make(chan struct{}, 1)
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				close(graceCh)
 				return
 			}
-			ok := c.Handle(data)
-			if !ok {
-				return
-			}
+
+			sem <- struct{}{}
+			s.node.pool.Submit(func() {
+				c.Handle(data)
+				<-sem
+			})
 		}
 	}()
 }
