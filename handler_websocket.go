@@ -318,20 +318,17 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		defer c.Close(nil)
 
 		sem := make(chan struct{}, 1)
-		processReads := true
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				close(graceCh)
 				return
 			}
-			if processReads {
-				s.node.pool.Submit(func() {
-					sem <- struct{}{}
-					processReads = c.Handle(data)
-					<-sem
-				})
-			}
+			s.node.pool.Submit(func() {
+				sem <- struct{}{}
+				c.Handle(data)
+				<-sem
+			})
 		}
 	}()
 }
