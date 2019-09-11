@@ -6,7 +6,7 @@ const minCapacity = 16
 
 // Deque represents a single instance of the deque data structure.
 type Deque struct {
-	buf    []interface{}
+	buf    []func()
 	head   int
 	tail   int
 	count  int
@@ -21,7 +21,7 @@ func (q *Deque) Len() int {
 // PushBack appends an element to the back of the queue.  Implements FIFO when
 // elements are removed with PopFront(), and LIFO when elements are removed
 // with PopBack().
-func (q *Deque) PushBack(elem interface{}) {
+func (q *Deque) PushBack(elem func()) {
 	q.growIfFull()
 
 	q.buf[q.tail] = elem
@@ -31,7 +31,7 @@ func (q *Deque) PushBack(elem interface{}) {
 }
 
 // PushFront prepends an element to the front of the queue.
-func (q *Deque) PushFront(elem interface{}) {
+func (q *Deque) PushFront(elem func()) {
 	q.growIfFull()
 
 	// Calculate new head position.
@@ -43,7 +43,7 @@ func (q *Deque) PushFront(elem interface{}) {
 // PopFront removes and returns the element from the front of the queue.
 // Implements FIFO when used with PushBack().  If the queue is empty, the call
 // panics.
-func (q *Deque) PopFront() interface{} {
+func (q *Deque) PopFront() func() {
 	if q.count <= 0 {
 		panic("deque: PopFront() called on empty queue")
 	}
@@ -60,7 +60,7 @@ func (q *Deque) PopFront() interface{} {
 // PopBack removes and returns the element from the back of the queue.
 // Implements LIFO when used with PushBack().  If the queue is empty, the call
 // panics.
-func (q *Deque) PopBack() interface{} {
+func (q *Deque) PopBack() func() {
 	if q.count <= 0 {
 		panic("deque: PopBack() called on empty queue")
 	}
@@ -80,7 +80,7 @@ func (q *Deque) PopBack() interface{} {
 // Front returns the element at the front of the queue.  This is the element
 // that would be returned by PopFront().  This call panics if the queue is
 // empty.
-func (q *Deque) Front() interface{} {
+func (q *Deque) Front() func() {
 	if q.count <= 0 {
 		panic("deque: Front() called when empty")
 	}
@@ -90,7 +90,7 @@ func (q *Deque) Front() interface{} {
 // Back returns the element at the back of the queue.  This is the element
 // that would be returned by PopBack().  This call panics if the queue is
 // empty.
-func (q *Deque) Back() interface{} {
+func (q *Deque) Back() func() {
 	if q.count <= 0 {
 		panic("deque: Back() called when empty")
 	}
@@ -109,7 +109,7 @@ func (q *Deque) Back() interface{} {
 // case of a fixed-size circular log buffer: A new entry is pushed onto one end
 // and when full the oldest is popped from the other end.  All the log entries
 // in the buffer must be readable without altering the buffer contents.
-func (q *Deque) At(i int) interface{} {
+func (q *Deque) At(i int) func() {
 	if i < 0 || i >= q.count {
 		panic("deque: At() called with index out of range")
 	}
@@ -210,7 +210,7 @@ func (q *Deque) growIfFull() {
 		if q.minCap == 0 {
 			q.minCap = minCapacity
 		}
-		q.buf = make([]interface{}, q.minCap)
+		q.buf = make([]func(), q.minCap)
 		return
 	}
 	if q.count == len(q.buf) {
@@ -229,7 +229,7 @@ func (q *Deque) shrinkIfExcess() {
 // used to grow the queue when it is full, and also to shrink it when it is
 // only a quarter full.
 func (q *Deque) resize() {
-	newBuf := make([]interface{}, q.count<<1)
+	newBuf := make([]func(), q.count<<1)
 	if q.tail > q.head {
 		copy(newBuf, q.buf[q.head:q.tail])
 	} else {

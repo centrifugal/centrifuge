@@ -154,7 +154,7 @@ Loop:
 				p.waitingQueue.PushBack(task)
 			case workerTaskChan = <-p.readyWorkers:
 				// A worker is ready, so give task to worker.
-				workerTaskChan <- p.waitingQueue.PopFront().(func())
+				workerTaskChan <- p.waitingQueue.PopFront()
 			}
 			continue
 		}
@@ -206,7 +206,7 @@ Loop:
 		for p.waitingQueue.Len() != 0 {
 			workerTaskChan = <-p.readyWorkers
 			// A worker is ready, so give task to worker.
-			workerTaskChan <- p.waitingQueue.PopFront().(func())
+			workerTaskChan <- p.waitingQueue.PopFront()
 		}
 	}
 
