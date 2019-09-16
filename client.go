@@ -457,12 +457,15 @@ func (c *Client) Close(disconnect *Disconnect) error {
 		disconnect = c.disconnect
 	}
 
-	channels := c.channels
+	channels := make(map[string]ChannelContext, len(c.channels))
+	for channel, channelContext := range c.channels {
+		channels[channel] = channelContext
+	}
 	c.mu.Unlock()
 
 	if len(channels) > 0 {
 		// Unsubscribe from all channels.
-		for channel := range c.channels {
+		for channel := range channels {
 			err := c.unsubscribe(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
