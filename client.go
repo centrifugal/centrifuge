@@ -335,20 +335,20 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelConte
 	}
 
 	isValidPosition := streamPosition.Seq == position.Seq && streamPosition.Gen == position.Gen && streamPosition.Epoch == position.Epoch
-	var needDisconnect bool
+	keepConnection := true
 	c.mu.Lock()
 	if channelContext, ok = c.channels[ch]; ok {
 		channelContext.positionCheckTime = nowUnix
 		if !isValidPosition {
 			channelContext.positionCheckFailures++
-			needDisconnect = channelContext.positionCheckFailures == maxCheckPositionFailures
+			keepConnection = channelContext.positionCheckFailures < maxCheckPositionFailures
 		} else {
 			channelContext.positionCheckFailures = 0
 		}
 		c.channels[ch] = channelContext
 	}
 	c.mu.Unlock()
-	return needDisconnect
+	return keepConnection
 }
 
 // ID returns unique client connection id.
