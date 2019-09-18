@@ -1644,12 +1644,7 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 
 			recoveredPubs = publications
 
-			nextSeq := cmd.Seq + 1
-			nextGen := cmd.Gen
-			if nextSeq > maxSeq {
-				nextSeq = 0
-				nextGen = nextGen + 1
-			}
+			nextSeq, nextGen := nextSeqGen(cmd.Seq, cmd.Gen)
 			var recovered bool
 			if len(publications) == 0 {
 				recovered = latestSeq == cmd.Seq && latestGen == cmd.Gen && latestEpoch == cmd.Epoch
@@ -1711,6 +1706,12 @@ func (c *Client) subscribeCmd(cmd *proto.SubscribeRequest, rw *replyWriter) *Dis
 	}
 	rw.write(&proto.Reply{Result: replyRes})
 
+	if len(recoveredPubs) > 0 {
+		// recoveredPubs are in descending order.
+		latestSeq = recoveredPubs[0].Seq
+		latestGen = recoveredPubs[0].Gen
+	}
+
 	if chOpts.HistoryRecover {
 		rw.flush()
 		c.setInSubscribe(channel, false)
@@ -1758,8 +1759,16 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, rep
 			c.mu.Unlock()
 			return nil
 		}
-		nextSeq, nextGen := nextSeqGen(channelContext.recoveryPosition.Seq, channelContext.recoveryPosition.Gen)
-		if pub.Seq != nextSeq || pub.Gen != nextGen {
+		currentPositionSequence := uint64Sequence(channelContext.recoveryPosition.Seq, channelContext.recoveryPosition.Gen)
+		nextExpectedSequence := currentPositionSequence + 1
+		pubSequence := uint64Sequence(pub.Seq, pub.Gen)
+		if pubSequence < nextExpectedSequence {
+			// Looks like client already stepped over this sequence – skip sending.
+			c.mu.Unlock()
+			return nil
+		}
+		if pubSequence > nextExpectedSequence {
+			// Oops: sth lost, let client reconnect to recover missed messages.
 			go c.Close(DisconnectInsufficientState)
 			c.mu.Unlock()
 			return nil
