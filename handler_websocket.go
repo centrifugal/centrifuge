@@ -317,20 +317,23 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}(time.Now())
 		defer c.Close(nil)
 
-		var handleMu sync.Mutex
-		var ok bool
+		var handleMu sync.RWMutex
+		var closed bool
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				close(graceCh)
 				return
 			}
-			if !ok {
+			handleMu.RLock()
+			if closed {
+				handleMu.RUnlock()
 				continue
 			}
+			handleMu.RUnlock()
 			go func() {
 				handleMu.Lock()
-				ok = c.Handle(data)
+				closed = !c.Handle(data)
 				handleMu.Unlock()
 			}()
 		}
