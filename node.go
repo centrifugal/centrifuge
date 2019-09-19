@@ -12,7 +12,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/proto"
 	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
 	"github.com/centrifugal/centrifuge/internal/uuid"
-	"github.com/centrifugal/centrifuge/internal/workerpool"
 
 	"github.com/FZambia/eagle"
 	"github.com/prometheus/client_golang/prometheus"
@@ -58,8 +57,6 @@ type Node struct {
 	metricsMu       sync.Mutex
 	metricsExporter *eagle.Eagle
 	metricsSnapshot *eagle.Metrics
-
-	pool *workerpool.WorkerPool
 }
 
 const (
@@ -87,7 +84,6 @@ func New(c Config) (*Node, error) {
 		controlDecoder: controlproto.NewProtobufDecoder(),
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
-		pool:           workerpool.New(1024),
 	}
 
 	if c.LogHandler != nil {

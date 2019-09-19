@@ -317,18 +317,22 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}(time.Now())
 		defer c.Close(nil)
 
-		sem := make(chan struct{}, 1)
+		var handleMu sync.Mutex
+		var ok bool
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				close(graceCh)
 				return
 			}
-			s.node.pool.Submit(func() {
-				sem <- struct{}{}
-				c.Handle(data)
-				<-sem
-			})
+			if !ok {
+				continue
+			}
+			go func() {
+				handleMu.Lock()
+				ok = c.Handle(data)
+				handleMu.Unlock()
+			}()
 		}
 	}()
 }
