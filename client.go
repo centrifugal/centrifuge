@@ -1096,7 +1096,7 @@ func (c *Client) connectCmd(cmd *proto.ConnectRequest) (*proto.ConnectResponse, 
 	c.mu.RUnlock()
 
 	if closed {
-		return nil, nil
+		return resp, DisconnectNormal
 	}
 
 	if authenticated {
