@@ -34,7 +34,11 @@
                 var container = $('#messages');
 
                 var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
-                // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs');
+                // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
+                //     sockjsTransports: [
+                //         "xhr-streaming",
+                //     ]
+                // });
 
                 centrifuge.setConnectData({"user-agent": navigator.userAgent});
 

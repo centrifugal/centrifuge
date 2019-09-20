@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/timers"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,7 +21,8 @@ type websocketTransport struct {
 	conn      *websocket.Conn
 	closed    bool
 	closeCh   chan struct{}
-	opts      *websocketTransportOptions
+	graceCh   chan struct{}
+	opts      websocketTransportOptions
 	pingTimer *time.Timer
 }
 
@@ -32,10 +34,11 @@ type websocketTransportOptions struct {
 	compressionMinSize int
 }
 
-func newWebsocketTransport(conn *websocket.Conn, opts *websocketTransportOptions) *websocketTransport {
+func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}) *websocketTransport {
 	transport := &websocketTransport{
 		conn:    conn,
 		closeCh: make(chan struct{}),
+		graceCh: graceCh,
 		opts:    opts,
 	}
 	if opts.pingInterval > 0 {
@@ -124,13 +127,23 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 	t.mu.Unlock()
 
 	if disconnect != nil {
-		deadline := time.Now().Add(time.Second)
 		reason, err := json.Marshal(disconnect)
 		if err != nil {
 			return err
 		}
 		msg := websocket.FormatCloseMessage(disconnect.Code, string(reason))
-		_ = t.conn.WriteControl(websocket.CloseMessage, msg, deadline)
+		err = t.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
+		if err != nil {
+			return t.conn.Close()
+		}
+
+		// Wait for closing handshake completion.
+		tm := timers.AcquireTimer(5 * time.Second)
+		select {
+		case <-t.graceCh:
+		case <-tm.C:
+		}
+		timers.ReleaseTimer(tm)
 		return t.conn.Close()
 	}
 	return t.conn.Close()
@@ -272,7 +285,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
-		opts := &websocketTransportOptions{
+		opts := websocketTransportOptions{
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
@@ -280,7 +293,8 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			protoType:          protocol,
 		}
 
-		transport := newWebsocketTransport(conn, opts)
+		graceCh := make(chan struct{})
+		transport := newWebsocketTransport(conn, opts, graceCh)
 
 		select {
 		case <-s.node.NotifyShutdown():
@@ -289,10 +303,10 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		default:
 		}
 
-		ch := make(chan struct{})
-		defer close(ch)
+		ctxCh := make(chan struct{})
+		defer close(ctxCh)
 
-		c, err := NewClient(newCustomCancelContext(r.Context(), ch), s.node, transport)
+		c, err := NewClient(newCustomCancelContext(r.Context(), ctxCh), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
 			return
@@ -303,15 +317,25 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}(time.Now())
 		defer c.Close(nil)
 
+		var handleMu sync.RWMutex
+		var closed bool
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
+				close(graceCh)
 				return
 			}
-			ok := c.Handle(data)
-			if !ok {
-				return
+			handleMu.RLock()
+			if closed {
+				handleMu.RUnlock()
+				continue
 			}
+			handleMu.RUnlock()
+			go func() {
+				handleMu.Lock()
+				closed = !c.Handle(data)
+				handleMu.Unlock()
+			}()
 		}
 	}()
 }
