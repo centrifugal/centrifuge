@@ -93,11 +93,10 @@ type customWebsocketTransport struct {
 	request   *http.Request
 }
 
-func newWebsocketTransport(conn *websocket.Conn, protoType centrifuge.ProtocolType, r *http.Request) *customWebsocketTransport {
+func newWebsocketTransport(conn *websocket.Conn, protoType centrifuge.ProtocolType) *customWebsocketTransport {
 	return &customWebsocketTransport{
 		conn:      conn,
 		protoType: protoType,
-		request:   r,
 		closeCh:   make(chan struct{}),
 	}
 }
@@ -112,12 +111,6 @@ func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 
 func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
-}
-
-func (t *customWebsocketTransport) Meta() centrifuge.TransportMeta {
-	return centrifuge.TransportMeta{
-		Request: t.request,
-	}
 }
 
 func (t *customWebsocketTransport) Write(data []byte) error {
@@ -161,7 +154,7 @@ func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) erro
 
 func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
-	conn, err := websocket.Accept(rw, r, websocket.AcceptOptions{})
+	conn, err := websocket.Accept(rw, r, &websocket.AcceptOptions{})
 	if err != nil {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]interface{}{"error": err.Error()}))
 		return
@@ -172,7 +165,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 		protoType = centrifuge.ProtocolTypeProtobuf
 	}
 
-	transport := newWebsocketTransport(conn, protoType, r)
+	transport := newWebsocketTransport(conn, protoType)
 
 	select {
 	case <-s.node.NotifyShutdown():

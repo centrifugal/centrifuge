@@ -98,7 +98,7 @@ func main() {
 	})
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		PublishOnHistoryAdd: false,
+		PublishOnHistoryAdd: true, // This allows to publish into Redis channels atomically when adding Publication to history.
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
 				Host: "localhost",
