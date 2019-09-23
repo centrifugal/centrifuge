@@ -69,6 +69,8 @@ type RedisEngine struct {
 	shards   []*shard
 }
 
+var _ Engine = (*RedisEngine)(nil)
+
 // shard has everything to connect to Redis instance.
 type shard struct {
 	node              *Node
@@ -128,12 +130,12 @@ type RedisShardConfig struct {
 	// ConnectTimeout is a timeout on connect operation.
 	ConnectTimeout time.Duration
 
-	// SequenceTTL sets a time of sequence key expiration in Redis. By default
-	// history sequence keys do not expire, though in some cases when channels
-	// created for only short time and then not used anymore this behaviour can
-	// lead to constant space grows in Redis during application lifetime. Setting
-	// a reasonable value to this option (much bigger than history retention period)
-	// can help with this problem.
+	// SequenceTTL sets a time of sequence meta key expiration in Redis. Sequence
+	// meta key is a Redis HASH that contains top position in channel and epoch value.
+	// By default sequence meta keys do not expire, though in some cases – when channels
+	// created for а short time and then not used anymore – created sequence meta keys
+	// stay in memory while not actually useful. Setting a reasonable value to this
+	// option (usually much bigger than history retention period) can help.
 	SequenceTTL time.Duration
 }
 
@@ -347,29 +349,29 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 var (
 	// Add to history and optionally publish.
 	// KEYS[1] - history list key
-	// KEYS[2] - history meta key
+	// KEYS[2] - sequence meta hash key
 	// ARGV[1] - message payload
 	// ARGV[2] - history size ltrim right bound
 	// ARGV[3] - history lifetime
 	// ARGV[4] - channel to publish message to if needed
 	// ARGV[5] - history meta key expiration time
 	addHistorySource = `
-	local sequence = redis.call("hincrby", KEYS[2], "s", 1)
-	if ARGV[5] ~= '0' then
-		redis.call("expire", KEYS[2], ARGV[5])
-	end
-	local payload = "__" .. sequence .. "__" .. ARGV[1]
-	redis.call("lpush", KEYS[1], payload)
-	redis.call("ltrim", KEYS[1], 0, ARGV[2])
-	redis.call("expire", KEYS[1], ARGV[3])
-	if ARGV[4] ~= '' then
-		redis.call("publish", ARGV[4], payload)
-	end
-	return sequence
+local sequence = redis.call("hincrby", KEYS[2], "s", 1)
+if ARGV[5] ~= '0' then
+	redis.call("expire", KEYS[2], ARGV[5])
+end
+local payload = "__" .. sequence .. "__" .. ARGV[1]
+redis.call("lpush", KEYS[1], payload)
+redis.call("ltrim", KEYS[1], 0, ARGV[2])
+redis.call("expire", KEYS[1], ARGV[3])
+if ARGV[4] ~= '' then
+	redis.call("publish", ARGV[4], payload)
+end
+return sequence
 		`
 
 	// Retrieve channel history information.
-	// KEYS[1] - history meta key
+	// KEYS[1] - sequence meta hash key
 	// KEYS[2] - history list key
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
@@ -590,28 +592,20 @@ func (s *shard) pingChannelID() channelID {
 	return channelID(s.config.Prefix + redisPingChannelSuffix)
 }
 
-func (s *shard) getPresenceHashKey(ch string) channelID {
+func (s *shard) presenceHashKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".presence.data." + ch)
 }
 
-func (s *shard) getPresenceSetKey(ch string) channelID {
+func (s *shard) presenceSetKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".presence.expire." + ch)
 }
 
-func (s *shard) getHistoryKey(ch string) channelID {
+func (s *shard) historyListKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".history.list." + ch)
 }
 
-func (s *shard) getHistoryMetaKey(ch string) channelID {
-	return channelID(s.config.Prefix + ".history.meta." + ch)
-}
-
-func (s *shard) getHistorySeqKey(ch string) channelID {
-	return channelID(s.config.Prefix + ".history.seq." + ch)
-}
-
-func (s *shard) getHistoryEpochKey(ch string) channelID {
-	return channelID(s.config.Prefix + ".history.epoch." + ch)
+func (s *shard) sequenceMetaKey(ch string) channelID {
+	return channelID(s.config.Prefix + ".seq.meta." + ch)
 }
 
 // Run Redis shard.
@@ -1342,8 +1336,8 @@ func (s *shard) AddPresence(ch string, uid string, info *ClientInfo, expire int)
 		return err
 	}
 	expireAt := time.Now().Unix() + int64(expire)
-	hashKey := s.getPresenceHashKey(ch)
-	setKey := s.getPresenceSetKey(ch)
+	hashKey := s.presenceHashKey(ch)
+	setKey := s.presenceSetKey(ch)
 	dr := newDataRequest(dataOpAddPresence, []interface{}{setKey, hashKey, expire, expireAt, uid, infoJSON})
 	resp := s.getDataResponse(dr)
 	return resp.err
@@ -1351,8 +1345,8 @@ func (s *shard) AddPresence(ch string, uid string, info *ClientInfo, expire int)
 
 // RemovePresence - see engine interface description.
 func (s *shard) RemovePresence(ch string, uid string) error {
-	hashKey := s.getPresenceHashKey(ch)
-	setKey := s.getPresenceSetKey(ch)
+	hashKey := s.presenceHashKey(ch)
+	setKey := s.presenceSetKey(ch)
 	dr := newDataRequest(dataOpRemovePresence, []interface{}{setKey, hashKey, uid})
 	resp := s.getDataResponse(dr)
 	return resp.err
@@ -1360,8 +1354,8 @@ func (s *shard) RemovePresence(ch string, uid string) error {
 
 // Presence - see engine interface description.
 func (s *shard) Presence(ch string) (map[string]*ClientInfo, error) {
-	hashKey := s.getPresenceHashKey(ch)
-	setKey := s.getPresenceSetKey(ch)
+	hashKey := s.presenceHashKey(ch)
+	setKey := s.presenceSetKey(ch)
 	now := int(time.Now().Unix())
 	dr := newDataRequest(dataOpPresence, []interface{}{setKey, hashKey, now})
 	resp := s.getDataResponse(dr)
@@ -1398,8 +1392,8 @@ func (s *shard) PresenceStats(ch string) (PresenceStats, error) {
 
 // History - see engine interface description.
 func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
-	historyMetaKey := s.getHistoryMetaKey(ch)
-	historyKey := s.getHistoryKey(ch)
+	seqMetaKey := s.sequenceMetaKey(ch)
+	historyKey := s.historyListKey(ch)
 
 	var includePubs = true
 	var rightBound = -1
@@ -1408,9 +1402,9 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 		includePubs = false
 	}
 
-	sequenceKeyTTLSeconds := int(s.config.SequenceTTL.Seconds())
+	seqKeyTTLSeconds := int(s.config.SequenceTTL.Seconds())
 
-	dr := newDataRequest(dataOpHistory, []interface{}{historyMetaKey, historyKey, includePubs, rightBound, sequenceKeyTTLSeconds})
+	dr := newDataRequest(dataOpHistory, []interface{}{seqMetaKey, historyKey, includePubs, rightBound, seqKeyTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, RecoveryPosition{}, resp.err
@@ -1508,10 +1502,10 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 		publishChannel = s.messageChannelID(ch)
 	}
 
-	historyKey := s.getHistoryKey(ch)
-	historyMetaKey := s.getHistoryMetaKey(ch)
-	sequenceKeyTTLSeconds := int(s.config.SequenceTTL.Seconds())
-	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, historyMetaKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, sequenceKeyTTLSeconds})
+	historyKey := s.historyListKey(ch)
+	seqMetaKey := s.sequenceMetaKey(ch)
+	seqKeyTTLSeconds := int(s.config.SequenceTTL.Seconds())
+	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, seqMetaKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, seqKeyTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
@@ -1533,7 +1527,7 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 
 // RemoveHistory - see engine interface description.
 func (s *shard) RemoveHistory(ch string) error {
-	historyKey := s.getHistoryKey(ch)
+	historyKey := s.historyListKey(ch)
 	dr := newDataRequest(dataOpHistoryRemove, []interface{}{historyKey})
 	resp := s.getDataResponse(dr)
 	return resp.err
