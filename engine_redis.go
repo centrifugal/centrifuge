@@ -128,13 +128,13 @@ type RedisShardConfig struct {
 	// ConnectTimeout is a timeout on connect operation.
 	ConnectTimeout time.Duration
 
-	// SequenceExpireInterval sets a time of sequence key expiration in Redis. By default
+	// SequenceTTL sets a time of sequence key expiration in Redis. By default
 	// history sequence keys do not expire, though in some cases when channels
 	// created for only short time and then not used anymore this behaviour can
 	// lead to constant space grows in Redis during application lifetime. Setting
 	// a reasonable value to this option (much bigger than history retention period)
 	// can help with this problem.
-	SequenceExpireInterval time.Duration
+	SequenceTTL time.Duration
 }
 
 // subRequest is an internal request to subscribe or unsubscribe from one or more channels
@@ -347,14 +347,14 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 var (
 	// Add to history and optionally publish.
 	// KEYS[1] - history list key
-	// KEYS[2] - history sequence key
+	// KEYS[2] - history meta key
 	// ARGV[1] - message payload
 	// ARGV[2] - history size ltrim right bound
 	// ARGV[3] - history lifetime
 	// ARGV[4] - channel to publish message to if needed
-	// ARGV[5] - sequence key expiration time
+	// ARGV[5] - history meta key expiration time
 	addHistorySource = `
-	local sequence = redis.call("incr", KEYS[2])
+	local sequence = redis.call("hincrby", KEYS[2], "s", 1)
 	if ARGV[5] ~= '0' then
 		redis.call("expire", KEYS[2], ARGV[5])
 	end
@@ -369,30 +369,29 @@ var (
 		`
 
 	// Retrieve channel history information.
-	// KEYS[1] - history sequence key
-	// KEYS[2] - history epoch key
-	// KEYS[3] - history list key
+	// KEYS[1] - history meta key
+	// KEYS[2] - history list key
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
 	// ARGV[3] - sequence key expiration time
 	historySource = `
 redis.replicate_commands()
-local seq = redis.call("get", KEYS[1])
-if ARGV[3] ~= '0' and seq ~= false then
+local sequence = redis.call("hget", KEYS[1], "s")
+if ARGV[3] ~= '0' and sequence ~= false then
 	redis.call("expire", KEYS[1], ARGV[3])
 end
 local epoch
-if redis.call('exists', KEYS[2]) ~= 0 then
-  epoch = redis.call("get", KEYS[2])
+if redis.call('exists', KEYS[1]) ~= 0 then
+  epoch = redis.call("hget", KEYS[1], "e")
 else
   epoch = redis.call('time')[1]
-  redis.call("set", KEYS[2], epoch)
+  redis.call("hset", KEYS[1], "e", epoch)
 end
 local pubs = nil
 if ARGV[1] ~= "0" then
-	pubs = redis.call("lrange", KEYS[3], 0, ARGV[2])
+	pubs = redis.call("lrange", KEYS[2], 0, ARGV[2])
 end
-return {seq, epoch, pubs}
+return {sequence, epoch, pubs}
 	`
 
 	// Add/update client presence information.
@@ -566,7 +565,7 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		addPresenceScript: redis.NewScript(2, addPresenceSource),
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
-		historyScript:     redis.NewScript(3, historySource),
+		historyScript:     redis.NewScript(2, historySource),
 		addHistoryScript:  redis.NewScript(2, addHistorySource),
 	}
 	shard.pubCh = make(chan pubRequest)
@@ -603,11 +602,15 @@ func (s *shard) getHistoryKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".history.list." + ch)
 }
 
-func (s *shard) gethistorySeqKey(ch string) channelID {
+func (s *shard) getHistoryMetaKey(ch string) channelID {
+	return channelID(s.config.Prefix + ".history.meta." + ch)
+}
+
+func (s *shard) getHistorySeqKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".history.seq." + ch)
 }
 
-func (s *shard) gethistoryEpochKey(ch string) channelID {
+func (s *shard) getHistoryEpochKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".history.epoch." + ch)
 }
 
@@ -1050,7 +1053,7 @@ func (s *shard) runDataPipeline() {
 
 	err = s.historyScript.Load(conn)
 	if err != nil {
-		s.node.Log(NewLogEntry(LogLevelError, "error loading history seq Lua", map[string]interface{}{"error": err.Error()}))
+		s.node.Log(NewLogEntry(LogLevelError, "error loading history Lua", map[string]interface{}{"error": err.Error()}))
 		// Can not proceed if script has not been loaded.
 		conn.Close()
 		return
@@ -1395,8 +1398,7 @@ func (s *shard) PresenceStats(ch string) (PresenceStats, error) {
 
 // History - see engine interface description.
 func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
-	historySeqKey := s.gethistorySeqKey(ch)
-	historyEpochKey := s.gethistoryEpochKey(ch)
+	historyMetaKey := s.getHistoryMetaKey(ch)
 	historyKey := s.getHistoryKey(ch)
 
 	var includePubs = true
@@ -1406,9 +1408,9 @@ func (s *shard) History(ch string, filter HistoryFilter) ([]*Publication, Recove
 		includePubs = false
 	}
 
-	sequenceKeyExpireSeconds := int(s.config.SequenceExpireInterval.Seconds())
+	sequenceKeyTTLSeconds := int(s.config.SequenceTTL.Seconds())
 
-	dr := newDataRequest(dataOpHistory, []interface{}{historySeqKey, historyEpochKey, historyKey, includePubs, rightBound, sequenceKeyExpireSeconds})
+	dr := newDataRequest(dataOpHistory, []interface{}{historyMetaKey, historyKey, includePubs, rightBound, sequenceKeyTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, RecoveryPosition{}, resp.err
@@ -1507,9 +1509,9 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 	}
 
 	historyKey := s.getHistoryKey(ch)
-	sequenceKey := s.gethistorySeqKey(ch)
-	sequenceKeyExpireSeconds := int(s.config.SequenceExpireInterval.Seconds())
-	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, sequenceKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, sequenceKeyExpireSeconds})
+	historyMetaKey := s.getHistoryMetaKey(ch)
+	sequenceKeyTTLSeconds := int(s.config.SequenceTTL.Seconds())
+	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, historyMetaKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, sequenceKeyTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err

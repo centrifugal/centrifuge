@@ -101,14 +101,14 @@ func main() {
 		PublishOnHistoryAdd: true, // This allows to publish into Redis channels atomically when adding Publication to history.
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
-				Host: "localhost",
-				Port: 6379,
-				SequenceExpireInterval: 7 * 24 * time.Hour, // reasonably large expiration intreval.
+				Host:        "localhost",
+				Port:        6379,
+				SequenceTTL: 7 * 24 * time.Hour, // reasonably large expiration intreval.
 			},
 			centrifuge.RedisShardConfig{
-				Host: "localhost",
-				Port: 6380,
-				SequenceExpireInterval: 7 * 24 * time.Hour,
+				Host:        "localhost",
+				Port:        6380,
+				SequenceTTL: 7 * 24 * time.Hour,
 			},
 		},
 	})
