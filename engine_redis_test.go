@@ -78,13 +78,13 @@ func newTestRedisEngine() *RedisEngine {
 func NewTestRedisEngineWithPrefix(prefix string) *RedisEngine {
 	n, _ := New(Config{})
 	redisConf := RedisShardConfig{
-		Host:                   testRedisHost,
-		Port:                   testRedisPort,
-		Password:               testRedisPassword,
-		DB:                     testRedisDB,
-		Prefix:                 prefix,
-		ReadTimeout:            100 * time.Second,
-		SequenceExpireInterval: 300 * time.Second,
+		Host:        testRedisHost,
+		Port:        testRedisPort,
+		Password:    testRedisPassword,
+		DB:          testRedisDB,
+		Prefix:      prefix,
+		ReadTimeout: 100 * time.Second,
+		SequenceTTL: 300 * time.Second,
 	}
 	e, _ := NewRedisEngine(n, RedisEngineConfig{Shards: []RedisShardConfig{redisConf}})
 	n.SetEngine(e)
