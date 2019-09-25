@@ -103,7 +103,7 @@ func main() {
 			centrifuge.RedisShardConfig{
 				Host:        "localhost",
 				Port:        6379,
-				SequenceTTL: 7 * 24 * time.Hour, // reasonably large expiration intreval.
+				SequenceTTL: 7 * 24 * time.Hour, // reasonably large expiration interval.
 			},
 			centrifuge.RedisShardConfig{
 				Host:        "localhost",

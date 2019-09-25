@@ -90,6 +90,13 @@ type shard struct {
 
 // RedisEngineConfig is a config for Redis Engine.
 type RedisEngineConfig struct {
+	// PublishOnHistoryAdd is an option to control Redis Engine behaviour in terms of
+	// adding to history and publishing message to channel. Redis Engine have a role
+	// of Broker, HistoryManager and PresenceManager, this option is a tip to engine
+	// implementation about the fact that Redis Engine used as both Broker and
+	// HistoryManager. In this case we have a possibility to save Publications into
+	// channel history stream and publish into PUB/SUB Redis channel atomically. And
+	// we just do this reducing network round trips.
 	PublishOnHistoryAdd bool
 	Shards              []RedisShardConfig
 }

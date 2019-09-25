@@ -369,7 +369,7 @@ func (n *Node) Info() (Info, error) {
 // handleControl handles messages from control channel - control messages used for internal
 // communication between nodes to share state or proto.
 func (n *Node) handleControl(data []byte) error {
-	messagesReceivedCount.WithLabelValues("control").Inc()
+	messagesReceivedCountControl.Inc()
 
 	cmd, err := n.controlDecoder.DecodeCommand(data)
 	if err != nil {
@@ -417,7 +417,7 @@ func (n *Node) handleControl(data []byte) error {
 // coming from engine. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
 func (n *Node) handlePublication(ch string, pub *Publication) error {
-	messagesReceivedCount.WithLabelValues("publication").Inc()
+	messagesReceivedCountPublication.Inc()
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
@@ -433,7 +433,7 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 // handleJoin handles join messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
 func (n *Node) handleJoin(ch string, join *proto.Join) error {
-	messagesReceivedCount.WithLabelValues("join").Inc()
+	messagesReceivedCountJoin.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
 		return nil
@@ -444,7 +444,7 @@ func (n *Node) handleJoin(ch string, join *proto.Join) error {
 // handleLeave handles leave messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
 func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
-	messagesReceivedCount.WithLabelValues("leave").Inc()
+	messagesReceivedCountLeave.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
 		return nil
@@ -468,7 +468,7 @@ func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...Publish
 		Info: info,
 	}
 
-	messagesSentCount.WithLabelValues("publication").Inc()
+	messagesSentCountPublication.Inc()
 
 	// If history enabled for channel we add Publication to history first and then
 	// publish to Broker.
@@ -512,7 +512,7 @@ func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) er
 		}
 		opts = &chOpts
 	}
-	messagesSentCount.WithLabelValues("join").Inc()
+	messagesSentCountJoin.Inc()
 	return n.broker.PublishJoin(ch, join, opts)
 }
 
@@ -526,14 +526,14 @@ func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions)
 		}
 		opts = &chOpts
 	}
-	messagesSentCount.WithLabelValues("leave").Inc()
+	messagesSentCountLeave.Inc()
 	return n.broker.PublishLeave(ch, leave, opts)
 }
 
 // publishControl publishes message into control channel so all running
 // nodes will receive and handle it.
 func (n *Node) publishControl(cmd *controlproto.Command) error {
-	messagesSentCount.WithLabelValues("control").Inc()
+	messagesSentCountControl.Inc()
 	data, err := n.controlEncoder.EncodeCommand(cmd)
 	if err != nil {
 		return err
