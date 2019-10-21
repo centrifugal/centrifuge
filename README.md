@@ -9,7 +9,7 @@ Centrifuge library is a real-time core of [Centrifugo](https://github.com/centri
 
 Library highlights:
 
-* Fast and optimized for low-latency communication with thousands of client connections
+* Fast and optimized for low-latency communication with thousands of client connections. See [benchmark](https://centrifugal.github.io/centrifugo/misc/benchmark/)
 * WebSocket with JSON or binary Protobuf protocol
 * SockJS polyfill library support for browsers where WebSocket not available (JSON only)
 * Built-in horizontal scalability with Redis PUB/SUB, Redis sharding, Sentinel for HA
