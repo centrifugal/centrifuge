@@ -253,6 +253,60 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	assert.Equal(t, "42", client.UserID())
 }
 
+func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() + 60,
+	})
+	client, _ := NewClient(newCtx, node, transport)
+
+	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
+		return RefreshReply{
+			Expired: true,
+		}
+	})
+
+	_, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	assert.Nil(t, disconnect)
+	client.expire()
+	assert.True(t, client.closed)
+}
+
+func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
+	node := nodeWithMemoryEngine()
+
+	config := node.Config()
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() + 60,
+	})
+	client, _ := NewClient(newCtx, node, transport)
+
+	expireAt := time.Now().Unix() + 60
+	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
+		return RefreshReply{
+			ExpireAt: expireAt,
+		}
+	})
+
+	_, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	assert.Nil(t, disconnect)
+	client.expire()
+	assert.False(t, client.closed)
+	assert.Equal(t, expireAt, client.exp)
+}
+
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
