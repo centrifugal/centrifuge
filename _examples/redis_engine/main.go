@@ -98,17 +98,26 @@ func main() {
 	})
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		PublishOnHistoryAdd: true, // This allows to publish into Redis channels atomically when adding Publication to history.
+		// This allows to publish into Redis channels atomically when adding
+		// Publication to history. Otherwise adding to history and publishing
+		// to PUB/SUB channel will be two separate calls each involving RTT.
+		PublishOnHistoryAdd: true,
+
+		// Use reasonably large expiration interval for sequence fields,
+		// much bigger than maximum HistoryLifetime value in Node config.
+		// This way sequence data will expire, in some cases you may want
+		// to prevent its expiration setting this to zero value.
+		SequenceTTL: 7 * 24 * time.Hour,
+
+		// And configure a couple of shards to use.
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
-				Host:        "localhost",
-				Port:        6379,
-				SequenceTTL: 7 * 24 * time.Hour, // reasonably large expiration interval.
+				Host: "localhost",
+				Port: 6379,
 			},
 			centrifuge.RedisShardConfig{
-				Host:        "localhost",
-				Port:        6380,
-				SequenceTTL: 7 * 24 * time.Hour,
+				Host: "localhost",
+				Port: 6380,
 			},
 		},
 	})

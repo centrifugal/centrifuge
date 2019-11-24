@@ -84,9 +84,8 @@ func NewTestRedisEngineWithPrefix(prefix string) *RedisEngine {
 		DB:          testRedisDB,
 		Prefix:      prefix,
 		ReadTimeout: 100 * time.Second,
-		SequenceTTL: 300 * time.Second,
 	}
-	e, _ := NewRedisEngine(n, RedisEngineConfig{Shards: []RedisShardConfig{redisConf}})
+	e, _ := NewRedisEngine(n, RedisEngineConfig{SequenceTTL: 300 * time.Second, Shards: []RedisShardConfig{redisConf}})
 	n.SetEngine(e)
 	err := n.Run()
 	if err != nil {
