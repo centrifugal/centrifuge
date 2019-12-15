@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"bytes"
+	"fmt"
+	"github.com/dgrijalva/jwt-go"
 	"math"
 	"sync"
 )
@@ -54,4 +56,24 @@ func getBuffer() *bytes.Buffer {
 func putBuffer(buf *bytes.Buffer) {
 	buf.Reset()
 	bufferPool.Put(buf)
+}
+
+func JWTKeyFunc(config Config) func(token *jwt.Token) (interface{}, error) {
+	return func(token *jwt.Token) (interface{}, error) {
+		switch token.Method.(type) {
+		case *jwt.SigningMethodHMAC:
+			if config.Secret == "" {
+				return nil, fmt.Errorf("config.secret not set")
+			}
+			return []byte(config.Secret), nil
+
+		case *jwt.SigningMethodRSA:
+			if config.Secret == "" {
+				return nil, fmt.Errorf("public key nof found in config.secret")
+			}
+			return jwt.ParseRSAPublicKeyFromPEM( []byte(config.Secret))
+		default:
+			return nil, fmt.Errorf("unsupported signing method: %v. centrifugo supports HMAC and RSA", token.Header["alg"])
+		}
+	}
 }
