@@ -71,7 +71,7 @@ func JWTKeyFunc(config Config) func(token *jwt.Token) (interface{}, error) {
 			if config.Secret == "" {
 				return nil, fmt.Errorf("public key nof found in config.secret")
 			}
-			return jwt.ParseRSAPublicKeyFromPEM( []byte(config.Secret))
+			return jwt.ParseRSAPublicKeyFromPEM([]byte(config.Secret))
 		default:
 			return nil, fmt.Errorf("unsupported signing method: %v. centrifugo supports HMAC and RSA", token.Header["alg"])
 		}

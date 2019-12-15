@@ -1844,7 +1844,7 @@ func (c *Client) subRefreshCmd(cmd *proto.SubRefreshRequest) (*proto.SubRefreshR
 		resp.Error = ErrorBadRequest
 		return resp, nil
 	}
-	parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{},JWTKeyFunc(config))
+	parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, JWTKeyFunc(config))
 	if parsedToken == nil && err != nil {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 		resp.Error = ErrorBadRequest
