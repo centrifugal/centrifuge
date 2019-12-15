@@ -6,8 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-
+	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,11 +49,11 @@ func (t *testTransport) Name() string {
 }
 
 func (t *testTransport) Protocol() ProtocolType {
-	return proto.ProtocolTypeJSON
+	return protocol.TypeJSON
 }
 
 func (t *testTransport) Encoding() EncodingType {
-	return proto.EncodingTypeJSON
+	return protocol.EncodingTypeJSON
 }
 
 func (t *testTransport) Close(disconnect *Disconnect) error {
@@ -116,8 +115,8 @@ func TestHubSubscriptions(t *testing.T) {
 }
 
 func TestPreparedReply(t *testing.T) {
-	reply := proto.Reply{}
-	prepared := newPreparedReply(&reply, proto.ProtocolTypeJSON)
+	reply := protocol.Reply{}
+	prepared := newPreparedReply(&reply, protocol.TypeJSON)
 	data := prepared.Data()
 	assert.NotNil(t, data)
 }

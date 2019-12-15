@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
+	"github.com/centrifugal/protocol"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,11 +37,11 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	conn, _, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
 	assert.NoError(b, err)
 
-	connectRequest := &proto.ConnectRequest{}
+	connectRequest := &protocol.ConnectRequest{}
 	params, _ := json.Marshal(connectRequest)
-	cmd := &proto.Command{
+	cmd := &protocol.Command{
 		ID:     1,
-		Method: proto.MethodTypeConnect,
+		Method: protocol.MethodTypeConnect,
 		Params: params,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
@@ -50,13 +50,13 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	_, _, err = conn.ReadMessage()
 	assert.NoError(b, err)
 
-	subscribeRequest := &proto.SubscribeRequest{
+	subscribeRequest := &protocol.SubscribeRequest{
 		Channel: channel,
 	}
 	params, _ = json.Marshal(subscribeRequest)
-	cmd = &proto.Command{
+	cmd = &protocol.Command{
 		ID:     2,
-		Method: proto.MethodTypeSubscribe,
+		Method: protocol.MethodTypeSubscribe,
 		Params: params,
 	}
 	cmdBytes, _ = json.Marshal(cmd)
@@ -70,11 +70,11 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	conn, _, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
 	assert.NoError(b, err)
 
-	connectRequest := &proto.ConnectRequest{}
+	connectRequest := &protocol.ConnectRequest{}
 	params, _ := connectRequest.Marshal()
-	cmd := &proto.Command{
+	cmd := &protocol.Command{
 		ID:     1,
-		Method: proto.MethodTypeConnect,
+		Method: protocol.MethodTypeConnect,
 		Params: params,
 	}
 
@@ -90,13 +90,13 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	_, _, err = conn.ReadMessage()
 	assert.NoError(b, err)
 
-	subscribeRequest := &proto.SubscribeRequest{
+	subscribeRequest := &protocol.SubscribeRequest{
 		Channel: channel,
 	}
 	params, _ = subscribeRequest.Marshal()
-	cmd = &proto.Command{
+	cmd = &protocol.Command{
 		ID:     2,
-		Method: proto.MethodTypeSubscribe,
+		Method: protocol.MethodTypeSubscribe,
 		Params: params,
 	}
 	cmdBytes, _ = cmd.Marshal()
@@ -158,11 +158,11 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 				assert.Fail(t, err.Error())
 			}
 
-			var rep proto.Reply
+			var rep protocol.Reply
 			err = json.Unmarshal(data, &rep)
 			assert.NoError(t, err)
 
-			var push proto.Push
+			var push protocol.Push
 			err = json.Unmarshal(rep.Result, &push)
 			assert.NoError(t, err)
 

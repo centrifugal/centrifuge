@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
+	"github.com/centrifugal/protocol"
 	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/assert"
 )
@@ -773,14 +773,14 @@ func TestClientSubscribeRecoverRedis(t *testing.T) {
 
 			connectClient(t, client)
 
-			replies := []*proto.Reply{}
+			replies := []*protocol.Reply{}
 			rw := testReplyWriter(&replies)
 
 			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
 				Limit: 0,
 				Since: nil,
 			})
-			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+			disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: channel,
 				Recover: true,
 				Seq:     tt.SinceSeq,
