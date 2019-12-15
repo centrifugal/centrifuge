@@ -73,7 +73,7 @@ func JWTKeyFunc(config Config) func(token *jwt.Token) (interface{}, error) {
 			}
 			return jwt.ParseRSAPublicKeyFromPEM([]byte(config.Secret))
 		default:
-			return nil, fmt.Errorf("unsupported signing method: %v. centrifugo supports HMAC and RSA", token.Header["alg"])
+			return nil, fmt.Errorf("unsupported signing method: %v. centrifuge supports HMAC and RSA", token.Header["alg"])
 		}
 	}
 }
