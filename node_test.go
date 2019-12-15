@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
+	"github.com/centrifugal/centrifuge/internal/controlproto"
 
+	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,17 +33,17 @@ func (e *TestEngine) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (e *TestEngine) Publish(ch string, pub *proto.Publication, opts *ChannelOptions) error {
+func (e *TestEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) error {
+func (e *TestEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) error {
+func (e *TestEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
 	return nil
 }
@@ -61,7 +61,7 @@ func (e *TestEngine) Unsubscribe(ch string) error {
 	return nil
 }
 
-func (e *TestEngine) AddPresence(ch string, uid string, info *proto.ClientInfo, expire time.Duration) error {
+func (e *TestEngine) AddPresence(ch string, uid string, info *ClientInfo, expire time.Duration) error {
 	return nil
 }
 
@@ -69,19 +69,19 @@ func (e *TestEngine) RemovePresence(ch string, uid string) error {
 	return nil
 }
 
-func (e *TestEngine) Presence(ch string) (map[string]*proto.ClientInfo, error) {
-	return map[string]*proto.ClientInfo{}, nil
+func (e *TestEngine) Presence(ch string) (map[string]*ClientInfo, error) {
+	return map[string]*protocol.ClientInfo{}, nil
 }
 
 func (e *TestEngine) PresenceStats(ch string) (PresenceStats, error) {
 	return PresenceStats{}, nil
 }
 
-func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*proto.Publication, RecoveryPosition, error) {
-	return []*proto.Publication{}, RecoveryPosition{}, nil
+func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, RecoveryPosition, error) {
+	return []*protocol.Publication{}, RecoveryPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(ch string, pub *proto.Publication, opts *ChannelOptions) (*Publication, error) {
+func (e *TestEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*Publication, error) {
 	return pub, nil
 }
 
@@ -202,9 +202,9 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := NewClient(newCtx, node, transport)
 	connectClient(b, client)
-	replies := []*proto.Reply{}
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
 	}, rw)
 	assert.Nil(b, disconnect)

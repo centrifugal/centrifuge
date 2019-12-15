@@ -1,4 +1,4 @@
-package proto
+package controlproto
 
 import (
 	"encoding/json"
