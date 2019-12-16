@@ -9,8 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
+	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/FZambia/eagle"
@@ -432,7 +431,7 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 
 // handleJoin handles join messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleJoin(ch string, join *proto.Join) error {
+func (n *Node) handleJoin(ch string, join *Join) error {
 	messagesReceivedCountJoin.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
@@ -443,7 +442,7 @@ func (n *Node) handleJoin(ch string, join *proto.Join) error {
 
 // handleLeave handles leave messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
+func (n *Node) handleLeave(ch string, leave *Leave) error {
 	messagesReceivedCountLeave.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
@@ -504,7 +503,7 @@ var (
 
 // publishJoin allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) error {
+func (n *Node) publishJoin(ch string, join *Join, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -518,7 +517,7 @@ func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) er
 
 // publishLeave allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) error {
+func (n *Node) publishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -717,7 +716,7 @@ func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
 }
 
 // addPresence proxies presence adding to engine.
-func (n *Node) addPresence(ch string, uid string, info *proto.ClientInfo) error {
+func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
 	if n.presenceManager == nil {
 		return nil
 	}
