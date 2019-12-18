@@ -230,20 +230,20 @@ func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
 func BenchmarkMemoryEnginePublishWithHistoryParallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test-uid", Data: rawData}
+	chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
+			pub := &Publication{UID: "test-uid", Data: rawData}
 			var err error
 			pub, err = e.AddHistory("channel", pub, chOpts)
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 			err = e.Publish("channel", pub, chOpts)
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -255,7 +255,7 @@ func BenchmarkMemoryEngineAddPresence(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -267,7 +267,7 @@ func BenchmarkMemoryEngineAddPresenceParallel(b *testing.B) {
 		for pb.Next() {
 			err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -280,7 +280,7 @@ func BenchmarkMemoryEnginePresence(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := e.Presence("channel")
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -293,7 +293,7 @@ func BenchmarkMemoryEnginePresenceParallel(b *testing.B) {
 		for pb.Next() {
 			_, err := e.Presence("channel")
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -313,7 +313,7 @@ func BenchmarkMemoryEngineHistory(b *testing.B) {
 			Since: nil,
 		})
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -333,7 +333,7 @@ func BenchmarkMemoryEngineHistoryParallel(b *testing.B) {
 				Since: nil,
 			})
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -355,7 +355,7 @@ func BenchmarkMemoryEngineHistoryRecoverParallel(b *testing.B) {
 				Since: &RecoveryPosition{Seq: uint32(numMessages - 5), Gen: 0, Epoch: ""},
 			})
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
