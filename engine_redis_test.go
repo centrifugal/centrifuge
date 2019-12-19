@@ -44,28 +44,28 @@ func (t testRedisConn) close() error {
 
 // Get connection to Redis, select database and if that database not empty
 // then panic to prevent existing data corruption.
-func dial() testRedisConn {
+func dial(t *testing.T) testRedisConn {
 	addr := net.JoinHostPort(testRedisHost, strconv.Itoa(testRedisPort))
 	c, err := redis.DialTimeout("tcp", addr, 0, 1*time.Second, 1*time.Second)
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 
 	_, err = c.Do("SELECT", testRedisDB)
 	if err != nil {
 		c.Close()
-		panic(err)
+		t.Fatal(err)
 	}
 
 	n, err := redis.Int(c.Do("DBSIZE"))
 	if err != nil {
 		c.Close()
-		panic(err)
+		t.Fatal(err)
 	}
 
 	if n != 0 {
 		c.Close()
-		panic(errors.New("database is not empty, test can not continue"))
+		t.Fatal(errors.New("database is not empty, test can not continue"))
 	}
 
 	return testRedisConn{c}
@@ -95,7 +95,7 @@ func NewTestRedisEngineWithPrefix(prefix string) *RedisEngine {
 }
 
 func TestRedisEngine(t *testing.T) {
-	c := dial()
+	c := dial(t)
 	defer c.close()
 
 	e := newTestRedisEngine()
@@ -184,7 +184,7 @@ func TestRedisEngine(t *testing.T) {
 }
 
 func TestRedisCurrentPosition(t *testing.T) {
-	c := dial()
+	c := dial(t)
 	defer c.close()
 	e := newTestRedisEngine()
 
@@ -211,7 +211,7 @@ func TestRedisCurrentPosition(t *testing.T) {
 
 func TestRedisEngineRecover(t *testing.T) {
 
-	c := dial()
+	c := dial(t)
 	defer c.close()
 
 	e := newTestRedisEngine()
@@ -268,7 +268,7 @@ func TestRedisEngineRecover(t *testing.T) {
 }
 
 func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
-	c := dial()
+	c := dial(t)
 	defer c.close()
 
 	// Custom prefix to not collide with other tests.
@@ -595,20 +595,20 @@ func BenchmarkRedisEnginePublishWithHistory(b *testing.B) {
 func BenchmarkRedisEnginePublishWithHistoryParallel(b *testing.B) {
 	e := newTestRedisEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test-uid", Data: rawData}
+	chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
+			pub := &Publication{UID: "test-uid", Data: rawData}
 			var err error
 			pub, err = e.AddHistory("channel", pub, chOpts)
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 			err = e.Publish("channel", pub, chOpts)
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -620,7 +620,7 @@ func BenchmarkRedisEngineAddPresence(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -632,7 +632,7 @@ func BenchmarkRedisEngineAddPresenceParallel(b *testing.B) {
 		for pb.Next() {
 			err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -645,7 +645,7 @@ func BenchmarkRedisEnginePresence(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := e.Presence("channel")
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -658,7 +658,7 @@ func BenchmarkRedisEnginePresenceParallel(b *testing.B) {
 		for pb.Next() {
 			_, err := e.Presence("channel")
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -677,7 +677,7 @@ func BenchmarkRedisEngineHistory(b *testing.B) {
 			Limit: -1,
 		})
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 
 	}
@@ -697,7 +697,7 @@ func BenchmarkRedisEngineHistoryParallel(b *testing.B) {
 				Limit: -1,
 			})
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -723,7 +723,7 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 				Since: &RecoveryPosition{Seq: uint32(numMessages - 5), Gen: 0, Epoch: r.Epoch},
 			})
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -745,7 +745,7 @@ func nodeWithRedisEngine() *Node {
 }
 
 func TestClientSubscribeRecoverRedis(t *testing.T) {
-	c := dial()
+	c := dial(t)
 	defer c.close()
 
 	for _, tt := range recoverTests {
