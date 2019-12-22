@@ -612,11 +612,24 @@ func (c *Client) Handle(data []byte) bool {
 			return nil
 		}
 		disconnect := c.handleCommand(cmd, write, flush)
+		select {
+		case <-c.ctx.Done():
+			if encodeErr == nil {
+				protocol.PutCommandDecoder(protoType, decoder)
+				protocol.PutReplyEncoder(protoType, encoder)
+			}
+			return true
+		default:
+		}
 		if disconnect != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			if disconnect != DisconnectNormal {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			}
 			c.Close(disconnect)
-			protocol.PutCommandDecoder(protoType, decoder)
-			protocol.PutReplyEncoder(protoType, encoder)
+			if encodeErr == nil {
+				protocol.PutCommandDecoder(protoType, decoder)
+				protocol.PutReplyEncoder(protoType, encoder)
+			}
 			return false
 		}
 		if encodeErr != nil {
