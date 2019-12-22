@@ -59,7 +59,7 @@ func putBuffer(buf *bytes.Buffer) {
 	bufferPool.Put(buf)
 }
 
-func JWTKeyFunc(config Config) func(token *jwt.Token) (interface{}, error) {
+func jwtKeyFunc(config Config) func(token *jwt.Token) (interface{}, error) {
 	return func(token *jwt.Token) (interface{}, error) {
 		switch token.Method.(type) {
 		case *jwt.SigningMethodHMAC:
