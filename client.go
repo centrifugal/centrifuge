@@ -1197,15 +1197,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		var b64info string
 		var exp int64
 
-		parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			if config.Secret == "" {
-				return nil, fmt.Errorf("secret not set")
-			}
-			return []byte(config.Secret), nil
-		})
+		parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, jwtKeyFunc(config))
 		if parsedToken == nil && err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 			return resp, DisconnectInvalidToken
@@ -1341,7 +1333,6 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 	}
 
 	config := c.node.Config()
-	secret := config.Secret
 
 	var user string
 	var expireAt int64
@@ -1352,15 +1343,7 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 		c.node.logger.log(newLogEntry(LogLevelInfo, "refresh token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
 		return resp, DisconnectInvalidToken
 	}
-	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		if secret == "" {
-			return nil, fmt.Errorf("secret not set")
-		}
-		return []byte(secret), nil
-	})
+	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, jwtKeyFunc(config))
 	if parsedToken == nil && err != nil {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 		return resp, DisconnectInvalidToken
@@ -1445,7 +1428,6 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 
 	config := c.node.Config()
 
-	secret := config.Secret
 	channelMaxLength := config.ChannelMaxLength
 	channelLimit := config.ClientChannelLimit
 	insecure := config.ClientInsecure
@@ -1513,15 +1495,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 			rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
 			return nil
 		}
-		parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			if secret == "" {
-				return nil, fmt.Errorf("secret not set")
-			}
-			return []byte(secret), nil
-		})
+		parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, jwtKeyFunc(config))
 		if parsedToken == nil && err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 			rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
@@ -1870,7 +1844,6 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 	}
 
 	config := c.node.Config()
-	secret := config.Secret
 
 	var channelInfo Raw
 	var expireAt int64
@@ -1885,15 +1858,7 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 		resp.Error = ErrorBadRequest
 		return resp, nil
 	}
-	parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		if secret == "" {
-			return nil, fmt.Errorf("secret not set")
-		}
-		return []byte(secret), nil
-	})
+	parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, jwtKeyFunc(config))
 	if parsedToken == nil && err != nil {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
 		resp.Error = ErrorBadRequest
