@@ -3,10 +3,10 @@ package centrifuge
 import (
 	"bytes"
 	"fmt"
-	"github.com/dgrijalva/jwt-go"
-	"log"
 	"math"
 	"sync"
+
+	"github.com/dgrijalva/jwt-go"
 )
 
 const (
@@ -64,20 +64,19 @@ func jwtKeyFunc(config Config) func(token *jwt.Token) (interface{}, error) {
 		switch token.Method.(type) {
 		case *jwt.SigningMethodHMAC:
 			if config.TokenHMACSecretKey == "" && config.Secret == "" {
-				return nil, fmt.Errorf("config.token_hmac_secret_key not set")
+				return nil, fmt.Errorf("token HMAC secret key not set")
 			}
 			if config.Secret != "" {
-				log.Println("config.secret is deprecated and will be removed soon, please update your app to use token_hmac_secret_key instead")
 				return []byte(config.Secret), nil
 			}
 			return []byte(config.TokenHMACSecretKey), nil
 		case *jwt.SigningMethodRSA:
 			if config.TokenRSAPublicKey == nil {
-				return nil, fmt.Errorf("config.token_rsa_public_key not set")
+				return nil, fmt.Errorf("token RSA public key not set")
 			}
 			return config.TokenRSAPublicKey, nil
 		default:
-			return nil, fmt.Errorf("unsupported signing method: %v. centrifuge supports HMAC and RSA", token.Header["alg"])
+			return nil, fmt.Errorf("unsupported signing method: %v", token.Header["alg"])
 		}
 	}
 }

@@ -17,11 +17,13 @@ type Config struct {
 	Name string
 	// Secret is a secret key used to generate connection and subscription tokens.
 	//
-	// Deprecated: Use TokenHMACSecretKey instead
+	// Deprecated: Use TokenHMACSecretKey instead.
 	Secret string
-	//TokenHMACSecretKey is a secret key used to validate connection and subscription tokens generated using HMAC.
+	// TokenHMACSecretKey is a secret key used to validate connection and subscription tokens generated using HMAC.
+	// Zero value means that HMAC tokens won't be allowed.
 	TokenHMACSecretKey string
-	//TokenRSAPublicKey is a parsed public key used to validate connection and subscription tokens generated using HMAC
+	// TokenRSAPublicKey is a public key used to validate connection and subscription tokens generated using RSA.
+	// Zero value means that RSA tokens won't be allowed.
 	TokenRSAPublicKey *rsa.PublicKey
 	// ChannelOptions embedded.
 	ChannelOptions
