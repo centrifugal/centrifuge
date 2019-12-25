@@ -120,3 +120,13 @@ func TestPreparedReply(t *testing.T) {
 	data := prepared.Data()
 	assert.NotNil(t, data)
 }
+
+func TestUserConnections(t *testing.T) {
+	h := newHub()
+	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	assert.NoError(t, err)
+	h.add(c)
+
+	connections := h.userConnections(c.UserID())
+	assert.Equal(t, h.conns, connections)
+}
