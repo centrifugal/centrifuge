@@ -63,11 +63,8 @@ func jwtKeyFunc(config Config) func(token *jwt.Token) (interface{}, error) {
 	return func(token *jwt.Token) (interface{}, error) {
 		switch token.Method.(type) {
 		case *jwt.SigningMethodHMAC:
-			if config.TokenHMACSecretKey == "" && config.Secret == "" {
+			if config.TokenHMACSecretKey == "" {
 				return nil, fmt.Errorf("token HMAC secret key not set")
-			}
-			if config.Secret != "" {
-				return []byte(config.Secret), nil
 			}
 			return []byte(config.TokenHMACSecretKey), nil
 		case *jwt.SigningMethodRSA:
