@@ -71,28 +71,11 @@ func RegisterTestCase(ctx context.Context, port int, tc TestCaseFunc, name strin
 	}
 }
 
-func testCustomHeader(fn ResolveFunc) *centrifuge.Node {
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
-	node, _ := centrifuge.New(cfg)
-
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
-		authHeader := client.Transport().Meta().Request.Header.Get("Authorization")
-		if authHeader != "testsuite" {
-			fn(fmt.Errorf("No valid Authorization header found"))
-		} else {
-			fn(nil)
-		}
-	})
-	return node
-}
-
 func testJWTAuth(fn ResolveFunc) *centrifuge.Node {
 	// Use this token in client:
 	// eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0c3VpdGVfand0In0.hPmHsVqvtY88PvK4EmJlcdwNuKFuy3BGaF7dMaKdPlw
 	cfg := centrifuge.DefaultConfig
-	cfg.Secret = "secret"
+	cfg.TokenHMACSecretKey = "secret"
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 	node, _ := centrifuge.New(cfg)
@@ -216,7 +199,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go RegisterTestCase(ctx, 10000, testCustomHeader, "testCustomHeader", true)
 	go RegisterTestCase(ctx, 10001, testJWTAuth, "testJWTAuth", false)
 	go RegisterTestCase(ctx, 10002, testSimpleSubscribe, "testSimpleSubscribe", true)
 	go RegisterTestCase(ctx, 10003, testReceiveRPCReceiveMessageJSON, "testReceiveRPCReceiveMessageJSON", true)

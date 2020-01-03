@@ -16,10 +16,6 @@ type Config struct {
 	// Name of this server node - must be unique, used as human readable
 	// and meaningful node identificator.
 	Name string
-	// Secret is a secret key used to generate connection and subscription tokens.
-	//
-	// Deprecated: Use TokenHMACSecretKey instead.
-	Secret string
 	// TokenHMACSecretKey is a secret key used to validate connection and subscription tokens generated using HMAC.
 	// Zero value means that HMAC tokens won't be allowed.
 	TokenHMACSecretKey string

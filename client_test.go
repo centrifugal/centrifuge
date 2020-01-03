@@ -154,7 +154,7 @@ func TestClientConnectWithValidToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
@@ -171,7 +171,7 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
@@ -189,7 +189,7 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
@@ -206,7 +206,7 @@ func TestClientTokenRefresh(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
@@ -536,7 +536,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
@@ -577,7 +577,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
