@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/controlproto"
+	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/FZambia/eagle"
@@ -56,6 +57,8 @@ type Node struct {
 	metricsMu       sync.Mutex
 	metricsExporter *eagle.Eagle
 	metricsSnapshot *eagle.Metrics
+
+	subDissolver *dissolve.Dissolver
 }
 
 const (
@@ -83,6 +86,7 @@ func New(c Config) (*Node, error) {
 		controlDecoder: controlproto.NewProtobufDecoder(),
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
+		subDissolver:   dissolve.New(1000, 16),
 	}
 
 	if c.LogHandler != nil {
@@ -171,6 +175,7 @@ func (n *Node) Run() error {
 	go n.sendNodePing()
 	go n.cleanNodeInfo()
 	go n.updateMetrics()
+	n.subDissolver.Run()
 	return nil
 }
 
@@ -664,7 +669,16 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 		return err
 	}
 	if empty {
-		return n.broker.Unsubscribe(ch)
+		n.subDissolver.Submit(func() error {
+			mu := n.subLock(ch)
+			mu.Lock()
+			defer mu.Unlock()
+			empty := len(n.hub.subs[ch]) == 0
+			if empty {
+				return n.broker.Unsubscribe(ch)
+			}
+			return nil
+		})
 	}
 	return nil
 }
