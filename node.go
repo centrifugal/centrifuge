@@ -637,7 +637,7 @@ func (n *Node) removeClient(c *Client) error {
 }
 
 // addSubscription registers subscription of connection on channel in both
-// engine and clientSubscriptionHub.
+// hub and engine.
 func (n *Node) addSubscription(ch string, c *Client) error {
 	actionCount.WithLabelValues("add_subscription").Inc()
 	mu := n.subLock(ch)
@@ -658,7 +658,7 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 }
 
 // removeSubscription removes subscription of connection on channel
-// from both engine and clientSubscriptionHub.
+// from hub and engine.
 func (n *Node) removeSubscription(ch string, c *Client) error {
 	actionCount.WithLabelValues("remove_subscription").Inc()
 	mu := n.subLock(ch)
@@ -669,11 +669,16 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 		return err
 	}
 	if empty {
+		submittedAt := time.Now()
 		n.subDissolver.Submit(func() error {
+			timeSpent := time.Now().Sub(submittedAt)
+			if timeSpent < time.Second {
+				time.Sleep(time.Second - timeSpent)
+			}
 			mu := n.subLock(ch)
 			mu.Lock()
 			defer mu.Unlock()
-			empty := len(n.hub.subs[ch]) == 0
+			empty := n.hub.NumSubscribers(ch) == 0
 			if empty {
 				return n.broker.Unsubscribe(ch)
 			}
