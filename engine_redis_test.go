@@ -793,6 +793,8 @@ func TestClientSubscribeRecoverRedis(t *testing.T) {
 			res := extractSubscribeResult(replies)
 			assert.Equal(t, tt.NumRecovered, len(res.Publications))
 			assert.Equal(t, tt.Recovered, res.Recovered)
+
+			node.Shutdown(context.Background())
 		})
 	}
 }

@@ -62,7 +62,8 @@ type Node struct {
 }
 
 const (
-	numSubLocks = 16384
+	numSubLocks            = 16384
+	numSubDissolverWorkers = 128
 )
 
 // New creates Node, the only required argument is config.
@@ -86,7 +87,7 @@ func New(c Config) (*Node, error) {
 		controlDecoder: controlproto.NewProtobufDecoder(),
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
-		subDissolver:   dissolve.New(1000, 16),
+		subDissolver:   dissolve.New(numSubDissolverWorkers),
 	}
 
 	if c.LogHandler != nil {
@@ -218,6 +219,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			defer closer.Close(ctx)
 		}
 	}
+	n.subDissolver.Close()
 	return n.hub.shutdown(ctx)
 }
 
