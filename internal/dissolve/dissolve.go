@@ -5,37 +5,41 @@ import (
 	"runtime"
 )
 
-// Dissolver ...
+// Dissolver allows to put function to in-memory queue and process
+// it with workers until success. The order of execution is not maintained.
+// Jobs will be lost after closing. Jobs not saved to persistent store so
+// do not survive process restart.
+// Centrifuge uses this for asynchronously unsubscribing node from channels
+// in broker. As soon as process restarts all connections to broker get
+// closed automatically so it's ok to lose jobs inside Dissolver queue.
 type Dissolver struct {
-	queue     Queue
-	semaphore chan struct{}
-	nWorkers  int
+	queue      queue
+	numWorkers int
 }
 
-// New ...
-func New(maxConcurrency int, nWorkers int) *Dissolver {
+// New creates new Dissolver.
+func New(numWorkers int) *Dissolver {
 	return &Dissolver{
-		queue:     newQueue(),
-		nWorkers:  nWorkers,
-		semaphore: make(chan struct{}, maxConcurrency),
+		queue:      newQueue(),
+		numWorkers: numWorkers,
 	}
 }
 
-// Run ...
+// Run launches workers to process Jobs from queue concurrently.
 func (d *Dissolver) Run() error {
-	for i := 0; i < d.nWorkers; i++ {
+	for i := 0; i < d.numWorkers; i++ {
 		go d.runWorker()
 	}
 	return nil
 }
 
-// Close ...
+// Close stops processing Jobs, no more Jobs can be submitted after closing.
 func (d *Dissolver) Close() error {
 	d.queue.Close()
 	return nil
 }
 
-// Submit ...
+// Submit Job to be reliably processed.
 func (d *Dissolver) Submit(job Job) error {
 	if !d.queue.Add(job) {
 		return errors.New("can not submit job to closed dissolver")
@@ -45,10 +49,8 @@ func (d *Dissolver) Submit(job Job) error {
 
 func (d *Dissolver) runWorker() {
 	for {
-		d.semaphore <- struct{}{}
 		job, ok := d.queue.Wait()
 		if !ok {
-			<-d.semaphore
 			break
 		}
 		err := job()
@@ -57,6 +59,5 @@ func (d *Dissolver) runWorker() {
 			runtime.Gosched()
 			d.queue.Add(job)
 		}
-		<-d.semaphore
 	}
 }
