@@ -19,44 +19,6 @@ import (
 	"nhooyr.io/websocket"
 )
 
-var dataBytes []byte
-
-func init() {
-	data := map[string]interface{}{
-		"_id":        "5adece493c1a23736b037c52",
-		"isActive":   false,
-		"balance":    "$2,199.02",
-		"picture":    "http://placehold.it/32x32",
-		"age":        25,
-		"eyeColor":   "blue",
-		"name":       "Swanson Walker",
-		"gender":     "male",
-		"company":    "SHADEASE",
-		"email":      "swansonwalker@shadease.com",
-		"phone":      "+1 (885) 410-3991",
-		"address":    "768 Paerdegat Avenue, Gouglersville, Oklahoma, 5380",
-		"registered": "2016-01-24T07:40:09 -03:00",
-		"latitude":   -71.336378,
-		"longitude":  -28.155956,
-		"tags": []string{
-			"magna",
-			"nostrud",
-			"irure",
-			"aliquip",
-			"culpa",
-			"sint",
-		},
-		"greeting":      "Hello, Swanson Walker! You have 9 unread messages.",
-		"favoriteFruit": "apple",
-	}
-
-	var err error
-	dataBytes, err = json.Marshal(data)
-	if err != nil {
-		panic(err.Error())
-	}
-}
-
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
@@ -228,7 +190,7 @@ func main() {
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
 			// Do not log here - lots of messages expected.
-			err := client.Send(dataBytes)
+			err := client.Send(e.Data)
 			if err != nil {
 				if err != io.EOF {
 					log.Fatalln("error senfing to client:", err.Error())
