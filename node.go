@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/controlproto"
+	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/FZambia/eagle"
@@ -56,10 +57,13 @@ type Node struct {
 	metricsMu       sync.Mutex
 	metricsExporter *eagle.Eagle
 	metricsSnapshot *eagle.Metrics
+
+	subDissolver *dissolve.Dissolver
 }
 
 const (
-	numSubLocks = 16384
+	numSubLocks            = 16384
+	numSubDissolverWorkers = 64
 )
 
 // New creates Node, the only required argument is config.
@@ -83,6 +87,7 @@ func New(c Config) (*Node, error) {
 		controlDecoder: controlproto.NewProtobufDecoder(),
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
+		subDissolver:   dissolve.New(numSubDissolverWorkers),
 	}
 
 	if c.LogHandler != nil {
@@ -171,6 +176,7 @@ func (n *Node) Run() error {
 	go n.sendNodePing()
 	go n.cleanNodeInfo()
 	go n.updateMetrics()
+	n.subDissolver.Run()
 	return nil
 }
 
@@ -213,6 +219,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			defer closer.Close(ctx)
 		}
 	}
+	n.subDissolver.Close()
 	return n.hub.shutdown(ctx)
 }
 
@@ -632,7 +639,7 @@ func (n *Node) removeClient(c *Client) error {
 }
 
 // addSubscription registers subscription of connection on channel in both
-// engine and clientSubscriptionHub.
+// hub and engine.
 func (n *Node) addSubscription(ch string, c *Client) error {
 	actionCount.WithLabelValues("add_subscription").Inc()
 	mu := n.subLock(ch)
@@ -653,7 +660,7 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 }
 
 // removeSubscription removes subscription of connection on channel
-// from both engine and clientSubscriptionHub.
+// from hub and engine.
 func (n *Node) removeSubscription(ch string, c *Client) error {
 	actionCount.WithLabelValues("remove_subscription").Inc()
 	mu := n.subLock(ch)
@@ -664,7 +671,21 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 		return err
 	}
 	if empty {
-		return n.broker.Unsubscribe(ch)
+		submittedAt := time.Now()
+		n.subDissolver.Submit(func() error {
+			timeSpent := time.Now().Sub(submittedAt)
+			if timeSpent < time.Second {
+				time.Sleep(time.Second - timeSpent)
+			}
+			mu := n.subLock(ch)
+			mu.Lock()
+			defer mu.Unlock()
+			empty := n.hub.NumSubscribers(ch) == 0
+			if empty {
+				return n.broker.Unsubscribe(ch)
+			}
+			return nil
+		})
 	}
 	return nil
 }

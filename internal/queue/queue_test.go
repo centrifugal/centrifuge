@@ -4,39 +4,39 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type testItem []byte
 
 func TestByteQueueResize(t *testing.T) {
 	q := New()
-	assert.Equal(t, 0, q.Len())
-	assert.Equal(t, false, q.Closed())
+	require.Equal(t, 0, q.Len())
+	require.Equal(t, false, q.Closed())
 
 	for i := 0; i < initialCapacity; i++ {
 		q.Add(testItem([]byte(strconv.Itoa(i))))
 	}
 	q.Add(testItem([]byte("resize here")))
-	assert.Equal(t, initialCapacity*2, q.Cap())
+	require.Equal(t, initialCapacity*2, q.Cap())
 	q.Remove()
 
 	q.Add(testItem([]byte("new resize here")))
-	assert.Equal(t, initialCapacity*2, q.Cap())
+	require.Equal(t, initialCapacity*2, q.Cap())
 	q.Add(testItem([]byte("one more item, no resize must happen")))
-	assert.Equal(t, initialCapacity*2, q.Cap())
+	require.Equal(t, initialCapacity*2, q.Cap())
 
-	assert.Equal(t, initialCapacity+2, q.Len())
+	require.Equal(t, initialCapacity+2, q.Len())
 }
 
 func TestByteQueueSize(t *testing.T) {
 	q := New()
-	assert.Equal(t, 0, q.Size())
+	require.Equal(t, 0, q.Size())
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
-	assert.Equal(t, 2, q.Size())
+	require.Equal(t, 2, q.Size())
 	q.Remove()
-	assert.Equal(t, 1, q.Size())
+	require.Equal(t, 1, q.Size())
 }
 
 func TestByteQueueWait(t *testing.T) {
@@ -45,20 +45,20 @@ func TestByteQueueWait(t *testing.T) {
 	q.Add(testItem([]byte("2")))
 
 	s, ok := q.Wait()
-	assert.Equal(t, true, ok)
-	assert.Equal(t, "1", string(s))
+	require.Equal(t, true, ok)
+	require.Equal(t, "1", string(s))
 
 	s, ok = q.Wait()
-	assert.Equal(t, true, ok)
-	assert.Equal(t, "2", string(s))
+	require.Equal(t, true, ok)
+	require.Equal(t, "2", string(s))
 
 	go func() {
 		q.Add(testItem([]byte("3")))
 	}()
 
 	s, ok = q.Wait()
-	assert.Equal(t, true, ok)
-	assert.Equal(t, "3", string(s))
+	require.Equal(t, true, ok)
+	require.Equal(t, "3", string(s))
 
 }
 
@@ -67,22 +67,22 @@ func TestByteQueueClose(t *testing.T) {
 
 	// test removing from empty queue
 	_, ok := q.Remove()
-	assert.Equal(t, false, ok)
+	require.Equal(t, false, ok)
 
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
 	q.Close()
 
 	ok = q.Add(testItem([]byte("3")))
-	assert.Equal(t, false, ok)
+	require.Equal(t, false, ok)
 
 	_, ok = q.Wait()
-	assert.Equal(t, false, ok)
+	require.Equal(t, false, ok)
 
 	_, ok = q.Remove()
-	assert.Equal(t, false, ok)
+	require.Equal(t, false, ok)
 
-	assert.Equal(t, true, q.Closed())
+	require.Equal(t, true, q.Closed())
 
 }
 
@@ -91,12 +91,12 @@ func TestByteQueueCloseRemaining(t *testing.T) {
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
 	msgs := q.CloseRemaining()
-	assert.Equal(t, 2, len(msgs))
+	require.Equal(t, 2, len(msgs))
 	ok := q.Add(testItem([]byte("3")))
-	assert.Equal(t, false, ok)
-	assert.Equal(t, true, q.Closed())
+	require.Equal(t, false, ok)
+	require.Equal(t, true, q.Closed())
 	msgs = q.CloseRemaining()
-	assert.Equal(t, 0, len(msgs))
+	require.Equal(t, 0, len(msgs))
 }
 
 func BenchmarkQueueAdd(b *testing.B) {
