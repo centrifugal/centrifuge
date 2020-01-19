@@ -63,7 +63,7 @@ type Node struct {
 
 const (
 	numSubLocks            = 16384
-	numSubDissolverWorkers = 128
+	numSubDissolverWorkers = 64
 )
 
 // New creates Node, the only required argument is config.
