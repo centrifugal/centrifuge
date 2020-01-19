@@ -1,6 +1,7 @@
 package dissolve
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -11,6 +12,31 @@ func TestDissolver(t *testing.T) {
 	defer d.Close()
 	ch := make(chan struct{}, 1)
 	err := d.Submit(func() error {
+		ch <- struct{}{}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Submit returned error: %v", err)
+	}
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestDissolverErrorHandling(t *testing.T) {
+	d := New(4)
+	d.Run()
+	defer d.Close()
+	var numFails int
+	ch := make(chan struct{}, 1)
+	err := d.Submit(func() error {
+		if numFails < 10 {
+			// Fail Job several times.
+			numFails++
+			return errors.New("artificial error")
+		}
 		ch <- struct{}{}
 		return nil
 	})
