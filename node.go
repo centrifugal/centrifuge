@@ -32,6 +32,8 @@ type Node struct {
 	hub *Hub
 	// broker is responsible for PUB/SUB mechanics.
 	broker Broker
+	// authorization is responsible to verify client tokens
+	authorization Authorization
 	// historyManager is responsible for managing channel Publication history.
 	historyManager HistoryManager
 	// presenceManager is responsible for presence information management.
@@ -67,12 +69,16 @@ const (
 )
 
 // New creates Node, the only required argument is config.
-func New(c Config) (*Node, error) {
+func New(c Config, authorization Authorization) (*Node, error) {
 	uid := uuid.Must(uuid.NewV4()).String()
 
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)
 	for i := 0; i < numSubLocks; i++ {
 		subLocks[i] = &sync.Mutex{}
+	}
+
+	if authorization == nil {
+		authorization = NewAuthorizationJwt(c.TokenHMACSecretKey, c.TokenRSAPublicKey)
 	}
 
 	n := &Node{
@@ -88,6 +94,7 @@ func New(c Config) (*Node, error) {
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
+		authorization:  authorization,
 	}
 
 	if c.LogHandler != nil {
@@ -153,6 +160,7 @@ func (n *Node) Reload(c Config) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.config = c
+	n.authorization = NewAuthorizationJwt(c.TokenHMACSecretKey, c.TokenRSAPublicKey)
 	return nil
 }
 
@@ -862,6 +870,14 @@ func (n *Node) userAllowed(ch string, user string) bool {
 		}
 	}
 	return false
+}
+
+func (n *Node) VerifyConnectToken(token string) (Token, error) {
+	return n.authorization.VerifyConnectToken(token)
+}
+
+func (n *Node) VerifySubscribeToken(token string) (Token, error) {
+	return n.authorization.VerifySubscribeToken(token)
 }
 
 type nodeRegistry struct {
