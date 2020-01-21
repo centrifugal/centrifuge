@@ -77,7 +77,7 @@ func main() {
 		},
 	}
 
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(cfg, nil)
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{

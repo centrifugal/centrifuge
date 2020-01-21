@@ -52,7 +52,7 @@ func main() {
 		},
 	}
 
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(cfg, nil)
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		log.Printf("authenticating client connection with id: %s dialed via %s (%s proto)", e.ClientID, t.Name(), t.Encoding())

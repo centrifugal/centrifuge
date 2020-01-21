@@ -10,7 +10,7 @@ import (
 )
 
 func TestSockjsHandler(t *testing.T) {
-	n, _ := New(Config{})
+	n, _ := New(Config{}, nil)
 	mux := http.NewServeMux()
 	mux.Handle("/connection/sockjs/", NewSockjsHandler(n, SockjsConfig{
 		HandlerPrefix: "/connection/sockjs",

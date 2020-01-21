@@ -65,7 +65,7 @@ func main() {
 		},
 	}
 
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(cfg, nil)
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 

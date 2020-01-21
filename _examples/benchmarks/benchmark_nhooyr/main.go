@@ -169,7 +169,7 @@ func main() {
 	cfg.LogHandler = handleLog
 	cfg.ClientInsecure = true
 
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(cfg, nil)
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
