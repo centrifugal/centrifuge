@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/dgrijalva/jwt-go"
+	"sync"
 )
 
 var (
@@ -14,18 +15,19 @@ var (
 )
 
 type AuthorizationJwt struct {
+	mu                 sync.RWMutex
 	TokenHMACSecretKey string
 	TokenRSAPublicKey  *rsa.PublicKey
 }
 
 func NewAuthorizationJwt(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.PublicKey) Authorization {
-	return AuthorizationJwt{
+	return &AuthorizationJwt{
 		TokenHMACSecretKey: tokenHMACSecretKey,
 		TokenRSAPublicKey:  tokenRSAPublicKey,
 	}
 }
 
-func (auth AuthorizationJwt) VerifyConnectToken(token string) (Token, error) {
+func (auth *AuthorizationJwt) VerifyConnectToken(token string) (Token, error) {
 	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, auth.jwtKeyFunc())
 	if err != nil {
 		if err, ok := err.(*jwt.ValidationError); ok {
@@ -55,7 +57,7 @@ func (auth AuthorizationJwt) VerifyConnectToken(token string) (Token, error) {
 	return Token{}, InvalidToken
 }
 
-func (auth AuthorizationJwt) VerifySubscribeToken(token string) (Token, error) {
+func (auth *AuthorizationJwt) VerifySubscribeToken(token string) (Token, error) {
 	parsedToken, err := jwt.ParseWithClaims(token, &subscribeTokenClaims{}, auth.jwtKeyFunc())
 	if err != nil {
 		if validationErr, ok := err.(*jwt.ValidationError); ok {
@@ -86,7 +88,14 @@ func (auth AuthorizationJwt) VerifySubscribeToken(token string) (Token, error) {
 	return Token{}, InvalidToken
 }
 
-func (auth AuthorizationJwt) jwtKeyFunc() func(token *jwt.Token) (interface{}, error) {
+func (auth *AuthorizationJwt) Reload(config Config) {
+	auth.mu.RLock()
+	defer auth.mu.RUnlock()
+	auth.TokenRSAPublicKey = config.TokenRSAPublicKey
+	auth.TokenHMACSecretKey = config.TokenHMACSecretKey
+}
+
+func (auth *AuthorizationJwt) jwtKeyFunc() func(token *jwt.Token) (interface{}, error) {
 	return func(token *jwt.Token) (interface{}, error) {
 		switch token.Method.(type) {
 		case *jwt.SigningMethodHMAC:

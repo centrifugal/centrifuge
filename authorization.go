@@ -3,6 +3,7 @@ package centrifuge
 type Authorization interface {
 	VerifyConnectToken(token string) (Token, error)
 	VerifySubscribeToken(token string) (Token, error)
+	Reload(config Config)
 }
 
 type Token struct {

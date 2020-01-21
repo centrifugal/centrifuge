@@ -160,7 +160,7 @@ func (n *Node) Reload(c Config) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.config = c
-	n.authorization = NewAuthorizationJwt(c.TokenHMACSecretKey, c.TokenRSAPublicKey)
+	n.authorization.Reload(c)
 	return nil
 }
 
