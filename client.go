@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -1191,7 +1190,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		var err error
 		if token, err = c.node.VerifyConnectToken(cmd.Token); err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
-			if errors.Is(err, ErrorTokenExpired) {
+			if err == ErrorTokenExpired {
 				resp.Error = ErrorTokenExpired
 				return resp, nil
 			}
@@ -1426,7 +1425,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 			errVerify error
 		)
 		if token, errVerify = c.node.VerifySubscribeToken(cmd.Token); errVerify != nil {
-			if errors.Is(errVerify, ErrorTokenExpired) {
+			if errVerify == ErrorTokenExpired {
 				_ = rw.write(&protocol.Reply{Error: ErrorTokenExpired})
 				return nil
 			}
