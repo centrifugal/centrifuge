@@ -76,7 +76,7 @@ func newTestRedisEngine() *RedisEngine {
 }
 
 func NewTestRedisEngineWithPrefix(prefix string) *RedisEngine {
-	n, _ := New(Config{})
+	n, _ := New(Config{}, nil)
 	redisConf := RedisShardConfig{
 		Host:        testRedisHost,
 		Port:        testRedisPort,
@@ -731,7 +731,7 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 
 func nodeWithRedisEngine() *Node {
 	c := DefaultConfig
-	n, err := New(c)
+	n, err := New(c, nil)
 	if err != nil {
 		panic(err)
 	}
