@@ -13,5 +13,4 @@ require (
 	github.com/igm/sockjs-go v0.0.0-20191119074118-cd6986df5bcc
 	github.com/prometheus/client_golang v0.9.2
 	github.com/stretchr/testify v1.3.0
-	golang.org/x/tools v0.0.0-20200122192710-213b5e130a7c // indirect
 )
