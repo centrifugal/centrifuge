@@ -1189,7 +1189,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		var token ConnectToken
 		var err error
 		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
 			if err == ErrorTokenExpired {
 				resp.Error = ErrorTokenExpired
 				return resp, nil
