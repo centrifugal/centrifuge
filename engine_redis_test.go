@@ -731,7 +731,7 @@ func BenchmarkRedisEngineHistoryRecoverParallel(b *testing.B) {
 
 func nodeWithRedisEngine() *Node {
 	c := DefaultConfig
-	n, err := New(c, nil)
+	n, err := New(c)
 	if err != nil {
 		panic(err)
 	}
