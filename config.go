@@ -85,6 +85,10 @@ type Config struct {
 	LogLevel LogLevel
 	// LogHandler is a handler func node will send logs to.
 	LogHandler LogHandler
+
+	// TokenVerifier is a interface to allow customs tokens verifiers
+	// Zero value means that TokenVerifierJWT will be used.
+	TokenVerifier TokenVerifier
 }
 
 // Validate validates config and returns error if problems found
@@ -165,4 +169,6 @@ var DefaultConfig = Config{
 	ClientChannelPositionCheckDelay: 40 * time.Second,
 	ClientQueueMaxSize:              10485760, // 10MB by default
 	ClientChannelLimit:              128,
+
+	TokenVerifier: nil,
 }

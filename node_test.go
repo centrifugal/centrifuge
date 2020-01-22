@@ -95,7 +95,7 @@ func (e *TestEngine) Channels() ([]string, error) {
 
 func nodeWithTestEngine() *Node {
 	c := DefaultConfig
-	n, err := New(c, nil)
+	n, err := New(c)
 	if err != nil {
 		panic(err)
 	}
@@ -109,7 +109,7 @@ func nodeWithTestEngine() *Node {
 
 func nodeWithMemoryEngine() *Node {
 	c := DefaultConfig
-	n, err := New(c, nil)
+	n, err := New(c)
 	if err != nil {
 		panic(err)
 	}

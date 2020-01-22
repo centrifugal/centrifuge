@@ -42,7 +42,7 @@ func main() {
 	cfg.LogHandler = handleLog
 	cfg.ClientInsecure = true
 
-	node, _ := centrifuge.New(cfg, nil)
+	node, _ := centrifuge.New(cfg)
 
 	if os.Getenv("CENTRIFUGE_ENGINE") == "redis" {
 		engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{

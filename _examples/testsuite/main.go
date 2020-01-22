@@ -78,7 +78,7 @@ func testJWTAuth(fn ResolveFunc) *centrifuge.Node {
 	cfg.TokenHMACSecretKey = "secret"
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
-	node, _ := centrifuge.New(cfg, nil)
+	node, _ := centrifuge.New(cfg)
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
@@ -95,7 +95,7 @@ func testSimpleSubscribe(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
-	node, _ := centrifuge.New(cfg, nil)
+	node, _ := centrifuge.New(cfg)
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
@@ -120,7 +120,7 @@ func testReceiveRPCReceiveMessageJSON(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
-	node, _ := centrifuge.New(cfg, nil)
+	node, _ := centrifuge.New(cfg)
 
 	message := testsuiteMessage{
 		Data: "testsuite",
@@ -157,7 +157,7 @@ func testReceiveRPCReceiveMessageProtobuf(fn ResolveFunc) *centrifuge.Node {
 	cfg := centrifuge.DefaultConfig
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
-	node, _ := centrifuge.New(cfg, nil)
+	node, _ := centrifuge.New(cfg)
 
 	message := []byte("boom 👻 boom")
 

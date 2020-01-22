@@ -3,44 +3,39 @@ package centrifuge
 import (
 	"crypto/rsa"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"github.com/dgrijalva/jwt-go"
 	"sync"
+
+	"github.com/dgrijalva/jwt-go"
 )
 
-var (
-	InvalidToken = errors.New("invalid connection token")
-	InvalidInfo  = errors.New("can not decode provided info from base64")
-)
-
-type AuthorizationJwt struct {
+type tokenVerifierJWT struct {
 	mu                 sync.RWMutex
 	TokenHMACSecretKey string
 	TokenRSAPublicKey  *rsa.PublicKey
 }
 
-func NewAuthorizationJwt(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.PublicKey) Authorization {
-	return &AuthorizationJwt{
+func NewTokenVerifierJWT(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.PublicKey) TokenVerifier {
+	return &tokenVerifierJWT{
 		TokenHMACSecretKey: tokenHMACSecretKey,
 		TokenRSAPublicKey:  tokenRSAPublicKey,
 	}
 }
 
-func (auth *AuthorizationJwt) VerifyConnectToken(token string) (Token, error) {
-	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, auth.jwtKeyFunc())
+func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (ConnectToken, error) {
+	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, verifier.jwtKeyFunc())
 	if err != nil {
 		if err, ok := err.(*jwt.ValidationError); ok {
 			if err.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other
 				// errors set in Errors bitfield.
-				return Token{}, ErrorTokenExpired
+				return ConnectToken{}, ErrorTokenExpired
 			}
 		}
-		return Token{}, InvalidToken
+		return ConnectToken{}, ErrTokenInvalid
 	}
 	if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
-		token := Token{
+		token := ConnectToken{
 			UserID:   claims.StandardClaims.Subject,
 			ExpireAt: claims.StandardClaims.ExpiresAt,
 			Info:     claims.Info,
@@ -48,29 +43,29 @@ func (auth *AuthorizationJwt) VerifyConnectToken(token string) (Token, error) {
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 			if err != nil {
-				return Token{}, InvalidInfo
+				return ConnectToken{}, ErrTokenInvalidInfo
 			}
 			token.Info = byteInfo
 		}
 		return token, nil
 	}
-	return Token{}, InvalidToken
+	return ConnectToken{}, ErrTokenInvalid
 }
 
-func (auth *AuthorizationJwt) VerifySubscribeToken(token string) (Token, error) {
-	parsedToken, err := jwt.ParseWithClaims(token, &subscribeTokenClaims{}, auth.jwtKeyFunc())
+func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (SubscribeToken, error) {
+	parsedToken, err := jwt.ParseWithClaims(token, &subscribeTokenClaims{}, verifier.jwtKeyFunc())
 	if err != nil {
 		if validationErr, ok := err.(*jwt.ValidationError); ok {
 			if validationErr.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other
 				// errors set in Errors bitfield.
-				return Token{}, ErrorTokenExpired
+				return SubscribeToken{}, ErrorTokenExpired
 			}
 		}
-		return Token{}, InvalidToken
+		return SubscribeToken{}, ErrTokenInvalid
 	}
 	if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
-		token := Token{
+		token := SubscribeToken{
 			UserID:   claims.Client,
 			Info:     claims.Info,
 			Channel:  claims.Channel,
@@ -79,35 +74,37 @@ func (auth *AuthorizationJwt) VerifySubscribeToken(token string) (Token, error) 
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 			if err != nil {
-				return Token{}, InvalidInfo
+				return SubscribeToken{}, ErrTokenInvalidInfo
 			}
 			token.Info = byteInfo
 		}
 		return token, nil
 	}
-	return Token{}, InvalidToken
+	return SubscribeToken{}, ErrTokenInvalid
 }
 
-func (auth *AuthorizationJwt) Reload(config Config) {
-	auth.mu.RLock()
-	defer auth.mu.RUnlock()
-	auth.TokenRSAPublicKey = config.TokenRSAPublicKey
-	auth.TokenHMACSecretKey = config.TokenHMACSecretKey
+func (verifier *tokenVerifierJWT) Reload(config Config) {
+	verifier.mu.Lock()
+	defer verifier.mu.Unlock()
+	verifier.TokenRSAPublicKey = config.TokenRSAPublicKey
+	verifier.TokenHMACSecretKey = config.TokenHMACSecretKey
 }
 
-func (auth *AuthorizationJwt) jwtKeyFunc() func(token *jwt.Token) (interface{}, error) {
+func (verifier *tokenVerifierJWT) jwtKeyFunc() func(token *jwt.Token) (interface{}, error) {
 	return func(token *jwt.Token) (interface{}, error) {
+		verifier.mu.RLock()
+		defer verifier.mu.RUnlock()
 		switch token.Method.(type) {
 		case *jwt.SigningMethodHMAC:
-			if auth.TokenHMACSecretKey == "" {
+			if verifier.TokenHMACSecretKey == "" {
 				return nil, fmt.Errorf("token HMAC secret key not set")
 			}
-			return []byte(auth.TokenHMACSecretKey), nil
+			return []byte(verifier.TokenHMACSecretKey), nil
 		case *jwt.SigningMethodRSA:
-			if auth.TokenRSAPublicKey == nil {
+			if verifier.TokenRSAPublicKey == nil {
 				return nil, fmt.Errorf("token RSA public key not set")
 			}
-			return auth.TokenRSAPublicKey, nil
+			return verifier.TokenRSAPublicKey, nil
 		default:
 			return nil, fmt.Errorf("unsupported signing method: %v", token.Header["alg"])
 		}

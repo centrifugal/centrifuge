@@ -98,7 +98,7 @@ func createCentrifugeNode() (*centrifuge.Node, error) {
 	cfg := centrifuge.DefaultConfig
 	cfg.Publish = true
 
-	node, err := centrifuge.New(cfg, nil)
+	node, err := centrifuge.New(cfg)
 	if err != nil {
 		return nil, err
 	}

@@ -32,8 +32,8 @@ type Node struct {
 	hub *Hub
 	// broker is responsible for PUB/SUB mechanics.
 	broker Broker
-	// authorization is responsible to verify client tokens
-	authorization Authorization
+	// tokenVerifier is responsible to verify client tokens
+	tokenVerifier TokenVerifier
 	// historyManager is responsible for managing channel Publication history.
 	historyManager HistoryManager
 	// presenceManager is responsible for presence information management.
@@ -69,7 +69,7 @@ const (
 )
 
 // New creates Node, the only required argument is config.
-func New(c Config, authorization Authorization) (*Node, error) {
+func New(c Config) (*Node, error) {
 	uid := uuid.Must(uuid.NewV4()).String()
 
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)
@@ -77,8 +77,10 @@ func New(c Config, authorization Authorization) (*Node, error) {
 		subLocks[i] = &sync.Mutex{}
 	}
 
-	if authorization == nil {
-		authorization = NewAuthorizationJwt(c.TokenHMACSecretKey, c.TokenRSAPublicKey)
+	tokenVerifier := c.TokenVerifier
+	if tokenVerifier == nil {
+		tokenVerifier = NewTokenVerifierJWT(c.TokenHMACSecretKey, c.TokenRSAPublicKey)
+		c.TokenVerifier = tokenVerifier
 	}
 
 	n := &Node{
@@ -94,7 +96,7 @@ func New(c Config, authorization Authorization) (*Node, error) {
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
-		authorization:  authorization,
+		tokenVerifier:  tokenVerifier,
 	}
 
 	if c.LogHandler != nil {
@@ -160,7 +162,7 @@ func (n *Node) Reload(c Config) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.config = c
-	n.authorization.Reload(c)
+	n.tokenVerifier.Reload(c)
 	return nil
 }
 
@@ -872,12 +874,12 @@ func (n *Node) userAllowed(ch string, user string) bool {
 	return false
 }
 
-func (n *Node) VerifyConnectToken(token string) (Token, error) {
-	return n.authorization.VerifyConnectToken(token)
+func (n *Node) verifyConnectToken(token string) (ConnectToken, error) {
+	return n.tokenVerifier.VerifyConnectToken(token)
 }
 
-func (n *Node) VerifySubscribeToken(token string) (Token, error) {
-	return n.authorization.VerifySubscribeToken(token)
+func (n *Node) verifySubscribeToken(token string) (SubscribeToken, error) {
+	return n.tokenVerifier.VerifySubscribeToken(token)
 }
 
 type nodeRegistry struct {

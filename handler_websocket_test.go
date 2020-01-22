@@ -17,7 +17,7 @@ import (
 )
 
 func TestWebsocketHandler(t *testing.T) {
-	n, _ := New(Config{}, nil)
+	n, _ := New(Config{})
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
 	server := httptest.NewServer(mux)

@@ -1186,9 +1186,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		c.exp = credentials.ExpireAt
 		c.mu.Unlock()
 	} else if cmd.Token != "" {
-		var token Token
+		var token ConnectToken
 		var err error
-		if token, err = c.node.VerifyConnectToken(cmd.Token); err != nil {
+		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
 			if err == ErrorTokenExpired {
 				resp.Error = ErrorTokenExpired
@@ -1300,10 +1300,10 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 	config := c.node.Config()
 
 	var (
-		token     Token
+		token     ConnectToken
 		errVerify error
 	)
-	if token, errVerify = c.node.VerifyConnectToken(cmd.Token); errVerify != nil {
+	if token, errVerify = c.node.verifyConnectToken(cmd.Token); errVerify != nil {
 		return nil, DisconnectBadRequest
 	}
 
@@ -1421,10 +1421,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 			return nil
 		}
 		var (
-			token     Token
+			token     SubscribeToken
 			errVerify error
 		)
-		if token, errVerify = c.node.VerifySubscribeToken(cmd.Token); errVerify != nil {
+		if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
 			if errVerify == ErrorTokenExpired {
 				_ = rw.write(&protocol.Reply{Error: ErrorTokenExpired})
 				return nil
@@ -1747,10 +1747,10 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 		return resp, nil
 	}
 	var (
-		token     Token
+		token     SubscribeToken
 		errVerify error
 	)
-	if token, errVerify = c.node.authorization.VerifyConnectToken(cmd.Token); errVerify != nil {
+	if token, errVerify = c.node.tokenVerifier.VerifySubscribeToken(cmd.Token); errVerify != nil {
 		resp.Error = ErrorBadRequest
 		return resp, nil
 	}

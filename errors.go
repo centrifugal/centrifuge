@@ -66,4 +66,14 @@ var (
 		Code:    110,
 		Message: "expired",
 	}
+	// ErrTokenInvalid ...
+	ErrTokenInvalid = &Error{
+		Code:    111,
+		Message: "invalid connection token",
+	}
+	// ErrTokenInvalid ...
+	ErrTokenInvalidInfo = &Error{
+		Code:    112,
+		Message: "can not decode provided info",
+	}
 )
