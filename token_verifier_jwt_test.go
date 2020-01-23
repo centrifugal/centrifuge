@@ -44,7 +44,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 		args      args
 		want      ConnectToken
 		wantErr   bool
-		wantedErr *Error
+		wantedErr error
 	}{
 		{
 			name:     "Valid jwt",
@@ -66,7 +66,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			},
 			want:      ConnectToken{},
 			wantErr:   true,
-			wantedErr: ErrTokenInvalid,
+			wantedErr: errTokenInvalid,
 		}, {
 			name:     "Expired jwt",
 			verifier: verifierJWT,
@@ -75,7 +75,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			},
 			want:      ConnectToken{},
 			wantErr:   true,
-			wantedErr: ErrorTokenExpired,
+			wantedErr: errTokenExpired,
 		},
 	}
 	for _, tt := range tests {
@@ -106,7 +106,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 		args      args
 		want      SubscribeToken
 		wantErr   bool
-		wantedErr *Error
+		wantedErr error
 	}{
 		{
 			name:      "Empty token",
@@ -114,7 +114,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			args:      args{},
 			want:      SubscribeToken{},
 			wantErr:   true,
-			wantedErr: ErrTokenInvalid,
+			wantedErr: errTokenInvalid,
 		}, {
 			name:     "Invalid token",
 			verifier: verifierJWT,
@@ -123,7 +123,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			},
 			want:      SubscribeToken{},
 			wantErr:   true,
-			wantedErr: ErrTokenInvalid,
+			wantedErr: errTokenInvalid,
 		}, {
 			name:     "Expired token",
 			verifier: verifierJWT,
@@ -132,7 +132,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			},
 			want:      SubscribeToken{},
 			wantErr:   true,
-			wantedErr: ErrorTokenExpired,
+			wantedErr: errTokenExpired,
 		}, {
 			name:     "Valid token",
 			verifier: verifierJWT,
@@ -146,7 +146,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 				Channel:  "channel1",
 			},
 			wantErr:   true,
-			wantedErr: ErrorTokenExpired,
+			wantedErr: errTokenExpired,
 		},
 	}
 	for _, tt := range tests {

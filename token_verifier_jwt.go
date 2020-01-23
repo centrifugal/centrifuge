@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"crypto/rsa"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -22,6 +23,12 @@ func NewTokenVerifierJWT(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.Publi
 	}
 }
 
+var (
+	errTokenInvalid     = errors.New("invalid connection token")
+	errTokenInvalidInfo = errors.New("can not decode provided info")
+	errTokenExpired     = errors.New("token expired")
+)
+
 func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (ConnectToken, error) {
 	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, verifier.jwtKeyFunc())
 	if err != nil {
@@ -29,10 +36,10 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (ConnectToken
 			if err.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other
 				// errors set in Errors bitfield.
-				return ConnectToken{}, ErrorTokenExpired
+				return ConnectToken{}, errTokenExpired
 			}
 		}
-		return ConnectToken{}, ErrTokenInvalid
+		return ConnectToken{}, errTokenInvalid
 	}
 	if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
 		token := ConnectToken{
@@ -43,13 +50,13 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (ConnectToken
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 			if err != nil {
-				return ConnectToken{}, ErrTokenInvalidInfo
+				return ConnectToken{}, errTokenInvalidInfo
 			}
 			token.Info = byteInfo
 		}
 		return token, nil
 	}
-	return ConnectToken{}, ErrTokenInvalid
+	return ConnectToken{}, errTokenInvalid
 }
 
 func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (SubscribeToken, error) {
@@ -59,10 +66,10 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (SubscribeT
 			if validationErr.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other
 				// errors set in Errors bitfield.
-				return SubscribeToken{}, ErrorTokenExpired
+				return SubscribeToken{}, errTokenExpired
 			}
 		}
-		return SubscribeToken{}, ErrTokenInvalid
+		return SubscribeToken{}, errTokenInvalid
 	}
 	if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
 		token := SubscribeToken{
@@ -74,13 +81,13 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (SubscribeT
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 			if err != nil {
-				return SubscribeToken{}, ErrTokenInvalidInfo
+				return SubscribeToken{}, errTokenInvalidInfo
 			}
 			token.Info = byteInfo
 		}
 		return token, nil
 	}
-	return SubscribeToken{}, ErrTokenInvalid
+	return SubscribeToken{}, errTokenInvalid
 }
 
 func (verifier *tokenVerifierJWT) Reload(config Config) {

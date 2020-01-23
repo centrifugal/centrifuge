@@ -1190,7 +1190,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		var err error
 		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
-			if err == ErrorTokenExpired {
+			if err == errTokenExpired {
 				resp.Error = ErrorTokenExpired
 				return resp, nil
 			}
@@ -1425,7 +1425,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 			errVerify error
 		)
 		if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
-			if errVerify == ErrorTokenExpired {
+			if errVerify == errTokenExpired {
 				_ = rw.write(&protocol.Reply{Error: ErrorTokenExpired})
 				return nil
 			}
