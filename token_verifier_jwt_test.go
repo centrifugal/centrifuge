@@ -81,7 +81,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.verifier.VerifyConnectToken(tt.args.token)
-			if (err != nil) == tt.wantErr {
+			if err != nil && tt.wantErr {
 				if !reflect.DeepEqual(err, tt.wantedErr) {
 					t.Errorf("VerifyConnectToken() error = %v, wantedErr %v", got, tt.wantedErr)
 				}
@@ -152,7 +152,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.verifier.VerifySubscribeToken(tt.args.token)
-			if (err != nil) == tt.wantErr {
+			if err != nil && tt.wantErr {
 				if !reflect.DeepEqual(err, tt.wantedErr) {
 					t.Errorf("VerifySubscribeToken() error = %v, wantedErr %v", err, tt.wantedErr)
 				}
