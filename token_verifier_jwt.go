@@ -16,7 +16,7 @@ type tokenVerifierJWT struct {
 	TokenRSAPublicKey  *rsa.PublicKey
 }
 
-func NewTokenVerifierJWT(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.PublicKey) TokenVerifier {
+func NewTokenVerifierJWT(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.PublicKey) tokenVerifier {
 	return &tokenVerifierJWT{
 		TokenHMACSecretKey: tokenHMACSecretKey,
 		TokenRSAPublicKey:  tokenRSAPublicKey,
@@ -29,20 +29,20 @@ var (
 	errTokenExpired     = errors.New("token expired")
 )
 
-func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (ConnectToken, error) {
+func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken, error) {
 	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, verifier.jwtKeyFunc())
 	if err != nil {
 		if err, ok := err.(*jwt.ValidationError); ok {
 			if err.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other
 				// errors set in Errors bitfield.
-				return ConnectToken{}, errTokenExpired
+				return connectToken{}, errTokenExpired
 			}
 		}
-		return ConnectToken{}, errTokenInvalid
+		return connectToken{}, errTokenInvalid
 	}
 	if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
-		token := ConnectToken{
+		token := connectToken{
 			UserID:   claims.StandardClaims.Subject,
 			ExpireAt: claims.StandardClaims.ExpiresAt,
 			Info:     claims.Info,
@@ -50,29 +50,29 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (ConnectToken
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 			if err != nil {
-				return ConnectToken{}, errTokenInvalidInfo
+				return connectToken{}, errTokenInvalidInfo
 			}
 			token.Info = byteInfo
 		}
 		return token, nil
 	}
-	return ConnectToken{}, errTokenInvalid
+	return connectToken{}, errTokenInvalid
 }
 
-func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (SubscribeToken, error) {
+func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeToken, error) {
 	parsedToken, err := jwt.ParseWithClaims(token, &subscribeTokenClaims{}, verifier.jwtKeyFunc())
 	if err != nil {
 		if validationErr, ok := err.(*jwt.ValidationError); ok {
 			if validationErr.Errors == jwt.ValidationErrorExpired {
 				// The only problem with token is its expiration - no other
 				// errors set in Errors bitfield.
-				return SubscribeToken{}, errTokenExpired
+				return subscribeToken{}, errTokenExpired
 			}
 		}
-		return SubscribeToken{}, errTokenInvalid
+		return subscribeToken{}, errTokenInvalid
 	}
 	if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
-		token := SubscribeToken{
+		token := subscribeToken{
 			UserID:   claims.Client,
 			Info:     claims.Info,
 			Channel:  claims.Channel,
@@ -81,13 +81,13 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (SubscribeT
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 			if err != nil {
-				return SubscribeToken{}, errTokenInvalidInfo
+				return subscribeToken{}, errTokenInvalidInfo
 			}
 			token.Info = byteInfo
 		}
 		return token, nil
 	}
-	return SubscribeToken{}, errTokenInvalid
+	return subscribeToken{}, errTokenInvalid
 }
 
 func (verifier *tokenVerifierJWT) Reload(config Config) {

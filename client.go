@@ -1186,7 +1186,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		c.exp = credentials.ExpireAt
 		c.mu.Unlock()
 	} else if cmd.Token != "" {
-		var token ConnectToken
+		var token connectToken
 		var err error
 		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
@@ -1300,7 +1300,7 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 	config := c.node.Config()
 
 	var (
-		token     ConnectToken
+		token     connectToken
 		errVerify error
 	)
 	if token, errVerify = c.node.verifyConnectToken(cmd.Token); errVerify != nil {
@@ -1421,7 +1421,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 			return nil
 		}
 		var (
-			token     SubscribeToken
+			token     subscribeToken
 			errVerify error
 		)
 		if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
@@ -1747,7 +1747,7 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 		return resp, nil
 	}
 	var (
-		token     SubscribeToken
+		token     subscribeToken
 		errVerify error
 	)
 	if token, errVerify = c.node.tokenVerifier.VerifySubscribeToken(cmd.Token); errVerify != nil {

@@ -1,12 +1,12 @@
 package centrifuge
 
-type TokenVerifier interface {
-	VerifyConnectToken(token string) (ConnectToken, error)
-	VerifySubscribeToken(token string) (SubscribeToken, error)
+type tokenVerifier interface {
+	VerifyConnectToken(token string) (connectToken, error)
+	VerifySubscribeToken(token string) (subscribeToken, error)
 	Reload(config Config)
 }
 
-type ConnectToken struct {
+type connectToken struct {
 	// UserID tells library an ID of connecting user.
 	UserID string
 	// ExpireAt allows to set time in future when connection must be validated.
@@ -20,7 +20,7 @@ type ConnectToken struct {
 	Info []byte
 }
 
-type SubscribeToken struct {
+type subscribeToken struct {
 	// UserID tells library an ID of connecting user.
 	UserID string
 	// ExpireAt allows to set time in future when connection must be validated.

@@ -12,7 +12,7 @@ func Test_tokenVerifierJWT_Reload(t *testing.T) {
 	}
 	tests := []struct {
 		name     string
-		verifier TokenVerifier
+		verifier tokenVerifier
 		args     args
 	}{
 		{
@@ -40,9 +40,9 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 	_time := time.Now()
 	tests := []struct {
 		name      string
-		verifier  TokenVerifier
+		verifier  tokenVerifier
 		args      args
-		want      ConnectToken
+		want      connectToken
 		wantErr   bool
 		wantedErr error
 	}{
@@ -52,7 +52,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			args: args{
 				token: getConnToken("user1", _time.Add(24*time.Hour).Unix()),
 			},
-			want: ConnectToken{
+			want: connectToken{
 				UserID:   "user1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
 				Info:     nil,
@@ -64,7 +64,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			args: args{
 				token: "Invalid jwt",
 			},
-			want:      ConnectToken{},
+			want:      connectToken{},
 			wantErr:   true,
 			wantedErr: errTokenInvalid,
 		}, {
@@ -73,7 +73,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			args: args{
 				token: getConnToken("user1", _time.Add(-24*time.Hour).Unix()),
 			},
-			want:      ConnectToken{},
+			want:      connectToken{},
 			wantErr:   true,
 			wantedErr: errTokenExpired,
 		},
@@ -102,9 +102,9 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 	_time := time.Now()
 	tests := []struct {
 		name      string
-		verifier  TokenVerifier
+		verifier  tokenVerifier
 		args      args
-		want      SubscribeToken
+		want      subscribeToken
 		wantErr   bool
 		wantedErr error
 	}{
@@ -112,7 +112,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			name:      "Empty token",
 			verifier:  verifierJWT,
 			args:      args{},
-			want:      SubscribeToken{},
+			want:      subscribeToken{},
 			wantErr:   true,
 			wantedErr: errTokenInvalid,
 		}, {
@@ -121,7 +121,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			args: args{
 				token: "randomToken",
 			},
-			want:      SubscribeToken{},
+			want:      subscribeToken{},
 			wantErr:   true,
 			wantedErr: errTokenInvalid,
 		}, {
@@ -130,7 +130,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			args: args{
 				token: getSubscribeToken("channel1", "user1", _time.Add(-24*time.Hour).Unix()),
 			},
-			want:      SubscribeToken{},
+			want:      subscribeToken{},
 			wantErr:   true,
 			wantedErr: errTokenExpired,
 		}, {
@@ -139,7 +139,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			args: args{
 				token: getSubscribeToken("channel1", "user1", _time.Add(24*time.Hour).Unix()),
 			},
-			want: SubscribeToken{
+			want: subscribeToken{
 				UserID:   "user1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
 				Info:     nil,

@@ -86,9 +86,9 @@ type Config struct {
 	// LogHandler is a handler func node will send logs to.
 	LogHandler LogHandler
 
-	// TokenVerifier is a interface to allow customs tokens verifiers
+	// tokenVerifier is a interface to allow customs tokens verifiers
 	// Zero value means that TokenVerifierJWT will be used.
-	TokenVerifier TokenVerifier
+	TokenVerifier tokenVerifier
 }
 
 // Validate validates config and returns error if problems found

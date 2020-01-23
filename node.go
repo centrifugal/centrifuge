@@ -33,7 +33,7 @@ type Node struct {
 	// broker is responsible for PUB/SUB mechanics.
 	broker Broker
 	// tokenVerifier is responsible to verify client tokens
-	tokenVerifier TokenVerifier
+	tokenVerifier tokenVerifier
 	// historyManager is responsible for managing channel Publication history.
 	historyManager HistoryManager
 	// presenceManager is responsible for presence information management.
@@ -874,11 +874,11 @@ func (n *Node) userAllowed(ch string, user string) bool {
 	return false
 }
 
-func (n *Node) verifyConnectToken(token string) (ConnectToken, error) {
+func (n *Node) verifyConnectToken(token string) (connectToken, error) {
 	return n.tokenVerifier.VerifyConnectToken(token)
 }
 
-func (n *Node) verifySubscribeToken(token string) (SubscribeToken, error) {
+func (n *Node) verifySubscribeToken(token string) (subscribeToken, error) {
 	return n.tokenVerifier.VerifySubscribeToken(token)
 }
 
