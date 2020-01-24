@@ -165,6 +165,4 @@ var DefaultConfig = Config{
 	ClientChannelPositionCheckDelay: 40 * time.Second,
 	ClientQueueMaxSize:              10485760, // 10MB by default
 	ClientChannelLimit:              128,
-
-	TokenVerifier: nil,
 }
