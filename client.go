@@ -1304,7 +1304,12 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 		errVerify error
 	)
 	if token, errVerify = c.node.verifyConnectToken(cmd.Token); errVerify != nil {
-		return nil, DisconnectBadRequest
+		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid}))
+		if errVerify == errTokenExpired {
+			resp.Error = ErrorTokenExpired
+			return resp, nil
+		}
+		return resp, DisconnectInvalidToken
 	}
 
 	res := &protocol.RefreshResult{
@@ -1429,7 +1434,12 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 				_ = rw.write(&protocol.Reply{Error: ErrorTokenExpired})
 				return nil
 			}
-			_ = rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
+			if errVerify == errTokenInvalidInfo {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info", map[string]interface{}{"user": c.UserID(), "client": c.uid, "error": errVerify.Error()}))
+				return DisconnectBadRequest
+			}
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid, "user": c.UserID()}))
+			rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
 			return nil
 		}
 		if c.uid != token.UserID {
@@ -1751,6 +1761,12 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 		errVerify error
 	)
 	if token, errVerify = c.node.tokenVerifier.VerifySubscribeToken(cmd.Token); errVerify != nil {
+		if errVerify == errTokenExpired {
+			// The only problem with token is its expiration - no other errors set in bitfield.
+			resp.Error = ErrorTokenExpired
+			return resp, nil
+		}
+		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid, "user": c.UserID()}))
 		resp.Error = ErrorBadRequest
 		return resp, nil
 	}
