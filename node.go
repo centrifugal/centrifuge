@@ -77,12 +77,6 @@ func New(c Config) (*Node, error) {
 		subLocks[i] = &sync.Mutex{}
 	}
 
-	tokenVerifier := c.TokenVerifier
-	if tokenVerifier == nil {
-		tokenVerifier = NewTokenVerifierJWT(c.TokenHMACSecretKey, c.TokenRSAPublicKey)
-		c.TokenVerifier = tokenVerifier
-	}
-
 	n := &Node{
 		uid:            uid,
 		nodes:          newNodeRegistry(uid),
@@ -96,7 +90,7 @@ func New(c Config) (*Node, error) {
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
-		tokenVerifier:  tokenVerifier,
+		tokenVerifier:  newTokenVerifierJWT(c.TokenHMACSecretKey, c.TokenRSAPublicKey),
 	}
 
 	if c.LogHandler != nil {

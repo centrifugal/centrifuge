@@ -85,10 +85,6 @@ type Config struct {
 	LogLevel LogLevel
 	// LogHandler is a handler func node will send logs to.
 	LogHandler LogHandler
-
-	// tokenVerifier is a interface to allow customs tokens verifiers
-	// Zero value means that TokenVerifierJWT will be used.
-	TokenVerifier tokenVerifier
 }
 
 // Validate validates config and returns error if problems found

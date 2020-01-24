@@ -16,7 +16,7 @@ type tokenVerifierJWT struct {
 	TokenRSAPublicKey  *rsa.PublicKey
 }
 
-func NewTokenVerifierJWT(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.PublicKey) tokenVerifier {
+func newTokenVerifierJWT(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.PublicKey) tokenVerifier {
 	return &tokenVerifierJWT{
 		TokenHMACSecretKey: tokenHMACSecretKey,
 		TokenRSAPublicKey:  tokenRSAPublicKey,

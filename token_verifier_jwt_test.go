@@ -6,37 +6,11 @@ import (
 	"time"
 )
 
-func Test_tokenVerifierJWT_Reload(t *testing.T) {
-	type args struct {
-		config Config
-	}
-	tests := []struct {
-		name     string
-		verifier tokenVerifier
-		args     args
-	}{
-		{
-			name:     "",
-			verifier: nil,
-			args:     args{},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			//verifier := &tokenVerifierJWT{
-			//	mu:                 tt.fields.mu,
-			//	TokenHMACSecretKey: tt.fields.TokenHMACSecretKey,
-			//	TokenRSAPublicKey:  tt.fields.TokenRSAPublicKey,
-			//}
-		})
-	}
-}
-
 func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 	type args struct {
 		token string
 	}
-	verifierJWT := NewTokenVerifierJWT("secret", nil)
+	verifierJWT := newTokenVerifierJWT("secret", nil)
 	_time := time.Now()
 	tests := []struct {
 		name      string
@@ -98,7 +72,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 	type args struct {
 		token string
 	}
-	verifierJWT := NewTokenVerifierJWT("secret", nil)
+	verifierJWT := newTokenVerifierJWT("secret", nil)
 	_time := time.Now()
 	tests := []struct {
 		name      string
