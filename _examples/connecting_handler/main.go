@@ -32,10 +32,10 @@ func waitExitSignal(n *centrifuge.Node) {
 func main() {
 	cfg := centrifuge.DefaultConfig
 
-	// Set secret to handle requests with JWT auth too. This is
+	// Set HMAC secret to handle requests with JWT auth too. This is
 	// not required if you don't use token authentication and
 	// private subscriptions verified by token.
-	cfg.Secret = "secret"
+	cfg.TokenHMACSecretKey = "secret"
 	cfg.Publish = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
@@ -54,7 +54,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.Transport, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		log.Printf("authenticating client connection with id: %s dialed via %s (%s proto)", e.ClientID, t.Name(), t.Encoding())
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -16,6 +17,11 @@ import (
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+type clientMessage struct {
+	Timestamp int64  `json:"timestamp"`
+	Input     string `json:"input"`
+}
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
@@ -49,10 +55,10 @@ func waitExitSignal(n *centrifuge.Node) {
 func main() {
 	cfg := centrifuge.DefaultConfig
 
-	// Set secret to handle requests with JWT auth too. This is
+	// Set HMAC secret to handle requests with JWT auth too. This is
 	// not required if you don't use token authentication and
 	// private subscriptions verified by token.
-	cfg.Secret = "secret"
+	cfg.TokenHMACSecretKey = "secret"
 	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
@@ -74,9 +80,16 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.Transport, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
 			Data: centrifuge.Raw(`{}`),
+		}
+	})
+
+	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 10,
 		}
 	})
 
@@ -103,7 +116,18 @@ func main() {
 
 		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			return centrifuge.PublishReply{}
+			var msg clientMessage
+			err := json.Unmarshal(e.Data, &msg)
+			if err != nil {
+				return centrifuge.PublishReply{
+					Error: centrifuge.ErrorBadRequest,
+				}
+			}
+			msg.Timestamp = time.Now().Unix()
+			data, _ := json.Marshal(msg)
+			return centrifuge.PublishReply{
+				Data: data,
+			}
 		})
 
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
@@ -124,30 +148,28 @@ func main() {
 		})
 
 		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
 		// Connect handler should not block, so start separate goroutine to
 		// periodically send messages to client.
 		go func() {
 			for {
-				err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-				if err != nil {
-					if err != io.EOF {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+					err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+					if err != nil {
+						if err == io.EOF {
+							return
+						}
 						log.Println(err.Error())
 					} else {
 						return
 					}
 				}
-				time.Sleep(5 * time.Second)
 			}
 		}()
-	})
-
-	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 10,
-		}
 	})
 
 	if err := node.Run(); err != nil {
@@ -156,7 +178,7 @@ func main() {
 
 	go func() {
 		for {
-			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal notification"}`))
+			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.FormatInt(time.Now().Unix(), 10)+`"}`))
 			if err != nil {
 				log.Println(err.Error())
 			}

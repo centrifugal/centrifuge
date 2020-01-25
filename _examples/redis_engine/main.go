@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	_ "net/http/pprof"
 
@@ -93,11 +94,22 @@ func main() {
 		})
 
 		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 	})
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		PublishOnHistoryAdd: false,
+		// This allows to publish into Redis channels atomically when adding
+		// Publication to history. Otherwise adding to history and publishing
+		// to PUB/SUB channel will be two separate calls each involving RTT.
+		PublishOnHistoryAdd: true,
+
+		// Use reasonably large expiration interval for sequence fields,
+		// much bigger than maximum HistoryLifetime value in Node config.
+		// This way sequence data will expire, in some cases you may want
+		// to prevent its expiration setting this to zero value.
+		SequenceTTL: 7 * 24 * time.Hour,
+
+		// And configure a couple of shards to use.
 		Shards: []centrifuge.RedisShardConfig{
 			centrifuge.RedisShardConfig{
 				Host: "localhost",

@@ -1,7 +1,9 @@
 package centrifuge
 
 import (
+	"crypto/rsa"
 	"errors"
+	"fmt"
 	"regexp"
 	"time"
 )
@@ -14,8 +16,12 @@ type Config struct {
 	// Name of this server node - must be unique, used as human readable
 	// and meaningful node identificator.
 	Name string
-	// Secret is a secret key used to generate connection and subscription tokens.
-	Secret string
+	// TokenHMACSecretKey is a secret key used to validate connection and subscription tokens generated using HMAC.
+	// Zero value means that HMAC tokens won't be allowed.
+	TokenHMACSecretKey string
+	// TokenRSAPublicKey is a public key used to validate connection and subscription tokens generated using RSA.
+	// Zero value means that RSA tokens won't be allowed.
+	TokenRSAPublicKey *rsa.PublicKey
 	// ChannelOptions embedded.
 	ChannelOptions
 	// Namespaces – list of namespaces for custom channel options.
@@ -36,8 +42,6 @@ type Config struct {
 	// ClientPresenceExpireInterval is an interval how long to consider
 	// presence info valid after receiving presence ping.
 	ClientPresenceExpireInterval time.Duration
-	// ClientPingInterval sets interval server will send ping messages to clients.
-	ClientPingInterval time.Duration
 	// ClientExpiredCloseDelay is an extra time given to client to
 	// refresh its connection in the end of connection lifetime.
 	ClientExpiredCloseDelay time.Duration
@@ -52,14 +56,6 @@ type Config struct {
 	// client position check in channel. If client does not pass check it will
 	// be disconnected with DisconnectInsufficientState.
 	ClientChannelPositionCheckDelay time.Duration
-	// ClientMessageWriteTimeout is maximum time of write message operation.
-	// Slow client will be disconnected. By default we don't use this option (i.e. it's 0)
-	// and slow client connections will be closed when there queue size exceeds
-	// ClientQueueMaxSize. In case of SockJS transport we don't have control over it so
-	// it only affects raw websocket.
-	ClientMessageWriteTimeout time.Duration
-	// ClientRequestMaxSize sets maximum size in bytes of allowed client request.
-	ClientRequestMaxSize int
 	// ClientQueueMaxSize is a maximum size of client's message queue in bytes.
 	// After this queue size exceeded Centrifugo closes client's connection.
 	ClientQueueMaxSize int
@@ -106,6 +102,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if c.HistoryRecover && (c.HistorySize == 0 || c.HistoryLifetime == 0) {
+		return errors.New("both history size and history lifetime required for history recovery")
+	}
+
 	var nss []string
 	for _, n := range c.Namespaces {
 		name := n.Name
@@ -115,6 +115,9 @@ func (c *Config) Validate() error {
 		}
 		if stringInSlice(name, nss) {
 			return errors.New(errPrefix + "namespace name must be unique")
+		}
+		if n.HistoryRecover && (n.HistorySize == 0 || n.HistoryLifetime == 0) {
+			return fmt.Errorf("namespace %s: both history size and history lifetime required for history recovery", name)
 		}
 		nss = append(nss, name)
 	}
@@ -163,13 +166,10 @@ var DefaultConfig = Config{
 	ClientAnonymous:                 false,
 	ClientPresencePingInterval:      25 * time.Second,
 	ClientPresenceExpireInterval:    60 * time.Second,
-	ClientMessageWriteTimeout:       0,
-	ClientPingInterval:              25 * time.Second,
 	ClientExpiredCloseDelay:         25 * time.Second,
 	ClientExpiredSubCloseDelay:      25 * time.Second,
 	ClientStaleCloseDelay:           25 * time.Second,
 	ClientChannelPositionCheckDelay: 40 * time.Second,
-	ClientRequestMaxSize:            65536,    // 64KB by default
 	ClientQueueMaxSize:              10485760, // 10MB by default
 	ClientChannelLimit:              128,
 }

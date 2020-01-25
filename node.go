@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
+	"github.com/centrifugal/centrifuge/internal/controlproto"
+	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/FZambia/eagle"
@@ -57,10 +57,13 @@ type Node struct {
 	metricsMu       sync.Mutex
 	metricsExporter *eagle.Eagle
 	metricsSnapshot *eagle.Metrics
+
+	subDissolver *dissolve.Dissolver
 }
 
 const (
-	numSubLocks = 16384
+	numSubLocks            = 16384
+	numSubDissolverWorkers = 64
 )
 
 // New creates Node, the only required argument is config.
@@ -84,6 +87,7 @@ func New(c Config) (*Node, error) {
 		controlDecoder: controlproto.NewProtobufDecoder(),
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
+		subDissolver:   dissolve.New(numSubDissolverWorkers),
 	}
 
 	if c.LogHandler != nil {
@@ -172,6 +176,7 @@ func (n *Node) Run() error {
 	go n.sendNodePing()
 	go n.cleanNodeInfo()
 	go n.updateMetrics()
+	n.subDissolver.Run()
 	return nil
 }
 
@@ -214,6 +219,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			defer closer.Close(ctx)
 		}
 	}
+	n.subDissolver.Close()
 	return n.hub.shutdown(ctx)
 }
 
@@ -369,7 +375,7 @@ func (n *Node) Info() (Info, error) {
 // handleControl handles messages from control channel - control messages used for internal
 // communication between nodes to share state or proto.
 func (n *Node) handleControl(data []byte) error {
-	messagesReceivedCount.WithLabelValues("control").Inc()
+	messagesReceivedCountControl.Inc()
 
 	cmd, err := n.controlDecoder.DecodeCommand(data)
 	if err != nil {
@@ -417,7 +423,7 @@ func (n *Node) handleControl(data []byte) error {
 // coming from engine. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
 func (n *Node) handlePublication(ch string, pub *Publication) error {
-	messagesReceivedCount.WithLabelValues("publication").Inc()
+	messagesReceivedCountPublication.Inc()
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
@@ -435,8 +441,8 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 
 // handleJoin handles join messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleJoin(ch string, join *proto.Join) error {
-	messagesReceivedCount.WithLabelValues("join").Inc()
+func (n *Node) handleJoin(ch string, join *Join) error {
+	messagesReceivedCountJoin.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
 		return nil
@@ -446,8 +452,8 @@ func (n *Node) handleJoin(ch string, join *proto.Join) error {
 
 // handleLeave handles leave messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleLeave(ch string, leave *proto.Leave) error {
-	messagesReceivedCount.WithLabelValues("leave").Inc()
+func (n *Node) handleLeave(ch string, leave *Leave) error {
+	messagesReceivedCountLeave.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
 		return nil
@@ -471,7 +477,7 @@ func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...Publish
 		Info: info,
 	}
 
-	messagesSentCount.WithLabelValues("publication").Inc()
+	messagesSentCountPublication.Inc()
 
 	// If history enabled for channel we add Publication to history first and then
 	// publish to Broker.
@@ -507,7 +513,7 @@ var (
 
 // publishJoin allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) error {
+func (n *Node) publishJoin(ch string, join *Join, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -515,13 +521,13 @@ func (n *Node) publishJoin(ch string, join *proto.Join, opts *ChannelOptions) er
 		}
 		opts = &chOpts
 	}
-	messagesSentCount.WithLabelValues("join").Inc()
+	messagesSentCountJoin.Inc()
 	return n.broker.PublishJoin(ch, join, opts)
 }
 
 // publishLeave allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) error {
+func (n *Node) publishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -529,14 +535,14 @@ func (n *Node) publishLeave(ch string, leave *proto.Leave, opts *ChannelOptions)
 		}
 		opts = &chOpts
 	}
-	messagesSentCount.WithLabelValues("leave").Inc()
+	messagesSentCountLeave.Inc()
 	return n.broker.PublishLeave(ch, leave, opts)
 }
 
 // publishControl publishes message into control channel so all running
 // nodes will receive and handle it.
 func (n *Node) publishControl(cmd *controlproto.Command) error {
-	messagesSentCount.WithLabelValues("control").Inc()
+	messagesSentCountControl.Inc()
 	data, err := n.controlEncoder.EncodeCommand(cmd)
 	if err != nil {
 		return err
@@ -636,7 +642,7 @@ func (n *Node) removeClient(c *Client) error {
 }
 
 // addSubscription registers subscription of connection on channel in both
-// engine and clientSubscriptionHub.
+// hub and engine.
 func (n *Node) addSubscription(ch string, c *Client) error {
 	actionCount.WithLabelValues("add_subscription").Inc()
 	mu := n.subLock(ch)
@@ -657,7 +663,7 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 }
 
 // removeSubscription removes subscription of connection on channel
-// from both engine and clientSubscriptionHub.
+// from hub and engine.
 func (n *Node) removeSubscription(ch string, c *Client) error {
 	actionCount.WithLabelValues("remove_subscription").Inc()
 	mu := n.subLock(ch)
@@ -668,7 +674,21 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 		return err
 	}
 	if empty {
-		return n.broker.Unsubscribe(ch)
+		submittedAt := time.Now()
+		n.subDissolver.Submit(func() error {
+			timeSpent := time.Now().Sub(submittedAt)
+			if timeSpent < time.Second {
+				time.Sleep(time.Second - timeSpent)
+			}
+			mu := n.subLock(ch)
+			mu.Lock()
+			defer mu.Unlock()
+			empty := n.hub.NumSubscribers(ch) == 0
+			if empty {
+				return n.broker.Unsubscribe(ch)
+			}
+			return nil
+		})
 	}
 	return nil
 }
@@ -731,7 +751,7 @@ func (n *Node) PersonalChannel(user string) string {
 }
 
 // addPresence proxies presence adding to engine.
-func (n *Node) addPresence(ch string, uid string, info *proto.ClientInfo) error {
+func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
 	if n.presenceManager == nil {
 		return nil
 	}

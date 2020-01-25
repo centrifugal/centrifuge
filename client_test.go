@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
+	"github.com/centrifugal/protocol"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func getConnToken(user string, exp int64) string {
@@ -38,9 +39,9 @@ func getSubscribeToken(channel string, client string, exp int64) string {
 	return t
 }
 
-func testReplyWriter(replies *[]*proto.Reply) *replyWriter {
+func testReplyWriter(replies *[]*protocol.Reply) *replyWriter {
 	return &replyWriter{
-		write: func(rep *proto.Reply) error {
+		write: func(rep *protocol.Reply) error {
 			*replies = append(*replies, rep)
 			return nil
 		},
@@ -69,19 +70,20 @@ func TestSetCredentials(t *testing.T) {
 func TestNewClient(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
-	client, err := newClient(context.Background(), node, transport)
+	client, err := NewClient(context.Background(), node, transport)
 	assert.NoError(t, err)
 	assert.NotNil(t, client)
 }
 
 func TestClientInitialState(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	assert.Equal(t, client.uid, client.ID())
 	assert.NotNil(t, "", client.user)
 	assert.Equal(t, 0, len(client.Channels()))
-	assert.Equal(t, proto.EncodingJSON, client.Transport().Encoding())
+	assert.Equal(t, protocol.TypeJSON, client.Transport().Protocol())
 	assert.Equal(t, "test_transport", client.Transport().Name())
 	assert.False(t, client.closed)
 	assert.False(t, client.authenticated)
@@ -90,8 +92,9 @@ func TestClientInitialState(t *testing.T) {
 
 func TestClientClosedState(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
+	client, _ := NewClient(context.Background(), node, transport)
 	err := client.Close(nil)
 	assert.NoError(t, err)
 	assert.True(t, client.closed)
@@ -99,23 +102,25 @@ func TestClientClosedState(t *testing.T) {
 
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
-	_, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	client, _ := NewClient(context.Background(), node, transport)
+	_, disconnect := client.connectCmd(&protocol.ConnectRequest{})
 	assert.NotNil(t, disconnect)
 	assert.Equal(t, disconnect, DisconnectBadRequest)
 }
 
 func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	config.ClientInsecure = true
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	client, _ := NewClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, resp.Error)
 	assert.NotEmpty(t, resp.Result.Client)
@@ -124,14 +129,15 @@ func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 
 func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	config.ClientAnonymous = true
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	client, _ := NewClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, resp.Error)
 	assert.NotEmpty(t, resp.Result.Client)
@@ -140,9 +146,10 @@ func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 
 func TestClientConnectWithMalformedToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
-	_, disconnect := client.connectCmd(&proto.ConnectRequest{
+	client, _ := NewClient(context.Background(), node, transport)
+	_, disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: "bad bad token",
 	})
 	assert.NotNil(t, disconnect)
@@ -151,14 +158,15 @@ func TestClientConnectWithMalformedToken(t *testing.T) {
 
 func TestClientConnectWithValidToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
+	client, _ := NewClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 0),
 	})
 	assert.Nil(t, disconnect)
@@ -168,14 +176,15 @@ func TestClientConnectWithValidToken(t *testing.T) {
 
 func TestClientConnectWithExpiringToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
+	client, _ := NewClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", time.Now().Unix()+10),
 	})
 	assert.Nil(t, disconnect)
@@ -186,14 +195,15 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 
 func TestClientConnectWithExpiredToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
+	client, _ := NewClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
 	})
 	assert.Nil(t, disconnect)
@@ -203,20 +213,21 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 
 func TestClientTokenRefresh(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
-	client, _ := newClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&proto.ConnectRequest{
+	client, _ := NewClient(context.Background(), node, transport)
+	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
 	})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorTokenExpired, resp.Error)
 
-	refreshResp, disconnect := client.refreshCmd(&proto.RefreshRequest{
+	refreshResp, disconnect := client.refreshCmd(&protocol.RefreshRequest{
 		Token: getConnToken("42", 2525637058),
 	})
 	assert.Nil(t, disconnect)
@@ -227,6 +238,7 @@ func TestClientTokenRefresh(t *testing.T) {
 
 func TestClientConnectContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	node.Reload(config)
@@ -237,14 +249,14 @@ func TestClientConnectContextCredentials(t *testing.T) {
 		UserID:   "42",
 		ExpireAt: time.Now().Unix() + 60,
 	})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	// Set refresh handler to tell library that server-side refresh must be used.
 	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
 		return RefreshReply{}
 	})
 
-	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, false, resp.Result.Expires)
 	assert.Equal(t, uint32(0), resp.Result.TTL)
@@ -252,8 +264,65 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	assert.Equal(t, "42", client.UserID())
 }
 
+func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
+	config := node.Config()
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() + 60,
+	})
+	client, _ := NewClient(newCtx, node, transport)
+
+	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
+		return RefreshReply{
+			Expired: true,
+		}
+	})
+
+	_, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	assert.Nil(t, disconnect)
+	client.expire()
+	assert.True(t, client.closed)
+}
+
+func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
+	config := node.Config()
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() + 60,
+	})
+	client, _ := NewClient(newCtx, node, transport)
+
+	expireAt := time.Now().Unix() + 60
+	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
+		return RefreshReply{
+			ExpireAt: expireAt,
+		}
+	})
+
+	_, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	assert.Nil(t, disconnect)
+	client.expire()
+	assert.False(t, client.closed)
+	assert.Equal(t, expireAt, client.exp)
+}
+
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	node.Reload(config)
@@ -264,20 +333,20 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 		UserID:   "42",
 		ExpireAt: time.Now().Unix() - 60,
 	})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	// Set refresh handler to tell library that server-side refresh must be used.
 	node.On().ClientRefresh(func(ctx context.Context, c *Client, e RefreshEvent) RefreshReply {
 		return RefreshReply{}
 	})
 
-	resp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorExpired, resp.Error)
 }
 
-func connectClient(t *testing.T, client *Client) *proto.ConnectResult {
-	connectResp, disconnect := client.connectCmd(&proto.ConnectRequest{})
+func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
+	connectResp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, connectResp.Error)
 	assert.True(t, client.authenticated)
@@ -285,8 +354,8 @@ func connectClient(t *testing.T, client *Client) *proto.ConnectResult {
 	return connectResp.Result
 }
 
-func extractSubscribeResult(replies []*proto.Reply) *proto.SubscribeResult {
-	var res proto.SubscribeResult
+func extractSubscribeResult(replies []*protocol.Reply) *protocol.SubscribeResult {
+	var res protocol.SubscribeResult
 	err := json.Unmarshal(replies[0].Result, &res)
 	if err != nil {
 		panic(err)
@@ -294,11 +363,11 @@ func extractSubscribeResult(replies []*proto.Reply) *proto.SubscribeResult {
 	return &res
 }
 
-func subscribeClient(t *testing.T, client *Client, ch string) *proto.SubscribeResult {
-	replies := []*proto.Reply{}
+func subscribeClient(t testing.TB, client *Client, ch string) *protocol.SubscribeResult {
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: ch,
 	}, rw)
 	assert.Nil(t, disconnect)
@@ -308,19 +377,20 @@ func subscribeClient(t *testing.T, client *Client, ch string) *proto.SubscribeRe
 
 func TestClientSubscribe(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
 	assert.Equal(t, 0, len(client.Channels()))
 
-	replies := []*proto.Reply{}
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test1",
 	}, rw)
 	assert.Nil(t, disconnect)
@@ -333,7 +403,7 @@ func TestClientSubscribe(t *testing.T) {
 	assert.Equal(t, 1, len(client.Channels()))
 
 	replies = nil
-	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test2",
 	}, rw)
 	assert.Nil(t, disconnect)
@@ -342,7 +412,7 @@ func TestClientSubscribe(t *testing.T) {
 	assert.Equal(t, 2, node.Hub().NumChannels())
 
 	replies = nil
-	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test2",
 	}, rw)
 	assert.Nil(t, disconnect)
@@ -351,18 +421,19 @@ func TestClientSubscribe(t *testing.T) {
 
 func TestClientSubscribeReceivePublication(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
-	replies := []*proto.Reply{}
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
 	}, rw)
 	assert.Nil(t, disconnect)
@@ -389,6 +460,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 
 func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	config := node.Config()
 	config.HistoryLifetime = 100
 	config.HistorySize = 10
@@ -397,14 +469,14 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
-	replies := []*proto.Reply{}
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
 	}, rw)
 	assert.Nil(t, disconnect)
@@ -460,17 +532,18 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 
 func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
-	replies := []*proto.Reply{}
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 	}, rw)
 	assert.Nil(t, disconnect)
@@ -479,22 +552,23 @@ func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 
 func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
-	replies := []*proto.Reply{}
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$wrong_channel", "wrong client", 0),
 	}, rw)
@@ -502,7 +576,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	assert.Equal(t, ErrorPermissionDenied, replies[0].Error)
 
 	replies = nil
-	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$wrong_channel", client.ID(), 0),
 	}, rw)
@@ -510,7 +584,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	assert.Equal(t, ErrorPermissionDenied, replies[0].Error)
 
 	replies = nil
-	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), 0),
 	}, rw)
@@ -520,22 +594,23 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 
 func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	config.Secret = "secret"
+	config.TokenHMACSecretKey = "secret"
 	node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
-	replies := []*proto.Reply{}
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 
-	disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), 10),
 	}, rw)
@@ -543,7 +618,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	assert.Equal(t, ErrorTokenExpired, replies[0].Error)
 
 	replies = nil
-	disconnect = client.subscribeCmd(&proto.SubscribeRequest{
+	disconnect = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), time.Now().Unix()+10),
 	}, rw)
@@ -556,6 +631,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 
 func TestClientSubscribeLast(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	config.HistorySize = 10
@@ -567,7 +643,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 	connectClient(t, client)
 
 	result := subscribeClient(t, client, "test")
@@ -577,7 +653,7 @@ func TestClientSubscribeLast(t *testing.T) {
 		node.Publish("test", []byte("{}"))
 	}
 
-	client, _ = newClient(newCtx, node, transport)
+	client, _ = NewClient(newCtx, node, transport)
 	connectClient(t, client)
 	result = subscribeClient(t, client, "test")
 	assert.Equal(t, uint32(10), result.Seq)
@@ -585,15 +661,17 @@ func TestClientSubscribeLast(t *testing.T) {
 
 func TestClientUnsubscribe(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
-	unsubscribeResp, disconnect := client.unsubscribeCmd(&proto.UnsubscribeRequest{
+	unsubscribeResp, disconnect := client.unsubscribeCmd(&protocol.UnsubscribeRequest{
 		Channel: "test",
 	})
 	assert.Nil(t, disconnect)
@@ -615,14 +693,15 @@ func TestClientUnsubscribe(t *testing.T) {
 
 func TestClientPublish(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
-	publishResp, disconnect := client.publishCmd(&proto.PublishRequest{
+	publishResp, disconnect := client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{}`),
 	})
@@ -633,7 +712,7 @@ func TestClientPublish(t *testing.T) {
 	config.Publish = true
 	node.Reload(config)
 
-	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{}`),
 	})
@@ -644,7 +723,7 @@ func TestClientPublish(t *testing.T) {
 	config.SubscribeToPublish = true
 	node.Reload(config)
 
-	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{}`),
 	})
@@ -652,7 +731,7 @@ func TestClientPublish(t *testing.T) {
 	assert.Equal(t, ErrorPermissionDenied, publishResp.Error)
 
 	subscribeClient(t, client, "test")
-	publishResp, disconnect = client.publishCmd(&proto.PublishRequest{
+	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{}`),
 	})
@@ -660,16 +739,140 @@ func TestClientPublish(t *testing.T) {
 	assert.Nil(t, publishResp.Error)
 }
 
-func TestClientPing(t *testing.T) {
+type testBrokerEventHandler struct {
+	// Publication must register callback func to handle Publications received.
+	HandlePublicationFunc func(ch string, pub *Publication) error
+	// Join must register callback func to handle Join messages received.
+	HandleJoinFunc func(ch string, join *Join) error
+	// Leave must register callback func to handle Leave messages received.
+	HandleLeaveFunc func(ch string, leave *Leave) error
+	// Control must register callback func to handle Control data received.
+	HandleControlFunc func([]byte) error
+}
+
+func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication) error {
+	if b.HandlePublicationFunc != nil {
+		return b.HandlePublicationFunc(ch, pub)
+	}
+	return nil
+}
+
+func (b *testBrokerEventHandler) HandleJoin(ch string, join *Join) error {
+	if b.HandleJoinFunc != nil {
+		return b.HandleJoinFunc(ch, join)
+	}
+	return nil
+}
+
+func (b *testBrokerEventHandler) HandleLeave(ch string, leave *Leave) error {
+	if b.HandleLeaveFunc != nil {
+		return b.HandleLeaveFunc(ch, leave)
+	}
+	return nil
+}
+
+func (b *testBrokerEventHandler) HandleControl(data []byte) error {
+	if b.HandleControlFunc != nil {
+		return b.HandleControlFunc(data)
+	}
+	return nil
+}
+
+type testClientMessage struct {
+	Input     string `json:"input"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+func TestClientPublishHandler(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
-	pingResp, disconnect := client.pingCmd(&proto.PingRequest{})
+	node.broker.(*MemoryEngine).eventHandler = &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication) error {
+			var msg testClientMessage
+			err := json.Unmarshal(pub.Data, &msg)
+			require.NoError(t, err)
+			if msg.Input == "with timestamp" {
+				require.True(t, msg.Timestamp > 0)
+			} else {
+				require.Zero(t, msg.Timestamp)
+			}
+			return nil
+		},
+	}
+
+	config := node.Config()
+	config.Publish = true
+	node.Reload(config)
+
+	subscribeClient(t, client, "test")
+
+	client.eventHub.publishHandler = func(e PublishEvent) PublishReply {
+		var msg testClientMessage
+		err := json.Unmarshal(e.Data, &msg)
+		require.NoError(t, err)
+		if msg.Input == "with disconnect" {
+			return PublishReply{
+				Disconnect: DisconnectBadRequest,
+			}
+		}
+		if msg.Input == "with error" {
+			return PublishReply{
+				Error: ErrorBadRequest,
+			}
+		}
+		if msg.Input == "with timestamp" {
+			msg.Timestamp = time.Now().Unix()
+			data, _ := json.Marshal(msg)
+			return PublishReply{Data: data}
+		}
+		return PublishReply{}
+	}
+	publishResp, disconnect := client.publishCmd(&protocol.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "no time"}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, publishResp.Error)
+
+	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "with timestamp"}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Nil(t, publishResp.Error)
+
+	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "with error"}`),
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorBadRequest, publishResp.Error)
+
+	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "with disconnect"}`),
+	})
+	assert.Equal(t, DisconnectBadRequest, disconnect)
+}
+
+func TestClientPing(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := NewClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	pingResp, disconnect := client.pingCmd(&protocol.PingRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, pingResp.Error)
 	assert.Empty(t, pingResp.Result)
@@ -677,6 +880,7 @@ func TestClientPing(t *testing.T) {
 
 func TestClientPingWithRecover(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	config.HistoryLifetime = 10
@@ -687,12 +891,12 @@ func TestClientPingWithRecover(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
-	pingResp, disconnect := client.pingCmd(&proto.PingRequest{})
+	pingResp, disconnect := client.pingCmd(&protocol.PingRequest{})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, pingResp.Error)
 	assert.Nil(t, pingResp.Result)
@@ -700,6 +904,7 @@ func TestClientPingWithRecover(t *testing.T) {
 
 func TestClientPresence(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	config.Presence = true
@@ -708,19 +913,19 @@ func TestClientPresence(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
-	presenceResp, disconnect := client.presenceCmd(&proto.PresenceRequest{
+	presenceResp, disconnect := client.presenceCmd(&protocol.PresenceRequest{
 		Channel: "test",
 	})
 	assert.Nil(t, disconnect)
 	assert.Nil(t, presenceResp.Error)
 	assert.Equal(t, 1, len(presenceResp.Result.Presence))
 
-	presenceStatsResp, disconnect := client.presenceStatsCmd(&proto.PresenceStatsRequest{
+	presenceStatsResp, disconnect := client.presenceStatsCmd(&protocol.PresenceStatsRequest{
 		Channel: "test",
 	})
 	assert.Nil(t, disconnect)
@@ -732,14 +937,14 @@ func TestClientPresence(t *testing.T) {
 	config.Presence = false
 	node.Reload(config)
 
-	presenceResp, disconnect = client.presenceCmd(&proto.PresenceRequest{
+	presenceResp, disconnect = client.presenceCmd(&protocol.PresenceRequest{
 		Channel: "test",
 	})
 	assert.Nil(t, disconnect)
 	assert.Equal(t, ErrorNotAvailable, presenceResp.Error)
 	assert.Nil(t, presenceResp.Result)
 
-	presenceStatsResp, disconnect = client.presenceStatsCmd(&proto.PresenceStatsRequest{
+	presenceStatsResp, disconnect = client.presenceStatsCmd(&protocol.PresenceStatsRequest{
 		Channel: "test",
 	})
 	assert.Nil(t, disconnect)
@@ -750,6 +955,7 @@ func TestClientPresence(t *testing.T) {
 
 func TestClientHistory(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	config.HistorySize = 10
@@ -759,7 +965,7 @@ func TestClientHistory(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	for i := 0; i < 10; i++ {
 		node.Publish("test", []byte(`{}`))
@@ -768,7 +974,7 @@ func TestClientHistory(t *testing.T) {
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
-	historyResp, disconnect := client.historyCmd(&proto.HistoryRequest{
+	historyResp, disconnect := client.historyCmd(&protocol.HistoryRequest{
 		Channel: "test",
 	})
 	assert.Nil(t, disconnect)
@@ -780,7 +986,7 @@ func TestClientHistory(t *testing.T) {
 	config.HistoryLifetime = 0
 	node.Reload(config)
 
-	historyResp, disconnect = client.historyCmd(&proto.HistoryRequest{
+	historyResp, disconnect = client.historyCmd(&protocol.HistoryRequest{
 		Channel: "test",
 	})
 	assert.Nil(t, disconnect)
@@ -788,8 +994,62 @@ func TestClientHistory(t *testing.T) {
 	assert.Nil(t, historyResp.Result)
 }
 
+func TestClientHistoryDisabled(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
+	config := node.Config()
+	config.HistorySize = 10
+	config.HistoryLifetime = 60
+	config.HistoryDisableForClient = true
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := NewClient(newCtx, node, transport)
+
+	node.Publish("test", []byte(`{}`))
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	historyResp, disconnect := client.historyCmd(&protocol.HistoryRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorNotAvailable, historyResp.Error)
+}
+
+func TestClientPresenceDisabled(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
+	config := node.Config()
+	config.Presence = true
+	config.PresenceDisableForClient = true
+	node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := NewClient(newCtx, node, transport)
+
+	node.Publish("test", []byte(`{}`))
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	presenceResp, disconnect := client.presenceCmd(&protocol.PresenceRequest{
+		Channel: "test",
+	})
+	assert.Nil(t, disconnect)
+	assert.Equal(t, ErrorNotAvailable, presenceResp.Error)
+}
+
 func TestClientCloseUnauthenticated(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	config.ClientStaleCloseDelay = time.Millisecond
@@ -798,7 +1058,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 	time.Sleep(100 * time.Millisecond)
 	client.mu.Lock()
 	assert.True(t, client.closed)
@@ -807,6 +1067,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 
 func TestClientPresenceUpdate(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	config := node.Config()
 	config.Presence = true
@@ -815,7 +1076,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
@@ -826,11 +1087,12 @@ func TestClientPresenceUpdate(t *testing.T) {
 
 func TestClientSend(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -847,10 +1109,12 @@ func TestClientSend(t *testing.T) {
 
 func TestClientClose(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
@@ -862,17 +1126,19 @@ func TestClientClose(t *testing.T) {
 
 func TestClientHandleMalformedCommand(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
+	client, _ := NewClient(newCtx, node, transport)
 
 	connectClient(t, client)
 
-	replies := []*proto.Reply{}
+	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 
-	disconnect := client.handle(&proto.Command{
+	disconnect := client.handleCommand(&protocol.Command{
 		ID:     1,
 		Method: 1000,
 		Params: []byte(`{}`),
@@ -881,7 +1147,7 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 	assert.Equal(t, ErrorMethodNotFound, replies[0].Error)
 
 	replies = nil
-	disconnect = client.handle(&proto.Command{
+	disconnect = client.handleCommand(&protocol.Command{
 		ID:     1,
 		Method: 2,
 		Params: []byte(`{}`),
@@ -939,7 +1205,7 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 			transport := newTestTransport()
 			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := newClient(newCtx, node, transport)
+			client, _ := NewClient(newCtx, node, transport)
 
 			channel := "test_recovery_memory_" + tt.Name
 
@@ -951,7 +1217,7 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 
 			connectClient(t, client)
 
-			replies := []*proto.Reply{}
+			replies := []*protocol.Reply{}
 			rw := testReplyWriter(&replies)
 
 			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
@@ -959,7 +1225,7 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 				Since: nil,
 			})
 
-			disconnect := client.subscribeCmd(&proto.SubscribeRequest{
+			disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: channel,
 				Recover: true,
 				Seq:     tt.SinceSeq,
@@ -971,6 +1237,8 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 			res := extractSubscribeResult(replies)
 			assert.Equal(t, tt.NumRecovered, len(res.Publications))
 			assert.Equal(t, tt.Recovered, res.Recovered)
+
+			node.Shutdown(context.Background())
 		})
 	}
 }

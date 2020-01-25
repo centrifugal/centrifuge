@@ -2,7 +2,16 @@ package centrifuge
 
 import (
 	"bytes"
+	"fmt"
+	"math"
 	"sync"
+
+	"github.com/dgrijalva/jwt-go"
+)
+
+const (
+	maxSeq uint32 = math.MaxUint32 // maximum uint32 value
+	maxGen uint32 = math.MaxUint32 // maximum uint32 value
 )
 
 func nextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
@@ -15,6 +24,14 @@ func nextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
 		nextSeq = currentSeq + 1
 	}
 	return nextSeq, nextGen
+}
+
+func uint64Sequence(currentSeq, currentGen uint32) uint64 {
+	return uint64(currentGen)*uint64(math.MaxUint32) + uint64(currentSeq)
+}
+
+func unpackUint64(val uint64) (uint32, uint32) {
+	return uint32(val), uint32(val >> 32)
 }
 
 func stringInSlice(a string, list []string) bool {
@@ -40,4 +57,23 @@ func getBuffer() *bytes.Buffer {
 func putBuffer(buf *bytes.Buffer) {
 	buf.Reset()
 	bufferPool.Put(buf)
+}
+
+func jwtKeyFunc(config Config) func(token *jwt.Token) (interface{}, error) {
+	return func(token *jwt.Token) (interface{}, error) {
+		switch token.Method.(type) {
+		case *jwt.SigningMethodHMAC:
+			if config.TokenHMACSecretKey == "" {
+				return nil, fmt.Errorf("token HMAC secret key not set")
+			}
+			return []byte(config.TokenHMACSecretKey), nil
+		case *jwt.SigningMethodRSA:
+			if config.TokenRSAPublicKey == nil {
+				return nil, fmt.Errorf("token RSA public key not set")
+			}
+			return config.TokenRSAPublicKey, nil
+		default:
+			return nil, fmt.Errorf("unsupported signing method: %v", token.Header["alg"])
+		}
+	}
 }

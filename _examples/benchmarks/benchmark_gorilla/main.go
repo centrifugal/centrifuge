@@ -2,34 +2,23 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
+	"time"
 
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %+v", e.Message, e.Fields)
-}
-
-func authMiddleware(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID: "42",
-		})
-		r = r.WithContext(newCtx)
-		h.ServeHTTP(w, r)
-	})
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -44,51 +33,33 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
-var dataBytes []byte
-
-func init() {
-	data := map[string]interface{}{
-		"_id":        "5adece493c1a23736b037c52",
-		"isActive":   false,
-		"balance":    "$2,199.02",
-		"picture":    "http://placehold.it/32x32",
-		"age":        25,
-		"eyeColor":   "blue",
-		"name":       "Swanson Walker",
-		"gender":     "male",
-		"company":    "SHADEASE",
-		"email":      "swansonwalker@shadease.com",
-		"phone":      "+1 (885) 410-3991",
-		"address":    "768 Paerdegat Avenue, Gouglersville, Oklahoma, 5380",
-		"registered": "2016-01-24T07:40:09 -03:00",
-		"latitude":   -71.336378,
-		"longitude":  -28.155956,
-		"tags": []string{
-			"magna",
-			"nostrud",
-			"irure",
-			"aliquip",
-			"culpa",
-			"sint",
-		},
-		"greeting":      "Hello, Swanson Walker! You have 9 unread messages.",
-		"favoriteFruit": "apple",
-	}
-
-	var err error
-	dataBytes, err = json.Marshal(data)
-	if err != nil {
-		panic(err.Error())
-	}
-}
-
 func main() {
+	log.Printf("NumCPU: %d", runtime.NumCPU())
+
 	cfg := centrifuge.DefaultConfig
 	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelError
 	cfg.LogHandler = handleLog
+	cfg.ClientInsecure = true
 
 	node, _ := centrifuge.New(cfg)
+
+	if os.Getenv("CENTRIFUGE_ENGINE") == "redis" {
+		engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+			PublishOnHistoryAdd: true,
+			SequenceTTL:         7 * 24 * time.Hour,
+			Shards: []centrifuge.RedisShardConfig{
+				centrifuge.RedisShardConfig{
+					Host: "localhost",
+					Port: 6379,
+				},
+			},
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+		node.SetEngine(engine)
+	}
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
@@ -109,7 +80,7 @@ func main() {
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
 			// Do not log here - lots of messages expected.
-			err := client.Send(dataBytes)
+			err := client.Send(e.Data)
 			if err != nil {
 				if err != io.EOF {
 					log.Fatalln("error senfing to client:", err.Error())
@@ -130,8 +101,9 @@ func main() {
 		panic(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
-	http.Handle("/metrics", promhttp.Handler())
+	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+		WriteTimeout: time.Second,
+	}))
 
 	go func() {
 		if err := http.ListenAndServe(":8000", nil); err != nil {

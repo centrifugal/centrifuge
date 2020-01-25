@@ -3,13 +3,14 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/proto"
-	"github.com/centrifugal/centrifuge/internal/proto/controlproto"
+	"github.com/centrifugal/centrifuge/internal/controlproto"
 
+	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,17 +33,17 @@ func (e *TestEngine) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (e *TestEngine) Publish(ch string, pub *proto.Publication, opts *ChannelOptions) error {
+func (e *TestEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishJoin(ch string, join *proto.Join, opts *ChannelOptions) error {
+func (e *TestEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishLeave(ch string, leave *proto.Leave, opts *ChannelOptions) error {
+func (e *TestEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
 	return nil
 }
@@ -60,7 +61,7 @@ func (e *TestEngine) Unsubscribe(ch string) error {
 	return nil
 }
 
-func (e *TestEngine) AddPresence(ch string, uid string, info *proto.ClientInfo, expire time.Duration) error {
+func (e *TestEngine) AddPresence(ch string, uid string, info *ClientInfo, expire time.Duration) error {
 	return nil
 }
 
@@ -68,19 +69,19 @@ func (e *TestEngine) RemovePresence(ch string, uid string) error {
 	return nil
 }
 
-func (e *TestEngine) Presence(ch string) (map[string]*proto.ClientInfo, error) {
-	return map[string]*proto.ClientInfo{}, nil
+func (e *TestEngine) Presence(ch string) (map[string]*ClientInfo, error) {
+	return map[string]*protocol.ClientInfo{}, nil
 }
 
 func (e *TestEngine) PresenceStats(ch string) (PresenceStats, error) {
 	return PresenceStats{}, nil
 }
 
-func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*proto.Publication, RecoveryPosition, error) {
-	return []*proto.Publication{}, RecoveryPosition{}, nil
+func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, RecoveryPosition, error) {
+	return []*protocol.Publication{}, RecoveryPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(ch string, pub *proto.Publication, opts *ChannelOptions) (*Publication, error) {
+func (e *TestEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*Publication, error) {
 	return pub, nil
 }
 
@@ -121,6 +122,7 @@ func nodeWithMemoryEngine() *Node {
 
 func TestUserAllowed(t *testing.T) {
 	node := nodeWithTestEngine()
+	defer node.Shutdown(context.Background())
 	assert.True(t, node.userAllowed("channel#1", "1"))
 	assert.True(t, node.userAllowed("channel", "1"))
 	assert.False(t, node.userAllowed("channel#1", "2"))
@@ -131,6 +133,7 @@ func TestUserAllowed(t *testing.T) {
 
 func TestSetConfig(t *testing.T) {
 	node := nodeWithTestEngine()
+	defer node.Shutdown(context.Background())
 	err := node.Reload(DefaultConfig)
 	assert.NoError(t, err)
 }
@@ -183,6 +186,7 @@ var testPayload = map[string]interface{}{
 
 func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 	node := nodeWithTestEngine()
+
 	payload, err := json.Marshal(testPayload)
 	if err != nil {
 		panic(err.Error())
@@ -190,5 +194,71 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		node.Publish("bench", payload)
+	}
+	b.StopTimer()
+	node.Shutdown(context.Background())
+}
+
+func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
+	transport := newTestTransport()
+	transport.setProtocolType(protoType)
+	transport.setSink(sink)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := NewClient(newCtx, node, transport)
+	connectClient(b, client)
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
+		Channel: channel,
+	}, rw)
+	assert.Nil(b, disconnect)
+}
+
+func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte) {
+	newFakeConn(b, node, channel, ProtocolTypeJSON, sink)
+}
+
+func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []byte) {
+	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink)
+}
+
+func BenchmarkBroadcastMemoryEngine(b *testing.B) {
+	benchmarks := []struct {
+		name           string
+		getFakeConn    func(b testing.TB, n *Node, channel string, sink chan []byte)
+		numSubscribers int
+	}{
+		{"JSON", newFakeConnJSON, 1},
+		{"Protobuf", newFakeConnProtobuf, 1},
+		{"JSON", newFakeConnJSON, 10000},
+		{"Protobuf", newFakeConnProtobuf, 10000},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(fmt.Sprintf("%s_%d_subscribers", bm.name, bm.numSubscribers), func(b *testing.B) {
+			n := nodeWithMemoryEngine()
+			c := n.Config()
+			c.ClientInsecure = true
+			n.Reload(c)
+			payload := []byte(`{"input": "test"}`)
+			sink := make(chan []byte, bm.numSubscribers)
+			for i := 0; i < bm.numSubscribers; i++ {
+				bm.getFakeConn(b, n, "test", sink)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				err := n.Publish("test", payload)
+				if err != nil {
+					panic(err)
+				}
+				for j := 0; j < bm.numSubscribers; j++ {
+					<-sink
+				}
+			}
+			b.StopTimer()
+			n.Shutdown(context.Background())
+			b.ReportAllocs()
+		})
 	}
 }

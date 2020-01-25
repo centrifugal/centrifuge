@@ -53,6 +53,15 @@ func (t *benchmarkTransport) writeCombined(bufs ...[]byte) error {
 	return nil
 }
 
+func (t *benchmarkTransport) writeSingle(data []byte) error {
+	_, err := t.f.Write(data)
+	if err != nil {
+		panic(err)
+	}
+	t.inc(1)
+	return nil
+}
+
 func (t *benchmarkTransport) close() error {
 	return t.f.Close()
 }
@@ -75,7 +84,8 @@ func BenchmarkWriteMerge(b *testing.B) {
 	defer transport.close()
 	writer := newWriter(writerConfig{
 		MaxMessagesInFrame: 4,
-		WriteFn:            transport.writeCombined,
+		WriteFn:            transport.writeSingle,
+		WriteManyFn:        transport.writeCombined,
 	})
 
 	b.ResetTimer()
@@ -88,8 +98,11 @@ func BenchmarkWriteMerge(b *testing.B) {
 func BenchmarkWriteMergeDisabled(b *testing.B) {
 	transport := newBenchmarkTransport()
 	defer transport.close()
-	writer := newWriter(writerConfig{MaxMessagesInFrame: 1, WriteFn: transport.writeCombined})
-
+	writer := newWriter(writerConfig{
+		MaxMessagesInFrame: 1,
+		WriteFn:            transport.writeSingle,
+		WriteManyFn:        transport.writeCombined,
+	})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		runWrite(writer, transport)
@@ -108,7 +121,7 @@ func newFakeTransport() *fakeTransport {
 	}
 }
 
-func (t *fakeTransport) write(bufs ...[]byte) error {
+func (t *fakeTransport) writeMany(bufs ...[]byte) error {
 	for range bufs {
 		t.count++
 		t.ch <- struct{}{}
@@ -116,9 +129,19 @@ func (t *fakeTransport) write(bufs ...[]byte) error {
 	return nil
 }
 
+func (t *fakeTransport) write(buf []byte) error {
+	t.count++
+	t.ch <- struct{}{}
+	return nil
+}
+
 func TestWriter(t *testing.T) {
 	transport := newFakeTransport()
-	w := newWriter(writerConfig{MaxMessagesInFrame: 4, WriteFn: transport.write})
+	w := newWriter(writerConfig{
+		MaxMessagesInFrame: 4,
+		WriteFn:            transport.write,
+		WriteManyFn:        transport.writeMany,
+	})
 	disconnect := w.enqueue([]byte("test"))
 	assert.Nil(t, disconnect)
 	<-transport.ch
@@ -129,7 +152,11 @@ func TestWriter(t *testing.T) {
 
 func TestWriterDisconnect(t *testing.T) {
 	transport := newFakeTransport()
-	w := newWriter(writerConfig{MaxQueueSize: 1, WriteFn: transport.write})
+	w := newWriter(writerConfig{
+		MaxQueueSize: 1,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	})
 	disconnect := w.enqueue([]byte("test"))
 	assert.NotNil(t, disconnect)
 }
