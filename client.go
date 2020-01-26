@@ -426,7 +426,7 @@ func (c *Client) Unsubscribe(ch string, resubscribe bool) error {
 
 func (c *Client) subscribePersonal() (string, *Error) {
 	channel := c.node.PersonalChannel(c.user)
-	err := c.node.addSubscription(channel, c)
+	err := c.node.addSubscription(channel, c, true)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		return "", ErrorInternal
@@ -1636,7 +1636,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 		c.setInSubscribe(channel, true)
 	}
 
-	err := c.node.addSubscription(channel, c)
+	err := c.node.addSubscription(channel, c, false)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		if chOpts.HistoryRecover {

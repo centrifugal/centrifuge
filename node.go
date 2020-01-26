@@ -429,9 +429,6 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	if n.isPersonalChannel(ch) {
-		return n.hub.broadcastMessage(ch, pub.Data)
-	}
 	chOpts, ok := n.ChannelOpts(ch)
 	if !ok {
 		return ErrNoChannelOptions
@@ -643,12 +640,12 @@ func (n *Node) removeClient(c *Client) error {
 
 // addSubscription registers subscription of connection on channel in both
 // hub and engine.
-func (n *Node) addSubscription(ch string, c *Client) error {
+func (n *Node) addSubscription(ch string, c *Client, serverSide bool) error {
 	actionCount.WithLabelValues("add_subscription").Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	first, err := n.hub.addSub(ch, c)
+	first, err := n.hub.addSub(ch, c, serverSide)
 	if err != nil {
 		return err
 	}
