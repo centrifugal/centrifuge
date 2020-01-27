@@ -114,7 +114,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 				token: getSubscribeToken("channel1", "user1", _time.Add(24*time.Hour).Unix()),
 			},
 			want: subscribeToken{
-				UserID:   "user1",
+				Client:   "user1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
 				Info:     nil,
 				Channel:  "channel1",

@@ -73,7 +73,7 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeT
 	}
 	if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
 		token := subscribeToken{
-			UserID:   claims.Client,
+			Client:   claims.Client,
 			Info:     claims.Info,
 			Channel:  claims.Channel,
 			ExpireAt: claims.StandardClaims.ExpiresAt,

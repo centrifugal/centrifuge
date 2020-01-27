@@ -7,7 +7,7 @@ type tokenVerifier interface {
 }
 
 type connectToken struct {
-	// UserID tells library an ID of connecting user.
+	// Client tells library an ID of connecting user.
 	UserID string
 	// ExpireAt allows to set time in future when connection must be validated.
 	// In this case OnRefresh callback must be set by application.
@@ -21,8 +21,8 @@ type connectToken struct {
 }
 
 type subscribeToken struct {
-	// UserID tells library an ID of connecting user.
-	UserID string
+	// Client tells library an ID of connecting user.
+	Client string
 	// ExpireAt allows to set time in future when connection must be validated.
 	// In this case OnRefresh callback must be set by application.
 	ExpireAt int64
