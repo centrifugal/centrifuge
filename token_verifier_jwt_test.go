@@ -13,15 +13,15 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 	verifierJWT := newTokenVerifierJWT("secret", nil)
 	_time := time.Now()
 	tests := []struct {
-		name      string
-		verifier  tokenVerifier
-		args      args
-		want      connectToken
-		wantErr   bool
-		wantedErr error
+		name     string
+		verifier tokenVerifier
+		args     args
+		want     connectToken
+		wantErr  bool
+		expired  bool
 	}{
 		{
-			name:     "Valid jwt",
+			name:     "Valid JWT",
 			verifier: verifierJWT,
 			args: args{
 				token: getConnToken("user1", _time.Add(24*time.Hour).Unix()),
@@ -33,33 +33,36 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			},
 			wantErr: false,
 		}, {
-			name:     "Invalid jwt",
+			name:     "Invalid JWT",
 			verifier: verifierJWT,
 			args: args{
 				token: "Invalid jwt",
 			},
-			want:      connectToken{},
-			wantErr:   true,
-			wantedErr: errTokenInvalid,
+			want:    connectToken{},
+			wantErr: true,
+			expired: false,
 		}, {
-			name:     "Expired jwt",
+			name:     "Expired JWT",
 			verifier: verifierJWT,
 			args: args{
 				token: getConnToken("user1", _time.Add(-24*time.Hour).Unix()),
 			},
-			want:      connectToken{},
-			wantErr:   true,
-			wantedErr: errTokenExpired,
+			want:    connectToken{},
+			wantErr: true,
+			expired: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.verifier.VerifyConnectToken(tt.args.token)
-			if err != nil && tt.wantErr {
-				if !reflect.DeepEqual(err, tt.wantedErr) {
-					t.Errorf("VerifyConnectToken() error = %v, wantedErr %v", got, tt.wantedErr)
-				}
-				return
+			if tt.wantErr && err == nil {
+				t.Errorf("VerifyConnectToken() should return error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("VerifyConnectToken() should not return error")
+			}
+			if tt.expired && err != errTokenExpired {
+				t.Errorf("VerifyConnectToken() should return token expired error")
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("VerifyConnectToken() got = %v, want %v", got, tt.want)
@@ -75,62 +78,64 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 	verifierJWT := newTokenVerifierJWT("secret", nil)
 	_time := time.Now()
 	tests := []struct {
-		name      string
-		verifier  tokenVerifier
-		args      args
-		want      subscribeToken
-		wantErr   bool
-		wantedErr error
+		name     string
+		verifier tokenVerifier
+		args     args
+		want     subscribeToken
+		wantErr  bool
+		expired  bool
 	}{
 		{
-			name:      "Empty token",
-			verifier:  verifierJWT,
-			args:      args{},
-			want:      subscribeToken{},
-			wantErr:   true,
-			wantedErr: errTokenInvalid,
+			name:     "Empty JWT",
+			verifier: verifierJWT,
+			args:     args{},
+			want:     subscribeToken{},
+			wantErr:  true,
+			expired:  false,
 		}, {
-			name:     "Invalid token",
+			name:     "Invalid JWT",
 			verifier: verifierJWT,
 			args: args{
 				token: "randomToken",
 			},
-			want:      subscribeToken{},
-			wantErr:   true,
-			wantedErr: errTokenInvalid,
+			want:    subscribeToken{},
+			wantErr: true,
+			expired: false,
 		}, {
-			name:     "Expired token",
+			name:     "Expired JWT",
 			verifier: verifierJWT,
 			args: args{
-				token: getSubscribeToken("channel1", "user1", _time.Add(-24*time.Hour).Unix()),
+				token: getSubscribeToken("channel1", "client1", _time.Add(-24*time.Hour).Unix()),
 			},
-			want:      subscribeToken{},
-			wantErr:   true,
-			wantedErr: errTokenExpired,
+			want:    subscribeToken{},
+			wantErr: true,
+			expired: true,
 		}, {
-			name:     "Valid token",
+			name:     "Valid JWT",
 			verifier: verifierJWT,
 			args: args{
-				token: getSubscribeToken("channel1", "user1", _time.Add(24*time.Hour).Unix()),
+				token: getSubscribeToken("channel1", "client1", _time.Add(24*time.Hour).Unix()),
 			},
 			want: subscribeToken{
-				Client:   "user1",
+				Client:   "client1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
 				Info:     nil,
 				Channel:  "channel1",
 			},
-			wantErr:   true,
-			wantedErr: errTokenExpired,
+			wantErr: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.verifier.VerifySubscribeToken(tt.args.token)
-			if err != nil && tt.wantErr {
-				if !reflect.DeepEqual(err, tt.wantedErr) {
-					t.Errorf("VerifySubscribeToken() error = %v, wantedErr %v", err, tt.wantedErr)
-				}
-				return
+			if tt.wantErr && err == nil {
+				t.Errorf("VerifySubscribeToken() should return error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("VerifySubscribeToken() should not return error")
+			}
+			if tt.expired && err != errTokenExpired {
+				t.Errorf("VerifySubscribeToken() should return token expired error")
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("VerifySubscribeToken() got = %v, want %v", got, tt.want)

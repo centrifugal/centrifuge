@@ -7,31 +7,34 @@ type tokenVerifier interface {
 }
 
 type connectToken struct {
-	// Client tells library an ID of connecting user.
+	// UserID tells library an ID of connecting user.
 	UserID string
 	// ExpireAt allows to set time in future when connection must be validated.
-	// In this case OnRefresh callback must be set by application.
+	// Validation can be server-side using On().Refresh callback or client-side
+	// if On().Refresh not set.
 	ExpireAt int64
 	// Info contains additional information about connection. It will be
 	// included into Join/Leave messages, into Presence information, also
 	// info becomes a part of published message if it was published from
 	// client directly. In some cases having additional info can be an
 	// overhead – but you are simply free to not use it.
-	Info []byte
+	Info Raw
 }
 
 type subscribeToken struct {
-	// Client tells library an ID of connecting user.
+	// Client is a unique client ID string set to each connection on server.
+	// Will be compared with actual client ID.
 	Client string
-	// ExpireAt allows to set time in future when connection must be validated.
-	// In this case OnRefresh callback must be set by application.
-	ExpireAt int64
-	// Info contains additional information about connection. It will be
-	// included into Join/Leave messages, into Presence information, also
-	// info becomes a part of published message if it was published from
-	// client directly. In some cases having additional info can be an
-	// overhead – but you are simply free to not use it.
-	Info []byte
-	// Used in private channel
+	// Channel client wants to subscribe. Will be compared with channel in
+	// subscribe command.
 	Channel string
+	// ExpireAt allows to set time in future when connection must be validated.
+	// Validation can be server-side using On().SubRefresh callback or client-side
+	// if On().SubRefresh not set.
+	ExpireAt int64
+	// Info contains additional information about connection in channel.
+	// It will be included into Join/Leave messages, into Presence information,
+	// also channel info becomes a part of published message if it was published
+	// from subscribed client directly.
+	Info Raw
 }

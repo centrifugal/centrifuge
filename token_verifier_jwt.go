@@ -24,9 +24,8 @@ func newTokenVerifierJWT(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.Publi
 }
 
 var (
-	errTokenInvalid     = errors.New("invalid connection token")
-	errTokenInvalidInfo = errors.New("can not decode provided info")
-	errTokenExpired     = errors.New("token expired")
+	errTokenExpired   = errors.New("token expired")
+	errMalformedToken = errors.New("malformed token")
 )
 
 func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken, error) {
@@ -39,7 +38,7 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken
 				return connectToken{}, errTokenExpired
 			}
 		}
-		return connectToken{}, errTokenInvalid
+		return connectToken{}, err
 	}
 	if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
 		token := connectToken{
@@ -50,13 +49,13 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 			if err != nil {
-				return connectToken{}, errTokenInvalidInfo
+				return connectToken{}, err
 			}
-			token.Info = byteInfo
+			token.Info = Raw(byteInfo)
 		}
 		return token, nil
 	}
-	return connectToken{}, errTokenInvalid
+	return connectToken{}, errMalformedToken
 }
 
 func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeToken, error) {
@@ -69,7 +68,7 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeT
 				return subscribeToken{}, errTokenExpired
 			}
 		}
-		return subscribeToken{}, errTokenInvalid
+		return subscribeToken{}, err
 	}
 	if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
 		token := subscribeToken{
@@ -81,13 +80,13 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeT
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 			if err != nil {
-				return subscribeToken{}, errTokenInvalidInfo
+				return subscribeToken{}, err
 			}
-			token.Info = byteInfo
+			token.Info = Raw(byteInfo)
 		}
 		return token, nil
 	}
-	return subscribeToken{}, errTokenInvalid
+	return subscribeToken{}, errMalformedToken
 }
 
 func (verifier *tokenVerifierJWT) Reload(config Config) {
