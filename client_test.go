@@ -16,7 +16,7 @@ import (
 )
 
 func getConnToken(user string, exp int64) string {
-	claims := jwt.MapClaims{"user": user}
+	claims := jwt.MapClaims{"sub": user}
 	if exp > 0 {
 		claims["exp"] = exp
 	}
