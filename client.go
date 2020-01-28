@@ -1109,6 +1109,7 @@ type subscribeTokenClaims struct {
 	Channel    string `json:"channel"`
 	Info       Raw    `json:"info"`
 	Base64Info string `json:"b64info"`
+        SubNoExpires bool `json:"subNoExpires"`
 	jwt.StandardClaims
 }
 
@@ -1507,6 +1508,9 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 			tokenB64info = claims.Base64Info
 			tokenClient = claims.Client
 			expireAt = claims.StandardClaims.ExpiresAt
+                        if claims.SubNoExpires == true {
+                                expireAt = 0
+                        }
 
 			if c.uid != tokenClient {
 				rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
