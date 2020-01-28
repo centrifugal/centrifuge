@@ -12,13 +12,13 @@ import (
 
 type tokenVerifierJWT struct {
 	mu                 sync.RWMutex
-	TokenHMACSecretKey string
+	TokenHMACSecretKey []byte
 	TokenRSAPublicKey  *rsa.PublicKey
 }
 
 func newTokenVerifierJWT(tokenHMACSecretKey string, tokenRSAPublicKey *rsa.PublicKey) tokenVerifier {
 	return &tokenVerifierJWT{
-		TokenHMACSecretKey: tokenHMACSecretKey,
+		TokenHMACSecretKey: []byte(tokenHMACSecretKey),
 		TokenRSAPublicKey:  tokenRSAPublicKey,
 	}
 }
@@ -93,7 +93,7 @@ func (verifier *tokenVerifierJWT) Reload(config Config) {
 	verifier.mu.Lock()
 	defer verifier.mu.Unlock()
 	verifier.TokenRSAPublicKey = config.TokenRSAPublicKey
-	verifier.TokenHMACSecretKey = config.TokenHMACSecretKey
+	verifier.TokenHMACSecretKey = []byte(config.TokenHMACSecretKey)
 }
 
 func (verifier *tokenVerifierJWT) jwtKeyFunc() func(token *jwt.Token) (interface{}, error) {
@@ -102,10 +102,10 @@ func (verifier *tokenVerifierJWT) jwtKeyFunc() func(token *jwt.Token) (interface
 		defer verifier.mu.RUnlock()
 		switch token.Method.(type) {
 		case *jwt.SigningMethodHMAC:
-			if verifier.TokenHMACSecretKey == "" {
+			if len(verifier.TokenHMACSecretKey) == 0 {
 				return nil, fmt.Errorf("token HMAC secret key not set")
 			}
-			return []byte(verifier.TokenHMACSecretKey), nil
+			return verifier.TokenHMACSecretKey, nil
 		case *jwt.SigningMethodRSA:
 			if verifier.TokenRSAPublicKey == nil {
 				return nil, fmt.Errorf("token RSA public key not set")

@@ -143,3 +143,17 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkConnectTokenVerify(b *testing.B) {
+	verifierJWT := newTokenVerifierJWT("secret", nil)
+	token := getConnToken("user1", time.Now().Add(24*time.Hour).Unix())
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := verifierJWT.VerifyConnectToken(token)
+		if err != nil {
+			b.Fatal(errMalformedToken)
+		}
+	}
+	b.StopTimer()
+	b.ReportAllocs()
+}
