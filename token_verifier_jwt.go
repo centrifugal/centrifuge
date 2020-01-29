@@ -28,6 +28,21 @@ var (
 	errMalformedToken = errors.New("malformed token")
 )
 
+type connectTokenClaims struct {
+	Info       Raw    `json:"info"`
+	Base64Info string `json:"b64info"`
+	jwt.StandardClaims
+}
+
+type subscribeTokenClaims struct {
+	Client          string `json:"client"`
+	Channel         string `json:"channel"`
+	Info            Raw    `json:"info"`
+	Base64Info      string `json:"b64info"`
+	ExpireTokenOnly bool   `json:"eto"`
+	jwt.StandardClaims
+}
+
 func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken, error) {
 	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, verifier.jwtKeyFunc())
 	if err != nil {

@@ -15,7 +15,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/centrifugal/protocol"
-	"github.com/dgrijalva/jwt-go"
 )
 
 // ClientEventHub allows to deal with client event handlers.
@@ -1095,21 +1094,6 @@ func (c *Client) handleSend(params Raw, rw *replyWriter) *Disconnect {
 		return nil
 	}
 	return nil
-}
-
-type connectTokenClaims struct {
-	Info       Raw    `json:"info"`
-	Base64Info string `json:"b64info"`
-	jwt.StandardClaims
-}
-
-type subscribeTokenClaims struct {
-	Client          string `json:"client"`
-	Channel         string `json:"channel"`
-	Info            Raw    `json:"info"`
-	Base64Info      string `json:"b64info"`
-	ExpireTokenOnly bool   `json:"eto"`
-	jwt.StandardClaims
 }
 
 // connectCmd handles connect command from client - client must send connect
