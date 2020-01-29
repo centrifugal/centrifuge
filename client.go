@@ -1104,10 +1104,11 @@ type connectTokenClaims struct {
 }
 
 type subscribeTokenClaims struct {
-	Client     string `json:"client"`
-	Channel    string `json:"channel"`
-	Info       Raw    `json:"info"`
-	Base64Info string `json:"b64info"`
+	Client          string `json:"client"`
+	Channel         string `json:"channel"`
+	Info            Raw    `json:"info"`
+	Base64Info      string `json:"b64info"`
+	ExpireTokenOnly bool   `json:"eto"`
 	jwt.StandardClaims
 }
 
@@ -1447,6 +1448,9 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 			return nil
 		}
 		expireAt = token.ExpireAt
+		if token.ExpireTokenOnly {
+			expireAt = 0
+		}
 		channelInfo = token.Info
 	}
 

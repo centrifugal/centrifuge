@@ -72,10 +72,11 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeT
 	}
 	if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
 		token := subscribeToken{
-			Client:   claims.Client,
-			Info:     claims.Info,
-			Channel:  claims.Channel,
-			ExpireAt: claims.StandardClaims.ExpiresAt,
+			Client:          claims.Client,
+			Info:            claims.Info,
+			Channel:         claims.Channel,
+			ExpireAt:        claims.StandardClaims.ExpiresAt,
+			ExpireTokenOnly: claims.ExpireTokenOnly,
 		}
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)

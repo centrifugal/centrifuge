@@ -37,4 +37,8 @@ type subscribeToken struct {
 	// also channel info becomes a part of published message if it was published
 	// from subscribed client directly.
 	Info Raw
+	// ExpireTokenOnly used to indicate that library must only check token expiration
+	// but not turn on Subscription expiration checks on server side. This allows
+	// to implement one-time subcription tokens.
+	ExpireTokenOnly bool
 }
