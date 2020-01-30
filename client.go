@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"sort"
@@ -16,7 +15,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/centrifugal/protocol"
-	"github.com/dgrijalva/jwt-go"
 )
 
 // ClientEventHub allows to deal with client event handlers.
@@ -1098,21 +1096,6 @@ func (c *Client) handleSend(params Raw, rw *replyWriter) *Disconnect {
 	return nil
 }
 
-type connectTokenClaims struct {
-	Info       Raw    `json:"info"`
-	Base64Info string `json:"b64info"`
-	jwt.StandardClaims
-}
-
-type subscribeTokenClaims struct {
-	Client          string `json:"client"`
-	Channel         string `json:"channel"`
-	Info            Raw    `json:"info"`
-	Base64Info      string `json:"b64info"`
-	ExpireTokenOnly bool   `json:"eto"`
-	jwt.StandardClaims
-}
-
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
 func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectResponse, *Disconnect) {
@@ -1188,61 +1171,28 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		c.exp = credentials.ExpireAt
 		c.mu.Unlock()
 	} else if cmd.Token != "" {
-		// Explicit auth Credentials not provided in auth handler and in context, try
-		// to extract credentials from connection JWT.
-		// TODO: JWT stuff should be outside library.
-		token := cmd.Token
-
-		var user string
-		var info Raw
-		var b64info string
-		var exp int64
-
-		parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, jwtKeyFunc(config))
-		if parsedToken == nil && err != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-			return resp, DisconnectInvalidToken
-		}
-		if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
-			user = claims.StandardClaims.Subject
-			info = claims.Info
-			b64info = claims.Base64Info
-			exp = claims.StandardClaims.ExpiresAt
-		} else {
-			if validationErr, ok := err.(*jwt.ValidationError); ok {
-				if validationErr.Errors == jwt.ValidationErrorExpired {
-					// The only problem with token is its expiration - no other
-					// errors set in Errors bitfield.
-					resp.Error = ErrorTokenExpired
-					return resp, nil
-				}
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
-				return resp, DisconnectInvalidToken
+		var token connectToken
+		var err error
+		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
+			if err == errTokenExpired {
+				resp.Error = ErrorTokenExpired
+				return resp, nil
 			}
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
 			return resp, DisconnectInvalidToken
 		}
 
 		c.mu.Lock()
-		c.user = user
-		c.exp = exp
+		c.user = token.UserID
+		c.exp = token.ExpireAt
 		c.mu.Unlock()
 
-		if len(info) > 0 {
+		if len(token.Info) > 0 {
 			c.mu.Lock()
-			c.info = info
+			c.info = token.Info
 			c.mu.Unlock()
 		}
-		if b64info != "" {
-			byteInfo, err := base64.StdEncoding.DecodeString(b64info)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": user, "client": c.uid, "error": err.Error()}))
-				return resp, DisconnectBadRequest
-			}
-			c.mu.Lock()
-			c.info = Raw(byteInfo)
-			c.mu.Unlock()
-		}
+
 	} else {
 		if !insecure && !clientAnonymous {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
@@ -1327,79 +1277,48 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 
 	resp := &clientproto.RefreshResponse{}
 
-	token := cmd.Token
-	if token == "" {
+	if cmd.Token == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client token required to refresh", map[string]interface{}{"user": c.user, "client": c.uid}))
 		return resp, DisconnectBadRequest
 	}
 
 	config := c.node.Config()
 
-	var user string
-	var expireAt int64
-	var info Raw
-	var b64info string
-
-	if cmd.Token == "" {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "refresh token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
-		return resp, DisconnectInvalidToken
-	}
-	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, jwtKeyFunc(config))
-	if parsedToken == nil && err != nil {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-		return resp, DisconnectInvalidToken
-	}
-	if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
-		user = claims.StandardClaims.Subject
-		info = claims.Info
-		b64info = claims.Base64Info
-		expireAt = claims.StandardClaims.ExpiresAt
-	} else {
-		if validationErr, ok := err.(*jwt.ValidationError); ok {
-			if validationErr.Errors == jwt.ValidationErrorExpired {
-				// The only problem with token is its expiration - no other errors set in bitfield.
-				resp.Error = ErrorTokenExpired
-				return resp, nil
-			}
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-			return resp, DisconnectInvalidToken
+	var (
+		token     connectToken
+		errVerify error
+	)
+	if token, errVerify = c.node.verifyConnectToken(cmd.Token); errVerify != nil {
+		if errVerify == errTokenExpired {
+			resp.Error = ErrorTokenExpired
+			return resp, nil
 		}
-		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid}))
 		return resp, DisconnectInvalidToken
 	}
 
 	res := &protocol.RefreshResult{
 		Version: config.Version,
-		Expires: expireAt > 0,
+		Expires: token.ExpireAt > 0,
 		Client:  c.uid,
 	}
 
-	diff := expireAt - time.Now().Unix()
+	diff := token.ExpireAt - time.Now().Unix()
 	if diff > 0 {
 		res.TTL = uint32(diff)
 	}
 
 	resp.Result = res
 
-	if expireAt > 0 {
+	if token.ExpireAt > 0 {
 		// connection check enabled
-		timeToExpire := expireAt - time.Now().Unix()
+		timeToExpire := token.ExpireAt - time.Now().Unix()
 		if timeToExpire > 0 {
 			// connection refreshed, update client timestamp and set new expiration timeout
 			c.mu.Lock()
-			c.exp = expireAt
-			if len(info) > 0 {
-				c.info = info
-			}
-			var byteInfo []byte
-			if b64info != "" {
-				var err error
-				byteInfo, err = base64.StdEncoding.DecodeString(b64info)
-				if err != nil {
-					c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": user, "client": c.uid, "error": err.Error()}))
-					return resp, DisconnectBadRequest
-				}
-				c.info = byteInfo
+			c.exp = token.ExpireAt
+			if len(token.Info) > 0 {
+				c.info = token.Info
 			}
 			if c.expireTimer != nil {
 				c.expireTimer.Stop()
@@ -1485,69 +1404,38 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 	isPrivateChannel := c.node.privateChannel(channel)
 
 	if isPrivateChannel {
-		// private channel - subscription request must have valid token.
-		var tokenChannel string
-		var tokenClient string
-		var tokenInfo Raw
-		var tokenB64info string
 
 		if cmd.Token == "" {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
 			rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
 			return nil
 		}
-		parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, jwtKeyFunc(config))
-		if parsedToken == nil && err != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+		var (
+			token     subscribeToken
+			errVerify error
+		)
+		if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
+			if errVerify == errTokenExpired {
+				_ = rw.write(&protocol.Reply{Error: ErrorTokenExpired})
+				return nil
+			}
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid, "user": c.UserID()}))
 			rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
 			return nil
 		}
-		if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
-			tokenChannel = claims.Channel
-			tokenInfo = claims.Info
-			tokenB64info = claims.Base64Info
-			tokenClient = claims.Client
-			expireAt = claims.StandardClaims.ExpiresAt
-			if claims.ExpireTokenOnly {
-				expireAt = 0
-			}
-
-			if c.uid != tokenClient {
-				rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
-				return nil
-			}
-			if cmd.Channel != tokenChannel {
-				rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
-				return nil
-			}
-
-			if len(tokenInfo) > 0 {
-				channelInfo = tokenInfo
-			}
-
-			if tokenB64info != "" {
-				byteInfo, err := base64.StdEncoding.DecodeString(tokenB64info)
-				if err != nil {
-					c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": c.UserID(), "client": c.uid, "error": err.Error()}))
-					return DisconnectBadRequest
-				}
-				channelInfo = byteInfo
-			}
-		} else {
-			if validationErr, ok := err.(*jwt.ValidationError); ok {
-				if validationErr.Errors == jwt.ValidationErrorExpired {
-					// The only problem with token is its expiration - no other errors set in bitfield.
-					rw.write(&protocol.Reply{Error: ErrorTokenExpired})
-					return nil
-				}
-				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-				rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
-				return nil
-			}
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-			rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
+		if c.uid != token.Client {
+			_ = rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
 			return nil
 		}
+		if cmd.Channel != token.Channel {
+			_ = rw.write(&protocol.Reply{Error: ErrorPermissionDenied})
+			return nil
+		}
+		expireAt = token.ExpireAt
+		if token.ExpireTokenOnly {
+			expireAt = 0
+		}
+		channelInfo = token.Info
 	}
 
 	if c.eventHub.subscribeHandler != nil {
@@ -1558,7 +1446,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 			return reply.Disconnect
 		}
 		if reply.Error != nil {
-			rw.write(&protocol.Reply{Error: reply.Error})
+			_ = rw.write(&protocol.Reply{Error: reply.Error})
 			return nil
 		}
 		if len(reply.ChannelInfo) > 0 && !isPrivateChannel {
@@ -1573,7 +1461,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 		now := time.Now().Unix()
 		if expireAt < now {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription expiration must be greater than now", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
-			rw.write(&protocol.Reply{Error: ErrorExpired})
+			_ = rw.write(&protocol.Reply{Error: ErrorExpired})
 			return nil
 		}
 		if isPrivateChannel {
@@ -1839,94 +1727,57 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 	res := &protocol.SubRefreshResult{}
 
 	c.mu.RLock()
-	_, ok := c.channels[channel]
+	_, okChannel := c.channels[channel]
 	c.mu.RUnlock()
-	if !ok {
+	if !okChannel {
 		// Must be subscribed to refresh.
 		resp.Error = ErrorPermissionDenied
 		return resp, nil
 	}
-
-	config := c.node.Config()
-
-	var channelInfo Raw
-	var expireAt int64
-
-	var tokenChannel string
-	var tokenClient string
-	var tokenInfo Raw
-	var tokenB64info string
 
 	if cmd.Token == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "subscription refresh token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
 		resp.Error = ErrorBadRequest
 		return resp, nil
 	}
-	parsedToken, err := jwt.ParseWithClaims(cmd.Token, &subscribeTokenClaims{}, jwtKeyFunc(config))
-	if parsedToken == nil && err != nil {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-		resp.Error = ErrorBadRequest
-		return resp, nil
-	}
-	if claims, ok := parsedToken.Claims.(*subscribeTokenClaims); ok && parsedToken.Valid {
-		tokenChannel = claims.Channel
-		tokenInfo = claims.Info
-		tokenB64info = claims.Base64Info
-		tokenClient = claims.Client
-		expireAt = claims.StandardClaims.ExpiresAt
-	} else {
-		if validationErr, ok := err.(*jwt.ValidationError); ok {
-			if validationErr.Errors == jwt.ValidationErrorExpired {
-				// The only problem with token is its expiration - no other errors set in bitfield.
-				resp.Error = ErrorTokenExpired
-				return resp, nil
-			}
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
-			resp.Error = ErrorBadRequest
+	var (
+		token     subscribeToken
+		errVerify error
+	)
+	if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
+		if errVerify == errTokenExpired {
+			resp.Error = ErrorTokenExpired
 			return resp, nil
 		}
-		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": err.Error(), "client": c.uid, "user": c.UserID()}))
+		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid, "user": c.UserID()}))
 		resp.Error = ErrorBadRequest
 		return resp, nil
 	}
 
-	if c.uid != tokenClient {
+	if c.uid != token.Client {
 		resp.Error = ErrorBadRequest
 		return resp, nil
 	}
-	if cmd.Channel != tokenChannel {
+	if cmd.Channel != token.Channel {
 		resp.Error = ErrorBadRequest
 		return resp, nil
 	}
 
-	if len(tokenInfo) > 0 {
-		channelInfo = tokenInfo
-	}
-
-	if tokenB64info != "" {
-		byteInfo, err := base64.StdEncoding.DecodeString(tokenB64info)
-		if err != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "can not decode provided info from base64", map[string]interface{}{"user": c.UserID(), "client": c.uid, "error": err.Error()}))
-			return resp, DisconnectBadRequest
-		}
-		channelInfo = byteInfo
-	}
-
-	if expireAt > 0 {
+	if token.ExpireAt > 0 {
 		res.Expires = true
 		now := time.Now().Unix()
-		if expireAt < now {
+		if token.ExpireAt < now {
 			resp.Error = ErrorExpired
 			return resp, nil
 		}
-		res.TTL = uint32(expireAt - now)
+		res.TTL = uint32(token.ExpireAt - now)
 	}
 
 	c.mu.Lock()
-	channelContext, ok := c.channels[channel]
-	if ok {
-		channelContext.Info = channelInfo
-		channelContext.expireAt = expireAt
+	channelContext, okChan := c.channels[channel]
+	if okChan {
+		channelContext.Info = token.Info
+		channelContext.expireAt = token.ExpireAt
 	}
 	c.channels[channel] = channelContext
 	c.mu.Unlock()
