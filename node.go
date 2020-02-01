@@ -32,6 +32,8 @@ type Node struct {
 	hub *Hub
 	// broker is responsible for PUB/SUB mechanics.
 	broker Broker
+	// tokenVerifier is responsible to verify client tokens
+	tokenVerifier tokenVerifier
 	// historyManager is responsible for managing channel Publication history.
 	historyManager HistoryManager
 	// presenceManager is responsible for presence information management.
@@ -88,6 +90,7 @@ func New(c Config) (*Node, error) {
 		eventHub:       &nodeEventHub{},
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
+		tokenVerifier:  newTokenVerifierJWT(c.TokenHMACSecretKey, c.TokenRSAPublicKey),
 	}
 
 	if c.LogHandler != nil {
@@ -153,6 +156,7 @@ func (n *Node) Reload(c Config) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.config = c
+	n.tokenVerifier.Reload(c)
 	return nil
 }
 
@@ -873,6 +877,14 @@ func (n *Node) userAllowed(ch string, user string) bool {
 		}
 	}
 	return false
+}
+
+func (n *Node) verifyConnectToken(token string) (connectToken, error) {
+	return n.tokenVerifier.VerifyConnectToken(token)
+}
+
+func (n *Node) verifySubscribeToken(token string) (subscribeToken, error) {
+	return n.tokenVerifier.VerifySubscribeToken(token)
 }
 
 type nodeRegistry struct {

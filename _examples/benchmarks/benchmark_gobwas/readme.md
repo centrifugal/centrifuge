@@ -1,4 +1,4 @@
-Example demonstrates simple chat with custom WenSocket transport based on https://github.com/nhooyr/websocket.
+Example demonstrates simple chat with custom WebSocket transport based on https://github.com/gobwas/ws.
 
 To start example run the following command from example directory:
 
