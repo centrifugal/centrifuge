@@ -127,8 +127,6 @@ type Client struct {
 	pubBuffer       []*Publication
 
 	messageWriter *writer
-
-	personalChannel string
 }
 
 // NewClient initializes new Client.
@@ -422,29 +420,6 @@ func (c *Client) Unsubscribe(ch string, resubscribe bool) error {
 	return c.sendUnsub(ch, resubscribe)
 }
 
-func (c *Client) subscribePersonal() (string, *Error) {
-	channel := c.node.PersonalChannel(c.user)
-	err := c.node.addSubscription(channel, c, true)
-	if err != nil {
-		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-		return "", ErrorInternal
-	}
-	if c.node.logger.enabled(LogLevelDebug) {
-		c.node.logger.log(newLogEntry(LogLevelDebug, "client subscribed to personal channel", map[string]interface{}{"client": c.uid, "user": c.user, "channel": channel}))
-	}
-	return channel, nil
-}
-
-func (c *Client) unsubscribePersonal(ch string) error {
-	err := c.node.removeSubscription(ch, c)
-	if err == nil {
-		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "client unsubscribed from personal channel", map[string]interface{}{"client": c.uid, "user": c.user, "channel": ch}))
-		}
-	}
-	return err
-}
-
 func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol())
 
@@ -485,28 +460,15 @@ func (c *Client) Close(disconnect *Disconnect) error {
 	for channel, channelContext := range c.channels {
 		channels[channel] = channelContext
 	}
-	personalChannel := c.personalChannel
 	c.mu.Unlock()
 
 	if len(channels) > 0 {
 		// Unsubscribe from all channels.
 		for channel := range channels {
-			if channel == personalChannel {
-				// Will be unsubscribed separately as there is less work
-				// to do than with general channels.
-				continue
-			}
 			err := c.unsubscribe(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
-		}
-	}
-
-	if personalChannel != "" {
-		err := c.unsubscribePersonal(personalChannel)
-		if err != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing from personal channel", map[string]interface{}{"channel": personalChannel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 
@@ -846,6 +808,27 @@ func (c *Client) handleConnect(params Raw, rw *replyWriter) *Disconnect {
 		rw.write(&protocol.Reply{Error: resp.Error})
 		return nil
 	}
+
+	config := c.node.Config()
+	if config.ClientSubscribePersonal && c.user != "" {
+		channel := c.node.PersonalChannel(c.user)
+		rw := &replyWriter{
+			write: func(*protocol.Reply) error {
+				return nil
+			},
+			flush: func() error {
+				return nil
+			},
+		}
+		cmd := &protocol.SubscribeRequest{
+			Channel: channel,
+		}
+		disconnect := c.subscribeCmd(cmd, rw)
+		if disconnect != nil {
+			return disconnect
+		}
+	}
+
 	var replyRes []byte
 	if resp.Result != nil {
 		replyRes, err = protocol.GetResultEncoder(c.transport.Protocol()).EncodeConnectResult(resp.Result)
@@ -1159,7 +1142,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 	clientAnonymous := config.ClientAnonymous
 	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
-	usePersonalChannel := config.ClientSubscribePersonal
 
 	var credentials *Credentials
 	var authData Raw
@@ -1289,17 +1271,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		return resp, DisconnectServerError
 	}
 
-	if usePersonalChannel && c.user != "" {
-		ch, err := c.subscribePersonal()
-		if err != nil {
-			resp.Error = err
-			return resp, nil
-		}
-		c.mu.Lock()
-		c.personalChannel = ch
-		c.mu.Unlock()
-	}
-
 	if exp > 0 {
 		duration := closeDelay + time.Duration(ttl)*time.Second
 		c.mu.Lock()
@@ -1401,8 +1372,6 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 	channelLimit := config.ClientChannelLimit
 	insecure := config.ClientInsecure
 
-	personalChannel := c.personalChannel
-
 	res := &protocol.SubscribeResult{}
 
 	if channelMaxLength > 0 && len(channel) > channelMaxLength {
@@ -1425,7 +1394,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter) *
 	_, ok := c.channels[channel]
 	c.mu.RUnlock()
 
-	if ok || channel == personalChannel {
+	if ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		rw.write(&protocol.Reply{Error: ErrorAlreadySubscribed})
 		return nil

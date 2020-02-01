@@ -160,7 +160,7 @@ var DefaultConfig = Config{
 	ChannelNamespaceBoundary:    ":", // so namespace "public" can be used as "public:news"
 	ChannelUserBoundary:         "#", // so user limited channel is "user#2694" where "2696" is user ID
 	ChannelUserSeparator:        ",", // so several users limited channel is "dialog#2694,3019"
-	ClientPersonalChannelPrefix: "&", // so personal channel will be like &#3019
+	ClientPersonalChannelPrefix: "",  // so personal channel by default will be like #3019
 
 	ClientInsecure:                  false,
 	ClientAnonymous:                 false,

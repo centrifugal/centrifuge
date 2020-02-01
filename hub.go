@@ -269,91 +269,46 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 
 	var jsonPublicationReply *preparedReply
 	var protobufPublicationReply *preparedReply
-	var jsonMessageReply *preparedReply
-	var protobufMessageReply *preparedReply
 
-	// Iterate over channel subscribers and send message - depending on subscription
-	// type this can be Publication or Message type.
-	for uid, serverSide := range channelSubscriptions {
+	// Iterate over channel subscribers and send message.
+	for uid := range channelSubscriptions {
 		c, ok := h.conns[uid]
 		if !ok {
 			continue
 		}
 		protoType := c.Transport().Protocol()
 		if protoType == protocol.TypeJSON {
-			if !serverSide {
-				if jsonPublicationReply == nil {
-					data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
-					if err != nil {
-						return err
-					}
-					messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: messageBytes,
-					}
-					jsonPublicationReply = newPreparedReply(reply, protocol.TypeJSON)
+			if jsonPublicationReply == nil {
+				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
+				if err != nil {
+					return err
 				}
-				c.writePublication(channel, pub, jsonPublicationReply, chOpts)
-			} else {
-				if jsonMessageReply == nil {
-					message := &protocol.Message{
-						Data: pub.Data,
-					}
-					data, err := protocol.GetPushEncoder(protoType).EncodeMessage(message)
-					if err != nil {
-						return err
-					}
-					messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewMessagePush(data))
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: messageBytes,
-					}
-					jsonMessageReply = newPreparedReply(reply, protocol.TypeJSON)
+				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
+				if err != nil {
+					return err
 				}
-				c.writeMessage(jsonMessageReply)
+				reply := &protocol.Reply{
+					Result: messageBytes,
+				}
+				jsonPublicationReply = newPreparedReply(reply, protocol.TypeJSON)
 			}
+			c.writePublication(channel, pub, jsonPublicationReply, chOpts)
 		} else if protoType == protocol.TypeProtobuf {
-			if !serverSide {
-				if protobufPublicationReply == nil {
-					data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
-					if err != nil {
-						return err
-					}
-					messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: messageBytes,
-					}
-					protobufPublicationReply = newPreparedReply(reply, protocol.TypeProtobuf)
+			if protobufPublicationReply == nil {
+				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
+				if err != nil {
+					return err
 				}
-				c.writePublication(channel, pub, protobufPublicationReply, chOpts)
-			} else {
-				if protobufMessageReply == nil {
-					message := &protocol.Message{
-						Data: pub.Data,
-					}
-					data, err := protocol.GetPushEncoder(protoType).EncodeMessage(message)
-					if err != nil {
-						return err
-					}
-					messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewMessagePush(data))
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: messageBytes,
-					}
-					protobufMessageReply = newPreparedReply(reply, protocol.TypeProtobuf)
+				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
+				if err != nil {
+					return err
 				}
-				c.writeMessage(protobufMessageReply)
+				reply := &protocol.Reply{
+					Result: messageBytes,
+				}
+				protobufPublicationReply = newPreparedReply(reply, protocol.TypeProtobuf)
 			}
+			c.writePublication(channel, pub, protobufPublicationReply, chOpts)
 		}
 	}
 	return nil
