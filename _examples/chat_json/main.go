@@ -59,10 +59,15 @@ func main() {
 	// not required if you don't use token authentication and
 	// private subscriptions verified by token.
 	cfg.TokenHMACSecretKey = "secret"
-	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
-	cfg.ClientSubscribePersonal = true
+
+	cfg.JoinLeave = true
+	cfg.HistoryLifetime = 300
+	cfg.HistorySize = 1000
+	cfg.HistoryRecover = true
+
+	cfg.UserSubscribePersonal = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
@@ -164,8 +169,6 @@ func main() {
 							return
 						}
 						log.Println(err.Error())
-					} else {
-						return
 					}
 				}
 			}

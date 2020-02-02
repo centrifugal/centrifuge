@@ -54,6 +54,18 @@
                     centrifuge.send(data);
                 });
 
+                centrifuge.on('publish', function(ctx) {
+                    drawText('Server-side publication from channel ' + ctx.channel + ": " + JSON.stringify(ctx.data));
+                });
+
+                centrifuge.on('join', function(ctx) {
+                    drawText('Server-side join from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('leave', function(ctx) {
+                    drawText('Server-side leave from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                     input.attr("disabled", true);

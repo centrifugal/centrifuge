@@ -64,12 +64,12 @@ type Config struct {
 	// ClientUserConnectionLimit limits number of client connections from user with the
 	// same ID. 0 - unlimited.
 	ClientUserConnectionLimit int
-	// ClientSubscribePersonal enables automatic subscribing to personal channel by user.
+	// UserSubscribePersonal enables automatic subscribing to personal channel by user.
 	// Only users with user ID defined will subscribe to personal channels, anonymous
 	// users are ignored.
-	ClientSubscribePersonal bool
-	// ClientPersonalChannelPrefix defines prefix to be added to user personal channel.
-	ClientPersonalChannelPrefix string
+	UserSubscribePersonal bool
+	// UserPersonalChannelPrefix defines prefix to be added to user personal channel.
+	UserPersonalChannelPrefix string
 	// ChannelPrivatePrefix is a prefix in channel name which indicates that
 	// channel is private.
 	ChannelPrivatePrefix string
@@ -155,12 +155,12 @@ var DefaultConfig = Config{
 
 	NodeInfoMetricsAggregateInterval: 60 * time.Second,
 
-	ChannelMaxLength:            255,
-	ChannelPrivatePrefix:        "$", // so private channel will look like "$gossips"
-	ChannelNamespaceBoundary:    ":", // so namespace "public" can be used as "public:news"
-	ChannelUserBoundary:         "#", // so user limited channel is "user#2694" where "2696" is user ID
-	ChannelUserSeparator:        ",", // so several users limited channel is "dialog#2694,3019"
-	ClientPersonalChannelPrefix: "",  // so personal channel by default will be like #3019
+	ChannelMaxLength:          255,
+	ChannelPrivatePrefix:      "$", // so private channel will look like "$gossips"
+	ChannelNamespaceBoundary:  ":", // so namespace "public" can be used as "public:news"
+	ChannelUserBoundary:       "#", // so user limited channel is "user#2694" where "2696" is user ID
+	ChannelUserSeparator:      ",", // so several users limited channel is "dialog#2694,3019"
+	UserPersonalChannelPrefix: "",  // so personal channel by default will be like #3019
 
 	ClientInsecure:                  false,
 	ClientAnonymous:                 false,

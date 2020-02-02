@@ -740,15 +740,10 @@ func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
 	return n.config.channelOpts(n.namespaceName(ch))
 }
 
-func (n *Node) isPersonalChannel(ch string) bool {
-	config := n.Config()
-	return config.ClientSubscribePersonal && strings.HasPrefix(ch, config.ClientPersonalChannelPrefix)
-}
-
 // PersonalChannel returns personal channel for user based on node configuration.
 func (n *Node) PersonalChannel(user string) string {
 	config := n.Config()
-	return config.ClientPersonalChannelPrefix + config.ChannelUserBoundary + user
+	return config.UserPersonalChannelPrefix + config.ChannelUserBoundary + user
 }
 
 // addPresence proxies presence adding to engine.
