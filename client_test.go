@@ -530,6 +530,61 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	}
 }
 
+func TestClientUserPersonalChannel(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
+	var tests = []struct {
+		Name   string
+		Prefix string
+		Error  *Error
+	}{
+		{"ok_no_prefix", "", nil},
+		{"ok_with_prefix", "user", nil},
+		{"fail_no_namespace", "user:", ErrorNamespaceNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			config := node.Config()
+			config.UserSubscribePersonal = true
+			config.UserPersonalChannelPrefix = tt.Prefix
+			node.Reload(config)
+			transport := newTestTransport()
+			transport.sink = make(chan []byte, 100)
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := NewClient(newCtx, node, transport)
+			replies := []*protocol.Reply{}
+			rw := testReplyWriter(&replies)
+			client.handleCommand(&protocol.Command{
+				ID: 1,
+			}, rw.write, rw.flush)
+			if tt.Error != nil {
+				assert.Equal(t, tt.Error, replies[0].Error)
+			} else {
+				done := make(chan struct{})
+				go func() {
+					for data := range transport.sink {
+						if strings.Contains(string(data), "test message") {
+							close(done)
+						}
+					}
+				}()
+
+				err := node.Publish(node.PersonalChannel("42"), []byte(`{"text": "test message"}`))
+				assert.NoError(t, err)
+
+				select {
+				case <-time.After(time.Second):
+					assert.Fail(t, "timeout receiving publication")
+				case <-done:
+				}
+			}
+		})
+	}
+}
+
 func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer node.Shutdown(context.Background())
