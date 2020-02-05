@@ -1385,11 +1385,22 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 	return resp, nil
 }
 
-func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (ChannelOptions, *Error, *Disconnect) {
+func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, serverSide bool) (ChannelOptions, *Error, *Disconnect) {
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for subscribe", map[string]interface{}{"user": c.user, "client": c.uid}))
 		return ChannelOptions{}, nil, DisconnectBadRequest
+	}
+
+	chOpts, ok := c.node.ChannelOpts(channel)
+	if !ok {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on non existing namespace", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
+		return ChannelOptions{}, ErrorNamespaceNotFound, nil
+	}
+
+	if !serverSide && chOpts.ServerSide {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on server side channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
+		return ChannelOptions{}, ErrorPermissionDenied, nil
 	}
 
 	config := c.node.Config()
@@ -1412,9 +1423,8 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (Chann
 	}
 
 	c.mu.RLock()
-	_, ok := c.channels[channel]
+	_, ok = c.channels[channel]
 	c.mu.RUnlock()
-
 	if ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		return ChannelOptions{}, ErrorAlreadySubscribed, nil
@@ -1423,12 +1433,6 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (Chann
 	if !c.node.userAllowed(channel, c.user) {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		return ChannelOptions{}, ErrorPermissionDenied, nil
-	}
-
-	chOpts, ok := c.node.ChannelOpts(channel)
-	if !ok {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on non existing namespace", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, ErrorNamespaceNotFound, nil
 	}
 
 	if !chOpts.Anonymous && c.user == "" && !insecure {
@@ -1540,7 +1544,7 @@ type subscribeContext struct {
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
 func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, serverSide bool) subscribeContext {
-	chOpts, replyError, disconnect := c.validateSubscribeRequest(cmd)
+	chOpts, replyError, disconnect := c.validateSubscribeRequest(cmd, serverSide)
 	if disconnect != nil || replyError != nil {
 		return handleErrorDisconnect(rw, replyError, disconnect, serverSide)
 	}
