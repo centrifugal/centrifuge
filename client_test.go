@@ -105,7 +105,9 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	_, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	assert.NotNil(t, disconnect)
 	assert.Equal(t, disconnect, DisconnectBadRequest)
 }
@@ -120,10 +122,13 @@ func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	assert.Nil(t, disconnect)
-	assert.Nil(t, resp.Error)
-	assert.NotEmpty(t, resp.Result.Client)
+	assert.Nil(t, replies[0].Error)
+	result := extractConnectResult(replies)
+	assert.NotEmpty(t, result.Client)
 	assert.Empty(t, client.UserID())
 }
 
@@ -137,10 +142,13 @@ func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	assert.Nil(t, disconnect)
-	assert.Nil(t, resp.Error)
-	assert.NotEmpty(t, resp.Result.Client)
+	assert.Nil(t, replies[0].Error)
+	result := extractConnectResult(replies)
+	assert.NotEmpty(t, result.Client)
 	assert.Empty(t, client.UserID())
 }
 
@@ -149,9 +157,11 @@ func TestClientConnectWithMalformedToken(t *testing.T) {
 	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	_, disconnect := client.connectCmd(&protocol.ConnectRequest{
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: "bad bad token",
-	})
+	}, rw)
 	assert.NotNil(t, disconnect)
 	assert.Equal(t, disconnect, DisconnectInvalidToken)
 }
@@ -166,12 +176,15 @@ func TestClientConnectWithValidToken(t *testing.T) {
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 0),
-	})
+	}, rw)
 	assert.Nil(t, disconnect)
-	assert.Equal(t, client.ID(), resp.Result.Client)
-	assert.Equal(t, false, resp.Result.Expires)
+	result := extractConnectResult(replies)
+	assert.Equal(t, client.ID(), result.Client)
+	assert.Equal(t, false, result.Expires)
 }
 
 func TestClientConnectWithExpiringToken(t *testing.T) {
@@ -184,12 +197,15 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", time.Now().Unix()+10),
-	})
+	}, rw)
 	assert.Nil(t, disconnect)
-	assert.Equal(t, true, resp.Result.Expires)
-	assert.True(t, resp.Result.TTL > 0)
+	result := extractConnectResult(replies)
+	assert.Equal(t, true, result.Expires)
+	assert.True(t, result.TTL > 0)
 	assert.True(t, client.authenticated)
 }
 
@@ -203,11 +219,13 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
-	})
+	}, rw)
 	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorTokenExpired, resp.Error)
+	assert.Equal(t, ErrorTokenExpired, replies[0].Error)
 	assert.False(t, client.authenticated)
 }
 
@@ -221,11 +239,13 @@ func TestClientTokenRefresh(t *testing.T) {
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
-	})
+	}, rw)
 	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorTokenExpired, resp.Error)
+	assert.Equal(t, ErrorTokenExpired, replies[0].Error)
 
 	refreshResp, disconnect := client.refreshCmd(&protocol.RefreshRequest{
 		Token: getConnToken("42", 2525637058),
@@ -256,10 +276,13 @@ func TestClientConnectContextCredentials(t *testing.T) {
 		return RefreshReply{}
 	})
 
-	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	assert.Nil(t, disconnect)
-	assert.Equal(t, false, resp.Result.Expires)
-	assert.Equal(t, uint32(0), resp.Result.TTL)
+	result := extractConnectResult(replies)
+	assert.Equal(t, false, result.Expires)
+	assert.Equal(t, uint32(0), result.TTL)
 	assert.True(t, client.authenticated)
 	assert.Equal(t, "42", client.UserID())
 }
@@ -285,7 +308,9 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 		}
 	})
 
-	_, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	assert.Nil(t, disconnect)
 	client.expire()
 	assert.True(t, client.closed)
@@ -313,7 +338,9 @@ func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
 		}
 	})
 
-	_, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	assert.Nil(t, disconnect)
 	client.expire()
 	assert.False(t, client.closed)
@@ -340,22 +367,36 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 		return RefreshReply{}
 	})
 
-	resp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorExpired, resp.Error)
+	assert.Equal(t, ErrorExpired, replies[0].Error)
 }
 
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
-	connectResp, disconnect := client.connectCmd(&protocol.ConnectRequest{})
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	assert.Nil(t, disconnect)
-	assert.Nil(t, connectResp.Error)
+	assert.Nil(t, replies[0].Error)
 	assert.True(t, client.authenticated)
-	assert.Equal(t, client.uid, connectResp.Result.Client)
-	return connectResp.Result
+	result := extractConnectResult(replies)
+	assert.Equal(t, client.uid, result.Client)
+	return result
 }
 
 func extractSubscribeResult(replies []*protocol.Reply) *protocol.SubscribeResult {
 	var res protocol.SubscribeResult
+	err := json.Unmarshal(replies[0].Result, &res)
+	if err != nil {
+		panic(err)
+	}
+	return &res
+}
+
+func extractConnectResult(replies []*protocol.Reply) *protocol.ConnectResult {
+	var res protocol.ConnectResult
 	err := json.Unmarshal(replies[0].Result, &res)
 	if err != nil {
 		panic(err)
