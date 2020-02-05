@@ -783,82 +783,13 @@ func (c *Client) handleConnect(params Raw, rw *replyWriter) *Disconnect {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding connect", map[string]interface{}{"error": err.Error()}))
 		return DisconnectBadRequest
 	}
-	resp, disconnect := c.connectCmd(cmd)
+	disconnect := c.connectCmd(cmd, rw)
 	if disconnect != nil {
 		return disconnect
 	}
-	if resp.Error != nil {
-		rw.write(&protocol.Reply{Error: resp.Error})
-		return nil
-	}
-
-	config := c.node.Config()
-
-	var channels []string
-	if config.UserSubscribePersonal && c.user != "" {
-		channels = append(channels, c.node.PersonalChannel(c.user))
-	}
-
-	subCtxMap := make(map[string]subscribeContext, len(channels))
-	subs := make(map[string]*protocol.SubscribeResult, len(channels))
-
-	for _, channel := range channels {
-		cmd := &protocol.SubscribeRequest{
-			Channel: channel,
-		}
-		subCtx := c.subscribeCmd(cmd, rw, true)
-		if subCtx.disconnect != nil {
-			return subCtx.disconnect
-		}
-		if subCtx.err != nil {
-			rw.write(&protocol.Reply{Error: subCtx.err})
-			return nil
-		}
-		subs[channel] = subCtx.result
-		subCtxMap[channel] = subCtx
-	}
-
-	var replyRes []byte
-	if resp.Result != nil {
-		resp.Result.Subs = subs
-		replyRes, err = protocol.GetResultEncoder(c.transport.Protocol()).EncodeConnectResult(resp.Result)
-		if err != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
-			return DisconnectServerError
-		}
-	}
-	rw.write(&protocol.Reply{Result: replyRes})
-	rw.flush()
-
-	c.mu.Lock()
-	for channel, subCtx := range subCtxMap {
-		if !subCtx.pubLocked {
-			continue
-		}
-		channelContext, ok := c.channels[channel]
-		if !ok {
-			continue
-		}
-		channelContext.setInSubscribe(false)
-		channelContext.pubBufferMu.Unlock()
-	}
-	c.mu.Unlock()
-
-	for channel, subCtx := range subCtxMap {
-		if subCtx.chOpts.JoinLeave && subCtx.clientInfo != nil {
-			join := &protocol.Join{
-				Info: *subCtx.clientInfo,
-			}
-			// Flush makes subscription response to go to connection before Join message.
-			rw.flush()
-			go c.node.publishJoin(channel, join, &subCtx.chOpts)
-		}
-	}
-
 	if c.node.eventHub.connectedHandler != nil {
 		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
-
 	return nil
 }
 
@@ -1149,7 +1080,7 @@ func (c *Client) handleSend(params Raw, rw *replyWriter) *Disconnect {
 
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
-func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectResponse, *Disconnect) {
+func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disconnect {
 	resp := &clientproto.ConnectResponse{}
 
 	c.mu.RLock()
@@ -1158,12 +1089,12 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 	c.mu.RUnlock()
 
 	if closed {
-		return resp, DisconnectNormal
+		return DisconnectNormal
 	}
 
 	if authenticated {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already authenticated", map[string]interface{}{"client": c.uid, "user": c.user}))
-		return resp, DisconnectBadRequest
+		return DisconnectBadRequest
 	}
 
 	config := c.node.Config()
@@ -1176,6 +1107,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 	var credentials *Credentials
 	var authData Raw
 
+	var channels []string
+
 	if c.node.eventHub.connectingHandler != nil {
 		reply := c.node.eventHub.connectingHandler(c.ctx, c.transport, ConnectEvent{
 			ClientID: c.ID(),
@@ -1183,11 +1116,12 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 			Token:    cmd.Token,
 		})
 		if reply.Disconnect != nil {
-			return nil, reply.Disconnect
+			return reply.Disconnect
 		}
 		if reply.Error != nil {
 			resp.Error = reply.Error
-			return resp, nil
+			rw.write(&protocol.Reply{Error: resp.Error})
+			return nil
 		}
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
@@ -1199,6 +1133,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		}
 		if reply.Data != nil {
 			authData = reply.Data
+		}
+		for _, sub := range reply.Subscriptions {
+			channels = append(channels, sub.Channel)
 		}
 	}
 
@@ -1227,10 +1164,11 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
 			if err == errTokenExpired {
 				resp.Error = ErrorTokenExpired
-				return resp, nil
+				rw.write(&protocol.Reply{Error: resp.Error})
+				return nil
 			}
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
-			return resp, DisconnectInvalidToken
+			return DisconnectInvalidToken
 		}
 
 		c.mu.Lock()
@@ -1247,7 +1185,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 	} else {
 		if !insecure && !clientAnonymous {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
-			return resp, DisconnectBadRequest
+			return DisconnectBadRequest
 		}
 	}
 
@@ -1261,7 +1199,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 	if userConnectionLimit > 0 && user != "" && len(c.node.hub.userConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": user, "client": c.uid, "limit": userConnectionLimit}))
 		resp.Error = ErrorLimitExceeded
-		return resp, nil
+		rw.write(&protocol.Reply{Error: resp.Error})
+		return nil
 	}
 
 	c.mu.RLock()
@@ -1272,7 +1211,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 			c.mu.RUnlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "connection expiration must be greater than now", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
 			resp.Error = ErrorExpired
-			return resp, nil
+			rw.write(&protocol.Reply{Error: resp.Error})
+			return nil
 		}
 		ttl = uint32(exp - now)
 	}
@@ -1298,7 +1238,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 	err := c.node.addClient(c)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding client", map[string]interface{}{"client": c.uid, "error": err.Error()}))
-		return resp, DisconnectServerError
+		return DisconnectServerError
 	}
 
 	if exp > 0 {
@@ -1319,7 +1259,68 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest) (*clientproto.ConnectR
 		resp.Result.Data = authData
 	}
 
-	return resp, nil
+	if config.UserSubscribePersonal && c.user != "" {
+		channels = append(channels, c.node.PersonalChannel(c.user))
+	}
+
+	subCtxMap := make(map[string]subscribeContext, len(channels))
+	subs := make(map[string]*protocol.SubscribeResult, len(channels))
+
+	for _, channel := range channels {
+		// TODO: unlock subscriptions in case of error or just disconnect.
+		// TODO: subscribe in parallel to prevent long-term locking pubBuffer locking.
+		cmd := &protocol.SubscribeRequest{
+			Channel: channel,
+		}
+		subCtx := c.subscribeCmd(cmd, rw, true)
+		if subCtx.disconnect != nil {
+			return subCtx.disconnect
+		}
+		if subCtx.err != nil {
+			rw.write(&protocol.Reply{Error: subCtx.err})
+			return nil
+		}
+		subs[channel] = subCtx.result
+		subCtxMap[channel] = subCtx
+	}
+
+	var replyRes []byte
+	if resp.Result != nil {
+		resp.Result.Subs = subs
+		replyRes, err = protocol.GetResultEncoder(c.transport.Protocol()).EncodeConnectResult(resp.Result)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
+			return DisconnectServerError
+		}
+	}
+	rw.write(&protocol.Reply{Result: replyRes})
+	rw.flush()
+
+	// Now we should unlock server side subscriptions.
+	c.mu.Lock()
+	for channel, subCtx := range subCtxMap {
+		if !subCtx.pubLocked {
+			continue
+		}
+		channelContext, ok := c.channels[channel]
+		if !ok {
+			continue
+		}
+		channelContext.setInSubscribe(false)
+		channelContext.pubBufferMu.Unlock()
+	}
+	c.mu.Unlock()
+
+	for channel, subCtx := range subCtxMap {
+		if subCtx.chOpts.JoinLeave && subCtx.clientInfo != nil {
+			join := &protocol.Join{
+				Info: *subCtx.clientInfo,
+			}
+			go c.node.publishJoin(channel, join, &subCtx.chOpts)
+		}
+	}
+
+	return nil
 }
 
 // refreshCmd handle refresh command to update connection with new
