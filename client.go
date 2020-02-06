@@ -1269,10 +1269,16 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	for _, channel := range channels {
 		// TODO: unlock subscriptions in case of error or just disconnect.
 		// TODO: subscribe in parallel to prevent long-term locking pubBuffer locking.
-		cmd := &protocol.SubscribeRequest{
+		subCmd := &protocol.SubscribeRequest{
 			Channel: channel,
 		}
-		subCtx := c.subscribeCmd(cmd, rw, true)
+		if subReq, ok := cmd.Subs[channel]; ok {
+			subCmd.Recover = subReq.Recover
+			subCmd.Seq = subReq.Seq
+			subCmd.Gen = subReq.Gen
+			subCmd.Epoch = subReq.Epoch
+		}
+		subCtx := c.subscribeCmd(subCmd, rw, true)
 		if subCtx.disconnect != nil {
 			return subCtx.disconnect
 		}
