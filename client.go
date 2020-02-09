@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
@@ -83,24 +82,6 @@ type ChannelContext struct {
 	positionCheckTime     int64
 	positionCheckFailures int64
 	recoveryPosition      RecoveryPosition
-
-	// The following fields help us to synchronize PUB/SUB and history messages
-	// during publication recovery process in channel.
-	inSubscribe uint32
-	pubBufferMu sync.Mutex
-	pubBuffer   []*Publication
-}
-
-func (c *ChannelContext) isInSubscribe() bool {
-	return atomic.LoadUint32(&c.inSubscribe) == 1
-}
-
-func (c *ChannelContext) setInSubscribe(flag bool) {
-	if flag {
-		atomic.StoreUint32(&c.inSubscribe, 1)
-	} else {
-		atomic.StoreUint32(&c.inSubscribe, 0)
-	}
 }
 
 // Client represents client connection to server.
@@ -122,7 +103,9 @@ type Client struct {
 	exp  int64
 	info Raw
 
-	channels map[string]*ChannelContext
+	channels map[string]ChannelContext
+
+	syncer *pubSubSyncer
 
 	staleTimer    *time.Timer
 	expireTimer   *time.Timer
@@ -149,7 +132,8 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 		node:      n,
 		transport: t,
 		eventHub:  &ClientEventHub{},
-		channels:  make(map[string]*ChannelContext),
+		channels:  make(map[string]ChannelContext),
+		syncer:    newPubSubSyncer(),
 	}
 
 	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
@@ -233,7 +217,7 @@ func (c *Client) updateChannelPresence(ch string) error {
 	return c.node.addPresence(ch, c.uid, info)
 }
 
-func (c *Client) checkSubscriptionExpiration(channel string, channelContext *ChannelContext, delay time.Duration) bool {
+func (c *Client) checkSubscriptionExpiration(channel string, channelContext ChannelContext, delay time.Duration) bool {
 	now := time.Now().Unix()
 	expireAt := channelContext.expireAt
 	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
@@ -273,7 +257,7 @@ func (c *Client) updatePresence() {
 		c.mu.Unlock()
 		return
 	}
-	channels := make(map[string]*ChannelContext, len(c.channels))
+	channels := make(map[string]ChannelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
 		channels[channel] = channelContext
 	}
@@ -317,7 +301,7 @@ func (c *Client) addPresenceUpdate() {
 }
 
 // Lock must be held outside.
-func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext *ChannelContext) bool {
+func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext ChannelContext) bool {
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
 		return true
@@ -374,9 +358,7 @@ func (c *Client) Channels() map[string]ChannelContext {
 	defer c.mu.RUnlock()
 	channels := make(map[string]ChannelContext, len(c.channels))
 	for ch, ctx := range c.channels {
-		channels[ch] = ChannelContext{
-			Info: ctx.Info,
-		}
+		channels[ch] = ctx
 	}
 	return channels
 }
@@ -461,7 +443,7 @@ func (c *Client) Close(disconnect *Disconnect) error {
 		disconnect = c.disconnect
 	}
 
-	channels := make(map[string]*ChannelContext, len(c.channels))
+	channels := make(map[string]ChannelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
 		channels[channel] = channelContext
 	}
@@ -1192,7 +1174,12 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	c.mu.RLock()
 	user := c.user
 	exp := c.exp
+	closed = c.closed
 	c.mu.RUnlock()
+
+	if closed {
+		return DisconnectNormal
+	}
 
 	c.node.logger.log(newLogEntry(LogLevelDebug, "client authenticated", map[string]interface{}{"client": c.uid, "user": c.user}))
 
@@ -1263,36 +1250,74 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		channels = append(channels, c.node.PersonalChannel(c.user))
 	}
 
-	subCtxMap := make(map[string]subscribeContext, len(channels))
-	subs := make(map[string]*protocol.SubscribeResult, len(channels))
+	var subCtxMap map[string]subscribeContext
+	if len(channels) > 0 {
+		var subMu sync.Mutex
+		subCtxMap = make(map[string]subscribeContext, len(channels))
+		subs := make(map[string]*protocol.SubscribeResult, len(channels))
+		var subDisconnect *Disconnect
+		var subError *Error
+		// var wg sync.WaitGroup
 
-	for _, channel := range channels {
-		// TODO: unlock subscriptions in case of error or just disconnect.
-		// TODO: subscribe in parallel to prevent long-term locking pubBuffer locking.
-		subCmd := &protocol.SubscribeRequest{
-			Channel: channel,
+		// wg.Add(len(channels))
+		for _, channel := range channels {
+			// go func(channel string) {
+			// defer wg.Done()
+			subCmd := &protocol.SubscribeRequest{
+				Channel: channel,
+			}
+			if subReq, ok := cmd.Subs[channel]; ok {
+				subCmd.Recover = subReq.Recover
+				subCmd.Seq = subReq.Seq
+				subCmd.Gen = subReq.Gen
+				subCmd.Epoch = subReq.Epoch
+			}
+			subCtx := c.subscribeCmd(subCmd, rw, true)
+			subMu.Lock()
+			subs[channel] = subCtx.result
+			subCtxMap[channel] = subCtx
+			if subCtx.disconnect != nil {
+				subDisconnect = subCtx.disconnect
+			}
+			if subCtx.err != nil {
+				subError = subCtx.err
+			}
+			subMu.Unlock()
+			// }(channel)
 		}
-		if subReq, ok := cmd.Subs[channel]; ok {
-			subCmd.Recover = subReq.Recover
-			subCmd.Seq = subReq.Seq
-			subCmd.Gen = subReq.Gen
-			subCmd.Epoch = subReq.Epoch
+		// wg.Wait()
+
+		if subDisconnect != nil || subError != nil {
+			panic(1)
+			// // Now we should unlock server side subscriptions.
+			// for _, subCtx := range subCtxMap {
+			// 	if !subCtx.pubLocked {
+			// 		continue
+			// 	}
+			// 	// c.mu.Lock()
+			// 	// channelContext, ok := c.channels[channel]
+			// 	// if !ok {
+			// 	// 	continue
+			// 	// }
+			// 	// channelContext.setInSubscribe(false)
+			// 	// if subCtx.pubLocked {
+			// 	// 	channelContext.pubBufferMu.Unlock()
+			// 	// }
+			// 	// c.mu.Unlock()
+			// }
+			// if subDisconnect != nil {
+			// 	return subDisconnect
+			// }
+			// rw.write(&protocol.Reply{Error: subError})
+			// return nil
 		}
-		subCtx := c.subscribeCmd(subCmd, rw, true)
-		if subCtx.disconnect != nil {
-			return subCtx.disconnect
+		if resp.Result != nil {
+			resp.Result.Subs = subs
 		}
-		if subCtx.err != nil {
-			rw.write(&protocol.Reply{Error: subCtx.err})
-			return nil
-		}
-		subs[channel] = subCtx.result
-		subCtxMap[channel] = subCtx
 	}
 
 	var replyRes []byte
 	if resp.Result != nil {
-		resp.Result.Subs = subs
 		replyRes, err = protocol.GetResultEncoder(c.transport.Protocol()).EncodeConnectResult(resp.Result)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
@@ -1302,27 +1327,28 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	rw.write(&protocol.Reply{Result: replyRes})
 	rw.flush()
 
-	// Now we should unlock server side subscriptions.
 	c.mu.Lock()
 	for channel, subCtx := range subCtxMap {
-		if !subCtx.pubLocked {
-			continue
-		}
-		channelContext, ok := c.channels[channel]
-		if !ok {
-			continue
-		}
-		channelContext.setInSubscribe(false)
-		channelContext.pubBufferMu.Unlock()
+		c.channels[channel] = subCtx.channelContext
 	}
 	c.mu.Unlock()
 
+	// Now we should unlock server side subscriptions.
 	for channel, subCtx := range subCtxMap {
-		if subCtx.chOpts.JoinLeave && subCtx.clientInfo != nil {
-			join := &protocol.Join{
-				Info: *subCtx.clientInfo,
+		c.syncer.setInSubscribe(channel, false)
+		if subCtx.pubLocked {
+			c.syncer.unlockPublications(channel, true)
+		}
+	}
+
+	if len(subCtxMap) > 0 {
+		for channel, subCtx := range subCtxMap {
+			if subCtx.chOpts.JoinLeave && subCtx.clientInfo != nil {
+				join := &protocol.Join{
+					Info: *subCtx.clientInfo,
+				}
+				go c.node.publishJoin(channel, join, &subCtx.chOpts)
 			}
-			go c.node.publishJoin(channel, join, &subCtx.chOpts)
 		}
 	}
 
@@ -1450,7 +1476,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, server
 	return chOpts, nil, nil
 }
 
-func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest) (Raw, int64, bool, *Error, *Disconnect) {
+func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide bool) (Raw, int64, bool, *Error, *Disconnect) {
 
 	var channelInfo Raw
 	var expireAt int64
@@ -1538,12 +1564,13 @@ func incRecoverCount(recovered bool) {
 }
 
 type subscribeContext struct {
-	result     *protocol.SubscribeResult
-	pubLocked  bool
-	chOpts     ChannelOptions
-	clientInfo *ClientInfo
-	err        *Error
-	disconnect *Disconnect
+	result         *protocol.SubscribeResult
+	pubLocked      bool
+	chOpts         ChannelOptions
+	clientInfo     *ClientInfo
+	err            *Error
+	disconnect     *Disconnect
+	channelContext ChannelContext
 }
 
 // subscribeCmd handles subscribe command - clients send this when subscribe
@@ -1556,7 +1583,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		return handleErrorDisconnect(rw, replyError, disconnect, serverSide)
 	}
 
-	channelInfo, expireAt, exposeExpiration, replyError, disconnect := c.extractSubscribeData(cmd)
+	channelInfo, expireAt, exposeExpiration, replyError, disconnect := c.extractSubscribeData(cmd, serverSide)
 	if disconnect != nil || replyError != nil {
 		return handleErrorDisconnect(rw, replyError, disconnect, serverSide)
 	}
@@ -1588,23 +1615,15 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		ChanInfo: channelInfo,
 	}
 
-	channelContext := &ChannelContext{}
-	c.mu.Lock()
-	// TODO: clean up on error response?
-	c.channels[channel] = channelContext
-	c.mu.Unlock()
-
 	if chOpts.HistoryRecover {
 		// Start synching recovery and PUB/SUB.
-		channelContext.setInSubscribe(true)
+		c.syncer.setInSubscribe(channel, true)
 	}
 
 	err := c.node.addSubscription(channel, c, false)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-		if chOpts.HistoryRecover {
-			channelContext.setInSubscribe(false)
-		}
+		c.syncer.setInSubscribe(channel, false)
 		if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 			return handleErrorDisconnect(rw, clientErr, nil, serverSide)
 		}
@@ -1616,9 +1635,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		err = c.node.addPresence(channel, c.uid, info)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error adding presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			if chOpts.HistoryRecover {
-				channelContext.setInSubscribe(false)
-			}
+			c.syncer.setInSubscribe(channel, false)
 			ctx.disconnect = DisconnectServerError
 			return ctx
 		}
@@ -1640,9 +1657,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			publications, recoveryPosition, err := c.node.recoverHistory(channel, RecoveryPosition{cmd.Seq, cmd.Gen, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				if chOpts.HistoryRecover {
-					channelContext.setInSubscribe(false)
-				}
+				c.syncer.setInSubscribe(channel, false)
 				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 					return handleErrorDisconnect(rw, clientErr, nil, serverSide)
 				}
@@ -1669,9 +1684,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			recovery, err := c.node.currentRecoveryState(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting recovery state for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				if chOpts.HistoryRecover {
-					channelContext.setInSubscribe(false)
-				}
+				c.syncer.setInSubscribe(channel, false)
 				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 					return handleErrorDisconnect(rw, clientErr, nil, serverSide)
 				}
@@ -1687,11 +1700,11 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		res.Seq = latestSeq
 		res.Gen = latestGen
 
-		channelContext.pubBufferMu.Lock()
+		c.syncer.lockPublications(channel)
 		pubBufferLocked = true
-		if len(channelContext.pubBuffer) > 0 {
-			recoveredPubs = append(recoveredPubs, channelContext.pubBuffer...)
-			channelContext.pubBuffer = nil
+		bufferedPubs := c.syncer.readBufferedPubs(channel)
+		if len(bufferedPubs) > 0 {
+			recoveredPubs = append(recoveredPubs, bufferedPubs...)
 		}
 		sort.Slice(recoveredPubs, func(i, j int) bool {
 			if recoveredPubs[i].Gen != recoveredPubs[j].Gen {
@@ -1703,21 +1716,19 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	}
 
 	res.Publications = recoveredPubs
-	replyRes, err := protocol.GetResultEncoder(c.transport.Protocol()).EncodeSubscribeResult(res)
-	if err != nil {
-		c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))
-		if chOpts.HistoryRecover {
-			channelContext.setInSubscribe(false)
-		}
-		if pubBufferLocked {
-			channelContext.pubBufferMu.Unlock()
-			pubBufferLocked = false
-		}
-		ctx.disconnect = DisconnectServerError
-		return ctx
-	}
 	if !serverSide {
 		// Write subscription reply only if initiated by client.
+		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol()).EncodeSubscribeResult(res)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))
+			c.syncer.setInSubscribe(channel, false)
+			if pubBufferLocked {
+				c.syncer.unlockPublications(channel, true)
+				pubBufferLocked = false
+			}
+			ctx.disconnect = DisconnectServerError
+			return ctx
+		}
 		_ = rw.write(&protocol.Reply{Result: replyRes})
 	}
 
@@ -1733,28 +1744,28 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		rw.flush()
 	}
 
-	channelContext.Info = channelInfo
-	channelContext.expireAt = expireAt
-	channelContext.recoveryPosition = RecoveryPosition{
-		Seq:   latestSeq,
-		Gen:   latestGen,
-		Epoch: latestEpoch,
+	channelContext := ChannelContext{
+		Info:     channelInfo,
+		expireAt: expireAt,
+		recoveryPosition: RecoveryPosition{
+			Seq:   latestSeq,
+			Gen:   latestGen,
+			Epoch: latestEpoch,
+		},
 	}
 	if chOpts.HistoryRecover {
 		channelContext.positionCheckTime = time.Now().Unix()
 	}
-	c.mu.Lock()
-	c.channels[channel] = channelContext
-	c.mu.Unlock()
 
 	if !serverSide {
+		c.mu.Lock()
+		c.channels[channel] = channelContext
+		c.mu.Unlock()
 		// Stop synching recovery and PUB/SUB.
 		// In case of server side subscription we will do this later.
-		if chOpts.HistoryRecover {
-			channelContext.setInSubscribe(false)
-		}
+		c.syncer.setInSubscribe(channel, false)
 		if pubBufferLocked {
-			channelContext.pubBufferMu.Unlock()
+			c.syncer.unlockPublications(channel, true)
 			pubBufferLocked = false
 		}
 	}
@@ -1766,23 +1777,32 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	ctx.result = res
 	ctx.chOpts = chOpts
 	ctx.clientInfo = info
+	ctx.channelContext = channelContext
 	ctx.pubLocked = pubBufferLocked
 
 	return ctx
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, reply *preparedReply, chOpts *ChannelOptions, channelContext *ChannelContext) error {
-	if chOpts.HistoryRecover && channelContext != nil {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, reply *preparedReply, chOpts *ChannelOptions) error {
+	if chOpts.HistoryRecover {
+		c.mu.Lock()
+		channelContext, ok := c.channels[ch]
+		if !ok {
+			c.mu.Unlock()
+			return nil
+		}
 		currentPositionSequence := uint64Sequence(channelContext.recoveryPosition.Seq, channelContext.recoveryPosition.Gen)
 		nextExpectedSequence := currentPositionSequence + 1
 		pubSequence := uint64Sequence(pub.Seq, pub.Gen)
 		if pubSequence < nextExpectedSequence {
 			// Looks like client already stepped over this sequence – skip sending.
+			c.mu.Unlock()
 			return nil
 		}
 		if pubSequence > nextExpectedSequence {
 			// Oops: sth lost, let client reconnect to recover missed messages.
 			go c.Close(DisconnectInsufficientState)
+			c.mu.Unlock()
 			return nil
 		}
 		channelContext.positionCheckTime = time.Now().Unix()
@@ -1790,36 +1810,28 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, rep
 		channelContext.recoveryPosition.Seq = pub.Seq
 		channelContext.recoveryPosition.Gen = pub.Gen
 		c.channels[ch] = channelContext
+		c.mu.Unlock()
 	}
 	return c.transportSend(reply)
 }
 
 func (c *Client) writePublication(ch string, pub *Publication, reply *preparedReply, chOpts *ChannelOptions) error {
-	if !chOpts.HistoryRecover {
-		// Fast path for channels without recovery.
-		return c.writePublicationUpdatePosition(ch, pub, reply, chOpts, nil)
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	channelContext, ok := c.channels[ch]
-	if !ok {
-		return nil
-	}
-	if channelContext.isInSubscribe() {
+	if c.syncer.isInSubscribe(ch) {
 		// Client currently in process of subscribing to this channel. In this case we keep
 		// publications in slice buffer. Publications from this temporary buffer will be sent in
 		// subscribe reply.
-		channelContext.pubBufferMu.Lock()
-		if channelContext.isInSubscribe() {
-			channelContext.pubBuffer = append(channelContext.pubBuffer, pub)
-		} else {
-			channelContext.pubBufferMu.Unlock()
-			return c.writePublicationUpdatePosition(ch, pub, reply, chOpts, channelContext)
+		c.syncer.lockPublications(ch)
+		if c.syncer.isInSubscribe(ch) {
+			// Sync point not reached yet - put Publication to tmp slice.
+			c.syncer.appendToBufferedPubs(ch, pub)
+			c.syncer.unlockPublications(ch, false)
+			return nil
 		}
-		channelContext.pubBufferMu.Unlock()
-		return nil
+		// Sync point already passed - send Publication into connection.
+		c.syncer.unlockPublications(ch, false)
+		return c.writePublicationUpdatePosition(ch, pub, reply, chOpts)
 	}
-	return c.writePublicationUpdatePosition(ch, pub, reply, chOpts, channelContext)
+	return c.writePublicationUpdatePosition(ch, pub, reply, chOpts)
 }
 
 func (c *Client) writeJoin(ch string, reply *preparedReply) error {
