@@ -51,7 +51,10 @@ func (d *Dissolver) runWorker() {
 	for {
 		job, ok := d.queue.Wait()
 		if !ok {
-			break
+			if d.queue.Closed() {
+				break
+			}
+			continue
 		}
 		err := job()
 		if err != nil {
