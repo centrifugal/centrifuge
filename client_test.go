@@ -1251,23 +1251,6 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 	assert.Equal(t, DisconnectBadRequest, disconnect)
 }
 
-func TestUnique(t *testing.T) {
-	pubs := []*Publication{
-		{Seq: 101, Gen: 0},
-		{Seq: 101, Gen: 1},
-		{Seq: 101, Gen: 1},
-		{Seq: 100, Gen: 2},
-		{Seq: 99},
-		{Seq: 98},
-		{Seq: 4294967295, Gen: 0},
-		{Seq: 4294967295, Gen: 1},
-		{Seq: 4294967295, Gen: 4294967295},
-		{Seq: 4294967295, Gen: 4294967295},
-	}
-	pubs = uniquePublications(pubs)
-	assert.Equal(t, 8, len(pubs))
-}
-
 var recoverTests = []struct {
 	Name            string
 	HistorySize     int
