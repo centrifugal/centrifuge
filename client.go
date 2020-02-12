@@ -79,6 +79,7 @@ const maxCheckPositionFailures int64 = 2
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
 	Info                  Raw
+	serverSide            bool
 	expireAt              int64
 	positionCheckTime     int64
 	positionCheckFailures int64
@@ -109,8 +110,6 @@ type Client struct {
 
 	channels map[string]ChannelContext
 
-	syncer *recovery.PubSubSync
-
 	staleTimer    *time.Timer
 	expireTimer   *time.Timer
 	presenceTimer *time.Timer
@@ -118,6 +117,7 @@ type Client struct {
 	disconnect    *Disconnect
 	eventHub      *ClientEventHub
 	messageWriter *writer
+	syncer        *recovery.PubSubSync
 }
 
 // NewClient initializes new Client.
@@ -304,7 +304,6 @@ func (c *Client) addPresenceUpdate() {
 	c.presenceTimer = time.AfterFunc(presenceInterval, c.updatePresence)
 }
 
-// Lock must be held outside.
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext ChannelContext) bool {
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {
@@ -1344,6 +1343,41 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	return nil
 }
 
+// Subscribe client to channel.
+func (c *Client) Subscribe(channel string) error {
+	subCmd := &protocol.SubscribeRequest{
+		Channel: channel,
+	}
+	subCtx := c.subscribeCmd(subCmd, nil, true)
+	if subCtx.err != nil {
+		return subCtx.err
+	}
+	defer c.syncer.StopBuffering(channel)
+	c.mu.Lock()
+	c.channels[channel] = subCtx.channelContext
+	c.mu.Unlock()
+	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol())
+	sub := &protocol.Sub{
+		Seq:         subCtx.result.GetSeq(),
+		Gen:         subCtx.result.GetGen(),
+		Epoch:       subCtx.result.GetEpoch(),
+		Recoverable: subCtx.result.GetRecoverable(),
+	}
+	data, err := pushEncoder.EncodeSub(sub)
+	if err != nil {
+		return err
+	}
+	result, err := pushEncoder.Encode(clientproto.NewSubPush(channel, data))
+	if err != nil {
+		return err
+	}
+	reply := newPreparedReply(&protocol.Reply{
+		Result: result,
+	}, c.transport.Protocol())
+	c.transportEnqueue(reply)
+	return nil
+}
+
 // refreshCmd handle refresh command to update connection with new
 // timestamp - this is only required when connection lifetime option set.
 func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshResponse, *Disconnect) {
@@ -1501,7 +1535,7 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 		channelInfo = token.Info
 	}
 
-	if c.eventHub.subscribeHandler != nil {
+	if !serverSide && c.eventHub.subscribeHandler != nil {
 		reply := c.eventHub.subscribeHandler(SubscribeEvent{
 			Channel: cmd.Channel,
 		})
@@ -1611,7 +1645,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		c.syncer.StartBuffering(channel)
 	}
 
-	err := c.node.addSubscription(channel, c, false)
+	err := c.node.addSubscription(channel, c)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.syncer.StopBuffering(channel)
@@ -1729,8 +1763,9 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	}
 
 	channelContext := ChannelContext{
-		Info:     channelInfo,
-		expireAt: expireAt,
+		Info:       channelInfo,
+		serverSide: serverSide,
+		expireAt:   expireAt,
 		recoveryPosition: RecoveryPosition{
 			Seq:   latestSeq,
 			Gen:   latestGen,
@@ -1934,7 +1969,8 @@ func (c *Client) unsubscribe(channel string) error {
 
 	c.mu.RLock()
 	info := c.clientInfo(channel)
-	_, ok = c.channels[channel]
+	chCtx, ok := c.channels[channel]
+	serverSide := chCtx.serverSide
 	c.mu.RUnlock()
 
 	if ok {
@@ -1962,7 +1998,7 @@ func (c *Client) unsubscribe(channel string) error {
 			return err
 		}
 
-		if c.eventHub.unsubscribeHandler != nil {
+		if !serverSide && c.eventHub.unsubscribeHandler != nil {
 			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
 				Channel: channel,
 			})

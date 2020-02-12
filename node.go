@@ -644,12 +644,12 @@ func (n *Node) removeClient(c *Client) error {
 
 // addSubscription registers subscription of connection on channel in both
 // hub and engine.
-func (n *Node) addSubscription(ch string, c *Client, serverSide bool) error {
+func (n *Node) addSubscription(ch string, c *Client) error {
 	actionCount.WithLabelValues("add_subscription").Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	first, err := n.hub.addSub(ch, c, serverSide)
+	first, err := n.hub.addSub(ch, c)
 	if err != nil {
 		return err
 	}

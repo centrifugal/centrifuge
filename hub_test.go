@@ -96,8 +96,8 @@ func TestHubSubscriptions(t *testing.T) {
 	h := newHub()
 	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
-	h.addSub("test1", c, false)
-	h.addSub("test2", c, false)
+	h.addSub("test1", c)
+	h.addSub("test2", c)
 	assert.Equal(t, 2, h.NumChannels())
 	channels := []string{}
 	for _, ch := range h.Channels() {

@@ -48,7 +48,7 @@ type Hub struct {
 	users map[string]map[string]struct{}
 
 	// registry to hold active subscriptions of clients to channels.
-	subs map[string]map[string]bool
+	subs map[string]map[string]struct{}
 }
 
 // newHub initializes Hub.
@@ -56,7 +56,7 @@ func newHub() *Hub {
 	return &Hub{
 		conns: make(map[string]*Client),
 		users: make(map[string]map[string]struct{}),
-		subs:  make(map[string]map[string]bool),
+		subs:  make(map[string]map[string]struct{}),
 	}
 }
 
@@ -210,7 +210,7 @@ func (h *Hub) userConnections(userID string) map[string]*Client {
 }
 
 // addSub adds connection into clientHub subscriptions registry.
-func (h *Hub) addSub(ch string, c *Client, serverSide bool) (bool, error) {
+func (h *Hub) addSub(ch string, c *Client) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -220,9 +220,9 @@ func (h *Hub) addSub(ch string, c *Client, serverSide bool) (bool, error) {
 
 	_, ok := h.subs[ch]
 	if !ok {
-		h.subs[ch] = make(map[string]bool)
+		h.subs[ch] = make(map[string]struct{})
 	}
-	h.subs[ch][uid] = serverSide
+	h.subs[ch][uid] = struct{}{}
 	if !ok {
 		return true, nil
 	}

@@ -8,6 +8,8 @@ github.com/centrifugal/protocol v0.1.1-0.20200206181231-c70e9daca9fc h1:LiAIh50+
 github.com/centrifugal/protocol v0.1.1-0.20200206181231-c70e9daca9fc/go.mod h1:2YbBCaDwQHl37ErRdMrKSj18X2yVvpkQYtSX6aVbe5A=
 github.com/centrifugal/protocol v0.1.1-0.20200206221747-8b2385ed4a60 h1:VP2z8MK4wYasg+Csd157s5VKAGRUWiSjHnP33mgVxnI=
 github.com/centrifugal/protocol v0.1.1-0.20200206221747-8b2385ed4a60/go.mod h1:2YbBCaDwQHl37ErRdMrKSj18X2yVvpkQYtSX6aVbe5A=
+github.com/centrifugal/protocol v0.1.1-0.20200212064257-6d887fe34a20 h1:+x/qzpzUlyzxdTDuI78nWHnPuIKbusB1RDwThfOEL44=
+github.com/centrifugal/protocol v0.1.1-0.20200212064257-6d887fe34a20/go.mod h1:2YbBCaDwQHl37ErRdMrKSj18X2yVvpkQYtSX6aVbe5A=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
