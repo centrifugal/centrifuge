@@ -132,7 +132,7 @@ func (h *Hub) disconnect(user string, reconnect bool) error {
 func (h *Hub) unsubscribe(user string, ch string) error {
 	userConnections := h.userConnections(user)
 	for _, c := range userConnections {
-		err := c.Unsubscribe(ch, false)
+		err := c.Unsubscribe(ch)
 		if err != nil {
 			return err
 		}

@@ -395,7 +395,13 @@ func (c *Client) Send(data Raw) error {
 }
 
 // Unsubscribe allows to unsubscribe client from channel.
-func (c *Client) Unsubscribe(ch string, resubscribe bool) error {
+func (c *Client) Unsubscribe(ch string, opts ...UnsubscribeOption) error {
+
+	unsubscribeOpts := &UnsubscribeOptions{}
+	for _, opt := range opts {
+		opt(unsubscribeOpts)
+	}
+
 	c.mu.RLock()
 	if c.closed {
 		c.mu.RUnlock()
@@ -407,7 +413,7 @@ func (c *Client) Unsubscribe(ch string, resubscribe bool) error {
 	if err != nil {
 		return err
 	}
-	return c.sendUnsub(ch, resubscribe)
+	return c.sendUnsub(ch, unsubscribeOpts.Resubscribe)
 }
 
 func (c *Client) sendUnsub(ch string, resubscribe bool) error {

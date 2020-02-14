@@ -780,7 +780,7 @@ func TestClientUnsubscribe(t *testing.T) {
 	subscribeClient(t, client, "test")
 	assert.Equal(t, 1, len(client.Channels()))
 
-	err := client.Unsubscribe("test", false)
+	err := client.Unsubscribe("test")
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(client.Channels()))
 	assert.Equal(t, 1, node.Hub().NumClients())
