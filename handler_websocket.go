@@ -6,8 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/timers"
 	"github.com/gorilla/websocket"
+
+	"github.com/centrifugal/centrifuge/internal/timers"
 )
 
 const (

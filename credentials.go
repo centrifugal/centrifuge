@@ -10,7 +10,7 @@ type Credentials struct {
 	// In this case OnRefresh callback must be set by application.
 	ExpireAt int64
 	// Info contains additional information about connection. It will be
-	// included into Join/Leave messages, into Presense information, also
+	// included into Join/Leave messages, into Presence information, also
 	// info becomes a part of published message if it was published from
 	// client directly. In some cases having additional info can be an
 	// overhead – but you are simply free to not use it.

@@ -122,7 +122,6 @@ type Client struct {
 
 // NewClient initializes new Client.
 func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
-
 	uuidObject, err := uuid.NewV4()
 	if err != nil {
 		return nil, err
@@ -396,7 +395,6 @@ func (c *Client) Send(data Raw) error {
 
 // Unsubscribe allows to unsubscribe client from channel.
 func (c *Client) Unsubscribe(ch string, opts ...UnsubscribeOption) error {
-
 	unsubscribeOpts := &UnsubscribeOptions{}
 	for _, opt := range opts {
 		opt(unsubscribeOpts)
@@ -697,7 +695,7 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 	case protocol.MethodTypeRPC:
 		disconnect = c.handleRPC(params, rw)
 	case protocol.MethodTypeSend:
-		disconnect = c.handleSend(params, rw)
+		disconnect = c.handleSend(params)
 	default:
 		rw.write(&protocol.Reply{Error: ErrorMethodNotFound})
 	}
@@ -706,7 +704,6 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 }
 
 func (c *Client) expire() {
-
 	c.mu.RLock()
 	closed := c.closed
 	c.mu.RUnlock()
@@ -1051,7 +1048,7 @@ func (c *Client) handleRPC(params Raw, rw *replyWriter) *Disconnect {
 	return nil
 }
 
-func (c *Client) handleSend(params Raw, rw *replyWriter) *Disconnect {
+func (c *Client) handleSend(params Raw) *Disconnect {
 	if c.eventHub.messageHandler != nil {
 		cmd, err := protocol.GetParamsDecoder(c.transport.Protocol()).DecodeSend(params)
 		if err != nil {
@@ -1178,7 +1175,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 			c.info = token.Info
 			c.mu.Unlock()
 		}
-
 	} else {
 		if !insecure && !clientAnonymous {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
@@ -1594,7 +1590,6 @@ func incRecoverCount(recovered bool) {
 
 type subscribeContext struct {
 	result         *protocol.SubscribeResult
-	pubLocked      bool
 	chOpts         ChannelOptions
 	clientInfo     *ClientInfo
 	err            *Error
@@ -1883,11 +1878,11 @@ func (c *Client) writePublications(ctx context.Context) {
 	}
 }
 
-func (c *Client) writeJoin(ch string, reply *preparedReply) error {
+func (c *Client) writeJoin(_ string, reply *preparedReply) error {
 	return c.transportEnqueue(reply)
 }
 
-func (c *Client) writeLeave(ch string, reply *preparedReply) error {
+func (c *Client) writeLeave(_ string, reply *preparedReply) error {
 	return c.transportEnqueue(reply)
 }
 
@@ -2017,7 +2012,7 @@ func (c *Client) unsubscribe(channel string) error {
 }
 
 // unsubscribeCmd handles unsubscribe command from client - it allows to
-// unsubscribe connection from channel
+// unsubscribe connection from channel.
 func (c *Client) unsubscribeCmd(cmd *protocol.UnsubscribeRequest) (*clientproto.UnsubscribeResponse, *Disconnect) {
 
 	channel := cmd.Channel
@@ -2042,9 +2037,7 @@ func (c *Client) unsubscribeCmd(cmd *protocol.UnsubscribeRequest) (*clientproto.
 }
 
 // publishCmd handles publish command - clients can publish messages into
-// channels themselves if `publish` allowed by channel options. In most cases clients not
-// allowed to publish into channels directly - web application publishes messages
-// itself via HTTP API or Redis.
+// channels themselves if `publish` allowed by channel options.
 func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishResponse, *Disconnect) {
 
 	ch := cmd.Channel
@@ -2262,6 +2255,6 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 }
 
 // pingCmd handles ping command from client.
-func (c *Client) pingCmd(cmd *protocol.PingRequest) (*clientproto.PingResponse, *Disconnect) {
+func (c *Client) pingCmd(_ *protocol.PingRequest) (*clientproto.PingResponse, *Disconnect) {
 	return &clientproto.PingResponse{}, nil
 }

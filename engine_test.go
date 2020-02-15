@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/uuid"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/centrifugal/centrifuge/internal/uuid"
 )
 
 type testMessage struct {
@@ -45,7 +46,7 @@ func (s *testStore) add(m testMessage) (int, string) {
 }
 
 func (s *testStore) get() []testMessage {
-	if time.Now().Sub(s.expireAt) < 0 {
+	if time.Since(s.expireAt) < 0 {
 		return s.messages
 	}
 	return nil

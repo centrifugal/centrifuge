@@ -8,7 +8,6 @@ import (
 
 const (
 	maxSeq uint32 = math.MaxUint32 // maximum uint32 value
-	maxGen uint32 = math.MaxUint32 // maximum uint32 value
 )
 
 func nextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {

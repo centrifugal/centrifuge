@@ -677,7 +677,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	if empty {
 		submittedAt := time.Now()
 		n.subDissolver.Submit(func() error {
-			timeSpent := time.Now().Sub(submittedAt)
+			timeSpent := time.Since(submittedAt)
 			if timeSpent < time.Second {
 				time.Sleep(time.Second - timeSpent)
 			}
