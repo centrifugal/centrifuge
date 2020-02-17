@@ -60,4 +60,4 @@ ignored = ["github.com/centrifugal/centrifuge/examples*"]
 
 [[constraint]]
   name = "github.com/centrifugal/protocol"
-  version = "0.1.0"
+  version = "0.2.0"
