@@ -5,37 +5,10 @@ import (
 	"sync"
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
+	"github.com/centrifugal/centrifuge/internal/prepared"
 
 	"github.com/centrifugal/protocol"
 )
-
-// preparedReply is structure for protoTypeoding reply only once.
-type preparedReply struct {
-	ProtoType ProtocolType
-	Reply     *protocol.Reply
-	data      []byte
-	once      sync.Once
-}
-
-// newPreparedReply initializes PreparedReply.
-func newPreparedReply(reply *protocol.Reply, protoType ProtocolType) *preparedReply {
-	return &preparedReply{
-		Reply:     reply,
-		ProtoType: protoType,
-	}
-}
-
-// Data returns data associated with reply which is only calculated once.
-func (r *preparedReply) Data() []byte {
-	r.once.Do(func() {
-		encoder := protocol.GetReplyEncoder(r.ProtoType)
-		encoder.Encode(r.Reply)
-		data := encoder.Finish()
-		protocol.PutReplyEncoder(r.ProtoType, encoder)
-		r.data = data
-	})
-	return r.data
-}
 
 // Hub manages client connections.
 type Hub struct {
@@ -267,8 +240,8 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 		return nil
 	}
 
-	var jsonPublicationReply *preparedReply
-	var protobufPublicationReply *preparedReply
+	var jsonPublicationReply *prepared.Reply
+	var protobufPublicationReply *prepared.Reply
 
 	// Iterate over channel subscribers and send message.
 	for uid := range channelSubscriptions {
@@ -290,7 +263,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 				reply := &protocol.Reply{
 					Result: messageBytes,
 				}
-				jsonPublicationReply = newPreparedReply(reply, protocol.TypeJSON)
+				jsonPublicationReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
 			c.writePublication(channel, pub, jsonPublicationReply, chOpts)
 		} else if protoType == protocol.TypeProtobuf {
@@ -306,7 +279,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 				reply := &protocol.Reply{
 					Result: messageBytes,
 				}
-				protobufPublicationReply = newPreparedReply(reply, protocol.TypeProtobuf)
+				protobufPublicationReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
 			c.writePublication(channel, pub, protobufPublicationReply, chOpts)
 		}
@@ -324,8 +297,8 @@ func (h *Hub) broadcastJoin(channel string, join *Join) error {
 		return nil
 	}
 
-	var jsonReply *preparedReply
-	var protobufReply *preparedReply
+	var jsonReply *prepared.Reply
+	var protobufReply *prepared.Reply
 
 	for uid := range channelSubscriptions {
 		c, ok := h.conns[uid]
@@ -346,7 +319,7 @@ func (h *Hub) broadcastJoin(channel string, join *Join) error {
 				reply := &protocol.Reply{
 					Result: messageBytes,
 				}
-				jsonReply = newPreparedReply(reply, protocol.TypeJSON)
+				jsonReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
 			c.writeJoin(channel, jsonReply)
 		} else if protoType == protocol.TypeProtobuf {
@@ -362,7 +335,7 @@ func (h *Hub) broadcastJoin(channel string, join *Join) error {
 				reply := &protocol.Reply{
 					Result: messageBytes,
 				}
-				protobufReply = newPreparedReply(reply, protocol.TypeProtobuf)
+				protobufReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
 			c.writeJoin(channel, protobufReply)
 		}
@@ -380,8 +353,8 @@ func (h *Hub) broadcastLeave(channel string, leave *Leave) error {
 		return nil
 	}
 
-	var jsonReply *preparedReply
-	var protobufReply *preparedReply
+	var jsonReply *prepared.Reply
+	var protobufReply *prepared.Reply
 
 	for uid := range channelSubscriptions {
 		c, ok := h.conns[uid]
@@ -402,7 +375,7 @@ func (h *Hub) broadcastLeave(channel string, leave *Leave) error {
 				reply := &protocol.Reply{
 					Result: messageBytes,
 				}
-				jsonReply = newPreparedReply(reply, protocol.TypeJSON)
+				jsonReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
 			c.writeLeave(channel, jsonReply)
 		} else if protoType == protocol.TypeProtobuf {
@@ -418,7 +391,7 @@ func (h *Hub) broadcastLeave(channel string, leave *Leave) error {
 				reply := &protocol.Reply{
 					Result: messageBytes,
 				}
-				protobufReply = newPreparedReply(reply, protocol.TypeProtobuf)
+				protobufReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
 			c.writeLeave(channel, protobufReply)
 		}

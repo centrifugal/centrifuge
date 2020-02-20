@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
+	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
@@ -106,7 +106,7 @@ type Client struct {
 	info Raw
 
 	publicationsOnce sync.Once
-	publications     chan preparedPublication
+	publications     *pubQueue
 
 	channels map[string]ChannelContext
 
@@ -130,13 +130,14 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	config := n.Config()
 
 	c := &Client{
-		ctx:       ctx,
-		uid:       uuidObject.String(),
-		node:      n,
-		transport: t,
-		eventHub:  &ClientEventHub{},
-		channels:  make(map[string]ChannelContext),
-		syncer:    recovery.NewPubSubSync(),
+		ctx:          ctx,
+		uid:          uuidObject.String(),
+		node:         n,
+		transport:    t,
+		eventHub:     &ClientEventHub{},
+		channels:     make(map[string]ChannelContext),
+		syncer:       recovery.NewPubSubSync(),
+		publications: newPubQueue(),
 	}
 
 	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
@@ -195,7 +196,7 @@ func (c *Client) closeUnauthenticated() {
 	}
 }
 
-func (c *Client) transportEnqueue(reply *preparedReply) error {
+func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	data := reply.Data()
 	disconnect := c.messageWriter.enqueue(data)
 	if disconnect != nil {
@@ -386,7 +387,7 @@ func (c *Client) Send(data Raw) error {
 		return err
 	}
 
-	reply := newPreparedReply(&protocol.Reply{
+	reply := prepared.NewReply(&protocol.Reply{
 		Result: result,
 	}, c.transport.Protocol())
 
@@ -426,7 +427,7 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 		return err
 	}
 
-	reply := newPreparedReply(&protocol.Reply{
+	reply := prepared.NewReply(&protocol.Reply{
 		Result: result,
 	}, c.transport.Protocol())
 
@@ -491,6 +492,8 @@ func (c *Client) Close(disconnect *Disconnect) error {
 
 	// Close writer and send messages remaining in writer queue if any.
 	c.messageWriter.close()
+
+	c.publications.Close()
 
 	c.transport.Close(disconnect)
 
@@ -1373,7 +1376,7 @@ func (c *Client) Subscribe(channel string) error {
 	if err != nil {
 		return err
 	}
-	reply := newPreparedReply(&protocol.Reply{
+	reply := prepared.NewReply(&protocol.Reply{
 		Result: result,
 	}, c.transport.Protocol())
 	c.transportEnqueue(reply)
@@ -1643,6 +1646,12 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		// Start synching recovery and PUB/SUB.
 		// The important thing is to call StopBuffering for this channel
 		// after response with Publications written to connection.
+		c.publicationsOnce.Do(func() {
+			// We need extra processing for Publications in channels with recovery feature on.
+			// This extra processing routine help us to do all necessary actions without blocking
+			// broadcasts inside Hub for a long time.
+			go c.processPublications()
+		})
 		c.syncer.StartBuffering(channel)
 	}
 
@@ -1726,16 +1735,13 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 
 		c.syncer.LockBuffer(channel)
 		bufferedPubs := c.syncer.ReadBuffered(channel)
-		if len(bufferedPubs) > 0 {
-			recoveredPubs = append(recoveredPubs, bufferedPubs...)
+		var okMerge bool
+		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		if !okMerge {
+			c.syncer.StopBuffering(channel)
+			ctx.disconnect = DisconnectServerError
+			return ctx
 		}
-		sort.Slice(recoveredPubs, func(i, j int) bool {
-			if recoveredPubs[i].Gen != recoveredPubs[j].Gen {
-				return recoveredPubs[i].Gen > recoveredPubs[j].Gen
-			}
-			return recoveredPubs[i].Seq > recoveredPubs[j].Seq
-		})
-		recoveredPubs = recovery.UniquePublications(recoveredPubs)
 	}
 
 	res.Publications = recoveredPubs
@@ -1744,7 +1750,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol()).EncodeSubscribeResult(res)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))
-			c.syncer.StopBuffering(channel)
+			if !serverSide {
+				// Will be called later in case of server side sub.
+				c.syncer.StopBuffering(channel)
+			}
 			ctx.disconnect = DisconnectServerError
 			return ctx
 		}
@@ -1797,7 +1806,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	return ctx
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, reply *preparedReply, chOpts *ChannelOptions) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, reply *prepared.Reply, chOpts *ChannelOptions) error {
 	if !chOpts.HistoryRecover {
 		return c.transportEnqueue(reply)
 	}
@@ -1807,9 +1816,9 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, rep
 		c.mu.Unlock()
 		return nil
 	}
-	currentPositionSequence := uint64Sequence(channelContext.recoveryPosition.Seq, channelContext.recoveryPosition.Gen)
+	currentPositionSequence := recovery.Uint64Sequence(channelContext.recoveryPosition.Seq, channelContext.recoveryPosition.Gen)
 	nextExpectedSequence := currentPositionSequence + 1
-	pubSequence := uint64Sequence(pub.Seq, pub.Gen)
+	pubSequence := recovery.Uint64Sequence(pub.Seq, pub.Gen)
 	if pubSequence < nextExpectedSequence {
 		// Looks like client already stepped over this sequence – skip sending.
 		c.mu.Unlock()
@@ -1830,63 +1839,51 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, rep
 	return c.transportEnqueue(reply)
 }
 
-type preparedPublication struct {
-	reply   *preparedReply
-	channel string
-	pub     *Publication
-	chOpts  *ChannelOptions
-}
+// 10Mb, should not be achieved in normal conditions, if the limit
+// is reached then this is a signal to scale.
+const maxPubQueueSize = 10485760
 
-func (c *Client) writePublication(ch string, pub *Publication, reply *preparedReply, chOpts *ChannelOptions) error {
+func (c *Client) writePublication(ch string, pub *Publication, reply *prepared.Reply, chOpts *ChannelOptions) error {
 	if !chOpts.HistoryRecover {
 		return c.transportEnqueue(reply)
 	}
-	c.publicationsOnce.Do(func() {
-		// We need extra processing for Publications in channels with recovery feature on.
-		// This extra processing routine help us to do all necessary actions without blocking
-		// broadcasts inside Hub for a long time.
-		c.publications = make(chan preparedPublication, 128)
-		go c.writePublications(c.ctx)
-	})
-	select {
-	case c.publications <- preparedPublication{
+	c.publications.Add(preparedPub{
 		reply:   reply,
 		channel: ch,
 		pub:     pub,
 		chOpts:  chOpts,
-	}:
-	default:
-		go c.Close(DisconnectSlow)
+	})
+	if c.publications.Size() > maxPubQueueSize {
+		go c.Close(DisconnectServerError)
 	}
 	return nil
 }
 
-func (c *Client) writePublications(ctx context.Context) {
+func (c *Client) processPublications() {
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case p := <-c.publications:
-			if !p.chOpts.HistoryRecover {
-				// Fast path.
-				c.writePublicationUpdatePosition(p.channel, p.pub, p.reply, p.chOpts)
+		// Wait for pub from queue.
+		p, ok := c.publications.Wait()
+		if !ok {
+			if c.publications.Closed() {
+				return
 			}
-			c.syncer.SyncPublication(p.channel, p.pub, func() {
-				c.writePublicationUpdatePosition(p.channel, p.pub, p.reply, p.chOpts)
-			})
+			continue
 		}
+		c.syncer.SyncPublication(p.channel, p.pub, func() {
+			c.writePublicationUpdatePosition(p.channel, p.pub, p.reply, p.chOpts)
+		})
 	}
 }
 
-func (c *Client) writeJoin(_ string, reply *preparedReply) error {
+func (c *Client) writeJoin(_ string, reply *prepared.Reply) error {
 	return c.transportEnqueue(reply)
 }
 
-func (c *Client) writeLeave(_ string, reply *preparedReply) error {
+func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
 	return c.transportEnqueue(reply)
 }
 
-func (c *Client) writeMessage(reply *preparedReply) error {
+func (c *Client) writeMessage(reply *prepared.Reply) error {
 	return c.transportEnqueue(reply)
 }
 
