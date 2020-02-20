@@ -130,14 +130,13 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	config := n.Config()
 
 	c := &Client{
-		ctx:          ctx,
-		uid:          uuidObject.String(),
-		node:         n,
-		transport:    t,
-		eventHub:     &ClientEventHub{},
-		channels:     make(map[string]ChannelContext),
-		syncer:       recovery.NewPubSubSync(),
-		publications: newPubQueue(),
+		ctx:       ctx,
+		uid:       uuidObject.String(),
+		node:      n,
+		transport: t,
+		eventHub:  &ClientEventHub{},
+		channels:  make(map[string]ChannelContext),
+		syncer:    recovery.NewPubSubSync(),
 	}
 
 	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
@@ -1138,10 +1137,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 
 	if credentials == nil {
 		// Try to find Credentials in context.
-		if val := c.ctx.Value(credentialsContextKey); val != nil {
-			if creds, ok := val.(*Credentials); ok {
-				credentials = creds
-			}
+		if creds, ok := GetCredentials(c.ctx); ok {
+			credentials = creds
 		}
 	}
 
@@ -1643,15 +1640,16 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	}
 
 	if chOpts.HistoryRecover {
-		// Start synching recovery and PUB/SUB.
-		// The important thing is to call StopBuffering for this channel
-		// after response with Publications written to connection.
 		c.publicationsOnce.Do(func() {
 			// We need extra processing for Publications in channels with recovery feature on.
 			// This extra processing routine help us to do all necessary actions without blocking
 			// broadcasts inside Hub for a long time.
+			c.publications = newPubQueue()
 			go c.processPublications()
 		})
+		// Start synching recovery and PUB/SUB.
+		// The important thing is to call StopBuffering for this channel
+		// after response with Publications written to connection.
 		c.syncer.StartBuffering(channel)
 	}
 
@@ -1847,12 +1845,22 @@ func (c *Client) writePublication(ch string, pub *Publication, reply *prepared.R
 	if !chOpts.HistoryRecover {
 		return c.transportEnqueue(reply)
 	}
-	c.publications.Add(preparedPub{
+	c.publicationsOnce.Do(func() {
+		// We need extra processing for Publications in channels with recovery feature on.
+		// This extra processing routine help us to do all necessary actions without blocking
+		// broadcasts inside Hub for a long time.
+		c.publications = newPubQueue()
+		go c.processPublications()
+	})
+	ok := c.publications.Add(preparedPub{
 		reply:   reply,
 		channel: ch,
 		pub:     pub,
 		chOpts:  chOpts,
 	})
+	if !ok {
+		return nil
+	}
 	if c.publications.Size() > maxPubQueueSize {
 		go c.Close(DisconnectServerError)
 	}

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Config contains Application configuration options.
+// Config contains Node configuration options.
 type Config struct {
 	// Version of server – will be sent to client on connection establishement
 	// phase in response to connect request.
@@ -16,11 +16,11 @@ type Config struct {
 	// Name of this server node - must be unique, used as human readable
 	// and meaningful node identificator.
 	Name string
-	// TokenHMACSecretKey is a secret key used to validate connection and subscription tokens generated using HMAC.
-	// Zero value means that HMAC tokens won't be allowed.
+	// TokenHMACSecretKey is a secret key used to validate connection and subscription
+	// tokens generated using HMAC. Zero value means that HMAC tokens won't be allowed.
 	TokenHMACSecretKey string
-	// TokenRSAPublicKey is a public key used to validate connection and subscription tokens generated using RSA.
-	// Zero value means that RSA tokens won't be allowed.
+	// TokenRSAPublicKey is a public key used to validate connection and subscription
+	// tokens generated using RSA. Zero value means that RSA tokens won't be allowed.
 	TokenRSAPublicKey *rsa.PublicKey
 	// ChannelOptions embedded.
 	ChannelOptions
@@ -162,8 +162,6 @@ var DefaultConfig = Config{
 	ChannelUserSeparator:      ",", // so several users limited channel is "dialog#2694,3019"
 	UserPersonalChannelPrefix: "",  // so personal channel by default will be like #3019
 
-	ClientInsecure:                  false,
-	ClientAnonymous:                 false,
 	ClientPresencePingInterval:      25 * time.Second,
 	ClientPresenceExpireInterval:    60 * time.Second,
 	ClientExpiredCloseDelay:         25 * time.Second,

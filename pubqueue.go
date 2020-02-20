@@ -87,29 +87,6 @@ func (q *pubQueue) Close() {
 	q.cond.Broadcast()
 }
 
-// CloseRemaining will close the queue and return all entried in the queue.
-// All goroutines in wait() will return.
-func (q *pubQueue) CloseRemaining() []preparedPub {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.closed {
-		return []preparedPub{}
-	}
-	rem := make([]preparedPub, 0, q.cnt)
-	for q.cnt > 0 {
-		i := q.nodes[q.head]
-		q.head = (q.head + 1) % len(q.nodes)
-		q.cnt--
-		rem = append(rem, i)
-	}
-	q.closed = true
-	q.cnt = 0
-	q.nodes = nil
-	q.size = 0
-	q.cond.Broadcast()
-	return rem
-}
-
 // Closed returns true if the queue has been closed
 // The call cannot guarantee that the queue hasn't been
 // closed while the function returns, so only "true" has a definite meaning.
@@ -160,22 +137,6 @@ func (q *pubQueue) Remove() (preparedPub, bool) {
 
 	q.mu.Unlock()
 	return i, true
-}
-
-// Return the capacity (without allocations)
-func (q *pubQueue) Cap() int {
-	q.mu.RLock()
-	c := cap(q.nodes)
-	q.mu.RUnlock()
-	return c
-}
-
-// Return the current length of the queue.
-func (q *pubQueue) Len() int {
-	q.mu.RLock()
-	l := q.cnt
-	q.mu.RUnlock()
-	return l
 }
 
 // Return the current size of the queue.

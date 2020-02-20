@@ -30,3 +30,12 @@ func SetCredentials(ctx context.Context, creds *Credentials) context.Context {
 	ctx = context.WithValue(ctx, credentialsContextKey, creds)
 	return ctx
 }
+
+// GetCredentials allows to get previously set Credentials from context.
+func GetCredentials(ctx context.Context) (*Credentials, bool) {
+	if val := ctx.Value(credentialsContextKey); val != nil {
+		creds, ok := val.(*Credentials)
+		return creds, ok
+	}
+	return nil, false
+}
