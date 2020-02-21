@@ -130,13 +130,14 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	config := n.Config()
 
 	c := &Client{
-		ctx:       ctx,
-		uid:       uuidObject.String(),
-		node:      n,
-		transport: t,
-		eventHub:  &ClientEventHub{},
-		channels:  make(map[string]ChannelContext),
-		syncer:    recovery.NewPubSubSync(),
+		ctx:          ctx,
+		uid:          uuidObject.String(),
+		node:         n,
+		transport:    t,
+		eventHub:     &ClientEventHub{},
+		channels:     make(map[string]ChannelContext),
+		syncer:       recovery.NewPubSubSync(),
+		publications: newPubQueue(),
 	}
 
 	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
@@ -1644,7 +1645,6 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			// We need extra processing for Publications in channels with recovery feature on.
 			// This extra processing routine help us to do all necessary actions without blocking
 			// broadcasts inside Hub for a long time.
-			c.publications = newPubQueue()
 			go c.processPublications()
 		})
 		// Start synching recovery and PUB/SUB.
@@ -1849,7 +1849,6 @@ func (c *Client) writePublication(ch string, pub *Publication, reply *prepared.R
 		// We need extra processing for Publications in channels with recovery feature on.
 		// This extra processing routine help us to do all necessary actions without blocking
 		// broadcasts inside Hub for a long time.
-		c.publications = newPubQueue()
 		go c.processPublications()
 	})
 	ok := c.publications.Add(preparedPub{
