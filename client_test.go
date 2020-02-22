@@ -604,15 +604,21 @@ func TestServerSideSubscriptions(t *testing.T) {
 			if strings.Contains(string(data), "test message 2") {
 				i++
 			}
-			if i == 2 {
+			if strings.Contains(string(data), "test message 3") {
+				i++
+			}
+			if i == 3 {
 				close(done)
 			}
 		}
 	}()
 
+	client.Subscribe("server-side-3")
 	err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
 	assert.NoError(t, err)
 	err = node.Publish("server-side-2", []byte(`{"text": "test message 2"}`))
+	assert.NoError(t, err)
+	err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
 	assert.NoError(t, err)
 
 	select {
