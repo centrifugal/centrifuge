@@ -14,8 +14,9 @@ import (
 
 	_ "net/http/pprof"
 
-	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/centrifugal/centrifuge"
 )
 
 type clientMessage struct {
@@ -32,7 +33,7 @@ func authMiddleware(h http.Handler) http.Handler {
 		ctx := r.Context()
 		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
 			UserID:   "42",
-			ExpireAt: time.Now().Unix() + 10,
+			ExpireAt: time.Now().Unix() + 60,
 			Info:     []byte(`{"name": "Alexander"}`),
 		})
 		r = r.WithContext(newCtx)
@@ -59,7 +60,7 @@ func main() {
 	// not required if you don't use token authentication and
 	// private subscriptions verified by token.
 	cfg.TokenHMACSecretKey = "secret"
-	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
 
 	cfg.JoinLeave = true
@@ -86,8 +87,9 @@ func main() {
 	node, _ := centrifuge.New(cfg)
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		// Subscribe to several server-side channels.
 		subs := []centrifuge.Subscription{}
-		for i := 0; i < 1; i++ {
+		for i := 0; i < 3; i++ {
 			subs = append(subs, centrifuge.Subscription{Channel: "server-side-" + strconv.Itoa(i)})
 		}
 		return centrifuge.ConnectReply{
@@ -99,7 +101,7 @@ func main() {
 	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
 		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
 		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 10,
+			ExpireAt: time.Now().Unix() + 60,
 		}
 	})
 
@@ -108,14 +110,14 @@ func main() {
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			return centrifuge.SubscribeReply{
-				ExpireAt: time.Now().Unix() + 10,
+				ExpireAt: time.Now().Unix() + 60,
 			}
 		})
 
 		client.On().SubRefresh(func(e centrifuge.SubRefreshEvent) centrifuge.SubRefreshReply {
 			log.Printf("user %s subscription on channel %s is going to expire, refreshing", client.UserID(), e.Channel)
 			return centrifuge.SubRefreshReply{
-				ExpireAt: time.Now().Unix() + 10,
+				ExpireAt: time.Now().Unix() + 60,
 			}
 		})
 
@@ -185,20 +187,31 @@ func main() {
 	}
 
 	go func() {
+		i := 0
 		for {
-			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.FormatInt(time.Now().Unix(), 10)+`"}`))
+			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.Itoa(i)+`"}`))
 			if err != nil {
 				log.Println(err.Error())
 			}
-			time.Sleep(5 * time.Second)
+			time.Sleep(5000 * time.Millisecond)
+			i++
 		}
 	}()
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
-	http.Handle("/connection/sockjs/", authMiddleware(centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
-		URL:           "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
-		HandlerPrefix: "/connection/sockjs",
-	})))
+	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+		ReadBufferSize:     1024,
+		UseWriteBufferPool: true,
+	})
+	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
+
+	sockjsHandler := centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
+		URL:                      "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
+		HandlerPrefix:            "/connection/sockjs",
+		WebsocketReadBufferSize:  1024,
+		WebsocketWriteBufferSize: 1024,
+	})
+	http.Handle("/connection/sockjs/", authMiddleware(sockjsHandler))
+
 	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", http.FileServer(http.Dir("./")))
 

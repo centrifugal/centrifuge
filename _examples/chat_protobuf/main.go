@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -54,6 +55,13 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 
+	cfg.JoinLeave = true
+	cfg.HistoryLifetime = 300
+	cfg.HistorySize = 1000
+	cfg.HistoryRecover = true
+
+	cfg.UserSubscribePersonal = true
+
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
 			Name: "chat",
@@ -66,6 +74,12 @@ func main() {
 	}
 
 	node, _ := centrifuge.New(cfg)
+
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		return centrifuge.ConnectReply{
+			Data: centrifuge.Raw(`{}`),
+		}
+	})
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
@@ -125,6 +139,18 @@ func main() {
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
+
+	go func() {
+		i := 0
+		for {
+			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+			if err != nil {
+				log.Println(err.Error())
+			}
+			time.Sleep(5000 * time.Millisecond)
+			i++
+		}
+	}()
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
