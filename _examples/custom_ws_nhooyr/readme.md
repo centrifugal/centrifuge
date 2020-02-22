@@ -1,11 +1,9 @@
-Example demonstrates simple chat with JSON protocol.
-
-Client uses Websocket by default, but you can simply uncomment one line in `index.html` to use SockJS instead. 
+Example demonstrates simple chat with JSON protocol using https://github.com/nhooyr/websocket library.
 
 To start example run the following command from example directory:
 
 ```
-GO111MODULE=on go run main.go
+go run main.go
 ```
 
 Then go to http://localhost:8000 to see it in action.

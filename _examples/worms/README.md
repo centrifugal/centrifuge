@@ -3,7 +3,7 @@ Based on original work by [@jboeijenga](https://codepen.io/jboeijenga/) found [o
 To start example run the following command from example directory:
 
 ```
-GO111MODULE=on go run main.go
+go run main.go
 ```
 
 Open several tabs of http://localhost:8000 - see how worms synchronized between them.

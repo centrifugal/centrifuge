@@ -5,5 +5,5 @@ This server example works as simple proxy for all events - without extra busines
 To start example run the following command from example directory:
 
 ```
-GO111MODULE=on go run main.go
+go run main.go
 ```

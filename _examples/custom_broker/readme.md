@@ -18,7 +18,7 @@ redis-server
 Finally to start example run the following command from example directory:
 
 ```
-GO111MODULE=on go run main.go
+go run main.go
 ```
 
 Go to http://localhost:8000. You will see simple chat app, try writing a chat message in one browser tab and you should see it appears in another tab.
