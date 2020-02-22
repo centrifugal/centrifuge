@@ -571,6 +571,57 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	}
 }
 
+func TestServerSideSubscriptions(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer node.Shutdown(context.Background())
+
+	node.On().ClientConnecting(func(context.Context, TransportInfo, ConnectEvent) ConnectReply {
+		return ConnectReply{
+			Subscriptions: []Subscription{
+				{Channel: "server-side-1"},
+				{Channel: "server-side-2"},
+			},
+		}
+	})
+	transport := newTestTransport()
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := NewClient(newCtx, node, transport)
+	replies := []*protocol.Reply{}
+	rw := testReplyWriter(&replies)
+	client.handleCommand(&protocol.Command{
+		ID: 1,
+	}, rw.write, rw.flush)
+
+	done := make(chan struct{})
+	go func() {
+		var i int
+		for data := range transport.sink {
+			if strings.Contains(string(data), "test message 1") {
+				i++
+			}
+			if strings.Contains(string(data), "test message 2") {
+				i++
+			}
+			if i == 2 {
+				close(done)
+			}
+		}
+	}()
+
+	err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
+	assert.NoError(t, err)
+	err = node.Publish("server-side-2", []byte(`{"text": "test message 2"}`))
+	assert.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		assert.Fail(t, "timeout receiving publication")
+	case <-done:
+	}
+}
+
 func TestClientUserPersonalChannel(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer node.Shutdown(context.Background())
