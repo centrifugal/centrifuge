@@ -5,7 +5,7 @@ Client uses Websocket by default, but you can simply uncomment one line in `inde
 To start example run the following command from example directory:
 
 ```
-GO111MODULE=on go run main.go
+go run main.go
 ```
 
 Then go to http://localhost:8000 to see it in action.

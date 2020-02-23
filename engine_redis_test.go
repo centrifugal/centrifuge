@@ -780,14 +780,14 @@ func TestClientSubscribeRecoverRedis(t *testing.T) {
 				Limit: 0,
 				Since: nil,
 			})
-			disconnect := client.subscribeCmd(&protocol.SubscribeRequest{
+			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: channel,
 				Recover: true,
 				Seq:     tt.SinceSeq,
 				Gen:     recoveryPosition.Gen,
 				Epoch:   recoveryPosition.Epoch,
-			}, rw)
-			assert.Nil(t, disconnect)
+			}, rw, false)
+			assert.Nil(t, subCtx.disconnect)
 			assert.NotEmpty(t, replies)
 			assert.Nil(t, replies[0].Error)
 			res := extractSubscribeResult(replies)

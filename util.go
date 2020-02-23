@@ -8,7 +8,6 @@ import (
 
 const (
 	maxSeq uint32 = math.MaxUint32 // maximum uint32 value
-	maxGen uint32 = math.MaxUint32 // maximum uint32 value
 )
 
 func nextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
@@ -21,10 +20,6 @@ func nextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
 		nextSeq = currentSeq + 1
 	}
 	return nextSeq, nextGen
-}
-
-func uint64Sequence(currentSeq, currentGen uint32) uint64 {
-	return uint64(currentGen)*uint64(math.MaxUint32) + uint64(currentSeq)
 }
 
 func unpackUint64(val uint64) (uint32, uint32) {

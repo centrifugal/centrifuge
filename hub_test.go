@@ -8,6 +8,8 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/centrifugal/centrifuge/internal/prepared"
 )
 
 type testTransport struct {
@@ -101,7 +103,7 @@ func TestHubSubscriptions(t *testing.T) {
 	assert.Equal(t, 2, h.NumChannels())
 	channels := []string{}
 	for _, ch := range h.Channels() {
-		channels = append(channels, string(ch))
+		channels = append(channels, ch)
 	}
 	assert.True(t, stringInSlice("test1", channels))
 	assert.True(t, stringInSlice("test2", channels))
@@ -116,7 +118,7 @@ func TestHubSubscriptions(t *testing.T) {
 
 func TestPreparedReply(t *testing.T) {
 	reply := protocol.Reply{}
-	prepared := newPreparedReply(&reply, protocol.TypeJSON)
+	prepared := prepared.NewReply(&reply, protocol.TypeJSON)
 	data := prepared.Data()
 	assert.NotNil(t, data)
 }

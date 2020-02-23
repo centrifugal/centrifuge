@@ -49,9 +49,29 @@
                 });
 
                 centrifuge.on('message', function(data) {
-                    drawText(JSON.stringify(data));
-                    // echo data back to server.
+                    drawText('Message: ' + JSON.stringify(data));
+                    // Echo data back to server.
                     centrifuge.send(data);
+                });
+
+                centrifuge.on('publish', function(ctx) {
+                    drawText('Server-side publication from channel ' + ctx.channel + ": " + JSON.stringify(ctx.data));
+                });
+
+                centrifuge.on('join', function(ctx) {
+                    drawText('Server-side join from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('leave', function(ctx) {
+                    drawText('Server-side leave from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('subscribe', function(ctx) {
+                    drawText('Subscribe to server-side channel ' + ctx.channel);
+                });
+
+                centrifuge.on('unsubscribe', function(ctx) {
+                    drawText('Unsubscribe from server-side channel ' + ctx.channel);
                 });
 
                 centrifuge.on('disconnect', function(ctx){
@@ -66,7 +86,7 @@
                         for (var key in result.presence){
                             count++;
                         }
-                        drawText('Now in this room: ' + count + ' clients');
+                        drawText('Presence: now in this room – ' + count + ' clients');
                     }, function(err) {
                         drawText("Presence error: " + JSON.stringify(err));
                     });

@@ -26,16 +26,17 @@ func TestWebsocketHandler(t *testing.T) {
 	url := "ws" + server.URL[4:]
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
-
 	assert.NoError(t, err)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
 	assert.NotNil(t, conn)
 	defer conn.Close()
 }
 
 func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
-	conn, _, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
 	assert.NoError(b, err)
+	defer resp.Body.Close()
 
 	connectRequest := &protocol.ConnectRequest{}
 	params, _ := json.Marshal(connectRequest)
@@ -67,8 +68,9 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 }
 
 func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Conn {
-	conn, _, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
 	assert.NoError(b, err)
+	defer resp.Body.Close()
 
 	connectRequest := &protocol.ConnectRequest{}
 	params, _ := connectRequest.Marshal()

@@ -22,6 +22,7 @@ func TestSockjsHandler(t *testing.T) {
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0pbfvm/websocket", nil)
 	assert.NoError(t, err)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
 	assert.NotNil(t, conn)
 	defer conn.Close()

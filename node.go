@@ -677,7 +677,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	if empty {
 		submittedAt := time.Now()
 		n.subDissolver.Submit(func() error {
-			timeSpent := time.Now().Sub(submittedAt)
+			timeSpent := time.Since(submittedAt)
 			if timeSpent < time.Second {
 				time.Sleep(time.Second - timeSpent)
 			}
@@ -738,6 +738,12 @@ func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.config.channelOpts(n.namespaceName(ch))
+}
+
+// PersonalChannel returns personal channel for user based on node configuration.
+func (n *Node) PersonalChannel(user string) string {
+	config := n.Config()
+	return config.UserPersonalChannelPrefix + config.ChannelUserBoundary + user
 }
 
 // addPresence proxies presence adding to engine.

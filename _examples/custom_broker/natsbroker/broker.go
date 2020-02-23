@@ -10,7 +10,7 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 
-	"github.com/nats-io/nats"
+	nats "github.com/nats-io/nats.go"
 )
 
 type (

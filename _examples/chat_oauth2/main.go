@@ -15,12 +15,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/centrifugal/centrifuge"
 	"github.com/dchest/uniuri"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
+	"github.com/centrifugal/centrifuge"
 )
 
 // SessionName is the key used to access the session store.
@@ -31,13 +32,13 @@ var Store sessions.Store
 
 func init() {
 	if os.Getenv("SESSION_SECRET") == "" {
-		panic("SESSION_SECRET environment variable required")
+		log.Fatal("SESSION_SECRET environment variable required")
 	}
 	if os.Getenv("GOOGLE_CLIENT_ID") == "" {
-		panic("GOOGLE_CLIENT_ID environment variable required")
+		log.Fatal("GOOGLE_CLIENT_ID environment variable required")
 	}
 	if os.Getenv("GOOGLE_CLIENT_SECRET") == "" {
-		panic("GOOGLE_CLIENT_SECRET environment variable required")
+		log.Fatal("GOOGLE_CLIENT_SECRET environment variable required")
 	}
 	key := []byte(os.Getenv("SESSION_SECRET"))
 	cookieStore := sessions.NewCookieStore([]byte(key))
@@ -133,7 +134,7 @@ func createCentrifugeNode() (*centrifuge.Node, error) {
 func main() {
 	node, err := createCentrifugeNode()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	router := mux.NewRouter().StrictSlash(true)
