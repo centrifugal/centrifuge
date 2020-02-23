@@ -1377,8 +1377,7 @@ func (c *Client) Subscribe(channel string) error {
 	reply := prepared.NewReply(&protocol.Reply{
 		Result: result,
 	}, c.transport.Protocol())
-	c.transportEnqueue(reply)
-	return nil
+	return c.transportEnqueue(reply)
 }
 
 // refreshCmd handle refresh command to update connection with new
