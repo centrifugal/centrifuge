@@ -577,9 +577,9 @@ func TestServerSideSubscriptions(t *testing.T) {
 
 	node.On().ClientConnecting(func(context.Context, TransportInfo, ConnectEvent) ConnectReply {
 		return ConnectReply{
-			Subscriptions: []Subscription{
-				{Channel: "server-side-1"},
-				{Channel: "server-side-2"},
+			Channels: []string{
+				"server-side-1",
+				"server-side-2",
 			},
 		}
 	})

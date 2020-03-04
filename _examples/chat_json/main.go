@@ -87,14 +87,10 @@ func main() {
 	node, _ := centrifuge.New(cfg)
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
-		// Subscribe to several server-side channels.
-		subs := []centrifuge.Subscription{}
-		for i := 0; i < 3; i++ {
-			subs = append(subs, centrifuge.Subscription{Channel: "server-side-" + strconv.Itoa(i)})
-		}
 		return centrifuge.ConnectReply{
-			Data:          centrifuge.Raw(`{}`),
-			Subscriptions: subs,
+			Data: centrifuge.Raw(`{}`),
+			// Subscribe to several server-side channels.
+			Channels: []string{"server-side-1", "server-side-2", "server-side-3"},
 		}
 	})
 

@@ -19,6 +19,8 @@ type connectToken struct {
 	// client directly. In some cases having additional info can be an
 	// overhead – but you are simply free to not use it.
 	Info Raw
+	// Channels slice contains channels to subscribe connection to on server-side.
+	Channels []string
 }
 
 type subscribeToken struct {

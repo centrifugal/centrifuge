@@ -1131,8 +1131,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		if reply.Data != nil {
 			authData = reply.Data
 		}
-		for _, sub := range reply.Subscriptions {
-			channels = append(channels, sub.Channel)
+		for _, ch := range reply.Channels {
+			channels = append(channels, ch)
 		}
 	}
 
@@ -1175,6 +1175,10 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 			c.mu.Lock()
 			c.info = token.Info
 			c.mu.Unlock()
+		}
+
+		for _, ch := range token.Channels {
+			channels = append(channels, ch)
 		}
 	} else {
 		if !insecure && !clientAnonymous {
