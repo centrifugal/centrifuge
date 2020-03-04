@@ -28,14 +28,8 @@ type ConnectReply struct {
 	Credentials *Credentials
 	// Data allows to set custom data in connect reply.
 	Data Raw
-	// Subscriptions field allows to provide a list of channels to subscribe
-	// connection server side.
-	Subscriptions []Subscription
-}
-
-// Subscription to channel.
-type Subscription struct {
-	Channel string
+	// Channels slice contains channels to subscribe connection to on server-side.
+	Channels []string
 }
 
 // ConnectingHandler called when new client authenticates on server.

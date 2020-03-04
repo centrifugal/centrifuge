@@ -29,8 +29,9 @@ var (
 )
 
 type connectTokenClaims struct {
-	Info       Raw    `json:"info"`
-	Base64Info string `json:"b64info"`
+	Info       Raw      `json:"info"`
+	Base64Info string   `json:"b64info"`
+	Channels   []string `json:"channels"`
 	jwt.StandardClaims
 }
 
@@ -60,6 +61,7 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken
 			UserID:   claims.StandardClaims.Subject,
 			ExpireAt: claims.StandardClaims.ExpiresAt,
 			Info:     claims.Info,
+			Channels: claims.Channels,
 		}
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)

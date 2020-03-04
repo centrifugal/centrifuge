@@ -1,3 +1,9 @@
+v0.6.0
+======
+
+* Simplify server-side subscription API replacing `[]centrifuge.Subscription` with just `[]string` - i.e. a slice of channels we want to subscribe connection to. For now it seems much more simple to just use a slice of strings and this must be sufficient for most use cases. It is also a bit more efficient for JWT use case in terms of its payload size. More complex logic can be introduced later over separate field of `ConnectReply` or `connectToken` if needed
+* Support server-side subscriptions via JWT using `channels` claim field
+
 v0.5.0
 ======
 
