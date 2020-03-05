@@ -68,7 +68,7 @@ func main() {
 	cfg.HistorySize = 1000
 	cfg.HistoryRecover = true
 
-	cfg.UserSubscribePersonal = true
+	cfg.UserSubscribeToPersonal = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{
@@ -82,6 +82,10 @@ func main() {
 				HistoryRecover:  true,
 			},
 		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatal(err)
 	}
 
 	node, _ := centrifuge.New(cfg)
@@ -171,7 +175,7 @@ func main() {
 						if err == io.EOF {
 							return
 						}
-						log.Println(err.Error())
+						log.Printf("error sending message: %s", err)
 					}
 				}
 			}
@@ -187,7 +191,7 @@ func main() {
 		for {
 			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.Itoa(i)+`"}`))
 			if err != nil {
-				log.Println(err.Error())
+				log.Printf("error publishing to personal channel: %s", err)
 			}
 			time.Sleep(5000 * time.Millisecond)
 			i++

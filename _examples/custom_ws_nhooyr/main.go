@@ -69,7 +69,7 @@ func main() {
 	cfg.HistorySize = 1000
 	cfg.HistoryRecover = true
 
-	cfg.UserSubscribePersonal = true
+	cfg.UserSubscribeToPersonal = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
 		centrifuge.ChannelNamespace{

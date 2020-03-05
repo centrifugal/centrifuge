@@ -645,8 +645,8 @@ func TestClientUserPersonalChannel(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			config := node.Config()
-			config.UserSubscribePersonal = true
-			config.UserPersonalChannelPrefix = tt.Prefix
+			config.UserSubscribeToPersonal = true
+			config.UserPersonalChannelNamespace = tt.Prefix
 			node.Reload(config)
 			transport := newTestTransport()
 			transport.sink = make(chan []byte, 100)
