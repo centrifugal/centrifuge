@@ -11,7 +11,6 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/dgrijalva/jwt-go"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,22 +56,22 @@ func TestClientEventHub(t *testing.T) {
 		return DisconnectReply{}
 	}
 	h.Disconnect(handler)
-	assert.NotNil(t, h.disconnectHandler)
+	require.NotNil(t, h.disconnectHandler)
 }
 
 func TestSetCredentials(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{})
 	val := newCtx.Value(credentialsContextKey).(*Credentials)
-	assert.NotNil(t, val)
+	require.NotNil(t, val)
 }
 
 func TestNewClient(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	transport := newTestTransport()
 	client, err := NewClient(context.Background(), node, transport)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	require.NoError(t, err)
+	require.NotNil(t, client)
 }
 
 func TestClientInitialState(t *testing.T) {
@@ -80,14 +79,14 @@ func TestClientInitialState(t *testing.T) {
 	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	assert.Equal(t, client.uid, client.ID())
-	assert.NotNil(t, "", client.user)
-	assert.Equal(t, 0, len(client.Channels()))
-	assert.Equal(t, protocol.TypeJSON, client.Transport().Protocol())
-	assert.Equal(t, "test_transport", client.Transport().Name())
-	assert.False(t, client.closed)
-	assert.False(t, client.authenticated)
-	assert.Nil(t, client.disconnect)
+	require.Equal(t, client.uid, client.ID())
+	require.NotNil(t, "", client.user)
+	require.Equal(t, 0, len(client.Channels()))
+	require.Equal(t, protocol.TypeJSON, client.Transport().Protocol())
+	require.Equal(t, "test_transport", client.Transport().Name())
+	require.False(t, client.closed)
+	require.False(t, client.authenticated)
+	require.Nil(t, client.disconnect)
 }
 
 func TestClientClosedState(t *testing.T) {
@@ -96,8 +95,8 @@ func TestClientClosedState(t *testing.T) {
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
 	err := client.Close(nil)
-	assert.NoError(t, err)
-	assert.True(t, client.closed)
+	require.NoError(t, err)
+	require.True(t, client.closed)
 }
 
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
@@ -108,8 +107,8 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
-	assert.NotNil(t, disconnect)
-	assert.Equal(t, disconnect, DisconnectBadRequest)
+	require.NotNil(t, disconnect)
+	require.Equal(t, disconnect, DisconnectBadRequest)
 }
 
 func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
@@ -125,11 +124,11 @@ func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
-	assert.Nil(t, disconnect)
-	assert.Nil(t, replies[0].Error)
+	require.Nil(t, disconnect)
+	require.Nil(t, replies[0].Error)
 	result := extractConnectResult(replies)
-	assert.NotEmpty(t, result.Client)
-	assert.Empty(t, client.UserID())
+	require.NotEmpty(t, result.Client)
+	require.Empty(t, client.UserID())
 }
 
 func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
@@ -145,11 +144,11 @@ func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
-	assert.Nil(t, disconnect)
-	assert.Nil(t, replies[0].Error)
+	require.Nil(t, disconnect)
+	require.Nil(t, replies[0].Error)
 	result := extractConnectResult(replies)
-	assert.NotEmpty(t, result.Client)
-	assert.Empty(t, client.UserID())
+	require.NotEmpty(t, result.Client)
+	require.Empty(t, client.UserID())
 }
 
 func TestClientConnectWithMalformedToken(t *testing.T) {
@@ -162,8 +161,8 @@ func TestClientConnectWithMalformedToken(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: "bad bad token",
 	}, rw)
-	assert.NotNil(t, disconnect)
-	assert.Equal(t, disconnect, DisconnectInvalidToken)
+	require.NotNil(t, disconnect)
+	require.Equal(t, disconnect, DisconnectInvalidToken)
 }
 
 func TestClientConnectWithValidToken(t *testing.T) {
@@ -181,10 +180,10 @@ func TestClientConnectWithValidToken(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 0),
 	}, rw)
-	assert.Nil(t, disconnect)
+	require.Nil(t, disconnect)
 	result := extractConnectResult(replies)
-	assert.Equal(t, client.ID(), result.Client)
-	assert.Equal(t, false, result.Expires)
+	require.Equal(t, client.ID(), result.Client)
+	require.Equal(t, false, result.Expires)
 }
 
 func TestClientConnectWithExpiringToken(t *testing.T) {
@@ -202,11 +201,11 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", time.Now().Unix()+10),
 	}, rw)
-	assert.Nil(t, disconnect)
+	require.Nil(t, disconnect)
 	result := extractConnectResult(replies)
-	assert.Equal(t, true, result.Expires)
-	assert.True(t, result.TTL > 0)
-	assert.True(t, client.authenticated)
+	require.Equal(t, true, result.Expires)
+	require.True(t, result.TTL > 0)
+	require.True(t, client.authenticated)
 }
 
 func TestClientConnectWithExpiredToken(t *testing.T) {
@@ -224,9 +223,9 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
 	}, rw)
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorTokenExpired, replies[0].Error)
-	assert.False(t, client.authenticated)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorTokenExpired, replies[0].Error)
+	require.False(t, client.authenticated)
 }
 
 func TestClientTokenRefresh(t *testing.T) {
@@ -244,16 +243,16 @@ func TestClientTokenRefresh(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
 	}, rw)
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorTokenExpired, replies[0].Error)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorTokenExpired, replies[0].Error)
 
 	refreshResp, disconnect := client.refreshCmd(&protocol.RefreshRequest{
 		Token: getConnToken("42", 2525637058),
 	})
-	assert.Nil(t, disconnect)
-	assert.NotEmpty(t, client.ID())
-	assert.True(t, refreshResp.Result.Expires)
-	assert.True(t, refreshResp.Result.TTL > 0)
+	require.Nil(t, disconnect)
+	require.NotEmpty(t, client.ID())
+	require.True(t, refreshResp.Result.Expires)
+	require.True(t, refreshResp.Result.TTL > 0)
 }
 
 func TestClientConnectContextCredentials(t *testing.T) {
@@ -279,12 +278,12 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
-	assert.Nil(t, disconnect)
+	require.Nil(t, disconnect)
 	result := extractConnectResult(replies)
-	assert.Equal(t, false, result.Expires)
-	assert.Equal(t, uint32(0), result.TTL)
-	assert.True(t, client.authenticated)
-	assert.Equal(t, "42", client.UserID())
+	require.Equal(t, false, result.Expires)
+	require.Equal(t, uint32(0), result.TTL)
+	require.True(t, client.authenticated)
+	require.Equal(t, "42", client.UserID())
 }
 
 func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
@@ -311,9 +310,9 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
-	assert.Nil(t, disconnect)
+	require.Nil(t, disconnect)
 	client.expire()
-	assert.True(t, client.closed)
+	require.True(t, client.closed)
 }
 
 func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
@@ -341,10 +340,10 @@ func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
-	assert.Nil(t, disconnect)
+	require.Nil(t, disconnect)
 	client.expire()
-	assert.False(t, client.closed)
-	assert.Equal(t, expireAt, client.exp)
+	require.False(t, client.closed)
+	require.Equal(t, expireAt, client.exp)
 }
 
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
@@ -370,19 +369,19 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorExpired, replies[0].Error)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorExpired, replies[0].Error)
 }
 
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
-	assert.Nil(t, disconnect)
-	assert.Nil(t, replies[0].Error)
-	assert.True(t, client.authenticated)
+	require.Nil(t, disconnect)
+	require.Nil(t, replies[0].Error)
+	require.True(t, client.authenticated)
 	result := extractConnectResult(replies)
-	assert.Equal(t, client.uid, result.Client)
+	require.Equal(t, client.uid, result.Client)
 	return result
 }
 
@@ -411,8 +410,8 @@ func subscribeClient(t testing.TB, client *Client, ch string) *protocol.Subscrib
 	ctx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: ch,
 	}, rw, false)
-	assert.Nil(t, ctx.disconnect)
-	assert.Nil(t, replies[0].Error)
+	require.Nil(t, ctx.disconnect)
+	require.Nil(t, replies[0].Error)
 	return extractSubscribeResult(replies)
 }
 
@@ -426,7 +425,7 @@ func TestClientSubscribe(t *testing.T) {
 
 	connectClient(t, client)
 
-	assert.Equal(t, 0, len(client.Channels()))
+	require.Equal(t, 0, len(client.Channels()))
 
 	replies := []*protocol.Reply{}
 	rw := testReplyWriter(&replies)
@@ -434,30 +433,30 @@ func TestClientSubscribe(t *testing.T) {
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test1",
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Equal(t, 1, len(replies))
-	assert.Nil(t, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Equal(t, 1, len(replies))
+	require.Nil(t, replies[0].Error)
 	res := extractSubscribeResult(replies)
-	assert.Empty(t, res.Seq)
-	assert.False(t, res.Recovered)
-	assert.Empty(t, res.Publications)
-	assert.Equal(t, 1, len(client.Channels()))
+	require.Empty(t, res.Seq)
+	require.False(t, res.Recovered)
+	require.Empty(t, res.Publications)
+	require.Equal(t, 1, len(client.Channels()))
 
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test2",
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Equal(t, 2, len(client.Channels()))
-	assert.Equal(t, 1, node.Hub().NumClients())
-	assert.Equal(t, 2, node.Hub().NumChannels())
+	require.Nil(t, subCtx.disconnect)
+	require.Equal(t, 2, len(client.Channels()))
+	require.Equal(t, 1, node.Hub().NumClients())
+	require.Equal(t, 2, node.Hub().NumChannels())
 
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test2",
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Equal(t, ErrorAlreadySubscribed, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Equal(t, ErrorAlreadySubscribed, replies[0].Error)
 }
 
 func TestClientSubscribeReceivePublication(t *testing.T) {
@@ -477,8 +476,8 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Nil(t, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Nil(t, replies[0].Error)
 
 	done := make(chan struct{})
 	go func() {
@@ -490,11 +489,11 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 	}()
 
 	err := node.Publish("test", []byte(`{"text": "test message"}`))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	select {
 	case <-time.After(time.Second):
-		assert.Fail(t, "timeout receiving publication")
+		require.Fail(t, "timeout receiving publication")
 	case <-done:
 	}
 }
@@ -520,8 +519,8 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Nil(t, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Nil(t, replies[0].Error)
 
 	done := make(chan struct{})
 	go func() {
@@ -542,9 +541,9 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 					if err == io.EOF {
 						break
 					}
-					assert.NoError(t, err)
+					require.NoError(t, err)
 					if push.Result.Data.Seq != seq {
-						assert.Fail(t, "wrong seq")
+						require.Fail(t, "wrong seq")
 					}
 					seq++
 					if seq > 3 {
@@ -558,15 +557,15 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	// Send 3 publications, expect client to receive them with
 	// incremental sequence numbers.
 	err := node.Publish("test", []byte(`{"text": "test message 1"}`))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	err = node.Publish("test", []byte(`{"text": "test message 2"}`))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	err = node.Publish("test", []byte(`{"text": "test message 3"}`))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	select {
 	case <-time.After(time.Second):
-		assert.Fail(t, "timeout receiving publications")
+		require.Fail(t, "timeout receiving publications")
 	case <-done:
 	}
 }
@@ -615,39 +614,49 @@ func TestServerSideSubscriptions(t *testing.T) {
 
 	client.Subscribe("server-side-3")
 	err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	err = node.Publish("server-side-2", []byte(`{"text": "test message 2"}`))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	select {
 	case <-time.After(time.Second):
-		assert.Fail(t, "timeout receiving publication")
+		require.Fail(t, "timeout receiving publication")
 	case <-done:
 	}
 }
 
 func TestClientUserPersonalChannel(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	config := node.Config()
+	config.UserSubscribeToPersonal = true
+	config.Namespaces = []ChannelNamespace{
+		ChannelNamespace{
+			Name:           "user",
+			ChannelOptions: ChannelOptions{},
+		},
+	}
+	node.Reload(config)
+
 	defer node.Shutdown(context.Background())
 
 	var tests = []struct {
-		Name   string
-		Prefix string
-		Error  *Error
+		Name      string
+		Namespace string
+		Error     *Error
 	}{
-		{"ok_no_prefix", "", nil},
-		{"ok_with_prefix", "user", nil},
-		{"fail_no_namespace", "user:", ErrorNamespaceNotFound},
+		{"ok_no_namespace", "", nil},
+		{"ok_with_namespace", "user", nil},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			config := node.Config()
 			config.UserSubscribeToPersonal = true
-			config.UserPersonalChannelNamespace = tt.Prefix
-			node.Reload(config)
+			config.UserPersonalChannelNamespace = tt.Namespace
+			err := node.Reload(config)
+			require.NoError(t, err)
 			transport := newTestTransport()
 			transport.sink = make(chan []byte, 100)
 			ctx := context.Background()
@@ -659,7 +668,7 @@ func TestClientUserPersonalChannel(t *testing.T) {
 				ID: 1,
 			}, rw.write, rw.flush)
 			if tt.Error != nil {
-				assert.Equal(t, tt.Error, replies[0].Error)
+				require.Equal(t, tt.Error, replies[0].Error)
 			} else {
 				done := make(chan struct{})
 				go func() {
@@ -671,11 +680,11 @@ func TestClientUserPersonalChannel(t *testing.T) {
 				}()
 
 				err := node.Publish(node.PersonalChannel("42"), []byte(`{"text": "test message"}`))
-				assert.NoError(t, err)
+				require.NoError(t, err)
 
 				select {
 				case <-time.After(time.Second):
-					assert.Fail(t, "timeout receiving publication")
+					require.Fail(t, "timeout receiving publication")
 				case <-done:
 				}
 			}
@@ -699,8 +708,8 @@ func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Equal(t, ErrorPermissionDenied, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Equal(t, ErrorPermissionDenied, replies[0].Error)
 }
 
 func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
@@ -725,24 +734,24 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 		Channel: "$test1",
 		Token:   getSubscribeToken("$wrong_channel", "wrong client", 0),
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Equal(t, ErrorPermissionDenied, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Equal(t, ErrorPermissionDenied, replies[0].Error)
 
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$wrong_channel", client.ID(), 0),
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Equal(t, ErrorPermissionDenied, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Equal(t, ErrorPermissionDenied, replies[0].Error)
 
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), 0),
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Nil(t, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Nil(t, replies[0].Error)
 }
 
 func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
@@ -767,19 +776,19 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), 10),
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Equal(t, ErrorTokenExpired, replies[0].Error)
+	require.Nil(t, subCtx.disconnect)
+	require.Equal(t, ErrorTokenExpired, replies[0].Error)
 
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
 		Token:   getSubscribeToken("$test1", client.ID(), time.Now().Unix()+10),
 	}, rw, false)
-	assert.Nil(t, subCtx.disconnect)
-	assert.Nil(t, replies[0].Error, "token is valid and not expired yet")
+	require.Nil(t, subCtx.disconnect)
+	require.Nil(t, replies[0].Error, "token is valid and not expired yet")
 	res := extractSubscribeResult(replies)
-	assert.True(t, res.Expires, "expires flag must be set")
-	assert.True(t, res.TTL > 0, "positive TTL must be set")
+	require.True(t, res.Expires, "expires flag must be set")
+	require.True(t, res.TTL > 0, "positive TTL must be set")
 }
 
 func TestClientSubscribeLast(t *testing.T) {
@@ -800,7 +809,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	connectClient(t, client)
 
 	result := subscribeClient(t, client, "test")
-	assert.Equal(t, uint32(0), result.Seq)
+	require.Equal(t, uint32(0), result.Seq)
 
 	for i := 0; i < 10; i++ {
 		node.Publish("test", []byte("{}"))
@@ -809,7 +818,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	client, _ = NewClient(newCtx, node, transport)
 	connectClient(t, client)
 	result = subscribeClient(t, client, "test")
-	assert.Equal(t, uint32(10), result.Seq)
+	require.Equal(t, uint32(10), result.Seq)
 }
 
 func TestClientUnsubscribe(t *testing.T) {
@@ -827,21 +836,21 @@ func TestClientUnsubscribe(t *testing.T) {
 	unsubscribeResp, disconnect := client.unsubscribeCmd(&protocol.UnsubscribeRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, unsubscribeResp.Error)
+	require.Nil(t, disconnect)
+	require.Nil(t, unsubscribeResp.Error)
 
-	assert.Equal(t, 0, len(client.Channels()))
-	assert.Equal(t, 1, node.Hub().NumClients())
-	assert.Equal(t, 0, node.Hub().NumChannels())
+	require.Equal(t, 0, len(client.Channels()))
+	require.Equal(t, 1, node.Hub().NumClients())
+	require.Equal(t, 0, node.Hub().NumChannels())
 
 	subscribeClient(t, client, "test")
-	assert.Equal(t, 1, len(client.Channels()))
+	require.Equal(t, 1, len(client.Channels()))
 
 	err := client.Unsubscribe("test")
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(client.Channels()))
-	assert.Equal(t, 1, node.Hub().NumClients())
-	assert.Equal(t, 0, node.Hub().NumChannels())
+	require.NoError(t, err)
+	require.Equal(t, 0, len(client.Channels()))
+	require.Equal(t, 1, node.Hub().NumClients())
+	require.Equal(t, 0, node.Hub().NumChannels())
 }
 
 func TestClientPublish(t *testing.T) {
@@ -858,8 +867,8 @@ func TestClientPublish(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{}`),
 	})
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorPermissionDenied, publishResp.Error)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorPermissionDenied, publishResp.Error)
 
 	config := node.Config()
 	config.Publish = true
@@ -869,8 +878,8 @@ func TestClientPublish(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{}`),
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, publishResp.Error)
+	require.Nil(t, disconnect)
+	require.Nil(t, publishResp.Error)
 
 	config = node.Config()
 	config.SubscribeToPublish = true
@@ -880,16 +889,16 @@ func TestClientPublish(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{}`),
 	})
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorPermissionDenied, publishResp.Error)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorPermissionDenied, publishResp.Error)
 
 	subscribeClient(t, client, "test")
 	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{}`),
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, publishResp.Error)
+	require.Nil(t, disconnect)
+	require.Nil(t, publishResp.Error)
 }
 
 type testBrokerEventHandler struct {
@@ -991,28 +1000,28 @@ func TestClientPublishHandler(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{"input": "no time"}`),
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, publishResp.Error)
+	require.Nil(t, disconnect)
+	require.Nil(t, publishResp.Error)
 
 	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{"input": "with timestamp"}`),
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, publishResp.Error)
+	require.Nil(t, disconnect)
+	require.Nil(t, publishResp.Error)
 
 	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{"input": "with error"}`),
 	})
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorBadRequest, publishResp.Error)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorBadRequest, publishResp.Error)
 
 	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{"input": "with disconnect"}`),
 	})
-	assert.Equal(t, DisconnectBadRequest, disconnect)
+	require.Equal(t, DisconnectBadRequest, disconnect)
 }
 
 func TestClientPing(t *testing.T) {
@@ -1026,9 +1035,9 @@ func TestClientPing(t *testing.T) {
 	connectClient(t, client)
 
 	pingResp, disconnect := client.pingCmd(&protocol.PingRequest{})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, pingResp.Error)
-	assert.Empty(t, pingResp.Result)
+	require.Nil(t, disconnect)
+	require.Nil(t, pingResp.Error)
+	require.Empty(t, pingResp.Result)
 }
 
 func TestClientPingWithRecover(t *testing.T) {
@@ -1050,9 +1059,9 @@ func TestClientPingWithRecover(t *testing.T) {
 	subscribeClient(t, client, "test")
 
 	pingResp, disconnect := client.pingCmd(&protocol.PingRequest{})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, pingResp.Error)
-	assert.Nil(t, pingResp.Result)
+	require.Nil(t, disconnect)
+	require.Nil(t, pingResp.Error)
+	require.Nil(t, pingResp.Result)
 }
 
 func TestClientPresence(t *testing.T) {
@@ -1074,17 +1083,17 @@ func TestClientPresence(t *testing.T) {
 	presenceResp, disconnect := client.presenceCmd(&protocol.PresenceRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, presenceResp.Error)
-	assert.Equal(t, 1, len(presenceResp.Result.Presence))
+	require.Nil(t, disconnect)
+	require.Nil(t, presenceResp.Error)
+	require.Equal(t, 1, len(presenceResp.Result.Presence))
 
 	presenceStatsResp, disconnect := client.presenceStatsCmd(&protocol.PresenceStatsRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, presenceResp.Error)
-	assert.Equal(t, uint32(1), presenceStatsResp.Result.NumUsers)
-	assert.Equal(t, uint32(1), presenceStatsResp.Result.NumClients)
+	require.Nil(t, disconnect)
+	require.Nil(t, presenceResp.Error)
+	require.Equal(t, uint32(1), presenceStatsResp.Result.NumUsers)
+	require.Equal(t, uint32(1), presenceStatsResp.Result.NumClients)
 
 	config = node.Config()
 	config.Presence = false
@@ -1093,17 +1102,17 @@ func TestClientPresence(t *testing.T) {
 	presenceResp, disconnect = client.presenceCmd(&protocol.PresenceRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorNotAvailable, presenceResp.Error)
-	assert.Nil(t, presenceResp.Result)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorNotAvailable, presenceResp.Error)
+	require.Nil(t, presenceResp.Result)
 
 	presenceStatsResp, disconnect = client.presenceStatsCmd(&protocol.PresenceStatsRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorNotAvailable, presenceStatsResp.Error)
-	assert.Nil(t, presenceStatsResp.Result)
+	require.Nil(t, disconnect)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorNotAvailable, presenceStatsResp.Error)
+	require.Nil(t, presenceStatsResp.Result)
 }
 
 func TestClientHistory(t *testing.T) {
@@ -1130,9 +1139,9 @@ func TestClientHistory(t *testing.T) {
 	historyResp, disconnect := client.historyCmd(&protocol.HistoryRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Nil(t, historyResp.Error)
-	assert.Equal(t, 10, len(historyResp.Result.Publications))
+	require.Nil(t, disconnect)
+	require.Nil(t, historyResp.Error)
+	require.Equal(t, 10, len(historyResp.Result.Publications))
 
 	config = node.Config()
 	config.HistorySize = 0
@@ -1142,9 +1151,9 @@ func TestClientHistory(t *testing.T) {
 	historyResp, disconnect = client.historyCmd(&protocol.HistoryRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorNotAvailable, historyResp.Error)
-	assert.Nil(t, historyResp.Result)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorNotAvailable, historyResp.Error)
+	require.Nil(t, historyResp.Result)
 }
 
 func TestClientHistoryDisabled(t *testing.T) {
@@ -1170,8 +1179,8 @@ func TestClientHistoryDisabled(t *testing.T) {
 	historyResp, disconnect := client.historyCmd(&protocol.HistoryRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorNotAvailable, historyResp.Error)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorNotAvailable, historyResp.Error)
 }
 
 func TestClientPresenceDisabled(t *testing.T) {
@@ -1196,8 +1205,8 @@ func TestClientPresenceDisabled(t *testing.T) {
 	presenceResp, disconnect := client.presenceCmd(&protocol.PresenceRequest{
 		Channel: "test",
 	})
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorNotAvailable, presenceResp.Error)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorNotAvailable, presenceResp.Error)
 }
 
 func TestClientCloseUnauthenticated(t *testing.T) {
@@ -1214,7 +1223,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	client, _ := NewClient(newCtx, node, transport)
 	time.Sleep(100 * time.Millisecond)
 	client.mu.Lock()
-	assert.True(t, client.closed)
+	require.True(t, client.closed)
 	client.mu.Unlock()
 }
 
@@ -1235,7 +1244,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 	subscribeClient(t, client, "test")
 
 	err := client.updateChannelPresence("test")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func TestClientSend(t *testing.T) {
@@ -1250,14 +1259,14 @@ func TestClientSend(t *testing.T) {
 	connectClient(t, client)
 
 	err := client.Send([]byte(`{}`))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = client.Close(nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = client.Send([]byte(`{}`))
-	assert.Error(t, err)
-	assert.Equal(t, io.EOF, err)
+	require.Error(t, err)
+	require.Equal(t, io.EOF, err)
 }
 
 func TestClientClose(t *testing.T) {
@@ -1272,9 +1281,9 @@ func TestClientClose(t *testing.T) {
 	connectClient(t, client)
 
 	err := client.Close(DisconnectShutdown)
-	assert.NoError(t, err)
-	assert.True(t, transport.closed)
-	assert.Equal(t, DisconnectShutdown, transport.disconnect)
+	require.NoError(t, err)
+	require.True(t, transport.closed)
+	require.Equal(t, DisconnectShutdown, transport.disconnect)
 }
 
 func TestClientHandleMalformedCommand(t *testing.T) {
@@ -1296,8 +1305,8 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 		Method: 1000,
 		Params: []byte(`{}`),
 	}, rw.write, rw.flush)
-	assert.Nil(t, disconnect)
-	assert.Equal(t, ErrorMethodNotFound, replies[0].Error)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorMethodNotFound, replies[0].Error)
 
 	replies = nil
 	disconnect = client.handleCommand(&protocol.Command{
@@ -1305,7 +1314,7 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 		Method: 2,
 		Params: []byte(`{}`),
 	}, rw.write, rw.flush)
-	assert.Equal(t, DisconnectBadRequest, disconnect)
+	require.Equal(t, DisconnectBadRequest, disconnect)
 }
 
 var recoverTests = []struct {
@@ -1368,11 +1377,11 @@ func TestClientSubscribeRecoverMemory(t *testing.T) {
 				Gen:     recoveryPosition.Gen,
 				Epoch:   recoveryPosition.Epoch,
 			}, rw, false)
-			assert.Nil(t, subCtx.disconnect)
-			assert.Nil(t, replies[0].Error)
+			require.Nil(t, subCtx.disconnect)
+			require.Nil(t, replies[0].Error)
 			res := extractSubscribeResult(replies)
-			assert.Equal(t, tt.NumRecovered, len(res.Publications))
-			assert.Equal(t, tt.Recovered, res.Recovered)
+			require.Equal(t, tt.NumRecovered, len(res.Publications))
+			require.Equal(t, tt.Recovered, res.Recovered)
 
 			node.Shutdown(context.Background())
 		})
