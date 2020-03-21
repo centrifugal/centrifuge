@@ -194,7 +194,7 @@ func (sr *subRequest) result() error {
 	return <-sr.err
 }
 
-func poolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string, options ...redis.DialOption) (*redis.Pool, error) {
+func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string, options ...redis.DialOption) (*redis.Pool, error) {
 	password := conf.Password
 	db := conf.DB
 
@@ -304,6 +304,8 @@ func poolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string, opt
 				}
 
 				if s.useCluster() {
+					// We need to load all scripts on connection Dial due to the fact
+					// that we need scripts on every Cluster node.
 					for _, script := range scripts {
 						err = script.Load(c)
 						if err != nil {
@@ -380,7 +382,7 @@ func newPool(s *shard, n *Node, conf RedisShardConfig) (redisConnPool, error) {
 	useSentinel := conf.MasterName != "" && len(conf.SentinelAddrs) > 0
 	usingPassword := password != ""
 
-	factory := poolFactory(s, n, conf)
+	poolFactory := makePoolFactory(s, n, conf)
 
 	if !s.useCluster() {
 		serverAddr := net.JoinHostPort(host, strconv.Itoa(port))
@@ -389,7 +391,7 @@ func newPool(s *shard, n *Node, conf RedisShardConfig) (redisConnPool, error) {
 		} else {
 			n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: Sentinel for name: %s, db: %d, using password: %v", conf.MasterName, db, usingPassword)))
 		}
-		pool, _ := factory(serverAddr, getDialOpts(conf)...)
+		pool, _ := poolFactory(serverAddr, getDialOpts(conf)...)
 		return pool, nil
 	}
 	// OK, we should work with cluster.
@@ -397,7 +399,7 @@ func newPool(s *shard, n *Node, conf RedisShardConfig) (redisConnPool, error) {
 	cluster := &redisc.Cluster{
 		DialOptions:  getDialOpts(conf),
 		StartupNodes: conf.ClusterAddrs,
-		CreatePool:   factory,
+		CreatePool:   poolFactory,
 	}
 	// Initialize cluster mapping.
 	if err := cluster.Refresh(); err != nil {
@@ -534,11 +536,6 @@ func (e *RedisEngine) getShard(channel string) *shard {
 		return e.shards[0]
 	}
 	return e.shards[consistentIndex(channel, len(e.shards))]
-}
-
-// Name returns name of engine.
-func (e *RedisEngine) name() string {
-	return "Redis"
 }
 
 // Run runs engine after node initialized.
@@ -1006,10 +1003,6 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 }
 
 func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, _ channelID, data []byte) error {
-	// NOTE: this is mostly for backwards compatibility at moment - now
-	// publications do not have sequence prefix when sen over PUB/SUB.
-	// Though if we decide to return to 1 RTT history save and publish
-	// in case of Redis engine this still can be useful.
 	pushData, seq, gen := extractPushData(data)
 	var push Push
 	err := push.Unmarshal(pushData)
