@@ -100,8 +100,6 @@ func TestRedisEngine(t *testing.T) {
 
 	e := newTestRedisEngine()
 
-	assert.Equal(t, e.name(), "Redis")
-
 	_, err := e.Channels()
 	assert.NoError(t, err)
 
