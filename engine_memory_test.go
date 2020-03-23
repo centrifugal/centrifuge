@@ -179,7 +179,7 @@ func TestMemoryHistoryHub(t *testing.T) {
 	assert.Equal(t, 1, len(hist))
 }
 
-func BenchmarkMemoryEnginePublish(b *testing.B) {
+func BenchmarkMemoryEnginePublish_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
 	pub := &Publication{UID: "test UID", Data: rawData}
@@ -192,7 +192,7 @@ func BenchmarkMemoryEnginePublish(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEnginePublishParallel(b *testing.B) {
+func BenchmarkMemoryEnginePublish_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
 	pub := &Publication{UID: "test UID", Data: rawData}
@@ -208,7 +208,7 @@ func BenchmarkMemoryEnginePublishParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
+func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
 	pub := &Publication{UID: "test-uid", Data: rawData}
@@ -227,7 +227,7 @@ func BenchmarkMemoryEnginePublishWithHistory(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEnginePublishWithHistoryParallel(b *testing.B) {
+func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte(`{"bench": true}`))
 	chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
@@ -249,7 +249,7 @@ func BenchmarkMemoryEnginePublishWithHistoryParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEngineAddPresence(b *testing.B) {
+func BenchmarkMemoryEngineAddPresence_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -260,7 +260,7 @@ func BenchmarkMemoryEngineAddPresence(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEngineAddPresenceParallel(b *testing.B) {
+func BenchmarkMemoryEngineAddPresence_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -273,7 +273,7 @@ func BenchmarkMemoryEngineAddPresenceParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEnginePresence(b *testing.B) {
+func BenchmarkMemoryEnginePresence_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
 	e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
@@ -285,7 +285,7 @@ func BenchmarkMemoryEnginePresence(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEnginePresenceParallel(b *testing.B) {
+func BenchmarkMemoryEnginePresence_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
@@ -299,7 +299,7 @@ func BenchmarkMemoryEnginePresenceParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEngineHistory(b *testing.B) {
+func BenchmarkMemoryEngineHistory_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test UID", Data: rawData}
@@ -318,7 +318,7 @@ func BenchmarkMemoryEngineHistory(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEngineHistoryParallel(b *testing.B) {
+func BenchmarkMemoryEngineHistory_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test-uid", Data: rawData}
@@ -339,7 +339,7 @@ func BenchmarkMemoryEngineHistoryParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEngineHistoryRecoverParallel(b *testing.B) {
+func BenchmarkMemoryEngineRecover_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := Raw([]byte("{}"))
 	numMessages := 100

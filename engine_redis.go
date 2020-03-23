@@ -41,7 +41,7 @@ const (
 	defaultReadTimeout    = time.Second
 	defaultWriteTimeout   = time.Second
 	defaultConnectTimeout = time.Second
-	defaultPoolSize       = 256
+	defaultPoolSize       = 128
 )
 
 type (
@@ -78,21 +78,19 @@ type redisConnPool interface {
 
 // shard has everything to connect to Redis instance.
 type shard struct {
-	node               *Node
-	engine             *RedisEngine
-	config             RedisShardConfig
-	pool               redisConnPool
-	subCh              chan subRequest
-	pubChans           []chan pubRequest
-	dataChans          []chan dataRequest
-	addPresenceScript  *redis.Script
-	remPresenceScript  *redis.Script
-	presenceScript     *redis.Script
-	historyScript      *redis.Script
-	addHistoryScript   *redis.Script
-	messagePrefix      string
-	numPublishRoutines int
-	numDataRoutines    int
+	node              *Node
+	engine            *RedisEngine
+	config            RedisShardConfig
+	pool              redisConnPool
+	subCh             chan subRequest
+	pubCh             chan pubRequest
+	dataCh            chan dataRequest
+	addPresenceScript *redis.Script
+	remPresenceScript *redis.Script
+	presenceScript    *redis.Script
+	historyScript     *redis.Script
+	addHistoryScript  *redis.Script
+	messagePrefix     string
 }
 
 // RedisEngineConfig is a config for Redis Engine.
@@ -248,19 +246,6 @@ func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string,
 	}
 
 	return func(serverAddr string, dialOpts ...redis.DialOption) (*redis.Pool, error) {
-		scripts := []*redis.Script{
-			s.addPresenceScript,
-			s.presenceScript,
-			s.remPresenceScript,
-			s.historyScript,
-			s.addHistoryScript,
-		}
-		existsArgs := make([]interface{}, 0, len(scripts)+1)
-		existsArgs = append(existsArgs, "EXISTS")
-		for _, script := range scripts {
-			existsArgs = append(existsArgs, script.Hash())
-		}
-
 		pool := &redis.Pool{
 			MaxIdle:     maxIdle,
 			MaxActive:   poolSize,
@@ -302,17 +287,6 @@ func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string,
 						return nil, err
 					}
 				}
-
-				if s.useCluster() {
-					// We need to load all scripts on connection Dial due to the fact
-					// that we need scripts on every Cluster node.
-					for _, script := range scripts {
-						err = script.Load(c)
-						if err != nil {
-							return nil, err
-						}
-					}
-				}
 				return c, nil
 			},
 			TestOnBorrow: func(c redis.Conn, t time.Time) error {
@@ -322,20 +296,15 @@ func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string,
 					}
 					return nil
 				}
-				if !s.useCluster() {
-					_, err := c.Do("PING")
-					return err
-				}
-				reply, err := redis.Ints(c.Do("SCRIPT", existsArgs...))
-				if err != nil {
-					return err
-				}
-				for _, exists := range reply {
-					if exists != 1 {
-						return errors.New("missing Lua script")
+				if s.useCluster() {
+					// No need in this optimization outside cluster
+					// use case due to utilization of pipelining.
+					if time.Since(t) < time.Second {
+						return nil
 					}
 				}
-				return nil
+				_, err := c.Do("PING")
+				return err
 			},
 		}
 		return pool, nil
@@ -640,23 +609,12 @@ func (e *RedisEngine) Channels() ([]string, error) {
 			channelMap[ch] = struct{}{}
 		}
 	}
-	channels := make([]string, len(channelMap))
-	j := 0
+	channels := make([]string, 0, len(channelMap))
 	for ch := range channelMap {
-		channels[j] = ch
-		j++
+		channels = append(channels, ch)
 	}
 	return channels, nil
 }
-
-const (
-	// Prefer pipelining in non-clustered scenario.
-	defaultNumPublishRoutines = 1
-	defaultNumDataRoutines    = 1
-	// More concurrency due to lack of pipelining support in cluster case.
-	clusterNumPublishRoutines = 8
-	clusterNumDataRoutines    = 8
-)
 
 // newShard initializes new Redis shard.
 func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
@@ -669,15 +627,6 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 		historyScript:     redis.NewScript(2, historySource),
 		addHistoryScript:  redis.NewScript(2, addHistorySource),
 	}
-	if shard.useCluster() {
-		// More concurrency due to lack of pipelining support in cluster case.
-		shard.numPublishRoutines = clusterNumPublishRoutines
-		shard.numDataRoutines = clusterNumDataRoutines
-	} else {
-		// Prefer pipelining.
-		shard.numPublishRoutines = defaultNumPublishRoutines
-		shard.numDataRoutines = defaultNumDataRoutines
-	}
 	pool, err := newPool(shard, n, conf)
 	if err != nil {
 		return nil, err
@@ -685,31 +634,15 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 	shard.pool = pool
 
 	shard.subCh = make(chan subRequest)
-
-	pubChans := make([]chan pubRequest, 0, shard.numPublishRoutines)
-	for i := 0; i < shard.numPublishRoutines; i++ {
-		pubChans = append(pubChans, make(chan pubRequest))
-	}
-	shard.pubChans = pubChans
-
-	dataChans := make([]chan dataRequest, 0, shard.numDataRoutines)
-	for i := 0; i < shard.numDataRoutines; i++ {
-		dataChans = append(dataChans, make(chan dataRequest))
-	}
-	shard.dataChans = dataChans
+	shard.pubCh = make(chan pubRequest)
+	shard.dataCh = make(chan dataRequest)
 
 	shard.messagePrefix = conf.Prefix + redisClientChannelPrefix
 
-	for i := 0; i < shard.numDataRoutines; i++ {
-		workerNum := i
+	if !shard.useCluster() {
+		// Only need data pipeline in non-cluster scenario.
 		go shard.runForever(func() {
-			// We need to distinguish 2 cases due to lack of pipelining
-			// support in cluster case.
-			if shard.useCluster() {
-				shard.runClusterDataPipeline(workerNum)
-			} else {
-				shard.runDataPipeline(workerNum)
-			}
+			shard.runDataPipeline()
 		})
 	}
 
@@ -762,12 +695,9 @@ func (s *shard) sequenceMetaKey(ch string) channelID {
 
 // Run Redis shard.
 func (s *shard) Run(h BrokerEventHandler) error {
-	for i := 0; i < s.numPublishRoutines; i++ {
-		workerNum := i
-		go s.runForever(func() {
-			s.runPublishPipeline(workerNum)
-		})
-	}
+	go s.runForever(func() {
+		s.runPublishPipeline()
+	})
 	go s.runForever(func() {
 		s.runPubSubPing()
 	})
@@ -1074,17 +1004,17 @@ func (s *shard) runPubSubPing() {
 	}
 }
 
-func (s *shard) runPublishPipeline(workerNum int) {
+func (s *shard) runPublishPipeline() {
 	var prs []pubRequest
 
 	for {
 		select {
-		case pr := <-s.pubChans[workerNum]:
+		case pr := <-s.pubCh:
 			prs = append(prs, pr)
 		loop:
 			for len(prs) < redisPublishBatchLimit {
 				select {
-				case pr := <-s.pubChans[workerNum]:
+				case pr := <-s.pubCh:
 					prs = append(prs, pr)
 				default:
 					break loop
@@ -1165,8 +1095,23 @@ func (s *shard) processClusterDataRequest(dr dataRequest) (interface{}, error) {
 
 	var err error
 
+	var key string
+	switch dr.op {
+	case dataOpAddPresence, dataOpRemovePresence, dataOpPresence, dataOpHistory, dataOpAddHistory:
+		key = fmt.Sprintf("%s", dr.args[0])
+	default:
+	}
+	if key != "" {
+		if c, ok := conn.(*redisc.Conn); ok {
+			err := c.Bind(key)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Handle redirections automatically.
-	conn, err = redisc.RetryConn(conn, 3, 100*time.Millisecond)
+	conn, err = redisc.RetryConn(conn, 3, 50*time.Millisecond)
 	if err != nil {
 		return nil, err
 	}
@@ -1192,14 +1137,7 @@ func (s *shard) processClusterDataRequest(dr dataRequest) (interface{}, error) {
 	return reply, err
 }
 
-func (s *shard) runClusterDataPipeline(workerNum int) {
-	for dr := range s.dataChans[workerNum] {
-		reply, err := s.processClusterDataRequest(dr)
-		dr.done(reply, err)
-	}
-}
-
-func (s *shard) runDataPipeline(workerNum int) {
+func (s *shard) runDataPipeline() {
 	conn := s.pool.Get()
 	scripts := []*redis.Script{
 		s.addPresenceScript,
@@ -1221,12 +1159,12 @@ func (s *shard) runDataPipeline(workerNum int) {
 
 	var drs []dataRequest
 
-	for dr := range s.dataChans[workerNum] {
+	for dr := range s.dataCh {
 		drs = append(drs, dr)
 	loop:
 		for len(drs) < redisDataBatchLimit {
 			select {
-			case req := <-s.dataChans[workerNum]:
+			case req := <-s.dataCh:
 				drs = append(drs, req)
 			default:
 				break loop
@@ -1322,14 +1260,13 @@ func (s *shard) Publish(ch string, pub *Publication, _ *ChannelOptions) error {
 		message: byteMessage,
 		err:     eChan,
 	}
-	workerNum := index(ch, s.numPublishRoutines)
 	select {
-	case s.pubChans[workerNum] <- pr:
+	case s.pubCh <- pr:
 	default:
 		timer := timers.AcquireTimer(s.readTimeout())
 		defer timers.ReleaseTimer(timer)
 		select {
-		case s.pubChans[workerNum] <- pr:
+		case s.pubCh <- pr:
 		case <-timer.C:
 			return errRedisOpTimeout
 		}
@@ -1363,14 +1300,13 @@ func (s *shard) PublishJoin(ch string, join *Join, _ *ChannelOptions) error {
 		message: byteMessage,
 		err:     eChan,
 	}
-	workerNum := index(ch, s.numPublishRoutines)
 	select {
-	case s.pubChans[workerNum] <- pr:
+	case s.pubCh <- pr:
 	default:
 		timer := timers.AcquireTimer(s.readTimeout())
 		defer timers.ReleaseTimer(timer)
 		select {
-		case s.pubChans[workerNum] <- pr:
+		case s.pubCh <- pr:
 		case <-timer.C:
 			return errRedisOpTimeout
 		}
@@ -1404,14 +1340,13 @@ func (s *shard) PublishLeave(ch string, leave *Leave, _ *ChannelOptions) error {
 		message: byteMessage,
 		err:     eChan,
 	}
-	workerNum := index(ch, s.numPublishRoutines)
 	select {
-	case s.pubChans[workerNum] <- pr:
+	case s.pubCh <- pr:
 	default:
 		timer := timers.AcquireTimer(s.readTimeout())
 		defer timers.ReleaseTimer(timer)
 		select {
-		case s.pubChans[workerNum] <- pr:
+		case s.pubCh <- pr:
 		case <-timer.C:
 			return errRedisOpTimeout
 		}
@@ -1431,12 +1366,12 @@ func (s *shard) PublishControl(data []byte) error {
 		err:     eChan,
 	}
 	select {
-	case s.pubChans[0] <- pr:
+	case s.pubCh <- pr:
 	default:
 		timer := timers.AcquireTimer(s.readTimeout())
 		defer timers.ReleaseTimer(timer)
 		select {
-		case s.pubChans[0] <- pr:
+		case s.pubCh <- pr:
 		case <-timer.C:
 			return errRedisOpTimeout
 		}
@@ -1477,14 +1412,21 @@ func (s *shard) Unsubscribe(ch string) error {
 	return s.sendSubscribe(r)
 }
 
-func (s *shard) getDataResponse(r dataRequest, workerNum int) *dataResponse {
+func (s *shard) getDataResponse(r dataRequest) *dataResponse {
+	if s.useCluster() {
+		reply, err := s.processClusterDataRequest(r)
+		return &dataResponse{
+			reply: reply,
+			err:   err,
+		}
+	}
 	select {
-	case s.dataChans[workerNum] <- r:
+	case s.dataCh <- r:
 	default:
 		timer := timers.AcquireTimer(s.readTimeout())
 		defer timers.ReleaseTimer(timer)
 		select {
-		case s.dataChans[workerNum] <- r:
+		case s.dataCh <- r:
 		case <-timer.C:
 			return &dataResponse{nil, errRedisOpTimeout}
 		}
@@ -1502,8 +1444,7 @@ func (s *shard) AddPresence(ch string, uid string, info *ClientInfo, expire int)
 	hashKey := s.presenceHashKey(ch)
 	setKey := s.presenceSetKey(ch)
 	dr := newDataRequest(dataOpAddPresence, []interface{}{setKey, hashKey, expire, expireAt, uid, infoJSON})
-	workerNum := index(ch, s.numDataRoutines)
-	resp := s.getDataResponse(dr, workerNum)
+	resp := s.getDataResponse(dr)
 	return resp.err
 }
 
@@ -1512,8 +1453,7 @@ func (s *shard) RemovePresence(ch string, uid string) error {
 	hashKey := s.presenceHashKey(ch)
 	setKey := s.presenceSetKey(ch)
 	dr := newDataRequest(dataOpRemovePresence, []interface{}{setKey, hashKey, uid})
-	workerNum := index(ch, s.numDataRoutines)
-	resp := s.getDataResponse(dr, workerNum)
+	resp := s.getDataResponse(dr)
 	return resp.err
 }
 
@@ -1523,8 +1463,7 @@ func (s *shard) Presence(ch string) (map[string]*ClientInfo, error) {
 	setKey := s.presenceSetKey(ch)
 	now := int(time.Now().Unix())
 	dr := newDataRequest(dataOpPresence, []interface{}{setKey, hashKey, now})
-	workerNum := index(ch, s.numDataRoutines)
-	resp := s.getDataResponse(dr, workerNum)
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
 	}
@@ -1571,8 +1510,7 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	seqKeyTTLSeconds := int(seqTTL.Seconds())
 
 	dr := newDataRequest(dataOpHistory, []interface{}{seqMetaKey, historyKey, includePubs, rightBound, seqKeyTTLSeconds})
-	workerNum := index(ch, s.numDataRoutines)
-	resp := s.getDataResponse(dr, workerNum)
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, RecoveryPosition{}, resp.err
 	}
@@ -1673,8 +1611,7 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 	seqMetaKey := s.sequenceMetaKey(ch)
 	seqKeyTTLSeconds := int(seqTTL.Seconds())
 	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, seqMetaKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, seqKeyTTLSeconds})
-	workerNum := index(ch, s.numDataRoutines)
-	resp := s.getDataResponse(dr, workerNum)
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
 	}
@@ -1697,16 +1634,18 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 func (s *shard) RemoveHistory(ch string) error {
 	historyKey := s.historyListKey(ch)
 	dr := newDataRequest(dataOpHistoryRemove, []interface{}{historyKey})
-	workerNum := index(ch, s.numDataRoutines)
-	resp := s.getDataResponse(dr, workerNum)
+	resp := s.getDataResponse(dr)
 	return resp.err
 }
 
 // Channels - see engine interface description.
 // Requires Redis >= 2.8.0 (http://redis.io/commands/pubsub)
 func (s *shard) Channels() ([]string, error) {
+	if s.useCluster() {
+		return nil, errors.New("channels command not supported when Redis Cluster is used")
+	}
 	dr := newDataRequest(dataOpChannels, []interface{}{"CHANNELS", s.messagePrefix + "*"})
-	resp := s.getDataResponse(dr, 0)
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
 	}
