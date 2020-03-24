@@ -130,6 +130,23 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Simulate some work.
+	for i := 0; i < 10; i++ {
+		go func(i int) {
+			for {
+				time.Sleep(time.Second)
+				err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
+				if err != nil {
+					panic(err.Error())
+				}
+				_, err = node.History("chat:" + strconv.Itoa(i))
+				if err != nil {
+					panic(err.Error())
+				}
+			}
+		}(i)
+	}
+
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 

@@ -1336,7 +1336,7 @@ var recoverTests = []struct {
 	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
 }
 
-func TestClientSubscribeRecoverMemory(t *testing.T) {
+func TestMemoryClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := nodeWithMemoryEngine()

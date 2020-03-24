@@ -102,9 +102,7 @@ func TestHubSubscriptions(t *testing.T) {
 	h.addSub("test2", c)
 	assert.Equal(t, 2, h.NumChannels())
 	channels := []string{}
-	for _, ch := range h.Channels() {
-		channels = append(channels, ch)
-	}
+	channels = append(channels, h.Channels()...)
 	assert.True(t, stringInSlice("test1", channels))
 	assert.True(t, stringInSlice("test2", channels))
 	assert.True(t, h.NumSubscribers("test1") > 0)
