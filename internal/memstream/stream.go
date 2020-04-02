@@ -7,6 +7,7 @@ import (
 
 var (
 	errNotFound    = errors.New("not found")
+	errBadLimit    = errors.New("bad limit")
 	errBadSequence = errors.New("bad sequence")
 )
 
@@ -72,17 +73,23 @@ func (s *Stream) Expire() {
 // Get items since provided position.
 // If seq is zero then elements since current first element in stream will be returned.
 func (s *Stream) Get(seq uint64, limit int) ([]Item, uint64, error) {
-	var cap = s.list.Len()
-	if limit > 0 {
-		cap = limit
-	}
-	result := make([]Item, 0, cap)
+
 	if seq == s.top+1 {
-		return result, s.top, nil
+		return nil, s.top, nil
 	}
+
 	if seq > s.top+1 {
 		return nil, s.top, errBadSequence
 	}
+
+	var cap int
+	if limit > 0 {
+		cap = limit
+	} else {
+		cap = int(s.top - seq + 1)
+	}
+
+	result := make([]Item, 0, cap)
 	var el *list.Element
 	if seq > 0 {
 		var ok bool
