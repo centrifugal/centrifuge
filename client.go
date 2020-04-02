@@ -83,7 +83,7 @@ type ChannelContext struct {
 	expireAt              int64
 	positionCheckTime     int64
 	positionCheckFailures int64
-	recoveryPosition      RecoveryPosition
+	recoveryPosition      StreamPosition
 }
 
 // Client represents client connection to server.
@@ -1686,7 +1686,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			publications, recoveryPosition, err := c.node.recoverHistory(channel, RecoveryPosition{cmd.Seq, cmd.Gen, cmd.Epoch})
+			publications, recoveryPosition, err := c.node.recoverHistory(channel, StreamPosition{cmd.Seq, cmd.Gen, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				c.syncer.StopBuffering(channel)
@@ -1775,7 +1775,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		Info:       channelInfo,
 		serverSide: serverSide,
 		expireAt:   expireAt,
-		recoveryPosition: RecoveryPosition{
+		recoveryPosition: StreamPosition{
 			Seq:   latestSeq,
 			Gen:   latestGen,
 			Epoch: latestEpoch,

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/memstream"
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
@@ -101,7 +102,7 @@ func (e *MemoryEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
+func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	return e.historyHub.get(ch, filter)
 }
 
@@ -224,18 +225,24 @@ type historyHub struct {
 	queue     priority.Queue
 	nextCheck int64
 
-	epoch       string
+	epoch string
+
 	sequencesMu sync.RWMutex
 	sequences   map[string]uint64
+
+	streams     map[string]*memstream.Stream
+	expirations map[string]int64
 }
 
 func newHistoryHub() *historyHub {
 	return &historyHub{
-		history:   make(map[string]historyItem),
-		queue:     priority.MakeQueue(),
-		nextCheck: 0,
-		epoch:     strconv.FormatInt(time.Now().Unix(), 10),
-		sequences: make(map[string]uint64),
+		history:     make(map[string]historyItem),
+		streams:     make(map[string]*memstream.Stream),
+		expirations: make(map[string]int64),
+		queue:       priority.MakeQueue(),
+		nextCheck:   0,
+		epoch:       strconv.FormatInt(time.Now().Unix(), 10),
+		sequences:   make(map[string]uint64),
 	}
 }
 
@@ -244,6 +251,39 @@ func (h *historyHub) initialize() {
 }
 
 func (h *historyHub) expire() {
+	var nextCheck int64
+	for {
+		time.Sleep(time.Second)
+		h.Lock()
+		if h.nextCheck == 0 || h.nextCheck > time.Now().Unix() {
+			h.Unlock()
+			continue
+		}
+		nextCheck = 0
+		for h.queue.Len() > 0 {
+			item := heap.Pop(&h.queue).(*priority.Item)
+			expireAt := item.Priority
+			if expireAt > time.Now().Unix() {
+				heap.Push(&h.queue, item)
+				nextCheck = expireAt
+				break
+			}
+			ch := item.Value
+			exp, ok := h.expirations[ch]
+			if !ok {
+				continue
+			}
+			if exp <= expireAt {
+				delete(h.expirations, ch)
+				h.streams[ch].Expire()
+			}
+		}
+		h.nextCheck = nextCheck
+		h.Unlock()
+	}
+}
+
+func (h *historyHub) expireOld() {
 	var nextCheck int64
 	for {
 		time.Sleep(time.Second)
@@ -308,6 +348,32 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Pu
 	h.Lock()
 	defer h.Unlock()
 
+	var index uint64
+
+	expireAt := time.Now().Unix() + int64(opts.HistoryLifetime)
+	heap.Push(&h.queue, &priority.Item{Value: ch, Priority: expireAt})
+
+	if stream, ok := h.streams[ch]; ok {
+		index, _ = stream.Add(pub, opts.HistorySize)
+	} else {
+		stream := memstream.New()
+		index, _ = stream.Add(pub, opts.HistorySize)
+		h.streams[ch] = stream
+	}
+	h.expirations[ch] = expireAt
+
+	if h.nextCheck == 0 || h.nextCheck > expireAt {
+		h.nextCheck = expireAt
+	}
+
+	pub.Seq, pub.Gen = unpackUint64(index)
+	return pub, nil
+}
+
+func (h *historyHub) addOld(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	index := h.next(ch)
 	pub.Seq, pub.Gen = unpackUint64(index)
 
@@ -339,7 +405,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Pu
 	return pub, nil
 }
 
-func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
+func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	h.RLock()
 	defer h.RUnlock()
 	return h.getUnsafe(ch, filter)
@@ -365,9 +431,69 @@ func (h *historyHub) getPublications(ch string) []*Publication {
 	return pubsCopy
 }
 
-func (h *historyHub) getUnsafe(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
+func (h *historyHub) getUnsafe(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+	if filter.Since == nil {
+		stream, ok := h.streams[ch]
+		if !ok {
+			return nil, StreamPosition{0, 0, h.epoch}, nil
+		}
+		if filter.Limit == 0 {
+			streamTop := stream.Top()
+			streamPosition := StreamPosition{}
+			streamPosition.Seq, streamPosition.Gen = unpackUint64(streamTop)
+			streamPosition.Epoch = h.epoch
+			return nil, streamPosition, nil
+		}
+		items, streamTop, err := stream.Get(0, filter.Limit)
+		if err != nil {
+			return nil, StreamPosition{}, err
+		}
+		pubs := make([]*Publication, 0, len(items))
+		for _, item := range items {
+			pub := item.Value.(*Publication)
+			pub.Seq, pub.Gen = unpackUint64(item.Seq)
+			pubs = append(pubs, pub)
+		}
+		streamPosition := StreamPosition{}
+		streamPosition.Seq, streamPosition.Gen = unpackUint64(streamTop)
+		streamPosition.Epoch = h.epoch
+		return pubs, streamPosition, nil
+	}
+
+	since := filter.Since
+
+	streamSeq := packToUint64(since.Seq, since.Gen) + 1
+
+	stream, ok := h.streams[ch]
+	if !ok {
+		return nil, StreamPosition{0, 0, h.epoch}, nil
+	}
+	items, streamTop, err := stream.Get(streamSeq, filter.Limit)
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	streamPosition := StreamPosition{}
+	streamPosition.Seq, streamPosition.Gen = unpackUint64(streamTop)
+	streamPosition.Epoch = h.epoch
+
+	pubs := make([]*Publication, 0, len(items))
+	for _, item := range items {
+		pub := item.Value.(*Publication)
+		pub.Seq, pub.Gen = unpackUint64(item.Seq)
+		pubs = append(pubs, pub)
+	}
+
+	if streamPosition.Seq == since.Seq && streamPosition.Gen == since.Gen && since.Epoch == h.epoch {
+		return nil, streamPosition, nil
+	}
+
+	return pubs, streamPosition, nil
+}
+
+func (h *historyHub) getUnsafeOld(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	latestSeq, latestGen, latestEpoch := h.getSequence(ch)
-	latestPosition := RecoveryPosition{Seq: latestSeq, Gen: latestGen, Epoch: latestEpoch}
+	latestPosition := StreamPosition{Seq: latestSeq, Gen: latestGen, Epoch: latestEpoch}
 
 	if filter.Since == nil {
 		if filter.Limit == 0 {
@@ -419,6 +545,15 @@ func (h *historyHub) getUnsafe(ch string, filter HistoryFilter) ([]*Publication,
 }
 
 func (h *historyHub) remove(ch string) error {
+	h.RLock()
+	defer h.RUnlock()
+	if stream, ok := h.streams[ch]; ok {
+		stream.Expire()
+	}
+	return nil
+}
+
+func (h *historyHub) removeOld(ch string) error {
 	h.RLock()
 	defer h.RUnlock()
 

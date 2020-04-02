@@ -77,8 +77,8 @@ func (e *TestEngine) PresenceStats(ch string) (PresenceStats, error) {
 	return PresenceStats{}, nil
 }
 
-func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, RecoveryPosition, error) {
-	return []*protocol.Publication{}, RecoveryPosition{}, nil
+func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
+	return []*protocol.Publication{}, StreamPosition{}, nil
 }
 
 func (e *TestEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*Publication, error) {

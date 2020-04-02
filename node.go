@@ -809,10 +809,10 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, since RecoveryPosition) ([]*Publication, RecoveryPosition, error) {
+func (n *Node) recoverHistory(ch string, since StreamPosition) ([]*Publication, StreamPosition, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
 	if n.historyManager == nil {
-		return nil, RecoveryPosition{}, ErrorNotAvailable
+		return nil, StreamPosition{}, ErrorNotAvailable
 	}
 	return n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
@@ -830,10 +830,10 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 // currentRecoveryState returns current recovery state for channel.
-func (n *Node) currentRecoveryState(ch string) (RecoveryPosition, error) {
+func (n *Node) currentRecoveryState(ch string) (StreamPosition, error) {
 	actionCount.WithLabelValues("history_recovery_state").Inc()
 	if n.historyManager == nil {
-		return RecoveryPosition{}, ErrorNotAvailable
+		return StreamPosition{}, ErrorNotAvailable
 	}
 	_, recoveryPosition, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: 0,

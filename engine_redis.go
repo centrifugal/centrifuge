@@ -579,7 +579,7 @@ func (e *RedisEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error) {
+func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	return e.getShard(ch).History(ch, filter, e.config.SequenceTTL)
 }
 
@@ -1496,7 +1496,7 @@ func (s *shard) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) ([]*Publication, RecoveryPosition, error) {
+func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) ([]*Publication, StreamPosition, error) {
 	seqMetaKey := s.sequenceMetaKey(ch)
 	historyKey := s.historyListKey(ch)
 
@@ -1512,14 +1512,14 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	dr := newDataRequest(dataOpHistory, []interface{}{seqMetaKey, historyKey, includePubs, rightBound, seqKeyTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
-		return nil, RecoveryPosition{}, resp.err
+		return nil, StreamPosition{}, resp.err
 	}
 	results := resp.reply.([]interface{})
 
 	sequence, err := redis.Int64(results[0], nil)
 	if err != nil {
 		if err != redis.ErrNil {
-			return nil, RecoveryPosition{}, err
+			return nil, StreamPosition{}, err
 		}
 		sequence = 0
 	}
@@ -1530,7 +1530,7 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	epoch, err = redis.String(results[1], nil)
 	if err != nil {
 		if err != redis.ErrNil {
-			return nil, RecoveryPosition{}, err
+			return nil, StreamPosition{}, err
 		}
 		epoch = ""
 	}
@@ -1539,11 +1539,11 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	if includePubs {
 		publications, err = sliceOfPubs(results[2], nil)
 		if err != nil {
-			return nil, RecoveryPosition{}, err
+			return nil, StreamPosition{}, err
 		}
 	}
 
-	latestPosition := RecoveryPosition{Seq: seq, Gen: gen, Epoch: epoch}
+	latestPosition := StreamPosition{Seq: seq, Gen: gen, Epoch: epoch}
 
 	since := filter.Since
 	if since == nil {

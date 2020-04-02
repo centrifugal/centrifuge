@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1315,75 +1314,4 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 		Params: []byte(`{}`),
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
-}
-
-var recoverTests = []struct {
-	Name            string
-	HistorySize     int
-	HistoryLifetime int
-	NumPublications int
-	SinceSeq        uint32
-	NumRecovered    int
-	Sleep           int
-	Recovered       bool
-}{
-	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
-	{"from_position", 10, 60, 10, 8, 2, 0, true},
-	{"from_position_that_is_too_far", 10, 60, 20, 8, 10, 0, false},
-	{"same_position_no_history_expected", 10, 60, 7, 7, 0, 0, true},
-	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
-	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
-	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
-}
-
-func TestMemoryClientSubscribeRecover(t *testing.T) {
-	for _, tt := range recoverTests {
-		t.Run(tt.Name, func(t *testing.T) {
-			node := nodeWithMemoryEngine()
-
-			config := node.Config()
-			config.HistorySize = tt.HistorySize
-			config.HistoryLifetime = tt.HistoryLifetime
-			config.HistoryRecover = true
-			node.Reload(config)
-
-			transport := newTestTransport()
-			ctx := context.Background()
-			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := NewClient(newCtx, node, transport)
-
-			channel := "test_recovery_memory_" + tt.Name
-
-			for i := 1; i <= tt.NumPublications; i++ {
-				node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
-			}
-
-			time.Sleep(time.Duration(tt.Sleep) * time.Second)
-
-			connectClient(t, client)
-
-			replies := []*protocol.Reply{}
-			rw := testReplyWriter(&replies)
-
-			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
-				Limit: 0,
-				Since: nil,
-			})
-
-			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
-				Channel: channel,
-				Recover: true,
-				Seq:     tt.SinceSeq,
-				Gen:     recoveryPosition.Gen,
-				Epoch:   recoveryPosition.Epoch,
-			}, rw, false)
-			require.Nil(t, subCtx.disconnect)
-			require.Nil(t, replies[0].Error)
-			res := extractSubscribeResult(replies)
-			require.Equal(t, tt.NumRecovered, len(res.Publications))
-			require.Equal(t, tt.Recovered, res.Recovered)
-
-			node.Shutdown(context.Background())
-		})
-	}
 }

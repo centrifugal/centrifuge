@@ -26,14 +26,14 @@ type BrokerEventHandler interface {
 // HistoryFilter allows to filter history according to fields set.
 type HistoryFilter struct {
 	// Since used to recover missed messages since provided RecoveryPosition.
-	Since *RecoveryPosition
+	Since *StreamPosition
 	// Limit number of publications to return.
 	Limit int
 }
 
-// RecoveryPosition contains fields to rely in recovery process. More info
+// StreamPosition contains fields to rely in stream recovery process. More info
 // about recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/
-type RecoveryPosition struct {
+type StreamPosition struct {
 	// Seq defines publication sequence.
 	Seq uint32
 	// Gen defines publication sequence generation. The reason why we use both seq and
@@ -90,12 +90,14 @@ type Broker interface {
 type HistoryManager interface {
 	// History returns a slice of publications published into channel.
 	// HistoryFilter allows to set several filtering options.
-	// History must return Publications with Seq and Gen set.
-	History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error)
+	// Returns slice of Publications with Seq and Gen properly set, current
+	// stream top position and error.
+	History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
-	// The returned value is Publication ready to be published to Broker.
+	// The returned value is Publication ready to be published to
+	// Broker (with Seq and Gen properly set if needed).
 	// If returned Publication is nil then node will not try to publish
 	// it to Broker at all. This is useful for situations when engine can
 	// atomically save Publication to history and publish it to channel.
