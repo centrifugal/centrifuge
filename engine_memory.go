@@ -242,7 +242,7 @@ func newHistoryHub(seqTTL time.Duration) *historyHub {
 }
 
 func (h *historyHub) runCleanups() {
-	go h.expire()
+	go h.expireStreams()
 	if h.seqTTL > 0 {
 		go h.removeStreams()
 	}
@@ -283,7 +283,7 @@ func (h *historyHub) removeStreams() {
 	}
 }
 
-func (h *historyHub) expire() {
+func (h *historyHub) expireStreams() {
 	var nextExpireCheck int64
 	for {
 		time.Sleep(time.Second)
@@ -419,10 +419,12 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 	}
 
 	streamSeq := recovery.PackUint64(since.Seq, since.Gen) + 1
+
 	items, _, err := stream.Get(streamSeq, filter.Limit)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
+
 	pubs := make([]*Publication, 0, len(items))
 	for _, item := range items {
 		pub := item.Value.(*Publication)
