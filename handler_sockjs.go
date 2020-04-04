@@ -174,7 +174,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 
 		select {
 		case <-s.node.NotifyShutdown():
-			transport.Close(DisconnectShutdown)
+			_ = transport.Close(DisconnectShutdown)
 			return
 		default:
 		}

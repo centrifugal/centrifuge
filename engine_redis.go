@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/FZambia/sentinel"
@@ -1524,7 +1525,7 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 		sequence = 0
 	}
 
-	seq, gen := unpackUint64(uint64(sequence))
+	seq, gen := recovery.UnpackUint64(uint64(sequence))
 
 	var epoch string
 	epoch, err = redis.String(results[1], nil)
@@ -1557,7 +1558,7 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 		return nil, latestPosition, nil
 	}
 
-	nextSeq, nextGen := nextSeqGen(since.Seq, since.Gen)
+	nextSeq, nextGen := recovery.NextSeqGen(since.Seq, since.Gen)
 
 	position := -1
 
@@ -1624,7 +1625,7 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 	if err != nil {
 		return nil, resp.err
 	}
-	seq, gen := unpackUint64(uint64(index))
+	seq, gen := recovery.UnpackUint64(uint64(index))
 	pub.Seq = seq
 	pub.Gen = gen
 	return pub, nil
@@ -1695,7 +1696,7 @@ func extractPushData(data []byte) ([]byte, uint32, uint32) {
 	if bytes.HasPrefix(data, []byte("__")) {
 		parts := bytes.SplitN(data, []byte("__"), 3)
 		sequence, _ := strconv.ParseUint(string(parts[1]), 10, 64)
-		seq, gen = unpackUint64(sequence)
+		seq, gen = recovery.UnpackUint64(sequence)
 		return parts[2], seq, gen
 	}
 	return data, seq, gen

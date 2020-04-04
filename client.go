@@ -1703,7 +1703,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 
 			recoveredPubs = publications
 
-			nextSeq, nextGen := nextSeqGen(cmd.Seq, cmd.Gen)
+			nextSeq, nextGen := recovery.NextSeqGen(cmd.Seq, cmd.Gen)
 			var recovered bool
 			if len(publications) == 0 {
 				recovered = latestSeq == cmd.Seq && latestGen == cmd.Gen && latestEpoch == cmd.Epoch
@@ -1815,9 +1815,9 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *Publication, rep
 		c.mu.Unlock()
 		return nil
 	}
-	currentPositionSequence := recovery.Uint64Sequence(channelContext.recoveryPosition.Seq, channelContext.recoveryPosition.Gen)
+	currentPositionSequence := recovery.PackUint64(channelContext.recoveryPosition.Seq, channelContext.recoveryPosition.Gen)
 	nextExpectedSequence := currentPositionSequence + 1
-	pubSequence := recovery.Uint64Sequence(pub.Seq, pub.Gen)
+	pubSequence := recovery.PackUint64(pub.Seq, pub.Gen)
 	if pubSequence != nextExpectedSequence {
 		// Oops: sth lost, let client reconnect to recover its state.
 		go c.Close(DisconnectInsufficientState)

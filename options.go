@@ -16,18 +16,34 @@ func SkipHistory() PublishOption {
 	}
 }
 
-// UnsubscribeOptions define some fields to alter behaviour of Publish operation.
+// UnsubscribeOptions define some fields to alter behaviour of Unsubscribe operation.
 type UnsubscribeOptions struct {
-	// SkipHistory allows to prevent saving specific Publication to channel history.
+	// Resubscribe allows to set resubscribe protocol flag.
 	Resubscribe bool
 }
 
 // UnsubscribeOption is a type to represent various Unsubscribe options.
 type UnsubscribeOption func(*UnsubscribeOptions)
 
-// WithResubscribe allows to set SkipHistory to true.
+// WithResubscribe allows to set Resubscribe flag to true.
 func WithResubscribe() UnsubscribeOption {
 	return func(opts *UnsubscribeOptions) {
 		opts.Resubscribe = true
+	}
+}
+
+// DisconnectOptions define some fields to alter behaviour of Disconnect operation.
+type DisconnectOptions struct {
+	// Reconnect allows to set reconnect flag.
+	Reconnect bool
+}
+
+// DisconnectOption is a type to represent various Unsubscribe options.
+type DisconnectOption func(options *DisconnectOptions)
+
+// WithReconnect allows to set Reconnect flag to true.
+func WithReconnect() DisconnectOption {
+	return func(opts *DisconnectOptions) {
+		opts.Reconnect = true
 	}
 }

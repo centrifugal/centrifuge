@@ -2,33 +2,8 @@ package centrifuge
 
 import (
 	"bytes"
-	"math"
 	"sync"
 )
-
-const (
-	maxSeq uint32 = math.MaxUint32 // maximum uint32 value
-)
-
-func nextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
-	var nextSeq uint32
-	nextGen := currentGen
-	if currentSeq == maxSeq {
-		nextSeq = 0
-		nextGen++
-	} else {
-		nextSeq = currentSeq + 1
-	}
-	return nextSeq, nextGen
-}
-
-func packToUint64(seq uint32, gen uint32) uint64 {
-	return uint64(gen)*uint64(maxSeq) + uint64(seq)
-}
-
-func unpackUint64(val uint64) (uint32, uint32) {
-	return uint32(val), uint32(val >> 32)
-}
 
 func stringInSlice(a string, list []string) bool {
 	for _, b := range list {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/memstream"
 	"github.com/centrifugal/centrifuge/internal/priority"
+	"github.com/centrifugal/centrifuge/internal/recovery"
 )
 
 // MemoryEngine is builtin default engine which allows to run Centrifuge-based
@@ -353,7 +354,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Pu
 		h.streams[ch] = stream
 	}
 
-	pub.Seq, pub.Gen = unpackUint64(index)
+	pub.Seq, pub.Gen = recovery.UnpackUint64(index)
 	return pub, nil
 }
 
@@ -369,7 +370,7 @@ func (h *historyHub) createStream(ch string) StreamPosition {
 
 func getPosition(stream *memstream.Stream) StreamPosition {
 	streamPosition := StreamPosition{}
-	streamPosition.Seq, streamPosition.Gen = unpackUint64(stream.Top())
+	streamPosition.Seq, streamPosition.Gen = recovery.UnpackUint64(stream.Top())
 	streamPosition.Epoch = stream.Epoch()
 	return streamPosition
 }
@@ -417,7 +418,7 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 		return nil, streamPosition, nil
 	}
 
-	streamSeq := packToUint64(since.Seq, since.Gen) + 1
+	streamSeq := recovery.PackUint64(since.Seq, since.Gen) + 1
 	items, _, err := stream.Get(streamSeq, filter.Limit)
 	if err != nil {
 		return nil, StreamPosition{}, err

@@ -102,10 +102,10 @@ func (h *Hub) disconnect(user string, reconnect bool) error {
 	return nil
 }
 
-func (h *Hub) unsubscribe(user string, ch string) error {
+func (h *Hub) unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
 	userConnections := h.userConnections(user)
 	for _, c := range userConnections {
-		err := c.Unsubscribe(ch)
+		err := c.Unsubscribe(ch, opts...)
 		if err != nil {
 			return err
 		}
@@ -265,7 +265,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 				}
 				jsonPublicationReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
-			c.writePublication(channel, pub, jsonPublicationReply, chOpts)
+			_ = c.writePublication(channel, pub, jsonPublicationReply, chOpts)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufPublicationReply == nil {
 				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
@@ -281,7 +281,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 				}
 				protobufPublicationReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
-			c.writePublication(channel, pub, protobufPublicationReply, chOpts)
+			_ = c.writePublication(channel, pub, protobufPublicationReply, chOpts)
 		}
 	}
 	return nil
@@ -321,7 +321,7 @@ func (h *Hub) broadcastJoin(channel string, join *Join) error {
 				}
 				jsonReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
-			c.writeJoin(channel, jsonReply)
+			_ = c.writeJoin(channel, jsonReply)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufReply == nil {
 				data, err := protocol.GetPushEncoder(protoType).EncodeJoin(join)
@@ -337,7 +337,7 @@ func (h *Hub) broadcastJoin(channel string, join *Join) error {
 				}
 				protobufReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
-			c.writeJoin(channel, protobufReply)
+			_ = c.writeJoin(channel, protobufReply)
 		}
 	}
 	return nil
@@ -377,7 +377,7 @@ func (h *Hub) broadcastLeave(channel string, leave *Leave) error {
 				}
 				jsonReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
-			c.writeLeave(channel, jsonReply)
+			_ = c.writeLeave(channel, jsonReply)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufReply == nil {
 				data, err := protocol.GetPushEncoder(protoType).EncodeLeave(leave)
@@ -393,7 +393,7 @@ func (h *Hub) broadcastLeave(channel string, leave *Leave) error {
 				}
 				protobufReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
-			c.writeLeave(channel, protobufReply)
+			_ = c.writeLeave(channel, protobufReply)
 		}
 	}
 	return nil

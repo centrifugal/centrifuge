@@ -32,7 +32,7 @@ type HistoryFilter struct {
 }
 
 // StreamPosition contains fields to rely in stream recovery process. More info
-// about recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/
+// about stream recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/
 type StreamPosition struct {
 	// Seq defines publication sequence.
 	Seq uint32

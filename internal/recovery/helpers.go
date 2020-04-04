@@ -14,7 +14,7 @@ const (
 // uniquePublications returns slice of unique Publications.
 func uniquePublications(s []*protocol.Publication) []*protocol.Publication {
 	keys := make(map[uint64]struct{})
-	list := []*protocol.Publication{}
+	var list []*protocol.Publication
 	for _, entry := range s {
 		val := (uint64(entry.Seq))<<32 | uint64(entry.Gen)
 		if _, value := keys[val]; !value {
@@ -38,9 +38,9 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 	})
 	if len(bufferedPubs) > 0 {
 		recoveredPubs = uniquePublications(recoveredPubs)
-		prevSeq := Uint64Sequence(recoveredPubs[0].Seq, recoveredPubs[0].Gen)
+		prevSeq := PackUint64(recoveredPubs[0].Seq, recoveredPubs[0].Gen)
 		for _, p := range recoveredPubs[1:] {
-			pubSequence := Uint64Sequence(p.Seq, p.Gen)
+			pubSequence := PackUint64(p.Seq, p.Gen)
 			if pubSequence != prevSeq+1 {
 				return nil, false
 			}
@@ -48,11 +48,6 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 		}
 	}
 	return recoveredPubs, true
-}
-
-// Uint64Sequence ...
-func Uint64Sequence(currentSeq, currentGen uint32) uint64 {
-	return uint64(currentGen)*uint64(math.MaxUint32) + uint64(currentSeq)
 }
 
 // NextSeqGen ...
@@ -66,6 +61,11 @@ func NextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
 		nextSeq = currentSeq + 1
 	}
 	return nextSeq, nextGen
+}
+
+// PackUint64 ...
+func PackUint64(seq, gen uint32) uint64 {
+	return uint64(gen)*uint64(math.MaxUint32) + uint64(seq)
 }
 
 // UnpackUint64 ...

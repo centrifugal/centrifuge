@@ -108,7 +108,7 @@ func index(s string, numBuckets int) int {
 		return 0
 	}
 	hash := fnv.New64a()
-	hash.Write([]byte(s))
+	_, _ = hash.Write([]byte(s))
 	return int(hash.Sum64() % uint64(numBuckets))
 }
 
@@ -183,8 +183,7 @@ func (n *Node) Run() error {
 	go n.sendNodePing()
 	go n.cleanNodeInfo()
 	go n.updateMetrics()
-	n.subDissolver.Run()
-	return nil
+	return n.subDissolver.Run()
 }
 
 // Log allows to log entry.
@@ -226,7 +225,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			defer closer.Close(ctx)
 		}
 	}
-	n.subDissolver.Close()
+	_ = n.subDissolver.Close()
 	return n.hub.shutdown(ctx)
 }
 
@@ -494,7 +493,7 @@ func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...Publish
 			// Publication added to history, no need to handle Publish error here.
 			// In this case we rely on the fact that clients will eventually restore
 			// Publication from history.
-			n.broker.Publish(ch, pub, &chOpts)
+			_ = n.broker.Publish(ch, pub, &chOpts)
 		}
 		return nil
 	}
@@ -620,6 +619,7 @@ func (n *Node) pubUnsubscribe(user string, ch string) error {
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from Centrifugo.
 func (n *Node) pubDisconnect(user string, reconnect bool) error {
+	// TODO: handle reconnect flag.
 	disconnect := &controlproto.Disconnect{
 		User: user,
 	}
@@ -659,7 +659,7 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 	if first {
 		err := n.broker.Subscribe(ch)
 		if err != nil {
-			n.hub.removeSub(ch, c)
+			_, _ = n.hub.removeSub(ch, c)
 			return err
 		}
 	}
@@ -679,7 +679,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	}
 	if empty {
 		submittedAt := time.Now()
-		n.subDissolver.Submit(func() error {
+		return n.subDissolver.Submit(func() error {
 			timeSpent := time.Since(submittedAt)
 			if timeSpent < time.Second {
 				time.Sleep(time.Second - timeSpent)
@@ -705,9 +705,13 @@ func (n *Node) nodeCmd(node *controlproto.Node) error {
 
 // Unsubscribe unsubscribes user from channel, if channel is equal to empty
 // string then user will be unsubscribed from all channels.
-func (n *Node) Unsubscribe(user string, ch string) error {
+func (n *Node) Unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
+	unsubscribeOpts := &UnsubscribeOptions{}
+	for _, opt := range opts {
+		opt(unsubscribeOpts)
+	}
 	// First unsubscribe on this node.
-	err := n.hub.unsubscribe(user, ch)
+	err := n.hub.unsubscribe(user, ch, opts...)
 	if err != nil {
 		return err
 	}
@@ -715,15 +719,19 @@ func (n *Node) Unsubscribe(user string, ch string) error {
 	return n.pubUnsubscribe(user, ch)
 }
 
-// Disconnect allows to close all user connections to Centrifugo.
-func (n *Node) Disconnect(user string, reconnect bool) error {
+// Disconnect allows to close all user connections through all nodes.
+func (n *Node) Disconnect(user string, opts ...DisconnectOption) error {
+	disconnectOpts := &DisconnectOptions{}
+	for _, opt := range opts {
+		opt(disconnectOpts)
+	}
 	// first disconnect user from this node
-	err := n.hub.disconnect(user, reconnect)
+	err := n.hub.disconnect(user, disconnectOpts.Reconnect)
 	if err != nil {
 		return err
 	}
 	// second send disconnect control message to other nodes
-	return n.pubDisconnect(user, reconnect)
+	return n.pubDisconnect(user, disconnectOpts.Reconnect)
 }
 
 // namespaceName returns namespace name from channel if exists.

@@ -25,16 +25,16 @@ func TestUnique(t *testing.T) {
 }
 
 func TestUint64Sequence(t *testing.T) {
-	s := Uint64Sequence(0, 0)
+	s := PackUint64(0, 0)
 	assert.Equal(t, uint64(0), s)
 
-	s = Uint64Sequence(1, 0)
+	s = PackUint64(1, 0)
 	assert.Equal(t, uint64(1), s)
 
-	s = Uint64Sequence(0, 1)
+	s = PackUint64(0, 1)
 	assert.Equal(t, uint64(1<<32-1), s)
 
-	s = Uint64Sequence(1, 1)
+	s = PackUint64(1, 1)
 	assert.Equal(t, uint64(1<<32), s)
 }
 
