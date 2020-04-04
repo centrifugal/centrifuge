@@ -110,7 +110,7 @@ type RedisEngineConfig struct {
 	// created for а short time and then not used anymore – created sequence meta keys
 	// stay in memory while not actually useful. Setting a reasonable value to this
 	// option (usually much bigger than history retention period) can help.
-
+	//
 	// SequenceTTL sets a time of sequence data expiration in Engine.
 	// Sequence meta key in Redis is a HASH that contains current sequence number
 	// in channel and epoch value. By default sequence data for channels does not expire.

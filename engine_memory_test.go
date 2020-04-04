@@ -120,10 +120,10 @@ func TestMemoryPresenceHub(t *testing.T) {
 }
 
 func TestMemoryHistoryHub(t *testing.T) {
-	h := newHistoryHub()
-	h.initialize()
+	h := newHistoryHub(0)
+	h.runCleanups()
 	h.RLock()
-	require.Equal(t, 0, len(h.history))
+	require.Equal(t, 0, len(h.streams))
 	h.RUnlock()
 	ch1 := "channel1"
 	ch2 := "channel2"
@@ -146,9 +146,17 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 2, len(hist))
 	time.Sleep(2 * time.Second)
 
-	// test that history cleaned up by periodic task
+	// test that stream data cleaned up by periodic task
 	h.RLock()
-	require.Equal(t, 0, len(h.history))
+	require.Equal(t, 2, len(h.streams))
+	items, top, err := h.streams[ch1].Get(0, -1)
+	require.NoError(t, err)
+	require.Nil(t, items)
+	require.NotZero(t, top)
+	items, top, err = h.streams[ch2].Get(0, -1)
+	require.NoError(t, err)
+	require.Nil(t, items)
+	require.NotZero(t, top)
 	h.RUnlock()
 	hist, _, err = h.get(ch1, HistoryFilter{
 		Limit: -1,
@@ -180,6 +188,29 @@ func TestMemoryHistoryHub(t *testing.T) {
 	})
 	require.Equal(t, nil, err)
 	require.Equal(t, 1, len(hist))
+}
+
+func TestMemoryHistoryHubSequenceTTL(t *testing.T) {
+	h := newHistoryHub(1 * time.Second)
+	h.runCleanups()
+
+	ch1 := "channel1"
+	ch2 := "channel2"
+	pub := newTestPublication()
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	h.RLock()
+	require.Equal(t, 2, len(h.streams))
+	h.RUnlock()
+
+	time.Sleep(2 * time.Second)
+
+	// test that stream cleaned up by periodic task
+	h.RLock()
+	require.Equal(t, 0, len(h.streams))
+	h.RUnlock()
 }
 
 func BenchmarkMemoryEnginePublish_SingleChannel(b *testing.B) {
@@ -348,7 +379,7 @@ func BenchmarkMemoryEngineRecover_SingleChannel_Parallel(b *testing.B) {
 	numMessages := 100
 	for i := 1; i <= numMessages; i++ {
 		pub := &Publication{Data: rawData}
-		e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
+		e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

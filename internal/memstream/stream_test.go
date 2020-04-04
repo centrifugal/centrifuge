@@ -36,7 +36,7 @@ func TestStream(t *testing.T) {
 	items, streamTop, err = s.Get(6, 2)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(5))
-	require.Equal(t, []Item{}, items)
+	require.Nil(t, items)
 
 	_, _, err = s.Get(7, 2)
 	require.Error(t, err)
@@ -49,8 +49,10 @@ func TestStream(t *testing.T) {
 	_, err = s.Add([]byte("6"), streamSize)
 	require.NoError(t, err)
 
-	_, _, err = s.Get(1, 2)
-	require.Error(t, err)
+	items, streamTop, err = s.Get(1, 2)
+	require.Nil(t, err)
+	require.Equal(t, streamTop, uint64(6))
+	require.Equal(t, []Item{Item{2, []byte("2")}, Item{3, []byte("3")}}, items)
 
 	items, streamTop, err = s.Get(2, 2)
 	require.NoError(t, err)

@@ -223,6 +223,44 @@ func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []b
 	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink)
 }
 
+func TestNodeHistoryIteration(t *testing.T) {
+	e := testMemoryEngine()
+	conf := e.node.Config()
+	conf.HistorySize = 100000
+	conf.HistoryLifetime = 60
+	conf.HistoryRecover = true
+	err := e.node.Reload(conf)
+	assert.NoError(t, err)
+
+	channel := "test"
+
+	numMessages := 10000
+	for i := 1; i <= numMessages; i++ {
+		err := e.node.Publish(channel, []byte(`{}`))
+		assert.NoError(t, err)
+	}
+
+	var n int
+
+	var seq uint32 = 0
+
+	for {
+		pubs, _, err := e.History(channel, HistoryFilter{
+			Limit: 10,
+			Since: &StreamPosition{Seq: seq, Gen: 0, Epoch: ""},
+		})
+		seq += 10
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pubs) == 0 {
+			break
+		}
+		n += len(pubs)
+	}
+	assert.Equal(t, numMessages, n)
+}
+
 func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 	benchmarks := []struct {
 		name           string

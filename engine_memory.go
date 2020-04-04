@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"container/heap"
-	"strconv"
 	"sync"
 	"time"
 
@@ -18,7 +17,7 @@ import (
 // you should use another engine implementation instead – for example Redis engine.
 //
 // Running single node can be sufficient for many use cases especially when you
-// need maximum performance and do not too many online clients. Consider configuring
+// need maximum performance and not too many online clients. Consider configuring
 // your load balancer to have one backup Centrifuge node for HA in this case.
 type MemoryEngine struct {
 	node         *Node
@@ -30,16 +29,20 @@ type MemoryEngine struct {
 var _ Engine = (*MemoryEngine)(nil)
 
 // MemoryEngineConfig is a memory engine config.
-type MemoryEngineConfig struct{}
+type MemoryEngineConfig struct {
+	// SequenceTTL sets a time of inactive stream sequence expiration.
+	// Must have a reasonable value for application.
+	// At moment works with seconds precision.
+	SequenceTTL time.Duration
+}
 
 // NewMemoryEngine initializes Memory Engine.
-func NewMemoryEngine(n *Node, _ MemoryEngineConfig) (*MemoryEngine, error) {
+func NewMemoryEngine(n *Node, c MemoryEngineConfig) (*MemoryEngine, error) {
 	e := &MemoryEngine{
 		node:        n,
 		presenceHub: newPresenceHub(),
-		historyHub:  newHistoryHub(),
+		historyHub:  newHistoryHub(c.SequenceTTL),
 	}
-	e.historyHub.initialize()
 	return e, nil
 }
 
@@ -47,6 +50,7 @@ func NewMemoryEngine(n *Node, _ MemoryEngineConfig) (*MemoryEngine, error) {
 // just after initialization.
 func (e *MemoryEngine) Run(h BrokerEventHandler) error {
 	e.eventHandler = h
+	e.historyHub.runCleanups()
 	return nil
 }
 
@@ -210,138 +214,109 @@ func (h *presenceHub) getStats(ch string) (PresenceStats, error) {
 	}, nil
 }
 
-type historyItem struct {
-	messages []*Publication
-	expireAt int64
-}
-
-func (i historyItem) isExpired() bool {
-	return i.expireAt < time.Now().Unix()
-}
-
 type historyHub struct {
 	sync.RWMutex
-	history   map[string]historyItem
-	queue     priority.Queue
-	nextCheck int64
 
-	epoch string
+	streams map[string]*memstream.Stream
 
-	sequencesMu sync.RWMutex
-	sequences   map[string]uint64
+	nextExpireCheck int64
+	expireQueue     priority.Queue
+	expires         map[string]int64
 
-	streams     map[string]*memstream.Stream
-	expirations map[string]int64
+	seqTTL          time.Duration
+	nextRemoveCheck int64
+	removeQueue     priority.Queue
+	removes         map[string]int64
 }
 
-func newHistoryHub() *historyHub {
+func newHistoryHub(seqTTL time.Duration) *historyHub {
 	return &historyHub{
-		history:     make(map[string]historyItem),
 		streams:     make(map[string]*memstream.Stream),
-		expirations: make(map[string]int64),
-		queue:       priority.MakeQueue(),
-		nextCheck:   0,
-		epoch:       strconv.FormatInt(time.Now().Unix(), 10),
-		sequences:   make(map[string]uint64),
+		expireQueue: priority.MakeQueue(),
+		expires:     make(map[string]int64),
+		seqTTL:      seqTTL,
+		removeQueue: priority.MakeQueue(),
+		removes:     make(map[string]int64),
 	}
 }
 
-func (h *historyHub) initialize() {
+func (h *historyHub) runCleanups() {
 	go h.expire()
+	if h.seqTTL > 0 {
+		go h.removeStreams()
+	}
 }
 
-func (h *historyHub) expire() {
-	var nextCheck int64
+func (h *historyHub) removeStreams() {
+	var nextRemoveCheck int64
 	for {
 		time.Sleep(time.Second)
 		h.Lock()
-		if h.nextCheck == 0 || h.nextCheck > time.Now().Unix() {
+		if h.nextRemoveCheck == 0 || h.nextRemoveCheck > time.Now().Unix() {
 			h.Unlock()
 			continue
 		}
-		nextCheck = 0
-		for h.queue.Len() > 0 {
-			item := heap.Pop(&h.queue).(*priority.Item)
+		nextRemoveCheck = 0
+		for h.removeQueue.Len() > 0 {
+			item := heap.Pop(&h.removeQueue).(*priority.Item)
 			expireAt := item.Priority
 			if expireAt > time.Now().Unix() {
-				heap.Push(&h.queue, item)
-				nextCheck = expireAt
+				heap.Push(&h.removeQueue, item)
+				nextRemoveCheck = expireAt
 				break
 			}
 			ch := item.Value
-			exp, ok := h.expirations[ch]
+			exp, ok := h.removes[ch]
 			if !ok {
 				continue
 			}
 			if exp <= expireAt {
-				delete(h.expirations, ch)
-				h.streams[ch].Expire()
+				delete(h.removes, ch)
+				delete(h.streams, ch)
+			} else {
+				heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: exp})
 			}
 		}
-		h.nextCheck = nextCheck
+		h.nextRemoveCheck = nextRemoveCheck
 		h.Unlock()
 	}
 }
 
-func (h *historyHub) expireOld() {
-	var nextCheck int64
+func (h *historyHub) expire() {
+	var nextExpireCheck int64
 	for {
 		time.Sleep(time.Second)
 		h.Lock()
-		if h.nextCheck == 0 || h.nextCheck > time.Now().Unix() {
+		if h.nextExpireCheck == 0 || h.nextExpireCheck > time.Now().Unix() {
 			h.Unlock()
 			continue
 		}
-		nextCheck = 0
-		for h.queue.Len() > 0 {
-			item := heap.Pop(&h.queue).(*priority.Item)
+		nextExpireCheck = 0
+		for h.expireQueue.Len() > 0 {
+			item := heap.Pop(&h.expireQueue).(*priority.Item)
 			expireAt := item.Priority
 			if expireAt > time.Now().Unix() {
-				heap.Push(&h.queue, item)
-				nextCheck = expireAt
+				heap.Push(&h.expireQueue, item)
+				nextExpireCheck = expireAt
 				break
 			}
 			ch := item.Value
-			hItem, ok := h.history[ch]
+			exp, ok := h.expires[ch]
 			if !ok {
 				continue
 			}
-			if hItem.expireAt <= expireAt {
-				delete(h.history, ch)
+			if exp <= expireAt {
+				delete(h.expires, ch)
+				if stream, ok := h.streams[ch]; ok {
+					stream.Expire()
+				}
+			} else {
+				heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: exp})
 			}
 		}
-		h.nextCheck = nextCheck
+		h.nextExpireCheck = nextExpireCheck
 		h.Unlock()
 	}
-}
-
-func (h *historyHub) next(ch string) uint64 {
-	var val uint64
-	h.sequencesMu.Lock()
-	top, ok := h.sequences[ch]
-	if !ok {
-		val = 1
-		h.sequences[ch] = val
-	} else {
-		top++
-		h.sequences[ch] = top
-		val = top
-	}
-	h.sequencesMu.Unlock()
-	return val
-}
-
-func (h *historyHub) getSequence(ch string) (uint32, uint32, string) {
-	h.sequencesMu.Lock()
-	defer h.sequencesMu.Unlock()
-	val, ok := h.sequences[ch]
-	if !ok {
-		var top uint64
-		h.sequences[ch] = top
-		return 0, 0, h.epoch
-	}
-	seq, gen := unpackUint64(val)
-	return seq, gen, h.epoch
 }
 
 func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
@@ -351,7 +326,24 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Pu
 	var index uint64
 
 	expireAt := time.Now().Unix() + int64(opts.HistoryLifetime)
-	heap.Push(&h.queue, &priority.Item{Value: ch, Priority: expireAt})
+	if _, ok := h.expires[ch]; !ok {
+		heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: expireAt})
+	}
+	h.expires[ch] = expireAt
+	if h.nextExpireCheck == 0 || h.nextExpireCheck > expireAt {
+		h.nextExpireCheck = expireAt
+	}
+
+	if h.seqTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.seqTTL.Seconds())
+		if _, ok := h.removes[ch]; !ok {
+			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
+		}
+		h.removes[ch] = removeAt
+		if h.nextRemoveCheck == 0 || h.nextRemoveCheck > removeAt {
+			h.nextRemoveCheck = removeAt
+		}
+	}
 
 	if stream, ok := h.streams[ch]; ok {
 		index, _ = stream.Add(pub, opts.HistorySize)
@@ -360,206 +352,89 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Pu
 		index, _ = stream.Add(pub, opts.HistorySize)
 		h.streams[ch] = stream
 	}
-	h.expirations[ch] = expireAt
-
-	if h.nextCheck == 0 || h.nextCheck > expireAt {
-		h.nextCheck = expireAt
-	}
 
 	pub.Seq, pub.Gen = unpackUint64(index)
 	return pub, nil
 }
 
-func (h *historyHub) addOld(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
-	h.Lock()
-	defer h.Unlock()
+// Lock must be held outside.
+func (h *historyHub) createStream(ch string) StreamPosition {
+	stream := memstream.New()
+	h.streams[ch] = stream
+	streamPosition := StreamPosition{}
+	streamPosition.Seq, streamPosition.Gen = 0, 0
+	streamPosition.Epoch = stream.Epoch()
+	return streamPosition
+}
 
-	index := h.next(ch)
-	pub.Seq, pub.Gen = unpackUint64(index)
-
-	_, ok := h.history[ch]
-
-	expireAt := time.Now().Unix() + int64(opts.HistoryLifetime)
-	heap.Push(&h.queue, &priority.Item{Value: ch, Priority: expireAt})
-	if !ok {
-		h.history[ch] = historyItem{
-			messages: []*Publication{pub},
-			expireAt: expireAt,
-		}
-	} else {
-		messages := h.history[ch].messages
-		messages = append([]*Publication{pub}, messages...)
-		if len(messages) > opts.HistorySize {
-			messages = messages[0:opts.HistorySize]
-		}
-		h.history[ch] = historyItem{
-			messages: messages,
-			expireAt: expireAt,
-		}
-	}
-
-	if h.nextCheck == 0 || h.nextCheck > expireAt {
-		h.nextCheck = expireAt
-	}
-
-	return pub, nil
+func getPosition(stream *memstream.Stream) StreamPosition {
+	streamPosition := StreamPosition{}
+	streamPosition.Seq, streamPosition.Gen = unpackUint64(stream.Top())
+	streamPosition.Epoch = stream.Epoch()
+	return streamPosition
 }
 
 func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	h.RLock()
-	defer h.RUnlock()
-	return h.getUnsafe(ch, filter)
-}
+	h.Lock()
+	defer h.Unlock()
 
-func (h *historyHub) getPublications(ch string) []*Publication {
-	hItem, ok := h.history[ch]
+	if h.seqTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.seqTTL.Seconds())
+		if _, ok := h.removes[ch]; !ok {
+			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
+		}
+		h.removes[ch] = removeAt
+		if h.nextRemoveCheck == 0 || h.nextRemoveCheck > removeAt {
+			h.nextRemoveCheck = removeAt
+		}
+	}
+
+	stream, ok := h.streams[ch]
 	if !ok {
-		return []*Publication{}
+		return nil, h.createStream(ch), nil
 	}
-	if hItem.isExpired() {
-		delete(h.history, ch)
-		return []*Publication{}
-	}
-	pubs := hItem.messages
-	pubsCopy := make([]*Publication, len(pubs))
-	copy(pubsCopy, pubs)
 
-	for i := len(pubsCopy)/2 - 1; i >= 0; i-- {
-		opp := len(pubsCopy) - 1 - i
-		pubsCopy[i], pubsCopy[opp] = pubsCopy[opp], pubsCopy[i]
-	}
-	return pubsCopy
-}
-
-func (h *historyHub) getUnsafe(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	if filter.Since == nil {
-		stream, ok := h.streams[ch]
-		if !ok {
-			return nil, StreamPosition{0, 0, h.epoch}, nil
-		}
 		if filter.Limit == 0 {
-			streamTop := stream.Top()
-			streamPosition := StreamPosition{}
-			streamPosition.Seq, streamPosition.Gen = unpackUint64(streamTop)
-			streamPosition.Epoch = h.epoch
-			return nil, streamPosition, nil
+			return nil, getPosition(stream), nil
 		}
-		items, streamTop, err := stream.Get(0, filter.Limit)
+		items, _, err := stream.Get(0, filter.Limit)
 		if err != nil {
 			return nil, StreamPosition{}, err
 		}
 		pubs := make([]*Publication, 0, len(items))
 		for _, item := range items {
 			pub := item.Value.(*Publication)
-			pub.Seq, pub.Gen = unpackUint64(item.Seq)
 			pubs = append(pubs, pub)
 		}
-		streamPosition := StreamPosition{}
-		streamPosition.Seq, streamPosition.Gen = unpackUint64(streamTop)
-		streamPosition.Epoch = h.epoch
-		return pubs, streamPosition, nil
+		return pubs, getPosition(stream), nil
 	}
 
 	since := filter.Since
 
-	streamSeq := packToUint64(since.Seq, since.Gen) + 1
-
-	stream, ok := h.streams[ch]
-	if !ok {
-		return nil, StreamPosition{0, 0, h.epoch}, nil
-	}
-	items, streamTop, err := stream.Get(streamSeq, filter.Limit)
-	if err != nil {
-		return nil, StreamPosition{}, err
-	}
-
-	streamPosition := StreamPosition{}
-	streamPosition.Seq, streamPosition.Gen = unpackUint64(streamTop)
-	streamPosition.Epoch = h.epoch
-
-	pubs := make([]*Publication, 0, len(items))
-	for _, item := range items {
-		pub := item.Value.(*Publication)
-		pub.Seq, pub.Gen = unpackUint64(item.Seq)
-		pubs = append(pubs, pub)
-	}
-
-	if streamPosition.Seq == since.Seq && streamPosition.Gen == since.Gen && since.Epoch == h.epoch {
+	streamPosition := getPosition(stream)
+	if streamPosition.Seq == since.Seq && streamPosition.Gen == since.Gen && since.Epoch == stream.Epoch() {
 		return nil, streamPosition, nil
 	}
 
+	streamSeq := packToUint64(since.Seq, since.Gen) + 1
+	items, _, err := stream.Get(streamSeq, filter.Limit)
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+	pubs := make([]*Publication, 0, len(items))
+	for _, item := range items {
+		pub := item.Value.(*Publication)
+		pubs = append(pubs, pub)
+	}
 	return pubs, streamPosition, nil
 }
 
-func (h *historyHub) getUnsafeOld(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	latestSeq, latestGen, latestEpoch := h.getSequence(ch)
-	latestPosition := StreamPosition{Seq: latestSeq, Gen: latestGen, Epoch: latestEpoch}
-
-	if filter.Since == nil {
-		if filter.Limit == 0 {
-			return nil, latestPosition, nil
-		}
-		allPubs := h.getPublications(ch)
-		if filter.Limit == -1 || filter.Limit >= len(allPubs) {
-			return allPubs, latestPosition, nil
-		}
-		return allPubs[:filter.Limit], latestPosition, nil
-	}
-
-	allPubs := h.getPublications(ch)
-
-	since := filter.Since
-
-	if latestSeq == since.Seq && since.Gen == latestGen && since.Epoch == latestEpoch {
-		return nil, latestPosition, nil
-	}
-
-	nextSeq, nextGen := nextSeqGen(since.Seq, since.Gen)
-
-	position := -1
-
-	for i := 0; i < len(allPubs); i++ {
-		pub := allPubs[i]
-		if pub.Seq == since.Seq && pub.Gen == since.Gen {
-			position = i + 1
-			break
-		}
-		if pub.Seq == nextSeq && pub.Gen == nextGen {
-			position = i
-			break
-		}
-	}
-
-	if position > -1 {
-		pubs := allPubs[position:]
-		if filter.Limit >= 0 {
-			return pubs[:filter.Limit], latestPosition, nil
-		}
-		return pubs, latestPosition, nil
-	}
-
-	if filter.Limit >= 0 {
-		return allPubs[:filter.Limit], latestPosition, nil
-	}
-	return allPubs, latestPosition, nil
-}
-
 func (h *historyHub) remove(ch string) error {
-	h.RLock()
-	defer h.RUnlock()
+	h.Lock()
+	defer h.Unlock()
 	if stream, ok := h.streams[ch]; ok {
 		stream.Expire()
-	}
-	return nil
-}
-
-func (h *historyHub) removeOld(ch string) error {
-	h.RLock()
-	defer h.RUnlock()
-
-	_, ok := h.history[ch]
-	if ok {
-		delete(h.history, ch)
 	}
 	return nil
 }

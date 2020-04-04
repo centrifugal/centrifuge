@@ -129,7 +129,7 @@ func (t *fakeTransport) writeMany(bufs ...[]byte) error {
 	return nil
 }
 
-func (t *fakeTransport) write(buf []byte) error {
+func (t *fakeTransport) write(_ []byte) error {
 	t.count++
 	t.ch <- struct{}{}
 	return nil

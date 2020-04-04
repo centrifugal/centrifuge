@@ -3,11 +3,11 @@ package memstream
 import (
 	"container/list"
 	"errors"
+	"strconv"
+	"time"
 )
 
 var (
-	errNotFound    = errors.New("not found")
-	errBadLimit    = errors.New("bad limit")
 	errBadSequence = errors.New("bad sequence")
 )
 
@@ -24,6 +24,7 @@ type Stream struct {
 	top   uint64
 	list  *list.List
 	index map[uint64]*list.Element
+	epoch string
 }
 
 // New creates new Stream.
@@ -31,6 +32,7 @@ func New() *Stream {
 	return &Stream{
 		list:  list.New(),
 		index: make(map[uint64]*list.Element),
+		epoch: strconv.FormatInt(time.Now().Unix(), 10),
 	}
 }
 
@@ -57,9 +59,15 @@ func (s *Stream) Top() uint64 {
 	return s.top
 }
 
+// Epoch returns epoch of stream.
+func (s *Stream) Epoch() string {
+	return s.epoch
+}
+
 // Reset stream.
 func (s *Stream) Reset() {
 	s.top = 0
+	s.epoch = strconv.FormatInt(time.Now().Unix(), 10)
 	s.list = list.New()
 	s.index = make(map[uint64]*list.Element)
 }
@@ -74,12 +82,8 @@ func (s *Stream) Expire() {
 // If seq is zero then elements since current first element in stream will be returned.
 func (s *Stream) Get(seq uint64, limit int) ([]Item, uint64, error) {
 
-	if seq == s.top+1 {
+	if seq >= s.top+1 {
 		return nil, s.top, nil
-	}
-
-	if seq > s.top+1 {
-		return nil, s.top, errBadSequence
 	}
 
 	var cap int
@@ -89,7 +93,6 @@ func (s *Stream) Get(seq uint64, limit int) ([]Item, uint64, error) {
 		cap = int(s.top - seq + 1)
 	}
 
-	result := make([]Item, 0, cap)
 	var el *list.Element
 	if seq > 0 {
 		var ok bool
@@ -104,6 +107,8 @@ func (s *Stream) Get(seq uint64, limit int) ([]Item, uint64, error) {
 	if el == nil {
 		return nil, s.top, nil
 	}
+
+	result := make([]Item, 0, cap)
 
 	item := el.Value.(Item)
 	result = append(result, item)
