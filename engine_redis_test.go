@@ -851,7 +851,7 @@ func TestRedisClientSubscribeRecover(t *testing.T) {
 
 			connectClient(t, client)
 
-			replies := []*protocol.Reply{}
+			var replies []*protocol.Reply
 			rw := testReplyWriter(&replies)
 
 			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{

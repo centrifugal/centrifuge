@@ -102,11 +102,11 @@ func TestMemoryPresenceHub(t *testing.T) {
 		Client: "client",
 	}
 
-	h.add(testCh1, uid, info)
+	_ = h.add(testCh1, uid, info)
 	require.Equal(t, 1, len(h.presence))
-	h.add(testCh2, uid, info)
+	_ = h.add(testCh2, uid, info)
 	require.Equal(t, 2, len(h.presence))
-	h.remove(testCh1, uid)
+	_ = h.remove(testCh1, uid)
 	// remove non existing must not fail
 	err := h.remove(testCh1, uid)
 	require.Equal(t, nil, err)
@@ -128,11 +128,11 @@ func TestMemoryHistoryHub(t *testing.T) {
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 
-	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 
 	hist, _, err := h.get(ch1, HistoryFilter{
 		Limit: -1,
@@ -165,10 +165,10 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 0, len(hist))
 
 	// test history messages limit
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
 	hist, _, err = h.get(ch1, HistoryFilter{
 		Limit: -1,
 	})
@@ -181,8 +181,8 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 1, len(hist))
 
 	// test history limit greater than history size
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
 	hist, _, err = h.get(ch1, HistoryFilter{
 		Limit: 2,
 	})
@@ -197,10 +197,10 @@ func TestMemoryHistoryHubSequenceTTL(t *testing.T) {
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
-	h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 	h.RLock()
 	require.Equal(t, 2, len(h.streams))
 	h.RUnlock()
@@ -309,7 +309,7 @@ func BenchmarkMemoryEngineAddPresence_SingleChannel_Parallel(b *testing.B) {
 
 func BenchmarkMemoryEnginePresence_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
-	e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := e.Presence("channel")
@@ -321,7 +321,7 @@ func BenchmarkMemoryEnginePresence_SingleChannel(b *testing.B) {
 
 func BenchmarkMemoryEnginePresence_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
-	e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -338,7 +338,7 @@ func BenchmarkMemoryEngineHistory_SingleChannel(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test UID", Data: rawData}
 	for i := 0; i < 4; i++ {
-		e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -357,7 +357,7 @@ func BenchmarkMemoryEngineHistory_SingleChannel_Parallel(b *testing.B) {
 	rawData := Raw([]byte("{}"))
 	pub := &Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
-		e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -379,7 +379,7 @@ func BenchmarkMemoryEngineRecover_SingleChannel_Parallel(b *testing.B) {
 	numMessages := 100
 	for i := 1; i <= numMessages; i++ {
 		pub := &Publication{Data: rawData}
-		e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
+		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -423,7 +423,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			config.HistorySize = tt.HistorySize
 			config.HistoryLifetime = tt.HistoryLifetime
 			config.HistoryRecover = true
-			node.Reload(config)
+			_ = node.Reload(config)
 
 			transport := newTestTransport()
 			ctx := context.Background()
@@ -433,14 +433,14 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			channel := "test_recovery_memory_" + tt.Name
 
 			for i := 1; i <= tt.NumPublications; i++ {
-				node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
+				_ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
 			}
 
 			time.Sleep(time.Duration(tt.Sleep) * time.Second)
 
 			connectClient(t, client)
 
-			replies := []*protocol.Reply{}
+			var replies []*protocol.Reply
 			rw := testReplyWriter(&replies)
 
 			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
