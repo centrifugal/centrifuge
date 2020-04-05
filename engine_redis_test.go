@@ -137,11 +137,11 @@ func TestRedisEngine(t *testing.T) {
 	require.NoError(t, nil, err)
 
 	// test publishing join message.
-	joinMessage := Join{}
+	joinMessage := protocol.Join{}
 	require.NoError(t, e.PublishJoin("channel", &joinMessage, nil))
 
 	// test publishing leave message.
-	leaveMessage := Leave{}
+	leaveMessage := protocol.Leave{}
 	require.NoError(t, e.PublishLeave("channel", &leaveMessage, nil))
 }
 

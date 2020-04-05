@@ -34,12 +34,12 @@ func (e *TestEngine) Publish(_ string, _ *Publication, _ *ChannelOptions) error 
 	return nil
 }
 
-func (e *TestEngine) PublishJoin(_ string, _ *Join, _ *ChannelOptions) error {
+func (e *TestEngine) PublishJoin(_ string, _ *protocol.Join, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishLeave(_ string, _ *Leave, _ *ChannelOptions) error {
+func (e *TestEngine) PublishLeave(_ string, _ *protocol.Leave, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
 	return nil
 }

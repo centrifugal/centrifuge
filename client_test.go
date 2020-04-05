@@ -904,9 +904,9 @@ type testBrokerEventHandler struct {
 	// Publication must register callback func to handle Publications received.
 	HandlePublicationFunc func(ch string, pub *Publication) error
 	// Join must register callback func to handle Join messages received.
-	HandleJoinFunc func(ch string, join *Join) error
+	HandleJoinFunc func(ch string, join *protocol.Join) error
 	// Leave must register callback func to handle Leave messages received.
-	HandleLeaveFunc func(ch string, leave *Leave) error
+	HandleLeaveFunc func(ch string, leave *protocol.Leave) error
 	// Control must register callback func to handle Control data received.
 	HandleControlFunc func([]byte) error
 }
@@ -918,14 +918,14 @@ func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication) 
 	return nil
 }
 
-func (b *testBrokerEventHandler) HandleJoin(ch string, join *Join) error {
+func (b *testBrokerEventHandler) HandleJoin(ch string, join *protocol.Join) error {
 	if b.HandleJoinFunc != nil {
 		return b.HandleJoinFunc(ch, join)
 	}
 	return nil
 }
 
-func (b *testBrokerEventHandler) HandleLeave(ch string, leave *Leave) error {
+func (b *testBrokerEventHandler) HandleLeave(ch string, leave *protocol.Leave) error {
 	if b.HandleLeaveFunc != nil {
 		return b.HandleLeaveFunc(ch, leave)
 	}
