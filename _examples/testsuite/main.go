@@ -83,7 +83,7 @@ func testJWTAuth(fn ResolveFunc) *centrifuge.Node {
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 		time.AfterFunc(5*time.Second, func() { fn(fmt.Errorf("timeout")) })
 		if client.UserID() != "testsuite_jwt" {
-			fn(fmt.Errorf("Wrong user id: %s", client.UserID()))
+			fn(fmt.Errorf("wrong user id: %s", client.UserID()))
 		} else {
 			fn(nil)
 		}
@@ -140,10 +140,10 @@ func testReceiveRPCReceiveMessageJSON(fn ResolveFunc) *centrifuge.Node {
 			var msg testsuiteMessage
 			err := json.Unmarshal(e.Data, &msg)
 			if err != nil {
-				fn(fmt.Errorf("Unmarshal error: %v", err))
+				fn(fmt.Errorf("unmarshal error: %v", err))
 			}
 			if msg.Data != message.Data {
-				fn(fmt.Errorf("Async message contains wrong data"))
+				fn(fmt.Errorf("async message contains wrong data"))
 			} else {
 				fn(nil)
 			}
@@ -172,7 +172,7 @@ func testReceiveRPCReceiveMessageProtobuf(fn ResolveFunc) *centrifuge.Node {
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
 			if !bytes.Equal(message, e.Data) {
-				fn(fmt.Errorf("Async message contains wrong data"))
+				fn(fmt.Errorf("async message contains wrong data"))
 			} else {
 				fn(nil)
 			}

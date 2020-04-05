@@ -10,11 +10,11 @@ import (
 
 // Config contains Node configuration options.
 type Config struct {
-	// Version of server – will be sent to client on connection establishement
+	// Version of server – will be sent to client on connection establishment
 	// phase in response to connect request.
 	Version string
 	// Name of this server node - must be unique, used as human readable
-	// and meaningful node identificator.
+	// and meaningful node identifier.
 	Name string
 	// TokenHMACSecretKey is a secret key used to validate connection and subscription
 	// tokens generated using HMAC. Zero value means that HMAC tokens won't be allowed.

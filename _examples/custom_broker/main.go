@@ -57,7 +57,7 @@ func main() {
 	cfg.LogHandler = handleLog
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		centrifuge.ChannelNamespace{
+		{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:         true,
@@ -110,7 +110,7 @@ func main() {
 	// Let Redis engine do the rest.
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
 		Shards: []centrifuge.RedisShardConfig{
-			centrifuge.RedisShardConfig{
+			{
 				Host: "localhost",
 				Port: 6379,
 			},

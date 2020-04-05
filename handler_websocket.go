@@ -56,7 +56,7 @@ func (t *websocketTransport) ping() {
 		deadline := time.Now().Add(t.opts.pingInterval / 2)
 		err := t.conn.WriteControl(websocket.PingMessage, []byte("ping"), deadline)
 		if err != nil {
-			t.Close(DisconnectServerError)
+			_ = t.Close(DisconnectServerError)
 			return
 		}
 		t.addPing()
@@ -309,7 +309,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		select {
 		case <-s.node.NotifyShutdown():
-			transport.Close(DisconnectShutdown)
+			_ = transport.Close(DisconnectShutdown)
 			return
 		default:
 		}

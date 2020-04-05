@@ -3,10 +3,10 @@ package centrifuge
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStringInSlice(t *testing.T) {
-	assert.True(t, stringInSlice("test", []string{"boom", "test"}))
-	assert.False(t, stringInSlice("test", []string{"boom", "testing"}))
+	require.True(t, stringInSlice("test", []string{"boom", "test"}))
+	require.False(t, stringInSlice("test", []string{"boom", "testing"}))
 }

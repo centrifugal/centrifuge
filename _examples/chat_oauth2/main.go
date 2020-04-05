@@ -41,7 +41,7 @@ func init() {
 		log.Fatal("GOOGLE_CLIENT_SECRET environment variable required")
 	}
 	key := []byte(os.Getenv("SESSION_SECRET"))
-	cookieStore := sessions.NewCookieStore([]byte(key))
+	cookieStore := sessions.NewCookieStore(key)
 	cookieStore.Options.HttpOnly = true
 	cookieStore.Options.MaxAge = 3600
 	Store = cookieStore
@@ -82,7 +82,7 @@ func authMiddleware(h http.Handler) http.Handler {
 		err := json.Unmarshal([]byte(value), &user)
 		if err != nil {
 			log.Printf("Error unmarshaling Google user %s\n", err.Error())
-			Logout(w, r)
+			_ = Logout(w, r)
 			http.Redirect(w, r, "/account", http.StatusTemporaryRedirect)
 			return
 		}
@@ -157,10 +157,10 @@ func main() {
 func accountHandler(w http.ResponseWriter, r *http.Request) {
 	value, _ := GetFromSession("user", r)
 	if value != "" {
-		fmt.Fprintln(w, "<a href='/logout'>Logout</a>")
+		_, _ = fmt.Fprintln(w, "<a href='/logout'>Logout</a>")
 		return
 	}
-	fmt.Fprintln(w, "<a href='/login'>Log in with Google</a>")
+	_, _ = fmt.Fprintln(w, "<a href='/login'>Log in with Google</a>")
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +183,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
-	Logout(w, r)
+	_ = Logout(w, r)
 	http.Redirect(w, r, "/account", http.StatusTemporaryRedirect)
 }
 
@@ -191,30 +191,30 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 
 	state := r.FormValue("state")
 	if state == "" {
-		fmt.Fprintf(w, "Empty state received")
+		_, _ = fmt.Fprintf(w, "Empty state received")
 		return
 	}
 
 	savedState, _ := GetFromSession("state", r)
 	if savedState == "" {
-		fmt.Fprintf(w, "No state in session")
+		_, _ = fmt.Fprintf(w, "No state in session")
 		return
 	}
 
 	if state != savedState {
-		fmt.Fprintf(w, "Invalid state")
+		_, _ = fmt.Fprintf(w, "Invalid state")
 		return
 	}
 
 	code := r.FormValue("code")
-	token, err := googleOauthConfig.Exchange(oauth2.NoContext, code)
+	token, err := googleOauthConfig.Exchange(context.Background(), code)
 	if err != nil {
-		fmt.Fprintf(w, "Code exchange failed with error %s\n", err.Error())
+		_, _ = fmt.Fprintf(w, "Code exchange failed with error %s\n", err.Error())
 		return
 	}
 
 	if !token.Valid() {
-		fmt.Fprintln(w, "Retreived invalid token")
+		_, _ = fmt.Fprintln(w, "Retrieved invalid token")
 		return
 	}
 
@@ -224,9 +224,10 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 	response, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo?access_token=" + token.AccessToken)
 	if err != nil {
 		log.Printf("Error getting user from token %s\n", err.Error())
+		return
 	}
-
 	defer response.Body.Close()
+
 	contents, err := ioutil.ReadAll(response.Body)
 
 	var user *GoogleUser
@@ -311,7 +312,7 @@ func Logout(res http.ResponseWriter, req *http.Request) error {
 	session.Values = make(map[interface{}]interface{})
 	err = session.Save(req, res)
 	if err != nil {
-		return errors.New("Could not delete user session")
+		return errors.New("could not delete user session")
 	}
 	return nil
 }

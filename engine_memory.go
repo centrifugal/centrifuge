@@ -13,11 +13,12 @@ import (
 )
 
 // MemoryEngine is builtin default engine which allows to run Centrifuge-based
-// server without any external brokers/storages. All data managed inside process
+// server without any external broker or storage. All data managed inside process
 // memory.
 //
 // With this engine you can only run single Centrifuge node. If you need to scale
-// you should use another engine implementation instead – for example Redis engine.
+// you should consider using another engine implementation instead – for example
+// Redis engine.
 //
 // Running single node can be sufficient for many use cases especially when you
 // need maximum performance and not too many online clients. Consider configuring
@@ -219,13 +220,10 @@ func (h *presenceHub) getStats(ch string) (PresenceStats, error) {
 
 type historyHub struct {
 	sync.RWMutex
-
-	streams map[string]*memstream.Stream
-
+	streams         map[string]*memstream.Stream
 	nextExpireCheck int64
 	expireQueue     priority.Queue
 	expires         map[string]int64
-
 	seqTTL          time.Duration
 	nextRemoveCheck int64
 	removeQueue     priority.Queue
