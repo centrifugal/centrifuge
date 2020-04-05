@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/protocol"
+
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/uuid"
@@ -444,7 +446,7 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 
 // handleJoin handles join messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleJoin(ch string, join *Join) error {
+func (n *Node) handleJoin(ch string, join *protocol.Join) error {
 	messagesReceivedCountJoin.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
@@ -455,7 +457,7 @@ func (n *Node) handleJoin(ch string, join *Join) error {
 
 // handleLeave handles leave messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleLeave(ch string, leave *Leave) error {
+func (n *Node) handleLeave(ch string, leave *protocol.Leave) error {
 	messagesReceivedCountLeave.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
@@ -516,7 +518,7 @@ var (
 
 // publishJoin allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishJoin(ch string, join *Join, opts *ChannelOptions) error {
+func (n *Node) publishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -530,7 +532,7 @@ func (n *Node) publishJoin(ch string, join *Join, opts *ChannelOptions) error {
 
 // publishLeave allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
+func (n *Node) publishLeave(ch string, leave *protocol.Leave, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -1024,12 +1026,12 @@ func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication) erro
 }
 
 // HandleJoin ...
-func (h *brokerEventHandler) HandleJoin(ch string, join *Join) error {
+func (h *brokerEventHandler) HandleJoin(ch string, join *protocol.Join) error {
 	return h.node.handleJoin(ch, join)
 }
 
 // HandleLeave ...
-func (h *brokerEventHandler) HandleLeave(ch string, leave *Leave) error {
+func (h *brokerEventHandler) HandleLeave(ch string, leave *protocol.Leave) error {
 	return h.node.handleLeave(ch, leave)
 }
 

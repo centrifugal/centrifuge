@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/protocol"
+
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/timers"
 
@@ -61,7 +63,7 @@ const (
 	redisClientChannelPrefix = ".client."
 )
 
-// RedisEngine uses Redis datastructures and PUB/SUB to manage Centrifugo logic.
+// RedisEngine uses Redis data structures and PUB/SUB to manage Centrifugo logic.
 // This engine allows to scale Centrifugo - you can run several Centrifugo instances
 // connected to the same Redis and load balance clients between instances.
 type RedisEngine struct {
@@ -203,11 +205,7 @@ func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string,
 	var lastMaster string
 
 	poolSize := defaultPoolSize
-
-	maxIdle := 64
-	if poolSize < maxIdle {
-		maxIdle = poolSize
-	}
+	maxIdle := poolSize
 
 	var sntnl *sentinel.Sentinel
 	if useSentinel {
@@ -275,7 +273,7 @@ func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string,
 
 				if password != "" {
 					if _, err := c.Do("AUTH", password); err != nil {
-						c.Close()
+						_ = c.Close()
 						n.Log(NewLogEntry(LogLevelError, "error auth in Redis", map[string]interface{}{"error": err.Error()}))
 						return nil, err
 					}
@@ -283,7 +281,7 @@ func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string,
 
 				if db != 0 {
 					if _, err := c.Do("SELECT", db); err != nil {
-						c.Close()
+						_ = c.Close()
 						n.Log(NewLogEntry(LogLevelError, "error selecting Redis db", map[string]interface{}{"error": err.Error()}))
 						return nil, err
 					}
@@ -526,12 +524,12 @@ func (e *RedisEngine) Publish(ch string, pub *Publication, opts *ChannelOptions)
 }
 
 // PublishJoin - see engine interface description.
-func (e *RedisEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) error {
+func (e *RedisEngine) PublishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error {
 	return e.getShard(ch).PublishJoin(ch, join, opts)
 }
 
 // PublishLeave - see engine interface description.
-func (e *RedisEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
+func (e *RedisEngine) PublishLeave(ch string, leave *protocol.Leave, opts *ChannelOptions) error {
 	return e.getShard(ch).PublishLeave(ch, leave, opts)
 }
 
@@ -743,7 +741,7 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 	if poolConn.Err() != nil {
 		// At this moment test on borrow could already return an error,
 		// we can't work with broken connection.
-		poolConn.Close()
+		_ = poolConn.Close()
 		return
 	}
 
@@ -767,7 +765,7 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 		for {
 			select {
 			case <-done:
-				conn.Close()
+				_ = conn.Close()
 				return
 			case r := <-s.subCh:
 				isSubscribe := r.subscribe
@@ -816,7 +814,7 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 					}
 					// Close conn, this should cause Receive to return with err below
 					// and whole runPubSub method to restart.
-					conn.Close()
+					_ = conn.Close()
 					return
 				}
 				for _, r := range channelBatch {
@@ -837,7 +835,7 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 						otherR.done(opErr)
 						// Close conn, this should cause Receive to return with err below
 						// and whole runPubSub method to restart.
-						conn.Close()
+						_ = conn.Close()
 						return
 					}
 					otherR.done(nil)
@@ -935,13 +933,13 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 
 func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, _ channelID, data []byte) error {
 	pushData, seq, gen := extractPushData(data)
-	var push Push
+	var push protocol.Push
 	err := push.Unmarshal(pushData)
 	if err != nil {
 		return err
 	}
 	switch push.Type {
-	case PushTypePublication:
+	case protocol.PushTypePublication:
 		var pub Publication
 		err := pub.Unmarshal(push.Data)
 		if err != nil {
@@ -951,21 +949,21 @@ func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, _ chan
 			pub.Seq = seq
 			pub.Gen = gen
 		}
-		eventHandler.HandlePublication(push.Channel, &pub)
-	case PushTypeJoin:
-		var join Join
+		_ = eventHandler.HandlePublication(push.Channel, &pub)
+	case protocol.PushTypeJoin:
+		var join protocol.Join
 		err := join.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		eventHandler.HandleJoin(push.Channel, &join)
-	case PushTypeLeave:
-		var leave Leave
+		_ = eventHandler.HandleJoin(push.Channel, &join)
+	case protocol.PushTypeLeave:
+		var leave protocol.Leave
 		err := leave.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		eventHandler.HandleLeave(push.Channel, &leave)
+		_ = eventHandler.HandleLeave(push.Channel, &leave)
 	default:
 	}
 	return nil
@@ -997,10 +995,10 @@ func (s *shard) runPubSubPing() {
 			err := conn.Send("PUBLISH", s.pingChannelID(), nil)
 			if err != nil {
 				s.node.Log(NewLogEntry(LogLevelError, "error publish ping to Redis channel", map[string]interface{}{"error": err.Error()}))
-				conn.Close()
+				_ = conn.Close()
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}
 }
@@ -1023,7 +1021,7 @@ func (s *shard) runPublishPipeline() {
 			}
 			conn := s.pool.Get()
 			for i := range prs {
-				conn.Send("PUBLISH", prs[i].channel, prs[i].message)
+				_ = conn.Send("PUBLISH", prs[i].channel, prs[i].message)
 			}
 			err := conn.Flush()
 			if err != nil {
@@ -1031,7 +1029,7 @@ func (s *shard) runPublishPipeline() {
 					prs[i].done(err)
 				}
 				s.node.Log(NewLogEntry(LogLevelError, "error flushing publish pipeline", map[string]interface{}{"error": err.Error()}))
-				conn.Close()
+				_ = conn.Close()
 				return
 			}
 			for i := range prs {
@@ -1039,10 +1037,10 @@ func (s *shard) runPublishPipeline() {
 				prs[i].done(err)
 			}
 			if conn.Err() != nil {
-				conn.Close()
+				_ = conn.Close()
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 			prs = nil
 		}
 	}
@@ -1111,7 +1109,7 @@ func (s *shard) processClusterDataRequest(dr dataRequest) (interface{}, error) {
 		}
 	}
 
-	// Handle redirections automatically.
+	// Handle redirects automatically.
 	conn, err = redisc.RetryConn(conn, 3, 50*time.Millisecond)
 	if err != nil {
 		return nil, err
@@ -1152,11 +1150,11 @@ func (s *shard) runDataPipeline() {
 		if err != nil {
 			s.node.Log(NewLogEntry(LogLevelError, "error loading Lua script", map[string]interface{}{"error": err.Error()}))
 			// Can not proceed if script has not been loaded.
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 	}
-	conn.Close()
+	_ = conn.Close()
 
 	var drs []dataRequest
 
@@ -1177,19 +1175,19 @@ func (s *shard) runDataPipeline() {
 		for i := range drs {
 			switch drs[i].op {
 			case dataOpAddPresence:
-				s.addPresenceScript.SendHash(conn, drs[i].args...)
+				_ = s.addPresenceScript.SendHash(conn, drs[i].args...)
 			case dataOpRemovePresence:
-				s.remPresenceScript.SendHash(conn, drs[i].args...)
+				_ = s.remPresenceScript.SendHash(conn, drs[i].args...)
 			case dataOpPresence:
-				s.presenceScript.SendHash(conn, drs[i].args...)
+				_ = s.presenceScript.SendHash(conn, drs[i].args...)
 			case dataOpHistory:
-				s.historyScript.SendHash(conn, drs[i].args...)
+				_ = s.historyScript.SendHash(conn, drs[i].args...)
 			case dataOpAddHistory:
-				s.addHistoryScript.SendHash(conn, drs[i].args...)
+				_ = s.addHistoryScript.SendHash(conn, drs[i].args...)
 			case dataOpHistoryRemove:
-				conn.Send("DEL", drs[i].args...)
+				_ = conn.Send("DEL", drs[i].args...)
 			case dataOpChannels:
-				conn.Send("PUBSUB", drs[i].args...)
+				_ = conn.Send("PUBSUB", drs[i].args...)
 			}
 		}
 
@@ -1199,7 +1197,7 @@ func (s *shard) runDataPipeline() {
 				drs[i].done(nil, err)
 			}
 			s.node.Log(NewLogEntry(LogLevelError, "error flushing data pipeline", map[string]interface{}{"error": err.Error()}))
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 		var noScriptError bool
@@ -1218,23 +1216,18 @@ func (s *shard) runDataPipeline() {
 			drs[i].done(reply, err)
 		}
 		if conn.Err() != nil {
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 		if noScriptError {
 			// Start this func from the beginning and LOAD missing script.
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
-		conn.Close()
+		_ = conn.Close()
 		drs = nil
 	}
 }
-
-var (
-	// ErrPublished returned to indicate that node should not publish message to broker.
-	ErrPublished = errors.New("message published")
-)
 
 // Publish - see engine interface description.
 func (s *shard) Publish(ch string, pub *Publication, _ *ChannelOptions) error {
@@ -1244,8 +1237,8 @@ func (s *shard) Publish(ch string, pub *Publication, _ *ChannelOptions) error {
 	if err != nil {
 		return err
 	}
-	push := &Push{
-		Type:    PushTypePublication,
+	push := &protocol.Push{
+		Type:    protocol.PushTypePublication,
 		Channel: ch,
 		Data:    data,
 	}
@@ -1276,7 +1269,7 @@ func (s *shard) Publish(ch string, pub *Publication, _ *ChannelOptions) error {
 }
 
 // PublishJoin - see engine interface description.
-func (s *shard) PublishJoin(ch string, join *Join, _ *ChannelOptions) error {
+func (s *shard) PublishJoin(ch string, join *protocol.Join, _ *ChannelOptions) error {
 
 	eChan := make(chan error, 1)
 
@@ -1284,8 +1277,8 @@ func (s *shard) PublishJoin(ch string, join *Join, _ *ChannelOptions) error {
 	if err != nil {
 		return err
 	}
-	push := &Push{
-		Type:    PushTypeJoin,
+	push := &protocol.Push{
+		Type:    protocol.PushTypeJoin,
 		Channel: ch,
 		Data:    data,
 	}
@@ -1316,7 +1309,7 @@ func (s *shard) PublishJoin(ch string, join *Join, _ *ChannelOptions) error {
 }
 
 // PublishLeave - see engine interface description.
-func (s *shard) PublishLeave(ch string, leave *Leave, _ *ChannelOptions) error {
+func (s *shard) PublishLeave(ch string, leave *protocol.Leave, _ *ChannelOptions) error {
 
 	eChan := make(chan error, 1)
 
@@ -1324,8 +1317,8 @@ func (s *shard) PublishLeave(ch string, leave *Leave, _ *ChannelOptions) error {
 	if err != nil {
 		return err
 	}
-	push := &Push{
-		Type:    PushTypeLeave,
+	push := &protocol.Push{
+		Type:    protocol.PushTypeLeave,
 		Channel: ch,
 		Data:    data,
 	}
@@ -1593,8 +1586,8 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 	if err != nil {
 		return nil, err
 	}
-	push := &Push{
-		Type:    PushTypePublication,
+	push := &protocol.Push{
+		Type:    protocol.PushTypePublication,
 		Channel: ch,
 		Data:    data,
 	}
@@ -1718,13 +1711,13 @@ func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
 
 		pushData, seq, gen := extractPushData(value)
 
-		var push Push
+		var push protocol.Push
 		err := push.Unmarshal(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Message: %v", err)
 		}
 
-		if push.Type != PushTypePublication {
+		if push.Type != protocol.PushTypePublication {
 			return nil, fmt.Errorf("wrong message type in history: %d", push.Type)
 		}
 
@@ -1748,7 +1741,7 @@ func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
 func consistentIndex(s string, numBuckets int) int {
 
 	hash := fnv.New64a()
-	hash.Write([]byte(s))
+	_, _ = hash.Write([]byte(s))
 	key := hash.Sum64()
 
 	var b int64 = -1

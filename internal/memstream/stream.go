@@ -2,13 +2,8 @@ package memstream
 
 import (
 	"container/list"
-	"errors"
 	"strconv"
 	"time"
-)
-
-var (
-	errBadSequence = errors.New("bad sequence")
 )
 
 // Item to be kept inside stream.
@@ -81,16 +76,8 @@ func (s *Stream) Expire() {
 // Get items since provided position.
 // If seq is zero then elements since current first element in stream will be returned.
 func (s *Stream) Get(seq uint64, limit int) ([]Item, uint64, error) {
-
 	if seq >= s.top+1 {
 		return nil, s.top, nil
-	}
-
-	var cap int
-	if limit > 0 {
-		cap = limit
-	} else {
-		cap = int(s.top - seq + 1)
 	}
 
 	var el *list.Element
@@ -108,11 +95,18 @@ func (s *Stream) Get(seq uint64, limit int) ([]Item, uint64, error) {
 		return nil, s.top, nil
 	}
 
-	result := make([]Item, 0, cap)
+	var resultCap int
+	if limit > 0 {
+		resultCap = limit
+	} else {
+		resultCap = int(s.top - seq + 1)
+	}
+
+	result := make([]Item, 0, resultCap)
 
 	item := el.Value.(Item)
 	result = append(result, item)
-	var i int = 1
+	i := 1
 	for e := el.Next(); e != nil; e = e.Next() {
 		if limit >= 0 && i >= limit {
 			break

@@ -11,7 +11,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 
 	"github.com/centrifugal/protocol"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type TestEngine struct {
@@ -25,67 +25,63 @@ func NewTestEngine() *TestEngine {
 	return &TestEngine{}
 }
 
-func (e *TestEngine) Run(h BrokerEventHandler) error {
+func (e *TestEngine) Run(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestEngine) Shutdown(ctx context.Context) error {
-	return nil
-}
-
-func (e *TestEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) error {
+func (e *TestEngine) Publish(_ string, _ *Publication, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishJoin(ch string, join *Join, opts *ChannelOptions) error {
+func (e *TestEngine) PublishJoin(_ string, _ *Join, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
+func (e *TestEngine) PublishLeave(_ string, _ *Leave, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishControl(msg []byte) error {
+func (e *TestEngine) PublishControl(_ []byte) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
 	return nil
 }
 
-func (e *TestEngine) Subscribe(ch string) error {
+func (e *TestEngine) Subscribe(_ string) error {
 	return nil
 }
 
-func (e *TestEngine) Unsubscribe(ch string) error {
+func (e *TestEngine) Unsubscribe(_ string) error {
 	return nil
 }
 
-func (e *TestEngine) AddPresence(ch string, uid string, info *ClientInfo, expire time.Duration) error {
+func (e *TestEngine) AddPresence(_ string, _ string, _ *ClientInfo, _ time.Duration) error {
 	return nil
 }
 
-func (e *TestEngine) RemovePresence(ch string, uid string) error {
+func (e *TestEngine) RemovePresence(_ string, _ string) error {
 	return nil
 }
 
-func (e *TestEngine) Presence(ch string) (map[string]*ClientInfo, error) {
+func (e *TestEngine) Presence(_ string) (map[string]*ClientInfo, error) {
 	return map[string]*protocol.ClientInfo{}, nil
 }
 
-func (e *TestEngine) PresenceStats(ch string) (PresenceStats, error) {
+func (e *TestEngine) PresenceStats(_ string) (PresenceStats, error) {
 	return PresenceStats{}, nil
 }
 
-func (e *TestEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
+func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
 	return []*protocol.Publication{}, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*Publication, error) {
+func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (*Publication, error) {
 	return pub, nil
 }
 
-func (e *TestEngine) RemoveHistory(ch string) error {
+func (e *TestEngine) RemoveHistory(_ string) error {
 	return nil
 }
 
@@ -123,19 +119,19 @@ func nodeWithMemoryEngine() *Node {
 func TestUserAllowed(t *testing.T) {
 	node := nodeWithTestEngine()
 	defer node.Shutdown(context.Background())
-	assert.True(t, node.userAllowed("channel#1", "1"))
-	assert.True(t, node.userAllowed("channel", "1"))
-	assert.False(t, node.userAllowed("channel#1", "2"))
-	assert.True(t, node.userAllowed("channel#1,2", "1"))
-	assert.True(t, node.userAllowed("channel#1,2", "2"))
-	assert.False(t, node.userAllowed("channel#1,2", "3"))
+	require.True(t, node.userAllowed("channel#1", "1"))
+	require.True(t, node.userAllowed("channel", "1"))
+	require.False(t, node.userAllowed("channel#1", "2"))
+	require.True(t, node.userAllowed("channel#1,2", "1"))
+	require.True(t, node.userAllowed("channel#1,2", "2"))
+	require.False(t, node.userAllowed("channel#1,2", "3"))
 }
 
 func TestSetConfig(t *testing.T) {
 	node := nodeWithTestEngine()
 	defer node.Shutdown(context.Background())
 	err := node.Reload(DefaultConfig)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func TestNodeRegistry(t *testing.T) {
@@ -144,14 +140,14 @@ func TestNodeRegistry(t *testing.T) {
 	nodeInfo2 := controlproto.Node{UID: "node2"}
 	registry.add(&nodeInfo1)
 	registry.add(&nodeInfo2)
-	assert.Equal(t, 2, len(registry.list()))
+	require.Equal(t, 2, len(registry.list()))
 	info := registry.get("node1")
-	assert.Equal(t, "node1", info.UID)
+	require.Equal(t, "node1", info.UID)
 	registry.clean(10 * time.Second)
 	time.Sleep(2 * time.Second)
 	registry.clean(time.Second)
 	// Current node info should still be in node registry - we never delete it.
-	assert.Equal(t, 1, len(registry.list()))
+	require.Equal(t, 1, len(registry.list()))
 }
 
 var testPayload = map[string]interface{}{
@@ -193,7 +189,10 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		node.Publish("bench", payload)
+		err := node.Publish("bench", payload)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.StopTimer()
 	node.Shutdown(context.Background())
@@ -207,12 +206,12 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := NewClient(newCtx, node, transport)
 	connectClient(b, client)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
 	}, rw, false)
-	assert.Nil(b, subCtx.disconnect)
+	require.Nil(b, subCtx.disconnect)
 }
 
 func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte) {
@@ -221,44 +220,6 @@ func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte)
 
 func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []byte) {
 	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink)
-}
-
-func TestNodeHistoryIteration(t *testing.T) {
-	e := testMemoryEngine()
-	conf := e.node.Config()
-	conf.HistorySize = 100000
-	conf.HistoryLifetime = 60
-	conf.HistoryRecover = true
-	err := e.node.Reload(conf)
-	assert.NoError(t, err)
-
-	channel := "test"
-
-	numMessages := 10000
-	for i := 1; i <= numMessages; i++ {
-		err := e.node.Publish(channel, []byte(`{}`))
-		assert.NoError(t, err)
-	}
-
-	var n int
-
-	var seq uint32 = 0
-
-	for {
-		pubs, _, err := e.History(channel, HistoryFilter{
-			Limit: 10,
-			Since: &StreamPosition{Seq: seq, Gen: 0, Epoch: ""},
-		})
-		seq += 10
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(pubs) == 0 {
-			break
-		}
-		n += len(pubs)
-	}
-	assert.Equal(t, numMessages, n)
 }
 
 func BenchmarkBroadcastMemoryEngine(b *testing.B) {
@@ -278,7 +239,10 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 			n := nodeWithMemoryEngine()
 			c := n.Config()
 			c.ClientInsecure = true
-			n.Reload(c)
+			err := n.Reload(c)
+			if err != nil {
+				b.Fatal(err)
+			}
 			payload := []byte(`{"input": "test"}`)
 			sink := make(chan []byte, bm.numSubscribers)
 			for i := 0; i < bm.numSubscribers; i++ {
@@ -299,4 +263,45 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 			b.ReportAllocs()
 		})
 	}
+}
+
+func TestNodeHistoryIteration(t *testing.T) {
+	numMessages := 10000
+
+	e := testMemoryEngine()
+	conf := e.node.Config()
+	conf.HistorySize = numMessages
+	conf.HistoryLifetime = 60
+	conf.HistoryRecover = true
+	err := e.node.Reload(conf)
+	require.NoError(t, err)
+
+	channel := "test"
+
+	for i := 1; i <= numMessages; i++ {
+		err := e.node.Publish(channel, []byte(`{}`))
+		require.NoError(t, err)
+	}
+
+	pubs, _ := e.node.History(channel)
+	require.Equal(t, numMessages, len(pubs))
+
+	var n int
+	var seq uint32 = 0
+
+	for {
+		pubs, _, err := e.History(channel, HistoryFilter{
+			Limit: 10,
+			Since: &StreamPosition{Seq: seq, Gen: 0, Epoch: ""},
+		})
+		seq += 10
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pubs) == 0 {
+			break
+		}
+		n += len(pubs)
+	}
+	require.Equal(t, numMessages, n)
 }

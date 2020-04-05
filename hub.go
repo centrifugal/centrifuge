@@ -288,7 +288,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
-func (h *Hub) broadcastJoin(channel string, join *Join) error {
+func (h *Hub) broadcastJoin(channel string, join *protocol.Join) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -344,7 +344,7 @@ func (h *Hub) broadcastJoin(channel string, join *Join) error {
 }
 
 // broadcastLeave sends message to all clients subscribed on channel.
-func (h *Hub) broadcastLeave(channel string, leave *Leave) error {
+func (h *Hub) broadcastLeave(channel string, leave *protocol.Leave) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

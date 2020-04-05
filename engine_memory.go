@@ -8,6 +8,8 @@ import (
 	"github.com/centrifugal/centrifuge/internal/memstream"
 	"github.com/centrifugal/centrifuge/internal/priority"
 	"github.com/centrifugal/centrifuge/internal/recovery"
+
+	"github.com/centrifugal/protocol"
 )
 
 // MemoryEngine is builtin default engine which allows to run Centrifuge-based
@@ -62,12 +64,12 @@ func (e *MemoryEngine) Publish(ch string, pub *Publication, _ *ChannelOptions) e
 }
 
 // PublishJoin - see engine interface description.
-func (e *MemoryEngine) PublishJoin(ch string, join *Join, _ *ChannelOptions) error {
+func (e *MemoryEngine) PublishJoin(ch string, join *protocol.Join, _ *ChannelOptions) error {
 	return e.eventHandler.HandleJoin(ch, join)
 }
 
 // PublishLeave - see engine interface description.
-func (e *MemoryEngine) PublishLeave(ch string, leave *Leave, _ *ChannelOptions) error {
+func (e *MemoryEngine) PublishLeave(ch string, leave *protocol.Leave, _ *ChannelOptions) error {
 	return e.eventHandler.HandleLeave(ch, leave)
 }
 
