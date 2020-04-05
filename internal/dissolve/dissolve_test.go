@@ -8,7 +8,7 @@ import (
 
 func TestDissolver(t *testing.T) {
 	d := New(4)
-	d.Run()
+	_ = d.Run()
 	defer d.Close()
 	ch := make(chan struct{}, 1)
 	err := d.Submit(func() error {
@@ -27,7 +27,7 @@ func TestDissolver(t *testing.T) {
 
 func TestDissolverErrorHandling(t *testing.T) {
 	d := New(4)
-	d.Run()
+	_ = d.Run()
 	defer d.Close()
 	var numFails int
 	ch := make(chan struct{}, 1)
@@ -52,8 +52,8 @@ func TestDissolverErrorHandling(t *testing.T) {
 
 func TestDissolverClose(t *testing.T) {
 	d := New(4)
-	d.Run()
-	d.Close()
+	_ = d.Run()
+	_ = d.Close()
 	ch := make(chan struct{}, 1)
 	err := d.Submit(func() error {
 		ch <- struct{}{}
@@ -66,12 +66,12 @@ func TestDissolverClose(t *testing.T) {
 
 func BenchmarkSubmitAndProcess(b *testing.B) {
 	d := New(1)
-	d.Run()
+	_ = d.Run()
 	defer d.Close()
 	ch := make(chan struct{}, 1)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		d.Submit(func() error {
+		_ = d.Submit(func() error {
 			ch <- struct{}{}
 			return nil
 		})
@@ -82,14 +82,14 @@ func BenchmarkSubmitAndProcess(b *testing.B) {
 
 func BenchmarkSubmitAndProcessParallel(b *testing.B) {
 	d := New(128)
-	d.Run()
+	_ = d.Run()
 	defer d.Close()
 	ch := make(chan struct{}, 1)
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			d.Submit(func() error {
+			_ = d.Submit(func() error {
 				ch <- struct{}{}
 				return nil
 			})

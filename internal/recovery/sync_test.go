@@ -53,7 +53,7 @@ func TestPubSubSyncer(t *testing.T) {
 
 func BenchmarkPubSubSync(b *testing.B) {
 	syncer := NewPubSubSync()
-	channels := []string{}
+	var channels []string
 	for i := 0; i < 1; i++ {
 		channels = append(channels, "server-side-"+strconv.Itoa(i))
 	}

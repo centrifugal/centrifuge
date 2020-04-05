@@ -7,23 +7,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type testItem []byte
-
 func TestByteQueueResize(t *testing.T) {
 	q := New()
 	require.Equal(t, 0, q.Len())
 	require.Equal(t, false, q.Closed())
 
 	for i := 0; i < initialCapacity; i++ {
-		q.Add(testItem([]byte(strconv.Itoa(i))))
+		q.Add([]byte(strconv.Itoa(i)))
 	}
-	q.Add(testItem([]byte("resize here")))
+	q.Add([]byte("resize here"))
 	require.Equal(t, initialCapacity*2, q.Cap())
 	q.Remove()
 
-	q.Add(testItem([]byte("new resize here")))
+	q.Add([]byte("new resize here"))
 	require.Equal(t, initialCapacity*2, q.Cap())
-	q.Add(testItem([]byte("one more item, no resize must happen")))
+	q.Add([]byte("one more item, no resize must happen"))
 	require.Equal(t, initialCapacity*2, q.Cap())
 
 	require.Equal(t, initialCapacity+2, q.Len())
@@ -32,8 +30,8 @@ func TestByteQueueResize(t *testing.T) {
 func TestByteQueueSize(t *testing.T) {
 	q := New()
 	require.Equal(t, 0, q.Size())
-	q.Add(testItem([]byte("1")))
-	q.Add(testItem([]byte("2")))
+	q.Add([]byte("1"))
+	q.Add([]byte("2"))
 	require.Equal(t, 2, q.Size())
 	q.Remove()
 	require.Equal(t, 1, q.Size())
@@ -41,8 +39,8 @@ func TestByteQueueSize(t *testing.T) {
 
 func TestByteQueueWait(t *testing.T) {
 	q := New()
-	q.Add(testItem([]byte("1")))
-	q.Add(testItem([]byte("2")))
+	q.Add([]byte("1"))
+	q.Add([]byte("2"))
 
 	s, ok := q.Wait()
 	require.Equal(t, true, ok)
@@ -53,7 +51,7 @@ func TestByteQueueWait(t *testing.T) {
 	require.Equal(t, "2", string(s))
 
 	go func() {
-		q.Add(testItem([]byte("3")))
+		q.Add([]byte("3"))
 	}()
 
 	s, ok = q.Wait()
@@ -69,11 +67,11 @@ func TestByteQueueClose(t *testing.T) {
 	_, ok := q.Remove()
 	require.Equal(t, false, ok)
 
-	q.Add(testItem([]byte("1")))
-	q.Add(testItem([]byte("2")))
+	q.Add([]byte("1"))
+	q.Add([]byte("2"))
 	q.Close()
 
-	ok = q.Add(testItem([]byte("3")))
+	ok = q.Add([]byte("3"))
 	require.Equal(t, false, ok)
 
 	_, ok = q.Wait()
@@ -88,11 +86,11 @@ func TestByteQueueClose(t *testing.T) {
 
 func TestByteQueueCloseRemaining(t *testing.T) {
 	q := New()
-	q.Add(testItem([]byte("1")))
-	q.Add(testItem([]byte("2")))
+	q.Add([]byte("1"))
+	q.Add([]byte("2"))
 	msgs := q.CloseRemaining()
 	require.Equal(t, 2, len(msgs))
-	ok := q.Add(testItem([]byte("3")))
+	ok := q.Add([]byte("3"))
 	require.Equal(t, false, ok)
 	require.Equal(t, true, q.Closed())
 	msgs = q.CloseRemaining()
@@ -103,7 +101,7 @@ func BenchmarkQueueAdd(b *testing.B) {
 	q := New()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		q.Add(testItem([]byte("test")))
+		q.Add([]byte("test"))
 	}
 	b.StopTimer()
 	q.Close()
@@ -127,7 +125,7 @@ func addAndConsume(q Queue, n int) {
 		}
 	}()
 	for i := 0; i < n; i++ {
-		q.Add(testItem([]byte("test")))
+		q.Add([]byte("test"))
 	}
 	<-done
 }
