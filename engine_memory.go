@@ -309,7 +309,7 @@ func (h *historyHub) expireStreams() {
 			if exp <= expireAt {
 				delete(h.expires, ch)
 				if stream, ok := h.streams[ch]; ok {
-					stream.Expire()
+					stream.Clear()
 				}
 			} else {
 				heap.Push(&h.expireQueue, &priority.Item{Value: ch, Priority: exp})
@@ -437,7 +437,7 @@ func (h *historyHub) remove(ch string) error {
 	h.Lock()
 	defer h.Unlock()
 	if stream, ok := h.streams[ch]; ok {
-		stream.Expire()
+		stream.Clear()
 	}
 	return nil
 }

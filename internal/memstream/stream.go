@@ -2,9 +2,25 @@ package memstream
 
 import (
 	"container/list"
-	"strconv"
+	"math/rand"
 	"time"
 )
+
+var random = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func randString(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letters[random.Intn(len(letters))]
+	}
+	return string(b)
+}
+
+func genEpoch() string {
+	return randString(4)
+}
 
 // Item to be kept inside stream.
 type Item struct {
@@ -12,8 +28,8 @@ type Item struct {
 	Value interface{}
 }
 
-// Stream is a non-thread safe simple in-memory data structure
-// that maintains a stream of values limited by size and provides
+// Stream is a non-thread safe in-memory data structure that
+// maintains a stream of values limited by size and provides
 // methods to access a range of values from provided position.
 type Stream struct {
 	top   uint64
@@ -27,7 +43,7 @@ func New() *Stream {
 	return &Stream{
 		list:  list.New(),
 		index: make(map[uint64]*list.Element),
-		epoch: strconv.FormatInt(time.Now().Unix(), 10),
+		epoch: genEpoch(),
 	}
 }
 
@@ -62,13 +78,12 @@ func (s *Stream) Epoch() string {
 // Reset stream.
 func (s *Stream) Reset() {
 	s.top = 0
-	s.epoch = strconv.FormatInt(time.Now().Unix(), 10)
-	s.list = list.New()
-	s.index = make(map[uint64]*list.Element)
+	s.epoch = genEpoch()
+	s.Clear()
 }
 
-// Expire stream.
-func (s *Stream) Expire() {
+// Clear stream data.
+func (s *Stream) Clear() {
 	s.list = list.New()
 	s.index = make(map[uint64]*list.Element)
 }
