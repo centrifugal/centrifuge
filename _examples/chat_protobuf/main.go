@@ -63,7 +63,7 @@ func main() {
 	cfg.UserSubscribeToPersonal = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		centrifuge.ChannelNamespace{
+		{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:   true,

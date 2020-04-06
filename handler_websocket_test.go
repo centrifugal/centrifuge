@@ -47,7 +47,7 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	}
 	cmdBytes, _ := json.Marshal(cmd)
 
-	conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
 	_, _, err = conn.ReadMessage()
 	assert.NoError(b, err)
 
@@ -61,7 +61,7 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 		Params: params,
 	}
 	cmdBytes, _ = json.Marshal(cmd)
-	conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
 	_, _, err = conn.ReadMessage()
 	assert.NoError(b, err)
 	return conn
@@ -88,7 +88,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	buf.Write(bs[:n])
 	buf.Write(cmdBytes)
 
-	conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
 	_, _, err = conn.ReadMessage()
 	assert.NoError(b, err)
 
@@ -109,7 +109,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	buf.Write(bs[:n])
 	buf.Write(cmdBytes)
 
-	conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
 	_, _, err = conn.ReadMessage()
 	assert.NoError(b, err)
 	return conn
@@ -121,7 +121,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 	n := nodeWithMemoryEngine()
 	c := n.Config()
 	c.ClientInsecure = true
-	n.Reload(c)
+	_ = n.Reload(c)
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
@@ -135,12 +135,16 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 
 	numConns := 100
 
-	conns := []*websocket.Conn{}
+	var conns []*websocket.Conn
 	for i := 0; i < numConns; i++ {
 		conn := newRealConnJSON(t, "test"+strconv.Itoa(i), url)
-		defer conn.Close()
 		conns = append(conns, conn)
 	}
+	defer func() {
+		for _, conn := range conns {
+			conn.Close()
+		}
+	}()
 
 	var wg sync.WaitGroup
 
@@ -189,7 +193,7 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 	n := nodeWithMemoryEngine()
 	c := n.Config()
 	c.ClientInsecure = true
-	n.Reload(c)
+	_ = n.Reload(c)
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{

@@ -13,10 +13,6 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-func handleLog(e centrifuge.LogEntry) {
-	log.Printf("%s: %v", e.Message, e.Fields)
-}
-
 func waitExitSignal(n *centrifuge.Node) {
 	sigs := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
@@ -39,7 +35,7 @@ func main() {
 	cfg.Publish = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		centrifuge.ChannelNamespace{
+		{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:         true,

@@ -15,7 +15,7 @@ type testHandler struct {
 	count int
 }
 
-func (h *testHandler) Handle(e LogEntry) {
+func (h *testHandler) Handle(_ LogEntry) {
 	h.count++
 }
 

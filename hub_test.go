@@ -71,7 +71,7 @@ func TestHub(t *testing.T) {
 	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	c.user = "test"
-	h.add(c)
+	_ = h.add(c)
 	assert.Equal(t, len(h.users), 1)
 	conns := h.userConnections("test")
 	assert.Equal(t, 1, len(conns))
@@ -89,7 +89,7 @@ func TestHubShutdown(t *testing.T) {
 	h = newHub()
 	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
-	h.add(c)
+	_ = h.add(c)
 	err = h.shutdown(context.Background())
 	assert.NoError(t, err)
 }
@@ -98,17 +98,17 @@ func TestHubSubscriptions(t *testing.T) {
 	h := newHub()
 	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
-	h.addSub("test1", c)
-	h.addSub("test2", c)
+	_, _ = h.addSub("test1", c)
+	_, _ = h.addSub("test2", c)
 	assert.Equal(t, 2, h.NumChannels())
-	channels := []string{}
+	var channels []string
 	channels = append(channels, h.Channels()...)
 	assert.True(t, stringInSlice("test1", channels))
 	assert.True(t, stringInSlice("test2", channels))
 	assert.True(t, h.NumSubscribers("test1") > 0)
 	assert.True(t, h.NumSubscribers("test2") > 0)
-	h.removeSub("test1", c)
-	h.removeSub("test2", c)
+	_, _ = h.removeSub("test1", c)
+	_, _ = h.removeSub("test2", c)
 	assert.Equal(t, h.NumChannels(), 0)
 	assert.False(t, h.NumSubscribers("test1") > 0)
 	assert.False(t, h.NumSubscribers("test2") > 0)
@@ -116,8 +116,8 @@ func TestHubSubscriptions(t *testing.T) {
 
 func TestPreparedReply(t *testing.T) {
 	reply := protocol.Reply{}
-	prepared := prepared.NewReply(&reply, protocol.TypeJSON)
-	data := prepared.Data()
+	preparedReply := prepared.NewReply(&reply, protocol.TypeJSON)
+	data := preparedReply.Data()
 	assert.NotNil(t, data)
 }
 
@@ -125,7 +125,7 @@ func TestUserConnections(t *testing.T) {
 	h := newHub()
 	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
-	h.add(c)
+	_ = h.add(c)
 
 	connections := h.userConnections(c.UserID())
 	assert.Equal(t, h.conns, connections)

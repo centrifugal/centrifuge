@@ -14,7 +14,7 @@ func TestConfigValidateDefault(t *testing.T) {
 func TestConfigValidateInvalidNamespaceName(t *testing.T) {
 	c := DefaultConfig
 	c.Namespaces = []ChannelNamespace{
-		ChannelNamespace{
+		{
 			Name:           "invalid name",
 			ChannelOptions: ChannelOptions{},
 		},
@@ -26,11 +26,11 @@ func TestConfigValidateInvalidNamespaceName(t *testing.T) {
 func TestConfigValidateDuplicateNamespaceName(t *testing.T) {
 	c := DefaultConfig
 	c.Namespaces = []ChannelNamespace{
-		ChannelNamespace{
+		{
 			Name:           "name",
 			ChannelOptions: ChannelOptions{},
 		},
-		ChannelNamespace{
+		{
 			Name:           "name",
 			ChannelOptions: ChannelOptions{},
 		},
@@ -49,7 +49,7 @@ func TestConfigValidateMalformedReciverTopLevel(t *testing.T) {
 func TestConfigValidateMalformedReciverInNamespace(t *testing.T) {
 	c := DefaultConfig
 	c.Namespaces = []ChannelNamespace{
-		ChannelNamespace{
+		{
 			Name: "name",
 			ChannelOptions: ChannelOptions{
 				HistoryRecover: true,

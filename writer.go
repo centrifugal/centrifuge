@@ -128,7 +128,7 @@ func (w *writer) close() error {
 	remaining := w.messages.CloseRemaining()
 	if len(remaining) > 0 {
 		w.mu.Lock()
-		w.config.WriteManyFn(remaining...)
+		_ = w.config.WriteManyFn(remaining...)
 		w.mu.Unlock()
 	}
 

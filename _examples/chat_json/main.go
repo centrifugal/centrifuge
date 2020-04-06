@@ -71,7 +71,7 @@ func main() {
 	cfg.UserSubscribeToPersonal = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		centrifuge.ChannelNamespace{
+		{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:         true,
@@ -89,6 +89,11 @@ func main() {
 	}
 
 	node, _ := centrifuge.New(cfg)
+
+	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
+		SequenceTTL: 120 * time.Second,
+	})
+	node.SetEngine(engine)
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{

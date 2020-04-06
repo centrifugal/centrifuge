@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/protocol"
+
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/uuid"
@@ -108,7 +110,7 @@ func index(s string, numBuckets int) int {
 		return 0
 	}
 	hash := fnv.New64a()
-	hash.Write([]byte(s))
+	_, _ = hash.Write([]byte(s))
 	return int(hash.Sum64() % uint64(numBuckets))
 }
 
@@ -183,8 +185,7 @@ func (n *Node) Run() error {
 	go n.sendNodePing()
 	go n.cleanNodeInfo()
 	go n.updateMetrics()
-	n.subDissolver.Run()
-	return nil
+	return n.subDissolver.Run()
 }
 
 // Log allows to log entry.
@@ -226,7 +227,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			defer closer.Close(ctx)
 		}
 	}
-	n.subDissolver.Close()
+	_ = n.subDissolver.Close()
 	return n.hub.shutdown(ctx)
 }
 
@@ -445,7 +446,7 @@ func (n *Node) handlePublication(ch string, pub *Publication) error {
 
 // handleJoin handles join messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleJoin(ch string, join *Join) error {
+func (n *Node) handleJoin(ch string, join *protocol.Join) error {
 	messagesReceivedCountJoin.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
@@ -456,7 +457,7 @@ func (n *Node) handleJoin(ch string, join *Join) error {
 
 // handleLeave handles leave messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleLeave(ch string, leave *Leave) error {
+func (n *Node) handleLeave(ch string, leave *protocol.Leave) error {
 	messagesReceivedCountLeave.Inc()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
@@ -494,7 +495,7 @@ func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...Publish
 			// Publication added to history, no need to handle Publish error here.
 			// In this case we rely on the fact that clients will eventually restore
 			// Publication from history.
-			n.broker.Publish(ch, pub, &chOpts)
+			_ = n.broker.Publish(ch, pub, &chOpts)
 		}
 		return nil
 	}
@@ -517,7 +518,7 @@ var (
 
 // publishJoin allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishJoin(ch string, join *Join, opts *ChannelOptions) error {
+func (n *Node) publishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -531,7 +532,7 @@ func (n *Node) publishJoin(ch string, join *Join, opts *ChannelOptions) error {
 
 // publishLeave allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
-func (n *Node) publishLeave(ch string, leave *Leave, opts *ChannelOptions) error {
+func (n *Node) publishLeave(ch string, leave *protocol.Leave, opts *ChannelOptions) error {
 	if opts == nil {
 		chOpts, ok := n.ChannelOpts(ch)
 		if !ok {
@@ -620,6 +621,7 @@ func (n *Node) pubUnsubscribe(user string, ch string) error {
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from Centrifugo.
 func (n *Node) pubDisconnect(user string, reconnect bool) error {
+	// TODO: handle reconnect flag.
 	disconnect := &controlproto.Disconnect{
 		User: user,
 	}
@@ -659,7 +661,7 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 	if first {
 		err := n.broker.Subscribe(ch)
 		if err != nil {
-			n.hub.removeSub(ch, c)
+			_, _ = n.hub.removeSub(ch, c)
 			return err
 		}
 	}
@@ -679,7 +681,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	}
 	if empty {
 		submittedAt := time.Now()
-		n.subDissolver.Submit(func() error {
+		_ = n.subDissolver.Submit(func() error {
 			timeSpent := time.Since(submittedAt)
 			if timeSpent < time.Second {
 				time.Sleep(time.Second - timeSpent)
@@ -705,9 +707,13 @@ func (n *Node) nodeCmd(node *controlproto.Node) error {
 
 // Unsubscribe unsubscribes user from channel, if channel is equal to empty
 // string then user will be unsubscribed from all channels.
-func (n *Node) Unsubscribe(user string, ch string) error {
+func (n *Node) Unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
+	unsubscribeOpts := &UnsubscribeOptions{}
+	for _, opt := range opts {
+		opt(unsubscribeOpts)
+	}
 	// First unsubscribe on this node.
-	err := n.hub.unsubscribe(user, ch)
+	err := n.hub.unsubscribe(user, ch, opts...)
 	if err != nil {
 		return err
 	}
@@ -715,15 +721,19 @@ func (n *Node) Unsubscribe(user string, ch string) error {
 	return n.pubUnsubscribe(user, ch)
 }
 
-// Disconnect allows to close all user connections to Centrifugo.
-func (n *Node) Disconnect(user string, reconnect bool) error {
+// Disconnect allows to close all user connections through all nodes.
+func (n *Node) Disconnect(user string, opts ...DisconnectOption) error {
+	disconnectOpts := &DisconnectOptions{}
+	for _, opt := range opts {
+		opt(disconnectOpts)
+	}
 	// first disconnect user from this node
-	err := n.hub.disconnect(user, reconnect)
+	err := n.hub.disconnect(user, disconnectOpts.Reconnect)
 	if err != nil {
 		return err
 	}
 	// second send disconnect control message to other nodes
-	return n.pubDisconnect(user, reconnect)
+	return n.pubDisconnect(user, disconnectOpts.Reconnect)
 }
 
 // namespaceName returns namespace name from channel if exists.
@@ -809,10 +819,10 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, since RecoveryPosition) ([]*Publication, RecoveryPosition, error) {
+func (n *Node) recoverHistory(ch string, since StreamPosition) ([]*Publication, StreamPosition, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
 	if n.historyManager == nil {
-		return nil, RecoveryPosition{}, ErrorNotAvailable
+		return nil, StreamPosition{}, ErrorNotAvailable
 	}
 	return n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
@@ -830,10 +840,10 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 // currentRecoveryState returns current recovery state for channel.
-func (n *Node) currentRecoveryState(ch string) (RecoveryPosition, error) {
+func (n *Node) currentRecoveryState(ch string) (StreamPosition, error) {
 	actionCount.WithLabelValues("history_recovery_state").Inc()
 	if n.historyManager == nil {
-		return RecoveryPosition{}, ErrorNotAvailable
+		return StreamPosition{}, ErrorNotAvailable
 	}
 	_, recoveryPosition, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: 0,
@@ -1016,12 +1026,12 @@ func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication) erro
 }
 
 // HandleJoin ...
-func (h *brokerEventHandler) HandleJoin(ch string, join *Join) error {
+func (h *brokerEventHandler) HandleJoin(ch string, join *protocol.Join) error {
 	return h.node.handleJoin(ch, join)
 }
 
 // HandleLeave ...
-func (h *brokerEventHandler) HandleLeave(ch string, leave *Leave) error {
+func (h *brokerEventHandler) HandleLeave(ch string, leave *protocol.Leave) error {
 	return h.node.handleLeave(ch, leave)
 }
 

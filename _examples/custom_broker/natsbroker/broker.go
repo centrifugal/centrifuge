@@ -9,12 +9,13 @@ import (
 	"sync"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/protocol"
 
 	nats "github.com/nats-io/nats.go"
 )
 
 type (
-	// channelID is unique channel identificator in Nats.
+	// channelID is unique channel identifier in Nats.
 	channelID string
 )
 
@@ -74,18 +75,18 @@ func (b *NatsBroker) Run(h centrifuge.BrokerEventHandler) error {
 }
 
 // Close is not implemented.
-func (b *NatsBroker) Close(ctx context.Context) error {
+func (b *NatsBroker) Close(_ context.Context) error {
 	return nil
 }
 
 // Publish - see Engine interface description.
-func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, opts *centrifuge.ChannelOptions) error {
+func (b *NatsBroker) Publish(ch string, pub *protocol.Publication, _ *centrifuge.ChannelOptions) error {
 	data, err := pub.Marshal()
 	if err != nil {
 		return err
 	}
-	push := &centrifuge.Push{
-		Type:    centrifuge.PushTypePublication,
+	push := &protocol.Push{
+		Type:    protocol.PushTypePublication,
 		Channel: ch,
 		Data:    data,
 	}
@@ -97,13 +98,13 @@ func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, opts *centr
 }
 
 // PublishJoin - see Engine interface description.
-func (b *NatsBroker) PublishJoin(ch string, join *centrifuge.Join, opts *centrifuge.ChannelOptions) error {
+func (b *NatsBroker) PublishJoin(ch string, join *protocol.Join, _ *centrifuge.ChannelOptions) error {
 	data, err := join.Marshal()
 	if err != nil {
 		return err
 	}
-	push := &centrifuge.Push{
-		Type:    centrifuge.PushTypeJoin,
+	push := &protocol.Push{
+		Type:    protocol.PushTypeJoin,
 		Channel: ch,
 		Data:    data,
 	}
@@ -115,13 +116,13 @@ func (b *NatsBroker) PublishJoin(ch string, join *centrifuge.Join, opts *centrif
 }
 
 // PublishLeave - see Engine interface description.
-func (b *NatsBroker) PublishLeave(ch string, leave *centrifuge.Leave, opts *centrifuge.ChannelOptions) error {
+func (b *NatsBroker) PublishLeave(ch string, leave *protocol.Leave, _ *centrifuge.ChannelOptions) error {
 	data, err := leave.Marshal()
 	if err != nil {
 		return err
 	}
-	push := &centrifuge.Push{
-		Type:    centrifuge.PushTypeLeave,
+	push := &protocol.Push{
+		Type:    protocol.PushTypeLeave,
 		Channel: ch,
 		Data:    data,
 	}
@@ -137,45 +138,45 @@ func (b *NatsBroker) PublishControl(data []byte) error {
 	return b.nc.Publish(string(b.controlChannel()), data)
 }
 
-func (b *NatsBroker) handleClientMessage(chID channelID, data []byte) error {
-	var push centrifuge.Push
+func (b *NatsBroker) handleClientMessage(data []byte) error {
+	var push protocol.Push
 	err := push.Unmarshal(data)
 	if err != nil {
 		return err
 	}
 	switch push.Type {
-	case centrifuge.PushTypePublication:
-		var pub centrifuge.Publication
+	case protocol.PushTypePublication:
+		var pub protocol.Publication
 		err := pub.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		b.eventHandler.HandlePublication(push.Channel, &pub)
-	case centrifuge.PushTypeJoin:
-		var join centrifuge.Join
+		_ = b.eventHandler.HandlePublication(push.Channel, &pub)
+	case protocol.PushTypeJoin:
+		var join protocol.Join
 		err := join.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		b.eventHandler.HandleJoin(push.Channel, &join)
-	case centrifuge.PushTypeLeave:
-		var leave centrifuge.Leave
+		_ = b.eventHandler.HandleJoin(push.Channel, &join)
+	case protocol.PushTypeLeave:
+		var leave protocol.Leave
 		err := leave.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		b.eventHandler.HandleLeave(push.Channel, &leave)
+		_ = b.eventHandler.HandleLeave(push.Channel, &leave)
 	default:
 	}
 	return nil
 }
 
 func (b *NatsBroker) handleClient(m *nats.Msg) {
-	b.handleClientMessage(channelID(m.Subject), m.Data)
+	_ = b.handleClientMessage(m.Data)
 }
 
 func (b *NatsBroker) handleControl(m *nats.Msg) {
-	b.eventHandler.HandleControl(m.Data)
+	_ = b.eventHandler.HandleControl(m.Data)
 }
 
 // Subscribe - see Engine interface description.
@@ -186,11 +187,15 @@ func (b *NatsBroker) Subscribe(ch string) error {
 	}
 	b.subsMu.Lock()
 	defer b.subsMu.Unlock()
+	clientChannel := b.clientChannel(ch)
+	if _, ok := b.subs[clientChannel]; ok {
+		return nil
+	}
 	subClient, err := b.nc.Subscribe(string(b.clientChannel(ch)), b.handleClient)
 	if err != nil {
 		return err
 	}
-	b.subs[b.clientChannel(ch)] = subClient
+	b.subs[clientChannel] = subClient
 	return nil
 }
 
@@ -199,7 +204,7 @@ func (b *NatsBroker) Unsubscribe(ch string) error {
 	b.subsMu.Lock()
 	defer b.subsMu.Unlock()
 	if sub, ok := b.subs[b.clientChannel(ch)]; ok {
-		sub.Unsubscribe()
+		_ = sub.Unsubscribe()
 		delete(b.subs, b.clientChannel(ch))
 	}
 	return nil

@@ -3,6 +3,8 @@ package centrifuge
 import (
 	"context"
 	"time"
+
+	"github.com/centrifugal/protocol"
 )
 
 // PresenceStats represents a short presence information for channel.
@@ -16,9 +18,9 @@ type BrokerEventHandler interface {
 	// Publication must register callback func to handle Publications received.
 	HandlePublication(ch string, pub *Publication) error
 	// Join must register callback func to handle Join messages received.
-	HandleJoin(ch string, join *Join) error
+	HandleJoin(ch string, join *protocol.Join) error
 	// Leave must register callback func to handle Leave messages received.
-	HandleLeave(ch string, leave *Leave) error
+	HandleLeave(ch string, leave *protocol.Leave) error
 	// Control must register callback func to handle Control data received.
 	HandleControl([]byte) error
 }
@@ -26,24 +28,28 @@ type BrokerEventHandler interface {
 // HistoryFilter allows to filter history according to fields set.
 type HistoryFilter struct {
 	// Since used to recover missed messages since provided RecoveryPosition.
-	Since *RecoveryPosition
+	Since *StreamPosition
 	// Limit number of publications to return.
 	Limit int
 }
 
-// RecoveryPosition contains fields to rely in recovery process. More info
-// about recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/
-type RecoveryPosition struct {
-	// Seq defines publication sequence.
+// StreamPosition contains fields to rely in stream recovery process. More info
+// about stream recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/
+type StreamPosition struct {
+	// Seq defines publication incremental sequence.
 	Seq uint32
-	// Gen defines publication sequence generation. The reason why we use both seq and
-	// gen is the fact that Javascript can't properly work with big numbers. As we not
-	// only support JSON but also Protobuf protocol format decision was made to be
-	// effective in serialization size and not pass sequences as strings.
+	// Gen defines publication sequence generation. The reason why we use both Seq and
+	// Gen fields is the fact that Javascript can't properly work with big numbers. As
+	// we not only support JSON but also Protobuf protocol format decision was made to
+	// be effective in serialization size and not pass sequences as strings.
 	Gen uint32
 	// Epoch of sequence and generation. Allows to handle situations when storage
-	// lost seq and gen for some reason and we don't want to improperly decide
-	// that publications were successfully recovered.
+	// lost stream entirely for some reason (expired or lost after restart) and we
+	// want to track this fact to prevent successful recovery from another stream.
+	// I.e. for example we have stream [1, 2, 3], then it's lost and new stream
+	// contains [1, 2, 3, 4], client that recovers from position 3 will only receive
+	// publication 4 missing 1, 2, 3 from new stream. With epoch we can tell client
+	// that correct recovery is not possible.
 	Epoch string
 }
 
@@ -72,9 +78,9 @@ type Broker interface {
 	// send error as soon as engine finishes publish operation.
 	Publish(ch string, pub *Publication, opts *ChannelOptions) error
 	// PublishJoin publishes Join Push message into channel.
-	PublishJoin(ch string, join *Join, opts *ChannelOptions) error
+	PublishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error
 	// PublishLeave publishes Leave Push message into channel.
-	PublishLeave(ch string, leave *Leave, opts *ChannelOptions) error
+	PublishLeave(ch string, leave *protocol.Leave, opts *ChannelOptions) error
 	// PublishControl allows to send control command data to all running nodes.
 	PublishControl(data []byte) error
 
@@ -90,12 +96,14 @@ type Broker interface {
 type HistoryManager interface {
 	// History returns a slice of publications published into channel.
 	// HistoryFilter allows to set several filtering options.
-	// History must return Publications with Seq and Gen set.
-	History(ch string, filter HistoryFilter) ([]*Publication, RecoveryPosition, error)
+	// Returns slice of Publications with Seq and Gen properly set, current
+	// stream top position and error.
+	History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
-	// The returned value is Publication ready to be published to Broker.
+	// The returned value is Publication ready to be published to
+	// Broker (with Seq and Gen properly set if needed).
 	// If returned Publication is nil then node will not try to publish
 	// it to Broker at all. This is useful for situations when engine can
 	// atomically save Publication to history and publish it to channel.
@@ -110,7 +118,7 @@ type HistoryManager interface {
 type PresenceManager interface {
 	// Presence returns actual presence information for channel.
 	Presence(ch string) (map[string]*ClientInfo, error)
-	// PresenseStats returns short stats of current presence data
+	// PresenceStats returns short stats of current presence data
 	// suitable for scenarios when caller does not need full client
 	// info returned by presence method.
 	PresenceStats(ch string) (PresenceStats, error)

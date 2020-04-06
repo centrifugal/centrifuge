@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -104,7 +103,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.NotNil(t, disconnect)
@@ -117,11 +116,11 @@ func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 
 	config := node.Config()
 	config.ClientInsecure = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
@@ -137,11 +136,11 @@ func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 
 	config := node.Config()
 	config.ClientAnonymous = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
@@ -156,7 +155,7 @@ func TestClientConnectWithMalformedToken(t *testing.T) {
 	defer node.Shutdown(context.Background())
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: "bad bad token",
@@ -171,11 +170,11 @@ func TestClientConnectWithValidToken(t *testing.T) {
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 0),
@@ -192,11 +191,11 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", time.Now().Unix()+10),
@@ -214,11 +213,11 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
@@ -234,11 +233,11 @@ func TestClientTokenRefresh(t *testing.T) {
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnToken("42", 1525541722),
@@ -260,7 +259,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -275,7 +274,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 		return RefreshReply{}
 	})
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
@@ -291,7 +290,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -307,7 +306,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 		}
 	})
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
@@ -320,7 +319,7 @@ func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
 	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -337,7 +336,7 @@ func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
 		}
 	})
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
@@ -351,7 +350,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	defer node.Shutdown(context.Background())
 
 	config := node.Config()
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -366,7 +365,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 		return RefreshReply{}
 	})
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
@@ -374,7 +373,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 }
 
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
@@ -404,7 +403,7 @@ func extractConnectResult(replies []*protocol.Reply) *protocol.ConnectResult {
 }
 
 func subscribeClient(t testing.TB, client *Client, ch string) *protocol.SubscribeResult {
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
 	ctx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -427,7 +426,7 @@ func TestClientSubscribe(t *testing.T) {
 
 	require.Equal(t, 0, len(client.Channels()))
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -470,7 +469,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 
 	connectClient(t, client)
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -504,7 +503,7 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	config := node.Config()
 	config.HistoryLifetime = 100
 	config.HistorySize = 10
-	node.Reload(config)
+	_ = node.Reload(config)
 	transport := newTestTransport()
 	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
@@ -513,7 +512,7 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 
 	connectClient(t, client)
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -587,7 +586,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := NewClient(newCtx, node, transport)
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	client.handleCommand(&protocol.Command{
 		ID: 1,
@@ -612,7 +611,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 		}
 	}()
 
-	client.Subscribe("server-side-3")
+	_ = client.Subscribe("server-side-3")
 	err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
 	require.NoError(t, err)
 	err = node.Publish("server-side-2", []byte(`{"text": "test message 2"}`))
@@ -632,12 +631,12 @@ func TestClientUserPersonalChannel(t *testing.T) {
 	config := node.Config()
 	config.UserSubscribeToPersonal = true
 	config.Namespaces = []ChannelNamespace{
-		ChannelNamespace{
+		{
 			Name:           "user",
 			ChannelOptions: ChannelOptions{},
 		},
 	}
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	defer node.Shutdown(context.Background())
 
@@ -662,7 +661,7 @@ func TestClientUserPersonalChannel(t *testing.T) {
 			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 			client, _ := NewClient(newCtx, node, transport)
-			replies := []*protocol.Reply{}
+			var replies []*protocol.Reply
 			rw := testReplyWriter(&replies)
 			client.handleCommand(&protocol.Command{
 				ID: 1,
@@ -702,7 +701,7 @@ func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 
 	connectClient(t, client)
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -718,7 +717,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -727,7 +726,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 
 	connectClient(t, client)
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -760,7 +759,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -769,7 +768,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 
 	connectClient(t, client)
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -799,7 +798,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	config.HistorySize = 10
 	config.HistoryLifetime = 60
 	config.HistoryRecover = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -812,7 +811,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	require.Equal(t, uint32(0), result.Seq)
 
 	for i := 0; i < 10; i++ {
-		node.Publish("test", []byte("{}"))
+		_ = node.Publish("test", []byte("{}"))
 	}
 
 	client, _ = NewClient(newCtx, node, transport)
@@ -872,7 +871,7 @@ func TestClientPublish(t *testing.T) {
 
 	config := node.Config()
 	config.Publish = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
@@ -883,7 +882,7 @@ func TestClientPublish(t *testing.T) {
 
 	config = node.Config()
 	config.SubscribeToPublish = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
@@ -905,9 +904,9 @@ type testBrokerEventHandler struct {
 	// Publication must register callback func to handle Publications received.
 	HandlePublicationFunc func(ch string, pub *Publication) error
 	// Join must register callback func to handle Join messages received.
-	HandleJoinFunc func(ch string, join *Join) error
+	HandleJoinFunc func(ch string, join *protocol.Join) error
 	// Leave must register callback func to handle Leave messages received.
-	HandleLeaveFunc func(ch string, leave *Leave) error
+	HandleLeaveFunc func(ch string, leave *protocol.Leave) error
 	// Control must register callback func to handle Control data received.
 	HandleControlFunc func([]byte) error
 }
@@ -919,14 +918,14 @@ func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication) 
 	return nil
 }
 
-func (b *testBrokerEventHandler) HandleJoin(ch string, join *Join) error {
+func (b *testBrokerEventHandler) HandleJoin(ch string, join *protocol.Join) error {
 	if b.HandleJoinFunc != nil {
 		return b.HandleJoinFunc(ch, join)
 	}
 	return nil
 }
 
-func (b *testBrokerEventHandler) HandleLeave(ch string, leave *Leave) error {
+func (b *testBrokerEventHandler) HandleLeave(ch string, leave *protocol.Leave) error {
 	if b.HandleLeaveFunc != nil {
 		return b.HandleLeaveFunc(ch, leave)
 	}
@@ -971,7 +970,7 @@ func TestClientPublishHandler(t *testing.T) {
 
 	config := node.Config()
 	config.Publish = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	subscribeClient(t, client, "test")
 
@@ -1048,7 +1047,7 @@ func TestClientPingWithRecover(t *testing.T) {
 	config.HistoryLifetime = 10
 	config.HistorySize = 10
 	config.HistoryRecover = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1070,7 +1069,7 @@ func TestClientPresence(t *testing.T) {
 
 	config := node.Config()
 	config.Presence = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1097,7 +1096,7 @@ func TestClientPresence(t *testing.T) {
 
 	config = node.Config()
 	config.Presence = false
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	presenceResp, disconnect = client.presenceCmd(&protocol.PresenceRequest{
 		Channel: "test",
@@ -1122,7 +1121,7 @@ func TestClientHistory(t *testing.T) {
 	config := node.Config()
 	config.HistorySize = 10
 	config.HistoryLifetime = 60
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1130,7 +1129,7 @@ func TestClientHistory(t *testing.T) {
 	client, _ := NewClient(newCtx, node, transport)
 
 	for i := 0; i < 10; i++ {
-		node.Publish("test", []byte(`{}`))
+		_ = node.Publish("test", []byte(`{}`))
 	}
 
 	connectClient(t, client)
@@ -1146,7 +1145,7 @@ func TestClientHistory(t *testing.T) {
 	config = node.Config()
 	config.HistorySize = 0
 	config.HistoryLifetime = 0
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	historyResp, disconnect = client.historyCmd(&protocol.HistoryRequest{
 		Channel: "test",
@@ -1164,14 +1163,14 @@ func TestClientHistoryDisabled(t *testing.T) {
 	config.HistorySize = 10
 	config.HistoryLifetime = 60
 	config.HistoryDisableForClient = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := NewClient(newCtx, node, transport)
 
-	node.Publish("test", []byte(`{}`))
+	_ = node.Publish("test", []byte(`{}`))
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
@@ -1190,14 +1189,14 @@ func TestClientPresenceDisabled(t *testing.T) {
 	config := node.Config()
 	config.Presence = true
 	config.PresenceDisableForClient = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := NewClient(newCtx, node, transport)
 
-	node.Publish("test", []byte(`{}`))
+	_ = node.Publish("test", []byte(`{}`))
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
@@ -1215,7 +1214,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 
 	config := node.Config()
 	config.ClientStaleCloseDelay = time.Millisecond
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1233,7 +1232,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 
 	config := node.Config()
 	config.Presence = true
-	node.Reload(config)
+	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1297,7 +1296,7 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 
 	connectClient(t, client)
 
-	replies := []*protocol.Reply{}
+	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
 	disconnect := client.handleCommand(&protocol.Command{
@@ -1315,75 +1314,4 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 		Params: []byte(`{}`),
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
-}
-
-var recoverTests = []struct {
-	Name            string
-	HistorySize     int
-	HistoryLifetime int
-	NumPublications int
-	SinceSeq        uint32
-	NumRecovered    int
-	Sleep           int
-	Recovered       bool
-}{
-	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
-	{"from_position", 10, 60, 10, 8, 2, 0, true},
-	{"from_position_that_is_too_far", 10, 60, 20, 8, 10, 0, false},
-	{"same_position_no_history_expected", 10, 60, 7, 7, 0, 0, true},
-	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
-	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
-	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
-}
-
-func TestMemoryClientSubscribeRecover(t *testing.T) {
-	for _, tt := range recoverTests {
-		t.Run(tt.Name, func(t *testing.T) {
-			node := nodeWithMemoryEngine()
-
-			config := node.Config()
-			config.HistorySize = tt.HistorySize
-			config.HistoryLifetime = tt.HistoryLifetime
-			config.HistoryRecover = true
-			node.Reload(config)
-
-			transport := newTestTransport()
-			ctx := context.Background()
-			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := NewClient(newCtx, node, transport)
-
-			channel := "test_recovery_memory_" + tt.Name
-
-			for i := 1; i <= tt.NumPublications; i++ {
-				node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
-			}
-
-			time.Sleep(time.Duration(tt.Sleep) * time.Second)
-
-			connectClient(t, client)
-
-			replies := []*protocol.Reply{}
-			rw := testReplyWriter(&replies)
-
-			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
-				Limit: 0,
-				Since: nil,
-			})
-
-			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
-				Channel: channel,
-				Recover: true,
-				Seq:     tt.SinceSeq,
-				Gen:     recoveryPosition.Gen,
-				Epoch:   recoveryPosition.Epoch,
-			}, rw, false)
-			require.Nil(t, subCtx.disconnect)
-			require.Nil(t, replies[0].Error)
-			res := extractSubscribeResult(replies)
-			require.Equal(t, tt.NumRecovered, len(res.Publications))
-			require.Equal(t, tt.Recovered, res.Recovered)
-
-			node.Shutdown(context.Background())
-		})
-	}
 }

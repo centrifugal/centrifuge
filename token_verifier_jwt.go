@@ -68,7 +68,7 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken
 			if err != nil {
 				return connectToken{}, err
 			}
-			token.Info = Raw(byteInfo)
+			token.Info = byteInfo
 		}
 		return token, nil
 	}
@@ -100,7 +100,7 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeT
 			if err != nil {
 				return subscribeToken{}, err
 			}
-			token.Info = Raw(byteInfo)
+			token.Info = byteInfo
 		}
 		return token, nil
 	}
