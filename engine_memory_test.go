@@ -34,7 +34,7 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	err := e.Publish("channel", newTestPublication(), nil)
 	require.NoError(t, err)
 
-	require.NoError(t, e.AddPresence("channel", "uid", &ClientInfo{}, time.Second))
+	require.NoError(t, e.AddPresence("channel", "uid", &protocol.ClientInfo{}, time.Second))
 	p, err := e.Presence("channel")
 	require.NoError(t, err)
 	require.Equal(t, 1, len(p))
@@ -97,7 +97,7 @@ func TestMemoryPresenceHub(t *testing.T) {
 	testCh2 := "channel2"
 	uid := "uid"
 
-	info := &ClientInfo{
+	info := &protocol.ClientInfo{
 		User:   "user",
 		Client: "client",
 	}
@@ -287,7 +287,7 @@ func BenchmarkMemoryEngineAddPresence_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+		err := e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -299,7 +299,7 @@ func BenchmarkMemoryEngineAddPresence_SingleChannel_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+			err := e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -309,7 +309,7 @@ func BenchmarkMemoryEngineAddPresence_SingleChannel_Parallel(b *testing.B) {
 
 func BenchmarkMemoryEnginePresence_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := e.Presence("channel")
@@ -321,7 +321,7 @@ func BenchmarkMemoryEnginePresence_SingleChannel(b *testing.B) {
 
 func BenchmarkMemoryEnginePresence_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

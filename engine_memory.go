@@ -60,7 +60,7 @@ func (e *MemoryEngine) Run(h BrokerEventHandler) error {
 
 // Publish adds message into history hub and calls node ClientMsg method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
-func (e *MemoryEngine) Publish(ch string, pub *Publication, _ *ChannelOptions) error {
+func (e *MemoryEngine) Publish(ch string, pub *protocol.Publication, _ *ChannelOptions) error {
 	return e.eventHandler.HandlePublication(ch, pub)
 }
 
@@ -90,7 +90,7 @@ func (e *MemoryEngine) Unsubscribe(_ string) error {
 }
 
 // AddPresence - see engine interface description.
-func (e *MemoryEngine) AddPresence(ch string, uid string, info *ClientInfo, _ time.Duration) error {
+func (e *MemoryEngine) AddPresence(ch string, uid string, info *protocol.ClientInfo, _ time.Duration) error {
 	return e.presenceHub.add(ch, uid, info)
 }
 
@@ -100,7 +100,7 @@ func (e *MemoryEngine) RemovePresence(ch string, uid string) error {
 }
 
 // Presence - see engine interface description.
-func (e *MemoryEngine) Presence(ch string) (map[string]*ClientInfo, error) {
+func (e *MemoryEngine) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
 	return e.presenceHub.get(ch)
 }
 
@@ -110,12 +110,12 @@ func (e *MemoryEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
 	return e.historyHub.get(ch, filter)
 }
 
 // AddHistory - see engine interface description.
-func (e *MemoryEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
+func (e *MemoryEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error) {
 	return e.historyHub.add(ch, pub, opts)
 }
 
@@ -131,22 +131,22 @@ func (e *MemoryEngine) Channels() ([]string, error) {
 
 type presenceHub struct {
 	sync.RWMutex
-	presence map[string]map[string]*ClientInfo
+	presence map[string]map[string]*protocol.ClientInfo
 }
 
 func newPresenceHub() *presenceHub {
 	return &presenceHub{
-		presence: make(map[string]map[string]*ClientInfo),
+		presence: make(map[string]map[string]*protocol.ClientInfo),
 	}
 }
 
-func (h *presenceHub) add(ch string, uid string, info *ClientInfo) error {
+func (h *presenceHub) add(ch string, uid string, info *protocol.ClientInfo) error {
 	h.Lock()
 	defer h.Unlock()
 
 	_, ok := h.presence[ch]
 	if !ok {
-		h.presence[ch] = make(map[string]*ClientInfo)
+		h.presence[ch] = make(map[string]*protocol.ClientInfo)
 	}
 	h.presence[ch][uid] = info
 	return nil
@@ -173,7 +173,7 @@ func (h *presenceHub) remove(ch string, uid string) error {
 	return nil
 }
 
-func (h *presenceHub) get(ch string) (map[string]*ClientInfo, error) {
+func (h *presenceHub) get(ch string) (map[string]*protocol.ClientInfo, error) {
 	h.RLock()
 	defer h.RUnlock()
 
@@ -183,7 +183,7 @@ func (h *presenceHub) get(ch string) (map[string]*ClientInfo, error) {
 		return nil, nil
 	}
 
-	data := make(map[string]*ClientInfo, len(presence))
+	data := make(map[string]*protocol.ClientInfo, len(presence))
 	for k, v := range presence {
 		data[k] = v
 	}

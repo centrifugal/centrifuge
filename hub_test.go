@@ -51,11 +51,11 @@ func (t *testTransport) Name() string {
 }
 
 func (t *testTransport) Protocol() ProtocolType {
-	return protocol.TypeJSON
+	return ProtocolTypeJSON
 }
 
 func (t *testTransport) Encoding() EncodingType {
-	return protocol.EncodingTypeJSON
+	return EncodingTypeJSON
 }
 
 func (t *testTransport) Close(disconnect *Disconnect) error {

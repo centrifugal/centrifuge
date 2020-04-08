@@ -75,7 +75,7 @@ func TestRedisEngine(t *testing.T) {
 	require.NoError(t, e.Unsubscribe("channel"))
 
 	// test adding presence
-	require.NoError(t, e.AddPresence("channel", "uid", &ClientInfo{}, 25*time.Second))
+	require.NoError(t, e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 25*time.Second))
 
 	p, err := e.Presence("channel")
 	require.NoError(t, err)
@@ -664,7 +664,7 @@ func BenchmarkRedisEngineAddPresence_SingleChannel(b *testing.B) {
 	e := newTestRedisEngine(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+		err := e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -677,7 +677,7 @@ func BenchmarkRedisEngineAddPresence_SingleChannel_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+			err := e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -687,7 +687,7 @@ func BenchmarkRedisEngineAddPresence_SingleChannel_Parallel(b *testing.B) {
 
 func BenchmarkRedisEnginePresence_SingleChannel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := e.Presence("channel")
@@ -700,7 +700,7 @@ func BenchmarkRedisEnginePresence_SingleChannel(b *testing.B) {
 func BenchmarkRedisEnginePresence_SingleChannel_Parallel(b *testing.B) {
 	e := newTestRedisEngine(b)
 	b.SetParallelism(128)
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -714,7 +714,7 @@ func BenchmarkRedisEnginePresence_SingleChannel_Parallel(b *testing.B) {
 
 func BenchmarkRedisEnginePresence_DifferentChannels(b *testing.B) {
 	e := newTestRedisEngine(b)
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 	j := 0
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -730,7 +730,7 @@ func BenchmarkRedisEnginePresence_DifferentChannels(b *testing.B) {
 func BenchmarkRedisEnginePresence_DifferentChannels_Parallel(b *testing.B) {
 	e := newTestRedisEngine(b)
 	b.SetParallelism(128)
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 	j := 0
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

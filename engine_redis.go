@@ -519,7 +519,7 @@ func (e *RedisEngine) Run(h BrokerEventHandler) error {
 }
 
 // Publish - see engine interface description.
-func (e *RedisEngine) Publish(ch string, pub *Publication, opts *ChannelOptions) error {
+func (e *RedisEngine) Publish(ch string, pub *protocol.Publication, opts *ChannelOptions) error {
 	return e.getShard(ch).Publish(ch, pub, opts)
 }
 
@@ -557,7 +557,7 @@ func (e *RedisEngine) Unsubscribe(ch string) error {
 }
 
 // AddPresence - see engine interface description.
-func (e *RedisEngine) AddPresence(ch string, uid string, info *ClientInfo, exp time.Duration) error {
+func (e *RedisEngine) AddPresence(ch string, uid string, info *protocol.ClientInfo, exp time.Duration) error {
 	expire := int(exp.Seconds())
 	return e.getShard(ch).AddPresence(ch, uid, info, expire)
 }
@@ -568,7 +568,7 @@ func (e *RedisEngine) RemovePresence(ch string, uid string) error {
 }
 
 // Presence - see engine interface description.
-func (e *RedisEngine) Presence(ch string) (map[string]*ClientInfo, error) {
+func (e *RedisEngine) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
 	return e.getShard(ch).Presence(ch)
 }
 
@@ -578,12 +578,12 @@ func (e *RedisEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
 	return e.getShard(ch).History(ch, filter, e.config.SequenceTTL)
 }
 
 // AddHistory - see engine interface description.
-func (e *RedisEngine) AddHistory(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
+func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error) {
 	return e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd, e.config.SequenceTTL)
 }
 
@@ -1429,7 +1429,7 @@ func (s *shard) getDataResponse(r dataRequest) *dataResponse {
 }
 
 // AddPresence - see engine interface description.
-func (s *shard) AddPresence(ch string, uid string, info *ClientInfo, expire int) error {
+func (s *shard) AddPresence(ch string, uid string, info *protocol.ClientInfo, expire int) error {
 	infoJSON, err := info.Marshal()
 	if err != nil {
 		return err
@@ -1452,7 +1452,7 @@ func (s *shard) RemovePresence(ch string, uid string) error {
 }
 
 // Presence - see engine interface description.
-func (s *shard) Presence(ch string) (map[string]*ClientInfo, error) {
+func (s *shard) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
 	hashKey := s.presenceHashKey(ch)
 	setKey := s.presenceSetKey(ch)
 	now := int(time.Now().Unix())
@@ -1659,7 +1659,7 @@ func (s *shard) Channels() ([]string, error) {
 	return channels, nil
 }
 
-func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {
+func mapStringClientInfo(result interface{}, err error) (map[string]*protocol.ClientInfo, error) {
 	values, err := redis.Values(result, err)
 	if err != nil {
 		return nil, err
@@ -1667,14 +1667,14 @@ func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo,
 	if len(values)%2 != 0 {
 		return nil, errors.New("mapStringClientInfo expects even number of values result")
 	}
-	m := make(map[string]*ClientInfo, len(values)/2)
+	m := make(map[string]*protocol.ClientInfo, len(values)/2)
 	for i := 0; i < len(values); i += 2 {
 		key, okKey := values[i].([]byte)
 		value, okValue := values[i+1].([]byte)
 		if !okKey || !okValue {
 			return nil, errors.New("scanMap key not a bulk string value")
 		}
-		var f ClientInfo
+		var f protocol.ClientInfo
 		err = f.Unmarshal(value)
 		if err != nil {
 			return nil, errors.New("can not unmarshal value to ClientInfo")
@@ -1695,7 +1695,7 @@ func extractPushData(data []byte) ([]byte, uint32, uint32) {
 	return data, seq, gen
 }
 
-func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
+func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error) {
 	values, err := redis.Values(result, err)
 	if err != nil {
 		return nil, err

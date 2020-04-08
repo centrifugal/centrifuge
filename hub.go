@@ -249,7 +249,7 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 		if !ok {
 			continue
 		}
-		protoType := c.Transport().Protocol()
+		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonPublicationReply == nil {
 				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
@@ -305,7 +305,7 @@ func (h *Hub) broadcastJoin(channel string, join *protocol.Join) error {
 		if !ok {
 			continue
 		}
-		protoType := c.Transport().Protocol()
+		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonReply == nil {
 				data, err := protocol.GetPushEncoder(protoType).EncodeJoin(join)
@@ -361,7 +361,7 @@ func (h *Hub) broadcastLeave(channel string, leave *protocol.Leave) error {
 		if !ok {
 			continue
 		}
-		protoType := c.Transport().Protocol()
+		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonReply == nil {
 				data, err := protocol.GetPushEncoder(protoType).EncodeLeave(leave)

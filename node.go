@@ -466,7 +466,7 @@ func (n *Node) handleLeave(ch string, leave *protocol.Leave) error {
 	return n.hub.broadcastLeave(ch, leave)
 }
 
-func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...PublishOption) error {
+func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts ...PublishOption) error {
 	chOpts, ok := n.ChannelOpts(ch)
 	if !ok {
 		return ErrNoChannelOptions
@@ -763,7 +763,7 @@ func (n *Node) PersonalChannel(user string) string {
 }
 
 // addPresence proxies presence adding to engine.
-func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
+func (n *Node) addPresence(ch string, uid string, info *protocol.ClientInfo) error {
 	if n.presenceManager == nil {
 		return nil
 	}
@@ -785,6 +785,21 @@ func (n *Node) removePresence(ch string, uid string) error {
 
 // Presence returns a map with information about active clients in channel.
 func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
+	presence, err := n.presenceRaw(ch)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]*ClientInfo, len(presence))
+	for k, v := range presence {
+		var i ClientInfo
+		i.fromProto(v)
+		result[k] = &i
+	}
+	return result, nil
+}
+
+// Presence returns a map with information about active clients in channel.
+func (n *Node) presenceRaw(ch string) (map[string]*protocol.ClientInfo, error) {
 	if n.presenceManager == nil {
 		return nil, ErrorNotAvailable
 	}

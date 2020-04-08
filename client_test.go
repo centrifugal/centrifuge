@@ -81,7 +81,7 @@ func TestClientInitialState(t *testing.T) {
 	require.Equal(t, client.uid, client.ID())
 	require.NotNil(t, "", client.user)
 	require.Equal(t, 0, len(client.Channels()))
-	require.Equal(t, protocol.TypeJSON, client.Transport().Protocol())
+	require.Equal(t, ProtocolTypeJSON, client.Transport().Protocol())
 	require.Equal(t, "test_transport", client.Transport().Name())
 	require.False(t, client.closed)
 	require.False(t, client.authenticated)
@@ -223,7 +223,7 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 		Token: getConnToken("42", 1525541722),
 	}, rw)
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorTokenExpired, replies[0].Error)
+	require.Equal(t, ErrorTokenExpired.toProto(), replies[0].Error)
 	require.False(t, client.authenticated)
 }
 
@@ -243,7 +243,7 @@ func TestClientTokenRefresh(t *testing.T) {
 		Token: getConnToken("42", 1525541722),
 	}, rw)
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorTokenExpired, replies[0].Error)
+	require.Equal(t, ErrorTokenExpired.toProto(), replies[0].Error)
 
 	refreshResp, disconnect := client.refreshCmd(&protocol.RefreshRequest{
 		Token: getConnToken("42", 2525637058),
@@ -369,7 +369,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorExpired, replies[0].Error)
+	require.Equal(t, ErrorExpired.toProto(), replies[0].Error)
 }
 
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
@@ -455,7 +455,7 @@ func TestClientSubscribe(t *testing.T) {
 		Channel: "test2",
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
-	require.Equal(t, ErrorAlreadySubscribed, replies[0].Error)
+	require.Equal(t, ErrorAlreadySubscribed.toProto(), replies[0].Error)
 }
 
 func TestClientSubscribeReceivePublication(t *testing.T) {
@@ -708,7 +708,7 @@ func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 		Channel: "$test1",
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
-	require.Equal(t, ErrorPermissionDenied, replies[0].Error)
+	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
 }
 
 func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
@@ -734,7 +734,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 		Token:   getSubscribeToken("$wrong_channel", "wrong client", 0),
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
-	require.Equal(t, ErrorPermissionDenied, replies[0].Error)
+	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
 
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
@@ -742,7 +742,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 		Token:   getSubscribeToken("$wrong_channel", client.ID(), 0),
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
-	require.Equal(t, ErrorPermissionDenied, replies[0].Error)
+	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
 
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
@@ -776,7 +776,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 		Token:   getSubscribeToken("$test1", client.ID(), 10),
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
-	require.Equal(t, ErrorTokenExpired, replies[0].Error)
+	require.Equal(t, ErrorTokenExpired.toProto(), replies[0].Error)
 
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
@@ -867,7 +867,7 @@ func TestClientPublish(t *testing.T) {
 		Data:    []byte(`{}`),
 	})
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorPermissionDenied, publishResp.Error)
+	require.Equal(t, ErrorPermissionDenied.toProto(), publishResp.Error)
 
 	config := node.Config()
 	config.Publish = true
@@ -889,7 +889,7 @@ func TestClientPublish(t *testing.T) {
 		Data:    []byte(`{}`),
 	})
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorPermissionDenied, publishResp.Error)
+	require.Equal(t, ErrorPermissionDenied.toProto(), publishResp.Error)
 
 	subscribeClient(t, client, "test")
 	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
@@ -1014,7 +1014,7 @@ func TestClientPublishHandler(t *testing.T) {
 		Data:    []byte(`{"input": "with error"}`),
 	})
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorBadRequest, publishResp.Error)
+	require.Equal(t, ErrorBadRequest.toProto(), publishResp.Error)
 
 	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
@@ -1102,7 +1102,7 @@ func TestClientPresence(t *testing.T) {
 		Channel: "test",
 	})
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorNotAvailable, presenceResp.Error)
+	require.Equal(t, ErrorNotAvailable.toProto(), presenceResp.Error)
 	require.Nil(t, presenceResp.Result)
 
 	presenceStatsResp, disconnect = client.presenceStatsCmd(&protocol.PresenceStatsRequest{
@@ -1110,7 +1110,7 @@ func TestClientPresence(t *testing.T) {
 	})
 	require.Nil(t, disconnect)
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorNotAvailable, presenceStatsResp.Error)
+	require.Equal(t, ErrorNotAvailable.toProto(), presenceStatsResp.Error)
 	require.Nil(t, presenceStatsResp.Result)
 }
 
@@ -1151,7 +1151,7 @@ func TestClientHistory(t *testing.T) {
 		Channel: "test",
 	})
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorNotAvailable, historyResp.Error)
+	require.Equal(t, ErrorNotAvailable.toProto(), historyResp.Error)
 	require.Nil(t, historyResp.Result)
 }
 
@@ -1179,7 +1179,7 @@ func TestClientHistoryDisabled(t *testing.T) {
 		Channel: "test",
 	})
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorNotAvailable, historyResp.Error)
+	require.Equal(t, ErrorNotAvailable.toProto(), historyResp.Error)
 }
 
 func TestClientPresenceDisabled(t *testing.T) {
@@ -1205,7 +1205,7 @@ func TestClientPresenceDisabled(t *testing.T) {
 		Channel: "test",
 	})
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorNotAvailable, presenceResp.Error)
+	require.Equal(t, ErrorNotAvailable.toProto(), presenceResp.Error)
 }
 
 func TestClientCloseUnauthenticated(t *testing.T) {
@@ -1305,7 +1305,7 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 		Params: []byte(`{}`),
 	}, rw.write, rw.flush)
 	require.Nil(t, disconnect)
-	require.Equal(t, ErrorMethodNotFound, replies[0].Error)
+	require.Equal(t, ErrorMethodNotFound.toProto(), replies[0].Error)
 
 	replies = nil
 	disconnect = client.handleCommand(&protocol.Command{

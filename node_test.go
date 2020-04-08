@@ -29,7 +29,7 @@ func (e *TestEngine) Run(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestEngine) Publish(_ string, _ *Publication, _ *ChannelOptions) error {
+func (e *TestEngine) Publish(_ string, _ *protocol.Publication, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishCount, 1)
 	return nil
 }
@@ -57,7 +57,7 @@ func (e *TestEngine) Unsubscribe(_ string) error {
 	return nil
 }
 
-func (e *TestEngine) AddPresence(_ string, _ string, _ *ClientInfo, _ time.Duration) error {
+func (e *TestEngine) AddPresence(_ string, _ string, _ *protocol.ClientInfo, _ time.Duration) error {
 	return nil
 }
 
@@ -65,7 +65,7 @@ func (e *TestEngine) RemovePresence(_ string, _ string) error {
 	return nil
 }
 
-func (e *TestEngine) Presence(_ string) (map[string]*ClientInfo, error) {
+func (e *TestEngine) Presence(_ string) (map[string]*protocol.ClientInfo, error) {
 	return map[string]*protocol.ClientInfo{}, nil
 }
 

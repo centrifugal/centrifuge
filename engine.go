@@ -16,7 +16,7 @@ type PresenceStats struct {
 // BrokerEventHandler can handle messages received from PUB/SUB system.
 type BrokerEventHandler interface {
 	// Publication must register callback func to handle Publications received.
-	HandlePublication(ch string, pub *Publication) error
+	HandlePublication(ch string, pub *protocol.Publication) error
 	// Join must register callback func to handle Join messages received.
 	HandleJoin(ch string, join *protocol.Join) error
 	// Leave must register callback func to handle Leave messages received.
@@ -76,7 +76,7 @@ type Broker interface {
 	// be delivered to all clients subscribed on this channel at moment on
 	// any Centrifuge node. The returned value is channel in which we will
 	// send error as soon as engine finishes publish operation.
-	Publish(ch string, pub *Publication, opts *ChannelOptions) error
+	Publish(ch string, pub *protocol.Publication, opts *ChannelOptions) error
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error
 	// PublishLeave publishes Leave Push message into channel.
@@ -98,7 +98,7 @@ type HistoryManager interface {
 	// HistoryFilter allows to set several filtering options.
 	// Returns slice of Publications with Seq and Gen properly set, current
 	// stream top position and error.
-	History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error)
+	History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
@@ -107,7 +107,7 @@ type HistoryManager interface {
 	// If returned Publication is nil then node will not try to publish
 	// it to Broker at all. This is useful for situations when engine can
 	// atomically save Publication to history and publish it to channel.
-	AddHistory(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error)
+	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
@@ -117,7 +117,7 @@ type HistoryManager interface {
 // PresenceManager is responsible for channel presence management.
 type PresenceManager interface {
 	// Presence returns actual presence information for channel.
-	Presence(ch string) (map[string]*ClientInfo, error)
+	Presence(ch string) (map[string]*protocol.ClientInfo, error)
 	// PresenceStats returns short stats of current presence data
 	// suitable for scenarios when caller does not need full client
 	// info returned by presence method.
@@ -126,7 +126,7 @@ type PresenceManager interface {
 	// for connection with specified identifier. Engine should have a
 	// property to expire client information that was not updated
 	// (touched) after some configured time interval.
-	AddPresence(ch string, clientID string, info *ClientInfo, expire time.Duration) error
+	AddPresence(ch string, clientID string, info *protocol.ClientInfo, expire time.Duration) error
 	// RemovePresence removes presence information for connection
 	// with specified identifier.
 	RemovePresence(ch string, clientID string) error
