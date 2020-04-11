@@ -113,8 +113,11 @@ func (s *Stream) Get(seq uint64, limit int) ([]Item, uint64, error) {
 	var resultCap int
 	if limit > 0 {
 		resultCap = limit
+		if resultCap > s.list.Len() {
+			resultCap = s.list.Len()
+		}
 	} else {
-		resultCap = int(s.top - seq + 1)
+		resultCap = s.list.Len()
 	}
 
 	result := make([]Item, 0, resultCap)
