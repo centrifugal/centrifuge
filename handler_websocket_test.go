@@ -172,7 +172,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 			err = json.Unmarshal(rep.Result, &push)
 			assert.NoError(t, err)
 
-			var pub Publication
+			var pub protocol.Publication
 			err = json.Unmarshal(push.Data, &pub)
 			assert.NoError(t, err)
 

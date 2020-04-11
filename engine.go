@@ -15,14 +15,14 @@ type PresenceStats struct {
 
 // BrokerEventHandler can handle messages received from PUB/SUB system.
 type BrokerEventHandler interface {
-	// Publication must register callback func to handle Publications received.
+	// HandlePublication to handle received Publications.
 	HandlePublication(ch string, pub *protocol.Publication) error
-	// Join must register callback func to handle Join messages received.
+	// HandleJoin to handle received Join messages.
 	HandleJoin(ch string, join *protocol.Join) error
-	// Leave must register callback func to handle Leave messages received.
+	// HandleLeave to handle received Leave messages.
 	HandleLeave(ch string, leave *protocol.Leave) error
-	// Control must register callback func to handle Control data received.
-	HandleControl([]byte) error
+	// HandleControl to handle received control data.
+	HandleControl(data []byte) error
 }
 
 // HistoryFilter allows to filter history according to fields set.
@@ -33,16 +33,12 @@ type HistoryFilter struct {
 	Limit int
 }
 
-// StreamPosition contains fields to rely in stream recovery process. More info
-// about stream recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/
+// StreamPosition contains fields to describe position in stream.
+// This is used for automatic recovery mechanics. More info about stream
+// recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/.
 type StreamPosition struct {
-	// Seq defines publication incremental sequence.
-	Seq uint32
-	// Gen defines publication sequence generation. The reason why we use both Seq and
-	// Gen fields is the fact that Javascript can't properly work with big numbers. As
-	// we not only support JSON but also Protobuf protocol format decision was made to
-	// be effective in serialization size and not pass sequences as strings.
-	Gen uint32
+	// Offset defines publication incremental offset inside a stream.
+	Offset uint64
 	// Epoch of sequence and generation. Allows to handle situations when storage
 	// lost stream entirely for some reason (expired or lost after restart) and we
 	// want to track this fact to prevent successful recovery from another stream.
@@ -96,14 +92,14 @@ type Broker interface {
 type HistoryManager interface {
 	// History returns a slice of publications published into channel.
 	// HistoryFilter allows to set several filtering options.
-	// Returns slice of Publications with Seq and Gen properly set, current
+	// Returns slice of Publications with Offset properly set, current
 	// stream top position and error.
 	History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
 	// The returned value is Publication ready to be published to
-	// Broker (with Seq and Gen properly set if needed).
+	// Broker (with Offset properly set if needed).
 	// If returned Publication is nil then node will not try to publish
 	// it to Broker at all. This is useful for situations when engine can
 	// atomically save Publication to history and publish it to channel.

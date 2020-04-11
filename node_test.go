@@ -77,7 +77,7 @@ func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*protocol.Publication
 	return []*protocol.Publication{}, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (*Publication, error) {
+func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (*protocol.Publication, error) {
 	return pub, nil
 }
 
@@ -265,11 +265,10 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 	}
 }
 
-func TestNodeHistoryIteration(t *testing.T) {
-	numMessages := 10000
-
+func TestMemoryEngineHistoryIteration(t *testing.T) {
 	e := testMemoryEngine()
 	conf := e.node.Config()
+	numMessages := 10000
 	conf.HistorySize = numMessages
 	conf.HistoryLifetime = 60
 	conf.HistoryRecover = true
@@ -287,14 +286,17 @@ func TestNodeHistoryIteration(t *testing.T) {
 	require.Equal(t, numMessages, len(pubs))
 
 	var n int
-	var seq uint32 = 0
+	var offset uint64 = 0
+	var iterateBy = 1
 
 	for {
+		// TODO: there is a plan to extend Node API to do history iteration.
+		// But for now we are using Engine method here.
 		pubs, _, err := e.History(channel, HistoryFilter{
-			Limit: 10,
-			Since: &StreamPosition{Seq: seq, Gen: 0, Epoch: ""},
+			Limit: iterateBy,
+			Since: &StreamPosition{Offset: offset, Epoch: ""},
 		})
-		seq += 10
+		offset += uint64(iterateBy)
 		if err != nil {
 			t.Fatal(err)
 		}

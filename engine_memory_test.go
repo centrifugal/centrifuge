@@ -21,8 +21,8 @@ func testMemoryEngine() *MemoryEngine {
 	return e
 }
 
-func newTestPublication() *Publication {
-	return &Publication{Data: []byte("{}")}
+func newTestPublication() *protocol.Publication {
+	return &protocol.Publication{Data: []byte("{}")}
 }
 
 func TestMemoryEnginePublishHistory(t *testing.T) {
@@ -215,8 +215,8 @@ func TestMemoryHistoryHubSequenceTTL(t *testing.T) {
 
 func BenchmarkMemoryEnginePublish_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
@@ -228,8 +228,8 @@ func BenchmarkMemoryEnginePublish_SingleChannel(b *testing.B) {
 
 func BenchmarkMemoryEnginePublish_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test UID", Data: rawData}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -244,8 +244,8 @@ func BenchmarkMemoryEnginePublish_SingleChannel_Parallel(b *testing.B) {
 
 func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test-uid", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
@@ -263,13 +263,13 @@ func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel(b *testing.B) {
 
 func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
-	rawData := Raw([]byte(`{"bench": true}`))
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
 	chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			pub := &Publication{UID: "test-uid", Data: rawData}
+			pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 			var err error
 			pub, err = e.AddHistory("channel", pub, chOpts)
 			if err != nil {
@@ -335,8 +335,8 @@ func BenchmarkMemoryEnginePresence_SingleChannel_Parallel(b *testing.B) {
 
 func BenchmarkMemoryEngineHistory_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
-	rawData := Raw([]byte("{}"))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte("{}"))
+	pub := &protocol.Publication{UID: "test UID", Data: rawData}
 	for i := 0; i < 4; i++ {
 		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
@@ -354,8 +354,8 @@ func BenchmarkMemoryEngineHistory_SingleChannel(b *testing.B) {
 
 func BenchmarkMemoryEngineHistory_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
-	rawData := Raw([]byte("{}"))
-	pub := &Publication{UID: "test-uid", Data: rawData}
+	rawData := protocol.Raw([]byte("{}"))
+	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
 		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
@@ -375,10 +375,10 @@ func BenchmarkMemoryEngineHistory_SingleChannel_Parallel(b *testing.B) {
 
 func BenchmarkMemoryEngineRecover_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
-	rawData := Raw([]byte("{}"))
+	rawData := protocol.Raw([]byte("{}"))
 	numMessages := 100
 	for i := 1; i <= numMessages; i++ {
-		pub := &Publication{Data: rawData}
+		pub := &protocol.Publication{Data: rawData}
 		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
 	}
 	b.ResetTimer()
@@ -386,7 +386,7 @@ func BenchmarkMemoryEngineRecover_SingleChannel_Parallel(b *testing.B) {
 		for pb.Next() {
 			_, _, err := e.History("channel", HistoryFilter{
 				Limit: -1,
-				Since: &StreamPosition{Seq: uint32(numMessages - 5), Gen: 0, Epoch: ""},
+				Since: &StreamPosition{Offset: uint64(numMessages - 5), Epoch: ""},
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -400,7 +400,7 @@ var recoverTests = []struct {
 	HistorySize     int
 	HistoryLifetime int
 	NumPublications int
-	SinceSeq        uint32
+	SinceOffset     uint64
 	NumRecovered    int
 	Sleep           int
 	Recovered       bool
@@ -451,8 +451,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: channel,
 				Recover: true,
-				Seq:     tt.SinceSeq,
-				Gen:     recoveryPosition.Gen,
+				Offset:  tt.SinceOffset,
 				Epoch:   recoveryPosition.Epoch,
 			}, rw, false)
 			require.Nil(t, subCtx.disconnect)

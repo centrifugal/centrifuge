@@ -818,6 +818,8 @@ func TestClientSubscribeLast(t *testing.T) {
 	connectClient(t, client)
 	result = subscribeClient(t, client, "test")
 	require.Equal(t, uint32(10), result.Seq)
+	require.Equal(t, uint32(0), result.Gen)
+	require.Equal(t, uint64(10), result.Offset)
 }
 
 func TestClientUnsubscribe(t *testing.T) {
@@ -902,7 +904,7 @@ func TestClientPublish(t *testing.T) {
 
 type testBrokerEventHandler struct {
 	// Publication must register callback func to handle Publications received.
-	HandlePublicationFunc func(ch string, pub *Publication) error
+	HandlePublicationFunc func(ch string, pub *protocol.Publication) error
 	// Join must register callback func to handle Join messages received.
 	HandleJoinFunc func(ch string, join *protocol.Join) error
 	// Leave must register callback func to handle Leave messages received.
@@ -911,7 +913,7 @@ type testBrokerEventHandler struct {
 	HandleControlFunc func([]byte) error
 }
 
-func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication) error {
+func (b *testBrokerEventHandler) HandlePublication(ch string, pub *protocol.Publication) error {
 	if b.HandlePublicationFunc != nil {
 		return b.HandlePublicationFunc(ch, pub)
 	}
@@ -955,7 +957,7 @@ func TestClientPublishHandler(t *testing.T) {
 	connectClient(t, client)
 
 	node.broker.(*MemoryEngine).eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication) error {
+		HandlePublicationFunc: func(ch string, pub *protocol.Publication) error {
 			var msg testClientMessage
 			err := json.Unmarshal(pub.Data, &msg)
 			require.NoError(t, err)

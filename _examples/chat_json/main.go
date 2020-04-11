@@ -97,7 +97,7 @@ func main() {
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
-			Data: centrifuge.Raw(`{}`),
+			Data: []byte(`{}`),
 			// Subscribe to several server-side channels.
 			Channels: []string{"server-side-1", "server-side-2", "server-side-3"},
 		}
@@ -175,7 +175,7 @@ func main() {
 				case <-ctx.Done():
 					return
 				case <-time.After(5 * time.Second):
-					err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+					err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
 					if err != nil {
 						if err == io.EOF {
 							return
@@ -192,14 +192,15 @@ func main() {
 	}
 
 	go func() {
-		i := 0
+		// Publish personal notifications for user 42 periodically.
+		i := 1
 		for {
-			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+			err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
 			}
-			time.Sleep(5000 * time.Millisecond)
 			i++
+			time.Sleep(5000 * time.Millisecond)
 		}
 	}()
 

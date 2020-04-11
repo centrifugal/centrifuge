@@ -77,7 +77,7 @@ func main() {
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
-			Data: centrifuge.Raw(`{}`),
+			Data: []byte(`{}`),
 		}
 	})
 
@@ -143,7 +143,7 @@ func main() {
 	go func() {
 		i := 0
 		for {
-			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+			err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
 			if err != nil {
 				log.Println(err.Error())
 			}

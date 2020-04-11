@@ -84,8 +84,8 @@ func TestRedisEngine(t *testing.T) {
 	err = e.RemovePresence("channel", "uid")
 	require.NoError(t, err)
 
-	rawData := Raw([]byte("{}"))
-	pub = &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte("{}"))
+	pub = &protocol.Publication{UID: "test UID", Data: rawData}
 
 	// test adding history
 	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
@@ -154,10 +154,9 @@ func TestRedisCurrentPosition(t *testing.T) {
 		Limit: 0,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint32(0), recoveryPosition.Seq)
-	require.Equal(t, uint32(0), recoveryPosition.Gen)
+	require.Equal(t, uint64(0), recoveryPosition.Offset)
 
-	pub := &Publication{Data: Raw([]byte("{}"))}
+	pub := &protocol.Publication{Data: protocol.Raw([]byte("{}"))}
 	_, err = e.AddHistory(channel, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
 	require.NoError(t, err)
 
@@ -165,15 +164,14 @@ func TestRedisCurrentPosition(t *testing.T) {
 		Limit: 0,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint32(1), recoveryPosition.Seq)
-	require.Equal(t, uint32(0), recoveryPosition.Gen)
+	require.Equal(t, uint64(1), recoveryPosition.Offset)
 }
 
 func TestRedisEngineRecover(t *testing.T) {
 	e := newTestRedisEngine(t)
 
-	rawData := Raw([]byte("{}"))
-	pub := &Publication{Data: rawData}
+	rawData := protocol.Raw([]byte("{}"))
+	pub := &protocol.Publication{Data: rawData}
 
 	pub.UID = "1"
 	_, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
@@ -199,7 +197,7 @@ func TestRedisEngineRecover(t *testing.T) {
 
 	pubs, _, err := e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &StreamPosition{Seq: 2, Gen: 0, Epoch: r.Epoch},
+		Since: &StreamPosition{Offset: 2, Epoch: r.Epoch},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 3, len(pubs))
@@ -209,7 +207,7 @@ func TestRedisEngineRecover(t *testing.T) {
 
 	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &StreamPosition{Seq: 6, Gen: 0, Epoch: r.Epoch},
+		Since: &StreamPosition{Offset: 6, Epoch: r.Epoch},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 5, len(pubs))
@@ -217,7 +215,7 @@ func TestRedisEngineRecover(t *testing.T) {
 	require.NoError(t, e.RemoveHistory("channel"))
 	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &StreamPosition{Seq: 2, Gen: 0, Epoch: r.Epoch},
+		Since: &StreamPosition{Offset: 2, Epoch: r.Epoch},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 0, len(pubs))
@@ -447,21 +445,18 @@ func TestRedisConsistentIndex(t *testing.T) {
 
 func TestRedisExtractPushData(t *testing.T) {
 	data := []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, seq, gen := extractPushData(data)
-	require.Equal(t, uint32(16901), seq)
-	require.Equal(t, uint32(0), gen)
+	pushData, offset := extractPushData(data)
+	require.Equal(t, uint64(16901), offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, seq, gen = extractPushData(data)
-	require.Equal(t, uint32(0), seq)
-	require.Equal(t, uint32(0), gen)
+	pushData, offset = extractPushData(data)
+	require.Equal(t, uint64(0), offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__4294967337__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, seq, gen = extractPushData(data)
-	require.Equal(t, uint32(41), seq)
-	require.Equal(t, uint32(1), gen)
+	pushData, offset = extractPushData(data)
+	require.Equal(t, uint64(4294967337), offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 }
 
@@ -479,8 +474,8 @@ func BenchmarkRedisEngineIndex(b *testing.B) {
 
 func BenchmarkRedisEnginePublish_SingleChannel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test UID", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
@@ -492,8 +487,8 @@ func BenchmarkRedisEnginePublish_SingleChannel(b *testing.B) {
 
 func BenchmarkRedisEnginePublish_SingleChannel_Parallel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test UID", Data: rawData}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -510,8 +505,8 @@ const benchmarkNumDifferentChannels = 1000
 
 func BenchmarkRedisEnginePublish_DifferentChannels(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test UID", Data: rawData}
 	j := 0
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -526,8 +521,8 @@ func BenchmarkRedisEnginePublish_DifferentChannels(b *testing.B) {
 
 func BenchmarkRedisEnginePublish_DifferentChannels_Parallel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test UID", Data: rawData}
 	b.SetParallelism(128)
 	j := 0
 	b.ResetTimer()
@@ -545,8 +540,8 @@ func BenchmarkRedisEnginePublish_DifferentChannels_Parallel(b *testing.B) {
 
 func BenchmarkRedisEnginePublish_WithHistory_SingleChannel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test-uid", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
@@ -564,13 +559,13 @@ func BenchmarkRedisEnginePublish_WithHistory_SingleChannel(b *testing.B) {
 
 func BenchmarkRedisEnginePublish_WithHistory_SingleChannel_Parallel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte(`{"bench": true}`))
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
 	chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			pub := &Publication{UID: "test-uid", Data: rawData}
+			pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 			var err error
 			pub, err = e.AddHistory("channel", pub, chOpts)
 			if err != nil {
@@ -586,8 +581,8 @@ func BenchmarkRedisEnginePublish_WithHistory_SingleChannel_Parallel(b *testing.B
 
 func BenchmarkRedisEnginePublish_WithHistory_DifferentChannels(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte(`{"bench": true}`))
-	pub := &Publication{UID: "test-uid", Data: rawData}
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
+	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 	j := 0
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -608,7 +603,7 @@ func BenchmarkRedisEnginePublish_WithHistory_DifferentChannels(b *testing.B) {
 
 func BenchmarkRedisEnginePublish_WithHistory_DifferentChannels_Parallel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte(`{"bench": true}`))
+	rawData := protocol.Raw([]byte(`{"bench": true}`))
 	chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 	b.SetParallelism(128)
 	j := 0
@@ -617,7 +612,7 @@ func BenchmarkRedisEnginePublish_WithHistory_DifferentChannels_Parallel(b *testi
 		for pb.Next() {
 			j++
 			channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
-			pub := &Publication{UID: "test-uid", Data: rawData}
+			pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 			var err error
 			pub, err = e.AddHistory(channel, pub, chOpts)
 			if err != nil {
@@ -747,8 +742,8 @@ func BenchmarkRedisEnginePresence_DifferentChannels_Parallel(b *testing.B) {
 
 func BenchmarkRedisEngineHistory_SingleChannel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte("{}"))
-	pub := &Publication{UID: "test UID", Data: rawData}
+	rawData := protocol.Raw([]byte("{}"))
+	pub := &protocol.Publication{Data: rawData}
 	for i := 0; i < 4; i++ {
 		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
@@ -766,8 +761,8 @@ func BenchmarkRedisEngineHistory_SingleChannel(b *testing.B) {
 
 func BenchmarkRedisEngineHistory_SingleChannel_Parallel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte("{}"))
-	pub := &Publication{UID: "test-uid", Data: rawData}
+	rawData := protocol.Raw([]byte("{}"))
+	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
 		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
@@ -786,10 +781,10 @@ func BenchmarkRedisEngineHistory_SingleChannel_Parallel(b *testing.B) {
 
 func BenchmarkRedisEngineRecover_SingleChannel_Parallel(b *testing.B) {
 	e := newTestRedisEngine(b)
-	rawData := Raw([]byte("{}"))
+	rawData := protocol.Raw([]byte("{}"))
 	numMessages := 100
 	for i := 0; i < numMessages; i++ {
-		pub := &Publication{Data: rawData}
+		pub := &protocol.Publication{Data: rawData}
 		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300})
 	}
 	_, r, err := e.History("channel", HistoryFilter{
@@ -801,7 +796,7 @@ func BenchmarkRedisEngineRecover_SingleChannel_Parallel(b *testing.B) {
 		for pb.Next() {
 			_, _, err := e.History("channel", HistoryFilter{
 				Limit: -1,
-				Since: &StreamPosition{Seq: uint32(numMessages - 5), Gen: 0, Epoch: r.Epoch},
+				Since: &StreamPosition{Offset: uint64(numMessages - 5), Epoch: r.Epoch},
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -861,8 +856,7 @@ func TestRedisClientSubscribeRecover(t *testing.T) {
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: channel,
 				Recover: true,
-				Seq:     tt.SinceSeq,
-				Gen:     recoveryPosition.Gen,
+				Offset:  tt.SinceOffset,
 				Epoch:   recoveryPosition.Epoch,
 			}, rw, false)
 			require.Nil(t, subCtx.disconnect)

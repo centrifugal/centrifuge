@@ -7,8 +7,6 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/memstream"
 	"github.com/centrifugal/centrifuge/internal/priority"
-	"github.com/centrifugal/centrifuge/internal/recovery"
-
 	"github.com/centrifugal/protocol"
 )
 
@@ -320,7 +318,7 @@ func (h *historyHub) expireStreams() {
 	}
 }
 
-func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
+func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -354,7 +352,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Pu
 		h.streams[ch] = stream
 	}
 
-	pub.Seq, pub.Gen = recovery.UnpackUint64(index)
+	pub.Offset = index
 	return pub, nil
 }
 
@@ -363,19 +361,19 @@ func (h *historyHub) createStream(ch string) StreamPosition {
 	stream := memstream.New()
 	h.streams[ch] = stream
 	streamPosition := StreamPosition{}
-	streamPosition.Seq, streamPosition.Gen = 0, 0
+	streamPosition.Offset = 0
 	streamPosition.Epoch = stream.Epoch()
 	return streamPosition
 }
 
 func getPosition(stream *memstream.Stream) StreamPosition {
 	streamPosition := StreamPosition{}
-	streamPosition.Seq, streamPosition.Gen = recovery.UnpackUint64(stream.Top())
+	streamPosition.Offset = stream.Top()
 	streamPosition.Epoch = stream.Epoch()
 	return streamPosition
 }
 
-func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (h *historyHub) get(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -403,9 +401,9 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 		if err != nil {
 			return nil, StreamPosition{}, err
 		}
-		pubs := make([]*Publication, 0, len(items))
+		pubs := make([]*protocol.Publication, 0, len(items))
 		for _, item := range items {
-			pub := item.Value.(*Publication)
+			pub := item.Value.(*protocol.Publication)
 			pubs = append(pubs, pub)
 		}
 		return pubs, getPosition(stream), nil
@@ -414,20 +412,20 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 	since := filter.Since
 
 	streamPosition := getPosition(stream)
-	if streamPosition.Seq == since.Seq && streamPosition.Gen == since.Gen && since.Epoch == stream.Epoch() {
+	if streamPosition.Offset == since.Offset && since.Epoch == stream.Epoch() {
 		return nil, streamPosition, nil
 	}
 
-	streamSeq := recovery.PackUint64(since.Seq, since.Gen) + 1
+	streamOffset := since.Offset + 1
 
-	items, _, err := stream.Get(streamSeq, filter.Limit)
+	items, _, err := stream.Get(streamOffset, filter.Limit)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
 
-	pubs := make([]*Publication, 0, len(items))
+	pubs := make([]*protocol.Publication, 0, len(items))
 	for _, item := range items {
-		pub := item.Value.(*Publication)
+		pub := item.Value.(*protocol.Publication)
 		pubs = append(pubs, pub)
 	}
 	return pubs, streamPosition, nil

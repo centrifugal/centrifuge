@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/protocol"
-
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
+	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/FZambia/eagle"
+	"github.com/centrifugal/protocol"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -46,7 +46,7 @@ type Node struct {
 	shutdown bool
 	// shutdownCh is a channel which is closed when node shutdown initiated.
 	shutdownCh chan struct{}
-	// eventHub to manage event handlers binded to node.
+	// eventHub to manage event handlers attached to node.
 	eventHub *nodeEventHub
 	// logger allows to log throughout library code and proxy log entries to
 	// configured log handler.
@@ -430,7 +430,7 @@ func (n *Node) handleControl(data []byte) error {
 // handlePublication handles messages published into channel and
 // coming from engine. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *Publication) error {
+func (n *Node) handlePublication(ch string, pub *protocol.Publication) error {
 	messagesReceivedCountPublication.Inc()
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
@@ -477,7 +477,7 @@ func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts .
 		opt(publishOpts)
 	}
 
-	pub := &Publication{
+	pub := &protocol.Publication{
 		Data: data,
 		Info: info,
 	}
@@ -784,16 +784,15 @@ func (n *Node) removePresence(ch string, uid string) error {
 }
 
 // Presence returns a map with information about active clients in channel.
-func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
+func (n *Node) Presence(ch string) (map[string]ClientInfo, error) {
 	presence, err := n.presenceRaw(ch)
 	if err != nil {
 		return nil, err
 	}
-	result := make(map[string]*ClientInfo, len(presence))
+	result := make(map[string]ClientInfo, len(presence))
 	for k, v := range presence {
-		var i ClientInfo
-		i.fromProto(v)
-		result[k] = &i
+		info := clientInfoFromProto(v)
+		result[k] = *info
 	}
 	return result, nil
 }
@@ -821,7 +820,21 @@ func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History returns a slice of last messages published into project channel.
-func (n *Node) History(ch string) ([]*Publication, error) {
+func (n *Node) History(ch string) ([]Publication, error) {
+	pubs, err := n.historyRaw(ch)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Publication, 0, len(pubs))
+	for _, pub := range pubs {
+		p := publicationFromProto(pub)
+		result = append(result, *p)
+	}
+	return result, err
+}
+
+// History returns a slice of last messages published into project channel.
+func (n *Node) historyRaw(ch string) ([]*protocol.Publication, error) {
 	actionCount.WithLabelValues("history").Inc()
 	if n.historyManager == nil {
 		return nil, ErrorNotAvailable
@@ -830,19 +843,26 @@ func (n *Node) History(ch string) ([]*Publication, error) {
 		Limit: -1,
 		Since: nil,
 	})
+	for _, pub := range pubs {
+		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+	}
 	return pubs, err
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, since StreamPosition) ([]*Publication, StreamPosition, error) {
+func (n *Node) recoverHistory(ch string, since StreamPosition) ([]*protocol.Publication, StreamPosition, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
 	if n.historyManager == nil {
 		return nil, StreamPosition{}, ErrorNotAvailable
 	}
-	return n.historyManager.History(ch, HistoryFilter{
+	pubs, pos, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
 		Since: &since,
 	})
+	for _, pub := range pubs {
+		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+	}
+	return pubs, pos, err
 }
 
 // RemoveHistory removes channel history.
@@ -854,17 +874,17 @@ func (n *Node) RemoveHistory(ch string) error {
 	return n.historyManager.RemoveHistory(ch)
 }
 
-// currentRecoveryState returns current recovery state for channel.
-func (n *Node) currentRecoveryState(ch string) (StreamPosition, error) {
-	actionCount.WithLabelValues("history_recovery_state").Inc()
+// streamTop returns current stream top position for channel.
+func (n *Node) streamTop(ch string) (StreamPosition, error) {
+	actionCount.WithLabelValues("history_stream_top").Inc()
 	if n.historyManager == nil {
 		return StreamPosition{}, ErrorNotAvailable
 	}
-	_, recoveryPosition, err := n.historyManager.History(ch, HistoryFilter{
+	_, streamTop, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: 0,
 		Since: nil,
 	})
-	return recoveryPosition, err
+	return streamTop, err
 }
 
 // privateChannel checks if channel private. In case of private channel
@@ -1036,7 +1056,7 @@ type brokerEventHandler struct {
 }
 
 // HandlePublication ...
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication) error {
+func (h *brokerEventHandler) HandlePublication(ch string, pub *protocol.Publication) error {
 	return h.node.handlePublication(ch, pub)
 }
 

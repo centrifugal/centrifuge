@@ -13,9 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/recovery"
+
 	"github.com/centrifugal/protocol"
 
-	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/FZambia/sentinel"
@@ -932,7 +933,7 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 }
 
 func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, _ channelID, data []byte) error {
-	pushData, seq, gen := extractPushData(data)
+	pushData, offset := extractPushData(data)
 	var push protocol.Push
 	err := push.Unmarshal(pushData)
 	if err != nil {
@@ -940,15 +941,13 @@ func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, _ chan
 	}
 	switch push.Type {
 	case protocol.PushTypePublication:
-		var pub Publication
+		var pub protocol.Publication
 		err := pub.Unmarshal(push.Data)
 		if err != nil {
 			return err
 		}
-		if seq > 0 || gen > 0 {
-			pub.Seq = seq
-			pub.Gen = gen
-		}
+		pub.Offset = offset
+		pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
 		_ = eventHandler.HandlePublication(push.Channel, &pub)
 	case protocol.PushTypeJoin:
 		var join protocol.Join
@@ -1230,7 +1229,7 @@ func (s *shard) runDataPipeline() {
 }
 
 // Publish - see engine interface description.
-func (s *shard) Publish(ch string, pub *Publication, _ *ChannelOptions) error {
+func (s *shard) Publish(ch string, pub *protocol.Publication, _ *ChannelOptions) error {
 	eChan := make(chan error, 1)
 
 	data, err := pub.Marshal()
@@ -1490,7 +1489,7 @@ func (s *shard) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) ([]*Publication, StreamPosition, error) {
+func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) ([]*protocol.Publication, StreamPosition, error) {
 	seqMetaKey := s.sequenceMetaKey(ch)
 	historyKey := s.historyListKey(ch)
 
@@ -1510,15 +1509,13 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	}
 	results := resp.reply.([]interface{})
 
-	sequence, err := redis.Int64(results[0], nil)
+	offset, err := redis.Uint64(results[0], nil)
 	if err != nil {
 		if err != redis.ErrNil {
 			return nil, StreamPosition{}, err
 		}
-		sequence = 0
+		offset = 0
 	}
-
-	seq, gen := recovery.UnpackUint64(uint64(sequence))
 
 	var epoch string
 	epoch, err = redis.String(results[1], nil)
@@ -1529,7 +1526,7 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 		epoch = ""
 	}
 
-	var publications []*Publication
+	var publications []*protocol.Publication
 	if includePubs {
 		publications, err = sliceOfPubs(results[2], nil)
 		if err != nil {
@@ -1537,7 +1534,7 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 		}
 	}
 
-	latestPosition := StreamPosition{Seq: seq, Gen: gen, Epoch: epoch}
+	latestPosition := StreamPosition{Offset: offset, Epoch: epoch}
 
 	since := filter.Since
 	if since == nil {
@@ -1547,21 +1544,21 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 		return publications, latestPosition, nil
 	}
 
-	if latestPosition.Seq == since.Seq && since.Gen == latestPosition.Gen && since.Epoch == latestPosition.Epoch {
+	if latestPosition.Offset == since.Offset && since.Epoch == latestPosition.Epoch {
 		return nil, latestPosition, nil
 	}
 
-	nextSeq, nextGen := recovery.NextSeqGen(since.Seq, since.Gen)
+	nextOffset := since.Offset + 1
 
 	position := -1
 
 	for i := 0; i < len(publications); i++ {
 		pub := publications[i]
-		if pub.Seq == since.Seq && pub.Gen == since.Gen {
+		if pub.Offset == since.Offset {
 			position = i + 1
 			break
 		}
-		if pub.Seq == nextSeq && pub.Gen == nextGen {
+		if pub.Offset == nextOffset {
 			position = i
 			break
 		}
@@ -1581,7 +1578,7 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	return publications, latestPosition, nil
 }
 
-func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, publishOnHistoryAdd bool, seqTTL time.Duration) (*Publication, error) {
+func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions, publishOnHistoryAdd bool, seqTTL time.Duration) (*protocol.Publication, error) {
 	data, err := pub.Marshal()
 	if err != nil {
 		return nil, err
@@ -1609,18 +1606,14 @@ func (s *shard) AddHistory(ch string, pub *Publication, opts *ChannelOptions, pu
 	if resp.err != nil {
 		return nil, resp.err
 	}
-
 	if publishOnHistoryAdd {
 		return nil, nil
 	}
-
-	index, err := redis.Int64(resp.reply, nil)
+	index, err := redis.Uint64(resp.reply, nil)
 	if err != nil {
 		return nil, resp.err
 	}
-	seq, gen := recovery.UnpackUint64(uint64(index))
-	pub.Seq = seq
-	pub.Gen = gen
+	pub.Offset = index
 	return pub, nil
 }
 
@@ -1684,15 +1677,14 @@ func mapStringClientInfo(result interface{}, err error) (map[string]*protocol.Cl
 	return m, nil
 }
 
-func extractPushData(data []byte) ([]byte, uint32, uint32) {
-	var seq, gen uint32
+func extractPushData(data []byte) ([]byte, uint64) {
+	var offset uint64
 	if bytes.HasPrefix(data, []byte("__")) {
 		parts := bytes.SplitN(data, []byte("__"), 3)
-		sequence, _ := strconv.ParseUint(string(parts[1]), 10, 64)
-		seq, gen = recovery.UnpackUint64(sequence)
-		return parts[2], seq, gen
+		offset, _ := strconv.ParseUint(string(parts[1]), 10, 64)
+		return parts[2], offset
 	}
-	return data, seq, gen
+	return data, offset
 }
 
 func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error) {
@@ -1700,7 +1692,7 @@ func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error)
 	if err != nil {
 		return nil, err
 	}
-	pubs := make([]*Publication, len(values))
+	pubs := make([]*protocol.Publication, len(values))
 
 	j := 0
 	for i := len(values) - 1; i >= 0; i-- {
@@ -1709,7 +1701,7 @@ func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error)
 			return nil, errors.New("error getting Message value")
 		}
 
-		pushData, seq, gen := extractPushData(value)
+		pushData, offset := extractPushData(value)
 
 		var push protocol.Push
 		err := push.Unmarshal(pushData)
@@ -1721,14 +1713,14 @@ func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error)
 			return nil, fmt.Errorf("wrong message type in history: %d", push.Type)
 		}
 
-		var pub Publication
+		var pub protocol.Publication
 		err = pub.Unmarshal(push.Data)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
 
-		pub.Seq = seq
-		pub.Gen = gen
+		pub.Offset = offset
+		pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
 		pubs[j] = &pub
 		j++
 	}
