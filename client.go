@@ -1131,9 +1131,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		if reply.Data != nil {
 			authData = reply.Data
 		}
-		for _, ch := range reply.Channels {
-			channels = append(channels, ch)
-		}
+		
+		channels = append(channels, reply.Channels...)
 	}
 
 	if credentials == nil {
