@@ -10,6 +10,7 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/dgrijalva/jwt-go"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -523,7 +524,7 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		var seq uint32 = 1
+		var offset uint64 = 1
 		for data := range transport.sink {
 			if strings.Contains(string(data), "test message") {
 				dec := json.NewDecoder(strings.NewReader(string(data)))
@@ -532,7 +533,7 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 						Result struct {
 							Channel string
 							Data    struct {
-								Seq uint32
+								Offset uint64
 							}
 						}
 					}
@@ -541,11 +542,11 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 						break
 					}
 					require.NoError(t, err)
-					if push.Result.Data.Seq != seq {
-						require.Fail(t, "wrong seq")
+					if push.Result.Data.Offset != offset {
+						require.Fail(t, "wrong offset")
 					}
-					seq++
-					if seq > 3 {
+					offset++
+					if offset > 3 {
 						close(done)
 					}
 				}
@@ -817,8 +818,6 @@ func TestClientSubscribeLast(t *testing.T) {
 	client, _ = NewClient(newCtx, node, transport)
 	connectClient(t, client)
 	result = subscribeClient(t, client, "test")
-	require.Equal(t, uint32(10), result.Seq)
-	require.Equal(t, uint32(0), result.Gen)
 	require.Equal(t, uint64(10), result.Offset)
 }
 
@@ -1316,4 +1315,19 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 		Params: []byte(`{}`),
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
+}
+
+func BenchmarkUUID(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		uuidObject, err := uuid.NewRandom()
+		if err != nil {
+			b.Fatal(err)
+		}
+		s := uuidObject.String()
+		if s == "" {
+			b.Fail()
+		}
+	}
+	b.ReportAllocs()
 }

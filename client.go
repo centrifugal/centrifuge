@@ -12,9 +12,9 @@ import (
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/recovery"
-	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/centrifugal/protocol"
+	"github.com/google/uuid"
 )
 
 // ClientEventHub allows to deal with client event handlers.
@@ -122,7 +122,7 @@ type Client struct {
 
 // NewClient initializes new Client.
 func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
-	uuidObject, err := uuid.NewV4()
+	uuidObject, err := uuid.NewRandom()
 	if err != nil {
 		return nil, err
 	}

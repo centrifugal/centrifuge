@@ -4,9 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/centrifugal/centrifuge/internal/uuid"
 )
 
 type testMessage struct {
@@ -26,7 +25,7 @@ type testStore struct {
 func newTestStore() *testStore {
 	return &testStore{
 		Sequence:   0,
-		Generation: uuid.Must(uuid.NewV4()).String(),
+		Generation: uuid.Must(uuid.NewRandom()).String(),
 		messages:   make([]testMessage, 0),
 		lifetime:   500 * time.Millisecond,
 		size:       5,

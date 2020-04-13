@@ -12,10 +12,10 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/recovery"
-	"github.com/centrifugal/centrifuge/internal/uuid"
 
 	"github.com/FZambia/eagle"
 	"github.com/centrifugal/protocol"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -72,7 +72,7 @@ const (
 
 // New creates Node, the only required argument is config.
 func New(c Config) (*Node, error) {
-	uid := uuid.Must(uuid.NewV4()).String()
+	uid := uuid.Must(uuid.NewRandom()).String()
 
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)
 	for i := 0; i < numSubLocks; i++ {
