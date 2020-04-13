@@ -118,7 +118,7 @@ func nodeWithMemoryEngine() *Node {
 
 func TestUserAllowed(t *testing.T) {
 	node := nodeWithTestEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	require.True(t, node.userAllowed("channel#1", "1"))
 	require.True(t, node.userAllowed("channel", "1"))
 	require.False(t, node.userAllowed("channel#1", "2"))
@@ -129,7 +129,7 @@ func TestUserAllowed(t *testing.T) {
 
 func TestSetConfig(t *testing.T) {
 	node := nodeWithTestEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.Reload(DefaultConfig)
 	require.NoError(t, err)
 }
@@ -195,7 +195,7 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 		}
 	}
 	b.StopTimer()
-	node.Shutdown(context.Background())
+	_ = node.Shutdown(context.Background())
 }
 
 func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
@@ -259,7 +259,7 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 				}
 			}
 			b.StopTimer()
-			n.Shutdown(context.Background())
+			_ = n.Shutdown(context.Background())
 			b.ReportAllocs()
 		})
 	}

@@ -75,7 +75,7 @@ func TestNewClient(t *testing.T) {
 
 func TestClientInitialState(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
 	require.Equal(t, client.uid, client.ID())
@@ -90,7 +90,7 @@ func TestClientInitialState(t *testing.T) {
 
 func TestClientClosedState(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
 	err := client.Close(nil)
@@ -100,7 +100,7 @@ func TestClientClosedState(t *testing.T) {
 
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
 	var replies []*protocol.Reply
@@ -112,7 +112,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 
 func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.ClientInsecure = true
@@ -132,7 +132,7 @@ func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 
 func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.ClientAnonymous = true
@@ -152,7 +152,7 @@ func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 
 func TestClientConnectWithMalformedToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	client, _ := NewClient(context.Background(), node, transport)
 	var replies []*protocol.Reply
@@ -166,7 +166,7 @@ func TestClientConnectWithMalformedToken(t *testing.T) {
 
 func TestClientConnectWithValidToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
@@ -187,7 +187,7 @@ func TestClientConnectWithValidToken(t *testing.T) {
 
 func TestClientConnectWithExpiringToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
@@ -209,7 +209,7 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 
 func TestClientConnectWithExpiredToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
@@ -229,7 +229,7 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 
 func TestClientTokenRefresh(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
@@ -256,7 +256,7 @@ func TestClientTokenRefresh(t *testing.T) {
 
 func TestClientConnectContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	_ = node.Reload(config)
@@ -287,7 +287,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 
 func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	_ = node.Reload(config)
@@ -316,7 +316,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 
 func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	_ = node.Reload(config)
@@ -347,7 +347,7 @@ func TestClientRefreshHandlerProlongatesClientSession(t *testing.T) {
 
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	_ = node.Reload(config)
@@ -416,7 +416,7 @@ func subscribeClient(t testing.TB, client *Client, ch string) *protocol.Subscrib
 
 func TestClientSubscribe(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
@@ -460,7 +460,7 @@ func TestClientSubscribe(t *testing.T) {
 
 func TestClientSubscribeReceivePublication(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
@@ -499,7 +499,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 
 func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	config := node.Config()
 	config.HistoryLifetime = 100
 	config.HistorySize = 10
@@ -571,7 +571,7 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 
 func TestServerSideSubscriptions(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.On().ClientConnecting(func(context.Context, TransportInfo, ConnectEvent) ConnectReply {
 		return ConnectReply{
@@ -638,7 +638,7 @@ func TestClientUserPersonalChannel(t *testing.T) {
 	}
 	_ = node.Reload(config)
 
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	var tests = []struct {
 		Name      string
@@ -693,7 +693,7 @@ func TestClientUserPersonalChannel(t *testing.T) {
 
 func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
@@ -713,7 +713,7 @@ func TestClientSubscribePrivateChannelNoToken(t *testing.T) {
 
 func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
@@ -755,7 +755,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 
 func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
@@ -792,7 +792,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 
 func TestClientSubscribeLast(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.HistorySize = 10
@@ -822,7 +822,7 @@ func TestClientSubscribeLast(t *testing.T) {
 
 func TestClientUnsubscribe(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -854,7 +854,7 @@ func TestClientUnsubscribe(t *testing.T) {
 
 func TestClientPublish(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
@@ -946,7 +946,7 @@ type testClientMessage struct {
 
 func TestClientPublishHandler(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
@@ -1016,7 +1016,7 @@ func TestClientPublishHandler(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorBadRequest, publishResp.Error)
 
-	publishResp, disconnect = client.publishCmd(&protocol.PublishRequest{
+	_, disconnect = client.publishCmd(&protocol.PublishRequest{
 		Channel: "test",
 		Data:    []byte(`{"input": "with disconnect"}`),
 	})
@@ -1025,7 +1025,7 @@ func TestClientPublishHandler(t *testing.T) {
 
 func TestClientPing(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
@@ -1041,7 +1041,7 @@ func TestClientPing(t *testing.T) {
 
 func TestClientPingWithRecover(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.HistoryLifetime = 10
@@ -1065,7 +1065,7 @@ func TestClientPingWithRecover(t *testing.T) {
 
 func TestClientPresence(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.Presence = true
@@ -1116,7 +1116,7 @@ func TestClientPresence(t *testing.T) {
 
 func TestClientHistory(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.HistorySize = 10
@@ -1157,7 +1157,7 @@ func TestClientHistory(t *testing.T) {
 
 func TestClientHistoryDisabled(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.HistorySize = 10
@@ -1184,7 +1184,7 @@ func TestClientHistoryDisabled(t *testing.T) {
 
 func TestClientPresenceDisabled(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.Presence = true
@@ -1210,7 +1210,7 @@ func TestClientPresenceDisabled(t *testing.T) {
 
 func TestClientCloseUnauthenticated(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.ClientStaleCloseDelay = time.Millisecond
@@ -1228,7 +1228,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 
 func TestClientPresenceUpdate(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.Presence = true
@@ -1248,7 +1248,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 
 func TestClientSend(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1270,7 +1270,7 @@ func TestClientSend(t *testing.T) {
 
 func TestClientClose(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1287,7 +1287,7 @@ func TestClientClose(t *testing.T) {
 
 func TestClientHandleMalformedCommand(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport()
 	ctx := context.Background()
