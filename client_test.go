@@ -10,6 +10,7 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/dgrijalva/jwt-go"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1314,4 +1315,19 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 		Params: []byte(`{}`),
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
+}
+
+func BenchmarkUUID(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		uuidObject, err := uuid.NewRandom()
+		if err != nil {
+			b.Fatal(err)
+		}
+		s := uuidObject.String()
+		if s == "" {
+			b.Fail()
+		}
+	}
+	b.ReportAllocs()
 }
