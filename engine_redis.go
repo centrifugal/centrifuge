@@ -234,11 +234,9 @@ func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string,
 				n.Log(NewLogEntry(LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
 			}
 			for {
-				select {
-				case <-time.After(30 * time.Second):
-					if err := sntnl.Discover(); err != nil {
-						n.Log(NewLogEntry(LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
-					}
+				<-time.After(30 * time.Second)
+				if err := sntnl.Discover(); err != nil {
+					n.Log(NewLogEntry(LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
 				}
 			}
 		}()
@@ -977,10 +975,6 @@ type pubRequest struct {
 
 func (pr *pubRequest) done(err error) {
 	pr.err <- err
-}
-
-func (pr *pubRequest) result() error {
-	return <-pr.err
 }
 
 func (s *shard) runPubSubPing() {
