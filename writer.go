@@ -15,9 +15,8 @@ type writerConfig struct {
 
 // writer helps to manage per-connection message queue.
 type writer struct {
-	mu     sync.Mutex
-	config writerConfig
-
+	mu       sync.Mutex
+	config   writerConfig
 	messages queue.Queue
 	closed   bool
 }

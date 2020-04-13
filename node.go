@@ -505,7 +505,7 @@ func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts .
 }
 
 // Publish sends data to all clients subscribed on channel. All running nodes
-// will receive it and will send it to all clients on node subscribed on channel.
+// will receive it and send to all local channel subscribers.
 func (n *Node) Publish(ch string, data []byte, opts ...PublishOption) error {
 	return n.publish(ch, data, nil, opts...)
 }
@@ -784,21 +784,7 @@ func (n *Node) removePresence(ch string, uid string) error {
 }
 
 // Presence returns a map with information about active clients in channel.
-func (n *Node) Presence(ch string) (map[string]ClientInfo, error) {
-	presence, err := n.presenceRaw(ch)
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]ClientInfo, len(presence))
-	for k, v := range presence {
-		info := clientInfoFromProto(v)
-		result[k] = *info
-	}
-	return result, nil
-}
-
-// Presence returns a map with information about active clients in channel.
-func (n *Node) presenceRaw(ch string) (map[string]*protocol.ClientInfo, error) {
+func (n *Node) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
 	if n.presenceManager == nil {
 		return nil, ErrorNotAvailable
 	}
@@ -820,21 +806,7 @@ func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History returns a slice of last messages published into project channel.
-func (n *Node) History(ch string) ([]Publication, error) {
-	pubs, err := n.historyRaw(ch)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]Publication, 0, len(pubs))
-	for _, pub := range pubs {
-		p := publicationFromProto(pub)
-		result = append(result, *p)
-	}
-	return result, err
-}
-
-// History returns a slice of last messages published into project channel.
-func (n *Node) historyRaw(ch string) ([]*protocol.Publication, error) {
+func (n *Node) History(ch string) ([]*protocol.Publication, error) {
 	actionCount.WithLabelValues("history").Inc()
 	if n.historyManager == nil {
 		return nil, ErrorNotAvailable
@@ -843,8 +815,10 @@ func (n *Node) historyRaw(ch string) ([]*protocol.Publication, error) {
 		Limit: -1,
 		Since: nil,
 	})
-	for _, pub := range pubs {
-		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+	if hasFlag(CompatibilityFlags, UseSeqGen) {
+		for _, pub := range pubs {
+			pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+		}
 	}
 	return pubs, err
 }
@@ -859,8 +833,10 @@ func (n *Node) recoverHistory(ch string, since StreamPosition) ([]*protocol.Publ
 		Limit: -1,
 		Since: &since,
 	})
-	for _, pub := range pubs {
-		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+	if hasFlag(CompatibilityFlags, UseSeqGen) {
+		for _, pub := range pubs {
+			pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+		}
 	}
 	return pubs, pos, err
 }

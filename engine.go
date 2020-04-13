@@ -102,7 +102,8 @@ type HistoryManager interface {
 	// Broker (with Offset properly set if needed).
 	// If returned Publication is nil then node will not try to publish
 	// it to Broker at all. This is useful for situations when engine can
-	// atomically save Publication to history and publish it to channel.
+	// atomically save Publication to history and publish it to channel
+	// (ex. over Lua in Redis Engine).
 	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)

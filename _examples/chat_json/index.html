@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
     <head>
         <meta charset="utf-8">
         <title></title>
@@ -12,28 +12,28 @@
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
-            var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            var channel = "chat:index";
+            const channel = "chat:index";
 
             function getParam(name, url) {
                 if (!url) url = window.location.href;
                 name = name.replace(/[\[\]]/g, '\\$&');
-                var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+                const regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
                     results = regex.exec(url);
                 if (!results) return null;
                 if (!results[2]) return '';
                 return decodeURIComponent(results[2].replace(/\+/g, ' '));
             }
 
-            $(function() {
+            $(function () {
 
-                var input = $("#input");
-                var container = $('#messages');
+                const input = $("#input");
+                const container = $('#messages');
 
-                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
                 // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
                 //     sockjsTransports: [
                 //         "xhr-streaming",
@@ -82,8 +82,8 @@
                 // show how many users currently in channel.
                 function showPresence(sub) {
                     sub.presence().then(function(result) {
-                        var count = 0;
-                        for (var key in result.presence){
+                        let count = 0;
+                        for (let key in result.presence){
                             count++;
                         }
                         drawText('Presence: now in this room – ' + count + ' clients');
@@ -116,7 +116,7 @@
                     }
 
                     // This can be whatever JSON you want.
-                    var rpcRequest = {"method": "getCurrentYear"}
+                    const rpcRequest = {"method": "getCurrentYear"};
 
                     centrifuge.rpc(rpcRequest).then(function(data){
                         drawText("RPC response data: " + JSON.stringify(data));
@@ -130,14 +130,14 @@
                 }
 
                 function handleMessage(message) {
-                    var clientID;
+                    let clientID;
                     if (message.info){
                         clientID = message.info.client;
                     } else {
                         clientID = null;
                     }
-                    var inputText = message.data["input"].toString();
-                    var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                    const inputText = message.data["input"].toString();
+                    const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
 
@@ -167,7 +167,7 @@
                     input.val('');
                 });
 
-                if (getParam("disconnect") == "1") {
+                if (getParam("disconnect") === "1") {
                     function reconnect() {
                         setTimeout(function() {
                             centrifuge.disconnect();
@@ -179,9 +179,9 @@
                     reconnect();
                 }
 
-                if (getParam("publish") == "1") {
-                    var publishInterval = parseInt(getParam("publishInterval")) || 1000;
-                    var counter = 0
+                if (getParam("publish") === "1") {
+                    const publishInterval = parseInt(getParam("publishInterval")) || 1000;
+                    let counter = 0;
                     setInterval(function(){
                         sub.publish({"input": counter.toString()}).then(function() {
                         }, function(err) {
@@ -195,7 +195,7 @@
     </head>
     <body>
         <form id="form">
-            <input type="text" id="input" autocomplete="off" />
+            <label for="input"></label><input type="text" id="input" autocomplete="off" />
             <input type="submit" id="submit" value="»">
         </form>
         <ul id="messages"></ul>

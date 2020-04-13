@@ -265,6 +265,37 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 	}
 }
 
+func BenchmarkHistory(b *testing.B) {
+	e := testMemoryEngine()
+	conf := e.node.Config()
+	numMessages := 100
+	conf.HistorySize = numMessages
+	conf.HistoryLifetime = 60
+	conf.HistoryRecover = true
+	err := e.node.Reload(conf)
+	require.NoError(b, err)
+
+	channel := "test"
+
+	for i := 1; i <= numMessages; i++ {
+		err := e.node.Publish(channel, []byte(`{}`))
+		require.NoError(b, err)
+	}
+
+	b.ResetTimer()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := e.node.History(channel)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+	}
+	b.StopTimer()
+	b.ReportAllocs()
+}
+
 func TestMemoryEngineHistoryIteration(t *testing.T) {
 	e := testMemoryEngine()
 	conf := e.node.Config()

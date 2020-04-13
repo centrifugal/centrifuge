@@ -117,7 +117,7 @@ type Client struct {
 	disconnect    *Disconnect
 	eventHub      *ClientEventHub
 	messageWriter *writer
-	syncer        *recovery.PubSubSync
+	pubSubSync    *recovery.PubSubSync
 }
 
 // NewClient initializes new Client.
@@ -136,7 +136,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 		transport:    t,
 		eventHub:     &ClientEventHub{},
 		channels:     make(map[string]ChannelContext),
-		syncer:       recovery.NewPubSubSync(),
+		pubSubSync:   recovery.NewPubSubSync(),
 		publications: newPubQueue(),
 	}
 
@@ -1075,7 +1075,7 @@ func (c *Client) handleSend(params protocol.Raw) *Disconnect {
 
 func (c *Client) unlockServerSideSubscriptions(subCtxMap map[string]subscribeContext) {
 	for channel := range subCtxMap {
-		c.syncer.StopBuffering(channel)
+		c.pubSubSync.StopBuffering(channel)
 	}
 }
 
@@ -1360,17 +1360,18 @@ func (c *Client) Subscribe(channel string) error {
 	if subCtx.err != nil {
 		return subCtx.err
 	}
-	defer c.syncer.StopBuffering(channel)
+	defer c.pubSubSync.StopBuffering(channel)
 	c.mu.Lock()
 	c.channels[channel] = subCtx.channelContext
 	c.mu.Unlock()
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
 	sub := &protocol.Sub{
-		Seq:         subCtx.result.GetSeq(),
-		Gen:         subCtx.result.GetGen(),
 		Offset:      subCtx.result.GetOffset(),
 		Epoch:       subCtx.result.GetEpoch(),
 		Recoverable: subCtx.result.GetRecoverable(),
+	}
+	if hasFlag(CompatibilityFlags, UseSeqGen) {
+		sub.Seq, sub.Gen = recovery.UnpackUint64(subCtx.result.GetOffset())
 	}
 	data, err := pushEncoder.EncodeSub(sub)
 	if err != nil {
@@ -1655,13 +1656,13 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		// Start syncing recovery and PUB/SUB.
 		// The important thing is to call StopBuffering for this channel
 		// after response with Publications written to connection.
-		c.syncer.StartBuffering(channel)
+		c.pubSubSync.StartBuffering(channel)
 	}
 
 	err := c.node.addSubscription(channel, c)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-		c.syncer.StopBuffering(channel)
+		c.pubSubSync.StopBuffering(channel)
 		if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 			return handleErrorDisconnect(rw, clientErr, nil, serverSide)
 		}
@@ -1673,7 +1674,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		err = c.node.addPresence(channel, c.uid, info)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error adding presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			c.syncer.StopBuffering(channel)
+			c.pubSubSync.StopBuffering(channel)
 			ctx.disconnect = DisconnectServerError
 			return ctx
 		}
@@ -1692,7 +1693,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			publications, recoveryPosition, err := c.node.recoverHistory(channel, StreamPosition{cmd.Offset, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				c.syncer.StopBuffering(channel)
+				c.pubSubSync.StopBuffering(channel)
 				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 					return handleErrorDisconnect(rw, clientErr, nil, serverSide)
 				}
@@ -1724,7 +1725,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			streamTop, err := c.node.streamTop(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting recovery state for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				c.syncer.StopBuffering(channel)
+				c.pubSubSync.StopBuffering(channel)
 				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 					return handleErrorDisconnect(rw, clientErr, nil, serverSide)
 				}
@@ -1737,14 +1738,16 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 
 		res.Epoch = latestEpoch
 		res.Offset = latestOffset
-		res.Seq, res.Gen = recovery.UnpackUint64(latestOffset)
+		if hasFlag(CompatibilityFlags, UseSeqGen) {
+			res.Seq, res.Gen = recovery.UnpackUint64(latestOffset)
+		}
 
-		c.syncer.LockBuffer(channel)
-		bufferedPubs := c.syncer.ReadBuffered(channel)
+		c.pubSubSync.LockBuffer(channel)
+		bufferedPubs := c.pubSubSync.ReadBuffered(channel)
 		var okMerge bool
 		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
-			c.syncer.StopBuffering(channel)
+			c.pubSubSync.StopBuffering(channel)
 			ctx.disconnect = DisconnectServerError
 			return ctx
 		}
@@ -1758,7 +1761,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))
 			if !serverSide {
 				// Will be called later in case of server side sub.
-				c.syncer.StopBuffering(channel)
+				c.pubSubSync.StopBuffering(channel)
 			}
 			ctx.disconnect = DisconnectServerError
 			return ctx
@@ -1794,9 +1797,9 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		c.mu.Lock()
 		c.channels[channel] = channelContext
 		c.mu.Unlock()
-		// Stop synching recovery and PUB/SUB.
+		// Stop syncing recovery and PUB/SUB.
 		// In case of server side subscription we will do this later.
-		c.syncer.StopBuffering(channel)
+		c.pubSubSync.StopBuffering(channel)
 	}
 
 	if c.node.logger.enabled(LogLevelDebug) {
@@ -1876,7 +1879,7 @@ func (c *Client) processPublications() {
 			}
 			continue
 		}
-		c.syncer.SyncPublication(p.channel, p.pub, func() {
+		c.pubSubSync.SyncPublication(p.channel, p.pub, func() {
 			c.writePublicationUpdatePosition(p.channel, p.pub, p.reply, p.chOpts)
 		})
 	}
@@ -2145,7 +2148,7 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 		return resp, nil
 	}
 
-	presence, err := c.node.presenceRaw(ch)
+	presence, err := c.node.Presence(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting presence", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		if clientErr, ok := err.(*Error); ok {
@@ -2245,7 +2248,7 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 		return resp, nil
 	}
 
-	pubs, err := c.node.historyRaw(ch)
+	pubs, err := c.node.History(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting history", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		resp.Error = ErrorInternal.toProto()

@@ -47,7 +47,7 @@
                 });
 
                 centrifuge.on('subscribe', function(ctx) {
-                    drawText('Subscribe to server-side channel ' + ctx.channel + ', ' + ctx.isResubscribe + ', ' + ctx.recovered);
+                    drawText('Subscribe to server-side channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
                 });
 
                 centrifuge.on('unsubscribe', function(ctx) {

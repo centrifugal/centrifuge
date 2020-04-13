@@ -9,9 +9,9 @@ type Credentials struct {
 	// ExpireAt allows to set time in future when connection must be validated.
 	// In this case OnRefresh callback must be set by application.
 	ExpireAt int64
-	// Info contains additional information about connection. It will be
-	// included into Join/Leave messages, into Presence information, also
-	// info becomes a part of published message if it was published from
+	// Info contains additional information about connection. This will be
+	// included untouched into Join/Leave messages, into Presence information,
+	// also info becomes a part of published message if it was published from
 	// client directly. In some cases having additional info can be an
 	// overhead – but you are simply free to not use it.
 	Info []byte
@@ -34,8 +34,8 @@ func SetCredentials(ctx context.Context, creds *Credentials) context.Context {
 // GetCredentials allows to get previously set Credentials from context.
 func GetCredentials(ctx context.Context) (*Credentials, bool) {
 	if val := ctx.Value(credentialsContextKey); val != nil {
-		creds, ok := val.(*Credentials)
-		return creds, ok
+		cred, ok := val.(*Credentials)
+		return cred, ok
 	}
 	return nil, false
 }

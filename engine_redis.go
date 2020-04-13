@@ -14,12 +14,10 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/recovery"
-
-	"github.com/centrifugal/protocol"
-
 	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/FZambia/sentinel"
+	"github.com/centrifugal/protocol"
 	"github.com/gomodule/redigo/redis"
 	"github.com/mna/redisc"
 )
@@ -986,19 +984,17 @@ func (s *shard) runPubSubPing() {
 	pingTicker := time.NewTicker(time.Second)
 	defer pingTicker.Stop()
 	for {
-		select {
-		case <-pingTicker.C:
-			// Publish periodically to maintain PUB/SUB connection alive and allow
-			// PUB/SUB connection to close early if no data received for a period of time.
-			conn := s.pool.Get()
-			err := conn.Send("PUBLISH", s.pingChannelID(), nil)
-			if err != nil {
-				s.node.Log(NewLogEntry(LogLevelError, "error publish ping to Redis channel", map[string]interface{}{"error": err.Error()}))
-				_ = conn.Close()
-				return
-			}
+		<-pingTicker.C
+		// Publish periodically to maintain PUB/SUB connection alive and allow
+		// PUB/SUB connection to close early if no data received for a period of time.
+		conn := s.pool.Get()
+		err := conn.Send("PUBLISH", s.pingChannelID(), nil)
+		if err != nil {
+			s.node.Log(NewLogEntry(LogLevelError, "error publish ping to Redis channel", map[string]interface{}{"error": err.Error()}))
 			_ = conn.Close()
+			return
 		}
+		_ = conn.Close()
 	}
 }
 

@@ -155,7 +155,7 @@ func main() {
 		})
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
-			log.Printf("Message from user: %s, data: %s", client.UserID(), string(e.Data))
+			log.Printf("message from user: %s, data: %s", client.UserID(), string(e.Data))
 			return centrifuge.MessageReply{}
 		})
 
