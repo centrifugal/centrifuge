@@ -14,11 +14,4 @@ func TestCompatibilityFlagExists(t *testing.T) {
 func TestCompatibilityFlagNotExists(t *testing.T) {
 	var flags uint64
 	require.False(t, hasFlag(flags, UseSeqGen))
-
-	a := []string{"a", "b"}
-	d := []string{"c"}
-
-	for _, s := range a {
-		d = append(d, s)
-	}
 }

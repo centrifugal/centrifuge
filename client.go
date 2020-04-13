@@ -435,7 +435,7 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 		Result: result,
 	}, c.transport.Protocol().toProto())
 
-	c.transportEnqueue(reply)
+	_ = c.transportEnqueue(reply)
 
 	return nil
 }
@@ -833,7 +833,7 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) *Disconne
 		}
 		// Flush prevents Join message to be delivered before subscribe response.
 		_ = rw.flush()
-		go c.node.publishJoin(cmd.Channel, join, &ctx.chOpts)
+		go func() { _ = c.node.publishJoin(cmd.Channel, join, &ctx.chOpts) }()
 	}
 	return nil
 }
@@ -1135,7 +1135,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		if reply.Data != nil {
 			authData = reply.Data
 		}
-		
+
 		channels = append(channels, reply.Channels...)
 	}
 
@@ -1342,7 +1342,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 				join := &protocol.Join{
 					Info: *subCtx.clientInfo,
 				}
-				go c.node.publishJoin(channel, join, &subCtx.chOpts)
+				go func() { _ = c.node.publishJoin(channel, join, &subCtx.chOpts) }()
 			}
 		}
 	}
@@ -1879,7 +1879,7 @@ func (c *Client) processPublications() {
 			continue
 		}
 		c.pubSubSync.SyncPublication(p.channel, p.pub, func() {
-			c.writePublicationUpdatePosition(p.channel, p.pub, p.reply, p.chOpts)
+			_ = c.writePublicationUpdatePosition(p.channel, p.pub, p.reply, p.chOpts)
 		})
 	}
 }
@@ -1992,7 +1992,7 @@ func (c *Client) unsubscribe(channel string) error {
 			leave := &protocol.Leave{
 				Info: *info,
 			}
-			c.node.publishLeave(channel, leave, &chOpts)
+			_ = c.node.publishLeave(channel, leave, &chOpts)
 		}
 
 		err := c.node.removeSubscription(channel, c)

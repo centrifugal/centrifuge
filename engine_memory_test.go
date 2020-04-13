@@ -460,7 +460,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			require.Equal(t, tt.NumRecovered, len(res.Publications))
 			require.Equal(t, tt.Recovered, res.Recovered)
 
-			node.Shutdown(context.Background())
+			_ = node.Shutdown(context.Background())
 		})
 	}
 }
