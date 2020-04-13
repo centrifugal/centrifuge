@@ -85,6 +85,11 @@ func TestStreamGetAll(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), streamTop)
 	require.Nil(t, items)
+	_, err = s.Add([]byte("1"), 2)
+	require.NoError(t, err)
+	items, _, err = s.Get(0, 200)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
 }
 
 func TestStreamClear(t *testing.T) {

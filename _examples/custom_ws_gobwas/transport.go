@@ -67,14 +67,16 @@ func (t *customWebsocketTransport) Write(data []byte) error {
 	case <-t.closeCh:
 		return nil
 	default:
-		// var messageType = ws.OpBinary
-		// if t.Encoding() == centrifuge.EncodingProtobuf {
-		// 	messageType = websocket.MessageBinary
-		// }
-		err := wsutil.WriteServerMessage(t.conn, ws.OpText, data)
-		if err != nil {
+		messageType := ws.OpText
+
+		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
+			messageType = ws.OpBinary
+		}
+
+		if err := wsutil.WriteServerMessage(t.conn, messageType, data); err != nil {
 			return err
 		}
+
 		return nil
 	}
 }

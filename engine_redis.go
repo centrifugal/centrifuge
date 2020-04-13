@@ -1002,42 +1002,41 @@ func (s *shard) runPublishPipeline() {
 	var prs []pubRequest
 
 	for {
-		select {
-		case pr := <-s.pubCh:
-			prs = append(prs, pr)
-		loop:
-			for len(prs) < redisPublishBatchLimit {
-				select {
-				case pr := <-s.pubCh:
-					prs = append(prs, pr)
-				default:
-					break loop
-				}
+		pr := <-s.pubCh
+		prs = append(prs, pr)
+
+	loop:
+		for len(prs) < redisPublishBatchLimit {
+			select {
+			case pr := <-s.pubCh:
+				prs = append(prs, pr)
+			default:
+				break loop
 			}
-			conn := s.pool.Get()
+		}
+		conn := s.pool.Get()
+		for i := range prs {
+			_ = conn.Send("PUBLISH", prs[i].channel, prs[i].message)
+		}
+		err := conn.Flush()
+		if err != nil {
 			for i := range prs {
-				_ = conn.Send("PUBLISH", prs[i].channel, prs[i].message)
-			}
-			err := conn.Flush()
-			if err != nil {
-				for i := range prs {
-					prs[i].done(err)
-				}
-				s.node.Log(NewLogEntry(LogLevelError, "error flushing publish pipeline", map[string]interface{}{"error": err.Error()}))
-				_ = conn.Close()
-				return
-			}
-			for i := range prs {
-				_, err := conn.Receive()
 				prs[i].done(err)
 			}
-			if conn.Err() != nil {
-				_ = conn.Close()
-				return
-			}
+			s.node.Log(NewLogEntry(LogLevelError, "error flushing publish pipeline", map[string]interface{}{"error": err.Error()}))
 			_ = conn.Close()
-			prs = nil
+			return
 		}
+		for i := range prs {
+			_, err := conn.Receive()
+			prs[i].done(err)
+		}
+		if conn.Err() != nil {
+			_ = conn.Close()
+			return
+		}
+		_ = conn.Close()
+		prs = nil
 	}
 }
 
