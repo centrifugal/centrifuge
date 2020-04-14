@@ -89,35 +89,27 @@ type ChannelContext struct {
 // Client represents client connection to server.
 type Client struct {
 	mu sync.RWMutex
-
 	// presenceMu allows to sync presence routine with client closing.
-	presenceMu sync.Mutex
-
-	ctx       context.Context
-	node      *Node
-	transport Transport
-
-	closed        bool
-	authenticated bool
-
-	uid  string
-	user string
-	exp  int64
-	info protocol.Raw
-
+	presenceMu       sync.Mutex
+	info             Raw
+	ctx              context.Context
+	transport        Transport
+	uid              string
+	user             string
+	node             *Node
+	exp              int64
 	publicationsOnce sync.Once
 	publications     *pubQueue
-
-	channels map[string]ChannelContext
-
-	staleTimer    *time.Timer
-	expireTimer   *time.Timer
-	presenceTimer *time.Timer
-
-	disconnect    *Disconnect
-	eventHub      *ClientEventHub
-	messageWriter *writer
-	pubSubSync    *recovery.PubSubSync
+	channels         map[string]ChannelContext
+	staleTimer       *time.Timer
+	expireTimer      *time.Timer
+	presenceTimer    *time.Timer
+	disconnect       *Disconnect
+	eventHub         *ClientEventHub
+	messageWriter    *writer
+	pubSubSync       *recovery.PubSubSync
+	closed           bool
+	authenticated    bool
 }
 
 // NewClient initializes new Client.
@@ -145,9 +137,8 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	messageWriterConf := writerConfig{
 		MaxQueueSize: config.ClientQueueMaxSize,
 		WriteFn: func(data []byte) error {
-			err := t.Write(data)
-			if err != nil {
-				go c.Close(DisconnectWriteError)
+			if err := t.Write(data); err != nil {
+				go func() { _ = c.Close(DisconnectWriteError) }()
 				return err
 			}
 			transportMessagesSentCounter.Inc()
@@ -158,9 +149,8 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 			for _, payload := range data {
 				buf.Write(payload)
 			}
-			err := t.Write(buf.Bytes())
-			if err != nil {
-				go c.Close(DisconnectWriteError)
+			if err := t.Write(buf.Bytes()); err != nil {
+				go func() { _ = c.Close(DisconnectWriteError) }()
 				putBuffer(buf)
 				return err
 			}
@@ -192,7 +182,7 @@ func (c *Client) closeUnauthenticated() {
 	closed := c.closed
 	c.mu.RUnlock()
 	if !authenticated && !closed {
-		c.Close(DisconnectStale)
+		_ = c.Close(DisconnectStale)
 	}
 }
 
@@ -201,7 +191,7 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	disconnect := c.messageWriter.enqueue(data)
 	if disconnect != nil {
 		// Close in goroutine to not block message broadcast.
-		go c.Close(disconnect)
+		go func() { _ = c.Close(disconnect) }()
 		return io.EOF
 	}
 	return nil
@@ -275,14 +265,14 @@ func (c *Client) updatePresence() {
 			// handle reliably on client side when unsubscribe with resubscribe
 			// flag was used. So I decided to stick with disconnect for now -
 			// it seems to work fine and drastically simplifies client code.
-			go c.Close(DisconnectSubExpired)
+			go func() { _ = c.Close(DisconnectSubExpired) }()
 			// No need to proceed after close.
 			return
 		}
 
 		checkDelay := config.ClientChannelPositionCheckDelay
 		if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
-			go c.Close(DisconnectInsufficientState)
+			go func() { _ = c.Close(DisconnectInsufficientState) }()
 			// No need to proceed after close.
 			return
 		}
@@ -495,11 +485,11 @@ func (c *Client) Close(disconnect *Disconnect) error {
 	c.mu.Unlock()
 
 	// Close writer and send messages remaining in writer queue if any.
-	c.messageWriter.close()
+	_ = c.messageWriter.close()
 
 	c.publications.Close()
 
-	c.transport.Close(disconnect)
+	_ = c.transport.Close(disconnect)
 
 	if disconnect != nil && disconnect.Reason != "" {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": disconnect.Reason, "reconnect": disconnect.Reconnect}))
@@ -542,7 +532,7 @@ func (c *Client) Handle(data []byte) bool {
 
 	if len(data) == 0 {
 		c.node.logger.log(newLogEntry(LogLevelError, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-		c.Close(DisconnectBadRequest)
+		_ = c.Close(DisconnectBadRequest)
 		return false
 	}
 
@@ -558,7 +548,7 @@ func (c *Client) Handle(data []byte) bool {
 				break
 			}
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-			c.Close(DisconnectBadRequest)
+			_ = c.Close(DisconnectBadRequest)
 			protocol.PutCommandDecoder(protoType, decoder)
 			protocol.PutReplyEncoder(protoType, encoder)
 			return false
@@ -581,7 +571,7 @@ func (c *Client) Handle(data []byte) bool {
 					}
 					protocol.PutCommandDecoder(protoType, decoder)
 					protocol.PutReplyEncoder(protoType, encoder)
-					c.Close(disconnect)
+					_ = c.Close(disconnect)
 					return fmt.Errorf("flush error")
 				}
 			}
@@ -602,7 +592,7 @@ func (c *Client) Handle(data []byte) bool {
 			if disconnect != DisconnectNormal {
 				c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			}
-			c.Close(disconnect)
+			_ = c.Close(disconnect)
 			if encodeErr == nil {
 				protocol.PutCommandDecoder(protoType, decoder)
 				protocol.PutReplyEncoder(protoType, encoder)
@@ -610,7 +600,7 @@ func (c *Client) Handle(data []byte) bool {
 			return false
 		}
 		if encodeErr != nil {
-			c.Close(DisconnectServerError)
+			_ = c.Close(DisconnectServerError)
 			return false
 		}
 	}
@@ -622,7 +612,7 @@ func (c *Client) Handle(data []byte) bool {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			}
-			c.Close(disconnect)
+			_ = c.Close(disconnect)
 			protocol.PutCommandDecoder(protoType, decoder)
 			protocol.PutReplyEncoder(protoType, encoder)
 			return false
@@ -723,7 +713,7 @@ func (c *Client) expire() {
 	if c.node.eventHub.refreshHandler != nil {
 		reply := c.node.eventHub.refreshHandler(c.ctx, c, RefreshEvent{})
 		if reply.Expired {
-			c.Close(DisconnectExpired)
+			_ = c.Close(DisconnectExpired)
 			return
 		}
 		if reply.ExpireAt > 0 {
@@ -769,7 +759,7 @@ func (c *Client) expire() {
 		return
 	}
 
-	c.Close(DisconnectExpired)
+	_ = c.Close(DisconnectExpired)
 }
 
 func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect {
@@ -1105,10 +1095,11 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
 
-	var credentials *Credentials
-	var authData protocol.Raw
-
-	var channels []string
+	var (
+		credentials *Credentials
+		authData    protocol.Raw
+		channels    []string
+	)
 
 	if c.node.eventHub.connectingHandler != nil {
 		reply := c.node.eventHub.connectingHandler(c.ctx, c.transport, ConnectEvent{
@@ -1146,19 +1137,24 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		}
 	}
 
-	var expires bool
-	var ttl uint32
+	var (
+		expires bool
+		ttl     uint32
+	)
 
-	if credentials != nil {
+	switch {
+	case credentials != nil:
 		// Server-side auth.
 		c.mu.Lock()
 		c.user = credentials.UserID
 		c.info = credentials.Info
 		c.exp = credentials.ExpireAt
 		c.mu.Unlock()
-	} else if cmd.Token != "" {
-		var token connectToken
-		var err error
+	case cmd.Token != "":
+		var (
+			token connectToken
+			err   error
+		)
 		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
 			if err == errTokenExpired {
 				resp.Error = ErrorTokenExpired.toProto()
@@ -1181,11 +1177,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		}
 
 		channels = append(channels, token.Channels...)
-	} else {
-		if !insecure && !clientAnonymous {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
-			return DisconnectBadRequest
-		}
+	case !insecure && !clientAnonymous:
+		c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
+		return DisconnectBadRequest
 	}
 
 	c.mu.RLock()
@@ -1389,7 +1383,6 @@ func (c *Client) Subscribe(channel string) error {
 // refreshCmd handle refresh command to update connection with new
 // timestamp - this is only required when connection lifetime option set.
 func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshResponse, *Disconnect) {
-
 	resp := &clientproto.RefreshResponse{}
 
 	if cmd.Token == "" {
@@ -1418,8 +1411,7 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 		Client:  c.uid,
 	}
 
-	diff := token.ExpireAt - time.Now().Unix()
-	if diff > 0 {
+	if diff := token.ExpireAt - time.Now().Unix(); diff > 0 {
 		res.TTL = uint32(diff)
 	}
 
@@ -1508,9 +1500,10 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, server
 }
 
 func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide bool) (protocol.Raw, int64, bool, *Error, *Disconnect) {
-
-	var channelInfo protocol.Raw
-	var expireAt int64
+	var (
+		channelInfo protocol.Raw
+		expireAt    int64
+	)
 
 	isPrivateChannel := c.node.privateChannel(cmd.Channel)
 
@@ -1679,10 +1672,11 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		}
 	}
 
-	var latestOffset uint64
-	var latestEpoch string
-
-	var recoveredPubs []*protocol.Publication
+	var (
+		latestOffset  uint64
+		latestEpoch   string
+		recoveredPubs []*Publication
+	)
 
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
@@ -1827,7 +1821,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	pubOffset := pub.Offset
 	if pubOffset != nextExpectedOffset {
 		// Oops: sth lost, let client reconnect to recover its state.
-		go c.Close(DisconnectInsufficientState)
+		go func() { _ = c.Close(DisconnectInsufficientState) }()
 		c.mu.Unlock()
 		return nil
 	}
@@ -1853,17 +1847,16 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 		// broadcasts inside Hub for a long time.
 		go c.processPublications()
 	})
-	ok := c.publications.Add(preparedPub{
+	if ok := c.publications.Add(preparedPub{
 		reply:   reply,
 		channel: ch,
 		pub:     pub,
 		chOpts:  chOpts,
-	})
-	if !ok {
+	}); !ok {
 		return nil
 	}
 	if c.publications.Size() > maxPubQueueSize {
-		go c.Close(DisconnectServerError)
+		go func() { _ = c.Close(DisconnectServerError) }()
 	}
 	return nil
 }
@@ -1893,7 +1886,6 @@ func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
 }
 
 func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.SubRefreshResponse, *Disconnect) {
-
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for sub refresh", map[string]interface{}{"user": c.user, "client": c.uid}))
@@ -1995,8 +1987,7 @@ func (c *Client) unsubscribe(channel string) error {
 			_ = c.node.publishLeave(channel, leave, &chOpts)
 		}
 
-		err := c.node.removeSubscription(channel, c)
-		if err != nil {
+		if err := c.node.removeSubscription(channel, c); err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error removing subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			return err
 		}
@@ -2016,7 +2007,6 @@ func (c *Client) unsubscribe(channel string) error {
 // unsubscribeCmd handles unsubscribe command from client - it allows to
 // unsubscribe connection from channel.
 func (c *Client) unsubscribeCmd(cmd *protocol.UnsubscribeRequest) (*clientproto.UnsubscribeResponse, *Disconnect) {
-
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for unsubscribe", map[string]interface{}{"user": c.user, "client": c.uid}))
@@ -2025,8 +2015,7 @@ func (c *Client) unsubscribeCmd(cmd *protocol.UnsubscribeRequest) (*clientproto.
 
 	resp := &clientproto.UnsubscribeResponse{}
 
-	err := c.unsubscribe(channel)
-	if err != nil {
+	if err := c.unsubscribe(channel); err != nil {
 		if err == ErrorNamespaceNotFound {
 			resp.Error = ErrorNamespaceNotFound.toProto()
 		} else {
@@ -2041,7 +2030,6 @@ func (c *Client) unsubscribeCmd(cmd *protocol.UnsubscribeRequest) (*clientproto.
 // publishCmd handles publish command - clients can publish messages into
 // channels themselves if `publish` allowed by channel options.
 func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishResponse, *Disconnect) {
-
 	ch := cmd.Channel
 	data := cmd.Data
 
@@ -2118,7 +2106,6 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 // presence information turned on for channel (based on channel options
 // for namespace or project)
 func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.PresenceResponse, *Disconnect) {
-
 	ch := cmd.Channel
 
 	if ch == "" {
@@ -2168,7 +2155,6 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 // presenceStatsCmd handles request to get presence stats – short summary
 // about active clients in channel.
 func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientproto.PresenceStatsResponse, *Disconnect) {
-
 	ch := cmd.Channel
 
 	if ch == "" {
@@ -2218,7 +2204,6 @@ func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientpr
 // channel options. Both M and N must be set, otherwise this method returns
 // ErrorNotAvailable.
 func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryResponse, *Disconnect) {
-
 	ch := cmd.Channel
 
 	if ch == "" {

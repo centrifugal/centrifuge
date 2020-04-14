@@ -72,7 +72,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 		go func(cc *Client) {
 			defer func() { <-sem }()
 			defer func() { closeFinishedCh <- struct{}{} }()
-			cc.Close(advice)
+			_ = cc.Close(advice)
 		}(client)
 	}
 
@@ -97,7 +97,7 @@ func (h *Hub) disconnect(user string, reconnect bool) error {
 	}
 	for _, c := range userConnections {
 		go func(cc *Client) {
-			cc.Close(advice)
+			_ = cc.Close(advice)
 		}(c)
 	}
 	return nil
@@ -124,8 +124,7 @@ func (h *Hub) add(c *Client) error {
 
 	h.conns[uid] = c
 
-	_, ok := h.users[user]
-	if !ok {
+	if _, ok := h.users[user]; !ok {
 		h.users[user] = make(map[string]struct{})
 	}
 	h.users[user][uid] = struct{}{}
@@ -321,8 +320,10 @@ func (h *Hub) broadcastJoin(channel string, join *protocol.Join) error {
 		return nil
 	}
 
-	var jsonReply *prepared.Reply
-	var protobufReply *prepared.Reply
+	var (
+		jsonReply     *prepared.Reply
+		protobufReply *prepared.Reply
+	)
 
 	for uid := range channelSubscriptions {
 		c, ok := h.conns[uid]
@@ -377,8 +378,10 @@ func (h *Hub) broadcastLeave(channel string, leave *protocol.Leave) error {
 		return nil
 	}
 
-	var jsonReply *prepared.Reply
-	var protobufReply *prepared.Reply
+	var (
+		jsonReply     *prepared.Reply
+		protobufReply *prepared.Reply
+	)
 
 	for uid := range channelSubscriptions {
 		c, ok := h.conns[uid]

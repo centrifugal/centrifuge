@@ -17,7 +17,7 @@ func (r Raw) Marshal() ([]byte, error) {
 	if len(r) == 0 {
 		return nil, nil
 	}
-	return []byte(r), nil
+	return r, nil
 }
 
 // MarshalTo exists to fit gogoprotobuf custom type interface.
@@ -88,6 +88,6 @@ func NewPopulatedRaw(r intn) *Raw {
 		data[i] = byte('a')
 	}
 	d := `{"key":"` + string(data) + `"}`
-	raw := Raw([]byte(d))
+	raw := Raw(d)
 	return &raw
 }

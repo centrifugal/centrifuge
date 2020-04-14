@@ -215,16 +215,16 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	close(n.shutdownCh)
 	n.mu.Unlock()
 	if closer, ok := n.broker.(Closer); ok {
-		defer closer.Close(ctx)
+		defer func() { _ = closer.Close(ctx) }()
 	}
 	if n.historyManager != nil {
 		if closer, ok := n.historyManager.(Closer); ok {
-			defer closer.Close(ctx)
+			defer func() { _ = closer.Close(ctx) }()
 		}
 	}
 	if n.presenceManager != nil {
 		if closer, ok := n.presenceManager.(Closer); ok {
-			defer closer.Close(ctx)
+			defer func() { _ = closer.Close(ctx) }()
 		}
 	}
 	_ = n.subDissolver.Close()
