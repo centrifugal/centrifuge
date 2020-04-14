@@ -142,13 +142,14 @@ func newPresenceHub() *presenceHub {
 
 func (h *presenceHub) add(ch string, uid string, info *ClientInfo) error {
 	h.Lock()
-	defer h.Unlock()
 
-	_, ok := h.presence[ch]
-	if !ok {
+	if _, ok := h.presence[ch]; !ok {
 		h.presence[ch] = make(map[string]*ClientInfo)
 	}
+
 	h.presence[ch][uid] = info
+	h.Unlock()
+
 	return nil
 }
 
@@ -187,6 +188,7 @@ func (h *presenceHub) get(ch string) (map[string]*ClientInfo, error) {
 	for k, v := range presence {
 		data[k] = v
 	}
+
 	return data, nil
 }
 
@@ -322,7 +324,6 @@ func (h *historyHub) expireStreams() {
 
 func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error) {
 	h.Lock()
-	defer h.Unlock()
 
 	var index uint64
 
@@ -355,6 +356,9 @@ func (h *historyHub) add(ch string, pub *Publication, opts *ChannelOptions) (*Pu
 	}
 
 	pub.Seq, pub.Gen = recovery.UnpackUint64(index)
+
+	h.Unlock()
+
 	return pub, nil
 }
 
@@ -435,9 +439,12 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 
 func (h *historyHub) remove(ch string) error {
 	h.Lock()
-	defer h.Unlock()
+
 	if stream, ok := h.streams[ch]; ok {
 		stream.Clear()
 	}
+
+	h.Unlock()
+
 	return nil
 }

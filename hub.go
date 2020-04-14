@@ -116,18 +116,19 @@ func (h *Hub) unsubscribe(user string, ch string, opts ...UnsubscribeOption) err
 // add adds connection into clientHub connections registry.
 func (h *Hub) add(c *Client) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	uid := c.ID()
 	user := c.UserID()
 
 	h.conns[uid] = c
 
-	_, ok := h.users[user]
-	if !ok {
+	if _, ok := h.users[user]; !ok {
 		h.users[user] = make(map[string]struct{})
 	}
+
 	h.users[user][uid] = struct{}{}
+	h.mu.Unlock()
+
 	return nil
 }
 
@@ -402,38 +403,46 @@ func (h *Hub) broadcastLeave(channel string, leave *protocol.Leave) error {
 // NumClients returns total number of client connections.
 func (h *Hub) NumClients() int {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+
 	total := 0
 	for _, clientConnections := range h.users {
 		total += len(clientConnections)
 	}
+
+	h.mu.RUnlock()
+
 	return total
 }
 
 // NumUsers returns a number of unique users connected.
 func (h *Hub) NumUsers() int {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.users)
+	l := len(h.users)
+	h.mu.RUnlock()
+	return l
 }
 
 // NumChannels returns a total number of different channels.
 func (h *Hub) NumChannels() int {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.subs)
+	l := len(h.subs)
+	h.mu.RUnlock()
+	return l
 }
 
 // Channels returns a slice of all active channels.
 func (h *Hub) Channels() []string {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+
 	channels := make([]string, len(h.subs))
 	i := 0
 	for ch := range h.subs {
 		channels[i] = ch
 		i++
 	}
+
+	h.mu.RUnlock()
+
 	return channels
 }
 

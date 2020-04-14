@@ -113,20 +113,20 @@ func (q *queueImpl) Add(i Job) bool {
 // all goroutines in wait() will return
 func (q *queueImpl) Close() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.closed = true
 	q.cnt = 0
 	q.nodes = nil
 	q.size = 0
 	q.cond.Broadcast()
+	q.mu.Unlock()
 }
 
 // CloseRemaining will close the queue and return all entried in the queue.
 // All goroutines in wait() will return.
 func (q *queueImpl) CloseRemaining() []Job {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if q.closed {
+		q.mu.Unlock()
 		return []Job{}
 	}
 	rem := make([]Job, 0, q.cnt)
@@ -141,6 +141,7 @@ func (q *queueImpl) CloseRemaining() []Job {
 	q.nodes = nil
 	q.size = 0
 	q.cond.Broadcast()
+	q.mu.Unlock()
 	return rem
 }
 

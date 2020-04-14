@@ -358,11 +358,11 @@ func (c *Client) Transport() TransportInfo {
 // Channels returns a map of channels client connection currently subscribed to.
 func (c *Client) Channels() map[string]ChannelContext {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	channels := make(map[string]ChannelContext, len(c.channels))
 	for ch, ctx := range c.channels {
 		channels[ch] = ctx
 	}
+	c.mu.RUnlock()
 	return channels
 }
 
@@ -1101,10 +1101,11 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
 
-	var credentials *Credentials
-	var authData Raw
-
-	var channels []string
+	var (
+		credentials *Credentials
+		authData    Raw
+		channels    []string
+	)
 
 	if c.node.eventHub.connectingHandler != nil {
 		reply := c.node.eventHub.connectingHandler(c.ctx, c.transport, ConnectEvent{
@@ -1142,17 +1143,20 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		}
 	}
 
-	var expires bool
-	var ttl uint32
+	var (
+		expires bool
+		ttl     uint32
+	)
 
-	if credentials != nil {
+	switch {
+	case credentials != nil:
 		// Server-side auth.
 		c.mu.Lock()
 		c.user = credentials.UserID
 		c.info = credentials.Info
 		c.exp = credentials.ExpireAt
 		c.mu.Unlock()
-	} else if cmd.Token != "" {
+	case cmd.Token != "":
 		var token connectToken
 		var err error
 		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
@@ -1177,11 +1181,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		}
 
 		channels = append(channels, token.Channels...)
-	} else {
-		if !insecure && !clientAnonymous {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
-			return DisconnectBadRequest
-		}
+	case !insecure && !clientAnonymous:
+		c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
+		return DisconnectBadRequest
 	}
 
 	c.mu.RLock()
@@ -1384,7 +1386,6 @@ func (c *Client) Subscribe(channel string) error {
 // refreshCmd handle refresh command to update connection with new
 // timestamp - this is only required when connection lifetime option set.
 func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshResponse, *Disconnect) {
-
 	resp := &clientproto.RefreshResponse{}
 
 	if cmd.Token == "" {
@@ -1413,8 +1414,7 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 		Client:  c.uid,
 	}
 
-	diff := token.ExpireAt - time.Now().Unix()
-	if diff > 0 {
+	if diff := token.ExpireAt - time.Now().Unix(); diff > 0 {
 		res.TTL = uint32(diff)
 	}
 
@@ -1503,9 +1503,10 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, server
 }
 
 func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide bool) (Raw, int64, bool, *Error, *Disconnect) {
-
-	var channelInfo Raw
-	var expireAt int64
+	var (
+		channelInfo Raw
+		expireAt    int64
+	)
 
 	isPrivateChannel := c.node.privateChannel(cmd.Channel)
 
@@ -1674,11 +1675,12 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		}
 	}
 
-	var latestSeq uint32
-	var latestGen uint32
-	var latestEpoch string
-
-	var recoveredPubs []*Publication
+	var (
+		latestSeq     uint32
+		latestGen     uint32
+		latestEpoch   string
+		recoveredPubs []*Publication
+	)
 
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
@@ -1886,7 +1888,6 @@ func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
 }
 
 func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.SubRefreshResponse, *Disconnect) {
-
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for sub refresh", map[string]interface{}{"user": c.user, "client": c.uid}))
@@ -2009,7 +2010,6 @@ func (c *Client) unsubscribe(channel string) error {
 // unsubscribeCmd handles unsubscribe command from client - it allows to
 // unsubscribe connection from channel.
 func (c *Client) unsubscribeCmd(cmd *protocol.UnsubscribeRequest) (*clientproto.UnsubscribeResponse, *Disconnect) {
-
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for unsubscribe", map[string]interface{}{"user": c.user, "client": c.uid}))
@@ -2034,7 +2034,6 @@ func (c *Client) unsubscribeCmd(cmd *protocol.UnsubscribeRequest) (*clientproto.
 // publishCmd handles publish command - clients can publish messages into
 // channels themselves if `publish` allowed by channel options.
 func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishResponse, *Disconnect) {
-
 	ch := cmd.Channel
 	data := cmd.Data
 
@@ -2106,7 +2105,6 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 // presence information turned on for channel (based on channel options
 // for namespace or project)
 func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.PresenceResponse, *Disconnect) {
-
 	ch := cmd.Channel
 
 	if ch == "" {
@@ -2156,7 +2154,6 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 // presenceStatsCmd handles request to get presence stats – short summary
 // about active clients in channel.
 func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientproto.PresenceStatsResponse, *Disconnect) {
-
 	ch := cmd.Channel
 
 	if ch == "" {
@@ -2206,7 +2203,6 @@ func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientpr
 // channel options. Both M and N must be set, otherwise this method returns
 // ErrorNotAvailable.
 func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryResponse, *Disconnect) {
-
 	ch := cmd.Channel
 
 	if ch == "" {

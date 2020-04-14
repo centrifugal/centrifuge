@@ -79,12 +79,12 @@ func (q *pubQueue) Add(i preparedPub) bool {
 // all goroutines in wait() will return
 func (q *pubQueue) Close() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.closed = true
 	q.cnt = 0
 	q.nodes = nil
 	q.size = 0
 	q.cond.Broadcast()
+	q.mu.Unlock()
 }
 
 // Closed returns true if the queue has been closed

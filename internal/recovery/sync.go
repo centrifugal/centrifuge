@@ -51,10 +51,10 @@ func (c *PubSubSync) SyncPublication(channel string, pub *protocol.Publication, 
 // StartBuffering ...
 func (c *PubSubSync) StartBuffering(channel string) {
 	c.subSyncMu.Lock()
-	defer c.subSyncMu.Unlock()
 	s := &subscribeState{}
 	c.subSync[channel] = s
 	atomic.StoreUint32(&s.inSubscribe, 1)
+	c.subSyncMu.Unlock()
 }
 
 // StopBuffering ...
@@ -110,18 +110,18 @@ func (c *PubSubSync) unlockBuffer(channel string) {
 
 func (c *PubSubSync) appendPubToBuffer(channel string, pub *protocol.Publication) {
 	c.subSyncMu.RLock()
-	defer c.subSyncMu.RUnlock()
 	s := c.subSync[channel]
 	s.pubBuffer = append(s.pubBuffer, pub)
+	c.subSyncMu.RUnlock()
 }
 
 // ReadBuffered ...
 func (c *PubSubSync) ReadBuffered(channel string) []*protocol.Publication {
 	c.subSyncMu.RLock()
-	defer c.subSyncMu.RUnlock()
 	s := c.subSync[channel]
 	pubs := make([]*protocol.Publication, len(s.pubBuffer))
 	copy(pubs, s.pubBuffer)
 	s.pubBuffer = nil
+	c.subSyncMu.RUnlock()
 	return pubs
 }

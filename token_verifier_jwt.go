@@ -109,9 +109,9 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeT
 
 func (verifier *tokenVerifierJWT) Reload(config Config) {
 	verifier.mu.Lock()
-	defer verifier.mu.Unlock()
 	verifier.TokenRSAPublicKey = config.TokenRSAPublicKey
 	verifier.TokenHMACSecretKey = []byte(config.TokenHMACSecretKey)
+	verifier.mu.Unlock()
 }
 
 func (verifier *tokenVerifierJWT) jwtKeyFunc() func(token *jwt.Token) (interface{}, error) {

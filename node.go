@@ -158,9 +158,9 @@ func (n *Node) Reload(c Config) error {
 		return err
 	}
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	n.config = c
 	n.tokenVerifier.Reload(c)
+	n.mu.Unlock()
 	return nil
 }
 
@@ -652,18 +652,20 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 	actionCount.WithLabelValues("add_subscription").Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
-	defer mu.Unlock()
 	first, err := n.hub.addSub(ch, c)
 	if err != nil {
+		mu.Unlock()
 		return err
 	}
 	if first {
 		err := n.broker.Subscribe(ch)
 		if err != nil {
 			_, _ = n.hub.removeSub(ch, c)
+			mu.Unlock()
 			return err
 		}
 	}
+	mu.Unlock()
 	return nil
 }
 
@@ -748,8 +750,9 @@ func (n *Node) namespaceName(ch string) string {
 // ChannelOpts returns channel options for channel using current channel config.
 func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
 	n.mu.RLock()
-	defer n.mu.RUnlock()
-	return n.config.channelOpts(n.namespaceName(ch))
+	ops, ok := n.config.channelOpts(n.namespaceName(ch))
+	n.mu.RUnlock()
+	return ops, ok
 }
 
 // PersonalChannel returns personal channel for user based on node configuration.
@@ -855,10 +858,12 @@ func (n *Node) currentRecoveryState(ch string) (StreamPosition, error) {
 // subscription request must contain a proper signature.
 func (n *Node) privateChannel(ch string) bool {
 	n.mu.RLock()
-	defer n.mu.RUnlock()
 	if n.config.ChannelPrivatePrefix == "" {
+		n.mu.RUnlock()
 		return false
 	}
+	n.mu.RUnlock()
+
 	return strings.HasPrefix(ch, n.config.ChannelPrivatePrefix)
 }
 
@@ -867,25 +872,29 @@ func (n *Node) privateChannel(ch string) bool {
 // to subscribe on it.
 func (n *Node) userAllowed(ch string, user string) bool {
 	n.mu.RLock()
-	defer n.mu.RUnlock()
 	userBoundary := n.config.ChannelUserBoundary
 	userSeparator := n.config.ChannelUserSeparator
 	if userBoundary == "" {
+		n.mu.RUnlock()
 		return true
 	}
 	if !strings.Contains(ch, userBoundary) {
+		n.mu.RUnlock()
 		return true
 	}
 	parts := strings.Split(ch, userBoundary)
 	if userSeparator == "" {
+		n.mu.RUnlock()
 		return parts[len(parts)-1] == user
 	}
 	allowedUsers := strings.Split(parts[len(parts)-1], userSeparator)
 	for _, allowedUser := range allowedUsers {
 		if user == allowedUser {
+			n.mu.RUnlock()
 			return true
 		}
 	}
+	n.mu.RUnlock()
 	return false
 }
 
