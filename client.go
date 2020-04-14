@@ -1502,7 +1502,7 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 
 	isPrivateChannel := c.node.privateChannel(cmd.Channel)
 
-	if isPrivateChannel {
+	if !serverSide && isPrivateChannel {
 		if cmd.Token == "" {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
 			return nil, 0, false, ErrorPermissionDenied, nil
@@ -1551,7 +1551,7 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 
 	// At moment we expose expiration details to client only in case
 	// of private channel subscription.
-	exposeExpiration := isPrivateChannel
+	exposeExpiration := !serverSide && isPrivateChannel
 
 	return channelInfo, expireAt, exposeExpiration, nil, nil
 }
