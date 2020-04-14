@@ -376,8 +376,7 @@ func newPool(s *shard, n *Node, conf RedisShardConfig) (redisConnPool, error) {
 
 // NewRedisEngine initializes Redis Engine.
 func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
-
-	var shards []*shard
+	var shards = make([]*shard, 0, len(config.Shards))
 
 	if len(config.Shards) == 0 {
 		return nil, errors.New("no Redis shards provided in configuration")
@@ -408,7 +407,7 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 	return e, nil
 }
 
-var (
+const (
 	// Add to history and optionally publish.
 	// KEYS[1] - history list key
 	// KEYS[2] - sequence meta hash key
@@ -1081,7 +1080,7 @@ func (dr *dataRequest) result() *dataResponse {
 
 func (s *shard) processClusterDataRequest(dr dataRequest) (interface{}, error) {
 	conn := s.pool.Get()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	var err error
 
@@ -1730,13 +1729,14 @@ func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
 // package by Damian Gryski. It consistently chooses a hash bucket number in the
 // range [0, numBuckets) for the given string. numBuckets must be >= 1.
 func consistentIndex(s string, numBuckets int) int {
-
 	hash := fnv.New64a()
 	_, _ = hash.Write([]byte(s))
 	key := hash.Sum64()
 
-	var b int64 = -1
-	var j int64
+	var (
+		b int64 = -1
+		j int64
+	)
 
 	for j < int64(numBuckets) {
 		b = j

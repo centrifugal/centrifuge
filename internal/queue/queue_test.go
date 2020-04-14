@@ -57,7 +57,6 @@ func TestByteQueueWait(t *testing.T) {
 	s, ok = q.Wait()
 	require.Equal(t, true, ok)
 	require.Equal(t, "3", string(s))
-
 }
 
 func TestByteQueueClose(t *testing.T) {
@@ -81,7 +80,6 @@ func TestByteQueueClose(t *testing.T) {
 	require.Equal(t, false, ok)
 
 	require.Equal(t, true, q.Closed())
-
 }
 
 func TestByteQueueCloseRemaining(t *testing.T) {

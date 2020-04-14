@@ -112,7 +112,7 @@ func (c *Config) Validate() error {
 		validPersonalChannelNamespace = true
 	}
 
-	var nss []string
+	var nss = make([]string, 0, len(c.Namespaces))
 	for _, n := range c.Namespaces {
 		name := n.Name
 		match := patternRegexp.MatchString(name)

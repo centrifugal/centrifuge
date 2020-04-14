@@ -326,10 +326,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		defer func(started time.Time) {
 			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
 		}(time.Now())
-		defer c.Close(nil)
+		defer func() { _ = c.Close(nil) }()
 
-		var handleMu sync.RWMutex
-		var closed bool
+		var (
+			handleMu sync.RWMutex
+			closed   bool
+		)
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
