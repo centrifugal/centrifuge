@@ -400,9 +400,9 @@ var recoverTests = []struct {
 	HistorySize     int
 	HistoryLifetime int
 	NumPublications int
-	SinceSeq        uint32
 	NumRecovered    int
 	Sleep           int
+	SinceSeq        uint32
 	Recovered       bool
 }{
 	{"empty_stream", 10, 60, 0, 0, 0, 0, true},

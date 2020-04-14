@@ -89,35 +89,27 @@ type ChannelContext struct {
 // Client represents client connection to server.
 type Client struct {
 	mu sync.RWMutex
-
 	// presenceMu allows to sync presence routine with client closing.
-	presenceMu sync.Mutex
-
-	ctx       context.Context
-	node      *Node
-	transport Transport
-
-	closed        bool
-	authenticated bool
-
-	uid  string
-	user string
-	exp  int64
-	info Raw
-
+	presenceMu       sync.Mutex
+	info             Raw
+	ctx              context.Context
+	transport        Transport
+	uid              string
+	user             string
+	node             *Node
+	exp              int64
 	publicationsOnce sync.Once
 	publications     *pubQueue
-
-	channels map[string]ChannelContext
-
-	staleTimer    *time.Timer
-	expireTimer   *time.Timer
-	presenceTimer *time.Timer
-
-	disconnect    *Disconnect
-	eventHub      *ClientEventHub
-	messageWriter *writer
-	syncer        *recovery.PubSubSync
+	channels         map[string]ChannelContext
+	staleTimer       *time.Timer
+	expireTimer      *time.Timer
+	presenceTimer    *time.Timer
+	disconnect       *Disconnect
+	eventHub         *ClientEventHub
+	messageWriter    *writer
+	syncer           *recovery.PubSubSync
+	closed           bool
+	authenticated    bool
 }
 
 // NewClient initializes new Client.
