@@ -578,7 +578,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 		return ConnectReply{
 			Channels: []string{
 				"server-side-1",
-				"server-side-2",
+				"$server-side-2",
 			},
 		}
 	})
@@ -596,7 +596,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 	_ = client.Subscribe("server-side-3")
 	err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
 	require.NoError(t, err)
-	err = node.Publish("server-side-2", []byte(`{"text": "test message 2"}`))
+	err = node.Publish("$server-side-2", []byte(`{"text": "test message 2"}`))
 	require.NoError(t, err)
 	err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
 	require.NoError(t, err)
