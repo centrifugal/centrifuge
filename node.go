@@ -942,6 +942,7 @@ func (r *nodeRegistry) add(info *controlproto.Node) {
 			r.nodes[info.UID] = *info
 		} else {
 			node.Version = info.Version
+			node.NumChannels = info.NumChannels
 			node.NumClients = info.NumClients
 			node.NumUsers = info.NumUsers
 			node.Uptime = info.Uptime
