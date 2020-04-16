@@ -1678,6 +1678,8 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		recoveredPubs []*Publication
 	)
 
+	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
+
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
 		if cmd.Recover {
@@ -1731,14 +1733,15 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 
 		res.Epoch = latestEpoch
 		res.Offset = latestOffset
-		if hasFlag(CompatibilityFlags, UseSeqGen) {
+
+		if useSeqGen {
 			res.Seq, res.Gen = recovery.UnpackUint64(latestOffset)
 		}
 
 		c.pubSubSync.LockBuffer(channel)
 		bufferedPubs := c.pubSubSync.ReadBuffered(channel)
 		var okMerge bool
-		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs, useSeqGen)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
 			ctx.disconnect = DisconnectServerError
@@ -1763,8 +1766,12 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	}
 
 	if len(recoveredPubs) > 0 {
-		// recoveredPubs are in descending order.
-		latestOffset = recoveredPubs[0].Offset
+		if useSeqGen {
+			// recoveredPubs are in descending order.
+			latestOffset = recoveredPubs[0].Offset
+		} else {
+			latestOffset = recoveredPubs[len(recoveredPubs)-1].Offset
+		}
 	}
 
 	if !serverSide && chOpts.HistoryRecover {

@@ -7,14 +7,10 @@ import (
 	"github.com/centrifugal/protocol"
 )
 
-//const (
-//	maxSeq uint32 = math.MaxUint32 // maximum uint32 value
-//)
-
 // uniquePublications returns slice of unique Publications.
 func uniquePublications(s []*protocol.Publication) []*protocol.Publication {
 	keys := make(map[uint64]struct{})
-	var list []*protocol.Publication
+	list := make([]*protocol.Publication, 0, len(s))
 	for _, entry := range s {
 		val := entry.Offset
 		if _, value := keys[val]; !value {
@@ -26,19 +22,28 @@ func uniquePublications(s []*protocol.Publication) []*protocol.Publication {
 }
 
 // MergePublications ...
-func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*protocol.Publication) ([]*protocol.Publication, bool) {
+func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*protocol.Publication, isLegacyOrder bool) ([]*protocol.Publication, bool) {
 	if len(bufferedPubs) > 0 {
 		recoveredPubs = append(recoveredPubs, bufferedPubs...)
 	}
 	sort.Slice(recoveredPubs, func(i, j int) bool {
-		return recoveredPubs[i].Offset > recoveredPubs[j].Offset
+		if isLegacyOrder {
+			return recoveredPubs[i].Offset > recoveredPubs[j].Offset
+		}
+		return recoveredPubs[i].Offset < recoveredPubs[j].Offset
 	})
 	if len(bufferedPubs) > 0 {
 		recoveredPubs = uniquePublications(recoveredPubs)
 		prevOffset := recoveredPubs[0].Offset
 		for _, p := range recoveredPubs[1:] {
 			pubOffset := p.Offset
-			if pubOffset != prevOffset+1 {
+			var isWrongOffset bool
+			if isLegacyOrder {
+				isWrongOffset = pubOffset != prevOffset-1
+			} else {
+				isWrongOffset = pubOffset != prevOffset+1
+			}
+			if isWrongOffset {
 				return nil, false
 			}
 			prevOffset = pubOffset
@@ -46,19 +51,6 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 	}
 	return recoveredPubs, true
 }
-
-//// NextSeqGen ...
-//func NextSeqGen(currentSeq, currentGen uint32) (uint32, uint32) {
-//	var nextSeq uint32
-//	nextGen := currentGen
-//	if currentSeq == maxSeq {
-//		nextSeq = 0
-//		nextGen++
-//	} else {
-//		nextSeq = currentSeq + 1
-//	}
-//	return nextSeq, nextGen
-//}
 
 // PackUint64 ...
 func PackUint64(seq, gen uint32) uint64 {
