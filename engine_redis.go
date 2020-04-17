@@ -416,18 +416,26 @@ const (
 	// ARGV[4] - channel to publish message to if needed
 	// ARGV[5] - history meta key expiration time
 	addHistorySource = `
-local sequence = redis.call("hincrby", KEYS[2], "s", 1)
+redis.replicate_commands()
+local epoch
+if redis.call('exists', KEYS[2]) ~= 0 then
+  epoch = redis.call("hget", KEYS[2], "e")
+else
+  epoch = redis.call('time')[1]
+  redis.call("hset", KEYS[2], "e", epoch)
+end
+local offset = redis.call("hincrby", KEYS[2], "s", 1)
 if ARGV[5] ~= '0' then
 	redis.call("expire", KEYS[2], ARGV[5])
 end
-local payload = "__" .. sequence .. "__" .. ARGV[1]
+local payload = "__" .. offset .. "__" .. ARGV[1]
 redis.call("lpush", KEYS[1], payload)
 redis.call("ltrim", KEYS[1], 0, ARGV[2])
 redis.call("expire", KEYS[1], ARGV[3])
 if ARGV[4] ~= '' then
 	redis.call("publish", ARGV[4], payload)
 end
-return sequence
+return {offset, epoch}
 		`
 
 	// Retrieve channel history information.
@@ -438,7 +446,7 @@ return sequence
 	// ARGV[3] - sequence key expiration time
 	historySource = `
 redis.replicate_commands()
-local sequence = redis.call("hget", KEYS[1], "s")
+local offset = redis.call("hget", KEYS[1], "s")
 if ARGV[3] ~= '0' and sequence ~= false then
 	redis.call("expire", KEYS[1], ARGV[3])
 end
@@ -453,7 +461,7 @@ local pubs = nil
 if ARGV[1] ~= "0" then
 	pubs = redis.call("lrange", KEYS[2], 0, ARGV[2])
 end
-return {sequence, epoch, pubs}
+return {offset, epoch, pubs}
 	`
 
 	// Add/update client presence information.
@@ -579,7 +587,7 @@ func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publ
 }
 
 // AddHistory - see engine interface description.
-func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error) {
+func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
 	return e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd, e.config.SequenceTTL)
 }
 
@@ -1566,10 +1574,10 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	return publications, latestPosition, nil
 }
 
-func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions, publishOnHistoryAdd bool, seqTTL time.Duration) (*protocol.Publication, error) {
+func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions, publishOnHistoryAdd bool, seqTTL time.Duration) (*protocol.Publication, StreamPosition, error) {
 	data, err := pub.Marshal()
 	if err != nil {
-		return nil, err
+		return nil, StreamPosition{}, err
 	}
 	push := &protocol.Push{
 		Type:    protocol.PushTypePublication,
@@ -1578,7 +1586,7 @@ func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOp
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		return nil, err
+		return nil, StreamPosition{}, err
 	}
 
 	var publishChannel channelID
@@ -1592,17 +1600,26 @@ func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOp
 	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, seqMetaKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, seqKeyTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
-		return nil, resp.err
+		return nil, StreamPosition{}, resp.err
+	}
+	replies, ok := resp.reply.([]interface{})
+	if !ok || len(replies) != 2 {
+		return nil, StreamPosition{}, errors.New("wrong Redis reply")
+	}
+	index, err := redis.Uint64(replies[0], nil)
+	if err != nil {
+		return nil, StreamPosition{}, errors.New("wrong Redis reply offset")
+	}
+	epoch, err := redis.String(replies[1], nil)
+	if err != nil {
+		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
 	if publishOnHistoryAdd {
-		return nil, nil
+		return nil, StreamPosition{Offset: index, Epoch: epoch}, nil
 	}
-	index, err := redis.Uint64(resp.reply, nil)
-	if err != nil {
-		return nil, resp.err
-	}
+
 	pub.Offset = index
-	return pub, nil
+	return pub, StreamPosition{Offset: index, Epoch: epoch}, nil
 }
 
 // RemoveHistory - see engine interface description.

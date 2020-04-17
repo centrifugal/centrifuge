@@ -77,8 +77,8 @@ func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*protocol.Publication
 	return []*protocol.Publication{}, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (*protocol.Publication, error) {
-	return pub, nil
+func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
+	return pub, StreamPosition{}, nil
 }
 
 func (e *TestEngine) RemoveHistory(_ string) error {

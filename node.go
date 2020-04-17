@@ -487,7 +487,7 @@ func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts .
 	// If history enabled for channel we add Publication to history first and then
 	// publish to Broker.
 	if n.historyManager != nil && !publishOpts.SkipHistory && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
-		pub, err := n.historyManager.AddHistory(ch, pub, &chOpts)
+		pub, _, err := n.historyManager.AddHistory(ch, pub, &chOpts)
 		if err != nil {
 			return err
 		}

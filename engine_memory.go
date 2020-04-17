@@ -113,7 +113,7 @@ func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*protocol.Pub
 }
 
 // AddHistory - see engine interface description.
-func (e *MemoryEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error) {
+func (e *MemoryEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
 	return e.historyHub.add(ch, pub, opts)
 }
 
@@ -318,11 +318,12 @@ func (h *historyHub) expireStreams() {
 	}
 }
 
-func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error) {
+func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
 	h.Lock()
 	defer h.Unlock()
 
 	var index uint64
+	var epoch string
 
 	expireAt := time.Now().Unix() + int64(opts.HistoryLifetime)
 	if _, ok := h.expires[ch]; !ok {
@@ -346,14 +347,16 @@ func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOpti
 
 	if stream, ok := h.streams[ch]; ok {
 		index, _ = stream.Add(pub, opts.HistorySize)
+		epoch = stream.Epoch()
 	} else {
 		stream := memstream.New()
 		index, _ = stream.Add(pub, opts.HistorySize)
+		epoch = stream.Epoch()
 		h.streams[ch] = stream
 	}
 
 	pub.Offset = index
-	return pub, nil
+	return pub, StreamPosition{Offset: index, Epoch: epoch}, nil
 }
 
 // Lock must be held outside.

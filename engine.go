@@ -70,8 +70,7 @@ type Broker interface {
 
 	// Publish allows to send Publication Push into channel. Publications should
 	// be delivered to all clients subscribed on this channel at moment on
-	// any Centrifuge node. The returned value is channel in which we will
-	// send error as soon as engine finishes publish operation.
+	// any Centrifuge node.
 	Publish(ch string, pub *protocol.Publication, opts *ChannelOptions) error
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error
@@ -104,7 +103,7 @@ type HistoryManager interface {
 	// it to Broker at all. This is useful for situations when engine can
 	// atomically save Publication to history and publish it to channel
 	// (ex. over Lua in Redis Engine).
-	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, error)
+	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
