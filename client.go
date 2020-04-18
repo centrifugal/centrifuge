@@ -78,19 +78,18 @@ const maxCheckPositionFailures int64 = 2
 
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
-	Info                  protocol.Raw
+	Info                  Raw
 	serverSide            bool
 	expireAt              int64
 	positionCheckTime     int64
 	positionCheckFailures int64
-	recoveryPosition      StreamPosition
+	streamPosition        StreamPosition
 }
 
 // Client represents client connection to server.
 type Client struct {
-	mu sync.RWMutex
-	// presenceMu allows to sync presence routine with client closing.
-	presenceMu       sync.Mutex
+	mu               sync.RWMutex
+	presenceMu       sync.Mutex // allows to sync presence routine with client closing.
 	info             Raw
 	ctx              context.Context
 	transport        Transport
@@ -311,7 +310,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelConte
 	if !needCheckPosition {
 		return true
 	}
-	position := channelContext.recoveryPosition
+	position := channelContext.streamPosition
 	streamTop, err := c.node.streamTop(ch)
 	if err != nil {
 		return true
@@ -1685,7 +1684,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			publications, recoveryPosition, err := c.node.recoverHistory(channel, StreamPosition{cmd.Offset, cmd.Epoch})
+			publications, streamPosition, err := c.node.recoverHistory(channel, StreamPosition{cmd.Offset, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				c.pubSubSync.StopBuffering(channel)
@@ -1696,8 +1695,8 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 				return ctx
 			}
 
-			latestOffset = recoveryPosition.Offset
-			latestEpoch = recoveryPosition.Epoch
+			latestOffset = streamPosition.Offset
+			latestEpoch = streamPosition.Epoch
 
 			recoveredPubs = publications
 
@@ -1784,7 +1783,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		Info:       channelInfo,
 		serverSide: serverSide,
 		expireAt:   expireAt,
-		recoveryPosition: StreamPosition{
+		streamPosition: StreamPosition{
 			Offset: latestOffset,
 			Epoch:  latestEpoch,
 		},
@@ -1823,7 +1822,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return nil
 	}
-	currentPositionOffset := channelContext.recoveryPosition.Offset
+	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
 	if pubOffset != nextExpectedOffset {
@@ -1834,7 +1833,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	}
 	channelContext.positionCheckTime = time.Now().Unix()
 	channelContext.positionCheckFailures = 0
-	channelContext.recoveryPosition.Offset = pub.Offset
+	channelContext.streamPosition.Offset = pub.Offset
 	c.channels[ch] = channelContext
 	c.mu.Unlock()
 	return c.transportEnqueue(reply)

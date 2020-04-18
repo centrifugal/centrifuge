@@ -27,14 +27,14 @@ type BrokerEventHandler interface {
 
 // HistoryFilter allows to filter history according to fields set.
 type HistoryFilter struct {
-	// Since used to recover missed messages since provided RecoveryPosition.
+	// Since used to extract publications from stream since provided StreamPosition.
 	Since *StreamPosition
 	// Limit number of publications to return.
 	Limit int
 }
 
 // StreamPosition contains fields to describe position in stream.
-// This is used for automatic recovery mechanics. More info about stream
+// At moment this is used for automatic recovery mechanics. More info about stream
 // recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/.
 type StreamPosition struct {
 	// Offset defines publication incremental offset inside a stream.

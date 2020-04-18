@@ -443,7 +443,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			var replies []*protocol.Reply
 			rw := testReplyWriter(&replies)
 
-			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
+			_, streamPosition, _ := node.historyManager.History(channel, HistoryFilter{
 				Limit: 0,
 				Since: nil,
 			})
@@ -452,7 +452,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 				Channel: channel,
 				Recover: true,
 				Offset:  tt.SinceOffset,
-				Epoch:   recoveryPosition.Epoch,
+				Epoch:   streamPosition.Epoch,
 			}, rw, false)
 			require.Nil(t, subCtx.disconnect)
 			require.Nil(t, replies[0].Error)

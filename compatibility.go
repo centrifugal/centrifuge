@@ -1,7 +1,8 @@
 package centrifuge
 
 const (
-	UseSeqGen uint64 = 1 << iota // Use Seq and Gen fields.
+	// UseSeqGen enables using Seq and Gen fields instead of Offset.
+	UseSeqGen uint64 = 1 << iota
 )
 
 // CompatibilityFlags is a global set of legacy features we support

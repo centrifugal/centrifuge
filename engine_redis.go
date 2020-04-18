@@ -47,7 +47,7 @@ const (
 )
 
 type (
-	// channelID is unique channel identificator in Redis.
+	// channelID is unique channel identifier in Redis.
 	channelID string
 )
 
@@ -62,9 +62,12 @@ const (
 	redisClientChannelPrefix = ".client."
 )
 
-// RedisEngine uses Redis data structures and PUB/SUB to manage Centrifugo logic.
-// This engine allows to scale Centrifugo - you can run several Centrifugo instances
-// connected to the same Redis and load balance clients between instances.
+// RedisEngine uses Redis to implement Engine functionality.
+// This engine allows to scale Centrifuge based server to many instances and
+// load balance client connections between them.
+// Redis engine supports additionally supports Sentinel, client-side sharding
+// and can work with Redis Cluster (or client-side shard between different
+// Redis Clusters).
 type RedisEngine struct {
 	node     *Node
 	sharding bool
@@ -106,16 +109,12 @@ type RedisEngineConfig struct {
 	// we just do this reducing network round trips.
 	PublishOnHistoryAdd bool
 
-	// SequenceTTL sets a time of sequence meta key expiration in Redis. Sequence
-	// meta key is a Redis HASH that contains top position in channel and epoch value.
-	// By default sequence meta keys do not expire, though in some cases – when channels
-	// created for а short time and then not used anymore – created sequence meta keys
+	// StreamMetaTTL sets a time of stream meta key expiration in Redis. Stream
+	// meta key is a Redis HASH that contains top offset in channel and epoch value.
+	// By default stream meta keys do not expire, though in some cases – when channels
+	// created for а short time and then not used anymore – created stream meta keys
 	// stay in memory while not actually useful. Setting a reasonable value to this
 	// option (usually much bigger than history retention period) can help.
-	//
-	// SequenceTTL sets a time of sequence data expiration in Engine.
-	// Sequence meta key in Redis is a HASH that contains current sequence number
-	// in channel and epoch value. By default sequence data for channels does not expire.
 	//
 	// Though in some cases – when channels created for а short time and then
 	// not used anymore – created sequence meta data can stay in memory while
@@ -123,8 +122,8 @@ type RedisEngineConfig struct {
 	// after using your app for a while user left it forever. In long-term
 	// perspective this can be an unwanted memory leak. Setting a reasonable
 	// value to this option (usually much bigger than history retention period)
-	// can help. In this case unused channel sequence data will eventually expire.
-	SequenceTTL time.Duration
+	// can help. In this case unused channel stream meta data will eventually expire.
+	StreamMetaTTL time.Duration
 
 	// Shards is a list of Redis instance configs.
 	Shards []RedisShardConfig
@@ -439,7 +438,7 @@ return {offset, epoch}
 		`
 
 	// Retrieve channel history information.
-	// KEYS[1] - sequence meta hash key
+	// KEYS[1] - stream meta hash key
 	// KEYS[2] - history list key
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
@@ -447,7 +446,7 @@ return {offset, epoch}
 	historySource = `
 redis.replicate_commands()
 local offset = redis.call("hget", KEYS[1], "s")
-if ARGV[3] ~= '0' and sequence ~= false then
+if ARGV[3] ~= '0' and offset ~= false then
 	redis.call("expire", KEYS[1], ARGV[3])
 end
 local epoch
@@ -583,12 +582,12 @@ func (e *RedisEngine) PresenceStats(ch string) (PresenceStats, error) {
 
 // History - see engine interface description.
 func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
-	return e.getShard(ch).History(ch, filter, e.config.SequenceTTL)
+	return e.getShard(ch).History(ch, filter, e.config.StreamMetaTTL)
 }
 
 // AddHistory - see engine interface description.
 func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
-	return e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd, e.config.SequenceTTL)
+	return e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd, e.config.StreamMetaTTL)
 }
 
 // RemoveHistory - see engine interface description.
@@ -689,7 +688,7 @@ func (s *shard) historyListKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".history.list." + ch)
 }
 
-func (s *shard) sequenceMetaKey(ch string) channelID {
+func (s *shard) streamMetaKey(ch string) channelID {
 	if s.useCluster() {
 		ch = "{" + ch + "}"
 	}
@@ -1486,7 +1485,7 @@ func (s *shard) PresenceStats(ch string) (PresenceStats, error) {
 
 // History - see engine interface description.
 func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) ([]*protocol.Publication, StreamPosition, error) {
-	seqMetaKey := s.sequenceMetaKey(ch)
+	seqMetaKey := s.streamMetaKey(ch)
 	historyKey := s.historyListKey(ch)
 
 	var includePubs = true
@@ -1595,7 +1594,7 @@ func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOp
 	}
 
 	historyKey := s.historyListKey(ch)
-	seqMetaKey := s.sequenceMetaKey(ch)
+	seqMetaKey := s.streamMetaKey(ch)
 	seqKeyTTLSeconds := int(seqTTL.Seconds())
 	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, seqMetaKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, seqKeyTTLSeconds})
 	resp := s.getDataResponse(dr)
@@ -1699,6 +1698,8 @@ func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error)
 	}
 	pubs := make([]*protocol.Publication, len(values))
 
+	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
+
 	j := 0
 	for i := len(values) - 1; i >= 0; i-- {
 		value, okValue := values[i].([]byte)
@@ -1724,8 +1725,11 @@ func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error)
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
 
-		pub.Offset = offset
-		pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
+		if !useSeqGen {
+			pub.Offset = offset
+		} else {
+			pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
+		}
 		pubs[j] = &pub
 		j++
 	}

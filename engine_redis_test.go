@@ -43,8 +43,8 @@ func NewTestRedisEngineWithPrefix(tb testing.TB, prefix string) *RedisEngine {
 		ReadTimeout: 100 * time.Second,
 	}
 	e, err := NewRedisEngine(n, RedisEngineConfig{
-		SequenceTTL: 300 * time.Second,
-		Shards:      []RedisShardConfig{redisConf},
+		StreamMetaTTL: 300 * time.Second,
+		Shards:        []RedisShardConfig{redisConf},
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -150,21 +150,21 @@ func TestRedisCurrentPosition(t *testing.T) {
 
 	channel := "test-current-position"
 
-	_, recoveryPosition, err := e.History(channel, HistoryFilter{
+	_, streamPosition, err := e.History(channel, HistoryFilter{
 		Limit: 0,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), recoveryPosition.Offset)
+	require.Equal(t, uint64(0), streamPosition.Offset)
 
 	pub := &protocol.Publication{Data: protocol.Raw("{}")}
 	_, _, err = e.AddHistory(channel, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
 	require.NoError(t, err)
 
-	_, recoveryPosition, err = e.History(channel, HistoryFilter{
+	_, streamPosition, err = e.History(channel, HistoryFilter{
 		Limit: 0,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), recoveryPosition.Offset)
+	require.Equal(t, uint64(1), streamPosition.Offset)
 }
 
 func TestRedisEngineRecover(t *testing.T) {
@@ -173,21 +173,10 @@ func TestRedisEngineRecover(t *testing.T) {
 	rawData := protocol.Raw("{}")
 	pub := &protocol.Publication{Data: rawData}
 
-	pub.UID = "1"
-	_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
-	require.NoError(t, err)
-	pub.UID = "2"
-	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
-	require.NoError(t, err)
-	pub.UID = "3"
-	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
-	require.NoError(t, err)
-	pub.UID = "4"
-	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
-	require.NoError(t, err)
-	pub.UID = "5"
-	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
-	require.NoError(t, err)
+	for i := 0; i < 5; i++ {
+		_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+		require.NoError(t, err)
+	}
 
 	_, r, err := e.History("channel", HistoryFilter{
 		Limit: 0,
@@ -201,9 +190,9 @@ func TestRedisEngineRecover(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 3, len(pubs))
-	require.Equal(t, uint32(3), pubs[0].Seq)
-	require.Equal(t, uint32(4), pubs[1].Seq)
-	require.Equal(t, uint32(5), pubs[2].Seq)
+	require.Equal(t, uint64(3), pubs[0].Offset)
+	require.Equal(t, uint64(4), pubs[1].Offset)
+	require.Equal(t, uint64(5), pubs[2].Offset)
 
 	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
@@ -849,7 +838,7 @@ func TestRedisClientSubscribeRecover(t *testing.T) {
 			var replies []*protocol.Reply
 			rw := testReplyWriter(&replies)
 
-			_, recoveryPosition, _ := node.historyManager.History(channel, HistoryFilter{
+			_, streamPosition, _ := node.historyManager.History(channel, HistoryFilter{
 				Limit: 0,
 				Since: nil,
 			})
@@ -857,7 +846,7 @@ func TestRedisClientSubscribeRecover(t *testing.T) {
 				Channel: channel,
 				Recover: true,
 				Offset:  tt.SinceOffset,
-				Epoch:   recoveryPosition.Epoch,
+				Epoch:   streamPosition.Epoch,
 			}, rw, false)
 			require.Nil(t, subCtx.disconnect)
 			require.NotEmpty(t, replies)

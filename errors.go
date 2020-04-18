@@ -8,8 +8,8 @@ import (
 
 // Error represents client reply error.
 type Error struct {
-	Code    uint32 `protobuf:"varint,1,opt,name=code,proto3" json:"code"`
-	Message string `protobuf:"bytes,2,opt,name=message,proto3" json:"message"`
+	Code    uint32
+	Message string
 }
 
 func (e *Error) toProto() *protocol.Error {
