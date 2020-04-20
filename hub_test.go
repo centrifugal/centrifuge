@@ -51,7 +51,7 @@ func (t *testTransport) Name() string {
 }
 
 func (t *testTransport) Protocol() ProtocolType {
-	return ProtocolTypeJSON
+	return t.protoType
 }
 
 func (t *testTransport) Encoding() EncodingType {

@@ -126,7 +126,7 @@ func TestClientConnectNoCredentialsNoTokenInsecure(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
-	result := extractConnectResult(replies)
+	result := extractConnectResult(replies, client.Transport().Protocol())
 	require.NotEmpty(t, result.Client)
 	require.Empty(t, client.UserID())
 }
@@ -146,7 +146,7 @@ func TestClientConnectNoCredentialsNoTokenAnonymous(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
-	result := extractConnectResult(replies)
+	result := extractConnectResult(replies, client.Transport().Protocol())
 	require.NotEmpty(t, result.Client)
 	require.Empty(t, client.UserID())
 }
@@ -181,7 +181,7 @@ func TestClientConnectWithValidToken(t *testing.T) {
 		Token: getConnToken("42", 0),
 	}, rw)
 	require.Nil(t, disconnect)
-	result := extractConnectResult(replies)
+	result := extractConnectResult(replies, client.Transport().Protocol())
 	require.Equal(t, client.ID(), result.Client)
 	require.Equal(t, false, result.Expires)
 }
@@ -202,7 +202,7 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 		Token: getConnToken("42", time.Now().Unix()+10),
 	}, rw)
 	require.Nil(t, disconnect)
-	result := extractConnectResult(replies)
+	result := extractConnectResult(replies, client.Transport().Protocol())
 	require.Equal(t, true, result.Expires)
 	require.True(t, result.TTL > 0)
 	require.True(t, client.authenticated)
@@ -279,7 +279,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
-	result := extractConnectResult(replies)
+	result := extractConnectResult(replies, client.Transport().Protocol())
 	require.Equal(t, false, result.Expires)
 	require.Equal(t, uint32(0), result.TTL)
 	require.True(t, client.authenticated)
@@ -380,25 +380,39 @@ func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
 	require.True(t, client.authenticated)
-	result := extractConnectResult(replies)
+	result := extractConnectResult(replies, client.Transport().Protocol())
 	require.Equal(t, client.uid, result.Client)
 	return result
 }
 
-func extractSubscribeResult(replies []*protocol.Reply) *protocol.SubscribeResult {
+func extractSubscribeResult(replies []*protocol.Reply, protoType ProtocolType) *protocol.SubscribeResult {
 	var res protocol.SubscribeResult
-	err := json.Unmarshal(replies[0].Result, &res)
-	if err != nil {
-		panic(err)
+	if protoType == ProtocolTypeJSON {
+		err := json.Unmarshal(replies[0].Result, &res)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		err := res.Unmarshal(replies[0].Result)
+		if err != nil {
+			panic(err)
+		}
 	}
 	return &res
 }
 
-func extractConnectResult(replies []*protocol.Reply) *protocol.ConnectResult {
+func extractConnectResult(replies []*protocol.Reply, protoType ProtocolType) *protocol.ConnectResult {
 	var res protocol.ConnectResult
-	err := json.Unmarshal(replies[0].Result, &res)
-	if err != nil {
-		panic(err)
+	if protoType == ProtocolTypeJSON {
+		err := json.Unmarshal(replies[0].Result, &res)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		err := res.Unmarshal(replies[0].Result)
+		if err != nil {
+			panic(err)
+		}
 	}
 	return &res
 }
@@ -412,7 +426,7 @@ func subscribeClient(t testing.TB, client *Client, ch string) *protocol.Subscrib
 	}, rw, false)
 	require.Nil(t, ctx.disconnect)
 	require.Nil(t, replies[0].Error)
-	return extractSubscribeResult(replies)
+	return extractSubscribeResult(replies, client.Transport().Protocol())
 }
 
 func TestClientSubscribe(t *testing.T) {
@@ -436,7 +450,7 @@ func TestClientSubscribe(t *testing.T) {
 	require.Nil(t, subCtx.disconnect)
 	require.Equal(t, 1, len(replies))
 	require.Nil(t, replies[0].Error)
-	res := extractSubscribeResult(replies)
+	res := extractSubscribeResult(replies, client.Transport().Protocol())
 	require.Empty(t, res.Seq)
 	require.False(t, res.Recovered)
 	require.Empty(t, res.Publications)
@@ -786,7 +800,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, replies[0].Error, "token is valid and not expired yet")
-	res := extractSubscribeResult(replies)
+	res := extractSubscribeResult(replies, client.Transport().Protocol())
 	require.True(t, res.Expires, "expires flag must be set")
 	require.True(t, res.TTL > 0, "positive TTL must be set")
 }

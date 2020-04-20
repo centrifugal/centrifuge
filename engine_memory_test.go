@@ -269,7 +269,7 @@ func TestMemoryEngineRecover(t *testing.T) {
 	require.Equal(t, 0, len(pubs))
 }
 
-func BenchmarkMemoryEnginePublish_SingleChannel(b *testing.B) {
+func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw(`{"bench": true}`)
 	pub := &protocol.Publication{UID: "test UID", Data: rawData}
@@ -282,7 +282,7 @@ func BenchmarkMemoryEnginePublish_SingleChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEnginePublish_SingleChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw(`{"bench": true}`)
 	pub := &protocol.Publication{UID: "test UID", Data: rawData}
@@ -298,7 +298,7 @@ func BenchmarkMemoryEnginePublish_SingleChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel(b *testing.B) {
+func BenchmarkMemoryPublish_History_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw(`{"bench": true}`)
 	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
@@ -317,7 +317,7 @@ func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw(`{"bench": true}`)
 	chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
@@ -339,7 +339,7 @@ func BenchmarkMemoryEnginePublish_WithHistory_SingleChannel_Parallel(b *testing.
 	})
 }
 
-func BenchmarkMemoryEngineAddPresence_SingleChannel(b *testing.B) {
+func BenchmarkMemoryAddPresence_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -350,7 +350,7 @@ func BenchmarkMemoryEngineAddPresence_SingleChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEngineAddPresence_SingleChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryAddPresence_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -363,7 +363,7 @@ func BenchmarkMemoryEngineAddPresence_SingleChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEnginePresence_SingleChannel(b *testing.B) {
+func BenchmarkMemoryPresence_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
@@ -375,7 +375,7 @@ func BenchmarkMemoryEnginePresence_SingleChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEnginePresence_SingleChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryPresence_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
@@ -389,7 +389,7 @@ func BenchmarkMemoryEnginePresence_SingleChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEngineHistory_SingleChannel(b *testing.B) {
+func BenchmarkMemoryHistory_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw("{}")
 	pub := &protocol.Publication{UID: "test UID", Data: rawData}
@@ -408,7 +408,7 @@ func BenchmarkMemoryEngineHistory_SingleChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryEngineHistory_SingleChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw("{}")
 	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
@@ -429,7 +429,7 @@ func BenchmarkMemoryEngineHistory_SingleChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryEngineRecover_SingleChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryRecover_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw("{}")
 	numMessages := 100
@@ -519,7 +519,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			}, rw, false)
 			require.Nil(t, subCtx.disconnect)
 			require.Nil(t, replies[0].Error)
-			res := extractSubscribeResult(replies)
+			res := extractSubscribeResult(replies, client.Transport().Protocol())
 			require.Equal(t, tt.NumRecovered, len(res.Publications))
 			require.Equal(t, tt.Recovered, res.Recovered)
 
