@@ -91,7 +91,7 @@ func main() {
 	node, _ := centrifuge.New(cfg)
 
 	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
-		StreamMetaTTL: 120 * time.Second,
+		HistoryMetaTTL: 120 * time.Second,
 	})
 	node.SetEngine(engine)
 

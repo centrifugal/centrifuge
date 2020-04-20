@@ -11,11 +11,11 @@
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
-            var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            var channel = "chat:index";
+            const channel = "chat:index";
 
             $(function() {
 
@@ -52,7 +52,7 @@
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be firer after client will connect to
                 // Centrifugo and will be authorized.
-                var sub = centrifuge.subscribe(channel, handleMessage)
+                const sub = centrifuge.subscribe(channel, handleMessage)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
                         .on("unsubscribe", handleUnsubscribe)
@@ -67,7 +67,7 @@
                 centrifuge.connect();
 
                 function handleSubscribe(ctx) {
-                    drawText('Subscribed on channel ' + ctx.channel);
+                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
                     if (ctx.isResubscribe) {
                         showPresence(sub);
                     }
@@ -80,14 +80,14 @@
 
                 function handleMessage(message) {
                     console.log("new message received", message);
-                    var clientID;
+                    let clientID;
                     if (message.info){
                         clientID = message.info.client;
                     } else {
                         clientID = null;
                     }
-                    var inputText = message.data["input"].toString();
-                    var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                    const inputText = message.data["input"].toString();
+                    const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
 

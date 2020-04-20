@@ -213,6 +213,62 @@ func TestMemoryHistoryHubSequenceTTL(t *testing.T) {
 	h.RUnlock()
 }
 
+func TestMemoryEngineRecover(t *testing.T) {
+	e := testMemoryEngine()
+
+	rawData := protocol.Raw("{}")
+
+	for i := 0; i < 5; i++ {
+		pub := &protocol.Publication{Data: rawData}
+		_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+		require.NoError(t, err)
+	}
+
+	_, r, err := e.History("channel", HistoryFilter{
+		Limit: 0,
+		Since: nil,
+	})
+	require.NoError(t, err)
+
+	pubs, _, err := e.History("channel", HistoryFilter{
+		Limit: -1,
+		Since: &StreamPosition{Offset: 2, Epoch: r.Epoch},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, len(pubs))
+	require.Equal(t, uint64(3), pubs[0].Offset)
+	require.Equal(t, uint64(4), pubs[1].Offset)
+	require.Equal(t, uint64(5), pubs[2].Offset)
+
+	for i := 0; i < 10; i++ {
+		pub := &protocol.Publication{Data: rawData}
+		_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+		require.NoError(t, err)
+	}
+
+	pubs, _, err = e.History("channel", HistoryFilter{
+		Limit: -1,
+		Since: &StreamPosition{Offset: 0, Epoch: r.Epoch},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 10, len(pubs))
+
+	pubs, _, err = e.History("channel", HistoryFilter{
+		Limit: -1,
+		Since: &StreamPosition{Offset: 100, Epoch: r.Epoch},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, len(pubs))
+
+	require.NoError(t, e.RemoveHistory("channel"))
+	pubs, _, err = e.History("channel", HistoryFilter{
+		Limit: -1,
+		Since: &StreamPosition{Offset: 2, Epoch: r.Epoch},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, len(pubs))
+}
+
 func BenchmarkMemoryEnginePublish_SingleChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw(`{"bench": true}`)
@@ -377,6 +433,7 @@ func BenchmarkMemoryEngineRecover_SingleChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw("{}")
 	numMessages := 100
+	numMissing := 5
 	for i := 1; i <= numMessages; i++ {
 		pub := &protocol.Publication{Data: rawData}
 		_, _, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
@@ -384,18 +441,21 @@ func BenchmarkMemoryEngineRecover_SingleChannel_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := e.History("channel", HistoryFilter{
+			pubs, _, err := e.History("channel", HistoryFilter{
 				Limit: -1,
-				Since: &StreamPosition{Offset: uint64(numMessages - 5), Epoch: ""},
+				Since: &StreamPosition{Offset: uint64(numMessages - numMissing), Epoch: ""},
 			})
 			if err != nil {
 				b.Fatal(err)
+			}
+			if len(pubs) != numMissing {
+				b.Fail()
 			}
 		}
 	})
 }
 
-var recoverTests = []struct {
+type recoverTest struct {
 	Name            string
 	HistorySize     int
 	HistoryLifetime int
@@ -404,11 +464,14 @@ var recoverTests = []struct {
 	NumRecovered    int
 	Sleep           int
 	Recovered       bool
-}{
+}
+
+var recoverTests = []recoverTest{
 	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
 	{"from_position", 10, 60, 10, 8, 2, 0, true},
-	{"from_position_that_is_too_far", 10, 60, 20, 8, 10, 0, false},
-	{"same_position_no_history_expected", 10, 60, 7, 7, 0, 0, true},
+	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, false},
+	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, false},
+	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, true},
 	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
 	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
 	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},

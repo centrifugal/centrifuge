@@ -83,19 +83,23 @@ type redisConnPool interface {
 
 // shard has everything to connect to Redis instance.
 type shard struct {
-	node              *Node
-	engine            *RedisEngine
-	config            RedisShardConfig
-	pool              redisConnPool
-	subCh             chan subRequest
-	pubCh             chan pubRequest
-	dataCh            chan dataRequest
-	addPresenceScript *redis.Script
-	remPresenceScript *redis.Script
-	presenceScript    *redis.Script
-	historyScript     *redis.Script
-	addHistoryScript  *redis.Script
-	messagePrefix     string
+	node                   *Node
+	engine                 *RedisEngine
+	config                 RedisShardConfig
+	pool                   redisConnPool
+	subCh                  chan subRequest
+	pubCh                  chan pubRequest
+	dataCh                 chan dataRequest
+	addPresenceScript      *redis.Script
+	remPresenceScript      *redis.Script
+	presenceScript         *redis.Script
+	historyScript          *redis.Script
+	addHistoryScript       *redis.Script
+	addHistoryStreamScript *redis.Script
+	historyStreamScript    *redis.Script
+	messagePrefix          string
+	HistoryMetaTTL         time.Duration
+	useStreams             bool
 }
 
 // RedisEngineConfig is a config for Redis Engine.
@@ -105,25 +109,32 @@ type RedisEngineConfig struct {
 	// of Broker, HistoryManager and PresenceManager, this option is a tip to engine
 	// implementation about the fact that Redis Engine used as both Broker and
 	// HistoryManager. In this case we have a possibility to save Publications into
-	// channel history stream and publish into PUB/SUB Redis channel atomically. And
-	// we just do this reducing network round trips.
+	// channel history stream and publish into PUB/SUB Redis channel via single RTT.
 	PublishOnHistoryAdd bool
 
-	// StreamMetaTTL sets a time of stream meta key expiration in Redis. Stream
+	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
 	// meta key is a Redis HASH that contains top offset in channel and epoch value.
-	// By default stream meta keys do not expire, though in some cases – when channels
-	// created for а short time and then not used anymore – created stream meta keys
-	// stay in memory while not actually useful. Setting a reasonable value to this
-	// option (usually much bigger than history retention period) can help.
+	// By default stream meta keys do not expire.
 	//
 	// Though in some cases – when channels created for а short time and then
-	// not used anymore – created sequence meta data can stay in memory while
+	// not used anymore – created stream meta keys can stay in memory while
 	// not actually useful. For example you can have a personal user channel but
 	// after using your app for a while user left it forever. In long-term
 	// perspective this can be an unwanted memory leak. Setting a reasonable
 	// value to this option (usually much bigger than history retention period)
 	// can help. In this case unused channel stream meta data will eventually expire.
-	StreamMetaTTL time.Duration
+	//
+	// TODO v1: maybe make this channel namespace option?
+	// TODO v1: since we have epoch things should also properly work without meta
+	// information at all (but we loose possibility of long-term recover in stream
+	// without new messages).
+	HistoryMetaTTL time.Duration
+
+	// UseStreams allows to enable usage of Redis streams instead of list data
+	// structure to keep history. Redis streams are more effective in terms of
+	// missed publication recovery and history pagination since we don't need
+	// to load entire structure to process memory (as we do in case of Redis Lists).
+	UseStreams bool
 
 	// Shards is a list of Redis instance configs.
 	Shards []RedisShardConfig
@@ -393,6 +404,8 @@ func NewRedisEngine(n *Node, config RedisEngineConfig) (*RedisEngine, error) {
 		if err != nil {
 			return nil, err
 		}
+		shard.HistoryMetaTTL = config.HistoryMetaTTL
+		shard.useStreams = config.UseStreams
 		shards = append(shards, shard)
 	}
 
@@ -437,28 +450,90 @@ end
 return {offset, epoch}
 		`
 
+	// addHistoryStreamSource contains Lua script to save data to Redis stream and
+	// publish it into channel.
+	// KEYS[1] - history stream key
+	// KEYS[2] - stream meta hash key
+	// ARGV[1] - message payload
+	// ARGV[2] - stream size
+	// ARGV[3] - stream lifetime
+	// ARGV[4] - channel to publish message to if needed
+	// ARGV[5] - history meta key expiration time
+	addHistoryStreamSource = `
+redis.replicate_commands()
+local epoch
+if redis.call('exists', KEYS[2]) ~= 0 then
+  epoch = redis.call("hget", KEYS[2], "e")
+else
+  epoch = redis.call('time')[1]
+  redis.call("hset", KEYS[2], "e", epoch)
+end
+local offset = redis.call("hincrby", KEYS[2], "s", 1)
+if ARGV[5] ~= '0' then
+	redis.call("expire", KEYS[2], ARGV[5])
+end
+redis.call("xadd", KEYS[1], "MAXLEN", ARGV[2], offset, "d", ARGV[1])
+redis.call("expire", KEYS[1], ARGV[3])
+if ARGV[4] ~= '' then
+	local payload = "__" .. offset .. "__" .. ARGV[1]
+	redis.call("publish", ARGV[4], payload)
+end
+return {offset, epoch}
+	`
+
 	// Retrieve channel history information.
-	// KEYS[1] - stream meta hash key
-	// KEYS[2] - history list key
+	// KEYS[1] - history list key
+	// KEYS[2] - stream meta hash key
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
 	// ARGV[3] - sequence key expiration time
 	historySource = `
 redis.replicate_commands()
-local offset = redis.call("hget", KEYS[1], "s")
+local offset = redis.call("hget", KEYS[2], "s")
 if ARGV[3] ~= '0' and offset ~= false then
-	redis.call("expire", KEYS[1], ARGV[3])
+	redis.call("expire", KEYS[2], ARGV[3])
 end
 local epoch
-if redis.call('exists', KEYS[1]) ~= 0 then
-  epoch = redis.call("hget", KEYS[1], "e")
+if redis.call('exists', KEYS[2]) ~= 0 then
+  epoch = redis.call("hget", KEYS[2], "e")
 else
   epoch = redis.call('time')[1]
-  redis.call("hset", KEYS[1], "e", epoch)
+  redis.call("hset", KEYS[2], "e", epoch)
 end
 local pubs = nil
 if ARGV[1] ~= "0" then
-	pubs = redis.call("lrange", KEYS[2], 0, ARGV[2])
+	pubs = redis.call("lrange", KEYS[1], 0, ARGV[2])
+end
+return {offset, epoch, pubs}
+	`
+
+	// historyStreamSource ...
+	// KEYS[1] - history stream key
+	// KEYS[2] - stream meta hash key
+	// ARGV[1] - include publications into response
+	// ARGV[2] - offset
+	// ARGV[3] - limit
+	// ARGV[4] - sequence key expiration time
+	historyStreamSource = `
+redis.replicate_commands()
+local offset = redis.call("hget", KEYS[2], "s")
+if ARGV[3] ~= '0' and offset ~= false then
+	redis.call("expire", KEYS[2], ARGV[3])
+end
+local epoch
+if redis.call('exists', KEYS[2]) ~= 0 then
+  epoch = redis.call("hget", KEYS[2], "e")
+else
+  epoch = redis.call('time')[1]
+  redis.call("hset", KEYS[2], "e", epoch)
+end
+local pubs = nil
+if ARGV[1] ~= "0" then
+  if ARGV[3] ~= "0" then
+    pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
+  else
+	pubs = redis.call("xrange", KEYS[1], ARGV[2], "+")
+  end
 end
 return {offset, epoch, pubs}
 	`
@@ -582,12 +657,12 @@ func (e *RedisEngine) PresenceStats(ch string) (PresenceStats, error) {
 
 // History - see engine interface description.
 func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
-	return e.getShard(ch).History(ch, filter, e.config.StreamMetaTTL)
+	return e.getShard(ch).History(ch, filter)
 }
 
 // AddHistory - see engine interface description.
 func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
-	return e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd, e.config.StreamMetaTTL)
+	return e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd)
 }
 
 // RemoveHistory - see engine interface description.
@@ -599,15 +674,15 @@ func (e *RedisEngine) RemoveHistory(ch string) error {
 func (e *RedisEngine) Channels() ([]string, error) {
 	channelMap := map[string]struct{}{}
 	for _, shard := range e.shards {
-		chans, err := shard.Channels()
+		shardChannels, err := shard.Channels()
 		if err != nil {
-			return chans, err
+			return nil, err
 		}
 		if !e.sharding {
 			// We have all channels on one shard.
-			return chans, nil
+			return shardChannels, nil
 		}
-		for _, ch := range chans {
+		for _, ch := range shardChannels {
 			channelMap[ch] = struct{}{}
 		}
 	}
@@ -621,13 +696,15 @@ func (e *RedisEngine) Channels() ([]string, error) {
 // newShard initializes new Redis shard.
 func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 	shard := &shard{
-		node:              n,
-		config:            conf,
-		addPresenceScript: redis.NewScript(2, addPresenceSource),
-		remPresenceScript: redis.NewScript(2, remPresenceSource),
-		presenceScript:    redis.NewScript(2, presenceSource),
-		historyScript:     redis.NewScript(2, historySource),
-		addHistoryScript:  redis.NewScript(2, addHistorySource),
+		node:                   n,
+		config:                 conf,
+		addPresenceScript:      redis.NewScript(2, addPresenceSource),
+		remPresenceScript:      redis.NewScript(2, remPresenceSource),
+		presenceScript:         redis.NewScript(2, presenceSource),
+		historyScript:          redis.NewScript(2, historySource),
+		addHistoryScript:       redis.NewScript(2, addHistorySource),
+		addHistoryStreamScript: redis.NewScript(2, addHistoryStreamSource),
+		historyStreamScript:    redis.NewScript(2, historyStreamSource),
 	}
 	pool, err := newPool(shard, n, conf)
 	if err != nil {
@@ -688,10 +765,21 @@ func (s *shard) historyListKey(ch string) channelID {
 	return channelID(s.config.Prefix + ".history.list." + ch)
 }
 
-func (s *shard) streamMetaKey(ch string) channelID {
+func (s *shard) historyStreamKey(ch string) channelID {
 	if s.useCluster() {
 		ch = "{" + ch + "}"
 	}
+	return channelID(s.config.Prefix + ".history.stream." + ch)
+}
+
+func (s *shard) historyMetaKey(ch string) channelID {
+	if s.useCluster() {
+		ch = "{" + ch + "}"
+	}
+	if s.useStreams {
+		return channelID(s.config.Prefix + ".stream.meta." + ch)
+	}
+	// TODO v1: rename to list.meta.
 	return channelID(s.config.Prefix + ".seq.meta." + ch)
 }
 
@@ -949,7 +1037,6 @@ func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, _ chan
 			return err
 		}
 		pub.Offset = offset
-		pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
 		_ = eventHandler.HandlePublication(push.Channel, &pub)
 	case protocol.PushTypeJoin:
 		var join protocol.Join
@@ -1119,9 +1206,17 @@ func (s *shard) processClusterDataRequest(dr dataRequest) (interface{}, error) {
 	case dataOpPresence:
 		reply, err = s.presenceScript.Do(conn, dr.args...)
 	case dataOpHistory:
-		reply, err = s.historyScript.Do(conn, dr.args...)
+		if s.useStreams {
+			reply, err = s.historyStreamScript.Do(conn, dr.args...)
+		} else {
+			reply, err = s.historyScript.Do(conn, dr.args...)
+		}
 	case dataOpAddHistory:
-		reply, err = s.addHistoryScript.Do(conn, dr.args...)
+		if s.useStreams {
+			reply, err = s.addHistoryStreamScript.Do(conn, dr.args...)
+		} else {
+			reply, err = s.addHistoryScript.Do(conn, dr.args...)
+		}
 	case dataOpHistoryRemove:
 		reply, err = conn.Do("DEL", dr.args...)
 	case dataOpChannels:
@@ -1138,6 +1233,8 @@ func (s *shard) runDataPipeline() {
 		s.remPresenceScript,
 		s.historyScript,
 		s.addHistoryScript,
+		s.addHistoryStreamScript,
+		s.historyStreamScript,
 	}
 	for _, script := range scripts {
 		err := script.Load(conn)
@@ -1175,9 +1272,17 @@ func (s *shard) runDataPipeline() {
 			case dataOpPresence:
 				_ = s.presenceScript.SendHash(conn, drs[i].args...)
 			case dataOpHistory:
-				_ = s.historyScript.SendHash(conn, drs[i].args...)
+				if s.useStreams {
+					_ = s.historyStreamScript.SendHash(conn, drs[i].args...)
+				} else {
+					_ = s.historyScript.SendHash(conn, drs[i].args...)
+				}
 			case dataOpAddHistory:
-				_ = s.addHistoryScript.SendHash(conn, drs[i].args...)
+				if s.useStreams {
+					_ = s.addHistoryStreamScript.SendHash(conn, drs[i].args...)
+				} else {
+					_ = s.addHistoryScript.SendHash(conn, drs[i].args...)
+				}
 			case dataOpHistoryRemove:
 				_ = conn.Send("DEL", drs[i].args...)
 			case dataOpChannels:
@@ -1484,9 +1589,83 @@ func (s *shard) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) ([]*protocol.Publication, StreamPosition, error) {
-	seqMetaKey := s.streamMetaKey(ch)
+func (s *shard) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
+	if s.useStreams {
+		return s.historyStream(ch, filter)
+	}
+	return s.historyList(ch, filter)
+}
+
+func (s *shard) extractHistoryResponse(reply interface{}, includePubs bool) (StreamPosition, []*Publication, error) {
+	results := reply.([]interface{})
+
+	offset, err := redis.Uint64(results[0], nil)
+	if err != nil {
+		if err != redis.ErrNil {
+			return StreamPosition{}, nil, err
+		}
+		offset = 0
+	}
+
+	epoch, err := redis.String(results[1], nil)
+	if err != nil {
+		return StreamPosition{}, nil, err
+	}
+
+	streamPosition := StreamPosition{Offset: offset, Epoch: epoch}
+
+	if includePubs {
+		var publications []*protocol.Publication
+		if s.useStreams {
+			publications, err = sliceOfPubsStream(results[2], nil)
+		} else {
+			publications, err = sliceOfPubs(results[2], nil)
+		}
+		if err != nil {
+			return StreamPosition{}, nil, err
+		}
+		return streamPosition, publications, nil
+	}
+
+	return streamPosition, nil, nil
+}
+
+func (s *shard) historyStream(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
+	historyKey := s.historyStreamKey(ch)
+	historyMetaKey := s.historyMetaKey(ch)
+
+	var includePubs = true
+	var offset uint64
+	if filter.Since != nil {
+		offset = filter.Since.Offset + 1
+	}
+	var limit int
+	if filter.Limit == 0 {
+		includePubs = false
+	}
+	if filter.Limit > 0 {
+		limit = filter.Limit
+	}
+
+	HistoryMetaTTLSeconds := int(s.HistoryMetaTTL.Seconds())
+
+	dr := newDataRequest(dataOpHistory, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, HistoryMetaTTLSeconds})
+	resp := s.getDataResponse(dr)
+	if resp.err != nil {
+		return nil, StreamPosition{}, resp.err
+	}
+
+	latestPosition, publications, err := s.extractHistoryResponse(resp.reply, includePubs)
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	return publications, latestPosition, nil
+}
+
+func (s *shard) historyList(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
 	historyKey := s.historyListKey(ch)
+	historyMetaKey := s.historyMetaKey(ch)
 
 	var includePubs = true
 	var rightBound = -1
@@ -1495,41 +1674,18 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 		includePubs = false
 	}
 
-	seqKeyTTLSeconds := int(seqTTL.Seconds())
+	HistoryMetaTTLSeconds := int(s.HistoryMetaTTL.Seconds())
 
-	dr := newDataRequest(dataOpHistory, []interface{}{seqMetaKey, historyKey, includePubs, rightBound, seqKeyTTLSeconds})
+	dr := newDataRequest(dataOpHistory, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, HistoryMetaTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
 	}
-	results := resp.reply.([]interface{})
 
-	offset, err := redis.Uint64(results[0], nil)
+	latestPosition, publications, err := s.extractHistoryResponse(resp.reply, includePubs)
 	if err != nil {
-		if err != redis.ErrNil {
-			return nil, StreamPosition{}, err
-		}
-		offset = 0
+		return nil, StreamPosition{}, err
 	}
-
-	var epoch string
-	epoch, err = redis.String(results[1], nil)
-	if err != nil {
-		if err != redis.ErrNil {
-			return nil, StreamPosition{}, err
-		}
-		epoch = ""
-	}
-
-	var publications []*protocol.Publication
-	if includePubs {
-		publications, err = sliceOfPubs(results[2], nil)
-		if err != nil {
-			return nil, StreamPosition{}, err
-		}
-	}
-
-	latestPosition := StreamPosition{Offset: offset, Epoch: epoch}
 
 	since := filter.Since
 	if since == nil {
@@ -1540,6 +1696,10 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	}
 
 	if latestPosition.Offset == since.Offset && since.Epoch == latestPosition.Epoch {
+		return nil, latestPosition, nil
+	}
+
+	if latestPosition.Offset < since.Offset {
 		return nil, latestPosition, nil
 	}
 
@@ -1573,7 +1733,7 @@ func (s *shard) History(ch string, filter HistoryFilter, seqTTL time.Duration) (
 	return publications, latestPosition, nil
 }
 
-func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions, publishOnHistoryAdd bool, seqTTL time.Duration) (*protocol.Publication, StreamPosition, error) {
+func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions, publishOnHistoryAdd bool) (*protocol.Publication, StreamPosition, error) {
 	data, err := pub.Marshal()
 	if err != nil {
 		return nil, StreamPosition{}, err
@@ -1593,10 +1753,19 @@ func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOp
 		publishChannel = s.messageChannelID(ch)
 	}
 
-	historyKey := s.historyListKey(ch)
-	seqMetaKey := s.streamMetaKey(ch)
-	seqKeyTTLSeconds := int(seqTTL.Seconds())
-	dr := newDataRequest(dataOpAddHistory, []interface{}{historyKey, seqMetaKey, byteMessage, opts.HistorySize - 1, opts.HistoryLifetime, publishChannel, seqKeyTTLSeconds})
+	historyMetaKey := s.historyMetaKey(ch)
+	HistoryMetaTTLSeconds := int(s.HistoryMetaTTL.Seconds())
+
+	var streamKey channelID
+	var size int
+	if s.useStreams {
+		streamKey = s.historyStreamKey(ch)
+		size = opts.HistorySize
+	} else {
+		streamKey = s.historyListKey(ch)
+		size = opts.HistorySize - 1
+	}
+	dr := newDataRequest(dataOpAddHistory, []interface{}{streamKey, historyMetaKey, byteMessage, size, opts.HistoryLifetime, publishChannel, HistoryMetaTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
@@ -1623,8 +1792,13 @@ func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOp
 
 // RemoveHistory - see engine interface description.
 func (s *shard) RemoveHistory(ch string) error {
-	historyKey := s.historyListKey(ch)
-	dr := newDataRequest(dataOpHistoryRemove, []interface{}{historyKey})
+	var key channelID
+	if s.useStreams {
+		key = s.historyStreamKey(ch)
+	} else {
+		key = s.historyListKey(ch)
+	}
+	dr := newDataRequest(dataOpHistoryRemove, []interface{}{key})
 	resp := s.getDataResponse(dr)
 	return resp.err
 }
@@ -1691,16 +1865,80 @@ func extractPushData(data []byte) ([]byte, uint64) {
 	return data, offset
 }
 
+func sliceOfPubsStream(result interface{}, err error) ([]*protocol.Publication, error) {
+	values, err := redis.Values(result, err)
+	if err != nil {
+		return nil, err
+	}
+	pubs := make([]*protocol.Publication, 0, len(values))
+
+	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
+
+	for i := 0; i < len(values); i++ {
+		streamElementValues, err := redis.Values(values[i], nil)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(streamElementValues) != 2 {
+			return nil, errors.New("malformed reply: number of streamElementValues is not 2")
+		}
+
+		offsetStr, err := redis.String(streamElementValues[0], nil)
+		if err != nil {
+			return nil, err
+		}
+		parts := strings.SplitN(offsetStr, "-", 2)
+		offset, err := strconv.ParseUint(parts[0], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
+		val := streamElementValues[1]
+		payloadElementValues, err := redis.Values(val, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		pushData, valueOK := payloadElementValues[1].([]byte)
+		if !valueOK {
+			return nil, errors.New("error getting value")
+		}
+
+		var push protocol.Push
+		err = push.Unmarshal(pushData)
+		if err != nil {
+			return nil, fmt.Errorf("can not unmarshal value to Message: %v", err)
+		}
+
+		if push.Type != protocol.PushTypePublication {
+			return nil, fmt.Errorf("wrong message type in history: %d", push.Type)
+		}
+
+		var pub protocol.Publication
+		err = pub.Unmarshal(push.Data)
+		if err != nil {
+			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
+		}
+		if !useSeqGen {
+			pub.Offset = offset
+		} else {
+			pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
+		}
+		pubs = append(pubs, &pub)
+	}
+	return pubs, nil
+}
+
 func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error) {
 	values, err := redis.Values(result, err)
 	if err != nil {
 		return nil, err
 	}
-	pubs := make([]*protocol.Publication, len(values))
+	pubs := make([]*protocol.Publication, 0, len(values))
 
 	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
 
-	j := 0
 	for i := len(values) - 1; i >= 0; i-- {
 		value, okValue := values[i].([]byte)
 		if !okValue {
@@ -1730,8 +1968,7 @@ func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error)
 		} else {
 			pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
 		}
-		pubs[j] = &pub
-		j++
+		pubs = append(pubs, &pub)
 	}
 	return pubs, nil
 }

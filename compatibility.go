@@ -9,6 +9,7 @@ const (
 // for backwards compatibility.
 //
 // Should be removed with v1 library release.
+// TODO v1: remove.
 var CompatibilityFlags uint64
 
 func hasFlag(flags, flag uint64) bool {

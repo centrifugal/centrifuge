@@ -32,10 +32,14 @@ var _ Engine = (*MemoryEngine)(nil)
 
 // MemoryEngineConfig is a memory engine config.
 type MemoryEngineConfig struct {
-	// StreamMetaTTL sets a time of inactive stream meta information expiration.
+	// HistoryMetaTTL sets a time of inactive stream meta information expiration.
 	// Must have a reasonable value for application.
 	// At moment works with seconds precision.
-	StreamMetaTTL time.Duration
+	// TODO v1: maybe make this channel namespace option?
+	// TODO v1: since we have epoch things should also properly work without meta
+	// information at all (but we loose possibility of long-term recover in stream
+	// without new messages).
+	HistoryMetaTTL time.Duration
 }
 
 // NewMemoryEngine initializes Memory Engine.
@@ -43,7 +47,7 @@ func NewMemoryEngine(n *Node, c MemoryEngineConfig) (*MemoryEngine, error) {
 	e := &MemoryEngine{
 		node:        n,
 		presenceHub: newPresenceHub(),
-		historyHub:  newHistoryHub(c.StreamMetaTTL),
+		historyHub:  newHistoryHub(c.HistoryMetaTTL),
 	}
 	return e, nil
 }
@@ -222,26 +226,26 @@ type historyHub struct {
 	nextExpireCheck int64
 	expireQueue     priority.Queue
 	expires         map[string]int64
-	streamMetaTTL   time.Duration
+	HistoryMetaTTL  time.Duration
 	nextRemoveCheck int64
 	removeQueue     priority.Queue
 	removes         map[string]int64
 }
 
-func newHistoryHub(streamMetaTTL time.Duration) *historyHub {
+func newHistoryHub(HistoryMetaTTL time.Duration) *historyHub {
 	return &historyHub{
-		streams:       make(map[string]*memstream.Stream),
-		expireQueue:   priority.MakeQueue(),
-		expires:       make(map[string]int64),
-		streamMetaTTL: streamMetaTTL,
-		removeQueue:   priority.MakeQueue(),
-		removes:       make(map[string]int64),
+		streams:        make(map[string]*memstream.Stream),
+		expireQueue:    priority.MakeQueue(),
+		expires:        make(map[string]int64),
+		HistoryMetaTTL: HistoryMetaTTL,
+		removeQueue:    priority.MakeQueue(),
+		removes:        make(map[string]int64),
 	}
 }
 
 func (h *historyHub) runCleanups() {
 	go h.expireStreams()
-	if h.streamMetaTTL > 0 {
+	if h.HistoryMetaTTL > 0 {
 		go h.removeStreams()
 	}
 }
@@ -334,8 +338,8 @@ func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOpti
 		h.nextExpireCheck = expireAt
 	}
 
-	if h.streamMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.streamMetaTTL.Seconds())
+	if h.HistoryMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.HistoryMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
@@ -380,8 +384,8 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*protocol.Publicati
 	h.Lock()
 	defer h.Unlock()
 
-	if h.streamMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.streamMetaTTL.Seconds())
+	if h.HistoryMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.HistoryMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
