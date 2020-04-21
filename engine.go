@@ -49,6 +49,23 @@ type StreamPosition struct {
 	Epoch string
 }
 
+type HistoryResult struct {
+	// StreamPosition embedded here describes current stream top offset and epoch.
+	StreamPosition
+	// Publications extracted from history storage according to HistoryFilter.
+	Publications []*protocol.Publication
+}
+
+type AddHistoryResult struct {
+	StreamPosition
+	// Published flag when set tells node to not try to publish Publication
+	// to Broker because it is assumed that Publication was already published
+	// during AddHistory operation. This is useful for situations when engine
+	// can atomically save Publication to history and publish it to channel
+	// (ex. over Lua in Redis Engine with one RTT).
+	Published bool
+}
+
 // Closer is an interface that Broker, HistoryManager and PresenceManager can
 // optionally implement if they need to close any resources on Centrifuge node
 // shutdown.
@@ -93,7 +110,7 @@ type HistoryManager interface {
 	// HistoryFilter allows to set several filtering options.
 	// Returns slice of Publications with Offset properly set, current
 	// stream top position and error.
-	History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error)
+	History(ch string, filter HistoryFilter) (HistoryResult, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
@@ -103,7 +120,10 @@ type HistoryManager interface {
 	// it to Broker at all. This is useful for situations when engine can
 	// atomically save Publication to history and publish it to channel
 	// (ex. over Lua in Redis Engine).
-	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error)
+	// TODO v1: do not return modified Publication as this is a bit error-prone,
+	// use boolean flag or return AddHistoryResult struct to distinguish between
+	// two options.
+	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (AddHistoryResult, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

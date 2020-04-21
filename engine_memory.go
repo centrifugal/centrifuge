@@ -112,13 +112,15 @@ func (e *MemoryEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
-	return e.historyHub.get(ch, filter)
+func (e *MemoryEngine) History(ch string, filter HistoryFilter) (HistoryResult, error) {
+	pubs, sp, err := e.historyHub.get(ch, filter)
+	return HistoryResult{Publications: pubs, StreamPosition: sp}, err
 }
 
 // AddHistory - see engine interface description.
-func (e *MemoryEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
-	return e.historyHub.add(ch, pub, opts)
+func (e *MemoryEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (AddHistoryResult, error) {
+	p, sp, err := e.historyHub.add(ch, pub, opts)
+	return AddHistoryResult{StreamPosition: sp, Published: p == nil}, err
 }
 
 // RemoveHistory - see engine interface description.

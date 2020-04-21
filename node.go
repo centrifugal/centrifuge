@@ -466,10 +466,10 @@ func (n *Node) handleLeave(ch string, leave *protocol.Leave) error {
 	return n.hub.broadcastLeave(ch, leave)
 }
 
-func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts ...PublishOption) error {
+func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts ...PublishOption) (PublishResult, error) {
 	chOpts, ok := n.ChannelOpts(ch)
 	if !ok {
-		return ErrNoChannelOptions
+		return PublishResult{}, ErrNoChannelOptions
 	}
 
 	publishOpts := &PublishOptions{}
@@ -487,26 +487,33 @@ func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts .
 	// If history enabled for channel we add Publication to history first and then
 	// publish to Broker.
 	if n.historyManager != nil && !publishOpts.SkipHistory && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
-		pub, _, err := n.historyManager.AddHistory(ch, pub, &chOpts)
+		addHistoryResult, err := n.historyManager.AddHistory(ch, pub, &chOpts)
 		if err != nil {
-			return err
+			return PublishResult{}, err
 		}
-		if pub != nil {
+		if !addHistoryResult.Published {
+			pub.Offset = addHistoryResult.Offset
 			// Publication added to history, no need to handle Publish error here.
-			// In this case we rely on the fact that clients will eventually restore
-			// Publication from history.
+			// In this case we rely on the fact that clients will automatically detect
+			// missed publication and restore its state from history on reconnect.
 			_ = n.broker.Publish(ch, pub, &chOpts)
 		}
-		return nil
+		return PublishResult{StreamPosition: addHistoryResult.StreamPosition}, nil
 	}
 	// If no history enabled - just publish to Broker. In this case we want to handle
 	// error as message will be lost forever otherwise.
-	return n.broker.Publish(ch, pub, &chOpts)
+	err := n.broker.Publish(ch, pub, &chOpts)
+	return PublishResult{}, err
+}
+
+// PublishResult ...
+type PublishResult struct {
+	StreamPosition
 }
 
 // Publish sends data to all clients subscribed on channel. All running nodes
 // will receive it and send to all local channel subscribers.
-func (n *Node) Publish(ch string, data []byte, opts ...PublishOption) error {
+func (n *Node) Publish(ch string, data []byte, opts ...PublishOption) (PublishResult, error) {
 	return n.publish(ch, data, nil, opts...)
 }
 
@@ -806,39 +813,45 @@ func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History returns a slice of last messages published into project channel.
-func (n *Node) History(ch string) ([]*protocol.Publication, error) {
+func (n *Node) History(ch string) (HistoryResult, error) {
 	actionCount.WithLabelValues("history").Inc()
 	if n.historyManager == nil {
-		return nil, ErrorNotAvailable
+		return HistoryResult{}, ErrorNotAvailable
 	}
-	pubs, _, err := n.historyManager.History(ch, HistoryFilter{
+	historyResult, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
 		Since: nil,
 	})
+	if err != nil {
+		return HistoryResult{}, err
+	}
 	if hasFlag(CompatibilityFlags, UseSeqGen) {
-		for _, pub := range pubs {
-			pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+		for i := 0; i < len(historyResult.Publications); i++ {
+			historyResult.Publications[i].Seq, historyResult.Publications[i].Gen = recovery.UnpackUint64(historyResult.Publications[i].Offset)
 		}
 	}
-	return pubs, err
+	return historyResult, nil
 }
 
 // recoverHistory recovers publications since last UID seen by client.
-func (n *Node) recoverHistory(ch string, since StreamPosition) ([]*protocol.Publication, StreamPosition, error) {
+func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
 	actionCount.WithLabelValues("recover_history").Inc()
 	if n.historyManager == nil {
-		return nil, StreamPosition{}, ErrorNotAvailable
+		return HistoryResult{}, ErrorNotAvailable
 	}
-	pubs, pos, err := n.historyManager.History(ch, HistoryFilter{
+	historyResult, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
 		Since: &since,
 	})
+	if err != nil {
+		return HistoryResult{}, err
+	}
 	if hasFlag(CompatibilityFlags, UseSeqGen) {
-		for _, pub := range pubs {
-			pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+		for i := 0; i < len(historyResult.Publications); i++ {
+			historyResult.Publications[i].Seq, historyResult.Publications[i].Gen = recovery.UnpackUint64(historyResult.Publications[i].Offset)
 		}
 	}
-	return pubs, pos, err
+	return historyResult, err
 }
 
 // RemoveHistory removes channel history.
@@ -856,11 +869,14 @@ func (n *Node) streamTop(ch string) (StreamPosition, error) {
 	if n.historyManager == nil {
 		return StreamPosition{}, ErrorNotAvailable
 	}
-	_, streamTop, err := n.historyManager.History(ch, HistoryFilter{
+	historyResult, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: 0,
 		Since: nil,
 	})
-	return streamTop, err
+	if err != nil {
+		return StreamPosition{}, err
+	}
+	return historyResult.StreamPosition, nil
 }
 
 // privateChannel checks if channel private. In case of private channel

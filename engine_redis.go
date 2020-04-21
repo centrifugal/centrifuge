@@ -656,13 +656,15 @@ func (e *RedisEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
-	return e.getShard(ch).History(ch, filter)
+func (e *RedisEngine) History(ch string, filter HistoryFilter) (HistoryResult, error) {
+	pubs, sp, err := e.getShard(ch).History(ch, filter)
+	return HistoryResult{Publications: pubs, StreamPosition: sp}, err
 }
 
 // AddHistory - see engine interface description.
-func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
-	return e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd)
+func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (AddHistoryResult, error) {
+	p, sp, err := e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd)
+	return AddHistoryResult{StreamPosition: sp, Published: p == nil}, err
 }
 
 // RemoveHistory - see engine interface description.

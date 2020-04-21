@@ -73,12 +73,12 @@ func (e *TestEngine) PresenceStats(_ string) (PresenceStats, error) {
 	return PresenceStats{}, nil
 }
 
-func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
-	return []*protocol.Publication{}, StreamPosition{}, nil
+func (e *TestEngine) History(_ string, _ HistoryFilter) (HistoryResult, error) {
+	return HistoryResult{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
-	return pub, StreamPosition{}, nil
+func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (AddHistoryResult, error) {
+	return AddHistoryResult{}, nil
 }
 
 func (e *TestEngine) RemoveHistory(_ string) error {
@@ -189,7 +189,7 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := node.Publish("bench", payload)
+		_, err := node.Publish("bench", payload)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -250,7 +250,7 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				err := n.Publish("test", payload)
+				_, err := n.Publish("test", payload)
 				if err != nil {
 					panic(err)
 				}
@@ -278,7 +278,7 @@ func BenchmarkHistory(b *testing.B) {
 	channel := "test"
 
 	for i := 1; i <= numMessages; i++ {
-		err := e.node.Publish(channel, []byte(`{}`))
+		_, err := e.node.Publish(channel, []byte(`{}`))
 		require.NoError(b, err)
 	}
 
@@ -309,12 +309,13 @@ func TestMemoryEngineHistoryIteration(t *testing.T) {
 	channel := "test"
 
 	for i := 1; i <= numMessages; i++ {
-		err := e.node.Publish(channel, []byte(`{}`))
+		_, err := e.node.Publish(channel, []byte(`{}`))
 		require.NoError(t, err)
 	}
 
-	pubs, _ := e.node.History(channel)
-	require.Equal(t, numMessages, len(pubs))
+	res, err := e.node.History(channel)
+	require.NoError(t, err)
+	require.Equal(t, numMessages, len(res.Publications))
 
 	var n int
 	var offset uint64 = 0
@@ -323,7 +324,7 @@ func TestMemoryEngineHistoryIteration(t *testing.T) {
 	for {
 		// TODO: there is a plan to extend Node API to do history iteration.
 		// But for now we are using Engine method here.
-		pubs, _, err := e.History(channel, HistoryFilter{
+		res, err := e.History(channel, HistoryFilter{
 			Limit: iterateBy,
 			Since: &StreamPosition{Offset: offset, Epoch: ""},
 		})
@@ -331,10 +332,10 @@ func TestMemoryEngineHistoryIteration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(pubs) == 0 {
+		if len(res.Publications) == 0 {
 			break
 		}
-		n += len(pubs)
+		n += len(res.Publications)
 	}
 	require.Equal(t, numMessages, n)
 }

@@ -502,7 +502,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 		}
 	}()
 
-	err := node.Publish("test", []byte(`{"text": "test message"}`))
+	_, err := node.Publish("test", []byte(`{"text": "test message"}`))
 	require.NoError(t, err)
 
 	select {
@@ -570,11 +570,11 @@ func TestClientSubscribeReceivePublicationWithSequence(t *testing.T) {
 
 	// Send 3 publications, expect client to receive them with
 	// incremental sequence numbers.
-	err := node.Publish("test", []byte(`{"text": "test message 1"}`))
+	_, err := node.Publish("test", []byte(`{"text": "test message 1"}`))
 	require.NoError(t, err)
-	err = node.Publish("test", []byte(`{"text": "test message 2"}`))
+	_, err = node.Publish("test", []byte(`{"text": "test message 2"}`))
 	require.NoError(t, err)
-	err = node.Publish("test", []byte(`{"text": "test message 3"}`))
+	_, err = node.Publish("test", []byte(`{"text": "test message 3"}`))
 	require.NoError(t, err)
 
 	select {
@@ -608,11 +608,11 @@ func TestServerSideSubscriptions(t *testing.T) {
 	}, rw.write, rw.flush)
 
 	_ = client.Subscribe("server-side-3")
-	err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
+	_, err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
 	require.NoError(t, err)
-	err = node.Publish("$server-side-2", []byte(`{"text": "test message 2"}`))
+	_, err = node.Publish("$server-side-2", []byte(`{"text": "test message 2"}`))
 	require.NoError(t, err)
-	err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
+	_, err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
 	require.NoError(t, err)
 
 	done := make(chan struct{})
@@ -693,7 +693,7 @@ func TestClientUserPersonalChannel(t *testing.T) {
 					}
 				}()
 
-				err := node.Publish(node.PersonalChannel("42"), []byte(`{"text": "test message"}`))
+				_, err := node.Publish(node.PersonalChannel("42"), []byte(`{"text": "test message"}`))
 				require.NoError(t, err)
 
 				select {
@@ -826,7 +826,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	require.Equal(t, uint32(0), result.Seq)
 
 	for i := 0; i < 10; i++ {
-		_ = node.Publish("test", []byte("{}"))
+		_, _ = node.Publish("test", []byte("{}"))
 	}
 
 	client, _ = NewClient(newCtx, node, transport)
@@ -1144,7 +1144,7 @@ func TestClientHistory(t *testing.T) {
 	client, _ := NewClient(newCtx, node, transport)
 
 	for i := 0; i < 10; i++ {
-		_ = node.Publish("test", []byte(`{}`))
+		_, _ = node.Publish("test", []byte(`{}`))
 	}
 
 	connectClient(t, client)
@@ -1185,7 +1185,7 @@ func TestClientHistoryDisabled(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := NewClient(newCtx, node, transport)
 
-	_ = node.Publish("test", []byte(`{}`))
+	_, _ = node.Publish("test", []byte(`{}`))
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
@@ -1211,7 +1211,7 @@ func TestClientPresenceDisabled(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := NewClient(newCtx, node, transport)
 
-	_ = node.Publish("test", []byte(`{}`))
+	_, _ = node.Publish("test", []byte(`{}`))
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")

@@ -1684,7 +1684,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		if cmd.Recover {
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			publications, streamPosition, err := c.node.recoverHistory(channel, StreamPosition{cmd.Offset, cmd.Epoch})
+			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmd.Offset, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				c.pubSubSync.StopBuffering(channel)
@@ -1695,10 +1695,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 				return ctx
 			}
 
-			latestOffset = streamPosition.Offset
-			latestEpoch = streamPosition.Epoch
+			latestOffset = historyResult.Offset
+			latestEpoch = historyResult.Epoch
 
-			recoveredPubs = publications
+			recoveredPubs = historyResult.Publications
 
 			cmdOffset := cmd.Offset
 			if cmd.Seq > 0 || cmd.Gen > 0 {
@@ -1708,10 +1708,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 
 			nextOffset := cmdOffset + 1
 			var recovered bool
-			if len(publications) == 0 {
+			if len(recoveredPubs) == 0 {
 				recovered = latestOffset == cmdOffset && latestEpoch == cmd.Epoch
 			} else {
-				recovered = publications[0].Offset == nextOffset && latestEpoch == cmd.Epoch
+				recovered = recoveredPubs[0].Offset == nextOffset && latestEpoch == cmd.Epoch
 			}
 			res.Recovered = recovered
 			incRecoverCount(res.Recovered)
@@ -2097,7 +2097,7 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 		}
 	}
 
-	err := c.node.publish(ch, data, info)
+	_, err := c.node.publish(ch, data, info)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error publishing", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		resp.Error = ErrorInternal.toProto()
@@ -2238,7 +2238,7 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 		return resp, nil
 	}
 
-	pubs, err := c.node.History(ch)
+	historyResult, err := c.node.History(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting history", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		resp.Error = ErrorInternal.toProto()
@@ -2246,7 +2246,7 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 	}
 
 	resp.Result = &protocol.HistoryResult{
-		Publications: pubs,
+		Publications: historyResult.Publications,
 	}
 
 	return resp, nil
