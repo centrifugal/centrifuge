@@ -195,7 +195,7 @@ func main() {
 		// Publish personal notifications for user 42 periodically.
 		i := 1
 		for {
-			err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+			_, err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
 			}

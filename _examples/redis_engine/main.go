@@ -136,7 +136,7 @@ func main() {
 		// Publish channel notifications from server periodically.
 		i := 1
 		for {
-			err := node.Publish("chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`))
+			_, err := node.Publish("chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`))
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
 			}
@@ -150,7 +150,7 @@ func main() {
 		go func(i int) {
 			for {
 				time.Sleep(time.Second)
-				err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
+				_, err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
 				if err != nil {
 					panic(err.Error())
 				}

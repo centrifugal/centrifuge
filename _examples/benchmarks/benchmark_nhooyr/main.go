@@ -131,7 +131,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 
 	select {
 	case <-s.node.NotifyShutdown():
-		transport.Close(centrifuge.DisconnectShutdown)
+		_ = transport.Close(centrifuge.DisconnectShutdown)
 		return
 	default:
 	}

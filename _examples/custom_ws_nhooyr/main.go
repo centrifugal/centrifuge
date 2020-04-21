@@ -184,7 +184,7 @@ func main() {
 	go func() {
 		i := 0
 		for {
-			err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+			_, err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.Itoa(i)+`"}`))
 			if err != nil {
 				log.Println(err.Error())
 			}
@@ -303,7 +303,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 
 	select {
 	case <-s.node.NotifyShutdown():
-		transport.Close(centrifuge.DisconnectShutdown)
+		_ = transport.Close(centrifuge.DisconnectShutdown)
 		return
 	default:
 	}

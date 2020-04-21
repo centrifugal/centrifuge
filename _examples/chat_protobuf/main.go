@@ -143,7 +143,7 @@ func main() {
 	go func() {
 		i := 0
 		for {
-			err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+			_, err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
 			if err != nil {
 				log.Println(err.Error())
 			}

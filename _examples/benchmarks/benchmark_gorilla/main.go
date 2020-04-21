@@ -47,7 +47,7 @@ func main() {
 	if os.Getenv("CENTRIFUGE_ENGINE") == "redis" {
 		engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
 			PublishOnHistoryAdd: true,
-			SequenceTTL:         7 * 24 * time.Hour,
+			HistoryMetaTTL:      7 * 24 * time.Hour,
 			Shards: []centrifuge.RedisShardConfig{
 				centrifuge.RedisShardConfig{
 					Host: "localhost",

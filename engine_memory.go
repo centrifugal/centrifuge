@@ -228,18 +228,18 @@ type historyHub struct {
 	nextExpireCheck int64
 	expireQueue     priority.Queue
 	expires         map[string]int64
-	HistoryMetaTTL  time.Duration
+	historyMetaTTL  time.Duration
 	nextRemoveCheck int64
 	removeQueue     priority.Queue
 	removes         map[string]int64
 }
 
-func newHistoryHub(HistoryMetaTTL time.Duration) *historyHub {
+func newHistoryHub(historyMetaTTL time.Duration) *historyHub {
 	return &historyHub{
 		streams:        make(map[string]*memstream.Stream),
 		expireQueue:    priority.MakeQueue(),
 		expires:        make(map[string]int64),
-		HistoryMetaTTL: HistoryMetaTTL,
+		historyMetaTTL: historyMetaTTL,
 		removeQueue:    priority.MakeQueue(),
 		removes:        make(map[string]int64),
 	}
@@ -247,7 +247,7 @@ func newHistoryHub(HistoryMetaTTL time.Duration) *historyHub {
 
 func (h *historyHub) runCleanups() {
 	go h.expireStreams()
-	if h.HistoryMetaTTL > 0 {
+	if h.historyMetaTTL > 0 {
 		go h.removeStreams()
 	}
 }
@@ -340,8 +340,8 @@ func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOpti
 		h.nextExpireCheck = expireAt
 	}
 
-	if h.HistoryMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.HistoryMetaTTL.Seconds())
+	if h.historyMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
@@ -386,8 +386,8 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*protocol.Publicati
 	h.Lock()
 	defer h.Unlock()
 
-	if h.HistoryMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.HistoryMetaTTL.Seconds())
+	if h.historyMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
