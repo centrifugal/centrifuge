@@ -134,6 +134,7 @@ type RedisEngineConfig struct {
 	// structure to keep history. Redis streams are more effective in terms of
 	// missed publication recovery and history pagination since we don't need
 	// to load entire structure to process memory (as we do in case of Redis Lists).
+	// TODO v1: use by default?
 	UseStreams bool
 
 	// Shards is a list of Redis instance configs.
