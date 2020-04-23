@@ -511,10 +511,22 @@ type PublishResult struct {
 	StreamPosition
 }
 
-// Publish sends data to all clients subscribed on channel. All running nodes
-// will receive it and send to all local channel subscribers.
-func (n *Node) Publish(ch string, data []byte, opts ...PublishOption) (PublishResult, error) {
-	return n.publish(ch, data, nil, opts...)
+// Publish sends data to all clients subscribed on channel. All running nodes will
+// receive it and send to all local channel subscribers.
+//
+// Data expected to be valid marshaled JSON or any binary payload.
+// Connections that work over JSON protocol can not handle custom binary payloads.
+// Connections that work over Protobuf protocol can work both with JSON and binary payloads.
+//
+// So the rule here: if you have channel subscribers that work using JSON
+// protocol then you can not publish binary data to these channel.
+//
+// The returned PublishResult contains embedded StreamPosition that describes
+// position inside stream Publication was added too. For channels without history
+// enabled (i.e. when Publications only sent to PUB/SUB system) StreamPosition will
+// be an empty struct (i.e. PublishResult.Offset will be zero).
+func (n *Node) Publish(channel string, data []byte, opts ...PublishOption) (PublishResult, error) {
+	return n.publish(channel, data, nil, opts...)
 }
 
 var (

@@ -528,3 +528,47 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 		})
 	}
 }
+
+func TestMemoryEngineHistoryIteration(t *testing.T) {
+	e := testMemoryEngine()
+	conf := e.node.Config()
+	numMessages := 10000
+	conf.HistorySize = numMessages
+	conf.HistoryLifetime = 60
+	conf.HistoryRecover = true
+	err := e.node.Reload(conf)
+	require.NoError(t, err)
+
+	channel := "test"
+
+	for i := 1; i <= numMessages; i++ {
+		_, err := e.node.Publish(channel, []byte(`{}`))
+		require.NoError(t, err)
+	}
+
+	res, err := e.node.History(channel)
+	require.NoError(t, err)
+	require.Equal(t, numMessages, len(res.Publications))
+
+	var n int
+	var offset uint64 = 0
+	var iterateBy = 100
+
+	for {
+		// TODO: there is a plan to extend Node API to do history iteration.
+		// But for now we are using Engine method here.
+		res, err := e.History(channel, HistoryFilter{
+			Limit: iterateBy,
+			Since: &StreamPosition{Offset: offset, Epoch: ""},
+		})
+		offset += uint64(iterateBy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Publications) == 0 {
+			break
+		}
+		n += len(res.Publications)
+	}
+	require.Equal(t, numMessages, n)
+}

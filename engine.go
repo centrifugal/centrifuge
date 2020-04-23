@@ -57,6 +57,7 @@ type HistoryResult struct {
 }
 
 type AddHistoryResult struct {
+	// StreamPosition embedded here describes current stream top offset and epoch.
 	StreamPosition
 	// Published flag when set tells node to not try to publish Publication
 	// to Broker because it is assumed that Publication was already published
@@ -114,15 +115,6 @@ type HistoryManager interface {
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
-	// The returned value is Publication ready to be published to
-	// Broker (with Offset properly set if needed).
-	// If returned Publication is nil then node will not try to publish
-	// it to Broker at all. This is useful for situations when engine can
-	// atomically save Publication to history and publish it to channel
-	// (ex. over Lua in Redis Engine).
-	// TODO v1: do not return modified Publication as this is a bit error-prone,
-	// use boolean flag or return AddHistoryResult struct to distinguish between
-	// two options.
 	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (AddHistoryResult, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)

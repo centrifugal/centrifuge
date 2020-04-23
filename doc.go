@@ -4,7 +4,8 @@
 // core of Centrifugo server (https://github.com/centrifugal/centrifugo).
 //
 // The API of this library is almost all goroutine-safe except cases where
-// one-time operations like setting callback handlers performed.
+// one-time operations like setting callback handlers performed. Library
+// expects that code inside callbacks will not block.
 //
 // Centrifuge library provides several features on top of plain Websocket
 // implementation - see full description in library README on Github –

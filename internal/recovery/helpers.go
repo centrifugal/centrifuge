@@ -21,17 +21,22 @@ func uniquePublications(s []*protocol.Publication) []*protocol.Publication {
 	return list
 }
 
-// MergePublications ...
+// MergePublications allows to merge recovered pubs with buffered pubs
+// collected during extracting recovered so result is ordered and with
+// duplicates removed.
 func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*protocol.Publication, isLegacyOrder bool) ([]*protocol.Publication, bool) {
 	if len(bufferedPubs) > 0 {
 		recoveredPubs = append(recoveredPubs, bufferedPubs...)
 	}
-	sort.Slice(recoveredPubs, func(i, j int) bool {
-		if isLegacyOrder {
+	if isLegacyOrder {
+		sort.Slice(recoveredPubs, func(i, j int) bool {
 			return recoveredPubs[i].Offset > recoveredPubs[j].Offset
-		}
-		return recoveredPubs[i].Offset < recoveredPubs[j].Offset
-	})
+		})
+	} else {
+		sort.Slice(recoveredPubs, func(i, j int) bool {
+			return recoveredPubs[i].Offset < recoveredPubs[j].Offset
+		})
+	}
 	if len(bufferedPubs) > 0 {
 		recoveredPubs = uniquePublications(recoveredPubs)
 		prevOffset := recoveredPubs[0].Offset

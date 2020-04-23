@@ -1725,13 +1725,21 @@ func (s *shard) historyList(ch string, filter HistoryFilter) ([]*protocol.Public
 	if position > -1 {
 		pubs := publications[position:]
 		if filter.Limit >= 0 {
-			return pubs[:filter.Limit], latestPosition, nil
+			limit := filter.Limit
+			if limit > len(pubs) {
+				limit = len(pubs)
+			}
+			return pubs[:limit], latestPosition, nil
 		}
 		return pubs, latestPosition, nil
 	}
 
 	if filter.Limit >= 0 {
-		return publications[:filter.Limit], latestPosition, nil
+		limit := filter.Limit
+		if limit > len(publications) {
+			limit = len(publications)
+		}
+		return publications[:limit], latestPosition, nil
 	}
 	return publications, latestPosition, nil
 }
@@ -1923,10 +1931,10 @@ func sliceOfPubsStream(result interface{}, err error) ([]*protocol.Publication, 
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
-		if !useSeqGen {
-			pub.Offset = offset
-		} else {
+		if useSeqGen {
 			pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
+		} else {
+			pub.Offset = offset
 		}
 		pubs = append(pubs, &pub)
 	}
@@ -1966,10 +1974,10 @@ func sliceOfPubs(result interface{}, err error) ([]*protocol.Publication, error)
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
 
-		if !useSeqGen {
-			pub.Offset = offset
-		} else {
+		if useSeqGen {
 			pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
+		} else {
+			pub.Offset = offset
 		}
 		pubs = append(pubs, &pub)
 	}
