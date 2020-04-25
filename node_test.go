@@ -77,7 +77,7 @@ func (e *TestEngine) History(_ string, _ HistoryFilter) (HistoryResult, error) {
 	return HistoryResult{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (AddHistoryResult, error) {
+func (e *TestEngine) AddHistory(_ string, _ *protocol.Publication, _ *ChannelOptions) (AddHistoryResult, error) {
 	return AddHistoryResult{}, nil
 }
 

@@ -3,10 +3,8 @@ package recovery
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/centrifugal/protocol"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUnique(t *testing.T) {
@@ -19,21 +17,21 @@ func TestUnique(t *testing.T) {
 		{Offset: 98},
 	}
 	pubs = uniquePublications(pubs)
-	assert.Equal(t, 5, len(pubs))
+	require.Equal(t, 5, len(pubs))
 }
 
 func TestUint64Sequence(t *testing.T) {
 	s := PackUint64(0, 0)
-	assert.Equal(t, uint64(0), s)
+	require.Equal(t, uint64(0), s)
 
 	s = PackUint64(1, 0)
-	assert.Equal(t, uint64(1), s)
+	require.Equal(t, uint64(1), s)
 
 	s = PackUint64(0, 1)
-	assert.Equal(t, uint64(1<<32-1), s)
+	require.Equal(t, uint64(1<<32-1), s)
 
 	s = PackUint64(1, 1)
-	assert.Equal(t, uint64(1<<32), s)
+	require.Equal(t, uint64(1<<32), s)
 }
 
 func TestMergePublicationsNoBuffered(t *testing.T) {

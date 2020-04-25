@@ -38,7 +38,9 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 		})
 	}
 	if len(bufferedPubs) > 0 {
-		recoveredPubs = uniquePublications(recoveredPubs)
+		if len(recoveredPubs) > 1 {
+			recoveredPubs = uniquePublications(recoveredPubs)
+		}
 		prevOffset := recoveredPubs[0].Offset
 		for _, p := range recoveredPubs[1:] {
 			pubOffset := p.Offset

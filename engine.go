@@ -88,7 +88,7 @@ type Broker interface {
 
 	// Publish allows to send Publication Push into channel. Publications should
 	// be delivered to all clients subscribed on this channel at moment on
-	// any Centrifuge node.
+	// any Centrifuge node (with at most once delivery guarantee).
 	Publish(ch string, pub *protocol.Publication, opts *ChannelOptions) error
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error
@@ -107,10 +107,9 @@ type Broker interface {
 
 // HistoryManager is responsible for dealing with channel history management.
 type HistoryManager interface {
-	// History returns a slice of publications published into channel.
-	// HistoryFilter allows to set several filtering options.
-	// Returns slice of Publications with Offset properly set, current
-	// stream top position and error.
+	// History returns HistoryResult with Publications in channel and
+	// current stream top position. Publications returned according to
+	// HistoryFilter which allows to set several filtering options.
 	History(ch string, filter HistoryFilter) (HistoryResult, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
