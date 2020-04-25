@@ -73,12 +73,12 @@ func (e *TestEngine) PresenceStats(_ string) (PresenceStats, error) {
 	return PresenceStats{}, nil
 }
 
-func (e *TestEngine) History(_ string, _ HistoryFilter) (HistoryResult, error) {
-	return HistoryResult{}, nil
+func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
+	return nil, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, _ *protocol.Publication, _ *ChannelOptions) (AddHistoryResult, error) {
-	return AddHistoryResult{}, nil
+func (e *TestEngine) AddHistory(_ string, _ *protocol.Publication, _ *ChannelOptions) (StreamPosition, bool, error) {
+	return StreamPosition{}, false, nil
 }
 
 func (e *TestEngine) RemoveHistory(_ string) error {

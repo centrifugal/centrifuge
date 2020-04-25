@@ -9,8 +9,10 @@ import (
 
 // PresenceStats represents a short presence information for channel.
 type PresenceStats struct {
+	// NumClients is a number of client connections in channel.
 	NumClients int
-	NumUsers   int
+	// NumUsers is a number of unique users in channel.
+	NumUsers int
 }
 
 // BrokerEventHandler can handle messages received from PUB/SUB system.
@@ -30,6 +32,9 @@ type HistoryFilter struct {
 	// Since used to extract publications from stream since provided StreamPosition.
 	Since *StreamPosition
 	// Limit number of publications to return.
+	// -1 means no limit - i.e. return all publications currently in stream.
+	// 0 means that caller only interested in current stream top position so
+	// Engine should not return any publications.
 	Limit int
 }
 
@@ -47,24 +52,6 @@ type StreamPosition struct {
 	// publication 4 missing 1, 2, 3 from new stream. With epoch we can tell client
 	// that correct recovery is not possible.
 	Epoch string
-}
-
-type HistoryResult struct {
-	// StreamPosition embedded here describes current stream top offset and epoch.
-	StreamPosition
-	// Publications extracted from history storage according to HistoryFilter.
-	Publications []*protocol.Publication
-}
-
-type AddHistoryResult struct {
-	// StreamPosition embedded here describes current stream top offset and epoch.
-	StreamPosition
-	// Published flag when set tells node to not try to publish Publication
-	// to Broker because it is assumed that Publication was already published
-	// during AddHistory operation. This is useful for situations when engine
-	// can atomically save Publication to history and publish it to channel
-	// (ex. over Lua in Redis Engine with one RTT).
-	Published bool
 }
 
 // Closer is an interface that Broker, HistoryManager and PresenceManager can
@@ -107,14 +94,24 @@ type Broker interface {
 
 // HistoryManager is responsible for dealing with channel history management.
 type HistoryManager interface {
-	// History returns HistoryResult with Publications in channel and
-	// current stream top position. Publications returned according to
-	// HistoryFilter which allows to set several filtering options.
-	History(ch string, filter HistoryFilter) (HistoryResult, error)
+	// History used to extract Publications from storage.
+	// Publications returned according to HistoryFilter which allows
+	// to set several filtering options.
+	// StreamPosition returned describes current history stream top
+	// offset and epoch.
+	History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
-	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (AddHistoryResult, error)
+	// StreamPosition returned here describes current stream top offset
+	// and epoch.
+	// Second return value is a boolean flag which when true tells that
+	// Publication already published to PUB/SUB system so node should
+	// not additionally call Broker Publish method. This can be useful
+	// for situations when HistoryManager can atomically save Publication
+	// to history and publish it towards online subscribers (ex. over Lua
+	// in Redis via single RTT).
+	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (StreamPosition, bool, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

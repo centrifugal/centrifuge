@@ -487,18 +487,18 @@ func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts .
 	// If history enabled for channel we add Publication to history first and then
 	// publish to Broker.
 	if n.historyManager != nil && !publishOpts.SkipHistory && chOpts.HistorySize > 0 && chOpts.HistoryLifetime > 0 {
-		addHistoryResult, err := n.historyManager.AddHistory(ch, pub, &chOpts)
+		streamPos, published, err := n.historyManager.AddHistory(ch, pub, &chOpts)
 		if err != nil {
 			return PublishResult{}, err
 		}
-		if !addHistoryResult.Published {
-			pub.Offset = addHistoryResult.Offset
+		if !published {
+			pub.Offset = streamPos.Offset
 			// Publication added to history, no need to handle Publish error here.
 			// In this case we rely on the fact that clients will automatically detect
 			// missed publication and restore its state from history on reconnect.
 			_ = n.broker.Publish(ch, pub, &chOpts)
 		}
-		return PublishResult{StreamPosition: addHistoryResult.StreamPosition}, nil
+		return PublishResult{StreamPosition: streamPos}, nil
 	}
 	// If no history enabled - just publish to Broker. In this case we want to handle
 	// error as message will be lost forever otherwise.
@@ -824,13 +824,21 @@ func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
 	return n.presenceManager.PresenceStats(ch)
 }
 
+// HistoryResult contains Publications and current stream top StreamPosition.
+type HistoryResult struct {
+	// StreamPosition embedded here describes current stream top offset and epoch.
+	StreamPosition
+	// Publications extracted from history storage according to HistoryFilter.
+	Publications []*protocol.Publication
+}
+
 // History returns a slice of last messages published into project channel.
 func (n *Node) History(ch string) (HistoryResult, error) {
 	actionCount.WithLabelValues("history").Inc()
 	if n.historyManager == nil {
 		return HistoryResult{}, ErrorNotAvailable
 	}
-	historyResult, err := n.historyManager.History(ch, HistoryFilter{
+	pubs, streamTop, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
 		Since: nil,
 	})
@@ -838,11 +846,14 @@ func (n *Node) History(ch string) (HistoryResult, error) {
 		return HistoryResult{}, err
 	}
 	if hasFlag(CompatibilityFlags, UseSeqGen) {
-		for i := 0; i < len(historyResult.Publications); i++ {
-			historyResult.Publications[i].Seq, historyResult.Publications[i].Gen = recovery.UnpackUint64(historyResult.Publications[i].Offset)
+		for i := 0; i < len(pubs); i++ {
+			pubs[i].Seq, pubs[i].Gen = recovery.UnpackUint64(pubs[i].Offset)
 		}
 	}
-	return historyResult, nil
+	return HistoryResult{
+		StreamPosition: streamTop,
+		Publications:   pubs,
+	}, nil
 }
 
 // recoverHistory recovers publications since last UID seen by client.
@@ -851,7 +862,7 @@ func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, e
 	if n.historyManager == nil {
 		return HistoryResult{}, ErrorNotAvailable
 	}
-	historyResult, err := n.historyManager.History(ch, HistoryFilter{
+	pubs, streamTop, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: -1,
 		Since: &since,
 	})
@@ -859,11 +870,14 @@ func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, e
 		return HistoryResult{}, err
 	}
 	if hasFlag(CompatibilityFlags, UseSeqGen) {
-		for i := 0; i < len(historyResult.Publications); i++ {
-			historyResult.Publications[i].Seq, historyResult.Publications[i].Gen = recovery.UnpackUint64(historyResult.Publications[i].Offset)
+		for i := 0; i < len(pubs); i++ {
+			pubs[i].Seq, pubs[i].Gen = recovery.UnpackUint64(pubs[i].Offset)
 		}
 	}
-	return historyResult, err
+	return HistoryResult{
+		StreamPosition: streamTop,
+		Publications:   pubs,
+	}, nil
 }
 
 // RemoveHistory removes channel history.
@@ -881,14 +895,14 @@ func (n *Node) streamTop(ch string) (StreamPosition, error) {
 	if n.historyManager == nil {
 		return StreamPosition{}, ErrorNotAvailable
 	}
-	historyResult, err := n.historyManager.History(ch, HistoryFilter{
+	_, streamTop, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: 0,
 		Since: nil,
 	})
 	if err != nil {
 		return StreamPosition{}, err
 	}
-	return historyResult.StreamPosition, nil
+	return streamTop, nil
 }
 
 // privateChannel checks if channel private. In case of private channel

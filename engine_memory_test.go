@@ -43,43 +43,43 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	pub := newTestPublication()
 
 	// test adding history.
-	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
 	require.NoError(t, err)
-	res, err := e.History("channel", HistoryFilter{
+	pubs, _, err := e.History("channel", HistoryFilter{
 		Limit: -1,
 		Since: nil,
 	})
 	require.NoError(t, err)
-	require.Equal(t, 1, len(res.Publications))
-	require.Equal(t, res.Publications[0].Data, pub.Data)
+	require.Equal(t, 1, len(pubs))
+	require.Equal(t, pubs[0].Data, pub.Data)
 
 	// test history limit.
-	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
 	require.NoError(t, err)
-	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
 	require.NoError(t, err)
-	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
 	require.NoError(t, err)
-	res, err = e.History("channel", HistoryFilter{
+	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: 2,
 		Since: nil,
 	})
 	require.NoError(t, err)
-	require.Equal(t, 2, len(res.Publications))
+	require.Equal(t, 2, len(pubs))
 
 	// test history limit greater than history size
-	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
 	require.NoError(t, err)
-	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
 	require.NoError(t, err)
-	_, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
 	require.NoError(t, err)
-	res, err = e.History("channel", HistoryFilter{
+	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: 2,
 		Since: nil,
 	})
 	require.NoError(t, err)
-	require.Equal(t, 1, len(res.Publications))
+	require.Equal(t, 1, len(pubs))
 }
 
 func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
@@ -127,11 +127,10 @@ func TestMemoryHistoryHub(t *testing.T) {
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	_, _, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
-
-	_, _, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 
 	hist, _, err := h.get(ch1, HistoryFilter{
 		Limit: -1,
@@ -164,10 +163,10 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 0, len(hist))
 
 	// test history messages limit
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 1})
 	hist, _, err = h.get(ch1, HistoryFilter{
 		Limit: -1,
 	})
@@ -180,8 +179,8 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 1, len(hist))
 
 	// test history limit greater than history size
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
 	hist, _, err = h.get(ch1, HistoryFilter{
 		Limit: 2,
 	})
@@ -196,10 +195,10 @@ func TestMemoryHistoryHubSequenceTTL(t *testing.T) {
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	_, _, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
-	_, _, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
-	_, _, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
+	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 	h.RLock()
 	require.Equal(t, 2, len(h.streams))
 	h.RUnlock()
@@ -219,53 +218,53 @@ func TestMemoryEngineRecover(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		pub := &protocol.Publication{Data: rawData}
-		_, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+		_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
 		require.NoError(t, err)
 	}
 
-	res, err := e.History("channel", HistoryFilter{
+	_, streamTop, err := e.History("channel", HistoryFilter{
 		Limit: 0,
 		Since: nil,
 	})
 	require.NoError(t, err)
 
-	res2, err := e.History("channel", HistoryFilter{
+	pubs, _, err := e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &StreamPosition{Offset: 2, Epoch: res.Epoch},
+		Since: &StreamPosition{Offset: 2, Epoch: streamTop.Epoch},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 3, len(res2.Publications))
-	require.Equal(t, uint64(3), res2.Publications[0].Offset)
-	require.Equal(t, uint64(4), res2.Publications[1].Offset)
-	require.Equal(t, uint64(5), res2.Publications[2].Offset)
+	require.Equal(t, 3, len(pubs))
+	require.Equal(t, uint64(3), pubs[0].Offset)
+	require.Equal(t, uint64(4), pubs[1].Offset)
+	require.Equal(t, uint64(5), pubs[2].Offset)
 
 	for i := 0; i < 10; i++ {
 		pub := &protocol.Publication{Data: rawData}
-		_, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+		_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
 		require.NoError(t, err)
 	}
 
-	res3, err := e.History("channel", HistoryFilter{
+	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &StreamPosition{Offset: 0, Epoch: res.Epoch},
+		Since: &StreamPosition{Offset: 0, Epoch: streamTop.Epoch},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 10, len(res3.Publications))
+	require.Equal(t, 10, len(pubs))
 
-	res4, err := e.History("channel", HistoryFilter{
+	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &StreamPosition{Offset: 100, Epoch: res.Epoch},
+		Since: &StreamPosition{Offset: 100, Epoch: streamTop.Epoch},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 0, len(res4.Publications))
+	require.Equal(t, 0, len(pubs))
 
 	require.NoError(t, e.RemoveHistory("channel"))
-	res5, err := e.History("channel", HistoryFilter{
+	pubs, _, err = e.History("channel", HistoryFilter{
 		Limit: -1,
-		Since: &StreamPosition{Offset: 2, Epoch: res.Epoch},
+		Since: &StreamPosition{Offset: 2, Epoch: streamTop.Epoch},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 0, len(res5.Publications))
+	require.Equal(t, 0, len(pubs))
 }
 
 func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
@@ -305,11 +304,11 @@ func BenchmarkMemoryPublish_History_OneChannel(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
 		var err error
-		res, err := e.AddHistory("channel", pub, chOpts)
+		streamTop, _, err := e.AddHistory("channel", pub, chOpts)
 		if err != nil {
 			panic(err)
 		}
-		pub.Offset = res.Offset
+		pub.Offset = streamTop.Offset
 		err = e.Publish("channel", pub, chOpts)
 		if err != nil {
 			panic(err)
@@ -327,11 +326,11 @@ func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
 		for pb.Next() {
 			pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 			var err error
-			res, err := e.AddHistory("channel", pub, chOpts)
+			streamTop, _, err := e.AddHistory("channel", pub, chOpts)
 			if err != nil {
 				b.Fatal(err)
 			}
-			pub.Offset = res.Offset
+			pub.Offset = streamTop.Offset
 			err = e.Publish("channel", pub, chOpts)
 			if err != nil {
 				b.Fatal(err)
@@ -395,11 +394,11 @@ func BenchmarkMemoryHistory_OneChannel(b *testing.B) {
 	rawData := protocol.Raw("{}")
 	pub := &protocol.Publication{UID: "test UID", Data: rawData}
 	for i := 0; i < 4; i++ {
-		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		_, _, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := e.History("channel", HistoryFilter{
+		_, _, err := e.History("channel", HistoryFilter{
 			Limit: -1,
 			Since: nil,
 		})
@@ -414,12 +413,12 @@ func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
 	rawData := protocol.Raw("{}")
 	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
 	for i := 0; i < 4; i++ {
-		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+		_, _, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, err := e.History("channel", HistoryFilter{
+			_, _, err := e.History("channel", HistoryFilter{
 				Limit: -1,
 				Since: nil,
 			})
@@ -437,19 +436,19 @@ func BenchmarkMemoryRecover_OneChannel_Parallel(b *testing.B) {
 	numMissing := 5
 	for i := 1; i <= numMessages; i++ {
 		pub := &protocol.Publication{Data: rawData}
-		_, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
+		_, _, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			res, err := e.History("channel", HistoryFilter{
+			pubs, _, err := e.History("channel", HistoryFilter{
 				Limit: -1,
 				Since: &StreamPosition{Offset: uint64(numMessages - numMissing), Epoch: ""},
 			})
 			if err != nil {
 				b.Fatal(err)
 			}
-			if len(res.Publications) != numMissing {
+			if len(pubs) != numMissing {
 				b.Fail()
 			}
 		}
@@ -507,16 +506,17 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			var replies []*protocol.Reply
 			rw := testReplyWriter(&replies)
 
-			historyResult, _ := node.historyManager.History(channel, HistoryFilter{
+			_, streamTop, err := node.historyManager.History(channel, HistoryFilter{
 				Limit: 0,
 				Since: nil,
 			})
+			require.NoError(t, err)
 
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: channel,
 				Recover: true,
 				Offset:  tt.SinceOffset,
-				Epoch:   historyResult.Epoch,
+				Epoch:   streamTop.Epoch,
 			}, rw, false)
 			require.Nil(t, subCtx.disconnect)
 			require.Nil(t, replies[0].Error)
@@ -546,9 +546,9 @@ func TestMemoryEngineHistoryIteration(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	res, err := e.node.History(channel)
+	historyResult, err := e.node.History(channel)
 	require.NoError(t, err)
-	require.Equal(t, numMessages, len(res.Publications))
+	require.Equal(t, numMessages, len(historyResult.Publications))
 
 	var n int
 	var offset uint64 = 0
@@ -557,7 +557,7 @@ func TestMemoryEngineHistoryIteration(t *testing.T) {
 	for {
 		// TODO: there is a plan to extend Node API to do history iteration.
 		// But for now we are using Engine method here.
-		res, err := e.History(channel, HistoryFilter{
+		pubs, _, err := e.History(channel, HistoryFilter{
 			Limit: iterateBy,
 			Since: &StreamPosition{Offset: offset, Epoch: ""},
 		})
@@ -565,10 +565,10 @@ func TestMemoryEngineHistoryIteration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(res.Publications) == 0 {
+		if len(pubs) == 0 {
 			break
 		}
-		n += len(res.Publications)
+		n += len(pubs)
 	}
 	require.Equal(t, numMessages, n)
 }

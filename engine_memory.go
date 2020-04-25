@@ -112,15 +112,14 @@ func (e *MemoryEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) History(ch string, filter HistoryFilter) (HistoryResult, error) {
-	pubs, sp, err := e.historyHub.get(ch, filter)
-	return HistoryResult{Publications: pubs, StreamPosition: sp}, err
+func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
+	return e.historyHub.get(ch, filter)
 }
 
 // AddHistory - see engine interface description.
-func (e *MemoryEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (AddHistoryResult, error) {
-	p, sp, err := e.historyHub.add(ch, pub, opts)
-	return AddHistoryResult{StreamPosition: sp, Published: p == nil}, err
+func (e *MemoryEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (StreamPosition, bool, error) {
+	streamTop, err := e.historyHub.add(ch, pub, opts)
+	return streamTop, false, err
 }
 
 // RemoveHistory - see engine interface description.
@@ -324,7 +323,7 @@ func (h *historyHub) expireStreams() {
 	}
 }
 
-func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOptions) (*protocol.Publication, StreamPosition, error) {
+func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOptions) (StreamPosition, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -360,9 +359,9 @@ func (h *historyHub) add(ch string, pub *protocol.Publication, opts *ChannelOpti
 		epoch = stream.Epoch()
 		h.streams[ch] = stream
 	}
-
 	pub.Offset = index
-	return pub, StreamPosition{Offset: index, Epoch: epoch}, nil
+
+	return StreamPosition{Offset: index, Epoch: epoch}, nil
 }
 
 // Lock must be held outside.

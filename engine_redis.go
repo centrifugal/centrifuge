@@ -657,15 +657,14 @@ func (e *RedisEngine) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 // History - see engine interface description.
-func (e *RedisEngine) History(ch string, filter HistoryFilter) (HistoryResult, error) {
-	pubs, sp, err := e.getShard(ch).History(ch, filter)
-	return HistoryResult{Publications: pubs, StreamPosition: sp}, err
+func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
+	return e.getShard(ch).History(ch, filter)
 }
 
 // AddHistory - see engine interface description.
-func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (AddHistoryResult, error) {
-	p, sp, err := e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd)
-	return AddHistoryResult{StreamPosition: sp, Published: p == nil}, err
+func (e *RedisEngine) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (StreamPosition, bool, error) {
+	streamTop, err := e.getShard(ch).AddHistory(ch, pub, opts, e.config.PublishOnHistoryAdd)
+	return streamTop, e.config.PublishOnHistoryAdd, err
 }
 
 // RemoveHistory - see engine interface description.
@@ -1744,10 +1743,10 @@ func (s *shard) historyList(ch string, filter HistoryFilter) ([]*protocol.Public
 	return publications, latestPosition, nil
 }
 
-func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions, publishOnHistoryAdd bool) (*protocol.Publication, StreamPosition, error) {
+func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions, publishOnHistoryAdd bool) (StreamPosition, error) {
 	data, err := pub.Marshal()
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return StreamPosition{}, err
 	}
 	push := &protocol.Push{
 		Type:    protocol.PushTypePublication,
@@ -1756,7 +1755,7 @@ func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOp
 	}
 	byteMessage, err := push.Marshal()
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return StreamPosition{}, err
 	}
 
 	var publishChannel channelID
@@ -1779,26 +1778,21 @@ func (s *shard) AddHistory(ch string, pub *protocol.Publication, opts *ChannelOp
 	dr := newDataRequest(dataOpAddHistory, []interface{}{streamKey, historyMetaKey, byteMessage, size, opts.HistoryLifetime, publishChannel, HistoryMetaTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
-		return nil, StreamPosition{}, resp.err
+		return StreamPosition{}, resp.err
 	}
 	replies, ok := resp.reply.([]interface{})
 	if !ok || len(replies) != 2 {
-		return nil, StreamPosition{}, errors.New("wrong Redis reply")
+		return StreamPosition{}, errors.New("wrong Redis reply")
 	}
 	index, err := redis.Uint64(replies[0], nil)
 	if err != nil {
-		return nil, StreamPosition{}, errors.New("wrong Redis reply offset")
+		return StreamPosition{}, errors.New("wrong Redis reply offset")
 	}
 	epoch, err := redis.String(replies[1], nil)
 	if err != nil {
-		return nil, StreamPosition{}, errors.New("wrong Redis reply epoch")
+		return StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	if publishOnHistoryAdd {
-		return nil, StreamPosition{Offset: index, Epoch: epoch}, nil
-	}
-
-	pub.Offset = index
-	return pub, StreamPosition{Offset: index, Epoch: epoch}, nil
+	return StreamPosition{Offset: index, Epoch: epoch}, nil
 }
 
 // RemoveHistory - see engine interface description.
