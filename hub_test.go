@@ -40,8 +40,10 @@ func (t *testTransport) Write(data []byte) error {
 	if t.closed {
 		return io.EOF
 	}
+	dataCopy := make([]byte, len(data))
+	copy(dataCopy, data)
 	if t.sink != nil {
-		t.sink <- data
+		t.sink <- dataCopy
 	}
 	return nil
 }
