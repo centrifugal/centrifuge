@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"crypto/rsa"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -29,18 +30,18 @@ var (
 )
 
 type connectTokenClaims struct {
-	Info       Raw      `json:"info"`
-	Base64Info string   `json:"b64info"`
-	Channels   []string `json:"channels"`
+	Info       json.RawMessage `json:"info"`
+	Base64Info string          `json:"b64info"`
+	Channels   []string        `json:"channels"`
 	jwt.StandardClaims
 }
 
 type subscribeTokenClaims struct {
-	Client          string `json:"client"`
-	Channel         string `json:"channel"`
-	Info            Raw    `json:"info"`
-	Base64Info      string `json:"b64info"`
-	ExpireTokenOnly bool   `json:"eto"`
+	Client          string          `json:"client"`
+	Channel         string          `json:"channel"`
+	Info            json.RawMessage `json:"info"`
+	Base64Info      string          `json:"b64info"`
+	ExpireTokenOnly bool            `json:"eto"`
 	jwt.StandardClaims
 }
 

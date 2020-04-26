@@ -154,7 +154,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 			defer wg.Done()
 			payload := []byte(`{"input":"test` + strconv.Itoa(i) + `"}`)
 
-			err := n.Publish("test"+strconv.Itoa(i), payload)
+			_, err := n.Publish("test"+strconv.Itoa(i), payload)
 			if err != nil {
 				assert.Fail(t, err.Error())
 			}
@@ -172,7 +172,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 			err = json.Unmarshal(rep.Result, &push)
 			assert.NoError(t, err)
 
-			var pub Publication
+			var pub protocol.Publication
 			err = json.Unmarshal(push.Data, &pub)
 			assert.NoError(t, err)
 
@@ -220,7 +220,7 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 			defer conn.Close()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				err := n.Publish("test", payload)
+				_, err := n.Publish("test", payload)
 				if err != nil {
 					panic(err)
 				}

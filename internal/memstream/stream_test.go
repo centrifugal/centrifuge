@@ -115,3 +115,21 @@ func TestStreamReset(t *testing.T) {
 	require.Equal(t, 0, s.list.Len())
 	require.NotEqual(t, epoch, s.Epoch())
 }
+
+func TestStreamOffset(t *testing.T) {
+	s := New()
+	const streamSize = 5
+	for i := 0; i < streamSize; i++ {
+		_, err := s.Add([]byte("elem"), streamSize)
+		require.NoError(t, err)
+	}
+	items, _, err := s.Get(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), items[0].Offset)
+	items, _, err = s.Get(1, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), items[0].Offset)
+	items, _, err = s.Get(2, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), items[0].Offset)
+}

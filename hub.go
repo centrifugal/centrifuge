@@ -6,6 +6,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
+	"github.com/centrifugal/centrifuge/internal/recovery"
 
 	"github.com/centrifugal/protocol"
 )
@@ -228,8 +229,13 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
 	return false, nil
 }
 
-// broadcastPub sends message to all clients subscribed on channel.
-func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *ChannelOptions) error {
+// broadcastPublication sends message to all clients subscribed on channel.
+func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication, chOpts *ChannelOptions) error {
+	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
+	if useSeqGen {
+		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
+	}
+
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -248,12 +254,21 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 		if !ok {
 			continue
 		}
-		protoType := c.Transport().Protocol()
+		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonPublicationReply == nil {
+				// Do not send offset to clients for now.
+				var offset uint64
+				if useSeqGen {
+					offset = pub.Offset
+					pub.Offset = 0
+				}
 				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
 				if err != nil {
 					return err
+				}
+				if useSeqGen {
+					pub.Offset = offset
 				}
 				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
 				if err != nil {
@@ -267,9 +282,18 @@ func (h *Hub) broadcastPublication(channel string, pub *Publication, chOpts *Cha
 			_ = c.writePublication(channel, pub, jsonPublicationReply, chOpts)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufPublicationReply == nil {
+				// Do not send offset to clients for now.
+				var offset uint64
+				if useSeqGen {
+					offset = pub.Offset
+					pub.Offset = 0
+				}
 				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
 				if err != nil {
 					return err
+				}
+				if useSeqGen {
+					pub.Offset = offset
 				}
 				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
 				if err != nil {
@@ -306,7 +330,7 @@ func (h *Hub) broadcastJoin(channel string, join *protocol.Join) error {
 		if !ok {
 			continue
 		}
-		protoType := c.Transport().Protocol()
+		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonReply == nil {
 				data, err := protocol.GetPushEncoder(protoType).EncodeJoin(join)
@@ -364,7 +388,7 @@ func (h *Hub) broadcastLeave(channel string, leave *protocol.Leave) error {
 		if !ok {
 			continue
 		}
-		protoType := c.Transport().Protocol()
+		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonReply == nil {
 				data, err := protocol.GetPushEncoder(protoType).EncodeLeave(leave)

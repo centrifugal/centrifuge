@@ -29,7 +29,7 @@ func (e *TestEngine) Run(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestEngine) Publish(_ string, _ *Publication, _ *ChannelOptions) error {
+func (e *TestEngine) Publish(_ string, _ *protocol.Publication, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishCount, 1)
 	return nil
 }
@@ -57,7 +57,7 @@ func (e *TestEngine) Unsubscribe(_ string) error {
 	return nil
 }
 
-func (e *TestEngine) AddPresence(_ string, _ string, _ *ClientInfo, _ time.Duration) error {
+func (e *TestEngine) AddPresence(_ string, _ string, _ *protocol.ClientInfo, _ time.Duration) error {
 	return nil
 }
 
@@ -65,7 +65,7 @@ func (e *TestEngine) RemovePresence(_ string, _ string) error {
 	return nil
 }
 
-func (e *TestEngine) Presence(_ string) (map[string]*ClientInfo, error) {
+func (e *TestEngine) Presence(_ string) (map[string]*protocol.ClientInfo, error) {
 	return map[string]*protocol.ClientInfo{}, nil
 }
 
@@ -74,11 +74,11 @@ func (e *TestEngine) PresenceStats(_ string) (PresenceStats, error) {
 }
 
 func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
-	return []*protocol.Publication{}, StreamPosition{}, nil
+	return nil, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, pub *protocol.Publication, _ *ChannelOptions) (*Publication, error) {
-	return pub, nil
+func (e *TestEngine) AddHistory(_ string, _ *protocol.Publication, _ *ChannelOptions) (StreamPosition, bool, error) {
+	return StreamPosition{}, false, nil
 }
 
 func (e *TestEngine) RemoveHistory(_ string) error {
@@ -189,7 +189,7 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := node.Publish("bench", payload)
+		_, err := node.Publish("bench", payload)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -250,7 +250,7 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				err := n.Publish("test", payload)
+				_, err := n.Publish("test", payload)
 				if err != nil {
 					panic(err)
 				}
@@ -265,43 +265,33 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 	}
 }
 
-func TestNodeHistoryIteration(t *testing.T) {
-	numMessages := 10000
-
+func BenchmarkHistory(b *testing.B) {
 	e := testMemoryEngine()
 	conf := e.node.Config()
+	numMessages := 100
 	conf.HistorySize = numMessages
 	conf.HistoryLifetime = 60
 	conf.HistoryRecover = true
 	err := e.node.Reload(conf)
-	require.NoError(t, err)
+	require.NoError(b, err)
 
 	channel := "test"
 
 	for i := 1; i <= numMessages; i++ {
-		err := e.node.Publish(channel, []byte(`{}`))
-		require.NoError(t, err)
+		_, err := e.node.Publish(channel, []byte(`{}`))
+		require.NoError(b, err)
 	}
 
-	pubs, _ := e.node.History(channel)
-	require.Equal(t, numMessages, len(pubs))
+	b.ResetTimer()
 
-	var n int
-	var seq uint32 = 0
-
-	for {
-		pubs, _, err := e.History(channel, HistoryFilter{
-			Limit: 10,
-			Since: &StreamPosition{Seq: seq, Gen: 0, Epoch: ""},
-		})
-		seq += 10
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := e.node.History(channel)
 		if err != nil {
-			t.Fatal(err)
+			b.Fatal(err)
 		}
-		if len(pubs) == 0 {
-			break
-		}
-		n += len(pubs)
+
 	}
-	require.Equal(t, numMessages, n)
+	b.StopTimer()
+	b.ReportAllocs()
 }

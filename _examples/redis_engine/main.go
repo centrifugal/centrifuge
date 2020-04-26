@@ -98,16 +98,18 @@ func main() {
 	})
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		// This allows to publish into Redis channels atomically when adding
-		// Publication to history. Otherwise adding to history and publishing
-		// to PUB/SUB channel will be two separate calls each involving RTT.
+		// This allows to publish into Redis channel when adding Publication
+		// to history instead of making separate Publish call thus saving one RTT.
 		PublishOnHistoryAdd: true,
 
-		// Use reasonably large expiration interval for sequence fields,
+		// We are using Redis streams here for history.
+		UseStreams: true,
+
+		// Use reasonably large expiration interval for stream meta key,
 		// much bigger than maximum HistoryLifetime value in Node config.
-		// This way sequence data will expire, in some cases you may want
+		// This way stream meta data will expire, in some cases you may want
 		// to prevent its expiration setting this to zero value.
-		SequenceTTL: 7 * 24 * time.Hour,
+		HistoryMetaTTL: 7 * 24 * time.Hour,
 
 		// And configure a couple of shards to use.
 		Shards: []centrifuge.RedisShardConfig{
@@ -130,12 +132,25 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Simulate some work.
+	go func() {
+		// Publish channel notifications from server periodically.
+		i := 1
+		for {
+			_, err := node.Publish("chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`))
+			if err != nil {
+				log.Printf("error publishing to personal channel: %s", err)
+			}
+			i++
+			time.Sleep(5000 * time.Millisecond)
+		}
+	}()
+
+	// Simulate some work inside Redis.
 	for i := 0; i < 10; i++ {
 		go func(i int) {
 			for {
 				time.Sleep(time.Second)
-				err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
+				_, err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
 				if err != nil {
 					panic(err.Error())
 				}

@@ -14,7 +14,7 @@ type DataRaw struct {
 }
 
 func TestRaw(t *testing.T) {
-	data1 := json.RawMessage([]byte(`{"key": "value"}`))
+	data1 := json.RawMessage(`{"key": "value"}`)
 	stdjsondata1, err := json.Marshal(DataRawMessage{
 		Data: &data1,
 	})
@@ -22,7 +22,7 @@ func TestRaw(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 
-	data2 := Raw([]byte(`{"key": "value"}`))
+	data2 := Raw(`{"key": "value"}`)
 	stdjsondata2, err := json.Marshal(DataRaw{
 		Data: &data2,
 	})

@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPubSubSyncer(t *testing.T) {
-	syncer := NewPubSubSync()
-	require.Empty(t, syncer.subSync)
+func TestPubSubSync(t *testing.T) {
+	psSync := NewPubSubSync()
+	require.Empty(t, psSync.subSync)
 
 	channels := []string{"ch1", "ch2", "ch3"}
 
@@ -24,19 +24,19 @@ func TestPubSubSyncer(t *testing.T) {
 			done := make(chan struct{}, 1)
 			wait := make(chan struct{}, 1)
 
-			syncer.StartBuffering(channel)
+			psSync.StartBuffering(channel)
 			go func() {
 				for i := 0; i < 10; i++ {
-					syncer.SyncPublication(channel, &protocol.Publication{}, func() {})
+					psSync.SyncPublication(channel, &protocol.Publication{}, func() {})
 				}
 				close(wait)
 			}()
 			go func() {
 				<-wait
-				syncer.LockBuffer(channel)
-				pubs := syncer.ReadBuffered(channel)
+				psSync.LockBuffer(channel)
+				pubs := psSync.ReadBuffered(channel)
 				require.Equal(t, 10, len(pubs))
-				syncer.StopBuffering(channel)
+				psSync.StopBuffering(channel)
 				close(done)
 			}()
 			select {
@@ -48,11 +48,11 @@ func TestPubSubSyncer(t *testing.T) {
 	}
 	wg.Wait()
 
-	require.Empty(t, syncer.subSync)
+	require.Empty(t, psSync.subSync)
 }
 
 func BenchmarkPubSubSync(b *testing.B) {
-	syncer := NewPubSubSync()
+	psSync := NewPubSubSync()
 	var channels []string
 	for i := 0; i < 1; i++ {
 		channels = append(channels, "server-side-"+strconv.Itoa(i))
@@ -65,15 +65,15 @@ func BenchmarkPubSubSync(b *testing.B) {
 			go func(channel string) {
 				defer wg.Done()
 				wait := make(chan struct{}, 1)
-				syncer.StartBuffering(channel)
+				psSync.StartBuffering(channel)
 				go func() {
-					syncer.SyncPublication(channel, &protocol.Publication{}, func() {})
+					psSync.SyncPublication(channel, &protocol.Publication{}, func() {})
 					close(wait)
 				}()
 				<-wait
-				syncer.LockBuffer(channel)
-				_ = syncer.ReadBuffered(channel)
-				syncer.StopBuffering(channel)
+				psSync.LockBuffer(channel)
+				_ = psSync.ReadBuffered(channel)
+				psSync.StopBuffering(channel)
 			}(channel)
 		}
 		wg.Wait()

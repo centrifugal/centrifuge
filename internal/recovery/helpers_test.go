@@ -4,58 +4,74 @@ import (
 	"testing"
 
 	"github.com/centrifugal/protocol"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUnique(t *testing.T) {
 	pubs := []*protocol.Publication{
-		{Seq: 101, Gen: 0},
-		{Seq: 101, Gen: 1},
-		{Seq: 101, Gen: 1},
-		{Seq: 100, Gen: 2},
-		{Seq: 99},
-		{Seq: 98},
-		{Seq: 4294967295, Gen: 0},
-		{Seq: 4294967295, Gen: 1},
-		{Seq: 4294967295, Gen: 4294967295},
-		{Seq: 4294967295, Gen: 4294967295},
+		{Offset: 101},
+		{Offset: 102},
+		{Offset: 100},
+		{Offset: 101},
+		{Offset: 99},
+		{Offset: 98},
 	}
 	pubs = uniquePublications(pubs)
-	assert.Equal(t, 8, len(pubs))
+	require.Equal(t, 5, len(pubs))
 }
 
 func TestUint64Sequence(t *testing.T) {
 	s := PackUint64(0, 0)
-	assert.Equal(t, uint64(0), s)
+	require.Equal(t, uint64(0), s)
 
 	s = PackUint64(1, 0)
-	assert.Equal(t, uint64(1), s)
+	require.Equal(t, uint64(1), s)
 
 	s = PackUint64(0, 1)
-	assert.Equal(t, uint64(1<<32-1), s)
+	require.Equal(t, uint64(1<<32-1), s)
 
 	s = PackUint64(1, 1)
-	assert.Equal(t, uint64(1<<32), s)
+	require.Equal(t, uint64(1<<32), s)
 }
 
-func TestNextSeqGen(t *testing.T) {
-	nextSeq, nextGen := NextSeqGen(0, 0)
-	assert.Equal(t, uint32(1), nextSeq)
-	assert.Equal(t, uint32(0), nextGen)
+func TestMergePublicationsNoBuffered(t *testing.T) {
+	recoveredPubs := []*protocol.Publication{
+		{Offset: 1},
+		{Offset: 2},
+	}
+	pubs, ok := MergePublications(recoveredPubs, nil, false)
+	require.True(t, ok)
+	require.Len(t, pubs, 2)
+}
 
-	nextSeq, nextGen = NextSeqGen(1, 0)
-	assert.Equal(t, uint32(2), nextSeq)
-	assert.Equal(t, uint32(0), nextGen)
+func TestMergePublicationsBuffered(t *testing.T) {
+	recoveredPubs := []*protocol.Publication{
+		{Offset: 1},
+		{Offset: 2},
+	}
+	bufferedPubs := []*protocol.Publication{
+		{Offset: 3},
+	}
+	pubs, ok := MergePublications(recoveredPubs, bufferedPubs, false)
+	require.True(t, ok)
+	require.Len(t, pubs, 3)
+}
 
-	nextSeq, nextGen = NextSeqGen(1, 1)
-	assert.Equal(t, uint32(2), nextSeq)
-	assert.Equal(t, uint32(1), nextGen)
+func TestMergePublicationsOrder(t *testing.T) {
+	recoveredPubs := []*protocol.Publication{
+		{Offset: 1},
+		{Offset: 2},
+	}
+	bufferedPubs := []*protocol.Publication{
+		{Offset: 3},
+	}
+	pubs, ok := MergePublications(recoveredPubs, bufferedPubs, true)
+	require.True(t, ok)
+	require.Len(t, pubs, 3)
+	require.True(t, pubs[0].Offset > pubs[1].Offset)
 
-	nextSeq, nextGen = NextSeqGen(maxSeq, 0)
-	assert.Equal(t, uint32(0), nextSeq)
-	assert.Equal(t, uint32(1), nextGen)
-
-	nextSeq, nextGen = NextSeqGen(maxSeq-1, 0)
-	assert.Equal(t, maxSeq, nextSeq)
-	assert.Equal(t, uint32(0), nextGen)
+	pubs, ok = MergePublications(recoveredPubs, bufferedPubs, false)
+	require.True(t, ok)
+	require.Len(t, pubs, 3)
+	require.True(t, pubs[0].Offset < pubs[1].Offset)
 }

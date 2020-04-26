@@ -9,40 +9,41 @@ import (
 
 // PresenceStats represents a short presence information for channel.
 type PresenceStats struct {
+	// NumClients is a number of client connections in channel.
 	NumClients int
-	NumUsers   int
+	// NumUsers is a number of unique users in channel.
+	NumUsers int
 }
 
 // BrokerEventHandler can handle messages received from PUB/SUB system.
 type BrokerEventHandler interface {
-	// Publication must register callback func to handle Publications received.
-	HandlePublication(ch string, pub *Publication) error
-	// Join must register callback func to handle Join messages received.
+	// HandlePublication to handle received Publications.
+	HandlePublication(ch string, pub *protocol.Publication) error
+	// HandleJoin to handle received Join messages.
 	HandleJoin(ch string, join *protocol.Join) error
-	// Leave must register callback func to handle Leave messages received.
+	// HandleLeave to handle received Leave messages.
 	HandleLeave(ch string, leave *protocol.Leave) error
-	// Control must register callback func to handle Control data received.
-	HandleControl([]byte) error
+	// HandleControl to handle received control data.
+	HandleControl(data []byte) error
 }
 
 // HistoryFilter allows to filter history according to fields set.
 type HistoryFilter struct {
-	// Since used to recover missed messages since provided RecoveryPosition.
+	// Since used to extract publications from stream since provided StreamPosition.
 	Since *StreamPosition
 	// Limit number of publications to return.
+	// -1 means no limit - i.e. return all publications currently in stream.
+	// 0 means that caller only interested in current stream top position so
+	// Engine should not return any publications.
 	Limit int
 }
 
-// StreamPosition contains fields to rely in stream recovery process. More info
-// about stream recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/
+// StreamPosition contains fields to describe position in stream.
+// At moment this is used for automatic recovery mechanics. More info about stream
+// recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/.
 type StreamPosition struct {
-	// Seq defines publication incremental sequence.
-	Seq uint32
-	// Gen defines publication sequence generation. The reason why we use both Seq and
-	// Gen fields is the fact that Javascript can't properly work with big numbers. As
-	// we not only support JSON but also Protobuf protocol format decision was made to
-	// be effective in serialization size and not pass sequences as strings.
-	Gen uint32
+	// Offset defines publication incremental offset inside a stream.
+	Offset uint64
 	// Epoch of sequence and generation. Allows to handle situations when storage
 	// lost stream entirely for some reason (expired or lost after restart) and we
 	// want to track this fact to prevent successful recovery from another stream.
@@ -74,9 +75,8 @@ type Broker interface {
 
 	// Publish allows to send Publication Push into channel. Publications should
 	// be delivered to all clients subscribed on this channel at moment on
-	// any Centrifuge node. The returned value is channel in which we will
-	// send error as soon as engine finishes publish operation.
-	Publish(ch string, pub *Publication, opts *ChannelOptions) error
+	// any Centrifuge node (with at most once delivery guarantee).
+	Publish(ch string, pub *protocol.Publication, opts *ChannelOptions) error
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error
 	// PublishLeave publishes Leave Push message into channel.
@@ -94,20 +94,24 @@ type Broker interface {
 
 // HistoryManager is responsible for dealing with channel history management.
 type HistoryManager interface {
-	// History returns a slice of publications published into channel.
-	// HistoryFilter allows to set several filtering options.
-	// Returns slice of Publications with Seq and Gen properly set, current
-	// stream top position and error.
-	History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error)
+	// History used to extract Publications from storage.
+	// Publications returned according to HistoryFilter which allows
+	// to set several filtering options.
+	// StreamPosition returned describes current history stream top
+	// offset and epoch.
+	History(ch string, filter HistoryFilter) ([]*protocol.Publication, StreamPosition, error)
 	// AddHistory adds Publication to channel history. Storage should
 	// automatically maintain history size and lifetime according to
 	// channel options if needed.
-	// The returned value is Publication ready to be published to
-	// Broker (with Seq and Gen properly set if needed).
-	// If returned Publication is nil then node will not try to publish
-	// it to Broker at all. This is useful for situations when engine can
-	// atomically save Publication to history and publish it to channel.
-	AddHistory(ch string, pub *Publication, opts *ChannelOptions) (*Publication, error)
+	// StreamPosition returned here describes current stream top offset
+	// and epoch.
+	// Second return value is a boolean flag which when true tells that
+	// Publication already published to PUB/SUB system so node should
+	// not additionally call Broker Publish method. This can be useful
+	// for situations when HistoryManager can atomically save Publication
+	// to history and publish it towards online subscribers (ex. over Lua
+	// in Redis via single RTT).
+	AddHistory(ch string, pub *protocol.Publication, opts *ChannelOptions) (StreamPosition, bool, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
@@ -117,7 +121,7 @@ type HistoryManager interface {
 // PresenceManager is responsible for channel presence management.
 type PresenceManager interface {
 	// Presence returns actual presence information for channel.
-	Presence(ch string) (map[string]*ClientInfo, error)
+	Presence(ch string) (map[string]*protocol.ClientInfo, error)
 	// PresenceStats returns short stats of current presence data
 	// suitable for scenarios when caller does not need full client
 	// info returned by presence method.
@@ -126,7 +130,7 @@ type PresenceManager interface {
 	// for connection with specified identifier. Engine should have a
 	// property to expire client information that was not updated
 	// (touched) after some configured time interval.
-	AddPresence(ch string, clientID string, info *ClientInfo, expire time.Duration) error
+	AddPresence(ch string, clientID string, info *protocol.ClientInfo, expire time.Duration) error
 	// RemovePresence removes presence information for connection
 	// with specified identifier.
 	RemovePresence(ch string, clientID string) error

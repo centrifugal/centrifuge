@@ -133,7 +133,7 @@ func main() {
 		hs, err := upgrader.Upgrade(safeConn)
 		if err != nil {
 			log.Printf("%s: upgrade error: %v", nameConn(conn), err)
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 
@@ -143,7 +143,7 @@ func main() {
 		client, err := centrifuge.NewClient(context.Background(), node, transport)
 		if err != nil {
 			log.Printf("%s: client create error: %v", nameConn(conn), err)
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 
@@ -152,7 +152,7 @@ func main() {
 		desc := netpoll.Must(netpoll.HandleRead(conn))
 
 		// Subscribe to events about conn.
-		poller.Start(desc, func(ev netpoll.Event) {
+		_ = poller.Start(desc, func(ev netpoll.Event) {
 			if ev&(netpoll.EventReadHup|netpoll.EventHup) != 0 {
 				// When ReadHup or Hup received, this mean that client has
 				// closed at least write end of the connection or connections
@@ -202,7 +202,7 @@ func main() {
 	accept := make(chan error, 1)
 
 	// Subscribe to events about listener.
-	poller.Start(acceptDesc, func(e netpoll.Event) {
+	_ = poller.Start(acceptDesc, func(e netpoll.Event) {
 		// We do not want to accept incoming connection when goroutine pool is
 		// busy. So if there are no free goroutines during 1ms we want to
 		// cooldown the server and do not receive connection for some short
