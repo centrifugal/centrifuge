@@ -1682,9 +1682,15 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	if chOpts.HistoryRecover {
 		res.Recoverable = true
 		if cmd.Recover {
+			cmdOffset := cmd.Offset
+			if cmd.Seq > 0 || cmd.Gen > 0 {
+				// Fallback to deprecated fields.
+				cmdOffset = recovery.PackUint64(cmd.Seq, cmd.Gen)
+			}
+
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmd.Offset, cmd.Epoch})
+			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmdOffset, cmd.Epoch})
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				c.pubSubSync.StopBuffering(channel)
@@ -1699,12 +1705,6 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			latestEpoch = historyResult.Epoch
 
 			recoveredPubs = historyResult.Publications
-
-			cmdOffset := cmd.Offset
-			if cmd.Seq > 0 || cmd.Gen > 0 {
-				// Fallback to deprecated fields.
-				cmdOffset = recovery.PackUint64(cmd.Seq, cmd.Gen)
-			}
 
 			nextOffset := cmdOffset + 1
 			var recovered bool

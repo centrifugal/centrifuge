@@ -477,6 +477,16 @@ var recoverTests = []recoverTest{
 	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
 }
 
+type recoverTestChannel struct {
+	ChannelPrefix string
+	IsSeq         bool
+}
+
+var recoverTestChannels = []recoverTestChannel{
+	{"test_recovery_memory_offset_", false},
+	{"test_recovery_memory_seq_", true},
+}
+
 func TestMemoryClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
@@ -488,42 +498,51 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			config.HistoryRecover = true
 			_ = node.Reload(config)
 
-			transport := newTestTransport()
-			ctx := context.Background()
-			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := NewClient(newCtx, node, transport)
+			for _, recoverTestChannel := range recoverTestChannels {
+				channel := recoverTestChannel.ChannelPrefix + tt.Name
+				transport := newTestTransport()
+				ctx := context.Background()
+				newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+				client, _ := NewClient(newCtx, node, transport)
 
-			channel := "test_recovery_memory_" + tt.Name
+				for i := 1; i <= tt.NumPublications; i++ {
+					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
+				}
 
-			for i := 1; i <= tt.NumPublications; i++ {
-				_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
+				time.Sleep(time.Duration(tt.Sleep) * time.Second)
+
+				connectClient(t, client)
+
+				var replies []*protocol.Reply
+				rw := testReplyWriter(&replies)
+
+				_, streamTop, err := node.historyManager.History(channel, HistoryFilter{
+					Limit: 0,
+					Since: nil,
+				})
+				require.NoError(t, err)
+
+				subscribeCmd := &protocol.SubscribeRequest{
+					Channel: channel,
+					Recover: true,
+					Epoch:   streamTop.Epoch,
+				}
+				if recoverTestChannel.IsSeq {
+					subscribeCmd.Seq = uint32(tt.SinceOffset)
+				} else {
+					subscribeCmd.Offset = tt.SinceOffset
+				}
+
+				subCtx := client.subscribeCmd(subscribeCmd, rw, false)
+				require.Nil(t, subCtx.disconnect)
+				require.Nil(t, replies[0].Error)
+				res := extractSubscribeResult(replies, client.Transport().Protocol())
+				require.Equal(t, tt.NumRecovered, len(res.Publications))
+				require.Equal(t, tt.Recovered, res.Recovered)
+				if len(res.Publications) > 1 {
+					require.True(t, res.Publications[0].Offset < res.Publications[1].Offset)
+				}
 			}
-
-			time.Sleep(time.Duration(tt.Sleep) * time.Second)
-
-			connectClient(t, client)
-
-			var replies []*protocol.Reply
-			rw := testReplyWriter(&replies)
-
-			_, streamTop, err := node.historyManager.History(channel, HistoryFilter{
-				Limit: 0,
-				Since: nil,
-			})
-			require.NoError(t, err)
-
-			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
-				Channel: channel,
-				Recover: true,
-				Offset:  tt.SinceOffset,
-				Epoch:   streamTop.Epoch,
-			}, rw, false)
-			require.Nil(t, subCtx.disconnect)
-			require.Nil(t, replies[0].Error)
-			res := extractSubscribeResult(replies, client.Transport().Protocol())
-			require.Equal(t, tt.NumRecovered, len(res.Publications))
-			require.Equal(t, tt.Recovered, res.Recovered)
-
 			_ = node.Shutdown(context.Background())
 		})
 	}
