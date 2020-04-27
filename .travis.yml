@@ -16,4 +16,9 @@ before_install:
 
 script:
   - go test -v -race -tags integration -coverprofile=cover.out $(go list ./... | grep -v /_examples/)
-  - goveralls -service=travis-ci -coverprofile=cover.out
+
+deploy:
+  - provider: script
+    script: goveralls -service=travis-ci -coverprofile=cover.out
+    on:
+      go: '1.14.x'
