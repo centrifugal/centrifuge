@@ -9,7 +9,7 @@ go:
   - tip
 
 services:
-  - redis-server
+  - redis
 
 before_install:
   - go get github.com/mattn/goveralls
@@ -17,8 +17,5 @@ before_install:
 script:
   - go test -v -race -tags integration -coverprofile=cover.out $(go list ./... | grep -v /_examples/)
 
-deploy:
-  - provider: script
-    script: goveralls -service=travis-ci -coverprofile=cover.out
-    on:
-      go: '1.14.x'
+after_success:
+  - 'if [[ "$TRAVIS_GO_VERSION" =~ ^1\.14 ]]; then goveralls -service=travis-ci -coverprofile=cover.out; fi'
