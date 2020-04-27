@@ -11,5 +11,9 @@ go:
 services:
   - redis-server
 
+before_install:
+  - go get github.com/mattn/goveralls
+
 script:
-  - go test -v -race -tags integration $(go list ./... | grep -v /_examples/)
+  - go test -v -race -tags integration -coverprofile=cover.out $(go list ./... | grep -v /_examples/)
+  - goveralls -service=travis-ci -coverprofile=cover.out
