@@ -8,7 +8,7 @@
 // expects that code inside callbacks will not block.
 //
 // Centrifuge library provides several features on top of plain Websocket
-// implementation - see full description in library README on Github –
+// implementation - read highlights in library README on Github –
 // https://github.com/centrifugal/centrifuge.
 //
 // Also check out examples in repo to see main library concepts in action.

@@ -6,6 +6,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestChannelNotFound(t *testing.T) {
+	c := DefaultConfig
+	_, ok := c.channelOpts("xxx")
+	require.False(t, ok)
+}
+
 func TestConfigValidateDefault(t *testing.T) {
 	err := DefaultConfig.Validate()
 	require.NoError(t, err)
@@ -39,14 +45,23 @@ func TestConfigValidateDuplicateNamespaceName(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestConfigValidateMalformedReciverTopLevel(t *testing.T) {
+func TestConfigValidateNoPersonalNamespace(t *testing.T) {
+	c := DefaultConfig
+	c.Namespaces = []ChannelNamespace{}
+	c.UserSubscribeToPersonal = true
+	c.UserPersonalChannelNamespace = "name"
+	err := c.Validate()
+	require.Error(t, err)
+}
+
+func TestConfigValidateMalformedReceiverTopLevel(t *testing.T) {
 	c := DefaultConfig
 	c.HistoryRecover = true
 	err := c.Validate()
 	require.Error(t, err)
 }
 
-func TestConfigValidateMalformedReciverInNamespace(t *testing.T) {
+func TestConfigValidateMalformedReceiverInNamespace(t *testing.T) {
 	c := DefaultConfig
 	c.Namespaces = []ChannelNamespace{
 		{

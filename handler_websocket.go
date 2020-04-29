@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/cancelctx"
+
 	"github.com/gorilla/websocket"
 
 	"github.com/centrifugal/centrifuge/internal/timers"
@@ -317,7 +319,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		ctxCh := make(chan struct{})
 		defer close(ctxCh)
 
-		c, err := NewClient(newCustomCancelContext(r.Context(), ctxCh), s.node, transport)
+		c, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
 			return

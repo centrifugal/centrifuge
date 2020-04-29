@@ -2,6 +2,7 @@ package dissolve
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -10,14 +11,25 @@ func TestDissolver(t *testing.T) {
 	d := New(4)
 	_ = d.Run()
 	defer d.Close()
-	ch := make(chan struct{}, 1)
-	err := d.Submit(func() error {
-		ch <- struct{}{}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("Submit returned error: %v", err)
-	}
+	ch := make(chan struct{})
+	numJobs := 1024
+	var wg sync.WaitGroup
+	wg.Add(numJobs)
+	go func() {
+		for i := 0; i < numJobs; i++ {
+			err := d.Submit(func() error {
+				defer wg.Done()
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("Submit returned error: %v", err)
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
 	select {
 	case <-ch:
 	case <-time.After(time.Second):

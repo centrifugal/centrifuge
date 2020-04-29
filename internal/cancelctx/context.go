@@ -1,4 +1,4 @@
-package centrifuge
+package cancelctx
 
 import (
 	"context"
@@ -21,7 +21,8 @@ func (c customCancelContext) Err() error {
 	}
 }
 
-// newCustomCancelContext returns a context that will be canceled on channel close.
-func newCustomCancelContext(ctx context.Context, ch <-chan struct{}) context.Context {
+// New returns a wrapper context around original context that will
+// be canceled on channel close.
+func New(ctx context.Context, ch <-chan struct{}) context.Context {
 	return customCancelContext{Context: ctx, ch: ch}
 }
