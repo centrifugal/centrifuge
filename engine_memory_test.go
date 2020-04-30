@@ -548,46 +548,79 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 	}
 }
 
-func TestMemoryEngineHistoryIteration(t *testing.T) {
-	e := testMemoryEngine()
-	conf := e.node.Config()
-	numMessages := 10000
+const historyIterationChannel = "test"
+
+type historyIterationTest struct {
+	NumMessages int
+	IterateBy   int
+}
+
+func (it *historyIterationTest) prepareHistoryIteration(t testing.TB, node *Node) StreamPosition {
+	conf := node.Config()
+	numMessages := it.NumMessages
 	conf.HistorySize = numMessages
 	conf.HistoryLifetime = 60
 	conf.HistoryRecover = true
-	err := e.node.Reload(conf)
+	err := node.Reload(conf)
 	require.NoError(t, err)
 
-	channel := "test"
+	channel := historyIterationChannel
+
+	historyResult, err := node.History(channel)
+	require.NoError(t, err)
+	startPosition := historyResult.StreamPosition
 
 	for i := 1; i <= numMessages; i++ {
-		_, err := e.node.Publish(channel, []byte(`{}`))
+		_, err := node.Publish(channel, []byte(`{}`))
 		require.NoError(t, err)
 	}
 
-	historyResult, err := e.node.History(channel)
+	historyResult, err = node.History(channel, WithNoLimit())
 	require.NoError(t, err)
 	require.Equal(t, numMessages, len(historyResult.Publications))
+	return startPosition
+}
 
-	var n int
-	var offset uint64 = 0
-	var iterateBy = 100
-
+func (it *historyIterationTest) testHistoryIteration(t testing.TB, node *Node, startPosition StreamPosition) {
+	var (
+		n         int
+		offset    = startPosition.Offset
+		epoch     = startPosition.Epoch
+		iterateBy = it.IterateBy
+	)
 	for {
-		// TODO: there is a plan to extend Node API to do history iteration.
-		// But for now we are using Engine method here.
-		pubs, _, err := e.History(channel, HistoryFilter{
-			Limit: iterateBy,
-			Since: &StreamPosition{Offset: offset, Epoch: ""},
-		})
-		offset += uint64(iterateBy)
+		res, err := node.History(
+			historyIterationChannel,
+			Since(StreamPosition{Offset: offset, Epoch: epoch}),
+			WithLimit(iterateBy),
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(pubs) == 0 {
+		offset += uint64(iterateBy)
+		if len(res.Publications) == 0 {
 			break
 		}
-		n += len(pubs)
+		n += len(res.Publications)
 	}
-	require.Equal(t, numMessages, n)
+	if n != it.NumMessages {
+		t.Fail()
+	}
+}
+
+func TestMemoryEngineHistoryIteration(t *testing.T) {
+	e := testMemoryEngine()
+	it := historyIterationTest{10000, 100}
+	startPosition := it.prepareHistoryIteration(t, e.node)
+	it.testHistoryIteration(t, e.node, startPosition)
+}
+
+func BenchmarkMemoryEngineHistoryIteration(b *testing.B) {
+	e := testMemoryEngine()
+	it := historyIterationTest{10000, 100}
+	startPosition := it.prepareHistoryIteration(b, e.node)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		it.testHistoryIteration(b, e.node, startPosition)
+	}
 }

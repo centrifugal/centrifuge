@@ -939,46 +939,23 @@ func TestRedisEngineHistoryIteration(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			e := newTestRedisEngine(t, tt.UseStreams)
-			conf := e.node.Config()
-			numMessages := 1000
-			conf.HistorySize = numMessages
-			conf.HistoryLifetime = 60
-			conf.HistoryRecover = true
-			err := e.node.Reload(conf)
-			require.NoError(t, err)
+			it := historyIterationTest{10000, 100}
+			startPosition := it.prepareHistoryIteration(t, e.node)
+			it.testHistoryIteration(t, e.node, startPosition)
+		})
+	}
+}
 
-			channel := "test"
-
-			for i := 1; i <= numMessages; i++ {
-				_, err := e.node.Publish(channel, []byte(`{}`))
-				require.NoError(t, err)
+func BenchmarkRedisEngineHistoryIteration(b *testing.B) {
+	for _, tt := range redisTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			e := newTestRedisEngine(b, tt.UseStreams)
+			it := historyIterationTest{10000, 100}
+			startPosition := it.prepareHistoryIteration(b, e.node)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				it.testHistoryIteration(b, e.node, startPosition)
 			}
-
-			res, err := e.node.History(channel)
-			require.NoError(t, err)
-			require.Equal(t, numMessages, len(res.Publications))
-
-			var n int
-			var offset uint64 = 0
-			var iterateBy = 100
-
-			for {
-				// TODO: there is a plan to extend Node API to do history iteration.
-				// But for now we are using Engine method here.
-				pubs, _, err := e.History(channel, HistoryFilter{
-					Limit: iterateBy,
-					Since: &StreamPosition{Offset: offset, Epoch: ""},
-				})
-				offset += uint64(iterateBy)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(pubs) == 0 {
-					break
-				}
-				n += len(pubs)
-			}
-			require.Equal(t, numMessages, n)
 		})
 	}
 }
