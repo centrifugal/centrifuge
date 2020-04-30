@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/dgrijalva/jwt-go"
+	"github.com/dgrijalva/jwt-go/v4"
 )
 
 type tokenVerifierJWT struct {
@@ -48,21 +48,21 @@ type subscribeTokenClaims struct {
 func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken, error) {
 	parsedToken, err := jwt.ParseWithClaims(token, &connectTokenClaims{}, verifier.jwtKeyFunc())
 	if err != nil {
-		if err, ok := err.(*jwt.ValidationError); ok {
-			if err.Errors == jwt.ValidationErrorExpired {
-				// The only problem with token is its expiration - no other
-				// errors set in Errors bitfield.
-				return connectToken{}, errTokenExpired
-			}
+		if _, ok := err.(*jwt.TokenExpiredError); ok {
+			// The only problem with token is its expiration - no other
+			// errors set in Errors bitfield.
+			return connectToken{}, errTokenExpired
 		}
 		return connectToken{}, err
 	}
 	if claims, ok := parsedToken.Claims.(*connectTokenClaims); ok && parsedToken.Valid {
 		token := connectToken{
 			UserID:   claims.StandardClaims.Subject,
-			ExpireAt: claims.StandardClaims.ExpiresAt,
 			Info:     claims.Info,
 			Channels: claims.Channels,
+		}
+		if claims.StandardClaims.ExpiresAt != nil {
+			token.ExpireAt = claims.StandardClaims.ExpiresAt.Unix()
 		}
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
@@ -79,12 +79,10 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(token string) (connectToken
 func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeToken, error) {
 	parsedToken, err := jwt.ParseWithClaims(token, &subscribeTokenClaims{}, verifier.jwtKeyFunc())
 	if err != nil {
-		if validationErr, ok := err.(*jwt.ValidationError); ok {
-			if validationErr.Errors == jwt.ValidationErrorExpired {
-				// The only problem with token is its expiration - no other
-				// errors set in Errors bitfield.
-				return subscribeToken{}, errTokenExpired
-			}
+		if _, ok := err.(*jwt.TokenExpiredError); ok {
+			// The only problem with token is its expiration - no other
+			// errors set in Errors bitfield.
+			return subscribeToken{}, errTokenExpired
 		}
 		return subscribeToken{}, err
 	}
@@ -93,8 +91,10 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(token string) (subscribeT
 			Client:          claims.Client,
 			Info:            claims.Info,
 			Channel:         claims.Channel,
-			ExpireAt:        claims.StandardClaims.ExpiresAt,
 			ExpireTokenOnly: claims.ExpireTokenOnly,
+		}
+		if claims.StandardClaims.ExpiresAt != nil {
+			token.ExpireAt = claims.StandardClaims.ExpiresAt.Unix()
 		}
 		if claims.Base64Info != "" {
 			byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
