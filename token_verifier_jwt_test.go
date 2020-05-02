@@ -1,10 +1,63 @@
 package centrifuge
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+const (
+	jwtValid            = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIyNjk0IiwiaW5mbyI6eyJmaXJzdF9uYW1lIjoiQWxleGFuZGVyIiwibGFzdF9uYW1lIjoiRW1lbGluIn19.m-TaS80RxkAiP9jH_s_h2NrKS_TDuPxJ8-z6gI7UewI"
+	jwtExpired          = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIyNjk0IiwiaW5mbyI6eyJmaXJzdF9uYW1lIjoiQWxleGFuZGVyIiwibGFzdF9uYW1lIjoiRW1lbGluIn0sImV4cCI6MTU4ODM1MTcwNH0.LTc0p5YlrwJcxXPETrjhm9qyYUBKCR5fSROmfCE4TD8"
+	jwtNotBefore        = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIyNjk0IiwiaW5mbyI6eyJmaXJzdF9uYW1lIjoiQWxleGFuZGVyIiwibGFzdF9uYW1lIjoiRW1lbGluIn0sImV4cCI6MzE3NjgyMDU3MCwibmJmIjozMTc2ODIwNTYwfQ.gfsQeznFw6g44OEnCTSBW7AkmLy92GBfXL_Bdvzs7vc"
+	jwtInvalidSignature = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIyNjk0IiwiaW5mbyI6eyJmaXJzdF9uYW1lIjoiQWxleGFuZGVyIiwibGFzdF9uYW1lIjoiRW1lbGluIn0sImV4cCI6MTU4ODQxOTY5MywibmJmIjoxNTg4NDE4NjkzfQ.05Xj9adbLukdhSJFyiVUEgbxCHTajXuotmalFgYviCo"
+)
+
+func BenchmarkJWT(b *testing.B) {
+	verifier := newTokenVerifierJWT("secret", nil)
+	for i := 0; i < b.N; i++ {
+		_, err := verifier.VerifyConnectToken(jwtExpired)
+		if err != errTokenExpired {
+			panic(err)
+		}
+	}
+}
+
+func Test_tokenVerifierJWT_Valid(t *testing.T) {
+	verifier := newTokenVerifierJWT("secret", nil)
+	ct, err := verifier.VerifyConnectToken(jwtValid)
+	require.NoError(t, err)
+	require.Equal(t, "2694", ct.UserID)
+}
+
+func Test_tokenVerifierJWT_Expired(t *testing.T) {
+	verifier := newTokenVerifierJWT("secret", nil)
+	_, err := verifier.VerifyConnectToken(jwtExpired)
+	require.Error(t, err)
+	require.Equal(t, errTokenExpired, err)
+}
+
+func Test_tokenVerifierJWT_DisabledAlgorithm(t *testing.T) {
+	verifier := newTokenVerifierJWT("", nil)
+	_, err := verifier.VerifyConnectToken(jwtExpired)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errDisabledAlgorithm), err.Error())
+}
+
+func Test_tokenVerifierJWT_InvalidSignature(t *testing.T) {
+	verifier := newTokenVerifierJWT("secret", nil)
+	_, err := verifier.VerifyConnectToken(jwtInvalidSignature)
+	require.Error(t, err)
+}
+
+func Test_tokenVerifierJWT_WithNotBefore(t *testing.T) {
+	verifier := newTokenVerifierJWT("secret", nil)
+	_, err := verifier.VerifyConnectToken(jwtNotBefore)
+	require.Error(t, err)
+}
 
 func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 	type args struct {
@@ -55,6 +108,9 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.verifier.VerifyConnectToken(tt.args.token)
+			if err != nil {
+				println(err.Error())
+			}
 			if tt.wantErr && err == nil {
 				t.Errorf("VerifyConnectToken() should return error")
 			}
@@ -151,7 +207,7 @@ func BenchmarkConnectTokenVerify(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := verifierJWT.VerifyConnectToken(token)
 		if err != nil {
-			b.Fatal(errMalformedToken)
+			b.Fatal(err)
 		}
 	}
 	b.StopTimer()

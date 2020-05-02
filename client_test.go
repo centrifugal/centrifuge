@@ -9,33 +9,42 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
-	"github.com/dgrijalva/jwt-go"
+	"github.com/cristalhq/jwt"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
 func getConnToken(user string, exp int64) string {
-	claims := jwt.MapClaims{"sub": user}
-	if exp > 0 {
-		claims["exp"] = exp
+	key := []byte(`secret`)
+	signer, _ := jwt.NewHS256(key)
+	builder := jwt.NewTokenBuilder(signer)
+	claims := &jwt.StandardClaims{
+		Subject:   user,
+		ExpiresAt: jwt.Timestamp(exp),
 	}
-	t, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("secret"))
+	token, err := builder.Build(claims)
 	if err != nil {
 		panic(err)
 	}
-	return t
+	return string(token.Raw())
 }
 
 func getSubscribeToken(channel string, client string, exp int64) string {
-	claims := jwt.MapClaims{"channel": channel, "client": client}
-	if exp > 0 {
-		claims["exp"] = exp
+	key := []byte(`secret`)
+	signer, _ := jwt.NewHS256(key)
+	builder := jwt.NewTokenBuilder(signer)
+	claims := &subscribeTokenClaims{
+		Channel: channel,
+		Client:  client,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: jwt.Timestamp(exp),
+		},
 	}
-	t, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("secret"))
+	token, err := builder.Build(claims)
 	if err != nil {
 		panic(err)
 	}
-	return t
+	return string(token.Raw())
 }
 
 func testReplyWriter(replies *[]*protocol.Reply) *replyWriter {
