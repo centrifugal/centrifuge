@@ -1,10 +1,14 @@
 package centrifuge
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/cristalhq/jwt"
 
 	"github.com/stretchr/testify/require"
 )
@@ -19,6 +23,67 @@ const (
 	jwtArrayAud         = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIyNjk0IiwiaW5mbyI6eyJmaXJzdF9uYW1lIjoiQWxleGFuZGVyIiwibGFzdF9uYW1lIjoiRW1lbGluIn0sImF1ZCI6WyJmb28iLCJiYXIiXX0.iY4pCPEQwstfNmPkLr7r7DrLZDo42q3E9jMc-TefI6g"
 	jwtStringAud        = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIyNjk0IiwiaW5mbyI6eyJmaXJzdF9uYW1lIjoiQWxleGFuZGVyIiwibGFzdF9uYW1lIjoiRW1lbGluIn0sImF1ZCI6ImZvbyJ9.jym6CG5haHME3ZQbb9jlnV1E0hSwwEjZycBZSygRzO0"
 )
+
+func generateTestRSAKeys(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
+	reader := rand.Reader
+	bitSize := 2048
+	key, err := rsa.GenerateKey(reader, bitSize)
+	require.NoError(t, err)
+	return key, &key.PublicKey
+}
+
+func getTokenBuilder(rsaPrivateKey *rsa.PrivateKey) *jwt.TokenBuilder {
+	var signer jwt.Signer
+	if rsaPrivateKey != nil {
+		signer, _ = jwt.NewRS256(&rsaPrivateKey.PublicKey, rsaPrivateKey)
+	} else {
+		// For HS we do everything in tests with key `secret`.
+		key := []byte(`secret`)
+		signer, _ = jwt.NewHS256(key)
+
+	}
+	return jwt.NewTokenBuilder(signer)
+}
+
+func getConnToken(user string, exp int64, rsaPrivateKey *rsa.PrivateKey) string {
+	builder := getTokenBuilder(rsaPrivateKey)
+	claims := &connectTokenClaims{
+		Base64Info: "e30=",
+		StandardClaims: jwt.StandardClaims{
+			Subject:   user,
+			ExpiresAt: jwt.Timestamp(exp),
+		},
+	}
+	token, err := builder.Build(claims)
+	if err != nil {
+		panic(err)
+	}
+	return string(token.Raw())
+}
+
+func getSubscribeToken(channel string, client string, exp int64, rsaPrivateKey *rsa.PrivateKey) string {
+	builder := getTokenBuilder(rsaPrivateKey)
+	claims := &subscribeTokenClaims{
+		Base64Info: "e30=",
+		Channel:    channel,
+		Client:     client,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: jwt.Timestamp(exp),
+		},
+	}
+	token, err := builder.Build(claims)
+	if err != nil {
+		panic(err)
+	}
+	return string(token.Raw())
+}
+
+func Test_tokenVerifierJWT_Signer(t *testing.T) {
+	_, pubKey := generateTestRSAKeys(t)
+	signer, err := newSigner("secret", pubKey)
+	require.NoError(t, err)
+	require.NotNil(t, signer)
+}
 
 func Test_tokenVerifierJWT_Valid(t *testing.T) {
 	verifier := newTokenVerifierJWT("secret", nil)
@@ -73,7 +138,10 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 	type args struct {
 		token string
 	}
-	verifierJWT := newTokenVerifierJWT("secret", nil)
+
+	privateKey, pubKey := generateTestRSAKeys(t)
+
+	verifierJWT := newTokenVerifierJWT("secret", pubKey)
 	_time := time.Now()
 	tests := []struct {
 		name     string
@@ -84,15 +152,27 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 		expired  bool
 	}{
 		{
-			name:     "Valid JWT",
+			name:     "Valid JWT HS",
 			verifier: verifierJWT,
 			args: args{
-				token: getConnToken("user1", _time.Add(24*time.Hour).Unix()),
+				token: getConnToken("user1", _time.Add(24*time.Hour).Unix(), nil),
 			},
 			want: connectToken{
 				UserID:   "user1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
-				Info:     nil,
+				Info:     []byte("{}"),
+			},
+			wantErr: false,
+		}, {
+			name:     "Valid JWT RS",
+			verifier: verifierJWT,
+			args: args{
+				token: getConnToken("user1", _time.Add(24*time.Hour).Unix(), privateKey),
+			},
+			want: connectToken{
+				UserID:   "user1",
+				ExpireAt: _time.Add(24 * time.Hour).Unix(),
+				Info:     []byte("{}"),
 			},
 			wantErr: false,
 		}, {
@@ -108,7 +188,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			name:     "Expired JWT",
 			verifier: verifierJWT,
 			args: args{
-				token: getConnToken("user1", _time.Add(-24*time.Hour).Unix()),
+				token: getConnToken("user1", _time.Add(-24*time.Hour).Unix(), nil),
 			},
 			want:    connectToken{},
 			wantErr: true,
@@ -138,7 +218,10 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 	type args struct {
 		token string
 	}
-	verifierJWT := newTokenVerifierJWT("secret", nil)
+
+	privateKey, pubKey := generateTestRSAKeys(t)
+
+	verifierJWT := newTokenVerifierJWT("secret", pubKey)
 	_time := time.Now()
 	tests := []struct {
 		name     string
@@ -168,21 +251,34 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			name:     "Expired JWT",
 			verifier: verifierJWT,
 			args: args{
-				token: getSubscribeToken("channel1", "client1", _time.Add(-24*time.Hour).Unix()),
+				token: getSubscribeToken("channel1", "client1", _time.Add(-24*time.Hour).Unix(), nil),
 			},
 			want:    subscribeToken{},
 			wantErr: true,
 			expired: true,
 		}, {
-			name:     "Valid JWT",
+			name:     "Valid JWT HS",
 			verifier: verifierJWT,
 			args: args{
-				token: getSubscribeToken("channel1", "client1", _time.Add(24*time.Hour).Unix()),
+				token: getSubscribeToken("channel1", "client1", _time.Add(24*time.Hour).Unix(), nil),
 			},
 			want: subscribeToken{
 				Client:   "client1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
-				Info:     nil,
+				Info:     []byte("{}"),
+				Channel:  "channel1",
+			},
+			wantErr: false,
+		}, {
+			name:     "Valid JWT HS",
+			verifier: verifierJWT,
+			args: args{
+				token: getSubscribeToken("channel1", "client1", _time.Add(24*time.Hour).Unix(), privateKey),
+			},
+			want: subscribeToken{
+				Client:   "client1",
+				ExpireAt: _time.Add(24 * time.Hour).Unix(),
+				Info:     []byte("{}"),
 				Channel:  "channel1",
 			},
 			wantErr: false,
