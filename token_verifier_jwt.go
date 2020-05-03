@@ -20,7 +20,8 @@ type tokenVerifierJWT struct {
 
 // validAtNowChecker validates whether the token is valid at the current time, based on
 // the values of the NotBefore and ExpiresAt claims.
-// TODO: add IssuedAt check.
+// We don't use check based on IssuedAt here since it's disabled in most systems due to
+// time skew reasons.
 func validAtNowChecker() jwt.Check {
 	return func(claims *jwt.StandardClaims) error {
 		now := time.Now()
@@ -58,6 +59,7 @@ type connectTokenClaims struct {
 	jwt.StandardClaims
 }
 
+// MarshalBinary to properly marshal custom claims to JSON.
 func (c *connectTokenClaims) MarshalBinary() ([]byte, error) {
 	return json.Marshal(c)
 }
@@ -71,6 +73,7 @@ type subscribeTokenClaims struct {
 	jwt.StandardClaims
 }
 
+// MarshalBinary to properly marshal custom claims to JSON.
 func (c *subscribeTokenClaims) MarshalBinary() ([]byte, error) {
 	return json.Marshal(c)
 }
