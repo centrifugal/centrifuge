@@ -2,7 +2,7 @@
 // source: control.proto
 
 /*
-Package controlproto is a generated protocol buffer package.
+Package controlpb is a generated protocol buffer package.
 
 It is generated from these files:
 	control.proto
@@ -14,7 +14,7 @@ It has these top-level messages:
 	Unsubscribe
 	Disconnect
 */
-package controlproto
+package controlpb
 
 import testing "testing"
 import rand "math/rand"

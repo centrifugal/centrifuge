@@ -18,4 +18,4 @@ script:
   - go test -v -race -tags integration -coverprofile=cover.out $(go list ./... | grep -v /_examples/)
 
 after_success:
-  - 'if [[ "$TRAVIS_GO_VERSION" =~ ^1\.14 ]]; then goveralls -service=travis-ci -coverprofile=cover.out; fi'
+  - 'if [[ "$TRAVIS_GO_VERSION" =~ ^1\.14 ]]; then goveralls -ignore "internal/controlpb/control*" -service=travis-ci -coverprofile=cover.out; fi'

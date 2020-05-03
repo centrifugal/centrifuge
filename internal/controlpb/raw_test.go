@@ -1,4 +1,4 @@
-package controlproto
+package controlpb
 
 import (
 	"encoding/json"
