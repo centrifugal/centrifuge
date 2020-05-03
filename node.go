@@ -835,12 +835,12 @@ type HistoryResult struct {
 // History allows to extract Publications in channel.
 // The channel must belong to namespace where history is on.
 func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
+	if n.historyManager == nil {
+		return HistoryResult{}, ErrorNotAvailable
+	}
 	historyOpts := &HistoryOptions{}
 	for _, opt := range opts {
 		opt(historyOpts)
-	}
-	if n.historyManager == nil {
-		return HistoryResult{}, ErrorNotAvailable
 	}
 	pubs, streamTop, err := n.historyManager.History(ch, HistoryFilter{
 		Limit: historyOpts.Limit,
@@ -863,27 +863,18 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 // fullHistory extracts full history in channel.
 func (n *Node) fullHistory(ch string) (HistoryResult, error) {
 	actionCount.WithLabelValues("history_full").Inc()
-	if n.historyManager == nil {
-		return HistoryResult{}, ErrorNotAvailable
-	}
 	return n.History(ch, WithNoLimit())
 }
 
 // recoverHistory recovers publications since last UID seen by client.
 func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
 	actionCount.WithLabelValues("history_recover").Inc()
-	if n.historyManager == nil {
-		return HistoryResult{}, ErrorNotAvailable
-	}
 	return n.History(ch, WithNoLimit(), Since(since))
 }
 
 // streamTop returns current stream top position for channel.
 func (n *Node) streamTop(ch string) (StreamPosition, error) {
 	actionCount.WithLabelValues("history_stream_top").Inc()
-	if n.historyManager == nil {
-		return StreamPosition{}, ErrorNotAvailable
-	}
 	historyResult, err := n.History(ch)
 	if err != nil {
 		return StreamPosition{}, err
