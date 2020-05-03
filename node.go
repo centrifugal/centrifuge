@@ -833,15 +833,19 @@ type HistoryResult struct {
 	Publications []*protocol.Publication
 }
 
-// History returns a slice of last messages published into project channel.
-func (n *Node) History(ch string) (HistoryResult, error) {
-	actionCount.WithLabelValues("history").Inc()
+// History allows to extract Publications in channel.
+// The channel must belong to namespace where history is on.
+func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
 	if n.historyManager == nil {
 		return HistoryResult{}, ErrorNotAvailable
 	}
+	historyOpts := &HistoryOptions{}
+	for _, opt := range opts {
+		opt(historyOpts)
+	}
 	pubs, streamTop, err := n.historyManager.History(ch, HistoryFilter{
-		Limit: -1,
-		Since: nil,
+		Limit: historyOpts.Limit,
+		Since: historyOpts.Since,
 	})
 	if err != nil {
 		return HistoryResult{}, err
@@ -855,55 +859,37 @@ func (n *Node) History(ch string) (HistoryResult, error) {
 		StreamPosition: streamTop,
 		Publications:   pubs,
 	}, nil
+}
+
+// fullHistory extracts full history in channel.
+func (n *Node) fullHistory(ch string) (HistoryResult, error) {
+	actionCount.WithLabelValues("history_full").Inc()
+	return n.History(ch, WithNoLimit())
 }
 
 // recoverHistory recovers publications since last UID seen by client.
 func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
-	actionCount.WithLabelValues("recover_history").Inc()
-	if n.historyManager == nil {
-		return HistoryResult{}, ErrorNotAvailable
-	}
-	pubs, streamTop, err := n.historyManager.History(ch, HistoryFilter{
-		Limit: -1,
-		Since: &since,
-	})
-	if err != nil {
-		return HistoryResult{}, err
-	}
-	if hasFlag(CompatibilityFlags, UseSeqGen) {
-		for i := 0; i < len(pubs); i++ {
-			pubs[i].Seq, pubs[i].Gen = recovery.UnpackUint64(pubs[i].Offset)
-		}
-	}
-	return HistoryResult{
-		StreamPosition: streamTop,
-		Publications:   pubs,
-	}, nil
-}
-
-// RemoveHistory removes channel history.
-func (n *Node) RemoveHistory(ch string) error {
-	actionCount.WithLabelValues("remove_history").Inc()
-	if n.historyManager == nil {
-		return ErrorNotAvailable
-	}
-	return n.historyManager.RemoveHistory(ch)
+	actionCount.WithLabelValues("history_recover").Inc()
+	return n.History(ch, WithNoLimit(), Since(since))
 }
 
 // streamTop returns current stream top position for channel.
 func (n *Node) streamTop(ch string) (StreamPosition, error) {
 	actionCount.WithLabelValues("history_stream_top").Inc()
-	if n.historyManager == nil {
-		return StreamPosition{}, ErrorNotAvailable
-	}
-	_, streamTop, err := n.historyManager.History(ch, HistoryFilter{
-		Limit: 0,
-		Since: nil,
-	})
+	historyResult, err := n.History(ch)
 	if err != nil {
 		return StreamPosition{}, err
 	}
-	return streamTop, nil
+	return historyResult.StreamPosition, nil
+}
+
+// RemoveHistory removes channel history.
+func (n *Node) RemoveHistory(ch string) error {
+	actionCount.WithLabelValues("history_remove").Inc()
+	if n.historyManager == nil {
+		return ErrorNotAvailable
+	}
+	return n.historyManager.RemoveHistory(ch)
 }
 
 // privateChannel checks if channel private. In case of private channel
