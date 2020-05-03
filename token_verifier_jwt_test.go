@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/cristalhq/jwt"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -270,7 +269,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			},
 			wantErr: false,
 		}, {
-			name:     "Valid JWT HS",
+			name:     "Valid JWT RS",
 			verifier: verifierJWT,
 			args: args{
 				token: getSubscribeToken("channel1", "client1", _time.Add(24*time.Hour).Unix(), privateKey),
