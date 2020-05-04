@@ -1017,7 +1017,8 @@ func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) *Disconnect {
 			return DisconnectBadRequest
 		}
 		rpcReply := c.eventHub.rpcHandler(RPCEvent{
-			Data: cmd.Data,
+			Method: cmd.Method,
+			Data:   cmd.Data,
 		})
 		if rpcReply.Disconnect != nil {
 			return rpcReply.Disconnect
