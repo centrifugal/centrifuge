@@ -90,6 +90,7 @@ type SubscribeHandler func(SubscribeEvent) SubscribeReply
 
 // UnsubscribeEvent contains fields related to unsubscribe event.
 type UnsubscribeEvent struct {
+	// Channel client unsubscribed from.
 	Channel string
 }
 
@@ -101,6 +102,9 @@ type UnsubscribeReply struct {
 type UnsubscribeHandler func(UnsubscribeEvent) UnsubscribeReply
 
 // PublishEvent contains fields related to publish event.
+// Note that this event called before actual publish to Engine
+// so handler has an option to reject this publication returning
+// an error in PublishReply.
 type PublishEvent struct {
 	Channel string
 	Data    []byte
@@ -123,6 +127,7 @@ type PublishHandler func(PublishEvent) PublishReply
 
 // SubRefreshEvent contains fields related to subscription refresh event.
 type SubRefreshEvent struct {
+	// Channel to which SubRefreshEvent belongs.
 	Channel string
 }
 
@@ -140,6 +145,10 @@ type SubRefreshHandler func(SubRefreshEvent) SubRefreshReply
 
 // RPCEvent contains fields related to rpc request.
 type RPCEvent struct {
+	// Method is an optional string that contains RPC method name client wants to call.
+	// This is an optional field, by default clients send RPC without any method set.
+	Method string
+	// Data contains RPC untouched payload.
 	Data []byte
 }
 
@@ -158,6 +167,7 @@ type RPCHandler func(RPCEvent) RPCReply
 
 // MessageEvent contains fields related to message request.
 type MessageEvent struct {
+	// Data contains message untouched payload.
 	Data []byte
 }
 
