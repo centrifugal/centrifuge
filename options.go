@@ -47,3 +47,40 @@ func WithReconnect() DisconnectOption {
 		opts.Reconnect = true
 	}
 }
+
+// HistoryOptions define some fields to alter History method behaviour.
+type HistoryOptions struct {
+	// Since used to extract publications from stream since provided StreamPosition.
+	Since *StreamPosition
+	// Limit number of publications to return.
+	// -1 means no limit - i.e. return all publications currently in stream.
+	// 0 means that caller only interested in current stream top position so Engine
+	// should not return any publications in result.
+	// Positive integer does what it should.
+	Limit int
+}
+
+// HistoryOption is a type to represent various History options.
+type HistoryOption func(options *HistoryOptions)
+
+// WithLimit allows to set limit.
+func WithLimit(limit int) HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.Limit = limit
+	}
+}
+
+// WithNoLimit allows to not limit returned Publications amount.
+// Should be used carefully inside large history streams.
+func WithNoLimit() HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.Limit = -1
+	}
+}
+
+// Since allows to set Since option.
+func Since(sp StreamPosition) HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.Since = &sp
+	}
+}

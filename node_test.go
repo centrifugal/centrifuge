@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/controlproto"
+	"github.com/centrifugal/centrifuge/internal/controlpb"
 
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
@@ -136,8 +136,8 @@ func TestSetConfig(t *testing.T) {
 
 func TestNodeRegistry(t *testing.T) {
 	registry := newNodeRegistry("node1")
-	nodeInfo1 := controlproto.Node{UID: "node1"}
-	nodeInfo2 := controlproto.Node{UID: "node2"}
+	nodeInfo1 := controlpb.Node{UID: "node1"}
+	nodeInfo2 := controlpb.Node{UID: "node2"}
 	registry.add(&nodeInfo1)
 	registry.add(&nodeInfo2)
 	require.Equal(t, 2, len(registry.list()))

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/recovery"
@@ -402,21 +403,21 @@ func (n *Node) handleControl(data []byte) error {
 	params := cmd.Params
 
 	switch method {
-	case controlproto.MethodTypeNode:
+	case controlpb.MethodTypeNode:
 		cmd, err := n.controlDecoder.DecodeNode(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding node control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.nodeCmd(cmd)
-	case controlproto.MethodTypeUnsubscribe:
+	case controlpb.MethodTypeUnsubscribe:
 		cmd, err := n.controlDecoder.DecodeUnsubscribe(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.hub.unsubscribe(cmd.User, cmd.Channel)
-	case controlproto.MethodTypeDisconnect:
+	case controlpb.MethodTypeDisconnect:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
@@ -567,7 +568,7 @@ func (n *Node) publishLeave(ch string, leave *protocol.Leave, opts *ChannelOptio
 
 // publishControl publishes message into control channel so all running
 // nodes will receive and handle it.
-func (n *Node) publishControl(cmd *controlproto.Command) error {
+func (n *Node) publishControl(cmd *controlpb.Command) error {
 	messagesSentCountControl.Inc()
 	data, err := n.controlEncoder.EncodeCommand(cmd)
 	if err != nil {
@@ -576,8 +577,8 @@ func (n *Node) publishControl(cmd *controlproto.Command) error {
 	return n.broker.PublishControl(data)
 }
 
-func (n *Node) getMetrics(metrics eagle.Metrics) *controlproto.Metrics {
-	return &controlproto.Metrics{
+func (n *Node) getMetrics(metrics eagle.Metrics) *controlpb.Metrics {
+	return &controlpb.Metrics{
 		Interval: n.config.NodeInfoMetricsAggregateInterval.Seconds(),
 		Items:    metrics.Flatten("."),
 	}
@@ -587,7 +588,7 @@ func (n *Node) getMetrics(metrics eagle.Metrics) *controlproto.Metrics {
 // contains information about current node.
 func (n *Node) pubNode() error {
 	n.mu.RLock()
-	node := &controlproto.Node{
+	node := &controlpb.Node{
 		UID:         n.uid,
 		Name:        n.config.Name,
 		Version:     n.config.Version,
@@ -609,9 +610,9 @@ func (n *Node) pubNode() error {
 
 	params, _ := n.controlEncoder.EncodeNode(node)
 
-	cmd := &controlproto.Command{
+	cmd := &controlpb.Command{
 		UID:    n.uid,
-		Method: controlproto.MethodTypeNode,
+		Method: controlpb.MethodTypeNode,
 		Params: params,
 	}
 
@@ -626,14 +627,14 @@ func (n *Node) pubNode() error {
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
 // nodes could unsubscribe user from channel.
 func (n *Node) pubUnsubscribe(user string, ch string) error {
-	unsubscribe := &controlproto.Unsubscribe{
+	unsubscribe := &controlpb.Unsubscribe{
 		User:    user,
 		Channel: ch,
 	}
 	params, _ := n.controlEncoder.EncodeUnsubscribe(unsubscribe)
-	cmd := &controlproto.Command{
+	cmd := &controlpb.Command{
 		UID:    n.uid,
-		Method: controlproto.MethodTypeUnsubscribe,
+		Method: controlpb.MethodTypeUnsubscribe,
 		Params: params,
 	}
 	return n.publishControl(cmd)
@@ -643,13 +644,13 @@ func (n *Node) pubUnsubscribe(user string, ch string) error {
 // nodes could disconnect user from Centrifugo.
 func (n *Node) pubDisconnect(user string, reconnect bool) error {
 	// TODO: handle reconnect flag.
-	disconnect := &controlproto.Disconnect{
+	disconnect := &controlpb.Disconnect{
 		User: user,
 	}
 	params, _ := n.controlEncoder.EncodeDisconnect(disconnect)
-	cmd := &controlproto.Command{
+	cmd := &controlpb.Command{
 		UID:    n.uid,
-		Method: controlproto.MethodTypeDisconnect,
+		Method: controlpb.MethodTypeDisconnect,
 		Params: params,
 	}
 	return n.publishControl(cmd)
@@ -721,7 +722,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 }
 
 // nodeCmd handles ping control command i.e. updates information about known nodes.
-func (n *Node) nodeCmd(node *controlproto.Node) error {
+func (n *Node) nodeCmd(node *controlpb.Node) error {
 	n.nodes.add(node)
 	return nil
 }
@@ -834,15 +835,19 @@ type HistoryResult struct {
 	Publications []*protocol.Publication
 }
 
-// History returns a slice of last messages published into project channel.
-func (n *Node) History(ch string) (HistoryResult, error) {
-	actionCount.WithLabelValues("history").Inc()
+// History allows to extract Publications in channel.
+// The channel must belong to namespace where history is on.
+func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
 	if n.historyManager == nil {
 		return HistoryResult{}, ErrorNotAvailable
 	}
+	historyOpts := &HistoryOptions{}
+	for _, opt := range opts {
+		opt(historyOpts)
+	}
 	pubs, streamTop, err := n.historyManager.History(ch, HistoryFilter{
-		Limit: -1,
-		Since: nil,
+		Limit: historyOpts.Limit,
+		Since: historyOpts.Since,
 	})
 	if err != nil {
 		return HistoryResult{}, err
@@ -856,55 +861,37 @@ func (n *Node) History(ch string) (HistoryResult, error) {
 		StreamPosition: streamTop,
 		Publications:   pubs,
 	}, nil
+}
+
+// fullHistory extracts full history in channel.
+func (n *Node) fullHistory(ch string) (HistoryResult, error) {
+	actionCount.WithLabelValues("history_full").Inc()
+	return n.History(ch, WithNoLimit())
 }
 
 // recoverHistory recovers publications since last UID seen by client.
 func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
-	actionCount.WithLabelValues("recover_history").Inc()
-	if n.historyManager == nil {
-		return HistoryResult{}, ErrorNotAvailable
-	}
-	pubs, streamTop, err := n.historyManager.History(ch, HistoryFilter{
-		Limit: -1,
-		Since: &since,
-	})
-	if err != nil {
-		return HistoryResult{}, err
-	}
-	if hasFlag(CompatibilityFlags, UseSeqGen) {
-		for i := 0; i < len(pubs); i++ {
-			pubs[i].Seq, pubs[i].Gen = recovery.UnpackUint64(pubs[i].Offset)
-		}
-	}
-	return HistoryResult{
-		StreamPosition: streamTop,
-		Publications:   pubs,
-	}, nil
-}
-
-// RemoveHistory removes channel history.
-func (n *Node) RemoveHistory(ch string) error {
-	actionCount.WithLabelValues("remove_history").Inc()
-	if n.historyManager == nil {
-		return ErrorNotAvailable
-	}
-	return n.historyManager.RemoveHistory(ch)
+	actionCount.WithLabelValues("history_recover").Inc()
+	return n.History(ch, WithNoLimit(), Since(since))
 }
 
 // streamTop returns current stream top position for channel.
 func (n *Node) streamTop(ch string) (StreamPosition, error) {
 	actionCount.WithLabelValues("history_stream_top").Inc()
-	if n.historyManager == nil {
-		return StreamPosition{}, ErrorNotAvailable
-	}
-	_, streamTop, err := n.historyManager.History(ch, HistoryFilter{
-		Limit: 0,
-		Since: nil,
-	})
+	historyResult, err := n.History(ch)
 	if err != nil {
 		return StreamPosition{}, err
 	}
-	return streamTop, nil
+	return historyResult.StreamPosition, nil
+}
+
+// RemoveHistory removes channel history.
+func (n *Node) RemoveHistory(ch string) error {
+	actionCount.WithLabelValues("history_remove").Inc()
+	if n.historyManager == nil {
+		return ErrorNotAvailable
+	}
+	return n.historyManager.RemoveHistory(ch)
 }
 
 // privateChannel checks if channel private. In case of private channel
@@ -959,7 +946,7 @@ type nodeRegistry struct {
 	// currentUID keeps uid of current node
 	currentUID string
 	// nodes is a map with information about known nodes.
-	nodes map[string]controlproto.Node
+	nodes map[string]controlpb.Node
 	// updates track time we last received ping from node. Used to clean up nodes map.
 	updates map[string]int64
 }
@@ -967,14 +954,14 @@ type nodeRegistry struct {
 func newNodeRegistry(currentUID string) *nodeRegistry {
 	return &nodeRegistry{
 		currentUID: currentUID,
-		nodes:      make(map[string]controlproto.Node),
+		nodes:      make(map[string]controlpb.Node),
 		updates:    make(map[string]int64),
 	}
 }
 
-func (r *nodeRegistry) list() []controlproto.Node {
+func (r *nodeRegistry) list() []controlpb.Node {
 	r.mu.RLock()
-	nodes := make([]controlproto.Node, len(r.nodes))
+	nodes := make([]controlpb.Node, len(r.nodes))
 	i := 0
 	for _, info := range r.nodes {
 		nodes[i] = info
@@ -984,14 +971,14 @@ func (r *nodeRegistry) list() []controlproto.Node {
 	return nodes
 }
 
-func (r *nodeRegistry) get(uid string) controlproto.Node {
+func (r *nodeRegistry) get(uid string) controlpb.Node {
 	r.mu.RLock()
 	info := r.nodes[uid]
 	r.mu.RUnlock()
 	return info
 }
 
-func (r *nodeRegistry) add(info *controlproto.Node) {
+func (r *nodeRegistry) add(info *controlpb.Node) {
 	r.mu.Lock()
 	if node, ok := r.nodes[info.UID]; ok {
 		if info.Metrics != nil {
