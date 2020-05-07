@@ -6,8 +6,6 @@ github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973 h1:xJ4a3vCFaGF/jqvzLM
 github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973/go.mod h1:Dwedo/Wpr24TaqPxmxbtue+5NUziq4I4S80YR8gNf3Q=
 github.com/centrifugal/protocol v0.3.3 h1:GCNee3RFsjQu6SyKBX0Ir7ByUrp+Gw0MU/PsIc2CM2s=
 github.com/centrifugal/protocol v0.3.3/go.mod h1:2YbBCaDwQHl37ErRdMrKSj18X2yVvpkQYtSX6aVbe5A=
-github.com/cristalhq/jwt/v2 v2.0.0-beta2 h1:9LBYJL3kK/bOJNQSTVkOFPF1UY54XdH+uZu7uLJJjL0=
-github.com/cristalhq/jwt/v2 v2.0.0-beta2/go.mod h1:nQT19GqJbrWubmI+ULE8PYsR1GCbwI5hAg1nG+9AbTg=
 github.com/cristalhq/jwt/v2 v2.0.0 h1:CxleHxkZQQ5J0siUQ2gwZrhAysmh8Ddh/R06AzCiYao=
 github.com/cristalhq/jwt/v2 v2.0.0/go.mod h1:nQT19GqJbrWubmI+ULE8PYsR1GCbwI5hAg1nG+9AbTg=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
