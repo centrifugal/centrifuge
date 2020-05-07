@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cristalhq/jwt"
+	"github.com/cristalhq/jwt/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,17 +31,17 @@ func generateTestRSAKeys(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
 	return key, &key.PublicKey
 }
 
-func getTokenBuilder(rsaPrivateKey *rsa.PrivateKey) *jwt.TokenBuilder {
+func getTokenBuilder(rsaPrivateKey *rsa.PrivateKey) *jwt.Builder {
 	var signer jwt.Signer
 	if rsaPrivateKey != nil {
-		signer, _ = jwt.NewRS256(&rsaPrivateKey.PublicKey, rsaPrivateKey)
+		signer, _ = jwt.NewSignerRS(jwt.RS256, rsaPrivateKey)
 	} else {
 		// For HS we do everything in tests with key `secret`.
 		key := []byte(`secret`)
-		signer, _ = jwt.NewHS256(key)
+		signer, _ = jwt.NewSignerHS(jwt.HS256, key)
 
 	}
-	return jwt.NewTokenBuilder(signer)
+	return jwt.NewBuilder(signer)
 }
 
 func getConnToken(user string, exp int64, rsaPrivateKey *rsa.PrivateKey) string {
@@ -50,7 +50,7 @@ func getConnToken(user string, exp int64, rsaPrivateKey *rsa.PrivateKey) string 
 		Base64Info: "e30=",
 		StandardClaims: jwt.StandardClaims{
 			Subject:   user,
-			ExpiresAt: jwt.Timestamp(exp),
+			ExpiresAt: jwt.NewNumericDate(time.Unix(exp, 0)),
 		},
 	}
 	token, err := builder.Build(claims)
@@ -67,7 +67,7 @@ func getSubscribeToken(channel string, client string, exp int64, rsaPrivateKey *
 		Channel:    channel,
 		Client:     client,
 		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: jwt.Timestamp(exp),
+			ExpiresAt: jwt.NewNumericDate(time.Unix(exp, 0)),
 		},
 	}
 	token, err := builder.Build(claims)
@@ -79,7 +79,7 @@ func getSubscribeToken(channel string, client string, exp int64, rsaPrivateKey *
 
 func Test_tokenVerifierJWT_Signer(t *testing.T) {
 	_, pubKey := generateTestRSAKeys(t)
-	signer, err := newSigner("secret", pubKey)
+	signer, err := newAlgorithms("secret", pubKey)
 	require.NoError(t, err)
 	require.NotNil(t, signer)
 }

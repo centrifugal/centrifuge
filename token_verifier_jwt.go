@@ -9,40 +9,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cristalhq/jwt"
+	"github.com/cristalhq/jwt/v2"
 )
 
 type tokenVerifierJWT struct {
-	mu        sync.RWMutex
-	signer    *signer
-	validator *jwt.Validator
-}
-
-// validAtNowChecker validates whether the token is valid at the current time, based on
-// the values of the NotBefore and ExpiresAt claims.
-// We don't use check based on IssuedAt here since it's disabled in most systems due to
-// time skew reasons.
-func validAtNowChecker() jwt.Check {
-	return func(claims *jwt.StandardClaims) error {
-		now := time.Now()
-		if claims.IsExpired(now) || !claims.HasPassedNotBefore(now) {
-			return jwt.ErrTokenExpired
-		}
-		return nil
-	}
+	mu         sync.RWMutex
+	algorithms *algorithms
 }
 
 func newTokenVerifierJWT(tokenHMACSecretKey string, pubKey *rsa.PublicKey) tokenVerifier {
-	verifier := &tokenVerifierJWT{
-		validator: jwt.NewValidator(
-			validAtNowChecker(),
-		),
-	}
-	signer, err := newSigner(tokenHMACSecretKey, pubKey)
+	verifier := &tokenVerifierJWT{}
+	algorithms, err := newAlgorithms(tokenHMACSecretKey, pubKey)
 	if err != nil {
 		panic(err)
 	}
-	verifier.signer = signer
+	verifier.algorithms = algorithms
 	return verifier
 }
 
@@ -78,91 +59,87 @@ func (c *subscribeTokenClaims) MarshalBinary() ([]byte, error) {
 	return json.Marshal(c)
 }
 
-type signer struct {
-	HS256 jwt.Signer
-	HS384 jwt.Signer
-	HS512 jwt.Signer
-	RS256 jwt.Signer
-	RS384 jwt.Signer
-	RS512 jwt.Signer
+type algorithms struct {
+	HS256 jwt.Verifier
+	HS384 jwt.Verifier
+	HS512 jwt.Verifier
+	RS256 jwt.Verifier
+	RS384 jwt.Verifier
+	RS512 jwt.Verifier
 }
 
-func newSigner(tokenHMACSecretKey string, pubKey *rsa.PublicKey) (*signer, error) {
-	s := &signer{}
+func newAlgorithms(tokenHMACSecretKey string, pubKey *rsa.PublicKey) (*algorithms, error) {
+	alg := &algorithms{}
 
 	// HMAC SHA.
 	if tokenHMACSecretKey != "" {
-		signerHS256, err := jwt.NewHS256([]byte(tokenHMACSecretKey))
+		verifierHS256, err := jwt.NewVerifierHS(jwt.HS256, []byte(tokenHMACSecretKey))
 		if err != nil {
 			return nil, err
 		}
-		signerHS384, err := jwt.NewHS384([]byte(tokenHMACSecretKey))
+		verifierHS384, err := jwt.NewVerifierHS(jwt.HS384, []byte(tokenHMACSecretKey))
 		if err != nil {
 			return nil, err
 		}
-		signerHS512, err := jwt.NewHS512([]byte(tokenHMACSecretKey))
+		verifierHS512, err := jwt.NewVerifierHS(jwt.HS512, []byte(tokenHMACSecretKey))
 		if err != nil {
 			return nil, err
 		}
-		s.HS256 = signerHS256
-		s.HS384 = signerHS384
-		s.HS512 = signerHS512
+		alg.HS256 = verifierHS256
+		alg.HS384 = verifierHS384
+		alg.HS512 = verifierHS512
 	}
 
 	// RSA.
 	if pubKey != nil {
-		// Since we only decode tokens we don't need Private key here.
-		// Can not pass nil to jwt signer constructor since it requires non-nil Private Key.
-		dummyPrivateKey := &rsa.PrivateKey{}
-
-		signerRS256, err := jwt.NewRS256(pubKey, dummyPrivateKey)
+		verifierRS256, err := jwt.NewVerifierRS(jwt.RS256, pubKey)
 		if err != nil {
 			return nil, err
 		}
-		signerRS384, err := jwt.NewRS384(pubKey, dummyPrivateKey)
+		verifierRS384, err := jwt.NewVerifierRS(jwt.RS384, pubKey)
 		if err != nil {
 			return nil, err
 		}
-		signerRS512, err := jwt.NewRS512(pubKey, dummyPrivateKey)
+		verifierRS512, err := jwt.NewVerifierRS(jwt.RS512, pubKey)
 		if err != nil {
 			return nil, err
 		}
-		s.RS256 = signerRS256
-		s.RS384 = signerRS384
-		s.RS512 = signerRS512
+		alg.RS256 = verifierRS256
+		alg.RS384 = verifierRS384
+		alg.RS512 = verifierRS512
 	}
 
-	return s, nil
+	return alg, nil
 }
 
-func (s *signer) verify(token *jwt.Token) error {
-	var signer jwt.Signer
+func (s *algorithms) verify(token *jwt.Token) error {
+	var verifier jwt.Verifier
 	switch token.Header().Algorithm {
 	case jwt.HS256:
-		signer = s.HS256
+		verifier = s.HS256
 	case jwt.HS384:
-		signer = s.HS384
+		verifier = s.HS384
 	case jwt.HS512:
-		signer = s.HS512
+		verifier = s.HS512
 	case jwt.RS256:
-		signer = s.RS256
+		verifier = s.RS256
 	case jwt.RS384:
-		signer = s.RS384
+		verifier = s.RS384
 	case jwt.RS512:
-		signer = s.RS512
+		verifier = s.RS512
 	default:
 		return fmt.Errorf("%w: %s", errUnsupportedAlgorithm, string(token.Header().Algorithm))
 	}
-	if signer == nil {
+	if verifier == nil {
 		return fmt.Errorf("%w: %s", errDisabledAlgorithm, string(token.Header().Algorithm))
 	}
-	return signer.Verify(token.Payload(), token.Signature())
+	return verifier.Verify(token.Payload(), token.Signature())
 }
 
 func (verifier *tokenVerifierJWT) verifySignature(token *jwt.Token) error {
 	verifier.mu.RLock()
 	defer verifier.mu.RUnlock()
-	return verifier.signer.verify(token)
+	return verifier.algorithms.verify(token)
 }
 
 func (verifier *tokenVerifierJWT) VerifyConnectToken(t string) (connectToken, error) {
@@ -182,19 +159,18 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(t string) (connectToken, er
 		return connectToken{}, err
 	}
 
-	err = verifier.validator.Validate(&claims.StandardClaims)
-	if err != nil {
-		if err == jwt.ErrTokenExpired {
-			return connectToken{}, errTokenExpired
-		}
-		return connectToken{}, err
+	now := time.Now()
+	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
+		return connectToken{}, errTokenExpired
 	}
 
 	ct := connectToken{
 		UserID:   claims.StandardClaims.Subject,
-		ExpireAt: int64(claims.StandardClaims.ExpiresAt),
 		Info:     claims.Info,
 		Channels: claims.Channels,
+	}
+	if claims.ExpiresAt != nil {
+		ct.ExpireAt = claims.ExpiresAt.Unix()
 	}
 	if claims.Base64Info != "" {
 		byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
@@ -223,20 +199,19 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(t string) (subscribeToken
 		return subscribeToken{}, err
 	}
 
-	err = verifier.validator.Validate(&claims.StandardClaims)
-	if err != nil {
-		if err == jwt.ErrTokenExpired {
-			return subscribeToken{}, errTokenExpired
-		}
-		return subscribeToken{}, err
+	now := time.Now()
+	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
+		return subscribeToken{}, errTokenExpired
 	}
 
 	st := subscribeToken{
 		Client:          claims.Client,
 		Info:            claims.Info,
 		Channel:         claims.Channel,
-		ExpireAt:        int64(claims.StandardClaims.ExpiresAt),
 		ExpireTokenOnly: claims.ExpireTokenOnly,
+	}
+	if claims.ExpiresAt != nil {
+		st.ExpireAt = claims.ExpiresAt.Unix()
 	}
 	if claims.Base64Info != "" {
 		byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
@@ -251,10 +226,10 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(t string) (subscribeToken
 func (verifier *tokenVerifierJWT) Reload(config Config) error {
 	verifier.mu.Lock()
 	defer verifier.mu.Unlock()
-	signer, err := newSigner(config.TokenHMACSecretKey, config.TokenRSAPublicKey)
+	alg, err := newAlgorithms(config.TokenHMACSecretKey, config.TokenRSAPublicKey)
 	if err != nil {
 		return err
 	}
-	verifier.signer = signer
+	verifier.algorithms = alg
 	return nil
 }
