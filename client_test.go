@@ -148,7 +148,7 @@ func TestClientConnectWithMalformedToken(t *testing.T) {
 	require.Equal(t, disconnect, DisconnectInvalidToken)
 }
 
-func TestClientConnectWithValidToken(t *testing.T) {
+func TestClientConnectWithValidTokenHMAC(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -162,6 +162,29 @@ func TestClientConnectWithValidToken(t *testing.T) {
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
 		Token: getConnTokenHS("42", 0),
+	}, rw)
+	require.Nil(t, disconnect)
+	result := extractConnectResult(replies, client.Transport().Protocol())
+	require.Equal(t, client.ID(), result.Client)
+	require.Equal(t, false, result.Expires)
+}
+
+func TestClientConnectWithValidTokenRSA(t *testing.T) {
+	privateKey, pubKey := generateTestRSAKeys(t)
+
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	config := node.Config()
+	config.TokenRSAPublicKey = pubKey
+	_ = node.Reload(config)
+
+	transport := newTestTransport()
+	client, _ := NewClient(context.Background(), node, transport)
+	var replies []*protocol.Reply
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{
+		Token: getConnToken("42", 0, privateKey),
 	}, rw)
 	require.Nil(t, disconnect)
 	result := extractConnectResult(replies, client.Transport().Protocol())

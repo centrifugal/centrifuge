@@ -49,9 +49,11 @@ func getConnToken(user string, exp int64, rsaPrivateKey *rsa.PrivateKey) string 
 	claims := &connectTokenClaims{
 		Base64Info: "e30=",
 		StandardClaims: jwt.StandardClaims{
-			Subject:   user,
-			ExpiresAt: jwt.NewNumericDate(time.Unix(exp, 0)),
+			Subject: user,
 		},
+	}
+	if exp > 0 {
+		claims.ExpiresAt = jwt.NewNumericDate(time.Unix(exp, 0))
 	}
 	token, err := builder.Build(claims)
 	if err != nil {
@@ -63,12 +65,13 @@ func getConnToken(user string, exp int64, rsaPrivateKey *rsa.PrivateKey) string 
 func getSubscribeToken(channel string, client string, exp int64, rsaPrivateKey *rsa.PrivateKey) string {
 	builder := getTokenBuilder(rsaPrivateKey)
 	claims := &subscribeTokenClaims{
-		Base64Info: "e30=",
-		Channel:    channel,
-		Client:     client,
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Unix(exp, 0)),
-		},
+		Base64Info:     "e30=",
+		Channel:        channel,
+		Client:         client,
+		StandardClaims: jwt.StandardClaims{},
+	}
+	if exp > 0 {
+		claims.ExpiresAt = jwt.NewNumericDate(time.Unix(exp, 0))
 	}
 	token, err := builder.Build(claims)
 	if err != nil {
