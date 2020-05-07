@@ -348,6 +348,11 @@ func (c *Client) Transport() TransportInfo {
 	return c.transport
 }
 
+// Info returns client metadata set by a handler or encoded into the token.
+func (c *Client) Info() Raw {
+	return append(make(Raw, 0, len(c.info)), c.info...)
+}
+
 // Channels returns a map of channels client connection currently subscribed to.
 func (c *Client) Channels() map[string]ChannelContext {
 	c.mu.RLock()
