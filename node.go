@@ -806,7 +806,7 @@ func (n *Node) removePresence(ch string, uid string) error {
 }
 
 // Presence returns a map with information about active clients in channel.
-func (n *Node) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
+func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
 	if n.presenceManager == nil {
 		return nil, ErrorNotAvailable
 	}
@@ -832,7 +832,7 @@ type HistoryResult struct {
 	// StreamPosition embedded here describes current stream top offset and epoch.
 	StreamPosition
 	// Publications extracted from history storage according to HistoryFilter.
-	Publications []*protocol.Publication
+	Publications []*Publication
 }
 
 // History allows to extract Publications in channel.

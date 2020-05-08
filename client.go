@@ -78,7 +78,7 @@ const maxCheckPositionFailures int64 = 2
 
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
-	Info                  Raw
+	Info                  []byte
 	serverSide            bool
 	expireAt              int64
 	positionCheckTime     int64
@@ -90,14 +90,10 @@ type ChannelContext struct {
 type Client struct {
 	mu               sync.RWMutex
 	presenceMu       sync.Mutex // allows to sync presence routine with client closing.
-	info             Raw
 	ctx              context.Context
 	transport        Transport
-	uid              string
-	user             string
 	node             *Node
 	exp              int64
-	publicationsOnce sync.Once
 	publications     *pubQueue
 	channels         map[string]ChannelContext
 	staleTimer       *time.Timer
@@ -107,6 +103,10 @@ type Client struct {
 	eventHub         *ClientEventHub
 	messageWriter    *writer
 	pubSubSync       *recovery.PubSubSync
+	uid              string
+	user             string
+	info             []byte
+	publicationsOnce sync.Once
 	closed           bool
 	authenticated    bool
 }
@@ -364,8 +364,10 @@ func (c *Client) On() *ClientEventHub {
 	return c.eventHub
 }
 
-// Send data to client connection asynchronously.
-func (c *Client) Send(data protocol.Raw) error {
+// Send data to client. This sends an asynchronous message – data will be
+// just written to connection. on client side this message can be handled
+// with Message handler.
+func (c *Client) Send(data []byte) error {
 	p := &protocol.Message{
 		Data: data,
 	}
