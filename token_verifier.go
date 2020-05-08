@@ -3,7 +3,7 @@ package centrifuge
 type tokenVerifier interface {
 	VerifyConnectToken(token string) (connectToken, error)
 	VerifySubscribeToken(token string) (subscribeToken, error)
-	Reload(config Config)
+	Reload(config Config) error
 }
 
 type connectToken struct {

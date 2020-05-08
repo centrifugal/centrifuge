@@ -9,33 +9,16 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
-	"github.com/dgrijalva/jwt-go"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
-func getConnToken(user string, exp int64) string {
-	claims := jwt.MapClaims{"sub": user}
-	if exp > 0 {
-		claims["exp"] = exp
-	}
-	t, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("secret"))
-	if err != nil {
-		panic(err)
-	}
-	return t
+func getConnTokenHS(user string, exp int64) string {
+	return getConnToken(user, exp, nil)
 }
 
-func getSubscribeToken(channel string, client string, exp int64) string {
-	claims := jwt.MapClaims{"channel": channel, "client": client}
-	if exp > 0 {
-		claims["exp"] = exp
-	}
-	t, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("secret"))
-	if err != nil {
-		panic(err)
-	}
-	return t
+func getSubscribeTokenHS(channel string, client string, exp int64) string {
+	return getSubscribeToken(channel, client, exp, nil)
 }
 
 func testReplyWriter(replies *[]*protocol.Reply) *replyWriter {
@@ -165,7 +148,7 @@ func TestClientConnectWithMalformedToken(t *testing.T) {
 	require.Equal(t, disconnect, DisconnectInvalidToken)
 }
 
-func TestClientConnectWithValidToken(t *testing.T) {
+func TestClientConnectWithValidTokenHMAC(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -178,7 +161,30 @@ func TestClientConnectWithValidToken(t *testing.T) {
 	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
-		Token: getConnToken("42", 0),
+		Token: getConnTokenHS("42", 0),
+	}, rw)
+	require.Nil(t, disconnect)
+	result := extractConnectResult(replies, client.Transport().Protocol())
+	require.Equal(t, client.ID(), result.Client)
+	require.Equal(t, false, result.Expires)
+}
+
+func TestClientConnectWithValidTokenRSA(t *testing.T) {
+	privateKey, pubKey := generateTestRSAKeys(t)
+
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	config := node.Config()
+	config.TokenRSAPublicKey = pubKey
+	_ = node.Reload(config)
+
+	transport := newTestTransport()
+	client, _ := NewClient(context.Background(), node, transport)
+	var replies []*protocol.Reply
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{
+		Token: getConnToken("42", 0, privateKey),
 	}, rw)
 	require.Nil(t, disconnect)
 	result := extractConnectResult(replies, client.Transport().Protocol())
@@ -199,7 +205,7 @@ func TestClientConnectWithExpiringToken(t *testing.T) {
 	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
-		Token: getConnToken("42", time.Now().Unix()+10),
+		Token: getConnTokenHS("42", time.Now().Unix()+10),
 	}, rw)
 	require.Nil(t, disconnect)
 	result := extractConnectResult(replies, client.Transport().Protocol())
@@ -221,7 +227,7 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
-		Token: getConnToken("42", 1525541722),
+		Token: getConnTokenHS("42", 1525541722),
 	}, rw)
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorTokenExpired.toProto(), replies[0].Error)
@@ -241,13 +247,13 @@ func TestClientTokenRefresh(t *testing.T) {
 	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{
-		Token: getConnToken("42", 1525541722),
+		Token: getConnTokenHS("42", 1525541722),
 	}, rw)
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorTokenExpired.toProto(), replies[0].Error)
 
 	refreshResp, disconnect := client.refreshCmd(&protocol.RefreshRequest{
-		Token: getConnToken("42", 2525637058),
+		Token: getConnTokenHS("42", 2525637058),
 	})
 	require.Nil(t, disconnect)
 	require.NotEmpty(t, client.ID())
@@ -746,7 +752,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
-		Token:   getSubscribeToken("$wrong_channel", "wrong client", 0),
+		Token:   getSubscribeTokenHS("$wrong_channel", "wrong client", 0),
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
 	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
@@ -754,7 +760,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
-		Token:   getSubscribeToken("$wrong_channel", client.ID(), 0),
+		Token:   getSubscribeTokenHS("$wrong_channel", client.ID(), 0),
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
 	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
@@ -762,7 +768,7 @@ func TestClientSubscribePrivateChannelWithToken(t *testing.T) {
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
-		Token:   getSubscribeToken("$test1", client.ID(), 0),
+		Token:   getSubscribeTokenHS("$test1", client.ID(), 0),
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, replies[0].Error)
@@ -788,7 +794,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
-		Token:   getSubscribeToken("$test1", client.ID(), 10),
+		Token:   getSubscribeTokenHS("$test1", client.ID(), 10),
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
 	require.Equal(t, ErrorTokenExpired.toProto(), replies[0].Error)
@@ -796,7 +802,7 @@ func TestClientSubscribePrivateChannelWithExpiringToken(t *testing.T) {
 	replies = nil
 	subCtx = client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "$test1",
-		Token:   getSubscribeToken("$test1", client.ID(), time.Now().Unix()+10),
+		Token:   getSubscribeTokenHS("$test1", client.ID(), time.Now().Unix()+10),
 	}, rw, false)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, replies[0].Error, "token is valid and not expired yet")
