@@ -778,10 +778,21 @@ func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
 // PersonalChannel returns personal channel for user based on node configuration.
 func (n *Node) PersonalChannel(user string) string {
 	config := n.Config()
+	buf := strings.Builder{}
+
 	if config.UserPersonalChannelNamespace == "" {
-		return config.ChannelUserBoundary + user
+		buf.WriteString(config.ChannelUserBoundary)
+		buf.WriteString(user)
+
+		return buf.String()
 	}
-	return config.UserPersonalChannelNamespace + config.ChannelNamespaceBoundary + config.ChannelUserBoundary + user
+
+	buf.WriteString(config.UserPersonalChannelNamespace)
+	buf.WriteString(config.ChannelNamespaceBoundary)
+	buf.WriteString(config.ChannelUserBoundary)
+	buf.WriteString(user)
+
+	return buf.String()
 }
 
 // addPresence proxies presence adding to engine.

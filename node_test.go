@@ -290,7 +290,6 @@ func BenchmarkHistory(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-
 	}
 	b.StopTimer()
 	b.ReportAllocs()

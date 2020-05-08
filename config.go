@@ -92,7 +92,7 @@ type Config struct {
 	UserSubscribeToPersonal bool
 }
 
-// Validate validates config and returns error if problems found
+// Validate validates config and returns error if problems found.
 func (c *Config) Validate() error {
 	errPrefix := "config error: "
 	pattern := "^[-a-zA-Z0-9_.]{2,}$"
@@ -117,10 +117,10 @@ func (c *Config) Validate() error {
 		name := n.Name
 		match := patternRegexp.MatchString(name)
 		if !match {
-			return errors.New(errPrefix + "wrong namespace name – " + name)
+			return fmt.Errorf("%s wrong namespace name – %s", errPrefix, name)
 		}
 		if stringInSlice(name, nss) {
-			return errors.New(errPrefix + "namespace name must be unique")
+			return fmt.Errorf("%s namespace name must be unique", errPrefix)
 		}
 		if n.HistoryRecover && (n.HistorySize == 0 || n.HistoryLifetime == 0) {
 			return fmt.Errorf("namespace %s: both history size and history lifetime required for history recovery", name)

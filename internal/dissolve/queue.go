@@ -9,7 +9,7 @@ type Job func() error
 
 // queue is an unbounded queue of Job.
 // The queue is goroutine safe.
-// Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT)
+// Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT).
 type queue interface {
 	// Add an Job to the back of the queue
 	// will return false if the queue is closed.
@@ -62,7 +62,7 @@ func newQueue() queue {
 	return sq
 }
 
-// Write mutex must be held when calling
+// Write mutex must be held when calling.
 func (q *queueImpl) resize(n int) {
 	nodes := make([]Job, n)
 	if q.head < q.tail {
@@ -100,7 +100,7 @@ func (q *queueImpl) Add(i Job) bool {
 }
 
 // Close the queue and discard all entried in the queue
-// all goroutines in wait() will return
+// all goroutines in wait() will return.
 func (q *queueImpl) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()

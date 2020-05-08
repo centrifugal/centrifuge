@@ -38,7 +38,7 @@ func newPubQueue() *pubQueue {
 	return sq
 }
 
-// Write mutex must be held when calling
+// Write mutex must be held when calling.
 func (q *pubQueue) resize(n int) {
 	nodes := make([]preparedPub, n)
 	if q.head < q.tail {
@@ -77,7 +77,7 @@ func (q *pubQueue) Add(i preparedPub) bool {
 }
 
 // Close the queue and discard all entries in the queue
-// all goroutines in wait() will return
+// all goroutines in wait() will return.
 func (q *pubQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()

@@ -22,7 +22,8 @@ func TestDissolver(t *testing.T) {
 				return nil
 			})
 			if err != nil {
-				t.Fatalf("Submit returned error: %v", err)
+				t.Errorf("Submit returned error: %v", err)
+				return
 			}
 		}
 	}()

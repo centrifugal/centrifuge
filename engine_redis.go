@@ -180,7 +180,7 @@ type RedisShardConfig struct {
 	ConnectTimeout time.Duration
 }
 
-// subRequest is an internal request to subscribe or unsubscribe from one or more channels
+// subRequest is an internal request to subscribe or unsubscribe from one or more channels.
 type subRequest struct {
 	channels  []channelID
 	subscribe bool
@@ -735,54 +735,103 @@ func (s *shard) useCluster() bool {
 }
 
 func (s *shard) controlChannelID() channelID {
-	return channelID(s.config.Prefix + redisControlChannelSuffix)
+	return channelID(strings.Join([]string{s.config.Prefix, redisControlChannelSuffix}, ""))
 }
 
 func (s *shard) pingChannelID() channelID {
-	return channelID(s.config.Prefix + redisPingChannelSuffix)
+	return channelID(strings.Join([]string{s.config.Prefix, redisPingChannelSuffix}, ""))
 }
 
 func (s *shard) messageChannelID(ch string) channelID {
-	return channelID(s.messagePrefix + ch)
+	return channelID(strings.Join([]string{s.messagePrefix, ch}, ""))
 }
 
 func (s *shard) presenceHashKey(ch string) channelID {
+	var buf strings.Builder
+
 	if s.useCluster() {
-		ch = "{" + ch + "}"
+		buf.WriteString("{")
+		buf.WriteString(ch)
+		buf.WriteString("}")
 	}
-	return channelID(s.config.Prefix + ".presence.data." + ch)
+
+	buf.WriteString(s.config.Prefix)
+	buf.WriteString(".presence.data.")
+	buf.WriteString(ch)
+
+	return channelID(buf.String())
 }
 
 func (s *shard) presenceSetKey(ch string) channelID {
+	var buf strings.Builder
+
 	if s.useCluster() {
-		ch = "{" + ch + "}"
+		buf.WriteString("{")
+		buf.WriteString(ch)
+		buf.WriteString("}")
 	}
-	return channelID(s.config.Prefix + ".presence.expire." + ch)
+
+	buf.WriteString(s.config.Prefix)
+	buf.WriteString(".presence.expire.")
+	buf.WriteString(ch)
+
+	return channelID(buf.String())
 }
 
 func (s *shard) historyListKey(ch string) channelID {
+	var buf strings.Builder
+
 	if s.useCluster() {
-		ch = "{" + ch + "}"
+		buf.WriteString("{")
+		buf.WriteString(ch)
+		buf.WriteString("}")
 	}
-	return channelID(s.config.Prefix + ".history.list." + ch)
+
+	buf.WriteString(s.config.Prefix)
+	buf.WriteString(".history.list.")
+	buf.WriteString(ch)
+
+	return channelID(buf.String())
 }
 
 func (s *shard) historyStreamKey(ch string) channelID {
+	var buf strings.Builder
+
 	if s.useCluster() {
-		ch = "{" + ch + "}"
+		buf.WriteString("{")
+		buf.WriteString(ch)
+		buf.WriteString("}")
 	}
-	return channelID(s.config.Prefix + ".history.stream." + ch)
+
+	buf.WriteString(s.config.Prefix)
+	buf.WriteString(".history.stream.")
+	buf.WriteString(ch)
+
+	return channelID(buf.String())
 }
 
 func (s *shard) historyMetaKey(ch string) channelID {
+	var buf strings.Builder
+
 	if s.useCluster() {
-		ch = "{" + ch + "}"
+		buf.WriteString("{")
+		buf.WriteString(ch)
+		buf.WriteString("}")
 	}
+
 	if s.useStreams {
-		return channelID(s.config.Prefix + ".stream.meta." + ch)
+		buf.WriteString(s.config.Prefix)
+		buf.WriteString(".stream.meta.")
+		buf.WriteString(ch)
+
+		return channelID(buf.String())
 	}
+	buf.WriteString(s.config.Prefix)
 	// TODO v1: rename to list.meta.
-	return channelID(s.config.Prefix + ".seq.meta." + ch)
+	buf.WriteString(".seq.meta.")
+	buf.WriteString(ch)
+
+	return channelID(buf.String())
 }
 
 // Run Redis shard.
@@ -819,7 +868,6 @@ func (s *shard) runForever(fn func()) {
 }
 
 func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
-
 	numWorkers := s.config.PubSubNumWorkers
 	if numWorkers == 0 {
 		numWorkers = runtime.NumCPU()
@@ -1371,7 +1419,6 @@ func (s *shard) Publish(ch string, pub *protocol.Publication, _ *ChannelOptions)
 
 // PublishJoin - see engine interface description.
 func (s *shard) PublishJoin(ch string, join *protocol.Join, _ *ChannelOptions) error {
-
 	eChan := make(chan error, 1)
 
 	data, err := join.Marshal()
@@ -1411,7 +1458,6 @@ func (s *shard) PublishJoin(ch string, join *protocol.Join, _ *ChannelOptions) e
 
 // PublishLeave - see engine interface description.
 func (s *shard) PublishLeave(ch string, leave *protocol.Leave, _ *ChannelOptions) error {
-
 	eChan := make(chan error, 1)
 
 	data, err := leave.Marshal()
@@ -1814,7 +1860,8 @@ func (s *shard) Channels() ([]string, error) {
 	if s.useCluster() {
 		return nil, errors.New("channels command not supported when Redis Cluster is used")
 	}
-	dr := newDataRequest(dataOpChannels, []interface{}{"CHANNELS", s.messagePrefix + "*"})
+
+	dr := newDataRequest(dataOpChannels, []interface{}{"CHANNELS", strings.Join([]string{s.messagePrefix, "*"}, "")})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err

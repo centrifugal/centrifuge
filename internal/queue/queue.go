@@ -6,7 +6,7 @@ import (
 
 // Queue is an unbounded queue of []byte.
 // The queue is goroutine safe.
-// Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT)
+// Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT).
 type Queue interface {
 	// Add an []byte to the back of the queue
 	// will return false if the queue is closed.
@@ -72,7 +72,7 @@ func New() Queue {
 	return sq
 }
 
-// Write mutex must be held when calling
+// Write mutex must be held when calling.
 func (q *byteQueue) resize(n int) {
 	nodes := make([][]byte, n)
 	if q.head < q.tail {
@@ -111,7 +111,7 @@ func (q *byteQueue) Add(i []byte) bool {
 }
 
 // Close the queue and discard all entried in the queue
-// all goroutines in wait() will return
+// all goroutines in wait() will return.
 func (q *byteQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -197,7 +197,7 @@ func (q *byteQueue) Remove() ([]byte, bool) {
 	return i, true
 }
 
-// Return the capacity (without allocations)
+// Return the capacity (without allocations).
 func (q *byteQueue) Cap() int {
 	q.mu.RLock()
 	c := cap(q.nodes)

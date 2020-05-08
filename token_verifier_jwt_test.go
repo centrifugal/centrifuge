@@ -39,7 +39,6 @@ func getTokenBuilder(rsaPrivateKey *rsa.PrivateKey) *jwt.Builder {
 		// For HS we do everything in tests with key `secret`.
 		key := []byte(`secret`)
 		signer, _ = jwt.NewSignerHS(jwt.HS256, key)
-
 	}
 	return jwt.NewBuilder(signer)
 }
