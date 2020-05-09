@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cristalhq/jwt/v2"
+	"github.com/cristalhq/jwt/v3"
 	"github.com/stretchr/testify/require"
 )
 
