@@ -6,7 +6,7 @@ package centrifuge
 // reason field of WebSocket close handshake).
 type Disconnect struct {
 	// Code is disconnect code.
-	Code int `json:"-"`
+	Code int `json:"code"`
 	// Reason is a short description of disconnect.
 	Reason string `json:"reason"`
 	// Reconnect gives client an advice to reconnect after disconnect or not.
