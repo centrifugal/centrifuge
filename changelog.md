@@ -1,3 +1,8 @@
+v0.8.1
+======
+
+* Fix closing connections with `insufficient state` after publish when history recovery feature is on and `PublishOnHistoryAdd` is `false` in Redis Engine config. [#119](https://github.com/centrifugal/centrifuge/issues/119).
+
 v0.8.0
 ======
 

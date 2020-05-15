@@ -152,11 +152,11 @@ func main() {
 				time.Sleep(time.Second)
 				_, err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
 				if err != nil {
-					panic(err.Error())
+					log.Println(err.Error())
 				}
 				_, err = node.History("chat:" + strconv.Itoa(i))
 				if err != nil {
-					panic(err.Error())
+					log.Println(err.Error())
 				}
 			}
 		}(i)
