@@ -160,7 +160,7 @@ func main() {
 		})
 
 		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %#v", client.UserID(), e.Disconnect)
+			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 			return centrifuge.DisconnectReply{}
 		})
 

@@ -150,7 +150,7 @@ func main() {
 		})
 
 		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %#v", client.UserID(), e.Disconnect)
+			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 			return centrifuge.DisconnectReply{}
 		})
 
@@ -277,11 +277,7 @@ func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) erro
 	t.mu.Unlock()
 
 	if disconnect != nil {
-		reason, err := json.Marshal(disconnect)
-		if err != nil {
-			return err
-		}
-		return t.conn.Close(websocket.StatusCode(disconnect.Code), string(reason))
+		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.CloseText())
 	}
 	return t.conn.Close(websocket.StatusNormalClosure, "")
 }

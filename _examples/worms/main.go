@@ -65,7 +65,7 @@ func main() {
 		})
 
 		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("worm disconnected, disconnect: %#v", e.Disconnect)
+			log.Printf("worm disconnected, disconnect: %s", e.Disconnect)
 			return centrifuge.DisconnectReply{}
 		})
 

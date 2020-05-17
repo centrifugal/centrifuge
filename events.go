@@ -58,6 +58,11 @@ type RefreshHandler func(context.Context, *Client, RefreshEvent) RefreshReply
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
+	// Disconnect can optionally contain a custom disconnect object that
+	// was sent from server to client with closing handshake. If this field
+	// exists then client connection was closed from server. If this field
+	// is nil then this means that client disconnected normally and connection
+	// closing was initiated by client side.
 	Disconnect *Disconnect
 }
 

@@ -1,16 +1,50 @@
 package centrifuge
 
+import (
+	"fmt"
+	"strings"
+	"sync"
+)
+
 // Disconnect allows to configure how client will be disconnected from server.
 // The important note that Disconnect serialized to JSON must be less than 127 bytes
 // due to WebSocket protocol limitations (because at moment we send Disconnect inside
 // reason field of WebSocket close handshake).
 type Disconnect struct {
 	// Code is disconnect code.
-	Code int `json:"-"`
+	Code int `json:"code,omitempty"`
 	// Reason is a short description of disconnect.
 	Reason string `json:"reason"`
 	// Reconnect gives client an advice to reconnect after disconnect or not.
 	Reconnect bool `json:"reconnect"`
+
+	closeTextOnce   sync.Once
+	cachedCloseText string
+}
+
+// String representation.
+func (d *Disconnect) String() string {
+	return fmt.Sprintf("code: %d, reason: %s, reconnect: %t", d.Code, d.Reason, d.Reconnect)
+}
+
+// CloseText allows to build disconnect advice sent inside close frame.
+// Note that at moment we don't encode Code to not duplicate information
+// since it is sent separately as Code of WebSocket Close Frame.
+func (d *Disconnect) CloseText() string {
+	d.closeTextOnce.Do(func() {
+		buf := strings.Builder{}
+		buf.WriteString(`{"reason":"`)
+		buf.WriteString(d.Reason)
+		buf.WriteString(`","reconnect":`)
+		if d.Reconnect {
+			buf.WriteString("true")
+		} else {
+			buf.WriteString("false")
+		}
+		buf.WriteString(`}`)
+		d.cachedCloseText = buf.String()
+	})
+	return d.cachedCloseText
 }
 
 // Some predefined disconnect structures used by library internally. Though

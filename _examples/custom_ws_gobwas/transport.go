@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"net"
 	"sync"
@@ -92,11 +91,7 @@ func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) erro
 	t.mu.Unlock()
 
 	if disconnect != nil {
-		reason, err := json.Marshal(disconnect)
-		if err != nil {
-			return err
-		}
-		data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), string(reason))
+		data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), disconnect.CloseText())
 		wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
 		return t.conn.Close()
 	}
