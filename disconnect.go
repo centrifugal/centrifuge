@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,6 +11,9 @@ import (
 // The important note that Disconnect serialized to JSON must be less than 127 bytes
 // due to WebSocket protocol limitations (because at moment we send Disconnect inside
 // reason field of WebSocket close handshake).
+// Note that due to performance reasons we cache Disconnect text representation
+// for Close Frame on first send to client so changing field values inside existing
+// Disconnect instance won't be reflected in WebSocket/Sockjs Close frames.
 type Disconnect struct {
 	// Code is disconnect code.
 	Code int `json:"code,omitempty"`
@@ -28,14 +32,15 @@ func (d *Disconnect) String() string {
 }
 
 // CloseText allows to build disconnect advice sent inside close frame.
-// Note that at moment we don't encode Code to not duplicate information
-// since it is sent separately as Code of WebSocket Close Frame.
+// At moment we don't encode Code here to not duplicate information
+// since it is sent separately as Code of WebSocket/SockJS Close Frame.
 func (d *Disconnect) CloseText() string {
 	d.closeTextOnce.Do(func() {
 		buf := strings.Builder{}
-		buf.WriteString(`{"reason":"`)
-		buf.WriteString(d.Reason)
-		buf.WriteString(`","reconnect":`)
+		buf.WriteString(`{"reason":`)
+		reason, _ := json.Marshal(d.Reason)
+		buf.Write(reason)
+		buf.WriteString(`,"reconnect":`)
 		if d.Reconnect {
 			buf.WriteString("true")
 		} else {
