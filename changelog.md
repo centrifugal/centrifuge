@@ -1,3 +1,9 @@
+v0.8.2
+======
+
+* Fix Disconnect Code field unmarshalling, introduce helper method `Disconnect.CloseText()` to build close text sent to client in Close Frame. 
+* Fix server-side Join event wrong channel when server subscribed client to several channels with JoinLeave feature on
+
 v0.8.1
 ======
 
