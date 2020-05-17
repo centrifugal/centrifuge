@@ -16,10 +16,9 @@ import (
 
 	_ "net/http/pprof"
 
+	"github.com/centrifugal/centrifuge"
 	"github.com/gobwas/ws"
 	"github.com/mailru/easygo/netpoll"
-
-	"github.com/centrifugal/centrifuge"
 )
 
 var (

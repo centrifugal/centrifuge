@@ -15,9 +15,8 @@ import (
 
 	_ "net/http/pprof"
 
-	"nhooyr.io/websocket"
-
 	"github.com/centrifugal/centrifuge"
+	"nhooyr.io/websocket"
 )
 
 type clientMessage struct {

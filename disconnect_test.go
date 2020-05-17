@@ -16,13 +16,3 @@ func TestDisconnect_CloseText(t *testing.T) {
 	closeText = d.CloseText()
 	require.Equal(t, `{"reason":"force disconnect","reconnect":false}`, closeText)
 }
-
-var benchCloseTextString string
-
-func BenchmarkDisconnect_CloseText(b *testing.B) {
-	d := DisconnectForceReconnect
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		benchCloseTextString = d.CloseText()
-	}
-}

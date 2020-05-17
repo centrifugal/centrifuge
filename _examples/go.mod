@@ -20,5 +20,5 @@ require (
 	github.com/prometheus/client_golang v0.9.2
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
-	nhooyr.io/websocket v1.8.4
+	nhooyr.io/websocket v1.8.5
 )
