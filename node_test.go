@@ -127,6 +127,39 @@ func TestUserAllowed(t *testing.T) {
 	require.False(t, node.userAllowed("channel#1,2", "3"))
 }
 
+func TestStripEnv(t *testing.T) {
+	node := nodeWithTestEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ch, found := node.stripEnv("test")
+	require.Equal(t, "test", ch)
+	require.False(t, found)
+
+	ch, found = node.stripEnv("/xxx/test")
+	require.Equal(t, "test", ch)
+	require.True(t, found)
+
+	ch, found = node.stripEnv("/xxx-test")
+	require.Equal(t, "/xxx-test", ch)
+	require.False(t, found)
+
+	ch, found = node.stripEnv("xxx/test")
+	require.Equal(t, "xxx/test", ch)
+	require.False(t, found)
+
+	ch, found = node.stripEnv("/xxx/yyy/test")
+	require.Equal(t, "yyy/test", ch)
+	require.True(t, found)
+
+	ch, found = node.stripEnv("//")
+	require.Equal(t, "//", ch)
+	require.False(t, found)
+
+	ch, found = node.stripEnv("/")
+	require.Equal(t, "/", ch)
+	require.False(t, found)
+}
+
 func TestSetConfig(t *testing.T) {
 	node := nodeWithTestEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()

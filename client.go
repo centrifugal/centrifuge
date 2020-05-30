@@ -106,6 +106,7 @@ type Client struct {
 	uid              string
 	user             string
 	info             []byte
+	env              string
 	publicationsOnce sync.Once
 	closed           bool
 	authenticated    bool
@@ -1151,6 +1152,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		c.user = credentials.UserID
 		c.info = credentials.Info
 		c.exp = credentials.ExpireAt
+		c.env = credentials.Env
 		c.mu.Unlock()
 	case cmd.Token != "":
 		var (
@@ -1170,6 +1172,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		c.mu.Lock()
 		c.user = token.UserID
 		c.exp = token.ExpireAt
+		c.env = token.Env
 		c.mu.Unlock()
 
 		if len(token.Info) > 0 {

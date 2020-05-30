@@ -90,6 +90,8 @@ type Config struct {
 	// Only users with user ID defined will subscribe to personal channels, anonymous
 	// users are ignored.
 	UserSubscribeToPersonal bool
+	// ChannelEnvDelimiter string
+	ChannelEnvDelimiter string
 }
 
 // Validate validates config and returns error if problems found
@@ -174,6 +176,7 @@ var DefaultConfig = Config{
 	ChannelNamespaceBoundary: ":", // so namespace "public" can be used as "public:news"
 	ChannelUserBoundary:      "#", // so user limited channel is "user#2694" where "2696" is user ID
 	ChannelUserSeparator:     ",", // so several users limited channel is "dialog#2694,3019"
+	ChannelEnvDelimiter:      "",  // so channel with env set will be like "/env/$public:news"
 
 	ClientPresencePingInterval:      25 * time.Second,
 	ClientPresenceExpireInterval:    60 * time.Second,

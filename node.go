@@ -905,6 +905,47 @@ func (n *Node) privateChannel(ch string) bool {
 	return strings.HasPrefix(ch, n.config.ChannelPrivatePrefix)
 }
 
+// stripEnv ...
+func (n *Node) stripEnv(ch string) (string, bool) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.config.ChannelEnvSeparator == "" {
+		return ch, false
+	}
+	if strings.HasPrefix(ch, n.config.ChannelEnvSeparator) {
+		index := strings.Index(ch[1:], n.config.ChannelEnvSeparator)
+		if index > 0 {
+			return ch[index+2:], true
+		}
+	}
+	return ch, false
+}
+
+func (n *Node) hasEnv(ch string, env string) bool {
+	if env == "" {
+		return true
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if !strings.HasPrefix(ch, n.config.ChannelEnvSeparator) || len(ch) < len(env)+2 {
+		return false
+	}
+	return ch[0:1+len(env)] == n.config.ChannelEnvSeparator+env+n.config.ChannelEnvSeparator
+}
+
+// stripEnv ...
+func (n *Node) addEnv(ch string, env string) string {
+	if env == "" {
+		return ch
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.config.ChannelEnvSeparator == "" {
+		return ch
+	}
+	return n.config.ChannelEnvSeparator + env + n.config.ChannelEnvSeparator + ch
+}
+
 // userAllowed checks if user can subscribe on channel - as channel
 // can contain special part in the end to indicate which users allowed
 // to subscribe on it.

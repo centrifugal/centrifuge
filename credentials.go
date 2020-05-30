@@ -4,6 +4,9 @@ import "context"
 
 // Credentials allows to authenticate connection when set into context.
 type Credentials struct {
+	// Env used to set connection environment. This automatically enables using
+	// environment prefix for channels.
+	Env string
 	// UserID tells library an ID of connecting user.
 	UserID string
 	// ExpireAt allows to set time in future when connection must be validated.
