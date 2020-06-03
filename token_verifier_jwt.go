@@ -34,6 +34,7 @@ var (
 )
 
 type connectTokenClaims struct {
+	Env        string          `json:"env,omitempty"`
 	Info       json.RawMessage `json:"info,omitempty"`
 	Base64Info string          `json:"b64info,omitempty"`
 	Channels   []string        `json:"channels,omitempty"`
@@ -165,6 +166,7 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(t string) (connectToken, er
 	}
 
 	ct := connectToken{
+		Env:      claims.Env,
 		UserID:   claims.StandardClaims.Subject,
 		Info:     claims.Info,
 		Channels: claims.Channels,

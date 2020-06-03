@@ -29,6 +29,24 @@ func TestConfigValidateInvalidNamespaceName(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestConfigValidateInvalidEnvDelimiters(t *testing.T) {
+	c := DefaultConfig
+	err := c.Validate()
+	require.NoError(t, err)
+	c.ChannelEnvDelimiters = "}"
+	err = c.Validate()
+	require.Error(t, err)
+	c.ChannelEnvDelimiters = "ЬЬ"
+	err = c.Validate()
+	require.Error(t, err)
+	c.ChannelEnvDelimiters = "|||"
+	err = c.Validate()
+	require.Error(t, err)
+	c.ChannelEnvDelimiters = "{}"
+	err = c.Validate()
+	require.NoError(t, err)
+}
+
 func TestConfigValidateDuplicateNamespaceName(t *testing.T) {
 	c := DefaultConfig
 	c.Namespaces = []ChannelNamespace{

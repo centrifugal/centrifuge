@@ -760,6 +760,7 @@ func (n *Node) Disconnect(user string, opts ...DisconnectOption) error {
 
 // namespaceName returns namespace name from channel if exists.
 func (n *Node) namespaceName(ch string) string {
+	ch, _ = n.stripEnv(ch)
 	cTrim := strings.TrimPrefix(ch, n.config.ChannelPrivatePrefix)
 	if n.config.ChannelNamespaceBoundary != "" && strings.Contains(cTrim, n.config.ChannelNamespaceBoundary) {
 		parts := strings.SplitN(cTrim, n.config.ChannelNamespaceBoundary, 2)
@@ -905,15 +906,14 @@ func (n *Node) privateChannel(ch string) bool {
 	return strings.HasPrefix(ch, n.config.ChannelPrivatePrefix)
 }
 
-// stripEnv ...
 func (n *Node) stripEnv(ch string) (string, bool) {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	if n.config.ChannelEnvSeparator == "" {
+	if n.config.ChannelEnvDelimiters == "" {
 		return ch, false
 	}
-	if strings.HasPrefix(ch, n.config.ChannelEnvSeparator) {
-		index := strings.Index(ch[1:], n.config.ChannelEnvSeparator)
+	envStartSymbol := string(n.config.ChannelEnvDelimiters[0])
+	if strings.HasPrefix(ch, envStartSymbol) {
+		envEndSymbol := string(n.config.ChannelEnvDelimiters[1])
+		index := strings.Index(ch[1:], envEndSymbol)
 		if index > 0 {
 			return ch[index+2:], true
 		}
@@ -921,29 +921,18 @@ func (n *Node) stripEnv(ch string) (string, bool) {
 	return ch, false
 }
 
-func (n *Node) hasEnv(ch string, env string) bool {
+func (n *Node) hasValidEnv(ch string, env string) bool {
 	if env == "" {
 		return true
 	}
 	n.mu.RLock()
 	defer n.mu.RUnlock()
-	if !strings.HasPrefix(ch, n.config.ChannelEnvSeparator) || len(ch) < len(env)+2 {
+	envStartSymbol := string(n.config.ChannelEnvDelimiters[0])
+	if !strings.HasPrefix(ch, envStartSymbol) || len(ch) < len(env)+2 {
 		return false
 	}
-	return ch[0:1+len(env)] == n.config.ChannelEnvSeparator+env+n.config.ChannelEnvSeparator
-}
-
-// stripEnv ...
-func (n *Node) addEnv(ch string, env string) string {
-	if env == "" {
-		return ch
-	}
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	if n.config.ChannelEnvSeparator == "" {
-		return ch
-	}
-	return n.config.ChannelEnvSeparator + env + n.config.ChannelEnvSeparator + ch
+	envEndSymbol := string(n.config.ChannelEnvDelimiters[1])
+	return strings.HasPrefix(ch, envStartSymbol+env+envEndSymbol)
 }
 
 // userAllowed checks if user can subscribe on channel - as channel

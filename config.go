@@ -90,8 +90,9 @@ type Config struct {
 	// Only users with user ID defined will subscribe to personal channels, anonymous
 	// users are ignored.
 	UserSubscribeToPersonal bool
-	// ChannelEnvDelimiter string
-	ChannelEnvDelimiter string
+	// ChannelEnvDelimiter string. Must contain two ascii symbols. If set to "[]" then a
+	// channel with env set should look like "[env]$public:news"
+	ChannelEnvDelimiters string
 }
 
 // Validate validates config and returns error if problems found
@@ -137,6 +138,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("namespace for user personal channel not found: %s", personalChannelNamespace)
 	}
 
+	asciiRegexp := regexp.MustCompile("\\w+")
+
+	if c.ChannelEnvDelimiters != "" && len(c.ChannelEnvDelimiters) != 2 && !asciiRegexp.Match([]byte(c.ChannelEnvDelimiters)) {
+		return errors.New("invalid channel env delimiters")
+	}
+
 	return nil
 }
 
@@ -176,7 +183,6 @@ var DefaultConfig = Config{
 	ChannelNamespaceBoundary: ":", // so namespace "public" can be used as "public:news"
 	ChannelUserBoundary:      "#", // so user limited channel is "user#2694" where "2696" is user ID
 	ChannelUserSeparator:     ",", // so several users limited channel is "dialog#2694,3019"
-	ChannelEnvDelimiter:      "",  // so channel with env set will be like "/env/$public:news"
 
 	ClientPresencePingInterval:      25 * time.Second,
 	ClientPresenceExpireInterval:    60 * time.Second,

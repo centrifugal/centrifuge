@@ -1498,6 +1498,11 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, server
 		return ChannelOptions{}, ErrorPermissionDenied, nil
 	}
 
+	if !serverSide && !c.node.hasValidEnv(channel, c.env) {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "channel belongs to another environment", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "env": c.env}))
+		return ChannelOptions{}, ErrorPermissionDenied, nil
+	}
+
 	if !chOpts.Anonymous && c.user == "" && !insecure {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "anonymous user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		return ChannelOptions{}, ErrorPermissionDenied, nil
@@ -2053,6 +2058,11 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 	}
 
 	resp := &clientproto.PublishResponse{}
+
+	if !c.node.hasValidEnv(ch, c.env) {
+		resp.Error = ErrorPermissionDenied.toProto()
+		return resp, nil
+	}
 
 	chOpts, ok := c.node.ChannelOpts(ch)
 	if !ok {

@@ -316,14 +316,53 @@ func BenchmarkHistory(b *testing.B) {
 	}
 
 	b.ResetTimer()
-
-	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := e.node.History(channel)
 		if err != nil {
 			b.Fatal(err)
 		}
 
+	}
+	b.StopTimer()
+	b.ReportAllocs()
+}
+
+var validEnv bool
+
+func BenchmarkHasValidEnv(b *testing.B) {
+	e := testMemoryEngine()
+	conf := e.node.Config()
+	conf.ChannelEnvDelimiters = "()"
+	err := e.node.Reload(conf)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		validEnv = e.node.hasValidEnv("(test)test", "test")
+		if !validEnv {
+			b.Fatal(err)
+		}
+
+	}
+	b.StopTimer()
+	b.ReportAllocs()
+}
+
+var strippedChannel string
+
+func BenchmarkStripEnv(b *testing.B) {
+	e := testMemoryEngine()
+	conf := e.node.Config()
+	conf.ChannelEnvDelimiters = "()"
+	err := e.node.Reload(conf)
+	require.NoError(b, err)
+	channel := "(test)test"
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		strippedChannel, _ = e.node.stripEnv(channel)
+		if strippedChannel != "test" {
+			b.Fatal("env not properly stripped")
+		}
 	}
 	b.StopTimer()
 	b.ReportAllocs()
