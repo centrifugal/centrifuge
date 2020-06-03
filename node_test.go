@@ -127,36 +127,56 @@ func TestUserAllowed(t *testing.T) {
 	require.False(t, node.userAllowed("channel#1,2", "3"))
 }
 
+func TestHasValidEnv(t *testing.T) {
+	node := nodeWithTestEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	conf := node.Config()
+	conf.ChannelEnvDelimiters = "[]"
+	err := node.Reload(conf)
+	require.NoError(t, err)
+
+	require.True(t, node.hasValidEnv("[test]channel", ""))
+	require.True(t, node.hasValidEnv("[test]channel", "test"))
+	require.False(t, node.hasValidEnv("[test]channel", "test2"))
+	require.False(t, node.hasValidEnv("ss[test2]channel", "test2"))
+}
+
 func TestStripEnv(t *testing.T) {
 	node := nodeWithTestEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	conf := node.Config()
+	conf.ChannelEnvDelimiters = "[]"
+	err := node.Reload(conf)
+	require.NoError(t, err)
 
 	ch, found := node.stripEnv("test")
 	require.Equal(t, "test", ch)
 	require.False(t, found)
 
-	ch, found = node.stripEnv("/xxx/test")
+	ch, found = node.stripEnv("[xxx]test")
 	require.Equal(t, "test", ch)
 	require.True(t, found)
 
-	ch, found = node.stripEnv("/xxx-test")
-	require.Equal(t, "/xxx-test", ch)
+	ch, found = node.stripEnv("[xxx-test")
+	require.Equal(t, "[xxx-test", ch)
 	require.False(t, found)
 
-	ch, found = node.stripEnv("xxx/test")
-	require.Equal(t, "xxx/test", ch)
+	ch, found = node.stripEnv("xxx]test")
+	require.Equal(t, "xxx]test", ch)
 	require.False(t, found)
 
-	ch, found = node.stripEnv("/xxx/yyy/test")
-	require.Equal(t, "yyy/test", ch)
+	ch, found = node.stripEnv("[xxx]yyy[test")
+	require.Equal(t, "yyy[test", ch)
 	require.True(t, found)
 
-	ch, found = node.stripEnv("//")
-	require.Equal(t, "//", ch)
+	ch, found = node.stripEnv("[]")
+	require.Equal(t, "[]", ch)
 	require.False(t, found)
 
-	ch, found = node.stripEnv("/")
-	require.Equal(t, "/", ch)
+	ch, found = node.stripEnv("[")
+	require.Equal(t, "[", ch)
 	require.False(t, found)
 }
 
@@ -332,13 +352,13 @@ var validEnv bool
 func BenchmarkHasValidEnv(b *testing.B) {
 	e := testMemoryEngine()
 	conf := e.node.Config()
-	conf.ChannelEnvDelimiters = "()"
+	conf.ChannelEnvDelimiters = "[]"
 	err := e.node.Reload(conf)
 	require.NoError(b, err)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		validEnv = e.node.hasValidEnv("(test)test", "test")
+		validEnv = e.node.hasValidEnv("[test]test", "test")
 		if !validEnv {
 			b.Fatal(err)
 		}
@@ -353,10 +373,10 @@ var strippedChannel string
 func BenchmarkStripEnv(b *testing.B) {
 	e := testMemoryEngine()
 	conf := e.node.Config()
-	conf.ChannelEnvDelimiters = "()"
+	conf.ChannelEnvDelimiters = "[]"
 	err := e.node.Reload(conf)
 	require.NoError(b, err)
-	channel := "(test)test"
+	channel := "[test]test"
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		strippedChannel, _ = e.node.stripEnv(channel)
