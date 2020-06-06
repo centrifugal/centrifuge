@@ -41,24 +41,24 @@ func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
 
-func (t *customWebsocketTransport) read() ([]byte, error) {
+func (t *customWebsocketTransport) read() ([]byte, bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	h, r, err := wsutil.NextReader(t.conn, ws.StateServerSide)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if h.OpCode.IsControl() {
-		return nil, wsutil.ControlFrameHandler(t.conn, ws.StateServerSide)(h, r)
+		return nil, true, wsutil.ControlFrameHandler(t.conn, ws.StateServerSide)(h, r)
 	}
 
 	data, err := ioutil.ReadAll(r)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return data, nil
+	return data, false, nil
 }
 
 func (t *customWebsocketTransport) Write(data []byte) error {
@@ -92,10 +92,10 @@ func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) erro
 
 	if disconnect != nil {
 		data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), disconnect.CloseText())
-		wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
+		_ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
 		return t.conn.Close()
 	}
 	data := ws.NewCloseFrameBody(ws.StatusNormalClosure, "")
-	wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
+	_ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
 	return t.conn.Close()
 }

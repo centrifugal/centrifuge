@@ -52,9 +52,10 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 	cfg.ClientInsecure = true
+	cfg.TokenHMACSecretKey = "secret"
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		centrifuge.ChannelNamespace{
+		{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:         true,
@@ -97,7 +98,7 @@ func main() {
 		})
 
 		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+		log.Printf("user %s connected via %s with format: %s", client.UserID(), transport.Name(), transport.Protocol())
 
 		// Connect handler should not block, so start separate goroutine to
 		// periodically send messages to client.
@@ -145,7 +146,7 @@ func main() {
 
 		protoType := centrifuge.ProtocolTypeJSON
 
-		upgrader := ws.Upgrader{
+		up := ws.Upgrader{
 			OnRequest: func(uri []byte) error {
 				if strings.Contains(string(uri), "format=protobuf") {
 					protoType = centrifuge.ProtocolTypeProtobuf
@@ -155,10 +156,10 @@ func main() {
 		}
 
 		// Zero-copy upgrade to WebSocket connection.
-		hs, err := upgrader.Upgrade(safeConn)
+		hs, err := up.Upgrade(safeConn)
 		if err != nil {
 			log.Printf("%s: upgrade error: %v", nameConn(conn), err)
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 
@@ -168,23 +169,23 @@ func main() {
 		client, err := centrifuge.NewClient(context.Background(), node, transport)
 		if err != nil {
 			log.Printf("%s: client create error: %v", nameConn(conn), err)
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 
 		// Create netpoll event descriptor for conn.
 		// We want to handle only read events of it.
-		desc := netpoll.Must(netpoll.HandleRead(conn))
+		desc := netpoll.Must(netpoll.HandleReadOnce(conn))
 
 		// Subscribe to events about conn.
-		poller.Start(desc, func(ev netpoll.Event) {
+		_ = poller.Start(desc, func(ev netpoll.Event) {
 			if ev&(netpoll.EventReadHup|netpoll.EventHup) != 0 {
 				// When ReadHup or Hup received, this mean that client has
 				// closed at least write end of the connection or connections
 				// itself. So we want to stop receive events about such conn
 				// and remove it from the chat registry.
-				poller.Stop(desc)
-				client.Close(nil)
+				_ = poller.Stop(desc)
+				_ = client.Close(nil)
 				return
 			}
 			// Here we can read some new message from connection.
@@ -193,16 +194,20 @@ func main() {
 			// We do not want to spawn a new goroutine to read single message.
 			// But we want to reuse previously spawned goroutine.
 			pool.Schedule(func() {
-				if data, err := transport.read(); err != nil {
+				if data, isControl, err := transport.read(); err != nil {
 					// When receive failed, we can only disconnect broken
 					// connection and stop to receive events about it.
-					poller.Stop(desc)
-					client.Close(nil)
+					_ = poller.Stop(desc)
+					_ = client.Close(nil)
 				} else {
-					ok := client.Handle(data)
-					if !ok {
-						return
+					if !isControl {
+						ok := client.Handle(data)
+						if !ok {
+							_ = poller.Stop(desc)
+							return
+						}
 					}
+					_ = poller.Resume(desc)
 				}
 			})
 		})
@@ -227,7 +232,7 @@ func main() {
 	accept := make(chan error, 1)
 
 	// Subscribe to events about listener.
-	poller.Start(acceptDesc, func(e netpoll.Event) {
+	_ = poller.Start(acceptDesc, func(e netpoll.Event) {
 		// We do not want to accept incoming connection when goroutine pool is
 		// busy. So if there are no free goroutines during 1ms we want to
 		// cooldown the server and do not receive connection for some short
@@ -261,7 +266,7 @@ func main() {
 			time.Sleep(delay)
 		}
 
-		poller.Resume(acceptDesc)
+		_ = poller.Resume(acceptDesc)
 	})
 
 	go func() {
