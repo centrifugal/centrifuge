@@ -164,6 +164,11 @@ func main() {
 			return centrifuge.DisconnectReply{}
 		})
 
+		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
+			log.Printf("user %s still connected", client.UserID())
+			return centrifuge.PresenceReply{}
+		})
+
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 

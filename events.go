@@ -133,6 +133,18 @@ type PublishReply struct {
 // PublishHandler called when client publishes into channel.
 type PublishHandler func(PublishEvent) PublishReply
 
+// PresenceEvent ...
+type PresenceEvent struct{}
+
+// PresenceReply ...
+type PresenceReply struct{}
+
+// PresenceHandler called periodically while connection alive.
+// This is a helper to do periodic things which can tolerate
+// some approximation in time. This callback will run every
+// ClientPresencePingInterval and can save you a timer.
+type PresenceHandler func(PresenceEvent) PresenceReply
+
 // SubRefreshEvent contains fields related to subscription refresh event.
 type SubRefreshEvent struct {
 	// Channel to which SubRefreshEvent belongs to.
