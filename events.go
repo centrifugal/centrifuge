@@ -32,7 +32,8 @@ type ConnectReply struct {
 	Channels []string
 }
 
-// ConnectingHandler called when new client authenticates on server.
+// ConnectingHandler called when new client authenticates on server. This handler
+// will be called from many goroutines, remember to synchronize your operations inside.
 type ConnectingHandler func(context.Context, TransportInfo, ConnectEvent) ConnectReply
 
 // ConnectedHandler called when new client connects to server.
@@ -53,8 +54,22 @@ type RefreshReply struct {
 }
 
 // RefreshHandler called when it's time to validate client connection and
-// update it's expiration time.
+// update it's expiration time. This handler will be called from many goroutines,
+// remember to synchronize your operations inside.
 type RefreshHandler func(context.Context, *Client, RefreshEvent) RefreshReply
+
+// PresenceEvent ...
+type PresenceEvent struct{}
+
+// PresenceReply ...
+type PresenceReply struct{}
+
+// PresenceHandler called periodically while connection alive. This is a helper
+// to do periodic things which can tolerate some approximation in time. This
+// callback will run every ClientPresenceInterval and can save you a timer.
+// This handler will be called from many goroutines, remember to synchronize your
+// operations inside.
+type PresenceHandler func(context.Context, *Client, PresenceEvent) PresenceReply
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
@@ -100,8 +115,7 @@ type UnsubscribeEvent struct {
 }
 
 // UnsubscribeReply contains fields determining the reaction on unsubscribe event.
-type UnsubscribeReply struct {
-}
+type UnsubscribeReply struct{}
 
 // UnsubscribeHandler called when client unsubscribed from channel.
 type UnsubscribeHandler func(UnsubscribeEvent) UnsubscribeReply
@@ -132,18 +146,6 @@ type PublishReply struct {
 
 // PublishHandler called when client publishes into channel.
 type PublishHandler func(PublishEvent) PublishReply
-
-// PresenceEvent ...
-type PresenceEvent struct{}
-
-// PresenceReply ...
-type PresenceReply struct{}
-
-// PresenceHandler called periodically while connection alive.
-// This is a helper to do periodic things which can tolerate
-// some approximation in time. This callback will run every
-// ClientPresencePingInterval and can save you a timer.
-type PresenceHandler func(PresenceEvent) PresenceReply
 
 // SubRefreshEvent contains fields related to subscription refresh event.
 type SubRefreshEvent struct {

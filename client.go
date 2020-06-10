@@ -27,7 +27,6 @@ type ClientEventHub struct {
 	subRefreshHandler  SubRefreshHandler
 	rpcHandler         RPCHandler
 	messageHandler     MessageHandler
-	presenceHandler    PresenceHandler
 }
 
 // Disconnect allows to set DisconnectHandler.
@@ -70,12 +69,6 @@ func (c *ClientEventHub) Unsubscribe(h UnsubscribeHandler) {
 // PublishHandler called when client publishes message into channel.
 func (c *ClientEventHub) Publish(h PublishHandler) {
 	c.publishHandler = h
-}
-
-// Presence allows to set PresenceHandler.
-// PresenceHandler called periodically while client connection alive.
-func (c *ClientEventHub) Presence(h PresenceHandler) {
-	c.presenceHandler = h
 }
 
 // We poll current position in channel from history storage periodically.
@@ -249,11 +242,11 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 
 // updatePresence used for various periodic actions we need to do with client connections.
 func (c *Client) updatePresence() {
+	if c.node.eventHub.presenceHandler != nil {
+		_ = c.node.eventHub.presenceHandler(c.ctx, c, PresenceEvent{})
+	}
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
-	if c.eventHub.presenceHandler != nil {
-		_ = c.eventHub.presenceHandler(PresenceEvent{})
-	}
 	config := c.node.Config()
 	c.mu.Lock()
 	if c.closed {
@@ -299,7 +292,7 @@ func (c *Client) updatePresence() {
 // Lock must be held outside.
 func (c *Client) addPresenceUpdate() {
 	config := c.node.Config()
-	presenceInterval := config.ClientPresencePingInterval
+	presenceInterval := config.ClientPresenceUpdateInterval
 	c.presenceTimer = time.AfterFunc(presenceInterval, c.updatePresence)
 }
 
@@ -786,11 +779,6 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 	if c.node.eventHub.connectedHandler != nil {
 		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
-	c.mu.Lock()
-	if !c.closed {
-		c.addPresenceUpdate()
-	}
-	c.mu.Unlock()
 	return nil
 }
 
@@ -1247,6 +1235,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	if c.staleTimer != nil {
 		c.staleTimer.Stop()
 	}
+	c.addPresenceUpdate()
 	c.mu.Unlock()
 
 	err := c.node.addClient(c)

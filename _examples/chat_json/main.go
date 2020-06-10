@@ -110,6 +110,11 @@ func main() {
 		}
 	})
 
+	node.On().ClientPresence(func(ctx context.Context, client *centrifuge.Client, e centrifuge.PresenceEvent) centrifuge.PresenceReply {
+		log.Printf("user %s still connected (client ID %s)", client.UserID(), client.ID())
+		return centrifuge.PresenceReply{}
+	})
+
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
@@ -162,11 +167,6 @@ func main() {
 		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
 			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 			return centrifuge.DisconnectReply{}
-		})
-
-		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
-			log.Printf("user %s still connected", client.UserID())
-			return centrifuge.PresenceReply{}
 		})
 
 		transport := client.Transport()
