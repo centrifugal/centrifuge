@@ -189,17 +189,13 @@ func (c *Client) onTimerOp() {
 	}
 	timerOp := c.timerOp
 	c.mu.Unlock()
-	var needNext bool
 	switch timerOp {
 	case timerOpStale:
-		needNext = c.closeUnauthenticated()
+		c.closeUnauthenticated()
 	case timerOpPresence:
-		needNext = c.updatePresence()
+		c.updatePresence()
 	case timerOpExpire:
-		needNext = c.expire()
-	}
-	if !needNext {
-		return
+		c.expire()
 	}
 }
 
@@ -208,9 +204,7 @@ func (c *Client) scheduleNextTimer() {
 	if c.closed {
 		return
 	}
-	if c.timer != nil {
-		c.timer.Stop()
-	}
+	c.stopTimer()
 	var nextTimerAt int64
 	if c.nextExpire > 0 && c.nextExpire < c.nextPresence {
 		c.timerOp = timerOpExpire
@@ -219,7 +213,15 @@ func (c *Client) scheduleNextTimer() {
 		c.timerOp = timerOpPresence
 		nextTimerAt = c.nextPresence
 	}
-	c.timer = time.AfterFunc(time.Duration(nextTimerAt-time.Now().Unix())*time.Second, c.onTimerOp)
+	afterDuration := time.Duration(nextTimerAt-time.Now().Unix()) * time.Second
+	c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+}
+
+// Lock must be held outside.
+func (c *Client) stopTimer() {
+	if c.timer != nil {
+		c.timer.Stop()
+	}
 }
 
 // Lock must be held outside.
@@ -240,16 +242,14 @@ func (c *Client) addExpireUpdate(after time.Duration) {
 // At moment used to close client connections which have not sent valid
 // connect command in a reasonable time interval after established connection
 // with server.
-func (c *Client) closeUnauthenticated() bool {
+func (c *Client) closeUnauthenticated() {
 	c.mu.RLock()
 	authenticated := c.authenticated
 	closed := c.closed
 	c.mu.RUnlock()
 	if !authenticated && !closed {
 		_ = c.Close(DisconnectStale)
-		return false
 	}
-	return true
 }
 
 func (c *Client) transportEnqueue(reply *prepared.Reply) error {
@@ -308,7 +308,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 }
 
 // updatePresence used for various periodic actions we need to do with client connections.
-func (c *Client) updatePresence() bool {
+func (c *Client) updatePresence() {
 	if c.node.eventHub.presenceHandler != nil {
 		_ = c.node.eventHub.presenceHandler(c.ctx, c, PresenceEvent{})
 	}
@@ -318,7 +318,7 @@ func (c *Client) updatePresence() bool {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return false
+		return
 	}
 	channels := make(map[string]ChannelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
@@ -336,14 +336,14 @@ func (c *Client) updatePresence() bool {
 			// it seems to work fine and drastically simplifies client code.
 			go func() { _ = c.Close(DisconnectSubExpired) }()
 			// No need to proceed after close.
-			return false
+			return
 		}
 
 		checkDelay := config.ClientChannelPositionCheckDelay
 		if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
 			go func() { _ = c.Close(DisconnectInsufficientState) }()
 			// No need to proceed after close.
-			return false
+			return
 		}
 
 		err := c.updateChannelPresence(channel)
@@ -354,7 +354,7 @@ func (c *Client) updatePresence() bool {
 	c.mu.Lock()
 	c.addPresenceUpdate()
 	c.mu.Unlock()
-	return true
+	return
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext ChannelContext) bool {
@@ -506,9 +506,7 @@ func (c *Client) Close(disconnect *Disconnect) error {
 	}
 	c.closed = true
 
-	if c.timer != nil {
-		c.timer.Stop()
-	}
+	c.stopTimer()
 
 	if c.disconnect != nil {
 		disconnect = c.disconnect
@@ -757,12 +755,12 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 	return disconnect
 }
 
-func (c *Client) expire() bool {
+func (c *Client) expire() {
 	c.mu.RLock()
 	closed := c.closed
 	c.mu.RUnlock()
 	if closed {
-		return false
+		return
 	}
 
 	now := time.Now().Unix()
@@ -771,7 +769,7 @@ func (c *Client) expire() bool {
 		reply := c.node.eventHub.refreshHandler(c.ctx, c, RefreshEvent{})
 		if reply.Expired {
 			_ = c.Close(DisconnectExpired)
-			return false
+			return
 		}
 		if reply.ExpireAt > 0 {
 			c.mu.Lock()
@@ -788,7 +786,7 @@ func (c *Client) expire() bool {
 	c.mu.RUnlock()
 
 	if exp == 0 {
-		return false
+		return
 	}
 
 	ttl := exp - now
@@ -805,11 +803,11 @@ func (c *Client) expire() bool {
 
 	if ttl > 0 {
 		// Connection was successfully refreshed.
-		return true
+		return
 	}
 
 	_ = c.Close(DisconnectExpired)
-	return false
+	return
 }
 
 func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect {
@@ -825,6 +823,10 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 	if c.node.eventHub.connectedHandler != nil {
 		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
+	// Make presence handler always run after client connect event.
+	c.mu.Lock()
+	c.addPresenceUpdate()
+	c.mu.Unlock()
 	return nil
 }
 
@@ -1278,7 +1280,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	// Client successfully connected.
 	c.mu.Lock()
 	c.authenticated = true
-	c.addPresenceUpdate()
 	c.mu.Unlock()
 
 	err := c.node.addClient(c)

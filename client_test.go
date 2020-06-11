@@ -82,6 +82,35 @@ func TestClientClosedState(t *testing.T) {
 	require.True(t, client.closed)
 }
 
+func TestClientTimer(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	client, _ := NewClient(context.Background(), node, transport)
+	require.NotNil(t, client.timer)
+	config := node.Config()
+	config.ClientStaleCloseDelay = 0
+	_ = node.Reload(config)
+	client, _ = NewClient(context.Background(), node, transport)
+	require.Nil(t, client.timer)
+}
+
+func TestClientTimerSchedule(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	client, _ := NewClient(context.Background(), node, transport)
+	client.nextExpire = time.Now().Unix() + 5
+	client.nextPresence = time.Now().Unix() + 10
+	client.scheduleNextTimer()
+	require.NotNil(t, client.timer)
+	require.Equal(t, timerOpExpire, client.timerOp)
+	client.nextPresence = time.Now().Unix() + 1
+	client.scheduleNextTimer()
+	require.NotNil(t, client.timer)
+	require.Equal(t, timerOpPresence, client.timerOp)
+}
+
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
