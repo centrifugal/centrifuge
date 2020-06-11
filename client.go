@@ -1290,7 +1290,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 
 	if exp > 0 {
 		duration := closeDelay + time.Duration(ttl)*time.Second
-		duration = time.Duration(ttl) * time.Second
 		c.mu.Lock()
 		c.addExpireUpdate(duration)
 		c.mu.Unlock()
