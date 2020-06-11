@@ -205,16 +205,21 @@ func (c *Client) scheduleNextTimer() {
 		return
 	}
 	c.stopTimer()
-	var nextTimerAt int64
-	if c.nextExpire > 0 && c.nextExpire < c.nextPresence {
-		c.timerOp = timerOpExpire
-		nextTimerAt = c.nextExpire
-	} else if c.nextPresence > 0 {
-		c.timerOp = timerOpPresence
-		nextTimerAt = c.nextPresence
+	var minEventTime int64
+	var nextTimerOp timerOp
+	if c.nextExpire > 0 {
+		nextTimerOp = timerOpExpire
+		minEventTime = c.nextExpire
 	}
-	afterDuration := time.Duration(nextTimerAt-time.Now().Unix()) * time.Second
-	c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+	if c.nextPresence > 0 && c.nextPresence < minEventTime {
+		nextTimerOp = timerOpPresence
+		minEventTime = c.nextPresence
+	}
+	if minEventTime > 0 {
+		c.timerOp = nextTimerOp
+		afterDuration := time.Duration(minEventTime-time.Now().Unix()) * time.Second
+		c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+	}
 }
 
 // Lock must be held outside.
