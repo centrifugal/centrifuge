@@ -42,11 +42,11 @@ func authMiddleware(h http.Handler) http.Handler {
 }
 
 func waitExitSignal(n *centrifuge.Node) {
-	sigs := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigs
+		<-sigCh
 		n.Shutdown(context.Background())
 		done <- true
 	}()
@@ -126,7 +126,6 @@ func main() {
 
 		client.On().SubRefresh(func(e centrifuge.SubRefreshEvent) centrifuge.SubRefreshReply {
 			log.Printf("user %s subscription on channel %s is going to expire, refreshing", client.UserID(), e.Channel)
-			client.Close(centrifuge.DisconnectForceReconnect)
 			return centrifuge.SubRefreshReply{
 				ExpireAt: time.Now().Unix() + 60,
 			}

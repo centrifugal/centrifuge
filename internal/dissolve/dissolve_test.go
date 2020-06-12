@@ -14,6 +14,7 @@ func TestDissolver(t *testing.T) {
 	ch := make(chan struct{})
 	numJobs := 1024
 	var wg sync.WaitGroup
+	errCh := make(chan error, 1)
 	wg.Add(numJobs)
 	go func() {
 		for i := 0; i < numJobs; i++ {
@@ -22,7 +23,7 @@ func TestDissolver(t *testing.T) {
 				return nil
 			})
 			if err != nil {
-				t.Fatalf("Submit returned error: %v", err)
+				errCh <- err
 			}
 		}
 	}()
@@ -34,6 +35,11 @@ func TestDissolver(t *testing.T) {
 	case <-ch:
 	case <-time.After(time.Second):
 		t.Fatal("timeout")
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("Submit returned error: %v", err)
+	default:
 	}
 }
 

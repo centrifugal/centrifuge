@@ -386,7 +386,6 @@ func (c *Client) updatePresence() {
 	c.mu.Lock()
 	c.addPresenceUpdate()
 	c.mu.Unlock()
-	return
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext ChannelContext) bool {
@@ -852,7 +851,6 @@ func (c *Client) expire() {
 	}
 
 	_ = c.close(DisconnectExpired)
-	return
 }
 
 func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect {
