@@ -86,6 +86,14 @@ type ChannelContext struct {
 	streamPosition        StreamPosition
 }
 
+type timerOp uint8
+
+const (
+	timerOpStale    timerOp = 1
+	timerOpPresence timerOp = 2
+	timerOpExpire   timerOp = 3
+)
+
 // Client represents client connection to server.
 type Client struct {
 	mu               sync.RWMutex
@@ -96,9 +104,6 @@ type Client struct {
 	exp              int64
 	publications     *pubQueue
 	channels         map[string]ChannelContext
-	staleTimer       *time.Timer
-	expireTimer      *time.Timer
-	presenceTimer    *time.Timer
 	disconnect       *Disconnect
 	eventHub         *ClientEventHub
 	messageWriter    *writer
@@ -107,6 +112,10 @@ type Client struct {
 	user             string
 	info             []byte
 	publicationsOnce sync.Once
+	nextPresence     int64
+	nextExpire       int64
+	timer            *time.Timer
+	timerOp          timerOp
 	closed           bool
 	authenticated    bool
 }
@@ -164,11 +173,74 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	staleCloseDelay := config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !c.authenticated {
 		c.mu.Lock()
-		c.staleTimer = time.AfterFunc(staleCloseDelay, c.closeUnauthenticated)
+		c.timerOp = timerOpStale
+		c.timer = time.AfterFunc(staleCloseDelay, c.onTimerOp)
 		c.mu.Unlock()
 	}
 
 	return c, nil
+}
+
+func (c *Client) onTimerOp() {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	timerOp := c.timerOp
+	c.mu.Unlock()
+	switch timerOp {
+	case timerOpStale:
+		c.closeUnauthenticated()
+	case timerOpPresence:
+		c.updatePresence()
+	case timerOpExpire:
+		c.expire()
+	}
+}
+
+// Lock must be held outside.
+func (c *Client) scheduleNextTimer() {
+	if c.closed {
+		return
+	}
+	c.stopTimer()
+	var minEventTime int64
+	var nextTimerOp timerOp
+	if c.nextExpire > 0 {
+		nextTimerOp = timerOpExpire
+		minEventTime = c.nextExpire
+	}
+	if c.nextPresence > 0 && c.nextPresence < minEventTime {
+		nextTimerOp = timerOpPresence
+		minEventTime = c.nextPresence
+	}
+	if minEventTime > 0 {
+		c.timerOp = nextTimerOp
+		afterDuration := time.Duration(minEventTime-time.Now().Unix()) * time.Second
+		c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+	}
+}
+
+// Lock must be held outside.
+func (c *Client) stopTimer() {
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+}
+
+// Lock must be held outside.
+func (c *Client) addPresenceUpdate() {
+	config := c.node.Config()
+	presenceInterval := config.ClientPresenceUpdateInterval
+	c.nextPresence = time.Now().Add(presenceInterval).Unix()
+	c.scheduleNextTimer()
+}
+
+// Lock must be held outside.
+func (c *Client) addExpireUpdate(after time.Duration) {
+	c.nextExpire = time.Now().Add(after).Unix()
+	c.scheduleNextTimer()
 }
 
 // closeUnauthenticated closes connection if it's not authenticated yet.
@@ -287,13 +359,7 @@ func (c *Client) updatePresence() {
 	c.mu.Lock()
 	c.addPresenceUpdate()
 	c.mu.Unlock()
-}
-
-// Lock must be held outside.
-func (c *Client) addPresenceUpdate() {
-	config := c.node.Config()
-	presenceInterval := config.ClientPresenceUpdateInterval
-	c.presenceTimer = time.AfterFunc(presenceInterval, c.updatePresence)
+	return
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext ChannelContext) bool {
@@ -445,6 +511,8 @@ func (c *Client) Close(disconnect *Disconnect) error {
 	}
 	c.closed = true
 
+	c.stopTimer()
+
 	if c.disconnect != nil {
 		disconnect = c.disconnect
 	}
@@ -475,18 +543,6 @@ func (c *Client) Close(disconnect *Disconnect) error {
 			c.node.logger.log(newLogEntry(LogLevelError, "error removing client", map[string]interface{}{"user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
-
-	c.mu.Lock()
-	if c.expireTimer != nil {
-		c.expireTimer.Stop()
-	}
-	if c.presenceTimer != nil {
-		c.presenceTimer.Stop()
-	}
-	if c.staleTimer != nil {
-		c.staleTimer.Stop()
-	}
-	c.mu.Unlock()
 
 	// Close writer and send messages remaining in writer queue if any.
 	_ = c.messageWriter.close()
@@ -742,17 +798,9 @@ func (c *Client) expire() {
 
 	if c.node.eventHub.refreshHandler != nil {
 		if ttl > 0 {
-			c.mu.RLock()
-			if c.expireTimer != nil {
-				c.expireTimer.Stop()
-			}
-			c.mu.RUnlock()
-
-			duration := time.Duration(ttl) * time.Second
-
 			c.mu.Lock()
 			if !c.closed {
-				c.expireTimer = time.AfterFunc(duration, c.expire)
+				c.addExpireUpdate(time.Duration(ttl) * time.Second)
 			}
 			c.mu.Unlock()
 		}
@@ -764,6 +812,7 @@ func (c *Client) expire() {
 	}
 
 	_ = c.Close(DisconnectExpired)
+	return
 }
 
 func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect {
@@ -779,6 +828,10 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 	if c.node.eventHub.connectedHandler != nil {
 		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
+	// Make presence handler always run after client connect event.
+	c.mu.Lock()
+	c.addPresenceUpdate()
+	c.mu.Unlock()
 	return nil
 }
 
@@ -1232,10 +1285,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	// Client successfully connected.
 	c.mu.Lock()
 	c.authenticated = true
-	if c.staleTimer != nil {
-		c.staleTimer.Stop()
-	}
-	c.addPresenceUpdate()
 	c.mu.Unlock()
 
 	err := c.node.addClient(c)
@@ -1247,7 +1296,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	if exp > 0 {
 		duration := closeDelay + time.Duration(ttl)*time.Second
 		c.mu.Lock()
-		c.expireTimer = time.AfterFunc(duration, c.expire)
+		c.addExpireUpdate(duration)
 		c.mu.Unlock()
 	}
 
@@ -1434,11 +1483,8 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 			if len(token.Info) > 0 {
 				c.info = token.Info
 			}
-			if c.expireTimer != nil {
-				c.expireTimer.Stop()
-			}
 			duration := time.Duration(timeToExpire)*time.Second + config.ClientExpiredCloseDelay
-			c.expireTimer = time.AfterFunc(duration, c.expire)
+			c.addExpireUpdate(duration)
 			c.mu.Unlock()
 		} else {
 			resp.Error = ErrorExpired.toProto()
