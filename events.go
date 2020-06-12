@@ -62,17 +62,15 @@ type RefreshReply struct {
 // remember to synchronize your operations inside.
 type RefreshHandler func(RefreshEvent) RefreshReply
 
-// PresenceEvent ...
+// PresenceEvent can contain some connection stuff in future. But not at moment.
 type PresenceEvent struct{}
 
-// PresenceReply ...
+// PresenceReply can contain some useful stuff in future. But not at moment.
 type PresenceReply struct{}
 
 // PresenceHandler called periodically while connection alive. This is a helper
 // to do periodic things which can tolerate some approximation in time. This
 // callback will run every ClientPresenceUpdateInterval and can save you a timer.
-// This handler will be called from many goroutines, remember to synchronize your
-// operations inside.
 type PresenceHandler func(PresenceEvent) PresenceReply
 
 // DisconnectEvent contains fields related to disconnect event.
@@ -88,7 +86,11 @@ type DisconnectEvent struct {
 // DisconnectReply contains fields determining the reaction on disconnect event.
 type DisconnectReply struct{}
 
-// DisconnectHandler called when client disconnects from server.
+// DisconnectHandler called when client disconnects from server. The important
+// thing to remember is that you should not rely entirely on this handler to
+// clean up non-expiring resources (in your database for example). Why? Because
+// in case of any non-graceful node shutdown (kill -9, process crash, machine lost)
+// disconnect handler will never be called (obviously) so you can have stale data.
 type DisconnectHandler func(DisconnectEvent) DisconnectReply
 
 // SubscribeEvent contains fields related to subscribe event.
