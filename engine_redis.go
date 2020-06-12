@@ -905,7 +905,7 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 					if otherR != nil {
 						otherR.done(opErr)
 					}
-					// Close conn, this should cause Receive to return with err below
+					// close conn, this should cause Receive to return with err below
 					// and whole runPubSub method to restart.
 					_ = conn.Close()
 					return
@@ -926,7 +926,7 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 					}
 					if opErr != nil {
 						otherR.done(opErr)
-						// Close conn, this should cause Receive to return with err below
+						// close conn, this should cause Receive to return with err below
 						// and whole runPubSub method to restart.
 						_ = conn.Close()
 						return

@@ -49,7 +49,7 @@ func main() {
 			PublishOnHistoryAdd: true,
 			HistoryMetaTTL:      7 * 24 * time.Hour,
 			Shards: []centrifuge.RedisShardConfig{
-				centrifuge.RedisShardConfig{
+				{
 					Host: "localhost",
 					Port: 6379,
 				},

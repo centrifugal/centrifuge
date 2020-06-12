@@ -18,7 +18,7 @@ type Queue interface {
 	// or 2) the queue is closed.
 	Remove() ([]byte, bool)
 
-	// Close the queue and discard all entried in the queue
+	// close the queue and discard all entried in the queue
 	// all goroutines in wait() will return
 	Close()
 
@@ -110,7 +110,7 @@ func (q *byteQueue) Add(i []byte) bool {
 	return true
 }
 
-// Close the queue and discard all entried in the queue
+// close the queue and discard all entried in the queue
 // all goroutines in wait() will return
 func (q *byteQueue) Close() {
 	q.mu.Lock()

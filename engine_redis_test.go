@@ -881,7 +881,7 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 
 	channel := "test_recovery_redis_" + tt.Name
 

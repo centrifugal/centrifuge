@@ -76,7 +76,7 @@ func (q *pubQueue) Add(i preparedPub) bool {
 	return true
 }
 
-// Close the queue and discard all entries in the queue
+// close the queue and discard all entries in the queue
 // all goroutines in wait() will return
 func (q *pubQueue) Close() {
 	q.mu.Lock()

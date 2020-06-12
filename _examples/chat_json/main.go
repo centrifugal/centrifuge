@@ -103,29 +103,30 @@ func main() {
 		}
 	})
 
-	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 60,
-		}
-	})
-
-	node.On().ClientPresence(func(ctx context.Context, client *centrifuge.Client, e centrifuge.PresenceEvent) centrifuge.PresenceReply {
-		log.Printf("user %s still connected (client ID %s)", client.UserID(), client.ID())
-		return centrifuge.PresenceReply{}
-	})
-
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+
+		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			return centrifuge.RefreshReply{
+				ExpireAt: time.Now().Unix() + 60,
+			}
+		})
+
+		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
+			log.Printf("user %s still connected (client ID %s)", client.UserID(), client.ID())
+			return centrifuge.PresenceReply{}
+		})
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			return centrifuge.SubscribeReply{
-				ExpireAt: time.Now().Unix() + 60,
+				ExpireAt: time.Now().Unix() + 5,
 			}
 		})
 
 		client.On().SubRefresh(func(e centrifuge.SubRefreshEvent) centrifuge.SubRefreshReply {
 			log.Printf("user %s subscription on channel %s is going to expire, refreshing", client.UserID(), e.Channel)
+			client.Close(centrifuge.DisconnectForceReconnect)
 			return centrifuge.SubRefreshReply{
 				ExpireAt: time.Now().Unix() + 60,
 			}

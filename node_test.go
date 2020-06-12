@@ -204,7 +204,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	transport.setSink(sink)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(b, client)
 	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)

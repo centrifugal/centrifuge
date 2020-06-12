@@ -20,6 +20,8 @@ import (
 // ClientEventHub allows to deal with client event handlers.
 // All its methods are not goroutine-safe and supposed to be called once on client connect.
 type ClientEventHub struct {
+	refreshHandler     RefreshHandler
+	presenceHandler    PresenceHandler
 	disconnectHandler  DisconnectHandler
 	subscribeHandler   SubscribeHandler
 	unsubscribeHandler UnsubscribeHandler
@@ -27,6 +29,16 @@ type ClientEventHub struct {
 	subRefreshHandler  SubRefreshHandler
 	rpcHandler         RPCHandler
 	messageHandler     MessageHandler
+}
+
+// Refresh called when it's time to refresh expiring client connection.
+func (c *ClientEventHub) Refresh(h RefreshHandler) {
+	c.refreshHandler = h
+}
+
+// Presence called periodically for active connection.
+func (c *ClientEventHub) Presence(h PresenceHandler) {
+	c.presenceHandler = h
 }
 
 // Disconnect allows to set DisconnectHandler.
@@ -96,35 +108,50 @@ const (
 
 // Client represents client connection to server.
 type Client struct {
-	mu               sync.RWMutex
-	presenceMu       sync.Mutex // allows to sync presence routine with client closing.
-	ctx              context.Context
-	transport        Transport
-	node             *Node
-	exp              int64
-	publications     *pubQueue
-	channels         map[string]ChannelContext
-	disconnect       *Disconnect
-	eventHub         *ClientEventHub
-	messageWriter    *writer
-	pubSubSync       *recovery.PubSubSync
-	uid              string
-	user             string
-	info             []byte
-	publicationsOnce sync.Once
-	nextPresence     int64
-	nextExpire       int64
-	timer            *time.Timer
-	timerOp          timerOp
-	closed           bool
-	authenticated    bool
+	mu                sync.RWMutex
+	presenceMu        sync.Mutex // allows to sync presence routine with client closing.
+	ctx               context.Context
+	transport         Transport
+	node              *Node
+	exp               int64
+	publications      *pubQueue
+	channels          map[string]ChannelContext
+	disconnect        *Disconnect
+	eventHub          *ClientEventHub
+	messageWriter     *writer
+	pubSubSync        *recovery.PubSubSync
+	uid               string
+	user              string
+	info              []byte
+	publicationsOnce  sync.Once
+	nextPresence      int64
+	nextExpire        int64
+	timer             *time.Timer
+	timerOp           timerOp
+	closed            bool
+	authenticated     bool
+	clientSideRefresh bool
+}
+
+type CloseFunc func() error
+
+type TransportClient struct {
+	c *Client
+}
+
+func (c *TransportClient) ID() string {
+	return c.c.ID()
+}
+
+func (c *TransportClient) Handle(data []byte) bool {
+	return c.c.handle(data)
 }
 
 // NewClient initializes new Client.
-func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
+func NewClient(ctx context.Context, n *Node, t Transport) (*TransportClient, CloseFunc, error) {
 	uuidObject, err := uuid.NewRandom()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	config := n.Config()
@@ -146,7 +173,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 		MaxQueueSize: config.ClientQueueMaxSize,
 		WriteFn: func(data []byte) error {
 			if err := t.Write(data); err != nil {
-				go func() { _ = c.Close(DisconnectWriteError) }()
+				go func() { _ = c.close(DisconnectWriteError) }()
 				return err
 			}
 			transportMessagesSentCounter.Inc()
@@ -158,7 +185,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 				buf.Write(payload)
 			}
 			if err := t.Write(buf.Bytes()); err != nil {
-				go func() { _ = c.Close(DisconnectWriteError) }()
+				go func() { _ = c.close(DisconnectWriteError) }()
 				putBuffer(buf)
 				return err
 			}
@@ -178,7 +205,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 		c.mu.Unlock()
 	}
 
-	return c, nil
+	return &TransportClient{c: c}, func() error { return c.close(nil) }, nil
 }
 
 func (c *Client) onTimerOp() {
@@ -253,7 +280,7 @@ func (c *Client) closeUnauthenticated() {
 	closed := c.closed
 	c.mu.RUnlock()
 	if !authenticated && !closed {
-		_ = c.Close(DisconnectStale)
+		_ = c.close(DisconnectStale)
 	}
 }
 
@@ -261,8 +288,8 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	data := reply.Data()
 	disconnect := c.messageWriter.enqueue(data)
 	if disconnect != nil {
-		// Close in goroutine to not block message broadcast.
-		go func() { _ = c.Close(disconnect) }()
+		// close in goroutine to not block message broadcast.
+		go func() { _ = c.close(disconnect) }()
 		return io.EOF
 	}
 	return nil
@@ -314,9 +341,6 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 
 // updatePresence used for various periodic actions we need to do with client connections.
 func (c *Client) updatePresence() {
-	if c.node.eventHub.presenceHandler != nil {
-		_ = c.node.eventHub.presenceHandler(c.ctx, c, PresenceEvent{})
-	}
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	config := c.node.Config()
@@ -330,6 +354,9 @@ func (c *Client) updatePresence() {
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
+	if c.eventHub.presenceHandler != nil {
+		_ = c.eventHub.presenceHandler(PresenceEvent{})
+	}
 	for channel, channelContext := range channels {
 		if !c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay) {
 			// Ideally we should deal with single expired subscription in this
@@ -339,14 +366,14 @@ func (c *Client) updatePresence() {
 			// handle reliably on client side when unsubscribe with resubscribe
 			// flag was used. So I decided to stick with disconnect for now -
 			// it seems to work fine and drastically simplifies client code.
-			go func() { _ = c.Close(DisconnectSubExpired) }()
+			go func() { _ = c.close(DisconnectSubExpired) }()
 			// No need to proceed after close.
 			return
 		}
 
 		checkDelay := config.ClientChannelPositionCheckDelay
 		if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
-			go func() { _ = c.Close(DisconnectInsufficientState) }()
+			go func() { _ = c.close(DisconnectInsufficientState) }()
 			// No need to proceed after close.
 			return
 		}
@@ -501,7 +528,19 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 }
 
 // Close client connection with specific disconnect reason.
-func (c *Client) Close(disconnect *Disconnect) error {
+// This method internally creates a new goroutine at moment to do
+// closing stuff. An extra goroutine is required to solve disconnect
+// and presence callback ordering problems. If you need to wait for
+// close result for some reason then read an error from returned channel.
+func (c *Client) Close(disconnect *Disconnect) chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.close(disconnect)
+	}()
+	return errCh
+}
+
+func (c *Client) close(disconnect *Disconnect) error {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.mu.Lock()
@@ -544,7 +583,7 @@ func (c *Client) Close(disconnect *Disconnect) error {
 		}
 	}
 
-	// Close writer and send messages remaining in writer queue if any.
+	// close writer and send messages remaining in writer queue if any.
 	_ = c.messageWriter.close()
 
 	c.publications.Close()
@@ -582,7 +621,7 @@ func (c *Client) clientInfo(ch string) *protocol.ClientInfo {
 }
 
 // Handle raw data encoded with Centrifuge protocol. Not goroutine-safe.
-func (c *Client) Handle(data []byte) bool {
+func (c *Client) handle(data []byte) bool {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -592,7 +631,7 @@ func (c *Client) Handle(data []byte) bool {
 
 	if len(data) == 0 {
 		c.node.logger.log(newLogEntry(LogLevelError, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-		_ = c.Close(DisconnectBadRequest)
+		_ = c.close(DisconnectBadRequest)
 		return false
 	}
 
@@ -608,7 +647,7 @@ func (c *Client) Handle(data []byte) bool {
 				break
 			}
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-			_ = c.Close(DisconnectBadRequest)
+			_ = c.close(DisconnectBadRequest)
 			protocol.PutCommandDecoder(protoType, decoder)
 			protocol.PutReplyEncoder(protoType, encoder)
 			return false
@@ -631,7 +670,7 @@ func (c *Client) Handle(data []byte) bool {
 					}
 					protocol.PutCommandDecoder(protoType, decoder)
 					protocol.PutReplyEncoder(protoType, encoder)
-					_ = c.Close(disconnect)
+					_ = c.close(disconnect)
 					return fmt.Errorf("flush error")
 				}
 			}
@@ -652,7 +691,7 @@ func (c *Client) Handle(data []byte) bool {
 			if disconnect != DisconnectNormal {
 				c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			}
-			_ = c.Close(disconnect)
+			_ = c.close(disconnect)
 			if encodeErr == nil {
 				protocol.PutCommandDecoder(protoType, decoder)
 				protocol.PutReplyEncoder(protoType, encoder)
@@ -660,7 +699,7 @@ func (c *Client) Handle(data []byte) bool {
 			return false
 		}
 		if encodeErr != nil {
-			_ = c.Close(DisconnectServerError)
+			_ = c.close(DisconnectServerError)
 			return false
 		}
 	}
@@ -672,7 +711,7 @@ func (c *Client) Handle(data []byte) bool {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			}
-			_ = c.Close(disconnect)
+			_ = c.close(disconnect)
 			protocol.PutCommandDecoder(protoType, decoder)
 			protocol.PutReplyEncoder(protoType, encoder)
 			return false
@@ -763,6 +802,7 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 func (c *Client) expire() {
 	c.mu.RLock()
 	closed := c.closed
+	clientSideRefresh := c.clientSideRefresh
 	c.mu.RUnlock()
 	if closed {
 		return
@@ -770,10 +810,10 @@ func (c *Client) expire() {
 
 	now := time.Now().Unix()
 
-	if c.node.eventHub.refreshHandler != nil {
-		reply := c.node.eventHub.refreshHandler(c.ctx, c, RefreshEvent{})
+	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
+		reply := c.eventHub.refreshHandler(RefreshEvent{})
 		if reply.Expired {
-			_ = c.Close(DisconnectExpired)
+			_ = c.close(DisconnectExpired)
 			return
 		}
 		if reply.ExpireAt > 0 {
@@ -796,7 +836,7 @@ func (c *Client) expire() {
 
 	ttl := exp - now
 
-	if c.node.eventHub.refreshHandler != nil {
+	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
 		if ttl > 0 {
 			c.mu.Lock()
 			if !c.closed {
@@ -811,7 +851,7 @@ func (c *Client) expire() {
 		return
 	}
 
-	_ = c.Close(DisconnectExpired)
+	_ = c.close(DisconnectExpired)
 	return
 }
 
@@ -828,10 +868,20 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 	if c.node.eventHub.connectedHandler != nil {
 		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
-	// Make presence handler always run after client connect event.
+
+	// Make presence and refresh handlers always run after client connect event.
 	c.mu.Lock()
 	c.addPresenceUpdate()
+	if c.exp > 0 {
+		expireAfter := time.Duration(c.exp-time.Now().Unix()) * time.Second
+		if c.clientSideRefresh {
+			conf := c.node.Config()
+			expireAfter += conf.ClientExpiredCloseDelay
+		}
+		c.addExpireUpdate(expireAfter)
+	}
 	c.mu.Unlock()
+
 	return nil
 }
 
@@ -1150,13 +1200,13 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	version := config.Version
 	insecure := config.ClientInsecure
 	clientAnonymous := config.ClientAnonymous
-	closeDelay := config.ClientExpiredCloseDelay
 	userConnectionLimit := config.ClientUserConnectionLimit
 
 	var (
-		credentials *Credentials
-		authData    protocol.Raw
-		channels    []string
+		credentials       *Credentials
+		authData          protocol.Raw
+		channels          []string
+		clientSideRefresh bool
 	)
 
 	if c.node.eventHub.connectingHandler != nil {
@@ -1184,7 +1234,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		if reply.Data != nil {
 			authData = reply.Data
 		}
-
+		clientSideRefresh = reply.ClientSideRefresh
 		channels = append(channels, reply.Channels...)
 	}
 
@@ -1285,6 +1335,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	// Client successfully connected.
 	c.mu.Lock()
 	c.authenticated = true
+	c.clientSideRefresh = clientSideRefresh
 	c.mu.Unlock()
 
 	err := c.node.addClient(c)
@@ -1293,15 +1344,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		return DisconnectServerError
 	}
 
-	if exp > 0 {
-		duration := closeDelay + time.Duration(ttl)*time.Second
-		c.mu.Lock()
-		c.addExpireUpdate(duration)
-		c.mu.Unlock()
-	}
-
-	if c.node.eventHub.refreshHandler != nil {
-		// Only require client-side refresh when no refresh handler set.
+	if !clientSideRefresh {
+		// Server will do refresh itself.
 		resp.Result.Expires = false
 		resp.Result.TTL = 0
 	}
@@ -1881,7 +1925,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	pubOffset := pub.Offset
 	if pubOffset != nextExpectedOffset {
 		// Oops: sth lost, let client reconnect to recover its state.
-		go func() { _ = c.Close(DisconnectInsufficientState) }()
+		go func() { _ = c.close(DisconnectInsufficientState) }()
 		c.mu.Unlock()
 		return nil
 	}
@@ -1916,7 +1960,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 		return nil
 	}
 	if c.publications.Size() > maxPubQueueSize {
-		go func() { _ = c.Close(DisconnectServerError) }()
+		go func() { _ = c.close(DisconnectServerError) }()
 	}
 	return nil
 }

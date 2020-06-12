@@ -30,6 +30,10 @@ type ConnectReply struct {
 	Data []byte
 	// Channels slice contains channels to subscribe connection to on server-side.
 	Channels []string
+	// ClientSideRefresh tells library to use client-side refresh logic: i.e. send
+	// refresh commands with new connection JWT. If not set then server-side refresh
+	// handler will be used.
+	ClientSideRefresh bool
 }
 
 // ConnectingHandler called when new client authenticates on server. This handler
@@ -56,7 +60,7 @@ type RefreshReply struct {
 // RefreshHandler called when it's time to validate client connection and
 // update it's expiration time. This handler will be called from many goroutines,
 // remember to synchronize your operations inside.
-type RefreshHandler func(context.Context, *Client, RefreshEvent) RefreshReply
+type RefreshHandler func(RefreshEvent) RefreshReply
 
 // PresenceEvent ...
 type PresenceEvent struct{}
@@ -66,10 +70,10 @@ type PresenceReply struct{}
 
 // PresenceHandler called periodically while connection alive. This is a helper
 // to do periodic things which can tolerate some approximation in time. This
-// callback will run every ClientPresenceInterval and can save you a timer.
+// callback will run every ClientPresenceUpdateInterval and can save you a timer.
 // This handler will be called from many goroutines, remember to synchronize your
 // operations inside.
-type PresenceHandler func(context.Context, *Client, PresenceEvent) PresenceReply
+type PresenceHandler func(PresenceEvent) PresenceReply
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
