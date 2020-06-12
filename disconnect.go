@@ -12,8 +12,8 @@ import (
 // due to WebSocket protocol limitations (because at moment we send Disconnect inside
 // reason field of WebSocket close handshake).
 // Note that due to performance reasons we cache Disconnect text representation
-// for close Frame on first send to client so changing field values inside existing
-// Disconnect instance won't be reflected in WebSocket/Sockjs close frames.
+// for Close Frame on first send to client so changing field values inside existing
+// Disconnect instance won't be reflected in WebSocket/Sockjs Close frames.
 type Disconnect struct {
 	// Code is disconnect code.
 	Code int `json:"code,omitempty"`
@@ -31,9 +31,9 @@ func (d *Disconnect) String() string {
 	return fmt.Sprintf("code: %d, reason: %s, reconnect: %t", d.Code, d.Reason, d.Reconnect)
 }
 
-// CloseText allows to build disconnect advice sent inside close frame.
+// CloseText allows to build disconnect advice sent inside Close frame.
 // At moment we don't encode Code here to not duplicate information
-// since it is sent separately as Code of WebSocket/SockJS close Frame.
+// since it is sent separately as Code of WebSocket/SockJS Close Frame.
 func (d *Disconnect) CloseText() string {
 	d.closeTextOnce.Do(func() {
 		buf := strings.Builder{}

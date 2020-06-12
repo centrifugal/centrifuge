@@ -48,6 +48,6 @@ type Transport interface {
 	TransportInfo
 	// Send sends data encoded using Centrifuge protocol to connection.
 	Write([]byte) error
-	// close closes transport.
+	// Close closes transport.
 	Close(*Disconnect) error
 }

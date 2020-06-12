@@ -58,7 +58,7 @@ type StreamPosition struct {
 // optionally implement if they need to close any resources on Centrifuge node
 // shutdown.
 type Closer interface {
-	// close when called should clean up used resources.
+	// Close when called should clean up used resources.
 	Close(ctx context.Context) error
 }
 

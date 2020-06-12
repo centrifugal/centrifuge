@@ -33,7 +33,7 @@ func (d *Dissolver) Run() error {
 	return nil
 }
 
-// close stops processing Jobs, no more Jobs can be submitted after closing.
+// Close stops processing Jobs, no more Jobs can be submitted after closing.
 func (d *Dissolver) Close() error {
 	d.queue.Close()
 	return nil
