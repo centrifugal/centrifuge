@@ -866,7 +866,11 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 	if c.node.eventHub.connectedHandler != nil {
 		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
+	c.scheduleOnConnectTimers()
+	return nil
+}
 
+func (c *Client) scheduleOnConnectTimers() {
 	// Make presence and refresh handlers always run after client connect event.
 	c.mu.Lock()
 	c.addPresenceUpdate()
@@ -879,8 +883,6 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 		c.addExpireUpdate(expireAfter)
 	}
 	c.mu.Unlock()
-
-	return nil
 }
 
 func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) *Disconnect {

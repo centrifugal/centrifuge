@@ -1283,6 +1283,41 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	client.mu.Unlock()
 }
 
+func TestClientCloseExpired(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", ExpireAt: time.Now().Unix() + 2})
+	client, _ := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	client.scheduleOnConnectTimers()
+	client.mu.RLock()
+	require.False(t, client.closed)
+	client.mu.RUnlock()
+	time.Sleep(4 * time.Second)
+	client.mu.RLock()
+	defer client.mu.RUnlock()
+	require.True(t, client.closed)
+}
+
+func TestClientConnectExpiredError(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", ExpireAt: time.Now().Unix() - 2})
+	client, _ := newClient(newCtx, node, transport)
+	var replies []*protocol.Reply
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorExpired.toProto(), replies[0].Error)
+	require.False(t, client.authenticated)
+}
+
 func TestClientPresenceUpdate(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
