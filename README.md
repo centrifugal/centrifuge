@@ -3,7 +3,7 @@
 [![Coverage Status](https://coveralls.io/repos/github/centrifugal/centrifuge/badge.svg?branch=master)](https://coveralls.io/github/centrifugal/centrifuge?branch=master)
 [![GoDoc](https://godoc.org/github.com/centrifugal/centrifuge?status.svg)](https://godoc.org/github.com/centrifugal/centrifuge)
 
-**This library has no v1 release yet so API can be changed. Use with strict versioning.**
+**This library has no v1 release yet, API still evolves. Use with strict versioning.**
 
 Centrifuge library is a real-time core of [Centrifugo](https://github.com/centrifugal/centrifugo) server. It's also supposed to be a general purpose real-time messaging library for Go programming language. The library is based on a strict client-server protocol based on Protobuf schema and solves several problems developer may come across when building complex real-time applications – like scalability (millions of connections), proper connection management, fast reconnect with message recovery, fallback option.
 
@@ -12,7 +12,7 @@ Library highlights:
 * Fast and optimized for low-latency communication with thousands of client connections. See [benchmark](https://centrifugal.github.io/centrifugo/misc/benchmark/)
 * WebSocket with JSON or binary Protobuf protocol
 * SockJS polyfill library support for browsers where WebSocket not available (JSON only)
-* Built-in horizontal scalability with Redis PUB/SUB, Redis sharding, Sentinel for HA
+* Built-in horizontal scalability with Redis PUB/SUB, consistent Redis sharding, Sentinel and Redis Cluster for HA
 * Possibility to register custom PUB/SUB broker, history and presence storage implementations
 * Native authentication over HTTP middleware or JWT-based
 * Bidirectional asynchronous message communication and RPC calls
