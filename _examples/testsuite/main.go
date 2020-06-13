@@ -204,11 +204,11 @@ func main() {
 	go RegisterTestCase(ctx, 10003, testReceiveRPCReceiveMessageJSON, "testReceiveRPCReceiveMessageJSON", true)
 	go RegisterTestCase(ctx, 10004, testReceiveRPCReceiveMessageProtobuf, "testReceiveRPCReceiveMessageProtobuf", true)
 
-	sigs := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigs
+		<-sigCh
 		log.Println("Interrupted")
 		cancel()
 		done <- true

@@ -42,11 +42,11 @@ func authMiddleware(h http.Handler) http.Handler {
 }
 
 func waitExitSignal(n *centrifuge.Node) {
-	sigs := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigs
+		<-sigCh
 		n.Shutdown(context.Background())
 		done <- true
 	}()
@@ -71,7 +71,7 @@ func main() {
 	cfg.UserSubscribeToPersonal = true
 
 	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		centrifuge.ChannelNamespace{
+		{
 			Name: "chat",
 			ChannelOptions: centrifuge.ChannelOptions{
 				Publish:         true,
@@ -92,14 +92,14 @@ func main() {
 		}
 	})
 
-	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 60,
-		}
-	})
-
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+
+		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			return centrifuge.RefreshReply{
+				ExpireAt: time.Now().Unix() + 60,
+			}
+		})
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
@@ -303,16 +303,16 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	default:
 	}
 
-	c, err := centrifuge.NewClient(r.Context(), s.node, transport)
+	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
 	if err != nil {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": websocketTransportName}))
 		return
 	}
+	defer func() { _ = closeFn() }()
 	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": websocketTransportName}))
 	defer func(started time.Time) {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started)}))
 	}(time.Now())
-	defer c.Close(nil)
 
 	for {
 		_, data, err := conn.Read(context.Background())

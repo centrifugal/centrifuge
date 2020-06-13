@@ -136,16 +136,16 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	default:
 	}
 
-	c, err := centrifuge.NewClient(r.Context(), s.node, transport)
+	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
 	if err != nil {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": websocketTransportName}))
 		return
 	}
+	defer func() { _ = closeFn() }()
 	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": websocketTransportName}))
 	defer func(started time.Time) {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started)}))
 	}(time.Now())
-	defer c.Close(nil)
 
 	for {
 		_, data, err := conn.Read(context.Background())

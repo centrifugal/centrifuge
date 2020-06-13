@@ -503,7 +503,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 				transport := newTestTransport()
 				ctx := context.Background()
 				newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-				client, _ := NewClient(newCtx, node, transport)
+				client, _ := newClient(newCtx, node, transport)
 
 				for i := 1; i <= tt.NumPublications; i++ {
 					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))

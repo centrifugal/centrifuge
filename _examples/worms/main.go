@@ -35,11 +35,11 @@ func authMiddleware(h http.Handler) http.Handler {
 }
 
 func waitExitSignal(n *centrifuge.Node) {
-	sigs := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigs
+		<-sigCh
 		n.Shutdown(context.Background())
 		done <- true
 	}()
@@ -60,7 +60,7 @@ func main() {
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
 			var ev event
 			_ = json.Unmarshal(e.Data, &ev)
-			_, _ = node.Publish("moving", []byte(ev.Payload))
+			_, _ = node.Publish("moving", ev.Payload)
 			return centrifuge.MessageReply{}
 		})
 

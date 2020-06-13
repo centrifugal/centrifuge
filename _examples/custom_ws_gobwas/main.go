@@ -32,11 +32,11 @@ func handleLog(e centrifuge.LogEntry) {
 }
 
 func waitExitSignal(n *centrifuge.Node) {
-	sigs := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigs
+		<-sigCh
 		n.Shutdown(context.Background())
 		done <- true
 	}()
@@ -166,7 +166,7 @@ func main() {
 		log.Printf("%s: established websocket connection: %+v", nameConn(conn), hs)
 
 		transport := newWebsocketTransport(safeConn, protoType)
-		client, err := centrifuge.NewClient(context.Background(), node, transport)
+		client, closeFn, err := centrifuge.NewClient(context.Background(), node, transport)
 		if err != nil {
 			log.Printf("%s: client create error: %v", nameConn(conn), err)
 			_ = conn.Close()
@@ -185,7 +185,7 @@ func main() {
 				// itself. So we want to stop receive events about such conn
 				// and remove it from the chat registry.
 				_ = poller.Stop(desc)
-				_ = client.Close(nil)
+				_ = closeFn()
 				return
 			}
 			// Here we can read some new message from connection.
@@ -198,7 +198,7 @@ func main() {
 					// When receive failed, we can only disconnect broken
 					// connection and stop to receive events about it.
 					_ = poller.Stop(desc)
-					_ = client.Close(nil)
+					_ = closeFn()
 				} else {
 					if !isControl {
 						ok := client.Handle(data)

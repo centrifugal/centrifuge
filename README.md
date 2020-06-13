@@ -114,7 +114,7 @@ func main() {
 	// pass here will be called every time new connection established with server. 
 	// Inside this callback function you can set various event handlers for connection.
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
-		// Set Subscribe Handler to react on every channel subscribtion attempt
+		// Set Subscribe Handler to react on every channel subscription attempt
 		// initiated by client. Here you can theoretically return an error or
 		// disconnect client from server if needed. But now we just accept
 		// all subscriptions.

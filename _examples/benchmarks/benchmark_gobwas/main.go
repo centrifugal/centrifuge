@@ -140,7 +140,7 @@ func main() {
 		log.Printf("%s: established websocket connection: %+v", nameConn(conn), hs)
 
 		transport := newWebsocketTransport(safeConn, protoType)
-		client, err := centrifuge.NewClient(context.Background(), node, transport)
+		client, closeFn, err := centrifuge.NewClient(context.Background(), node, transport)
 		if err != nil {
 			log.Printf("%s: client create error: %v", nameConn(conn), err)
 			_ = conn.Close()
@@ -149,7 +149,7 @@ func main() {
 
 		// Create netpoll event descriptor for conn.
 		// We want to handle only read events of it.
-		desc := netpoll.Must(netpoll.HandleRead(conn))
+		desc := netpoll.Must(netpoll.HandleReadOnce(conn))
 
 		// Subscribe to events about conn.
 		_ = poller.Start(desc, func(ev netpoll.Event) {
@@ -158,8 +158,8 @@ func main() {
 				// closed at least write end of the connection or connections
 				// itself. So we want to stop receive events about such conn
 				// and remove it from the chat registry.
-				poller.Stop(desc)
-				client.Close(nil)
+				_ = poller.Stop(desc)
+				_ = closeFn()
 				return
 			}
 			// Here we can read some new message from connection.
@@ -168,16 +168,20 @@ func main() {
 			// We do not want to spawn a new goroutine to read single message.
 			// But we want to reuse previously spawned goroutine.
 			pool.Schedule(func() {
-				if data, err := transport.read(); err != nil {
+				if data, isControl, err := transport.read(); err != nil {
 					// When receive failed, we can only disconnect broken
 					// connection and stop to receive events about it.
-					poller.Stop(desc)
-					client.Close(nil)
+					_ = poller.Stop(desc)
+					_ = closeFn()
 				} else {
-					ok := client.Handle(data)
-					if !ok {
-						return
+					if !isControl {
+						ok := client.Handle(data)
+						if !ok {
+							_ = poller.Stop(desc)
+							return
+						}
 					}
+					_ = poller.Resume(desc)
 				}
 			})
 		})
@@ -236,7 +240,7 @@ func main() {
 			}
 		}
 
-		poller.Resume(acceptDesc)
+		_ = poller.Resume(acceptDesc)
 	})
 
 	go func() {

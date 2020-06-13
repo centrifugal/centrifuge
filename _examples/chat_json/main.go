@@ -42,11 +42,11 @@ func authMiddleware(h http.Handler) http.Handler {
 }
 
 func waitExitSignal(n *centrifuge.Node) {
-	sigs := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigs
+		<-sigCh
 		n.Shutdown(context.Background())
 		done <- true
 	}()
@@ -103,19 +103,24 @@ func main() {
 		}
 	})
 
-	node.On().ClientRefresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 60,
-		}
-	})
-
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+
+		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			return centrifuge.RefreshReply{
+				ExpireAt: time.Now().Unix() + 60,
+			}
+		})
+
+		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
+			log.Printf("user %s still connected (client ID %s)", client.UserID(), client.ID())
+			return centrifuge.PresenceReply{}
+		})
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			return centrifuge.SubscribeReply{
-				ExpireAt: time.Now().Unix() + 60,
+				ExpireAt: time.Now().Unix() + 5,
 			}
 		})
 

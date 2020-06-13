@@ -70,7 +70,7 @@ func (t *testTransport) Close(disconnect *Disconnect) error {
 
 func TestHub(t *testing.T) {
 	h := newHub()
-	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	c.user = "test"
 	_ = h.add(c)
@@ -89,7 +89,7 @@ func TestHubShutdown(t *testing.T) {
 	err := h.shutdown(context.Background())
 	assert.NoError(t, err)
 	h = newHub()
-	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	_ = h.add(c)
 	err = h.shutdown(context.Background())
@@ -98,7 +98,7 @@ func TestHubShutdown(t *testing.T) {
 
 func TestHubSubscriptions(t *testing.T) {
 	h := newHub()
-	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	_, _ = h.addSub("test1", c)
 	_, _ = h.addSub("test2", c)
@@ -125,7 +125,7 @@ func TestPreparedReply(t *testing.T) {
 
 func TestUserConnections(t *testing.T) {
 	h := newHub()
-	c, err := NewClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	_ = h.add(c)
 

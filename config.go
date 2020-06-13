@@ -39,9 +39,9 @@ type Config struct {
 	// TokenRSAPublicKey is a public key used to validate connection and subscription
 	// tokens generated using RSA. Zero value means that RSA tokens won't be allowed.
 	TokenRSAPublicKey *rsa.PublicKey
-	// ClientPresencePingInterval is an interval how often connected clients
+	// ClientPresenceUpdateInterval is an interval how often connected clients
 	// must update presence info.
-	ClientPresencePingInterval time.Duration
+	ClientPresenceUpdateInterval time.Duration
 	// ClientPresenceExpireInterval is an interval how long to consider
 	// presence info valid after receiving presence ping.
 	ClientPresenceExpireInterval time.Duration
@@ -175,7 +175,7 @@ var DefaultConfig = Config{
 	ChannelUserBoundary:      "#", // so user limited channel is "user#2694" where "2696" is user ID
 	ChannelUserSeparator:     ",", // so several users limited channel is "dialog#2694,3019"
 
-	ClientPresencePingInterval:      25 * time.Second,
+	ClientPresenceUpdateInterval:    25 * time.Second,
 	ClientPresenceExpireInterval:    60 * time.Second,
 	ClientExpiredCloseDelay:         25 * time.Second,
 	ClientExpiredSubCloseDelay:      25 * time.Second,

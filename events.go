@@ -30,9 +30,14 @@ type ConnectReply struct {
 	Data []byte
 	// Channels slice contains channels to subscribe connection to on server-side.
 	Channels []string
+	// ClientSideRefresh tells library to use client-side refresh logic: i.e. send
+	// refresh commands with new connection JWT. If not set then server-side refresh
+	// handler will be used.
+	ClientSideRefresh bool
 }
 
-// ConnectingHandler called when new client authenticates on server.
+// ConnectingHandler called when new client authenticates on server. This handler
+// will be called from many goroutines, remember to synchronize your operations inside.
 type ConnectingHandler func(context.Context, TransportInfo, ConnectEvent) ConnectReply
 
 // ConnectedHandler called when new client connects to server.
@@ -53,8 +58,20 @@ type RefreshReply struct {
 }
 
 // RefreshHandler called when it's time to validate client connection and
-// update it's expiration time.
-type RefreshHandler func(context.Context, *Client, RefreshEvent) RefreshReply
+// update it's expiration time. This handler will be called from many goroutines,
+// remember to synchronize your operations inside.
+type RefreshHandler func(RefreshEvent) RefreshReply
+
+// PresenceEvent can contain some connection stuff in future. But not at moment.
+type PresenceEvent struct{}
+
+// PresenceReply can contain some useful stuff in future. But not at moment.
+type PresenceReply struct{}
+
+// PresenceHandler called periodically while connection alive. This is a helper
+// to do periodic things which can tolerate some approximation in time. This
+// callback will run every ClientPresenceUpdateInterval and can save you a timer.
+type PresenceHandler func(PresenceEvent) PresenceReply
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
@@ -69,7 +86,11 @@ type DisconnectEvent struct {
 // DisconnectReply contains fields determining the reaction on disconnect event.
 type DisconnectReply struct{}
 
-// DisconnectHandler called when client disconnects from server.
+// DisconnectHandler called when client disconnects from server. The important
+// thing to remember is that you should not rely entirely on this handler to
+// clean up non-expiring resources (in your database for example). Why? Because
+// in case of any non-graceful node shutdown (kill -9, process crash, machine lost)
+// disconnect handler will never be called (obviously) so you can have stale data.
 type DisconnectHandler func(DisconnectEvent) DisconnectReply
 
 // SubscribeEvent contains fields related to subscribe event.
@@ -100,8 +121,7 @@ type UnsubscribeEvent struct {
 }
 
 // UnsubscribeReply contains fields determining the reaction on unsubscribe event.
-type UnsubscribeReply struct {
-}
+type UnsubscribeReply struct{}
 
 // UnsubscribeHandler called when client unsubscribed from channel.
 type UnsubscribeHandler func(UnsubscribeEvent) UnsubscribeReply
