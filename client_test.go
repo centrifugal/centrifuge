@@ -1384,7 +1384,7 @@ func TestClientHandlePing(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 
 	var replies []*protocol.Reply
@@ -1405,7 +1405,7 @@ func TestClientHandleRPCNotAvailable(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 
 	var replies []*protocol.Reply
@@ -1426,7 +1426,7 @@ func TestClientHandleRPC(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	client.On().RPC(func(event RPCEvent) RPCReply {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
@@ -1453,7 +1453,7 @@ func TestClientHandleSend(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	client.On().Message(func(event MessageEvent) MessageReply {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
@@ -1479,7 +1479,7 @@ func TestClientHandlePublishNotAllowed(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	client.On().Publish(func(event PublishEvent) PublishReply {
 		t.Fail()
 		return PublishReply{}
@@ -1509,7 +1509,7 @@ func TestClientHandlePublish(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	client.On().Publish(func(event PublishEvent) PublishReply {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
@@ -1537,7 +1537,7 @@ func TestClientHandleHistoryPermissionDenied(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 
 	var replies []*protocol.Reply
@@ -1559,7 +1559,7 @@ func TestClientHandleHistoryNotAvailable(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
@@ -1587,7 +1587,7 @@ func TestClientHandleHistory(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
@@ -1610,7 +1610,7 @@ func TestClientHandlePresencePermissionDenied(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 
 	var replies []*protocol.Reply
@@ -1632,7 +1632,7 @@ func TestClientHandlePresenceNotAvailable(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
@@ -1659,7 +1659,7 @@ func TestClientHandlePresence(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
@@ -1682,7 +1682,7 @@ func TestClientHandlePresenceStatsPermissionDenied(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 
 	var replies []*protocol.Reply
@@ -1704,7 +1704,7 @@ func TestClientHandlePresenceStatsNotAvailable(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
@@ -1731,7 +1731,7 @@ func TestClientHandlePresenceStats(t *testing.T) {
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := NewClient(newCtx, node, transport)
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
