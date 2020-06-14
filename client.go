@@ -1254,7 +1254,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		ttl     uint32
 	)
 
-	// Client successfully connected.
 	c.mu.Lock()
 	c.clientSideRefresh = clientSideRefresh
 	c.mu.Unlock()
@@ -1344,7 +1343,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	// Client successfully connected.
 	c.mu.Lock()
 	c.authenticated = true
-	c.clientSideRefresh = clientSideRefresh
 	c.mu.Unlock()
 
 	err := c.node.addClient(c)
