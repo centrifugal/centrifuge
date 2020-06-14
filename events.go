@@ -44,7 +44,10 @@ type ConnectingHandler func(context.Context, TransportInfo, ConnectEvent) Connec
 type ConnectedHandler func(context.Context, *Client)
 
 // RefreshEvent contains fields related to refresh event.
-type RefreshEvent struct{}
+type RefreshEvent struct {
+	// Token will only be set in case of using client-side refresh mechanism.
+	Token string
+}
 
 // RefreshReply contains fields determining the reaction on refresh event.
 type RefreshReply struct {
@@ -55,11 +58,29 @@ type RefreshReply struct {
 	ExpireAt int64
 	// Info allows to modify connection information, zero value means no modification.
 	Info []byte
+	// Disconnect client.
+	Disconnect *Disconnect
 }
 
 // RefreshHandler called when it's time to validate client connection and
-// update it's expiration time. This handler will be called from many goroutines,
-// remember to synchronize your operations inside.
+// update it's expiration time if it's still actual. This handler can be
+// called concurrently with other client connection handlers.
+//
+// Centrifuge library supports two ways of refreshing connection: client-side
+// and server-side.
+//
+// The default mechanism is server-side, this means that as soon refresh handler
+// set and connection expiration time happens (by timer) – refresh handler will
+// be called.
+//
+// If ClientSideRefresh in ConnectReply inside ConnectingHandler set to true then
+// library uses client-side refresh mechanism. In this case library relies on
+// Refresh commands sent from client periodically to refresh connection. Refresh
+// command contains updated connection token. In case of using client-side refresh
+// you only need to set this callback if you want to validate connection token yourself
+// in a custom way. In you rely on builtin Centrifuge JWT support then connection
+// refresh will happen without involving your application at all so you must skip
+// setting this handler on connection.
 type RefreshHandler func(RefreshEvent) RefreshReply
 
 // PresenceEvent can contain some connection stuff in future. But not at moment.

@@ -811,6 +811,10 @@ func (c *Client) expire() {
 
 	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
 		reply := c.eventHub.refreshHandler(RefreshEvent{})
+		if reply.Disconnect != nil {
+			_ = c.close(reply.Disconnect)
+			return
+		}
 		if reply.Expired {
 			_ = c.close(DisconnectExpired)
 			return
@@ -1250,6 +1254,10 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		ttl     uint32
 	)
 
+	c.mu.Lock()
+	c.clientSideRefresh = clientSideRefresh
+	c.mu.Unlock()
+
 	switch {
 	case credentials != nil:
 		// Server-side auth.
@@ -1335,7 +1343,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	// Client successfully connected.
 	c.mu.Lock()
 	c.authenticated = true
-	c.clientSideRefresh = clientSideRefresh
 	c.mu.Unlock()
 
 	err := c.node.addClient(c)
@@ -1480,8 +1487,7 @@ func (c *Client) Subscribe(channel string) error {
 	return c.transportEnqueue(reply)
 }
 
-// refreshCmd handle refresh command to update connection with new
-// timestamp - this is only required when connection lifetime option set.
+// refreshCmd handles refresh command from client to confirm the actual state of connection.
 func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshResponse, *Disconnect) {
 	resp := &clientproto.RefreshResponse{}
 
@@ -1492,42 +1498,71 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 
 	config := c.node.Config()
 
-	var (
-		token     connectToken
-		errVerify error
-	)
-	if token, errVerify = c.node.verifyConnectToken(cmd.Token); errVerify != nil {
-		if errVerify == errTokenExpired {
-			resp.Error = ErrorTokenExpired.toProto()
-			return resp, nil
+	c.mu.RLock()
+	clientSideRefresh := c.clientSideRefresh
+	c.mu.RUnlock()
+
+	if !clientSideRefresh {
+		// Client not supposed to send refresh command in case of server-side refresh mechanism.
+		return resp, DisconnectBadRequest
+	}
+
+	var expireAt int64
+	var info []byte
+
+	if c.eventHub.refreshHandler != nil {
+		reply := c.eventHub.refreshHandler(RefreshEvent{
+			Token: cmd.Token,
+		})
+		if reply.Disconnect != nil {
+			return resp, reply.Disconnect
 		}
-		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid}))
-		return resp, DisconnectInvalidToken
+		if reply.Expired {
+			return resp, DisconnectExpired
+		}
+		expireAt = reply.ExpireAt
+		info = reply.Info
+	} else {
+		var (
+			token     connectToken
+			errVerify error
+		)
+		if token, errVerify = c.node.verifyConnectToken(cmd.Token); errVerify != nil {
+			if errVerify == errTokenExpired {
+				resp.Error = ErrorTokenExpired.toProto()
+				return resp, nil
+			}
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid}))
+			return resp, DisconnectInvalidToken
+		}
+		expireAt = token.ExpireAt
+		info = token.Info
 	}
 
 	res := &protocol.RefreshResult{
 		Version: config.Version,
-		Expires: token.ExpireAt > 0,
+		Expires: expireAt > 0,
 		Client:  c.uid,
 	}
 
-	if diff := token.ExpireAt - time.Now().Unix(); diff > 0 {
-		res.TTL = uint32(diff)
+	ttl := expireAt - time.Now().Unix()
+
+	if ttl > 0 {
+		res.TTL = uint32(ttl)
 	}
 
 	resp.Result = res
 
-	if token.ExpireAt > 0 {
+	if expireAt > 0 {
 		// connection check enabled
-		timeToExpire := token.ExpireAt - time.Now().Unix()
-		if timeToExpire > 0 {
+		if ttl > 0 {
 			// connection refreshed, update client timestamp and set new expiration timeout
 			c.mu.Lock()
-			c.exp = token.ExpireAt
-			if len(token.Info) > 0 {
-				c.info = token.Info
+			c.exp = expireAt
+			if len(info) > 0 {
+				c.info = info
 			}
-			duration := time.Duration(timeToExpire)*time.Second + config.ClientExpiredCloseDelay
+			duration := time.Duration(ttl)*time.Second + config.ClientExpiredCloseDelay
 			c.addExpireUpdate(duration)
 			c.mu.Unlock()
 		} else {

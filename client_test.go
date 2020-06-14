@@ -277,13 +277,19 @@ func TestClientConnectWithExpiredToken(t *testing.T) {
 	require.False(t, client.authenticated)
 }
 
-func TestClientTokenRefresh(t *testing.T) {
+func TestClientSideTokenRefresh(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	config := node.Config()
 	config.TokenHMACSecretKey = "secret"
 	_ = node.Reload(config)
+
+	node.On().ClientConnecting(func(ctx context.Context, info TransportInfo, event ConnectEvent) ConnectReply {
+		return ConnectReply{
+			ClientSideRefresh: true,
+		}
+	})
 
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
@@ -297,6 +303,51 @@ func TestClientTokenRefresh(t *testing.T) {
 
 	refreshResp, disconnect := client.refreshCmd(&protocol.RefreshRequest{
 		Token: getConnTokenHS("42", 2525637058),
+	})
+	require.Nil(t, disconnect)
+	require.NotEmpty(t, client.ID())
+	require.True(t, refreshResp.Result.Expires)
+	require.True(t, refreshResp.Result.TTL > 0)
+}
+
+func TestClientSideTokenRefresh_CustomToken(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.On().ClientConnecting(func(ctx context.Context, info TransportInfo, event ConnectEvent) ConnectReply {
+		require.True(t, strings.HasPrefix(event.Token, "custom"))
+		return ConnectReply{
+			ClientSideRefresh: true,
+			Credentials: &Credentials{
+				UserID:   "12",
+				ExpireAt: time.Now().Unix() + 10,
+			},
+		}
+	})
+
+	transport := newTestTransport()
+	client, _ := newClient(context.Background(), node, transport)
+	var replies []*protocol.Reply
+	rw := testReplyWriter(&replies)
+	disconnect := client.connectCmd(&protocol.ConnectRequest{
+		Token: "custom token",
+	}, rw)
+	require.Nil(t, disconnect)
+	require.Nil(t, replies[0].Error)
+
+	refreshResp, disconnect := client.refreshCmd(&protocol.RefreshRequest{
+		Token: getConnTokenHS("42", 2525637058),
+	})
+	require.Equal(t, DisconnectInvalidToken, disconnect)
+
+	client.On().Refresh(func(event RefreshEvent) RefreshReply {
+		require.True(t, strings.HasPrefix(event.Token, "custom"))
+		return RefreshReply{
+			ExpireAt: time.Now().Unix() + 10,
+		}
+	})
+	refreshResp, disconnect = client.refreshCmd(&protocol.RefreshRequest{
+		Token: "custom token new",
 	})
 	require.Nil(t, disconnect)
 	require.NotEmpty(t, client.ID())

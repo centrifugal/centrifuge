@@ -1,4 +1,4 @@
-Example demonstrates simple chat with JSON protocol.
+Example demonstrates a simple chat with JSON protocol.
 
 Client uses Websocket by default, but you can simply uncomment one line in `index.html` to use SockJS instead. 
 
