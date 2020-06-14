@@ -87,7 +87,7 @@ func main() {
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			log.Printf("user %s sent refresh command with token", client.UserID())
 			if !strings.HasPrefix(e.Token, "I am ") {
 				return centrifuge.RefreshReply{
 					Disconnect: centrifuge.DisconnectInvalidToken,

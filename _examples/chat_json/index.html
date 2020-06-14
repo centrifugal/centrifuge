@@ -167,6 +167,7 @@
                     input.val('');
                 });
 
+                // For debug purposes only ...
                 if (getParam("disconnect") === "1") {
                     function reconnect() {
                         setTimeout(function() {
@@ -179,6 +180,7 @@
                     reconnect();
                 }
 
+                // For debug purposes only ...
                 if (getParam("publish") === "1") {
                     const publishInterval = parseInt(getParam("publishInterval")) || 1000;
                     let counter = 0;

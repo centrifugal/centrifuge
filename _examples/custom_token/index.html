@@ -10,24 +10,7 @@
         <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
-            // helper functions to work with escaping html.
-            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
-            function replaceTag(tag) {return tagsToReplace[tag] || tag;}
-            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
-
-            function getParam(name, url) {
-                if (!url) url = window.location.href;
-                name = name.replace(/[\[\]]/g, '\\$&');
-                const regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
-                    results = regex.exec(url);
-                if (!results) return null;
-                if (!results[2]) return '';
-                return decodeURIComponent(results[2].replace(/\+/g, ' '));
-            }
-
             $(function () {
-
-                const input = $("#input");
                 const container = $('#messages');
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
@@ -40,12 +23,10 @@
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client);
-                    input.attr("disabled", false);
                 });
 
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                    input.attr("disabled", true);
                 });
 
                 // Trigger actual connection establishing with Centrifugo server.
@@ -55,30 +36,6 @@
 
                 function drawText(text) {
                     container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
-                }
-
-                if (getParam("disconnect") === "1") {
-                    function reconnect() {
-                        setTimeout(function() {
-                            centrifuge.disconnect();
-                            setTimeout(function(){
-                                reconnect();
-                            }, 11000);
-                        }, 4000);
-                    }
-                    reconnect();
-                }
-
-                if (getParam("publish") === "1") {
-                    const publishInterval = parseInt(getParam("publishInterval")) || 1000;
-                    let counter = 0;
-                    setInterval(function(){
-                        sub.publish({"input": counter.toString()}).then(function() {
-                        }, function(err) {
-                            drawText("Publish error: " + JSON.stringify(err));
-                        });
-                        counter++;
-                    }, publishInterval);
                 }
             });
         </script>
