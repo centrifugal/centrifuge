@@ -8,7 +8,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
 
 	"github.com/gorilla/websocket"
-	"github.com/igm/sockjs-go/sockjs"
+	"github.com/igm/sockjs-go/v3/sockjs"
 )
 
 const (

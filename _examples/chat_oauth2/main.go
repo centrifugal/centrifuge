@@ -15,13 +15,14 @@ import (
 	"strings"
 	"time"
 
+	_ "net/http/pprof"
+
+	"github.com/centrifugal/centrifuge"
 	"github.com/dchest/uniuri"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-
-	"github.com/centrifugal/centrifuge"
 )
 
 // SessionName is the key used to access the session store.
