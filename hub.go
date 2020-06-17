@@ -247,7 +247,6 @@ func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication, ch
 
 	var jsonPublicationReply *prepared.Reply
 	var protobufPublicationReply *prepared.Reply
-
 	// Iterate over channel subscribers and send message.
 	for uid := range channelSubscriptions {
 		c, ok := h.conns[uid]

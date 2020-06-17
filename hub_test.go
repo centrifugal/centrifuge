@@ -3,8 +3,12 @@ package centrifuge
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/assert"
@@ -16,6 +20,7 @@ type testTransport struct {
 	mu         sync.Mutex
 	sink       chan []byte
 	closed     bool
+	closeCh    chan struct{}
 	disconnect *Disconnect
 	protoType  ProtocolType
 }
@@ -23,6 +28,7 @@ type testTransport struct {
 func newTestTransport() *testTransport {
 	return &testTransport{
 		protoType: ProtocolTypeJSON,
+		closeCh:   make(chan struct{}),
 	}
 }
 
@@ -63,8 +69,12 @@ func (t *testTransport) Encoding() EncodingType {
 func (t *testTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.closed {
+		return nil
+	}
 	t.disconnect = disconnect
 	t.closed = true
+	close(t.closeCh)
 	return nil
 }
 
@@ -82,6 +92,198 @@ func TestHub(t *testing.T) {
 	_ = h.remove(c)
 	assert.Equal(t, len(h.users), 0)
 	assert.Equal(t, 1, len(conns))
+}
+
+func TestHubUnsubscribe(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, err := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, len(node.hub.users), 1)
+	// No such user.
+	err = node.hub.unsubscribe("1", "test")
+	require.NoError(t, err)
+	// Subscribed user.
+	err = node.hub.unsubscribe("42", "test")
+	require.NoError(t, err)
+	select {
+	case data := <-transport.sink:
+		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test\",\"data\":{}}}\n", string(data))
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+}
+
+func TestHubDisconnect(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, err := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, len(node.hub.users), 1)
+	// No such user.
+	err = node.hub.disconnect("1", false)
+	require.NoError(t, err)
+	// Subscribed user.
+	err = node.hub.disconnect("42", false)
+	require.NoError(t, err)
+	select {
+	case <-transport.closeCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+}
+
+func TestHubBroadcastPublicationJSON(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, err := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, len(node.hub.users), 1)
+	err = node.hub.broadcastPublication(
+		"test", &protocol.Publication{Data: []byte(`{"data": "broadcasted_data"}`)}, &ChannelOptions{})
+	require.NoError(t, err)
+	select {
+	case data := <-transport.sink:
+		require.True(t, strings.Contains(string(data), "broadcasted_data"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+}
+
+func TestHubBroadcastPublicationProtobuf(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	transport.protoType = ProtocolTypeProtobuf
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, err := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, len(node.hub.users), 1)
+	err = node.hub.broadcastPublication(
+		"test", &protocol.Publication{Data: []byte(`{"data": "broadcasted_data"}`)}, &ChannelOptions{})
+	require.NoError(t, err)
+	select {
+	case data := <-transport.sink:
+		require.True(t, strings.Contains(string(data), "broadcasted_data"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+}
+
+func TestHubBroadcastJoinJSON(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	transport.sink = make(chan []byte, 100)
+	transport.protoType = ProtocolTypeProtobuf
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, err := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, len(node.hub.users), 1)
+	err = node.hub.broadcastJoin(
+		"test", &protocol.Join{Info: ClientInfo{Client: "broadcast_client"}})
+	require.NoError(t, err)
+	select {
+	case data := <-transport.sink:
+		require.True(t, strings.Contains(string(data), "broadcast_client"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+}
+
+func TestHubBroadcastJoinProtobuf(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, err := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, len(node.hub.users), 1)
+	err = node.hub.broadcastJoin(
+		"test", &protocol.Join{Info: ClientInfo{Client: "broadcast_client"}})
+	require.NoError(t, err)
+	select {
+	case data := <-transport.sink:
+		require.True(t, strings.Contains(string(data), "broadcast_client"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+}
+
+func TestHubBroadcastLeaveJSON(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	transport.sink = make(chan []byte, 100)
+	transport.protoType = ProtocolTypeProtobuf
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, err := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, len(node.hub.users), 1)
+	err = node.hub.broadcastLeave(
+		"test", &protocol.Leave{Info: ClientInfo{Client: "broadcast_client"}})
+	require.NoError(t, err)
+	select {
+	case data := <-transport.sink:
+		require.True(t, strings.Contains(string(data), "broadcast_client"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+}
+
+func TestHubBroadcastLeaveProtobuf(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport()
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, err := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, len(node.hub.users), 1)
+	err = node.hub.broadcastLeave(
+		"test", &protocol.Leave{Info: ClientInfo{Client: "broadcast_client"}})
+	require.NoError(t, err)
+	select {
+	case data := <-transport.sink:
+		require.True(t, strings.Contains(string(data), "broadcast_client"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
 }
 
 func TestHubShutdown(t *testing.T) {
