@@ -2,18 +2,11 @@ package centrifuge
 
 import (
 	"crypto/rsa"
-	"errors"
-	"fmt"
-	"regexp"
 	"time"
 )
 
 // Config contains Node configuration options.
 type Config struct {
-	// ChannelOptions embedded.
-	ChannelOptions
-	// Namespaces – list of namespaces for custom channel options.
-	Namespaces []ChannelNamespace
 	// Version of server – will be sent to client on connection establishment
 	// phase in response to connect request.
 	Version string
@@ -23,19 +16,6 @@ type Config struct {
 	// TokenHMACSecretKey is a secret key used to validate connection and subscription
 	// tokens generated using HMAC. Zero value means that HMAC tokens won't be allowed.
 	TokenHMACSecretKey string
-	// UserPersonalChannelPrefix defines prefix to be added to user personal channel.
-	UserPersonalChannelNamespace string
-	// ChannelPrivatePrefix is a prefix in channel name which indicates that
-	// channel is private.
-	ChannelPrivatePrefix string
-	// ChannelNamespaceBoundary is a string separator which must be put after
-	// namespace part in channel name.
-	ChannelNamespaceBoundary string
-	// ChannelUserBoundary is a string separator which must be set before allowed
-	// users part in channel name.
-	ChannelUserBoundary string
-	// ChannelUserSeparator separates allowed users in user part of channel name.
-	ChannelUserSeparator string
 	// TokenRSAPublicKey is a public key used to validate connection and subscription
 	// tokens generated using RSA. Zero value means that RSA tokens won't be allowed.
 	TokenRSAPublicKey *rsa.PublicKey
@@ -74,8 +54,6 @@ type Config struct {
 	// ClientUserConnectionLimit limits number of client connections from user with the
 	// same ID. 0 - unlimited.
 	ClientUserConnectionLimit int
-	// ChannelMaxLength is a maximum length of channel name.
-	ChannelMaxLength int
 	// ClientInsecure turns on insecure mode for client connections - when it's
 	// turned on then no authentication required at all when connecting to Centrifugo,
 	// anonymous access and publish allowed for all channels, no connection expire
@@ -90,65 +68,13 @@ type Config struct {
 	// Only users with user ID defined will subscribe to personal channels, anonymous
 	// users are ignored.
 	UserSubscribeToPersonal bool
+	// ChannelMaxLength is a maximum length of channel name.
+	ChannelMaxLength int
 }
 
 // Validate validates config and returns error if problems found
 func (c *Config) Validate() error {
-	errPrefix := "config error: "
-	pattern := "^[-a-zA-Z0-9_.]{2,}$"
-	patternRegexp, err := regexp.Compile(pattern)
-	if err != nil {
-		return err
-	}
-
-	if c.HistoryRecover && (c.HistorySize == 0 || c.HistoryLifetime == 0) {
-		return errors.New("both history size and history lifetime required for history recovery")
-	}
-
-	usePersonalChannel := c.UserSubscribeToPersonal
-	personalChannelNamespace := c.UserPersonalChannelNamespace
-	var validPersonalChannelNamespace bool
-	if !usePersonalChannel || personalChannelNamespace == "" {
-		validPersonalChannelNamespace = true
-	}
-
-	var nss = make([]string, 0, len(c.Namespaces))
-	for _, n := range c.Namespaces {
-		name := n.Name
-		match := patternRegexp.MatchString(name)
-		if !match {
-			return errors.New(errPrefix + "wrong namespace name – " + name)
-		}
-		if stringInSlice(name, nss) {
-			return errors.New(errPrefix + "namespace name must be unique")
-		}
-		if n.HistoryRecover && (n.HistorySize == 0 || n.HistoryLifetime == 0) {
-			return fmt.Errorf("namespace %s: both history size and history lifetime required for history recovery", name)
-		}
-		if name == personalChannelNamespace {
-			validPersonalChannelNamespace = true
-		}
-		nss = append(nss, name)
-	}
-
-	if !validPersonalChannelNamespace {
-		return fmt.Errorf("namespace for user personal channel not found: %s", personalChannelNamespace)
-	}
-
 	return nil
-}
-
-// channelOpts searches for channel options for specified namespace key.
-func (c *Config) channelOpts(namespaceName string) (ChannelOptions, bool) {
-	if namespaceName == "" {
-		return c.ChannelOptions, true
-	}
-	for _, n := range c.Namespaces {
-		if n.Name == namespaceName {
-			return n.ChannelOptions, true
-		}
-	}
-	return ChannelOptions{}, false
 }
 
 const (
@@ -167,13 +93,9 @@ const (
 var DefaultConfig = Config{
 	Name: "centrifuge",
 
-	NodeInfoMetricsAggregateInterval: 60 * time.Second,
+	ChannelMaxLength: 255,
 
-	ChannelMaxLength:         255,
-	ChannelPrivatePrefix:     "$", // so private channel will look like "$gossips"
-	ChannelNamespaceBoundary: ":", // so namespace "public" can be used as "public:news"
-	ChannelUserBoundary:      "#", // so user limited channel is "user#2694" where "2696" is user ID
-	ChannelUserSeparator:     ",", // so several users limited channel is "dialog#2694,3019"
+	NodeInfoMetricsAggregateInterval: 60 * time.Second,
 
 	ClientPresenceUpdateInterval:    25 * time.Second,
 	ClientPresenceExpireInterval:    60 * time.Second,

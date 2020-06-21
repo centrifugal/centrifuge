@@ -298,8 +298,8 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 // updateChannelPresence updates client presence info for channel so it
 // won't expire until client disconnect.
 func (c *Client) updateChannelPresence(ch string) error {
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
+	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	if err != nil {
 		return nil
 	}
 	if !chOpts.Presence {
@@ -389,8 +389,8 @@ func (c *Client) updatePresence() {
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext ChannelContext) bool {
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
+	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	if err != nil {
 		return true
 	}
 	if !chOpts.HistoryRecover {
@@ -414,7 +414,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelConte
 	isValidPosition := streamTop.Offset == position.Offset && streamTop.Epoch == position.Epoch
 	keepConnection := true
 	c.mu.Lock()
-	if channelContext, ok = c.channels[ch]; ok {
+	if channelContext, ok := c.channels[ch]; ok {
 		channelContext.positionCheckTime = nowUnix
 		if !isValidPosition {
 			channelContext.positionCheckFailures++
@@ -1362,9 +1362,10 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		resp.Result.Data = authData
 	}
 
-	if config.UserSubscribeToPersonal && c.user != "" {
-		channels = append(channels, c.node.PersonalChannel(c.user))
-	}
+	// TODO: fix this.
+	//if config.UserSubscribeToPersonal && c.user != "" {
+	//	channels = append(channels, c.node.PersonalChannel(c.user))
+	//}
 
 	var subCtxMap map[string]subscribeContext
 	if len(channels) > 0 {
@@ -1580,21 +1581,16 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, server
 		return ChannelOptions{}, nil, DisconnectBadRequest
 	}
 
-	chOpts, ok := c.node.ChannelOpts(channel)
-	if !ok {
+	chOpts, err := c.node.channelOptsGetter.ChannelOptions(channel)
+	if err != nil {
+		// TODO: handle Centrifuge.Error.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on non existing namespace", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		return ChannelOptions{}, ErrorNamespaceNotFound, nil
-	}
-
-	if !serverSide && chOpts.ServerSide {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on server side channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, ErrorPermissionDenied, nil
 	}
 
 	config := c.node.Config()
 	channelMaxLength := config.ChannelMaxLength
 	channelLimit := config.ClientChannelLimit
-	insecure := config.ClientInsecure
 
 	if channelMaxLength > 0 && len(channel) > channelMaxLength {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long", map[string]interface{}{"max": channelMaxLength, "channel": channel, "user": c.user, "client": c.uid}))
@@ -1611,21 +1607,11 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, server
 	}
 
 	c.mu.RLock()
-	_, ok = c.channels[channel]
+	_, ok := c.channels[channel]
 	c.mu.RUnlock()
 	if ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		return ChannelOptions{}, ErrorAlreadySubscribed, nil
-	}
-
-	if !c.node.userAllowed(channel, c.user) {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, ErrorPermissionDenied, nil
-	}
-
-	if !chOpts.Anonymous && c.user == "" && !insecure {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "anonymous user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, ErrorPermissionDenied, nil
 	}
 
 	return chOpts, nil, nil
@@ -1637,58 +1623,65 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 		expireAt    int64
 	)
 
-	isPrivateChannel := c.node.privateChannel(cmd.Channel)
+	// TODO: fix this.
+	//isPrivateChannel := c.node.privateChannel(cmd.Channel)
 
-	if !serverSide && isPrivateChannel {
-		if cmd.Token == "" {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
-			return nil, 0, false, ErrorPermissionDenied, nil
-		}
-		var (
-			token     subscribeToken
-			errVerify error
-		)
-		if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
-			if errVerify == errTokenExpired {
-				return nil, 0, false, ErrorTokenExpired, nil
+	//if !serverSide && isPrivateChannel {
+	//	if cmd.Token == "" {
+	//		c.node.logger.log(newLogEntry(LogLevelInfo, "subscription token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
+	//		return nil, 0, false, ErrorPermissionDenied, nil
+	//	}
+	//	var (
+	//		token     subscribeToken
+	//		errVerify error
+	//	)
+	//	if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
+	//		if errVerify == errTokenExpired {
+	//			return nil, 0, false, ErrorTokenExpired, nil
+	//		}
+	//		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid, "user": c.UserID()}))
+	//		return nil, 0, false, ErrorPermissionDenied, nil
+	//	}
+	//	if c.uid != token.Client {
+	//		return nil, 0, false, ErrorPermissionDenied, nil
+	//	}
+	//	if cmd.Channel != token.Channel {
+	//		return nil, 0, false, ErrorPermissionDenied, nil
+	//	}
+	//	expireAt = token.ExpireAt
+	//	if token.ExpireTokenOnly {
+	//		expireAt = 0
+	//	}
+	//	channelInfo = token.Info
+	//}
+
+	if !serverSide {
+		if c.eventHub.subscribeHandler != nil {
+			reply := c.eventHub.subscribeHandler(SubscribeEvent{
+				Channel: cmd.Channel,
+			})
+			if reply.Disconnect != nil {
+				return nil, 0, false, nil, reply.Disconnect
 			}
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid, "user": c.UserID()}))
-			return nil, 0, false, ErrorPermissionDenied, nil
-		}
-		if c.uid != token.Client {
-			return nil, 0, false, ErrorPermissionDenied, nil
-		}
-		if cmd.Channel != token.Channel {
-			return nil, 0, false, ErrorPermissionDenied, nil
-		}
-		expireAt = token.ExpireAt
-		if token.ExpireTokenOnly {
-			expireAt = 0
-		}
-		channelInfo = token.Info
-	}
-
-	if !serverSide && c.eventHub.subscribeHandler != nil {
-		reply := c.eventHub.subscribeHandler(SubscribeEvent{
-			Channel: cmd.Channel,
-		})
-		if reply.Disconnect != nil {
-			return nil, 0, false, nil, reply.Disconnect
-		}
-		if reply.Error != nil {
-			return nil, 0, false, reply.Error, nil
-		}
-		if len(reply.ChannelInfo) > 0 && !isPrivateChannel {
-			channelInfo = reply.ChannelInfo
-		}
-		if reply.ExpireAt > 0 && !isPrivateChannel {
-			expireAt = reply.ExpireAt
+			if reply.Error != nil {
+				return nil, 0, false, reply.Error, nil
+			}
+			if len(reply.ChannelInfo) > 0 {
+				channelInfo = reply.ChannelInfo
+			}
+			if reply.ExpireAt > 0 {
+				expireAt = reply.ExpireAt
+			}
+		} else {
+			return nil, 0, false, ErrorNotAvailable, nil
 		}
 	}
 
 	// At moment we expose expiration details to client only in case
 	// of private channel subscription.
-	exposeExpiration := !serverSide && isPrivateChannel
+	// TODO: fix this.
+	//exposeExpiration := !serverSide && isPrivateChannel
+	exposeExpiration := false
 
 	return channelInfo, expireAt, exposeExpiration, nil, nil
 }
@@ -2096,9 +2089,10 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 
 // Lock must be held outside.
 func (c *Client) unsubscribe(channel string) error {
-	chOpts, ok := c.node.ChannelOpts(channel)
-	if !ok {
-		return ErrorNamespaceNotFound
+	chOpts, err := c.node.channelOptsGetter.ChannelOptions(channel)
+	if err != nil {
+		// TODO: check error handling here.
+		return err
 	}
 
 	c.mu.RLock()
@@ -2179,33 +2173,9 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 
 	resp := &clientproto.PublishResponse{}
 
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to publish to non-existing namespace", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid}))
-		resp.Error = ErrorNamespaceNotFound.toProto()
-		return resp, nil
-	}
-
-	if chOpts.SubscribeToPublish {
-		c.mu.RLock()
-		_, ok := c.channels[ch]
-		c.mu.RUnlock()
-		if !ok {
-			resp.Error = ErrorPermissionDenied.toProto()
-			return resp, nil
-		}
-	}
-
 	c.mu.RLock()
 	info := c.clientInfo(ch)
 	c.mu.RUnlock()
-
-	insecure := c.node.Config().ClientInsecure
-
-	if !chOpts.Publish && !insecure {
-		resp.Error = ErrorPermissionDenied.toProto()
-		return resp, nil
-	}
 
 	if c.eventHub.publishHandler != nil {
 		reply := c.eventHub.publishHandler(PublishEvent{
@@ -2228,6 +2198,9 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 		if reply.Data != nil {
 			data = reply.Data
 		}
+	} else {
+		resp.Error = ErrorNotAvailable.toProto()
+		return resp, nil
 	}
 
 	_, err := c.node.publish(ch, data, info)
@@ -2253,14 +2226,15 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 
 	resp := &clientproto.PresenceResponse{}
 
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
+	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	if err != nil {
+		// TODO: handle properly.
 		resp.Error = ErrorNamespaceNotFound.toProto()
 		return resp, nil
 	}
 
 	c.mu.RLock()
-	_, ok = c.channels[ch]
+	_, ok := c.channels[ch]
 	c.mu.RUnlock()
 
 	if !ok {
@@ -2311,8 +2285,9 @@ func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientpr
 		return resp, nil
 	}
 
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
+	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	if err != nil {
+		// TODO: handle properly.
 		resp.Error = ErrorNamespaceNotFound.toProto()
 		return resp, nil
 	}
@@ -2360,8 +2335,9 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 		return resp, nil
 	}
 
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
+	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	if err != nil {
+		// TODO: handle properly.
 		resp.Error = ErrorNamespaceNotFound.toProto()
 		return resp, nil
 	}

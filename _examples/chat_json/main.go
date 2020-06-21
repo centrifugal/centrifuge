@@ -62,26 +62,26 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
 
-	cfg.JoinLeave = true
-	cfg.HistoryLifetime = 300
-	cfg.HistorySize = 1000
-	cfg.HistoryRecover = true
-
-	cfg.UserSubscribeToPersonal = true
-
-	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		{
-			Name: "chat",
-			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:         true,
-				Presence:        true,
-				JoinLeave:       true,
-				HistoryLifetime: 60,
-				HistorySize:     1000,
-				HistoryRecover:  true,
-			},
-		},
-	}
+	//cfg.JoinLeave = true
+	//cfg.HistoryLifetime = 300
+	//cfg.HistorySize = 1000
+	//cfg.HistoryRecover = true
+	//
+	//cfg.UserSubscribeToPersonal = true
+	//
+	//cfg.Namespaces = []centrifuge.ChannelNamespace{
+	//	{
+	//		Name: "chat",
+	//		ChannelOptions: centrifuge.ChannelOptions{
+	//			Publish:         true,
+	//			Presence:        true,
+	//			JoinLeave:       true,
+	//			HistoryLifetime: 60,
+	//			HistorySize:     1000,
+	//			HistoryRecover:  true,
+	//		},
+	//	},
+	//}
 
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
@@ -114,13 +114,6 @@ func main() {
 		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
 			log.Printf("user %s still connected (client ID %s)", client.UserID(), client.ID())
 			return centrifuge.PresenceReply{}
-		})
-
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{
-				ExpireAt: time.Now().Unix() + 5,
-			}
 		})
 
 		client.On().SubRefresh(func(e centrifuge.SubRefreshEvent) centrifuge.SubRefreshReply {
@@ -195,18 +188,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	go func() {
-		// Publish personal notifications for user 42 periodically.
-		i := 1
-		for {
-			_, err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
-			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
-			}
-			i++
-			time.Sleep(5000 * time.Millisecond)
-		}
-	}()
+	//go func() {
+	//	// Publish personal notifications for user 42 periodically.
+	//	i := 1
+	//	for {
+	//		_, err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+	//		if err != nil {
+	//			log.Printf("error publishing to personal channel: %s", err)
+	//		}
+	//		i++
+	//		time.Sleep(5000 * time.Millisecond)
+	//	}
+	//}()
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ReadBufferSize:     1024,

@@ -2,10 +2,8 @@ package centrifuge
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"hash/fnv"
-	"strings"
 	"sync"
 	"time"
 
@@ -64,6 +62,8 @@ type Node struct {
 	metricsSnapshot *eagle.Metrics
 
 	subDissolver *dissolve.Dissolver
+
+	channelOptsGetter ChannelOptionsGetter
 }
 
 const (
@@ -81,19 +81,20 @@ func New(c Config) (*Node, error) {
 	}
 
 	n := &Node{
-		uid:            uid,
-		nodes:          newNodeRegistry(uid),
-		config:         c,
-		hub:            newHub(),
-		startedAt:      time.Now().Unix(),
-		shutdownCh:     make(chan struct{}),
-		logger:         nil,
-		controlEncoder: controlproto.NewProtobufEncoder(),
-		controlDecoder: controlproto.NewProtobufDecoder(),
-		eventHub:       &nodeEventHub{},
-		subLocks:       subLocks,
-		subDissolver:   dissolve.New(numSubDissolverWorkers),
-		tokenVerifier:  newTokenVerifierJWT(c.TokenHMACSecretKey, c.TokenRSAPublicKey),
+		uid:               uid,
+		nodes:             newNodeRegistry(uid),
+		config:            c,
+		hub:               newHub(),
+		startedAt:         time.Now().Unix(),
+		shutdownCh:        make(chan struct{}),
+		logger:            nil,
+		controlEncoder:    controlproto.NewProtobufEncoder(),
+		controlDecoder:    controlproto.NewProtobufDecoder(),
+		eventHub:          &nodeEventHub{},
+		subLocks:          subLocks,
+		subDissolver:      dissolve.New(numSubDissolverWorkers),
+		tokenVerifier:     newTokenVerifierJWT(c.TokenHMACSecretKey, c.TokenRSAPublicKey),
+		channelOptsGetter: newDefaultChannelOptionsGetter(),
 	}
 
 	if c.LogHandler != nil {
@@ -103,6 +104,16 @@ func New(c Config) (*Node, error) {
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
 	return n, nil
+}
+
+type defaultChannelOptionsGetter struct{}
+
+func newDefaultChannelOptionsGetter() *defaultChannelOptionsGetter {
+	return &defaultChannelOptionsGetter{}
+}
+
+func (g *defaultChannelOptionsGetter) ChannelOptions(_ string) (ChannelOptions, error) {
+	return ChannelOptions{}, nil
 }
 
 // index chooses bucket number in range [0, numBuckets).
@@ -125,6 +136,11 @@ func (n *Node) Config() Config {
 	c := n.config
 	n.mu.RUnlock()
 	return c
+}
+
+// SetChannelOptionsGetter allows to set ChannelOptionsGetter implementation to use.
+func (n *Node) SetChannelOptionsGetter(g ChannelOptionsGetter) {
+	n.channelOptsGetter = g
 }
 
 // SetEngine binds Engine to node.
@@ -440,9 +456,9 @@ func (n *Node) handlePublication(ch string, pub *protocol.Publication) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	chOpts, ok := n.ChannelOpts(ch)
-	if !ok {
-		return ErrNoChannelOptions
+	chOpts, err := n.channelOptsGetter.ChannelOptions(ch)
+	if err != nil {
+		return err
 	}
 	return n.hub.broadcastPublication(ch, pub, &chOpts)
 }
@@ -470,9 +486,9 @@ func (n *Node) handleLeave(ch string, leave *protocol.Leave) error {
 }
 
 func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts ...PublishOption) (PublishResult, error) {
-	chOpts, ok := n.ChannelOpts(ch)
-	if !ok {
-		return PublishResult{}, ErrNoChannelOptions
+	chOpts, err := n.channelOptsGetter.ChannelOptions(ch)
+	if err != nil {
+		return PublishResult{}, err
 	}
 
 	publishOpts := &PublishOptions{}
@@ -505,7 +521,7 @@ func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts .
 	}
 	// If no history enabled - just publish to Broker. In this case we want to handle
 	// error as message will be lost forever otherwise.
-	err := n.broker.Publish(ch, pub, &chOpts)
+	err = n.broker.Publish(ch, pub, &chOpts)
 	return PublishResult{}, err
 }
 
@@ -532,19 +548,13 @@ func (n *Node) Publish(channel string, data []byte, opts ...PublishOption) (Publ
 	return n.publish(channel, data, nil, opts...)
 }
 
-var (
-	// ErrNoChannelOptions returned when operation can't be performed because no
-	// appropriate channel options were found for channel.
-	ErrNoChannelOptions = errors.New("no channel options found")
-)
-
 // publishJoin allows to publish join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error {
 	if opts == nil {
-		chOpts, ok := n.ChannelOpts(ch)
-		if !ok {
-			return ErrorNamespaceNotFound
+		chOpts, err := n.channelOptsGetter.ChannelOptions(ch)
+		if err != nil {
+			return err
 		}
 		opts = &chOpts
 	}
@@ -556,9 +566,9 @@ func (n *Node) publishJoin(ch string, join *protocol.Join, opts *ChannelOptions)
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishLeave(ch string, leave *protocol.Leave, opts *ChannelOptions) error {
 	if opts == nil {
-		chOpts, ok := n.ChannelOpts(ch)
-		if !ok {
-			return ErrorNamespaceNotFound
+		chOpts, err := n.channelOptsGetter.ChannelOptions(ch)
+		if err != nil {
+			return err
 		}
 		opts = &chOpts
 	}
@@ -758,32 +768,6 @@ func (n *Node) Disconnect(user string, opts ...DisconnectOption) error {
 	return n.pubDisconnect(user, disconnectOpts.Reconnect)
 }
 
-// namespaceName returns namespace name from channel if exists.
-func (n *Node) namespaceName(ch string) string {
-	cTrim := strings.TrimPrefix(ch, n.config.ChannelPrivatePrefix)
-	if n.config.ChannelNamespaceBoundary != "" && strings.Contains(cTrim, n.config.ChannelNamespaceBoundary) {
-		parts := strings.SplitN(cTrim, n.config.ChannelNamespaceBoundary, 2)
-		return parts[0]
-	}
-	return ""
-}
-
-// ChannelOpts returns channel options for channel using current channel config.
-func (n *Node) ChannelOpts(ch string) (ChannelOptions, bool) {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	return n.config.channelOpts(n.namespaceName(ch))
-}
-
-// PersonalChannel returns personal channel for user based on node configuration.
-func (n *Node) PersonalChannel(user string) string {
-	config := n.Config()
-	if config.UserPersonalChannelNamespace == "" {
-		return config.ChannelUserBoundary + user
-	}
-	return config.UserPersonalChannelNamespace + config.ChannelNamespaceBoundary + config.ChannelUserBoundary + user
-}
-
 // addPresence proxies presence adding to engine.
 func (n *Node) addPresence(ch string, uid string, info *protocol.ClientInfo) error {
 	if n.presenceManager == nil {
@@ -892,44 +876,6 @@ func (n *Node) RemoveHistory(ch string) error {
 		return ErrorNotAvailable
 	}
 	return n.historyManager.RemoveHistory(ch)
-}
-
-// privateChannel checks if channel private. In case of private channel
-// subscription request must contain a proper signature.
-func (n *Node) privateChannel(ch string) bool {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	if n.config.ChannelPrivatePrefix == "" {
-		return false
-	}
-	return strings.HasPrefix(ch, n.config.ChannelPrivatePrefix)
-}
-
-// userAllowed checks if user can subscribe on channel - as channel
-// can contain special part in the end to indicate which users allowed
-// to subscribe on it.
-func (n *Node) userAllowed(ch string, user string) bool {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	userBoundary := n.config.ChannelUserBoundary
-	userSeparator := n.config.ChannelUserSeparator
-	if userBoundary == "" {
-		return true
-	}
-	if !strings.Contains(ch, userBoundary) {
-		return true
-	}
-	parts := strings.Split(ch, userBoundary)
-	if userSeparator == "" {
-		return parts[len(parts)-1] == user
-	}
-	allowedUsers := strings.Split(parts[len(parts)-1], userSeparator)
-	for _, allowedUser := range allowedUsers {
-		if user == allowedUser {
-			return true
-		}
-	}
-	return false
 }
 
 func (n *Node) verifyConnectToken(token string) (connectToken, error) {
