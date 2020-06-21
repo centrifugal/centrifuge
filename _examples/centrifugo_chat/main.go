@@ -52,6 +52,13 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
+func clientError(err error) *centrifuge.Error {
+	if clientErr, ok := err.(*centrifuge.Error); ok {
+		return clientErr
+	}
+	return centrifuge.ErrorInternal
+}
+
 func main() {
 	cfg := centrifuge.DefaultConfig
 
@@ -62,32 +69,38 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
 
-	//cfg.JoinLeave = true
-	//cfg.HistoryLifetime = 300
-	//cfg.HistorySize = 1000
-	//cfg.HistoryRecover = true
-	//
-	//cfg.UserSubscribeToPersonal = true
-	//
-	//cfg.Namespaces = []centrifuge.ChannelNamespace{
-	//	{
-	//		Name: "chat",
-	//		ChannelOptions: centrifuge.ChannelOptions{
-	//			Publish:         true,
-	//			Presence:        true,
-	//			JoinLeave:       true,
-	//			HistoryLifetime: 60,
-	//			HistorySize:     1000,
-	//			HistoryRecover:  true,
-	//		},
-	//	},
-	//}
-
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
 
 	node, _ := centrifuge.New(cfg)
+
+	var ruleCfg = centrifuge.DefaultRuleConfig
+	ruleCfg.JoinLeave = true
+	ruleCfg.HistoryLifetime = 300
+	ruleCfg.HistorySize = 1000
+	ruleCfg.HistoryRecover = true
+
+	cfg.UserSubscribeToPersonal = true
+
+	ruleCfg.Namespaces = []centrifuge.ChannelNamespace{
+		{
+			Name: "chat",
+			NamespacedChannelOptions: centrifuge.NamespacedChannelOptions{
+				Publish: true,
+				ChannelOptions: centrifuge.ChannelOptions{
+					Presence:        true,
+					JoinLeave:       true,
+					HistoryLifetime: 60,
+					HistorySize:     1000,
+					HistoryRecover:  true,
+				},
+			},
+		},
+	}
+
+	centrifugoRuleChecker := centrifuge.NewNamespacedChannelRuleChecker(node, ruleCfg)
+	node.SetChannelOptionsGetter(centrifugoRuleChecker)
 
 	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
 		HistoryMetaTTL: 120 * time.Second,
@@ -111,16 +124,15 @@ func main() {
 			}
 		})
 
-		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
-			log.Printf("user %s still connected (client ID %s)", client.UserID(), client.ID())
-			return centrifuge.PresenceReply{}
-		})
-
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{
-				ExpireAt: time.Now().Unix() + 5,
+			err := centrifugoRuleChecker.ValidateSubscribe(client, e.Channel)
+			if err != nil {
+				return centrifuge.SubscribeReply{
+					Error: clientError(err),
+				}
 			}
+			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+			return centrifuge.SubscribeReply{}
 		})
 
 		client.On().SubRefresh(func(e centrifuge.SubRefreshEvent) centrifuge.SubRefreshReply {
@@ -136,9 +148,15 @@ func main() {
 		})
 
 		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
+			err := centrifugoRuleChecker.ValidatePublish(client, e.Channel)
+			if err != nil {
+				return centrifuge.PublishReply{
+					Error: clientError(err),
+				}
+			}
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 			var msg clientMessage
-			err := json.Unmarshal(e.Data, &msg)
+			err = json.Unmarshal(e.Data, &msg)
 			if err != nil {
 				return centrifuge.PublishReply{
 					Error: centrifuge.ErrorBadRequest,
