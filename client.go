@@ -1655,6 +1655,8 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 	//	channelInfo = token.Info
 	//}
 
+	var exposeExpiration bool
+
 	if !serverSide {
 		if c.eventHub.subscribeHandler != nil {
 			reply := c.eventHub.subscribeHandler(SubscribeEvent{
@@ -1672,16 +1674,11 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 			if reply.ExpireAt > 0 {
 				expireAt = reply.ExpireAt
 			}
+			exposeExpiration = reply.ClientSideRefresh
 		} else {
 			return nil, 0, false, ErrorNotAvailable, nil
 		}
 	}
-
-	// At moment we expose expiration details to client only in case
-	// of private channel subscription.
-	// TODO: fix this.
-	//exposeExpiration := !serverSide && isPrivateChannel
-	exposeExpiration := false
 
 	return channelInfo, expireAt, exposeExpiration, nil, nil
 }

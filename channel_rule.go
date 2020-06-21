@@ -160,7 +160,7 @@ func (n *NamespacedChannelRuleChecker) ChannelOptions(ch string) (ChannelOptions
 }
 
 // ChannelOpts returns channel options for channel using current channel config.
-func (n *NamespacedChannelRuleChecker) NamespacedChannelOptions(ch string) (NamespacedChannelOptions, error) {
+func (n *NamespacedChannelRuleChecker) namespacedChannelOptions(ch string) (NamespacedChannelOptions, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.config.channelOpts(n.namespaceName(ch))
@@ -234,54 +234,52 @@ func (n *NamespacedChannelRuleChecker) userAllowed(ch string, user string) bool 
 	return false
 }
 
-func (n *NamespacedChannelRuleChecker) validateSubscribe(c *Client, channel string) (bool, error) {
+func (n *NamespacedChannelRuleChecker) ValidateSubscribe(c *Client, channel string) error {
 	config := n.node.Config()
 
-	chOpts, err := n.NamespacedChannelOptions(channel)
+	chOpts, err := n.namespacedChannelOptions(channel)
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	if !chOpts.ServerSide {
+	if chOpts.ServerSide {
 		n.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on server side channel", map[string]interface{}{"channel": channel, "user": c.UserID(), "client": c.ID()}))
-		return false, ErrorPermissionDenied
+		return ErrorPermissionDenied
 	}
 
 	if !n.userAllowed(channel, c.UserID()) {
 		n.node.logger.log(newLogEntry(LogLevelInfo, "user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.UserID(), "client": c.ID()}))
-		return false, ErrorPermissionDenied
+		return ErrorPermissionDenied
 	}
 
 	if !chOpts.Anonymous && c.user == "" && !config.ClientInsecure {
 		n.node.logger.log(newLogEntry(LogLevelInfo, "anonymous user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.UserID(), "client": c.ID()}))
-		return false, ErrorPermissionDenied
+		return ErrorPermissionDenied
 	}
 
-	return true, nil
+	return nil
 }
 
-func (n *NamespacedChannelRuleChecker) validatePublish(c *Client, ch string) (bool, error) {
-	chOpts, err := n.NamespacedChannelOptions(ch)
+func (n *NamespacedChannelRuleChecker) ValidatePublish(c *Client, ch string) error {
+	chOpts, err := n.namespacedChannelOptions(ch)
 	if err != nil {
 		// TODO: handle properly.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to publish to non-existing namespace", map[string]interface{}{"channel": ch, "user": c.UserID(), "client": c.ID()}))
-		return false, ErrorNamespaceNotFound
+		return ErrorNamespaceNotFound
 	}
 
 	if chOpts.SubscribeToPublish {
-		c.mu.RLock()
-		_, ok := c.channels[ch]
-		c.mu.RUnlock()
+		_, ok := c.Channels()[ch]
 		if !ok {
-			return false, ErrorPermissionDenied
+			return ErrorPermissionDenied
 		}
 	}
 
 	insecure := c.node.Config().ClientInsecure
 
 	if !chOpts.Publish && !insecure {
-		return false, ErrorPermissionDenied
+		return ErrorPermissionDenied
 	}
 
-	return true, nil
+	return nil
 }

@@ -130,6 +130,10 @@ type SubscribeReply struct {
 	ExpireAt int64
 	// ChannelInfo defines custom channel information, zero value means no channel information.
 	ChannelInfo []byte
+	// ClientSideRefresh tells library to use client-side refresh logic: i.e. send
+	// SubRefresh commands with new Subscription Token. If not set then server-side
+	// SubRefresh handler will be used.
+	ClientSideRefresh bool
 }
 
 // SubscribeHandler called when client wants to subscribe on channel.
