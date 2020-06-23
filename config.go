@@ -1,7 +1,6 @@
 package centrifuge
 
 import (
-	"crypto/rsa"
 	"time"
 )
 
@@ -13,12 +12,6 @@ type Config struct {
 	// Name of this server node - must be unique, used as human readable
 	// and meaningful node identifier.
 	Name string
-	// TokenHMACSecretKey is a secret key used to validate connection and subscription
-	// tokens generated using HMAC. Zero value means that HMAC tokens won't be allowed.
-	TokenHMACSecretKey string
-	// TokenRSAPublicKey is a public key used to validate connection and subscription
-	// tokens generated using RSA. Zero value means that RSA tokens won't be allowed.
-	TokenRSAPublicKey *rsa.PublicKey
 	// ClientPresenceUpdateInterval is an interval how often connected clients
 	// must update presence info.
 	ClientPresenceUpdateInterval time.Duration
@@ -54,20 +47,6 @@ type Config struct {
 	// ClientUserConnectionLimit limits number of client connections from user with the
 	// same ID. 0 - unlimited.
 	ClientUserConnectionLimit int
-	// ClientInsecure turns on insecure mode for client connections - when it's
-	// turned on then no authentication required at all when connecting to Centrifugo,
-	// anonymous access and publish allowed for all channels, no connection expire
-	// performed. This can be suitable for demonstration or personal usage.
-	ClientInsecure bool
-	// ClientAnonymous when set to true, allows connect requests without specifying
-	// a token or setting Credentials in authentication middleware. The resulting
-	// user will have empty string for user ID, meaning user can only subscribe
-	// to anonymous channels.
-	ClientAnonymous bool
-	// UserSubscribeToPersonal enables automatic subscribing to personal channel by user.
-	// Only users with user ID defined will subscribe to personal channels, anonymous
-	// users are ignored.
-	UserSubscribeToPersonal bool
 	// ChannelMaxLength is a maximum length of channel name.
 	ChannelMaxLength int
 }
