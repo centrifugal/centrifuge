@@ -1,9 +1,11 @@
 package centrifuge
 
-type tokenVerifier interface {
+type connectTokenVerifier interface {
 	VerifyConnectToken(token string) (connectToken, error)
+}
+
+type subscribeTokenVerifier interface {
 	VerifySubscribeToken(token string) (subscribeToken, error)
-	Reload(config Config) error
 }
 
 type connectToken struct {
@@ -41,6 +43,6 @@ type subscribeToken struct {
 	Info []byte
 	// ExpireTokenOnly used to indicate that library must only check token
 	// expiration but not turn on Subscription expiration checks on server side.
-	// This allows to implement one-time subcription tokens.
+	// This allows to implement one-time subscription tokens.
 	ExpireTokenOnly bool
 }

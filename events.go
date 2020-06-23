@@ -116,7 +116,11 @@ type DisconnectHandler func(DisconnectEvent) DisconnectReply
 
 // SubscribeEvent contains fields related to subscribe event.
 type SubscribeEvent struct {
+	// Channel client wants to subscribe to.
 	Channel string
+	// Token will only be set for token channels. This is a task of application
+	// to check that subscription to a channel has valid token.
+	Token string
 }
 
 // SubscribeReply contains fields determining the reaction on subscribe event.
@@ -182,18 +186,32 @@ type PublishHandler func(PublishEvent) PublishReply
 type SubRefreshEvent struct {
 	// Channel to which SubRefreshEvent belongs to.
 	Channel string
+	// Token will only be set in case of using client-side subscription refresh mechanism.
+	Token string
 }
 
 // SubRefreshReply contains fields determining the reaction on
 // subscription refresh event.
 type SubRefreshReply struct {
+	// Expired when set mean that connection must be closed with DisconnectExpired reason.
 	Expired  bool
 	ExpireAt int64
 	Info     []byte
+	// Disconnect client.
+	Disconnect *Disconnect
 }
 
 // SubRefreshHandler called when it's time to validate client subscription to channel and
 // update it's state if needed.
+//
+// If ClientSideRefresh in SubscribeReply inside SubscribeHandler set to true then
+// library uses client-side subscription refresh mechanism. In this case library relies on
+// SubRefresh commands sent from client periodically to refresh subscription. SubRefresh
+// command contains updated subscription token. In case of using client-side refresh
+// you only need to set this callback if you want to validate connection token yourself
+// in a custom way. In you rely on builtin Centrifuge JWT support then connection
+// refresh will happen without involving your application at all so you must skip
+// setting this handler on connection.
 type SubRefreshHandler func(SubRefreshEvent) SubRefreshReply
 
 // RPCEvent contains fields related to rpc request.

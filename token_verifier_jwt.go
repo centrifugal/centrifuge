@@ -12,12 +12,7 @@ import (
 	"github.com/cristalhq/jwt/v3"
 )
 
-type tokenVerifierJWT struct {
-	mu         sync.RWMutex
-	algorithms *algorithms
-}
-
-func newTokenVerifierJWT(tokenHMACSecretKey string, pubKey *rsa.PublicKey) tokenVerifier {
+func NewConnectTokenVerifier(tokenHMACSecretKey string, pubKey *rsa.PublicKey) connectTokenVerifier {
 	verifier := &tokenVerifierJWT{}
 	algorithms, err := newAlgorithms(tokenHMACSecretKey, pubKey)
 	if err != nil {
@@ -27,8 +22,23 @@ func newTokenVerifierJWT(tokenHMACSecretKey string, pubKey *rsa.PublicKey) token
 	return verifier
 }
 
+func NewSubscribeTokenVerifier(tokenHMACSecretKey string, pubKey *rsa.PublicKey) subscribeTokenVerifier {
+	verifier := &tokenVerifierJWT{}
+	algorithms, err := newAlgorithms(tokenHMACSecretKey, pubKey)
+	if err != nil {
+		panic(err)
+	}
+	verifier.algorithms = algorithms
+	return verifier
+}
+
+type tokenVerifierJWT struct {
+	mu         sync.RWMutex
+	algorithms *algorithms
+}
+
 var (
-	errTokenExpired         = errors.New("token expired")
+	ErrTokenExpired         = errors.New("token expired")
 	errUnsupportedAlgorithm = errors.New("unsupported JWT algorithm")
 	errDisabledAlgorithm    = errors.New("disabled JWT algorithm")
 )
@@ -40,11 +50,6 @@ type connectTokenClaims struct {
 	jwt.StandardClaims
 }
 
-// MarshalBinary to properly marshal custom claims to JSON.
-func (c *connectTokenClaims) MarshalBinary() ([]byte, error) {
-	return json.Marshal(c)
-}
-
 type subscribeTokenClaims struct {
 	Client          string          `json:"client,omitempty"`
 	Channel         string          `json:"channel,omitempty"`
@@ -52,11 +57,6 @@ type subscribeTokenClaims struct {
 	Base64Info      string          `json:"b64info,omitempty"`
 	ExpireTokenOnly bool            `json:"eto,omitempty"`
 	jwt.StandardClaims
-}
-
-// MarshalBinary to properly marshal custom claims to JSON.
-func (c *subscribeTokenClaims) MarshalBinary() ([]byte, error) {
-	return json.Marshal(c)
 }
 
 type algorithms struct {
@@ -161,7 +161,7 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(t string) (connectToken, er
 
 	now := time.Now()
 	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
-		return connectToken{}, errTokenExpired
+		return connectToken{}, ErrTokenExpired
 	}
 
 	ct := connectToken{
@@ -201,7 +201,7 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(t string) (subscribeToken
 
 	now := time.Now()
 	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
-		return subscribeToken{}, errTokenExpired
+		return subscribeToken{}, ErrTokenExpired
 	}
 
 	st := subscribeToken{
