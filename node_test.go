@@ -103,7 +103,7 @@ func nodeWithTestEngine() *Node {
 	return n
 }
 
-func nodeWithMemoryEngine() *Node {
+func nodeWithMemoryEngineNoHandlers() *Node {
 	c := DefaultConfig
 	n, err := New(c)
 	if err != nil {
@@ -116,15 +116,17 @@ func nodeWithMemoryEngine() *Node {
 	return n
 }
 
-func TestUserAllowed(t *testing.T) {
-	node := nodeWithTestEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	require.True(t, node.userAllowed("channel#1", "1"))
-	require.True(t, node.userAllowed("channel", "1"))
-	require.False(t, node.userAllowed("channel#1", "2"))
-	require.True(t, node.userAllowed("channel#1,2", "1"))
-	require.True(t, node.userAllowed("channel#1,2", "2"))
-	require.False(t, node.userAllowed("channel#1,2", "3"))
+func nodeWithMemoryEngine() *Node {
+	n := nodeWithMemoryEngineNoHandlers()
+	n.On().ClientConnected(func(ctx context.Context, client *Client) {
+		client.On().Subscribe(func(_ SubscribeEvent) SubscribeReply {
+			return SubscribeReply{}
+		})
+		client.On().Publish(func(_ PublishEvent) PublishReply {
+			return PublishReply{}
+		})
+	})
+	return n
 }
 
 func TestSetConfig(t *testing.T) {
@@ -203,7 +205,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	transport.setProtocolType(protoType)
 	transport.setSink(sink)
 	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "test_user_id"})
 	client, _ := newClient(newCtx, node, transport)
 	connectClient(b, client)
 	var replies []*protocol.Reply
@@ -237,12 +239,6 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 	for _, bm := range benchmarks {
 		b.Run(fmt.Sprintf("%s_%d_subscribers", bm.name, bm.numSubscribers), func(b *testing.B) {
 			n := nodeWithMemoryEngine()
-			c := n.Config()
-			c.ClientInsecure = true
-			err := n.Reload(c)
-			if err != nil {
-				b.Fatal(err)
-			}
 			payload := []byte(`{"input": "test"}`)
 			sink := make(chan []byte, bm.numSubscribers)
 			for i := 0; i < bm.numSubscribers; i++ {
@@ -269,9 +265,13 @@ func BenchmarkHistory(b *testing.B) {
 	e := testMemoryEngine()
 	conf := e.node.Config()
 	numMessages := 100
-	conf.HistorySize = numMessages
-	conf.HistoryLifetime = 60
-	conf.HistoryRecover = true
+	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+		return ChannelOptions{
+			HistorySize:     numMessages,
+			HistoryLifetime: 60,
+			HistoryRecover:  true,
+		}, nil
+	}
 	err := e.node.Reload(conf)
 	require.NoError(b, err)
 

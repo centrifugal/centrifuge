@@ -60,8 +60,6 @@ type Node struct {
 	metricsSnapshot *eagle.Metrics
 
 	subDissolver *dissolve.Dissolver
-
-	channelOptsGetter ChannelOptionsGetter
 }
 
 const (
@@ -79,19 +77,18 @@ func New(c Config) (*Node, error) {
 	}
 
 	n := &Node{
-		uid:               uid,
-		nodes:             newNodeRegistry(uid),
-		config:            c,
-		hub:               newHub(),
-		startedAt:         time.Now().Unix(),
-		shutdownCh:        make(chan struct{}),
-		logger:            nil,
-		controlEncoder:    controlproto.NewProtobufEncoder(),
-		controlDecoder:    controlproto.NewProtobufDecoder(),
-		eventHub:          &nodeEventHub{},
-		subLocks:          subLocks,
-		subDissolver:      dissolve.New(numSubDissolverWorkers),
-		channelOptsGetter: newDefaultChannelOptionsGetter(),
+		uid:            uid,
+		nodes:          newNodeRegistry(uid),
+		config:         c,
+		hub:            newHub(),
+		startedAt:      time.Now().Unix(),
+		shutdownCh:     make(chan struct{}),
+		logger:         nil,
+		controlEncoder: controlproto.NewProtobufEncoder(),
+		controlDecoder: controlproto.NewProtobufDecoder(),
+		eventHub:       &nodeEventHub{},
+		subLocks:       subLocks,
+		subDissolver:   dissolve.New(numSubDissolverWorkers),
 	}
 
 	if c.LogHandler != nil {
@@ -103,14 +100,13 @@ func New(c Config) (*Node, error) {
 	return n, nil
 }
 
-type defaultChannelOptionsGetter struct{}
-
-func newDefaultChannelOptionsGetter() *defaultChannelOptionsGetter {
-	return &defaultChannelOptionsGetter{}
-}
-
-func (g *defaultChannelOptionsGetter) ChannelOptions(_ string) (ChannelOptions, error) {
-	return ChannelOptions{}, nil
+func (n *Node) channelOptions(ch string) (ChannelOptions, error) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.config.ChannelOptionsFunc == nil {
+		return ChannelOptions{}, nil
+	}
+	return n.config.ChannelOptionsFunc(ch)
 }
 
 // index chooses bucket number in range [0, numBuckets).
@@ -133,11 +129,6 @@ func (n *Node) Config() Config {
 	c := n.config
 	n.mu.RUnlock()
 	return c
-}
-
-// SetChannelOptionsGetter allows to set ChannelOptionsGetter implementation to use.
-func (n *Node) SetChannelOptionsGetter(g ChannelOptionsGetter) {
-	n.channelOptsGetter = g
 }
 
 // SetEngine binds Engine to node.
@@ -450,7 +441,7 @@ func (n *Node) handlePublication(ch string, pub *protocol.Publication) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	chOpts, err := n.channelOptsGetter.ChannelOptions(ch)
+	chOpts, err := n.channelOptions(ch)
 	if err != nil {
 		return err
 	}
@@ -480,7 +471,7 @@ func (n *Node) handleLeave(ch string, leave *protocol.Leave) error {
 }
 
 func (n *Node) publish(ch string, data []byte, info *protocol.ClientInfo, opts ...PublishOption) (PublishResult, error) {
-	chOpts, err := n.channelOptsGetter.ChannelOptions(ch)
+	chOpts, err := n.channelOptions(ch)
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -546,7 +537,7 @@ func (n *Node) Publish(channel string, data []byte, opts ...PublishOption) (Publ
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishJoin(ch string, join *protocol.Join, opts *ChannelOptions) error {
 	if opts == nil {
-		chOpts, err := n.channelOptsGetter.ChannelOptions(ch)
+		chOpts, err := n.channelOptions(ch)
 		if err != nil {
 			return err
 		}
@@ -560,7 +551,7 @@ func (n *Node) publishJoin(ch string, join *protocol.Join, opts *ChannelOptions)
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishLeave(ch string, leave *protocol.Leave, opts *ChannelOptions) error {
 	if opts == nil {
-		chOpts, err := n.channelOptsGetter.ChannelOptions(ch)
+		chOpts, err := n.channelOptions(ch)
 		if err != nil {
 			return err
 		}
@@ -783,7 +774,7 @@ func (n *Node) removePresence(ch string, uid string) error {
 	return n.presenceManager.RemovePresence(ch, uid)
 }
 
-// Presence returns a map with information about active clients in channel.
+// Alive returns a map with information about active clients in channel.
 func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
 	if n.presenceManager == nil {
 		return nil, ErrorNotAvailable

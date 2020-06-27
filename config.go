@@ -49,6 +49,8 @@ type Config struct {
 	ClientUserConnectionLimit int
 	// ChannelMaxLength is a maximum length of channel name.
 	ChannelMaxLength int
+	// ChannelOptionsFunc ...
+	ChannelOptionsFunc ChannelOptionsFunc
 }
 
 // Validate validates config and returns error if problems found

@@ -1,14 +1,11 @@
 package centrifuge
 
-type connectTokenVerifier interface {
-	VerifyConnectToken(token string) (connectToken, error)
+type TokenVerifier interface {
+	VerifyConnectToken(token string) (ConnectToken, error)
+	VerifySubscribeToken(token string) (SubscribeToken, error)
 }
 
-type subscribeTokenVerifier interface {
-	VerifySubscribeToken(token string) (subscribeToken, error)
-}
-
-type connectToken struct {
+type ConnectToken struct {
 	// UserID tells library an ID of connecting user.
 	UserID string
 	// ExpireAt allows to set time in future when connection must be validated.
@@ -16,7 +13,7 @@ type connectToken struct {
 	// if On().Refresh not set.
 	ExpireAt int64
 	// Info contains additional information about connection. It will be
-	// included into Join/Leave messages, into Presence information, also
+	// included into Join/Leave messages, into Alive information, also
 	// info becomes a part of published message if it was published from
 	// client directly. In some cases having additional info can be an
 	// overhead – but you are simply free to not use it.
@@ -25,7 +22,7 @@ type connectToken struct {
 	Channels []string
 }
 
-type subscribeToken struct {
+type SubscribeToken struct {
 	// Client is a unique client ID string set to each connection on server.
 	// Will be compared with actual client ID.
 	Client string
@@ -37,7 +34,7 @@ type subscribeToken struct {
 	// if On().SubRefresh not set.
 	ExpireAt int64
 	// Info contains additional information about connection in channel.
-	// It will be included into Join/Leave messages, into Presence information,
+	// It will be included into Join/Leave messages, into Alive information,
 	// also channel info becomes a part of published message if it was published
 	// from subscribed client directly.
 	Info []byte

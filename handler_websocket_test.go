@@ -115,19 +115,27 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	return conn
 }
 
+func testAuthMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		newCtx := SetCredentials(ctx, &Credentials{
+			UserID: "test_user_id",
+		})
+		r = r.WithContext(newCtx)
+		h.ServeHTTP(w, r)
+	})
+}
+
 // TestWebsocketHandlerConcurrentConnections allows to catch errors related
 // to invalid buffer pool usages.
 func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 	n := nodeWithMemoryEngine()
-	c := n.Config()
-	c.ClientInsecure = true
-	_ = n.Reload(c)
 
 	mux := http.NewServeMux()
-	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
-	}))
+	})))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -191,15 +199,12 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 // total allocs and difference between JSON and Protobuf cases using various buffer sizes.
 func BenchmarkWebsocketHandler(b *testing.B) {
 	n := nodeWithMemoryEngine()
-	c := n.Config()
-	c.ClientInsecure = true
-	_ = n.Reload(c)
 
 	mux := http.NewServeMux()
-	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
-	}))
+	})))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 

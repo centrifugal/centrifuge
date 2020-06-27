@@ -83,16 +83,16 @@ type RefreshReply struct {
 // setting this handler on connection.
 type RefreshHandler func(RefreshEvent) RefreshReply
 
-// PresenceEvent can contain some connection stuff in future. But not at moment.
-type PresenceEvent struct{}
+// AliveEvent can contain some connection stuff in future. But not at moment.
+type AliveEvent struct{}
 
-// PresenceReply can contain some useful stuff in future. But not at moment.
-type PresenceReply struct{}
+// AliveReply can contain some useful stuff in future. But not at moment.
+type AliveReply struct{}
 
-// PresenceHandler called periodically while connection alive. This is a helper
+// AliveHandler called periodically while connection alive. This is a helper
 // to do periodic things which can tolerate some approximation in time. This
 // callback will run every ClientPresenceUpdateInterval and can save you a timer.
-type PresenceHandler func(PresenceEvent) PresenceReply
+type AliveHandler func(PresenceEvent) PresenceReply
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
@@ -250,3 +250,51 @@ type MessageReply struct {
 
 // MessageHandler must handle incoming async message from client.
 type MessageHandler func(MessageEvent) MessageReply
+
+// PresenceEvent ...
+type PresenceEvent struct {
+	Channel string
+}
+
+// PresenceReply contains fields determining the reaction on presence request.
+type PresenceReply struct {
+	// Error to return, nil value means no error.
+	Error *Error
+	// Disconnect client, nil value means no disconnect.
+	Disconnect *Disconnect
+}
+
+// PresenceHandler must handle incoming command from client.
+type PresenceHandler func(PresenceEvent) PresenceReply
+
+// PresenceStatsEvent ...
+type PresenceStatsEvent struct {
+	Channel string
+}
+
+// PresenceStatsReply contains fields determining the reaction on presence request.
+type PresenceStatsReply struct {
+	// Error to return, nil value means no error.
+	Error *Error
+	// Disconnect client, nil value means no disconnect.
+	Disconnect *Disconnect
+}
+
+// PresenceStatsHandler must handle incoming command from client.
+type PresenceStatsHandler func(PresenceStatsEvent) PresenceStatsReply
+
+// HistoryEvent ...
+type HistoryEvent struct {
+	Channel string
+}
+
+// HistoryReply contains fields determining the reaction on history request.
+type HistoryReply struct {
+	// Error to return, nil value means no error.
+	Error *Error
+	// Disconnect client, nil value means no disconnect.
+	Disconnect *Disconnect
+}
+
+// HistoryHandler must handle incoming command from client.
+type HistoryHandler func(event HistoryEvent) HistoryReply

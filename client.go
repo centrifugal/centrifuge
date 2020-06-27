@@ -20,25 +20,28 @@ import (
 // ClientEventHub allows to deal with client event handlers.
 // All its methods are not goroutine-safe and supposed to be called once on client connect.
 type ClientEventHub struct {
-	refreshHandler     RefreshHandler
-	presenceHandler    PresenceHandler
-	disconnectHandler  DisconnectHandler
-	subscribeHandler   SubscribeHandler
-	unsubscribeHandler UnsubscribeHandler
-	publishHandler     PublishHandler
-	subRefreshHandler  SubRefreshHandler
-	rpcHandler         RPCHandler
-	messageHandler     MessageHandler
+	aliveHandler         AliveHandler
+	refreshHandler       RefreshHandler
+	disconnectHandler    DisconnectHandler
+	subscribeHandler     SubscribeHandler
+	unsubscribeHandler   UnsubscribeHandler
+	publishHandler       PublishHandler
+	subRefreshHandler    SubRefreshHandler
+	rpcHandler           RPCHandler
+	messageHandler       MessageHandler
+	presenceHandler      PresenceHandler
+	presenceStatsHandler PresenceStatsHandler
+	historyHandler       HistoryHandler
+}
+
+// Alive called periodically for active connection.
+func (c *ClientEventHub) Alive(h AliveHandler) {
+	c.aliveHandler = h
 }
 
 // Refresh called when it's time to refresh expiring client connection.
 func (c *ClientEventHub) Refresh(h RefreshHandler) {
 	c.refreshHandler = h
-}
-
-// Presence called periodically for active connection.
-func (c *ClientEventHub) Presence(h PresenceHandler) {
-	c.presenceHandler = h
 }
 
 // Disconnect allows to set DisconnectHandler.
@@ -81,6 +84,21 @@ func (c *ClientEventHub) Unsubscribe(h UnsubscribeHandler) {
 // PublishHandler called when client publishes message into channel.
 func (c *ClientEventHub) Publish(h PublishHandler) {
 	c.publishHandler = h
+}
+
+// Presence ...
+func (c *ClientEventHub) Presence(h PresenceHandler) {
+	c.presenceHandler = h
+}
+
+// PresenceStats ...
+func (c *ClientEventHub) PresenceStats(h PresenceStatsHandler) {
+	c.presenceStatsHandler = h
+}
+
+// History ...
+func (c *ClientEventHub) History(h HistoryHandler) {
+	c.historyHandler = h
 }
 
 // We poll current position in channel from history storage periodically.
@@ -301,7 +319,7 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 // updateChannelPresence updates client presence info for channel so it
 // won't expire until client disconnect.
 func (c *Client) updateChannelPresence(ch string) error {
-	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	chOpts, err := c.node.channelOptions(ch)
 	if err != nil {
 		return nil
 	}
@@ -357,8 +375,8 @@ func (c *Client) updatePresence() {
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
-	if c.eventHub.presenceHandler != nil {
-		_ = c.eventHub.presenceHandler(PresenceEvent{})
+	if c.eventHub.aliveHandler != nil {
+		_ = c.eventHub.aliveHandler(PresenceEvent{})
 	}
 	for channel, channelContext := range channels {
 		if !c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay) {
@@ -392,7 +410,7 @@ func (c *Client) updatePresence() {
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext ChannelContext) bool {
-	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	chOpts, err := c.node.channelOptions(ch)
 	if err != nil {
 		return true
 	}
@@ -868,11 +886,15 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 	if disconnect != nil {
 		return disconnect
 	}
+	c.triggerConnect()
+	c.scheduleOnConnectTimers()
+	return nil
+}
+
+func (c *Client) triggerConnect() {
 	if c.node.eventHub.connectedHandler != nil {
 		c.node.eventHub.connectedHandler(c.ctx, c)
 	}
-	c.scheduleOnConnectTimers()
-	return nil
 }
 
 func (c *Client) scheduleOnConnectTimers() {
@@ -1531,7 +1553,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (Chann
 		return ChannelOptions{}, nil, DisconnectBadRequest
 	}
 
-	chOpts, err := c.node.channelOptsGetter.ChannelOptions(channel)
+	chOpts, err := c.node.channelOptions(channel)
 	if err != nil {
 		// TODO: handle Centrifuge.Error.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on non existing namespace", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
@@ -2001,7 +2023,7 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 
 // Lock must be held outside.
 func (c *Client) unsubscribe(channel string) error {
-	chOpts, err := c.node.channelOptsGetter.ChannelOptions(channel)
+	chOpts, err := c.node.channelOptions(channel)
 	if err != nil {
 		// TODO: check error handling here.
 		return err
@@ -2138,30 +2160,30 @@ func toClientErr(err error) *Error {
 // for namespace or project)
 func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.PresenceResponse, *Disconnect) {
 	ch := cmd.Channel
-
 	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
 	resp := &clientproto.PresenceResponse{}
 
-	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	chOpts, err := c.node.channelOptions(ch)
 	if err != nil {
 		resp.Error = toClientErr(err).toProto()
 		return resp, nil
 	}
-
-	c.mu.RLock()
-	_, ok := c.channels[ch]
-	c.mu.RUnlock()
-
-	if !ok {
-		resp.Error = ErrorPermissionDenied.toProto()
+	if !chOpts.Presence || c.eventHub.presenceHandler == nil {
+		resp.Error = ErrorNotAvailable.toProto()
 		return resp, nil
 	}
 
-	if !chOpts.Presence || chOpts.PresenceDisableForClient {
-		resp.Error = ErrorNotAvailable.toProto()
+	reply := c.eventHub.presenceHandler(PresenceEvent{
+		Channel: ch,
+	})
+	if reply.Disconnect != nil {
+		return nil, reply.Disconnect
+	}
+	if reply.Error != nil {
+		resp.Error = reply.Error.toProto()
 		return resp, nil
 	}
 
@@ -2183,30 +2205,30 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 // about active clients in channel.
 func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientproto.PresenceStatsResponse, *Disconnect) {
 	ch := cmd.Channel
-
 	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
 	resp := &clientproto.PresenceStatsResponse{}
 
-	c.mu.RLock()
-	_, ok := c.channels[ch]
-	c.mu.RUnlock()
-
-	if !ok {
-		resp.Error = ErrorPermissionDenied.toProto()
-		return resp, nil
-	}
-
-	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	chOpts, err := c.node.channelOptions(ch)
 	if err != nil {
 		resp.Error = toClientErr(err).toProto()
 		return resp, nil
 	}
-
-	if !chOpts.Presence || chOpts.PresenceDisableForClient {
+	if !chOpts.Presence || c.eventHub.presenceStatsHandler == nil {
 		resp.Error = ErrorNotAvailable.toProto()
+		return resp, nil
+	}
+
+	reply := c.eventHub.presenceStatsHandler(PresenceStatsEvent{
+		Channel: ch,
+	})
+	if reply.Disconnect != nil {
+		return nil, reply.Disconnect
+	}
+	if reply.Error != nil {
+		resp.Error = reply.Error.toProto()
 		return resp, nil
 	}
 
@@ -2232,30 +2254,30 @@ func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientpr
 // ErrorNotAvailable.
 func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryResponse, *Disconnect) {
 	ch := cmd.Channel
-
 	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
 	resp := &clientproto.HistoryResponse{}
 
-	c.mu.RLock()
-	_, ok := c.channels[ch]
-	c.mu.RUnlock()
-
-	if !ok {
-		resp.Error = ErrorPermissionDenied.toProto()
-		return resp, nil
-	}
-
-	chOpts, err := c.node.channelOptsGetter.ChannelOptions(ch)
+	chOpts, err := c.node.channelOptions(ch)
 	if err != nil {
 		resp.Error = toClientErr(err).toProto()
 		return resp, nil
 	}
-
-	if (chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0) || chOpts.HistoryDisableForClient {
+	if chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0 || c.eventHub.historyHandler == nil {
 		resp.Error = ErrorNotAvailable.toProto()
+		return resp, nil
+	}
+
+	reply := c.eventHub.historyHandler(HistoryEvent{
+		Channel: ch,
+	})
+	if reply.Disconnect != nil {
+		return nil, reply.Disconnect
+	}
+	if reply.Error != nil {
+		resp.Error = reply.Error.toProto()
 		return resp, nil
 	}
 
