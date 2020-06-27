@@ -51,9 +51,15 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 
-	cfg.Anonymous = true
-
 	node, _ := centrifuge.New(cfg)
+
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		return centrifuge.ConnectReply{
+			Credentials: &centrifuge.Credentials{
+				UserID: "",
+			},
+		}
+	})
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 

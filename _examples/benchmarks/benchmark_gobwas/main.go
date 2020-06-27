@@ -49,12 +49,18 @@ func main() {
 	flag.Parse()
 
 	cfg := centrifuge.DefaultConfig
-	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelError
 	cfg.LogHandler = handleLog
-	cfg.ClientInsecure = true
 
 	node, _ := centrifuge.New(cfg)
+
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		return centrifuge.ConnectReply{
+			Credentials: &centrifuge.Credentials{
+				UserID: "bench",
+			},
+		}
+	})
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 

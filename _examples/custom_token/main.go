@@ -40,20 +40,6 @@ func main() {
 	// Better to keep default in production. Here we just speeding up things a bit.
 	cfg.ClientExpiredCloseDelay = 5 * time.Second
 
-	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		{
-			Name: "chat",
-			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:         true,
-				Presence:        true,
-				JoinLeave:       true,
-				HistoryLifetime: 60,
-				HistorySize:     1000,
-				HistoryRecover:  true,
-			},
-		},
-	}
-
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
@@ -87,7 +73,7 @@ func main() {
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-			log.Printf("user %s sent refresh command with token", client.UserID())
+			log.Printf("user %s sent refresh command with token: %s", client.UserID(), e.Token)
 			if !strings.HasPrefix(e.Token, "I am ") {
 				return centrifuge.RefreshReply{
 					Disconnect: centrifuge.DisconnectInvalidToken,

@@ -55,33 +55,8 @@ func waitExitSignal(n *centrifuge.Node) {
 func main() {
 	cfg := centrifuge.DefaultConfig
 
-	// Set HMAC secret to handle requests with JWT auth too. This is
-	// not required if you don't use token authentication and
-	// private subscriptions verified by token.
-	cfg.TokenHMACSecretKey = "secret"
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
-
-	//cfg.JoinLeave = true
-	//cfg.HistoryLifetime = 300
-	//cfg.HistorySize = 1000
-	//cfg.HistoryRecover = true
-	//
-	//cfg.UserSubscribeToPersonal = true
-	//
-	//cfg.Namespaces = []centrifuge.ChannelNamespace{
-	//	{
-	//		Name: "chat",
-	//		ChannelOptions: centrifuge.ChannelOptions{
-	//			Publish:         true,
-	//			Presence:        true,
-	//			JoinLeave:       true,
-	//			HistoryLifetime: 60,
-	//			HistorySize:     1000,
-	//			HistoryRecover:  true,
-	//		},
-	//	},
-	//}
 
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
@@ -95,10 +70,11 @@ func main() {
 	node.SetEngine(engine)
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to several server-side channels.
-			Channels: []string{"server-side-1", "server-side-2", "server-side-3"},
+			Channels: []string{"#" + cred.UserID},
 		}
 	})
 
@@ -195,18 +171,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//go func() {
-	//	// Publish personal notifications for user 42 periodically.
-	//	i := 1
-	//	for {
-	//		_, err := node.Publish(node.PersonalChannel("42"), []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
-	//		if err != nil {
-	//			log.Printf("error publishing to personal channel: %s", err)
-	//		}
-	//		i++
-	//		time.Sleep(5000 * time.Millisecond)
-	//	}
-	//}()
+	go func() {
+		// Publish personal notifications for user 42 periodically.
+		i := 1
+		for {
+			_, err := node.Publish("#42", []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+			if err != nil {
+				log.Printf("error publishing to personal channel: %s", err)
+			}
+			i++
+			time.Sleep(5000 * time.Millisecond)
+		}
+	}()
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ReadBufferSize:     1024,

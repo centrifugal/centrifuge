@@ -55,40 +55,16 @@ func waitExitSignal(n *centrifuge.Node) {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
-
-	// Set HMAC secret to handle requests with JWT auth too. This is
-	// not required if you don't use token authentication and
-	// private subscriptions verified by token.
-	cfg.TokenHMACSecretKey = "secret"
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
-
-	cfg.JoinLeave = true
-	cfg.HistoryLifetime = 300
-	cfg.HistorySize = 1000
-	cfg.HistoryRecover = true
-
-	cfg.UserSubscribeToPersonal = true
-
-	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		{
-			Name: "chat",
-			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:         true,
-				Presence:        true,
-				JoinLeave:       true,
-				HistoryLifetime: 60,
-				HistorySize:     1000,
-				HistoryRecover:  true,
-			},
-		},
-	}
 
 	node, _ := centrifuge.New(cfg)
 
 	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
-			Data: centrifuge.Raw(`{}`),
+			Credentials: &centrifuge.Credentials{
+				UserID: "",
+			},
 		}
 	})
 
@@ -179,18 +155,6 @@ func main() {
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
-
-	go func() {
-		i := 0
-		for {
-			_, err := node.Publish(node.PersonalChannel("42"), centrifuge.Raw(`{"message": "personal `+strconv.Itoa(i)+`"}`))
-			if err != nil {
-				log.Println(err.Error())
-			}
-			time.Sleep(5000 * time.Millisecond)
-			i++
-		}
-	}()
 
 	websocketHandler := newWebsocketHandler(node)
 	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
