@@ -47,15 +47,16 @@ func (n *ClientHandler) OnConnecting(_ context.Context, _ TransportInfo, e Conne
 		}
 	}
 
-	if credentials == nil && n.ruleContainer.config.ClientAnonymous {
+	if credentials == nil && (n.ruleContainer.config.ClientAnonymous || n.ruleContainer.config.ClientInsecure) {
 		credentials = &Credentials{
 			UserID: "",
 		}
 	}
 
 	return ConnectReply{
-		Credentials: credentials,
-		Channels:    channels,
+		Credentials:       credentials,
+		Channels:          channels,
+		ClientSideRefresh: true,
 	}
 }
 
@@ -143,8 +144,9 @@ func (n *ClientHandler) OnSubscribe(c *Client, e SubscribeEvent) SubscribeReply 
 	}
 
 	return SubscribeReply{
-		ExpireAt:    expireAt,
-		ChannelInfo: channelInfo,
+		ExpireAt:          expireAt,
+		ChannelInfo:       channelInfo,
+		ClientSideRefresh: true,
 	}
 }
 
@@ -174,7 +176,10 @@ func (n *ClientHandler) OnPresence(c *Client, e PresenceEvent) PresenceReply {
 		n.node.logger.log(newLogEntry(LogLevelInfo, "presence channel options error", map[string]interface{}{"channel": e.Channel, "user": c.UserID(), "client": c.ID()}))
 		return PresenceReply{Error: toClientErr(err)}
 	}
-	if _, ok := c.Channels()[e.Channel]; !ok || chOpts.PresenceDisableForClient {
+	if chOpts.PresenceDisableForClient {
+		return PresenceReply{Error: ErrorNotAvailable}
+	}
+	if _, ok := c.Channels()[e.Channel]; !ok {
 		return PresenceReply{Error: ErrorPermissionDenied}
 	}
 	return PresenceReply{}
@@ -186,7 +191,10 @@ func (n *ClientHandler) OnPresenceStats(c *Client, e PresenceStatsEvent) Presenc
 		n.node.logger.log(newLogEntry(LogLevelInfo, "presence stats channel options error", map[string]interface{}{"channel": e.Channel, "user": c.UserID(), "client": c.ID()}))
 		return PresenceStatsReply{Error: toClientErr(err)}
 	}
-	if _, ok := c.Channels()[e.Channel]; !ok || chOpts.PresenceDisableForClient {
+	if chOpts.PresenceDisableForClient {
+		return PresenceStatsReply{Error: ErrorNotAvailable}
+	}
+	if _, ok := c.Channels()[e.Channel]; !ok {
 		return PresenceStatsReply{Error: ErrorPermissionDenied}
 	}
 	return PresenceStatsReply{}
@@ -198,7 +206,10 @@ func (n *ClientHandler) OnHistory(c *Client, e HistoryEvent) HistoryReply {
 		n.node.logger.log(newLogEntry(LogLevelInfo, "history channel options error", map[string]interface{}{"channel": e.Channel, "user": c.UserID(), "client": c.ID()}))
 		return HistoryReply{Error: toClientErr(err)}
 	}
-	if _, ok := c.Channels()[e.Channel]; !ok || chOpts.PresenceDisableForClient {
+	if chOpts.HistoryDisableForClient {
+		return HistoryReply{Error: ErrorNotAvailable}
+	}
+	if _, ok := c.Channels()[e.Channel]; !ok {
 		return HistoryReply{Error: ErrorPermissionDenied}
 	}
 	return HistoryReply{}
