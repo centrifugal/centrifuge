@@ -48,27 +48,18 @@ func main() {
 
 	cfg := centrifuge.DefaultConfig
 
-	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
-	cfg.ClientInsecure = true
-	cfg.TokenHMACSecretKey = "secret"
-
-	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		{
-			Name: "chat",
-			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:         true,
-				Presence:        true,
-				JoinLeave:       true,
-				HistoryLifetime: 60,
-				HistorySize:     1000,
-				HistoryRecover:  true,
-			},
-		},
-	}
 
 	node, _ := centrifuge.New(cfg)
+
+	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		return centrifuge.ConnectReply{
+			Credentials: &centrifuge.Credentials{
+				UserID: "",
+			},
+		}
+	})
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 

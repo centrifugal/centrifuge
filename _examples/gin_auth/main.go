@@ -86,26 +86,9 @@ func authMiddleware(h http.Handler) http.Handler {
 }
 
 func main() {
-
 	cfg := centrifuge.DefaultConfig
-
-	cfg.Publish = true
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
-
-	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		{
-			Name: "chat",
-			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:         true,
-				Presence:        true,
-				JoinLeave:       true,
-				HistoryLifetime: 60,
-				HistorySize:     1000,
-				HistoryRecover:  true,
-			},
-		},
-	}
 
 	node, _ := centrifuge.New(cfg)
 

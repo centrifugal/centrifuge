@@ -97,10 +97,7 @@ func authMiddleware(h http.Handler) http.Handler {
 }
 
 func createCentrifugeNode() (*centrifuge.Node, error) {
-	cfg := centrifuge.DefaultConfig
-	cfg.Publish = true
-
-	node, err := centrifuge.New(cfg)
+	node, err := centrifuge.New(centrifuge.DefaultConfig)
 	if err != nil {
 		return nil, err
 	}
