@@ -92,7 +92,7 @@ type AliveReply struct{}
 // AliveHandler called periodically while connection alive. This is a helper
 // to do periodic things which can tolerate some approximation in time. This
 // callback will run every ClientPresenceUpdateInterval and can save you a timer.
-type AliveHandler func(PresenceEvent) PresenceReply
+type AliveHandler func(AliveEvent) AliveReply
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {

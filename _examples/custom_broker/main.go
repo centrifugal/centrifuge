@@ -56,20 +56,6 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 
-	cfg.Namespaces = []centrifuge.ChannelNamespace{
-		{
-			Name: "chat",
-			ChannelOptions: centrifuge.ChannelOptions{
-				Publish:         true,
-				JoinLeave:       true,
-				Presence:        true,
-				HistoryLifetime: 60,
-				HistorySize:     1000,
-				HistoryRecover:  true,
-			},
-		},
-	}
-
 	node, _ := centrifuge.New(cfg)
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
