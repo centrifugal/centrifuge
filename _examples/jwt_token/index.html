@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
     <head>
         <meta charset="utf-8">
         <title></title>
@@ -8,6 +8,7 @@
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
         <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+        <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
@@ -15,18 +16,24 @@
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            const channel = "chat:index";
+            const channel = "chat";
 
-            $(function() {
+            $(function () {
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
-                var input = $("#input");
-                var container = $('#messages');
+                fetch('http://localhost:8000/token').then((response) => {
+                    return response.json();
+                }).then((data) => {
+                    centrifuge.setToken(data['token']);
+                    centrifuge.connect();
+                });
 
-                var centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket');
+                const input = $("#input");
+                const container = $('#messages');
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
-                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
                     input.attr("disabled", false);
                 });
 
@@ -35,51 +42,23 @@
                     input.attr("disabled", true);
                 });
 
-                // show how many users currently in channel.
-                function showPresence(sub) {
-                    sub.presence().then(function(result) {
-                        var count = 0;
-                        for (var key in result.presence){
-                            count++;
-                        }
-                        drawText('Now in this room: ' + count + ' clients');
-                    }, function(err) {
-                        console.log("presence error", err);
-                        drawText("Presence error");
-                    });
-                }
-
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be firer after client will connect to
                 // Centrifugo and will be authorized.
-                const sub = centrifuge.subscribe(channel, handleMessage)
-                        .on("join", handleJoin)
-                        .on("leave", handleLeave)
+                var sub = centrifuge.subscribe(channel, handleMessage)
                         .on("unsubscribe", handleUnsubscribe)
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
 
-                showPresence(sub);
-
-                // Trigger actual connection establishing with Centrifugo server.
-                // At this moment actual client work starts - i.e. subscriptions
-                // defined start subscribing etc.
-                centrifuge.connect();
-
                 function handleSubscribe(ctx) {
                     drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
-                    if (ctx.isResubscribe) {
-                        showPresence(sub);
-                    }
                 }
 
                 function handleSubscribeError(err) {
                     drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
-                    console.log("subscription failed", err);
                 }
 
                 function handleMessage(message) {
-                    console.log("new message received", message);
                     let clientID;
                     if (message.info){
                         clientID = message.info.client;
@@ -89,16 +68,6 @@
                     const inputText = message.data["input"].toString();
                     const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
-                }
-
-                function handleJoin(message) {
-                    console.log("subscription join event fired", message);
-                    drawText('Client joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
-                }
-
-                function handleLeave(message) {
-                    console.log("subscription leave event fired", message);
-                    drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
                 }
 
                 function handleUnsubscribe(sub) {
@@ -112,9 +81,9 @@
                 $('#form').submit(function(event) {
                     event.preventDefault();
                     sub.publish({"input": input.val()}).then(function() {
-                        console.log('message accepted by server');
+                        // console.log('message accepted by server');
                     }, function(err) {
-                        console.log('error publishing message', err);
+                        // console.log('error publishing message', err);
                     });
                     input.val('');
                 });
@@ -123,7 +92,7 @@
     </head>
     <body>
         <form id="form">
-            <input type="text" id="input" autocomplete="off" />
+            <label for="input"></label><input type="text" id="input" autocomplete="off" />
             <input type="submit" id="submit" value="»">
         </form>
         <ul id="messages"></ul>
