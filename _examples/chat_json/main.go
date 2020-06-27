@@ -52,11 +52,26 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
+// Check whether channel is allowed for subscribing. In real case permission
+// most probably will be more complex than in this example.
+func channelSubscribeAllowed(channel string) bool {
+	return channel == "chat"
+}
+
 func main() {
 	cfg := centrifuge.DefaultConfig
 
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
+	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, error) {
+		return centrifuge.ChannelOptions{
+			Presence:        true,
+			JoinLeave:       true,
+			HistorySize:     100,
+			HistoryLifetime: 300,
+			HistoryRecover:  true,
+		}, nil
+	}
 
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
@@ -73,37 +88,29 @@ func main() {
 		cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
-			// Subscribe to several server-side channels.
+			// Subscribe to personal several server-side channel.
 			Channels: []string{"#" + cred.UserID},
 		}
 	})
 
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
-		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			return centrifuge.RefreshReply{
-				ExpireAt: time.Now().Unix() + 60,
-			}
+		client.On().Alive(func(e centrifuge.AliveEvent) centrifuge.AliveReply {
+			log.Printf("user %s connection is still active", client.UserID())
+			return centrifuge.AliveReply{}
 		})
 
-		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
-			log.Printf("user %s still connected (client ID %s)", client.UserID(), client.ID())
-			return centrifuge.PresenceReply{}
+		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			return centrifuge.RefreshReply{ExpireAt: time.Now().Unix() + 60}
 		})
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{
-				ExpireAt: time.Now().Unix() + 5,
+			if !channelSubscribeAllowed(e.Channel) {
+				return centrifuge.SubscribeReply{Error: centrifuge.ErrorPermissionDenied}
 			}
-		})
-
-		client.On().SubRefresh(func(e centrifuge.SubRefreshEvent) centrifuge.SubRefreshReply {
-			log.Printf("user %s subscription on channel %s is going to expire, refreshing", client.UserID(), e.Channel)
-			return centrifuge.SubRefreshReply{
-				ExpireAt: time.Now().Unix() + 60,
-			}
+			return centrifuge.SubscribeReply{}
 		})
 
 		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
@@ -113,12 +120,13 @@ func main() {
 
 		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			if _, ok := client.Channels()[e.Channel]; !ok {
+				return centrifuge.PublishReply{Error: centrifuge.ErrorPermissionDenied}
+			}
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)
 			if err != nil {
-				return centrifuge.PublishReply{
-					Error: centrifuge.ErrorBadRequest,
-				}
+				return centrifuge.PublishReply{Error: centrifuge.ErrorBadRequest}
 			}
 			msg.Timestamp = time.Now().Unix()
 			data, _ := json.Marshal(msg)
@@ -129,9 +137,15 @@ func main() {
 
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
 			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
-			return centrifuge.RPCReply{
-				Data: []byte(`{"year": "2018"}`),
+			return centrifuge.RPCReply{Data: []byte(`{"year": "2018"}`)}
+		})
+
+		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
+			log.Printf("user %s calls presence on %s", client.UserID(), e.Channel)
+			if _, ok := client.Channels()[e.Channel]; !ok {
+				return centrifuge.PresenceReply{Error: centrifuge.ErrorPermissionDenied}
 			}
+			return centrifuge.PresenceReply{}
 		})
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {

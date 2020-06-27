@@ -3,11 +3,17 @@ package centrifuge
 // ChannelOptionsFunc is a function that Centrifuge will call every time
 // it needs to get ChannelOptions for a channel. Calls to this func can happen
 // concurrently – so you need to synchronize code inside function implementation.
+// The obvious advice here - only turn on various ChannelOptions features for
+// channels where feature is required.
 type ChannelOptionsFunc func(channel string) (ChannelOptions, error)
 
 // ChannelOptions represent channel specific configuration for namespace
 // or global channel options if set on top level of configuration.
 type ChannelOptions struct {
+	// Presence turns on presence information for channel.
+	// Presence is a structure with clients currently subscribed on channel.
+	Presence bool `json:"presence"`
+
 	// JoinLeave turns on join/leave messages for channel.
 	// When client subscribes on channel join message sent to all
 	// clients in this channel. When client leaves channel (unsubscribes)
@@ -15,10 +21,6 @@ type ChannelOptions struct {
 	// many subscribers because every subscribe/unsubscribe event results
 	// into join/leave event broadcast to all other active subscribers.
 	JoinLeave bool `mapstructure:"join_leave" json:"join_leave"`
-
-	// Presence turns on presence information for channel.
-	// Presence is a structure with clients currently subscribed on channel.
-	Presence bool `json:"presence"`
 
 	// HistorySize determines max amount of history messages for channel,
 	// 0 means no history for channel. Centrifuge history has an auxiliary
