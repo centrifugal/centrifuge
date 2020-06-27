@@ -12,9 +12,18 @@ import (
 	"github.com/cristalhq/jwt/v3"
 )
 
-func NewConnectTokenVerifier(tokenHMACSecretKey string, pubKey *rsa.PublicKey) connectTokenVerifier {
-	verifier := &tokenVerifierJWT{}
-	algorithms, err := newAlgorithms(tokenHMACSecretKey, pubKey)
+type TokenVerifierConfig struct {
+	// HMACSecretKey is a secret key used to validate connection and subscription
+	// tokens generated using HMAC. Zero value means that HMAC tokens won't be allowed.
+	HMACSecretKey string
+	// RSAPublicKey is a public key used to validate connection and subscription
+	// tokens generated using RSA. Zero value means that RSA tokens won't be allowed.
+	RSAPublicKey *rsa.PublicKey
+}
+
+func NewTokenVerifierJWT(config TokenVerifierConfig) *TokenVerifierJWT {
+	verifier := &TokenVerifierJWT{}
+	algorithms, err := newAlgorithms(config.HMACSecretKey, config.RSAPublicKey)
 	if err != nil {
 		panic(err)
 	}
@@ -22,17 +31,7 @@ func NewConnectTokenVerifier(tokenHMACSecretKey string, pubKey *rsa.PublicKey) c
 	return verifier
 }
 
-func NewSubscribeTokenVerifier(tokenHMACSecretKey string, pubKey *rsa.PublicKey) subscribeTokenVerifier {
-	verifier := &tokenVerifierJWT{}
-	algorithms, err := newAlgorithms(tokenHMACSecretKey, pubKey)
-	if err != nil {
-		panic(err)
-	}
-	verifier.algorithms = algorithms
-	return verifier
-}
-
-type tokenVerifierJWT struct {
+type TokenVerifierJWT struct {
 	mu         sync.RWMutex
 	algorithms *algorithms
 }
@@ -136,35 +135,35 @@ func (s *algorithms) verify(token *jwt.Token) error {
 	return verifier.Verify(token.Payload(), token.Signature())
 }
 
-func (verifier *tokenVerifierJWT) verifySignature(token *jwt.Token) error {
+func (verifier *TokenVerifierJWT) verifySignature(token *jwt.Token) error {
 	verifier.mu.RLock()
 	defer verifier.mu.RUnlock()
 	return verifier.algorithms.verify(token)
 }
 
-func (verifier *tokenVerifierJWT) VerifyConnectToken(t string) (connectToken, error) {
+func (verifier *TokenVerifierJWT) VerifyConnectToken(t string) (ConnectToken, error) {
 	token, err := jwt.Parse([]byte(t))
 	if err != nil {
-		return connectToken{}, err
+		return ConnectToken{}, err
 	}
 
 	err = verifier.verifySignature(token)
 	if err != nil {
-		return connectToken{}, err
+		return ConnectToken{}, err
 	}
 
 	claims := &connectTokenClaims{}
 	err = json.Unmarshal(token.RawClaims(), claims)
 	if err != nil {
-		return connectToken{}, err
+		return ConnectToken{}, err
 	}
 
 	now := time.Now()
 	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
-		return connectToken{}, ErrTokenExpired
+		return ConnectToken{}, ErrTokenExpired
 	}
 
-	ct := connectToken{
+	ct := ConnectToken{
 		UserID:   claims.StandardClaims.Subject,
 		Info:     claims.Info,
 		Channels: claims.Channels,
@@ -175,36 +174,36 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(t string) (connectToken, er
 	if claims.Base64Info != "" {
 		byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 		if err != nil {
-			return connectToken{}, err
+			return ConnectToken{}, err
 		}
 		ct.Info = byteInfo
 	}
 	return ct, nil
 }
 
-func (verifier *tokenVerifierJWT) VerifySubscribeToken(t string) (subscribeToken, error) {
+func (verifier *TokenVerifierJWT) VerifySubscribeToken(t string) (SubscribeToken, error) {
 	token, err := jwt.Parse([]byte(t))
 	if err != nil {
-		return subscribeToken{}, err
+		return SubscribeToken{}, err
 	}
 
 	err = verifier.verifySignature(token)
 	if err != nil {
-		return subscribeToken{}, err
+		return SubscribeToken{}, err
 	}
 
 	claims := &subscribeTokenClaims{}
 	err = json.Unmarshal(token.RawClaims(), claims)
 	if err != nil {
-		return subscribeToken{}, err
+		return SubscribeToken{}, err
 	}
 
 	now := time.Now()
 	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
-		return subscribeToken{}, ErrTokenExpired
+		return SubscribeToken{}, ErrTokenExpired
 	}
 
-	st := subscribeToken{
+	st := SubscribeToken{
 		Client:          claims.Client,
 		Info:            claims.Info,
 		Channel:         claims.Channel,
@@ -216,17 +215,17 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(t string) (subscribeToken
 	if claims.Base64Info != "" {
 		byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 		if err != nil {
-			return subscribeToken{}, err
+			return SubscribeToken{}, err
 		}
 		st.Info = byteInfo
 	}
 	return st, nil
 }
 
-func (verifier *tokenVerifierJWT) Reload(config Config) error {
+func (verifier *TokenVerifierJWT) Reload(config TokenVerifierConfig) error {
 	verifier.mu.Lock()
 	defer verifier.mu.Unlock()
-	alg, err := newAlgorithms(config.TokenHMACSecretKey, config.TokenRSAPublicKey)
+	alg, err := newAlgorithms(config.HMACSecretKey, config.RSAPublicKey)
 	if err != nil {
 		return err
 	}

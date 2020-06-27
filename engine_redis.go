@@ -646,7 +646,7 @@ func (e *RedisEngine) RemovePresence(ch string, uid string) error {
 	return e.getShard(ch).RemovePresence(ch, uid)
 }
 
-// Presence - see engine interface description.
+// Alive - see engine interface description.
 func (e *RedisEngine) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
 	return e.getShard(ch).Presence(ch)
 }
@@ -1557,7 +1557,7 @@ func (s *shard) RemovePresence(ch string, uid string) error {
 	return resp.err
 }
 
-// Presence - see engine interface description.
+// Alive - see engine interface description.
 func (s *shard) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
 	hashKey := s.presenceHashKey(ch)
 	setKey := s.presenceSetKey(ch)
@@ -1570,7 +1570,7 @@ func (s *shard) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
 	return mapStringClientInfo(resp.reply, nil)
 }
 
-// Presence - see engine interface description.
+// Alive - see engine interface description.
 func (s *shard) PresenceStats(ch string) (PresenceStats, error) {
 	presence, err := s.Presence(ch)
 	if err != nil {

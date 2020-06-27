@@ -487,15 +487,23 @@ var recoverTestChannels = []recoverTestChannel{
 	{"test_recovery_memory_seq_", true},
 }
 
+func setTestChannelOptions(c *Config, opts ChannelOptions) {
+	c.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+		return opts, nil
+	}
+}
+
 func TestMemoryClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := nodeWithMemoryEngine()
 
 			config := node.Config()
-			config.HistorySize = tt.HistorySize
-			config.HistoryLifetime = tt.HistoryLifetime
-			config.HistoryRecover = true
+			setTestChannelOptions(&config, ChannelOptions{
+				HistorySize:     tt.HistorySize,
+				HistoryLifetime: tt.HistoryLifetime,
+				HistoryRecover:  true,
+			})
 			_ = node.Reload(config)
 
 			for _, recoverTestChannel := range recoverTestChannels {
@@ -558,9 +566,13 @@ type historyIterationTest struct {
 func (it *historyIterationTest) prepareHistoryIteration(t testing.TB, node *Node) StreamPosition {
 	conf := node.Config()
 	numMessages := it.NumMessages
-	conf.HistorySize = numMessages
-	conf.HistoryLifetime = 60
-	conf.HistoryRecover = true
+	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+		return ChannelOptions{
+			HistorySize:     numMessages,
+			HistoryLifetime: 60,
+			HistoryRecover:  true,
+		}, nil
+	}
 	err := node.Reload(conf)
 	require.NoError(t, err)
 
