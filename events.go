@@ -23,21 +23,22 @@ type ConnectReply struct {
 	// Disconnect client.
 	Disconnect *Disconnect
 	// Credentials should be set if app wants to authenticate connection.
-	// This field still optional as auth could be provided through HTTP middleware
-	// or via JWT token.
+	// This field still optional as auth could be provided through HTTP
+	// middleware or via JWT token.
 	Credentials *Credentials
 	// Data allows to set custom data in connect reply.
 	Data []byte
 	// Channels slice contains channels to subscribe connection to on server-side.
 	Channels []string
-	// ClientSideRefresh tells library to use client-side refresh logic: i.e. send
-	// refresh commands with new connection JWT. If not set then server-side refresh
-	// handler will be used.
+	// ClientSideRefresh tells library to use client-side refresh logic:
+	// i.e. send refresh commands with new connection JWT. If not set
+	// then server-side refresh handler will be used.
 	ClientSideRefresh bool
 }
 
-// ConnectingHandler called when new client authenticates on server. This handler
-// will be called from many goroutines, remember to synchronize your operations inside.
+// ConnectingHandler called when new client authenticates on server.
+// This handler will be called from many goroutines, remember to synchronize
+// your operations inside.
 type ConnectingHandler func(context.Context, TransportInfo, ConnectEvent) ConnectReply
 
 // ConnectedHandler called when new client connects to server.
@@ -251,7 +252,7 @@ type MessageReply struct {
 // MessageHandler must handle incoming async message from client.
 type MessageHandler func(MessageEvent) MessageReply
 
-// PresenceEvent ...
+// PresenceEvent contains info of presence call.
 type PresenceEvent struct {
 	Channel string
 }
@@ -264,7 +265,7 @@ type PresenceReply struct {
 	Disconnect *Disconnect
 }
 
-// PresenceHandler must handle incoming command from client.
+// PresenceHandler called when presence request received from client.
 type PresenceHandler func(PresenceEvent) PresenceReply
 
 // PresenceStatsEvent ...

@@ -44,7 +44,7 @@ type Node struct {
 	// shutdownCh is a channel which is closed when node shutdown initiated.
 	shutdownCh chan struct{}
 	// eventHub to manage event handlers attached to node.
-	eventHub *nodeEventHub
+	eventHub *NodeEventHub
 	// logger allows to log throughout library code and proxy log entries to
 	// configured log handler.
 	logger *logger
@@ -86,7 +86,7 @@ func New(c Config) (*Node, error) {
 		logger:         nil,
 		controlEncoder: controlproto.NewProtobufEncoder(),
 		controlDecoder: controlproto.NewProtobufDecoder(),
-		eventHub:       &nodeEventHub{},
+		eventHub:       &NodeEventHub{},
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 	}
@@ -100,11 +100,13 @@ func New(c Config) (*Node, error) {
 	return n, nil
 }
 
+var defaultChannelOptions = ChannelOptions{}
+
 func (n *Node) channelOptions(ch string) (ChannelOptions, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	if n.config.ChannelOptionsFunc == nil {
-		return ChannelOptions{}, nil
+		return defaultChannelOptions, nil
 	}
 	return n.config.ChannelOptionsFunc(ch)
 }
@@ -203,7 +205,7 @@ func (n *Node) LogEnabled(level LogLevel) bool {
 }
 
 // On allows access to NodeEventHub.
-func (n *Node) On() NodeEventHub {
+func (n *Node) On() *NodeEventHub {
 	return n.eventHub
 }
 
@@ -774,7 +776,7 @@ func (n *Node) removePresence(ch string, uid string) error {
 	return n.presenceManager.RemovePresence(ch, uid)
 }
 
-// Alive returns a map with information about active clients in channel.
+// Presence returns a map with information about active clients in channel.
 func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
 	if n.presenceManager == nil {
 		return nil, ErrorNotAvailable
@@ -943,34 +945,25 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 	r.mu.Unlock()
 }
 
-// NodeEventHub can deal with events binded to Node.
-// All its methods are not goroutine-safe as handlers must be
-// registered once before Node Run method called.
-type NodeEventHub interface {
-	// Auth happens when client sends Connect command to server. In this handler client
-	// can reject connection or provide Credentials for it.
-	ClientConnecting(handler ConnectingHandler)
-	// Connect called after client connection has been successfully established,
-	// authenticated and connect reply already sent to client. This is a place
-	// where application should set all required connection event callbacks and
-	// can start communicating with client.
-	ClientConnected(handler ConnectedHandler)
-}
-
-// nodeEventHub can deal with events binded to Node.
-// All its methods are not goroutine-safe.
-type nodeEventHub struct {
+// NodeEventHub allows to bind events to Node.
+// All its methods are not goroutine-safe. Event handlers must be
+// set before Node run method called.
+type NodeEventHub struct {
 	connectingHandler ConnectingHandler
 	connectedHandler  ConnectedHandler
 }
 
-// ClientConnecting ...
-func (h *nodeEventHub) ClientConnecting(handler ConnectingHandler) {
+// ClientConnecting happens when client sends Connect command to server. In this
+// handler client can reject connection or provide Credentials for it.
+func (h *NodeEventHub) ClientConnecting(handler ConnectingHandler) {
 	h.connectingHandler = handler
 }
 
-// ClientConnected allows to set ConnectedHandler.
-func (h *nodeEventHub) ClientConnected(handler ConnectedHandler) {
+// ClientConnected called after client connection has been successfully established,
+// authenticated and connect reply already sent to client. This is a place where
+// application should set all required connection event callbacks and can start
+// communicating with client.
+func (h *NodeEventHub) ClientConnected(handler ConnectedHandler) {
 	h.connectedHandler = handler
 }
 
@@ -978,22 +971,22 @@ type brokerEventHandler struct {
 	node *Node
 }
 
-// HandlePublication ...
+// HandlePublication coming from Engine.
 func (h *brokerEventHandler) HandlePublication(ch string, pub *protocol.Publication) error {
 	return h.node.handlePublication(ch, pub)
 }
 
-// HandleJoin ...
+// HandleJoin coming from Engine.
 func (h *brokerEventHandler) HandleJoin(ch string, join *protocol.Join) error {
 	return h.node.handleJoin(ch, join)
 }
 
-// HandleLeave ...
+// HandleLeave coming from Engine.
 func (h *brokerEventHandler) HandleLeave(ch string, leave *protocol.Leave) error {
 	return h.node.handleLeave(ch, leave)
 }
 
-// HandleControl ...
+// HandleControl coming from Engine.
 func (h *brokerEventHandler) HandleControl(data []byte) error {
 	return h.node.handleControl(data)
 }

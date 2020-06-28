@@ -101,7 +101,7 @@ func (e *MemoryEngine) RemovePresence(ch string, uid string) error {
 	return e.presenceHub.remove(ch, uid)
 }
 
-// Alive - see engine interface description.
+// Presence - see engine interface description.
 func (e *MemoryEngine) Presence(ch string) (map[string]*protocol.ClientInfo, error) {
 	return e.presenceHub.get(ch)
 }

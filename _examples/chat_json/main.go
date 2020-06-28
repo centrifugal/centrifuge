@@ -53,7 +53,7 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 // Check whether channel is allowed for subscribing. In real case permission
-// most probably will be more complex than in this example.
+// check will probably be more complex than in this example.
 func channelSubscribeAllowed(channel string) bool {
 	return channel == "chat"
 }

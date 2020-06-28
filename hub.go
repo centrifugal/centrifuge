@@ -14,13 +14,10 @@ import (
 // Hub manages client connections.
 type Hub struct {
 	mu sync.RWMutex
-
 	// match client ID with actual client connection.
 	conns map[string]*Client
-
 	// registry to hold active client connections grouped by user.
 	users map[string]map[string]struct{}
-
 	// registry to hold active subscriptions of clients to channels.
 	subs map[string]map[string]struct{}
 }
@@ -35,8 +32,8 @@ func newHub() *Hub {
 }
 
 const (
-	// hubShutdownSemaphoreSize limits graceful disconnects concurrency on
-	// node shutdown.
+	// hubShutdownSemaphoreSize limits graceful disconnects concurrency
+	// on node shutdown.
 	hubShutdownSemaphoreSize = 128
 )
 
