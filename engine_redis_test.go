@@ -93,6 +93,11 @@ func TestRedisEngine(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, len(p))
 
+			s, err := e.PresenceStats("channel")
+			require.NoError(t, err)
+			require.Equal(t, 1, s.NumUsers)
+			require.Equal(t, 1, s.NumClients)
+
 			err = e.RemovePresence("channel", "uid")
 			require.NoError(t, err)
 
