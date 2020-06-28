@@ -599,13 +599,15 @@ func TestClientAliveHandler(t *testing.T) {
 	done := make(chan struct{})
 	closed := false
 	disconnected := make(chan struct{})
+	numCalls := 0
 
 	client.On().Alive(func(event AliveEvent) AliveReply {
-		if !closed {
+		numCalls++
+		if numCalls >= 50 && !closed {
 			close(done)
 			closed = true
+			client.Close(DisconnectForceNoReconnect)
 		}
-		client.Close(DisconnectForceNoReconnect)
 		return AliveReply{}
 	})
 
@@ -984,7 +986,7 @@ func TestClientSend(t *testing.T) {
 	err := client.Send([]byte(`{}`))
 	require.NoError(t, err)
 
-	err = client.Close(nil)
+	err = client.close(nil)
 	require.NoError(t, err)
 
 	err = client.Send([]byte(`{}`))
@@ -1003,7 +1005,7 @@ func TestClientClose(t *testing.T) {
 
 	connectClient(t, client)
 
-	err := client.Close(DisconnectShutdown)
+	err := client.close(DisconnectShutdown)
 	require.NoError(t, err)
 	require.True(t, transport.closed)
 	require.Equal(t, DisconnectShutdown, transport.disconnect)
@@ -1429,6 +1431,104 @@ func TestClientHandleMalformedCommand(t *testing.T) {
 		Params: []byte(`{}`),
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
+}
+
+func TestClientSideRefresh(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() + 60,
+	})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.On().ClientConnecting(func(ctx context.Context, info TransportInfo, event ConnectEvent) ConnectReply {
+		return ConnectReply{
+			ClientSideRefresh: true,
+		}
+	})
+
+	expireAt := time.Now().Unix() + 60
+	client.On().Refresh(func(e RefreshEvent) RefreshReply {
+		require.Equal(t, "test", e.Token)
+		return RefreshReply{
+			ExpireAt: expireAt,
+		}
+	})
+
+	connectClient(t, client)
+
+	var replies []*protocol.Reply
+	rw := testReplyWriter(&replies)
+
+	req := protocol.RefreshRequest{
+		Token: "test",
+	}
+	params, _ := json.Marshal(req)
+
+	disconnect := client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypeRefresh,
+		Params: params,
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Nil(t, replies[0].Error)
+}
+
+func TestClientSideSubRefresh(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() + 60,
+	})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.On().ClientConnecting(func(ctx context.Context, info TransportInfo, event ConnectEvent) ConnectReply {
+		client.On().Subscribe(func(event SubscribeEvent) SubscribeReply {
+			return SubscribeReply{
+				ExpireAt:          time.Now().Unix() + 10,
+				ClientSideRefresh: true,
+			}
+		})
+		return ConnectReply{
+			ClientSideRefresh: true,
+		}
+	})
+
+	expireAt := time.Now().Unix() + 60
+	client.On().SubRefresh(func(e SubRefreshEvent) SubRefreshReply {
+		require.Equal(t, "test_token", e.Token)
+		return SubRefreshReply{
+			ExpireAt: expireAt,
+		}
+	})
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	var replies []*protocol.Reply
+	rw := testReplyWriter(&replies)
+
+	req := protocol.SubRefreshRequest{
+		Channel: "test",
+		Token:   "test_token",
+	}
+	params, _ := json.Marshal(req)
+
+	disconnect := client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypeSubRefresh,
+		Params: params,
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Nil(t, replies[0].Error)
 }
 
 func BenchmarkUUID(b *testing.B) {

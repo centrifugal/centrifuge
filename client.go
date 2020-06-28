@@ -269,7 +269,7 @@ func (c *Client) scheduleNextTimer() {
 	}
 	if needTimer {
 		c.timerOp = nextTimerOp
-		afterDuration := time.Duration(minEventTime-time.Now().Unix()) * time.Second
+		afterDuration := time.Duration(minEventTime-time.Now().UnixNano()) * time.Nanosecond
 		c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
 	}
 }
@@ -285,13 +285,13 @@ func (c *Client) stopTimer() {
 func (c *Client) addPresenceUpdate() {
 	config := c.node.Config()
 	presenceInterval := config.ClientPresenceUpdateInterval
-	c.nextPresence = time.Now().Add(presenceInterval).Unix()
+	c.nextPresence = time.Now().Add(presenceInterval).UnixNano()
 	c.scheduleNextTimer()
 }
 
 // Lock must be held outside.
 func (c *Client) addExpireUpdate(after time.Duration) {
-	c.nextExpire = time.Now().Add(after).Unix()
+	c.nextExpire = time.Now().Add(after).UnixNano()
 	c.scheduleNextTimer()
 }
 
