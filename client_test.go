@@ -103,11 +103,15 @@ func TestClientTimerSchedule(t *testing.T) {
 	client, _ := newClient(context.Background(), node, transport)
 	client.nextExpire = time.Now().Unix() + 5
 	client.nextPresence = time.Now().Unix() + 10
+	client.mu.Lock()
 	client.scheduleNextTimer()
+	client.mu.Unlock()
 	require.NotNil(t, client.timer)
 	require.Equal(t, timerOpExpire, client.timerOp)
 	client.nextPresence = time.Now().Unix() + 1
+	client.mu.Lock()
 	client.scheduleNextTimer()
+	client.mu.Unlock()
 	require.NotNil(t, client.timer)
 	require.Equal(t, timerOpPresence, client.timerOp)
 }
