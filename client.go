@@ -17,8 +17,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// ClientEventHub allows to deal with client event handlers.
-// All its methods are not goroutine-safe and supposed to be called once on client connect.
+// ClientEventHub allows binding client event handlers.
+// All its methods are not goroutine-safe and supposed to be called once
+// on client connect.
 type ClientEventHub struct {
 	aliveHandler         AliveHandler
 	refreshHandler       RefreshHandler
@@ -86,17 +87,20 @@ func (c *ClientEventHub) Publish(h PublishHandler) {
 	c.publishHandler = h
 }
 
-// Presence ...
+// Presence allows to hook into Presence request from client. At this
+// moment you can only return a custom error or disconnect client.
 func (c *ClientEventHub) Presence(h PresenceHandler) {
 	c.presenceHandler = h
 }
 
-// PresenceStats ...
+// PresenceStats allows to hook into PresenceStats request from client.
+// At this moment you can only return a custom error or disconnect client.
 func (c *ClientEventHub) PresenceStats(h PresenceStatsHandler) {
 	c.presenceStatsHandler = h
 }
 
-// History ...
+// History allows to hook into History request from client. At this
+// moment you can only return a custom error or disconnect client.
 func (c *ClientEventHub) History(h HistoryHandler) {
 	c.historyHandler = h
 }
@@ -252,15 +256,18 @@ func (c *Client) scheduleNextTimer() {
 	c.stopTimer()
 	var minEventTime int64
 	var nextTimerOp timerOp
+	var needTimer bool
 	if c.nextExpire > 0 {
 		nextTimerOp = timerOpExpire
 		minEventTime = c.nextExpire
+		needTimer = true
 	}
-	if c.nextPresence > 0 && c.nextPresence < minEventTime {
+	if c.nextPresence > 0 && (minEventTime == 0 || c.nextPresence < minEventTime) {
 		nextTimerOp = timerOpPresence
 		minEventTime = c.nextPresence
+		needTimer = true
 	}
-	if minEventTime > 0 {
+	if needTimer {
 		c.timerOp = nextTimerOp
 		afterDuration := time.Duration(minEventTime-time.Now().Unix()) * time.Second
 		c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
@@ -547,14 +554,14 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 // Close client connection with specific disconnect reason.
 // This method internally creates a new goroutine at moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
-// and presence callback ordering problems. If you need to wait for
-// close result for some reason then read an error from returned channel.
-func (c *Client) Close(disconnect *Disconnect) chan error {
-	errCh := make(chan error, 1)
+// and presence callback ordering problems. Will be a noop if client
+// already closed. Since this method run a separate goroutine client
+// connection will be closed eventually (i.e. not always immediately).
+func (c *Client) Close(disconnect *Disconnect) error {
 	go func() {
-		errCh <- c.close(disconnect)
+		_ = c.close(disconnect)
 	}()
-	return errCh
+	return nil
 }
 
 func (c *Client) close(disconnect *Disconnect) error {

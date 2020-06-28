@@ -8,12 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/centrifugal/centrifuge/internal/prepared"
 
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/centrifugal/centrifuge/internal/prepared"
+	"github.com/stretchr/testify/require"
 )
 
 type testTransport struct {

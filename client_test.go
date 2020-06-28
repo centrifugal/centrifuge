@@ -78,8 +78,8 @@ func TestClientClosedState(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
-	errCh := client.Close(nil)
-	require.NoError(t, <-errCh)
+	err := client.close(nil)
+	require.NoError(t, err)
 	require.True(t, client.closed)
 }
 
@@ -563,11 +563,70 @@ func TestClientUnsubscribe(t *testing.T) {
 	subscribeClient(t, client, "test")
 	require.Equal(t, 1, len(client.Channels()))
 
+	unsubscribed := make(chan struct{})
+
+	client.On().Unsubscribe(func(event UnsubscribeEvent) UnsubscribeReply {
+		close(unsubscribed)
+		return UnsubscribeReply{}
+	})
+
 	err := client.Unsubscribe("test")
 	require.NoError(t, err)
 	require.Equal(t, 0, len(client.Channels()))
 	require.Equal(t, 1, node.Hub().NumClients())
 	require.Equal(t, 0, node.Hub().NumChannels())
+
+	select {
+	case <-unsubscribed:
+	case <-time.After(time.Second):
+		t.Fatal("unsubscribe handler not called")
+	}
+}
+
+func TestClientAliveHandler(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	config := node.Config()
+	config.ClientPresenceUpdateInterval = time.Millisecond
+	_ = node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	done := make(chan struct{})
+	closed := false
+	disconnected := make(chan struct{})
+
+	client.On().Alive(func(event AliveEvent) AliveReply {
+		if !closed {
+			close(done)
+			closed = true
+		}
+		client.Close(DisconnectForceNoReconnect)
+		return AliveReply{}
+	})
+
+	client.On().Disconnect(func(event DisconnectEvent) DisconnectReply {
+		close(disconnected)
+		return DisconnectReply{}
+	})
+
+	connectClient(t, client)
+	client.scheduleOnConnectTimers()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("alive handler not called")
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect handler not called")
+	}
 }
 
 func TestClientPublishNotAvailable(t *testing.T) {
@@ -925,8 +984,8 @@ func TestClientSend(t *testing.T) {
 	err := client.Send([]byte(`{}`))
 	require.NoError(t, err)
 
-	errCh := client.Close(nil)
-	require.NoError(t, <-errCh)
+	err = client.Close(nil)
+	require.NoError(t, err)
 
 	err = client.Send([]byte(`{}`))
 	require.Error(t, err)
@@ -944,8 +1003,8 @@ func TestClientClose(t *testing.T) {
 
 	connectClient(t, client)
 
-	errCh := client.Close(DisconnectShutdown)
-	require.NoError(t, <-errCh)
+	err := client.Close(DisconnectShutdown)
+	require.NoError(t, err)
 	require.True(t, transport.closed)
 	require.Equal(t, DisconnectShutdown, transport.disconnect)
 }
