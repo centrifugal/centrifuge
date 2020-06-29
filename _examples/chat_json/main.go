@@ -52,10 +52,12 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
+const exampleChannel = "chat:index"
+
 // Check whether channel is allowed for subscribing. In real case permission
 // check will probably be more complex than in this example.
 func channelSubscribeAllowed(channel string) bool {
-	return channel == "chat"
+	return channel == exampleChannel
 }
 
 func main() {
@@ -63,14 +65,22 @@ func main() {
 
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
+
+	// Turn on all
 	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, error) {
-		return centrifuge.ChannelOptions{
-			Presence:        true,
-			JoinLeave:       true,
-			HistorySize:     100,
-			HistoryLifetime: 300,
-			HistoryRecover:  true,
-		}, nil
+		if channel == exampleChannel {
+			// For exampleChannel turn on all features. You should only
+			// enable channel options where really needed to consume less
+			// resources on server.
+			return centrifuge.ChannelOptions{
+				Presence:        true,
+				JoinLeave:       true,
+				HistorySize:     100,
+				HistoryLifetime: 300,
+				HistoryRecover:  true,
+			}, nil
+		}
+		return centrifuge.ChannelOptions{}, nil
 	}
 
 	if err := cfg.Validate(); err != nil {
