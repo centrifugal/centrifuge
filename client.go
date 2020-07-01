@@ -234,17 +234,20 @@ func (c *Client) scheduleNextTimer() {
 	c.stopTimer()
 	var minEventTime int64
 	var nextTimerOp timerOp
+	var needTimer bool
 	if c.nextExpire > 0 {
 		nextTimerOp = timerOpExpire
 		minEventTime = c.nextExpire
+		needTimer = true
 	}
-	if c.nextPresence > 0 && c.nextPresence < minEventTime {
+	if c.nextPresence > 0 && (minEventTime == 0 || c.nextPresence < minEventTime) {
 		nextTimerOp = timerOpPresence
 		minEventTime = c.nextPresence
+		needTimer = true
 	}
-	if minEventTime > 0 {
+	if needTimer {
 		c.timerOp = nextTimerOp
-		afterDuration := time.Duration(minEventTime-time.Now().Unix()) * time.Second
+		afterDuration := time.Duration(minEventTime-time.Now().UnixNano()) * time.Nanosecond
 		c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
 	}
 }
@@ -260,13 +263,13 @@ func (c *Client) stopTimer() {
 func (c *Client) addPresenceUpdate() {
 	config := c.node.Config()
 	presenceInterval := config.ClientPresenceUpdateInterval
-	c.nextPresence = time.Now().Add(presenceInterval).Unix()
+	c.nextPresence = time.Now().Add(presenceInterval).UnixNano()
 	c.scheduleNextTimer()
 }
 
 // Lock must be held outside.
 func (c *Client) addExpireUpdate(after time.Duration) {
-	c.nextExpire = time.Now().Add(after).Unix()
+	c.nextExpire = time.Now().Add(after).UnixNano()
 	c.scheduleNextTimer()
 }
 
@@ -529,14 +532,12 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 // Close client connection with specific disconnect reason.
 // This method internally creates a new goroutine at moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
-// and presence callback ordering problems. If you need to wait for
-// close result for some reason then read an error from returned channel.
-func (c *Client) Close(disconnect *Disconnect) chan error {
-	errCh := make(chan error, 1)
+// and presence callback ordering problems.
+func (c *Client) Close(disconnect *Disconnect) error {
 	go func() {
-		errCh <- c.close(disconnect)
+		_ = c.close(disconnect)
 	}()
-	return errCh
+	return nil
 }
 
 func (c *Client) close(disconnect *Disconnect) error {

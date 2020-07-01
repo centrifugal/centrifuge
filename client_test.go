@@ -85,8 +85,8 @@ func TestClientClosedState(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
-	errCh := client.Close(nil)
-	require.NoError(t, <-errCh)
+	err := client.close(nil)
+	require.NoError(t, err)
 	require.True(t, client.closed)
 }
 
@@ -1403,8 +1403,8 @@ func TestClientSend(t *testing.T) {
 	err := client.Send([]byte(`{}`))
 	require.NoError(t, err)
 
-	errCh := client.Close(nil)
-	require.NoError(t, <-errCh)
+	err = client.close(nil)
+	require.NoError(t, err)
 
 	err = client.Send([]byte(`{}`))
 	require.Error(t, err)
@@ -1422,8 +1422,8 @@ func TestClientClose(t *testing.T) {
 
 	connectClient(t, client)
 
-	errCh := client.Close(DisconnectShutdown)
-	require.NoError(t, <-errCh)
+	err := client.close(DisconnectShutdown)
+	require.NoError(t, err)
 	require.True(t, transport.closed)
 	require.Equal(t, DisconnectShutdown, transport.disconnect)
 }
@@ -1842,4 +1842,52 @@ func BenchmarkUUID(b *testing.B) {
 		}
 	}
 	b.ReportAllocs()
+}
+
+func TestClientPresenceHandler(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	config := node.Config()
+	config.ClientPresenceUpdateInterval = time.Millisecond
+	_ = node.Reload(config)
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	done := make(chan struct{})
+	closed := false
+	disconnected := make(chan struct{})
+	numCalls := 0
+
+	client.On().Presence(func(event PresenceEvent) PresenceReply {
+		numCalls++
+		if numCalls >= 50 && !closed {
+			close(done)
+			closed = true
+			client.Close(DisconnectForceNoReconnect)
+		}
+		return PresenceReply{}
+	})
+
+	client.On().Disconnect(func(event DisconnectEvent) DisconnectReply {
+		close(disconnected)
+		return DisconnectReply{}
+	})
+
+	connectClient(t, client)
+	client.scheduleOnConnectTimers()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("alive handler not called")
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect handler not called")
+	}
 }
