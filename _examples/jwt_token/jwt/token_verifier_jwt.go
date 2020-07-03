@@ -20,7 +20,7 @@ type ConnectToken struct {
 	// if On().Refresh not set.
 	ExpireAt int64
 	// Info contains additional information about connection. It will be
-	// included into Join/Leave messages, into Alive information, also
+	// included into Join/Leave messages, into Presence information, also
 	// info becomes a part of published message if it was published from
 	// client directly. In some cases having additional info can be an
 	// overhead – but you are simply free to not use it.
@@ -41,7 +41,7 @@ type SubscribeToken struct {
 	// if On().SubRefresh not set.
 	ExpireAt int64
 	// Info contains additional information about connection in channel.
-	// It will be included into Join/Leave messages, into Alive information,
+	// It will be included into Join/Leave messages, into Presence information,
 	// also channel info becomes a part of published message if it was published
 	// from subscribed client directly.
 	Info []byte
