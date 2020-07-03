@@ -554,9 +554,9 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 // Close client connection with specific disconnect reason.
 // This method internally creates a new goroutine at moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
-// and presence callback ordering problems. Will be a noop if client
-// already closed. Since this method run a separate goroutine client
-// connection will be closed eventually (i.e. not always immediately).
+// and alive callback ordering problems. Will be a noop if client
+// already closed. Since this method runs a separate goroutine client
+// connection will be closed eventually (i.e. not immediately).
 func (c *Client) Close(disconnect *Disconnect) error {
 	go func() {
 		_ = c.close(disconnect)

@@ -102,19 +102,16 @@ func TestClientTimerSchedule(t *testing.T) {
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	client.mu.Lock()
-	client.nextExpire = time.Now().Unix() + 5
-	client.nextPresence = time.Now().Unix() + 10
+	defer client.mu.Unlock()
+	client.nextExpire = time.Now().Add(5 * time.Second).UnixNano()
+	client.nextPresence = time.Now().Add(10 * time.Second).UnixNano()
 	client.scheduleNextTimer()
 	require.NotNil(t, client.timer)
 	require.Equal(t, timerOpExpire, client.timerOp)
-	client.nextPresence = time.Now().Unix() + 1
-	client.mu.Unlock()
-
-	client.mu.Lock()
+	client.nextPresence = time.Now().Add(time.Second).UnixNano()
 	client.scheduleNextTimer()
 	require.NotNil(t, client.timer)
 	require.Equal(t, timerOpPresence, client.timerOp)
-	client.mu.Unlock()
 }
 
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
