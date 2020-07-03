@@ -17,7 +17,11 @@ package centrifuge
 // for a specific channel then do not turn on Presence for it. If you don't
 // need history – don't enable it. Every enabled option requires additional
 // work on server and can affect overall server performance.
-type ChannelOptionsFunc func(channel string) (ChannelOptions, error)
+//
+// Second return argument means whether channel exists in system. If second
+// return argument is false then ErrorUnknownChannel will be returned to client
+// in replies to commands with such channel.
+type ChannelOptionsFunc func(channel string) (ChannelOptions, bool, error)
 
 // ChannelOptions represent channel configuration. It contains several
 // options to tune core Centrifuge features for channel – for example tell

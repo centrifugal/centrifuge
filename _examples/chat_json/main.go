@@ -67,7 +67,7 @@ func main() {
 	cfg.LogHandler = handleLog
 
 	// Turn on all
-	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, error) {
+	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
 		if channel == exampleChannel {
 			// For exampleChannel turn on all features. You should only
 			// enable channel options where really needed to consume less
@@ -78,9 +78,9 @@ func main() {
 				HistorySize:     100,
 				HistoryLifetime: 300,
 				HistoryRecover:  true,
-			}, nil
+			}, true, nil
 		}
-		return centrifuge.ChannelOptions{}, nil
+		return centrifuge.ChannelOptions{}, false, nil
 	}
 
 	if err := cfg.Validate(); err != nil {

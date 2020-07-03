@@ -886,12 +886,12 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 	node := nodeWithRedisEngine(t, useStreams)
 
 	config := node.Config()
-	config.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+	config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
 			HistorySize:     tt.HistorySize,
 			HistoryLifetime: tt.HistoryLifetime,
 			HistoryRecover:  true,
-		}, nil
+		}, true, nil
 	}
 	_ = node.Reload(config)
 

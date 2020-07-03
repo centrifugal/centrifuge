@@ -488,8 +488,8 @@ var recoverTestChannels = []recoverTestChannel{
 }
 
 func setTestChannelOptions(c *Config, opts ChannelOptions) {
-	c.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
-		return opts, nil
+	c.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
+		return opts, true, nil
 	}
 }
 
@@ -566,12 +566,12 @@ type historyIterationTest struct {
 func (it *historyIterationTest) prepareHistoryIteration(t testing.TB, node *Node) StreamPosition {
 	conf := node.Config()
 	numMessages := it.NumMessages
-	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
 			HistorySize:     numMessages,
 			HistoryLifetime: 60,
 			HistoryRecover:  true,
-		}, nil
+		}, true, nil
 	}
 	err := node.Reload(conf)
 	require.NoError(t, err)

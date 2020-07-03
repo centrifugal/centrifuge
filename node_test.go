@@ -265,12 +265,12 @@ func BenchmarkHistory(b *testing.B) {
 	e := testMemoryEngine()
 	conf := e.node.Config()
 	numMessages := 100
-	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
 			HistorySize:     numMessages,
 			HistoryLifetime: 60,
 			HistoryRecover:  true,
-		}, nil
+		}, true, nil
 	}
 	err := e.node.Reload(conf)
 	require.NoError(b, err)

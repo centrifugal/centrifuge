@@ -31,7 +31,7 @@ func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.c, nil
+	return c, nil
 }
 
 func TestClientEventHub(t *testing.T) {
