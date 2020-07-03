@@ -147,7 +147,7 @@ func main() {
 
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
 			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
-			return centrifuge.RPCReply{Data: []byte(`{"year": "2018"}`)}
+			return centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}
 		})
 
 		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {

@@ -130,7 +130,7 @@ func main() {
 		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
 			log.Printf("RPC from user: %s, data: %s", client.UserID(), string(e.Data))
 			return centrifuge.RPCReply{
-				Data: []byte(`{"year": "2018"}`),
+				Data: []byte(`{"year": "2020"}`),
 			}
 		})
 
