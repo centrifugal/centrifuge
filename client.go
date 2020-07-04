@@ -17,94 +17,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// ClientEventHub allows binding client event handlers.
-// All its methods are not goroutine-safe and supposed to be called once
-// on client connect.
-type ClientEventHub struct {
-	aliveHandler         AliveHandler
-	refreshHandler       RefreshHandler
-	disconnectHandler    DisconnectHandler
-	subscribeHandler     SubscribeHandler
-	unsubscribeHandler   UnsubscribeHandler
-	publishHandler       PublishHandler
-	subRefreshHandler    SubRefreshHandler
-	rpcHandler           RPCHandler
-	messageHandler       MessageHandler
-	presenceHandler      PresenceHandler
-	presenceStatsHandler PresenceStatsHandler
-	historyHandler       HistoryHandler
-}
-
-// Alive called periodically for active connection.
-func (c *ClientEventHub) Alive(h AliveHandler) {
-	c.aliveHandler = h
-}
-
-// Refresh called when it's time to refresh expiring client connection.
-func (c *ClientEventHub) Refresh(h RefreshHandler) {
-	c.refreshHandler = h
-}
-
-// Disconnect allows to set DisconnectHandler.
-// DisconnectHandler called when client disconnected.
-func (c *ClientEventHub) Disconnect(h DisconnectHandler) {
-	c.disconnectHandler = h
-}
-
-// Message allows to set MessageHandler.
-// MessageHandler called when client sent asynchronous message.
-func (c *ClientEventHub) Message(h MessageHandler) {
-	c.messageHandler = h
-}
-
-// RPC allows to set RPCHandler.
-// RPCHandler will be executed on every incoming RPC call.
-func (c *ClientEventHub) RPC(h RPCHandler) {
-	c.rpcHandler = h
-}
-
-// SubRefresh allows to set SubRefreshHandler.
-// SubRefreshHandler called when it's time to refresh client subscription.
-func (c *ClientEventHub) SubRefresh(h SubRefreshHandler) {
-	c.subRefreshHandler = h
-}
-
-// Subscribe allows to set SubscribeHandler.
-// SubscribeHandler called when client subscribes on channel.
-func (c *ClientEventHub) Subscribe(h SubscribeHandler) {
-	c.subscribeHandler = h
-}
-
-// Unsubscribe allows to set UnsubscribeHandler.
-// UnsubscribeHandler called when client unsubscribes from channel.
-func (c *ClientEventHub) Unsubscribe(h UnsubscribeHandler) {
-	c.unsubscribeHandler = h
-}
-
-// Publish allows to set PublishHandler.
-// PublishHandler called when client publishes message into channel.
-func (c *ClientEventHub) Publish(h PublishHandler) {
-	c.publishHandler = h
-}
-
-// Presence allows to hook into Presence request from client. At this
-// moment you can only return a custom error or disconnect client.
-func (c *ClientEventHub) Presence(h PresenceHandler) {
-	c.presenceHandler = h
-}
-
-// PresenceStats allows to hook into PresenceStats request from client.
-// At this moment you can only return a custom error or disconnect client.
-func (c *ClientEventHub) PresenceStats(h PresenceStatsHandler) {
-	c.presenceStatsHandler = h
-}
-
-// History allows to hook into History request from client. At this
-// moment you can only return a custom error or disconnect client.
-func (c *ClientEventHub) History(h HistoryHandler) {
-	c.historyHandler = h
-}
-
 // We poll current position in channel from history storage periodically.
 // If client position is wrong maxCheckPositionFailures times in a row
 // then client will be disconnected with InsufficientState reason.
@@ -129,6 +41,27 @@ const (
 	timerOpExpire   timerOp = 3
 )
 
+type Event uint64
+
+const (
+	EventSubscribe Event = 1 << iota
+	EventUnsubscribe
+	EventPublish
+	EventDisconnect
+	EventAlive
+	EventRefresh
+	EventSubRefresh
+	EventRPC
+	EventHistory
+	EventPresence
+	EventPresenceStats
+	EventMessage
+)
+
+var EventAll = EventSubscribe | EventUnsubscribe | EventPublish | EventDisconnect |
+	EventAlive | EventRefresh | EventSubRefresh | EventRPC | EventHistory | EventPresence |
+	EventPresenceStats | EventMessage
+
 // Client represents client connection to server.
 type Client struct {
 	mu                sync.RWMutex
@@ -140,7 +73,7 @@ type Client struct {
 	exp               int64
 	publications      *pubQueue
 	channels          map[string]ChannelContext
-	eventHub          *ClientEventHub
+	events            Event
 	messageWriter     *writer
 	pubSubSync        *recovery.PubSubSync
 	uid               string
@@ -173,7 +106,6 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		uid:          uuidObject.String(),
 		node:         n,
 		transport:    t,
-		eventHub:     &ClientEventHub{},
 		channels:     make(map[string]ChannelContext),
 		pubSubSync:   recovery.NewPubSubSync(),
 		publications: newPubQueue(),
@@ -330,9 +262,9 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 	clientSideRefresh := channelContext.clientSideRefresh
 	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
 		// Subscription expired.
-		if !clientSideRefresh && c.eventHub.subRefreshHandler != nil {
+		if !clientSideRefresh && c.node.eventHub.subRefreshHandler != nil && c.hasEvent(EventSubRefresh) {
 			// Give subscription a chance to be refreshed via SubRefreshHandler.
-			reply := c.eventHub.subRefreshHandler(SubRefreshEvent{Channel: channel})
+			reply := c.node.eventHub.subRefreshHandler(c.ctx, c, SubRefreshEvent{Channel: channel})
 			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
 				return false
 			}
@@ -370,8 +302,8 @@ func (c *Client) updatePresence() {
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
-	if c.eventHub.aliveHandler != nil {
-		_ = c.eventHub.aliveHandler(AliveEvent{})
+	if c.node.eventHub.aliveHandler != nil && c.hasEvent(EventAlive) {
+		_ = c.node.eventHub.aliveHandler(c.ctx, c, AliveEvent{})
 	}
 	for channel, channelContext := range channels {
 		if !c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay) {
@@ -468,11 +400,6 @@ func (c *Client) Channels() map[string]ChannelContext {
 		channels[ch] = ctx
 	}
 	return channels
-}
-
-// On returns ClientEventHub to set various event handlers to client.
-func (c *Client) On() *ClientEventHub {
-	return c.eventHub
 }
 
 // Send data to client. This sends an asynchronous message – data will be
@@ -609,12 +536,16 @@ func (c *Client) close(disconnect *Disconnect) error {
 	if disconnect != nil {
 		serverDisconnectCount.WithLabelValues(strconv.Itoa(disconnect.Code)).Inc()
 	}
-	if c.eventHub.disconnectHandler != nil {
-		c.eventHub.disconnectHandler(DisconnectEvent{
+	if c.node.eventHub.disconnectHandler != nil && c.hasEvent(EventDisconnect) {
+		c.node.eventHub.disconnectHandler(c.ctx, c, DisconnectEvent{
 			Disconnect: disconnect,
 		})
 	}
 	return nil
+}
+
+func (c *Client) hasEvent(e Event) bool {
+	return c.events&e != 0
 }
 
 // Lock must be held outside.
@@ -822,8 +753,8 @@ func (c *Client) expire() {
 
 	now := time.Now().Unix()
 
-	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
-		reply := c.eventHub.refreshHandler(RefreshEvent{})
+	if !clientSideRefresh && c.node.eventHub.refreshHandler != nil && c.hasEvent(EventRefresh) {
+		reply := c.node.eventHub.refreshHandler(c.ctx, c, RefreshEvent{})
 		if reply.Disconnect != nil {
 			_ = c.close(reply.Disconnect)
 			return
@@ -852,7 +783,7 @@ func (c *Client) expire() {
 
 	ttl := exp - now
 
-	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
+	if !clientSideRefresh && c.node.eventHub.refreshHandler != nil && c.hasEvent(EventRefresh) {
 		if ttl > 0 {
 			c.mu.Lock()
 			if !c.closed {
@@ -894,7 +825,12 @@ func (c *Client) triggerConnect() {
 		c.disconnectMu.Unlock()
 		return
 	}
-	c.node.eventHub.connectedHandler(c.ctx, c)
+	events := c.node.eventHub.connectedHandler(c.ctx, c)
+	if events > 0 {
+		c.events = events
+	} else {
+		c.events = EventAll
+	}
 	c.disconnectMu.Unlock()
 }
 
@@ -1146,13 +1082,13 @@ func (c *Client) handlePing(params protocol.Raw, rw *replyWriter) *Disconnect {
 }
 
 func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) *Disconnect {
-	if c.eventHub.rpcHandler != nil {
+	if c.node.eventHub.rpcHandler != nil && c.hasEvent(EventRPC) {
 		cmd, err := protocol.GetParamsDecoder(c.transport.Protocol().toProto()).DecodeRPC(params)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding rpc", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
 		}
-		rpcReply := c.eventHub.rpcHandler(RPCEvent{
+		rpcReply := c.node.eventHub.rpcHandler(c.ctx, c, RPCEvent{
 			Method: cmd.Method,
 			Data:   cmd.Data,
 		})
@@ -1182,13 +1118,13 @@ func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) *Disconnect {
 }
 
 func (c *Client) handleSend(params protocol.Raw) *Disconnect {
-	if c.eventHub.messageHandler != nil {
+	if c.node.eventHub.messageHandler != nil && c.hasEvent(EventMessage) {
 		cmd, err := protocol.GetParamsDecoder(c.transport.Protocol().toProto()).DecodeSend(params)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding message", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
 		}
-		messageReply := c.eventHub.messageHandler(MessageEvent{
+		messageReply := c.node.eventHub.messageHandler(c.ctx, c, MessageEvent{
 			Data: cmd.Data,
 		})
 		if messageReply.Disconnect != nil {
@@ -1497,8 +1433,8 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 	var expireAt int64
 	var info []byte
 
-	if c.eventHub.refreshHandler != nil {
-		reply := c.eventHub.refreshHandler(RefreshEvent{
+	if c.node.eventHub.refreshHandler != nil && c.hasEvent(EventRefresh) {
+		reply := c.node.eventHub.refreshHandler(c.ctx, c, RefreshEvent{
 			Token: cmd.Token,
 		})
 		if reply.Disconnect != nil {
@@ -1602,8 +1538,8 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 	var clientSideRefresh bool
 
 	if !serverSide {
-		if c.eventHub.subscribeHandler != nil {
-			reply := c.eventHub.subscribeHandler(SubscribeEvent{
+		if c.node.eventHub.subscribeHandler != nil && c.hasEvent(EventSubscribe) {
+			reply := c.node.eventHub.subscribeHandler(c.ctx, c, SubscribeEvent{
 				Channel: cmd.Channel,
 				Token:   cmd.Token,
 			})
@@ -1986,8 +1922,8 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 	var expireAt int64
 	var info []byte
 
-	if c.eventHub.subRefreshHandler != nil {
-		reply := c.eventHub.subRefreshHandler(SubRefreshEvent{
+	if c.node.eventHub.subRefreshHandler != nil && c.hasEvent(EventSubRefresh) {
+		reply := c.node.eventHub.subRefreshHandler(c.ctx, c, SubRefreshEvent{
 			Channel: cmd.Channel,
 			Token:   cmd.Token,
 		})
@@ -2063,8 +1999,8 @@ func (c *Client) unsubscribe(channel string) error {
 			return err
 		}
 
-		if !serverSide && c.eventHub.unsubscribeHandler != nil {
-			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
+		if !serverSide && c.node.eventHub.unsubscribeHandler != nil && c.hasEvent(EventUnsubscribe) {
+			c.node.eventHub.unsubscribeHandler(c.ctx, c, UnsubscribeEvent{
 				Channel: channel,
 			})
 		}
@@ -2111,8 +2047,8 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 	info := c.clientInfo(ch)
 	c.mu.RUnlock()
 
-	if c.eventHub.publishHandler != nil {
-		reply := c.eventHub.publishHandler(PublishEvent{
+	if c.node.eventHub.publishHandler != nil && c.hasEvent(EventPublish) {
+		reply := c.node.eventHub.publishHandler(c.ctx, c, PublishEvent{
 			Channel: ch,
 			Data:    data,
 			Info: &ClientInfo{
@@ -2175,12 +2111,12 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 		resp.Error = ErrorUnknownChannel.toProto()
 		return resp, nil
 	}
-	if !chOpts.Presence || c.eventHub.presenceHandler == nil {
+	if !chOpts.Presence || c.node.eventHub.presenceHandler == nil || !c.hasEvent(EventPresence) {
 		resp.Error = ErrorNotAvailable.toProto()
 		return resp, nil
 	}
 
-	reply := c.eventHub.presenceHandler(PresenceEvent{
+	reply := c.node.eventHub.presenceHandler(c.ctx, c, PresenceEvent{
 		Channel: ch,
 	})
 	if reply.Disconnect != nil {
@@ -2224,12 +2160,12 @@ func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientpr
 		resp.Error = ErrorUnknownChannel.toProto()
 		return resp, nil
 	}
-	if !chOpts.Presence || c.eventHub.presenceStatsHandler == nil {
+	if !chOpts.Presence || c.node.eventHub.presenceStatsHandler == nil || !c.hasEvent(EventPresenceStats) {
 		resp.Error = ErrorNotAvailable.toProto()
 		return resp, nil
 	}
 
-	reply := c.eventHub.presenceStatsHandler(PresenceStatsEvent{
+	reply := c.node.eventHub.presenceStatsHandler(c.ctx, c, PresenceStatsEvent{
 		Channel: ch,
 	})
 	if reply.Disconnect != nil {
@@ -2277,12 +2213,12 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 		resp.Error = ErrorUnknownChannel.toProto()
 		return resp, nil
 	}
-	if chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0 || c.eventHub.historyHandler == nil {
+	if chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0 || c.node.eventHub.historyHandler == nil || !c.hasEvent(EventHistory) {
 		resp.Error = ErrorNotAvailable.toProto()
 		return resp, nil
 	}
 
-	reply := c.eventHub.historyHandler(HistoryEvent{
+	reply := c.node.eventHub.historyHandler(c.ctx, c, HistoryEvent{
 		Channel: ch,
 	})
 	if reply.Disconnect != nil {
