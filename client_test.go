@@ -1588,21 +1588,21 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 
 	chanCtx := ChannelContext{expireAt: 100}
 
-	// Not expired
+	// not expired.
 	client.nowTimeGetter = func() time.Time {
 		return time.Unix(100, 0)
 	}
 	got := client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
 	require.True(t, got)
 
-	// Simple refresh unavailable
+	// simple refresh unavailable.
 	client.nowTimeGetter = func() time.Time {
 		return time.Unix(200, 0)
 	}
 	got = client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
 	require.False(t, got)
 
-	// Refreshed but expired
+	// refreshed but expired.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{Expired: true}
@@ -1613,7 +1613,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	got = client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
 	require.False(t, got)
 
-	// Refreshed but not really
+	// refreshed but not really.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{ExpireAt: 150}
@@ -1624,7 +1624,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	got = client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
 	require.False(t, got)
 
-	// Refreshed but unknown channel
+	// refreshed but unknown channel.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{
@@ -1639,7 +1639,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.True(t, got)
 	require.NotContains(t, client.channels, "channel")
 
-	// Refreshed
+	// refreshed.
 	client.channels["channel"] = ChannelContext{}
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
@@ -1667,7 +1667,7 @@ func TestClientCheckPosition(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
 
-	// Channel option error
+	// channel option error.
 	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
 		require.Equal(t, "channel", channel)
 		return ChannelOptions{}, errors.New("oops")
@@ -1675,7 +1675,7 @@ func TestClientCheckPosition(t *testing.T) {
 	got := client.checkPosition(300*time.Second, "channel", ChannelContext{})
 	require.True(t, got)
 
-	// Not history recover
+	// not history recover.
 	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
 		require.Equal(t, "channel", channel)
 		return ChannelOptions{}, nil
@@ -1683,7 +1683,7 @@ func TestClientCheckPosition(t *testing.T) {
 	got = client.checkPosition(300*time.Second, "channel", ChannelContext{})
 	require.True(t, got)
 
-	// Not initial, not time to check
+	// not initial, not time to check.
 	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
 		require.Equal(t, "channel", channel)
 		return ChannelOptions{HistoryRecover: true}, nil
@@ -1694,7 +1694,7 @@ func TestClientCheckPosition(t *testing.T) {
 	got = client.checkPosition(300*time.Second, "channel", ChannelContext{positionCheckTime: 50})
 	require.True(t, got)
 
-	// Stream top error
+	// stream top error.
 	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
 		require.Equal(t, "channel", channel)
 		return ChannelOptions{HistoryRecover: true}, nil
@@ -1708,7 +1708,7 @@ func TestClientCheckPosition(t *testing.T) {
 	require.True(t, got)
 	node.historyManager = historyManager
 
-	// Channel not found
+	// channel not found.
 	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
 		require.Equal(t, "channel", channel)
 		return ChannelOptions{HistoryRecover: true}, nil
@@ -1721,7 +1721,7 @@ func TestClientCheckPosition(t *testing.T) {
 	})
 	require.True(t, got)
 
-	// Invalid position
+	// invalid position.
 	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
 		require.Equal(t, "channel", channel)
 		return ChannelOptions{HistoryRecover: true}, nil
