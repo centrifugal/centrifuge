@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
-	"github.com/centrifugal/centrifuge/internal/nowtime"
 	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 
@@ -150,7 +149,6 @@ type Client struct {
 	closed            bool
 	authenticated     bool
 	clientSideRefresh bool
-	nowTimeGetter     nowtime.Getter
 }
 
 type CloseFunc func() error
@@ -177,15 +175,14 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*TransportClient, Clo
 	config := n.Config()
 
 	c := &Client{
-		ctx:           ctx,
-		uid:           uuidObject.String(),
-		node:          n,
-		transport:     t,
-		eventHub:      &ClientEventHub{},
-		channels:      make(map[string]ChannelContext),
-		pubSubSync:    recovery.NewPubSubSync(),
-		publications:  newPubQueue(),
-		nowTimeGetter: nowtime.Get,
+		ctx:          ctx,
+		uid:          uuidObject.String(),
+		node:         n,
+		transport:    t,
+		eventHub:     &ClientEventHub{},
+		channels:     make(map[string]ChannelContext),
+		pubSubSync:   recovery.NewPubSubSync(),
+		publications: newPubQueue(),
 	}
 
 	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
@@ -334,7 +331,7 @@ func (c *Client) updateChannelPresence(ch string) error {
 }
 
 func (c *Client) checkSubscriptionExpiration(channel string, channelContext ChannelContext, delay time.Duration) bool {
-	now := c.nowTimeGetter().Unix()
+	now := c.node.nowTimeGetter().Unix()
 	expireAt := channelContext.expireAt
 	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
 		// Subscription expired.
@@ -420,7 +417,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelConte
 	if !chOpts.HistoryRecover {
 		return true
 	}
-	nowUnix := c.nowTimeGetter().Unix()
+	nowUnix := c.node.nowTimeGetter().Unix()
 
 	isInitialCheck := channelContext.positionCheckTime == 0
 	isTimeToCheck := nowUnix-channelContext.positionCheckTime > int64(checkDelay.Seconds())
