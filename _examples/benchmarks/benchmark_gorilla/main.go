@@ -67,7 +67,7 @@ func main() {
 		}
 	})
 
-	node.On().Connected(func(ctx context.Context, с *centrifuge.Client) centrifuge.Event {
+	node.On().Connected(func(ctx context.Context, c *centrifuge.Client) centrifuge.Event {
 		return centrifuge.EventAll
 	})
 
