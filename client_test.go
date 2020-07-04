@@ -1669,11 +1669,12 @@ func TestClientCheckPosition(t *testing.T) {
 
 	var (
 		chanOpts    ChannelOptions
+		chanFound   bool
 		chanOptsErr error
 	)
-	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		require.Equal(t, "channel", channel)
-		return chanOpts, chanOptsErr
+		return chanOpts, chanFound, chanOptsErr
 	}
 	node.mu.Unlock()
 
@@ -1682,19 +1683,28 @@ func TestClientCheckPosition(t *testing.T) {
 	got := client.checkPosition(300*time.Second, "channel", ChannelContext{})
 	require.True(t, got)
 
+	// channel option not found.
+	chanOptsErr = nil
+	chanFound = false
+	got = client.checkPosition(300*time.Second, "channel", ChannelContext{})
+	require.True(t, got)
+
 	// not history recover.
 	chanOptsErr = nil
+	chanFound = true
 	got = client.checkPosition(300*time.Second, "channel", ChannelContext{})
 	require.True(t, got)
 
 	// not initial, not time to check.
 	chanOptsErr = nil
+	chanFound = true
 	chanOpts = ChannelOptions{HistoryRecover: true}
 	got = client.checkPosition(300*time.Second, "channel", ChannelContext{positionCheckTime: 50})
 	require.True(t, got)
 
 	// channel not found.
 	chanOptsErr = nil
+	chanFound = true
 	chanOpts = ChannelOptions{HistoryRecover: true}
 	got = client.checkPosition(50*time.Second, "channel", ChannelContext{
 		positionCheckTime: 50,
@@ -1703,6 +1713,7 @@ func TestClientCheckPosition(t *testing.T) {
 
 	// invalid position.
 	chanOptsErr = nil
+	chanFound = true
 	chanOpts = ChannelOptions{HistoryRecover: true}
 	client.channels["channel"] = ChannelContext{positionCheckFailures: 2}
 	got = client.checkPosition(50*time.Second, "channel", ChannelContext{
