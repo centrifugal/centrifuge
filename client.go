@@ -138,7 +138,6 @@ type Client struct {
 	exp               int64
 	publications      *pubQueue
 	channels          map[string]ChannelContext
-	disconnect        *Disconnect
 	eventHub          *ClientEventHub
 	messageWriter     *writer
 	pubSubSync        *recovery.PubSubSync
@@ -564,10 +563,6 @@ func (c *Client) close(disconnect *Disconnect) error {
 	c.closed = true
 
 	c.stopTimer()
-
-	if c.disconnect != nil {
-		disconnect = c.disconnect
-	}
 
 	channels := make(map[string]ChannelContext, len(c.channels))
 	for channel, channelContext := range c.channels {

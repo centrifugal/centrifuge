@@ -70,7 +70,6 @@ func TestClientInitialState(t *testing.T) {
 	require.Equal(t, "test_transport", client.Transport().Name())
 	require.False(t, client.closed)
 	require.False(t, client.authenticated)
-	require.Nil(t, client.disconnect)
 }
 
 func TestClientClosedState(t *testing.T) {
