@@ -834,7 +834,7 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 func (c *Client) triggerConnect() {
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
-	if c.status == statusClosed {
+	if c.status != statusConnecting {
 		return
 	}
 	if c.node.clientEvents.connectHandler == nil || !c.hasEvent(EventConnect) {
