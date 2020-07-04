@@ -271,7 +271,7 @@ func (c *Client) updateChannelPresence(ch string) error {
 }
 
 func (c *Client) checkSubscriptionExpiration(channel string, channelContext ChannelContext, delay time.Duration) bool {
-	now := time.Now().Unix()
+	now := c.node.nowTimeGetter().Unix()
 	expireAt := channelContext.expireAt
 	clientSideRefresh := channelContext.clientSideRefresh
 	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
@@ -358,7 +358,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelConte
 	if !chOpts.HistoryRecover {
 		return true
 	}
-	nowUnix := time.Now().Unix()
+	nowUnix := c.node.nowTimeGetter().Unix()
 
 	isInitialCheck := channelContext.positionCheckTime == 0
 	isTimeToCheck := nowUnix-channelContext.positionCheckTime > int64(checkDelay.Seconds())

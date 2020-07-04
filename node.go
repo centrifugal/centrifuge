@@ -10,6 +10,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
+	"github.com/centrifugal/centrifuge/internal/nowtime"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 
 	"github.com/FZambia/eagle"
@@ -60,6 +61,9 @@ type Node struct {
 	metricsSnapshot *eagle.Metrics
 
 	subDissolver *dissolve.Dissolver
+
+	// mockable access to current time.
+	nowTimeGetter nowtime.Getter
 }
 
 const (
@@ -89,6 +93,7 @@ func New(c Config) (*Node, error) {
 		clientEvents:   &ClientEventHub{},
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
+		nowTimeGetter:  nowtime.Get,
 	}
 
 	if c.LogHandler != nil {
