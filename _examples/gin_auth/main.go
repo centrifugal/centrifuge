@@ -92,19 +92,19 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
-		transport := client.Transport()
-		log.Printf("user %s connected via %s.", client.UserID(), transport.Name())
+	node.On().Connect(func(c *centrifuge.Client) {
+		transport := c.Transport()
+		log.Printf("user %s connected via %s.", c.UserID(), transport.Name())
 
 		// Connect handler should not block, so start separate goroutine to
 		// periodically send messages to client.
 		go func() {
 			for {
 				select {
-				case <-ctx.Done():
+				case <-c.Context().Done():
 					return
 				case <-time.After(5 * time.Second):
-					err := client.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+					err := c.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
 					if err != nil {
 						if err == io.EOF {
 							return
@@ -116,24 +116,24 @@ func main() {
 		}()
 	})
 
-	node.On().Refresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-		log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+	node.On().Refresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
 		return centrifuge.RefreshReply{
 			ExpireAt: time.Now().Unix() + 10,
 		}
 	})
 
-	node.On().Subscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-		log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
 		return centrifuge.SubscribeReply{}
 	})
 
-	node.On().Unsubscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
-		log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
+	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
 	})
 
-	node.On().Publish(func(ctx context.Context, client *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
-		log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
 		var msg clientMessage
 		err := json.Unmarshal(e.Data, &msg)
 		if err != nil {
@@ -148,20 +148,20 @@ func main() {
 		}
 	})
 
-	node.On().RPC(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RPCEvent) centrifuge.RPCReply {
-		log.Printf("RPC from user: %s, data: %s", client.UserID(), string(e.Data))
+	node.On().RPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) centrifuge.RPCReply {
+		log.Printf("RPC from user: %s, data: %s", c.UserID(), string(e.Data))
 		return centrifuge.RPCReply{
 			Data: []byte(`{"year": "2020"}`),
 		}
 	})
 
-	node.On().Message(func(ctx context.Context, client *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
-		log.Printf("Message from user: %s, data: %s", client.UserID(), string(e.Data))
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+		log.Printf("Message from user: %s, data: %s", c.UserID(), string(e.Data))
 		return centrifuge.MessageReply{}
 	})
 
-	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) {
-		log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
 	})
 
 	// We also start a separate goroutine for centrifuge itself, since we

@@ -168,7 +168,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
@@ -176,18 +176,18 @@ func main() {
 		}
 	})
 
-	node.On().Connect(func(ctx context.Context, c *centrifuge.Client) {})
+	node.On().Connect(func(c *centrifuge.Client) {})
 
-	node.On().Subscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 		return centrifuge.SubscribeReply{}
 	})
 
-	node.On().Publish(func(ctx context.Context, client *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
 		return centrifuge.PublishReply{}
 	})
 
-	node.On().Message(func(ctx context.Context, client *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
-		err := client.Send(e.Data)
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+		err := c.Send(e.Data)
 		if err != nil {
 			if err != io.EOF {
 				log.Fatalln("error sending to client:", err.Error())
