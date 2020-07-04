@@ -129,9 +129,7 @@ func nodeWithMemoryEngine() *Node {
 
 func TestClientEventHub(t *testing.T) {
 	h := &ClientEventHub{}
-	handler := func(_ context.Context, _ *Client, _ DisconnectEvent) DisconnectReply {
-		return DisconnectReply{}
-	}
+	handler := func(_ context.Context, _ *Client, _ DisconnectEvent) {}
 	h.Disconnect(handler)
 	require.NotNil(t, h.disconnectHandler)
 }

@@ -59,7 +59,7 @@ func TestClientInitialState(t *testing.T) {
 	require.Equal(t, 0, len(client.Channels()))
 	require.Equal(t, ProtocolTypeJSON, client.Transport().Protocol())
 	require.Equal(t, "test_transport", client.Transport().Name())
-	require.False(t, client.closed)
+	require.True(t, client.status == statusConnecting)
 	require.False(t, client.authenticated)
 }
 
@@ -70,7 +70,7 @@ func TestClientClosedState(t *testing.T) {
 	client, _ := newClient(context.Background(), node, transport)
 	err := client.close(nil)
 	require.NoError(t, err)
-	require.True(t, client.closed)
+	require.True(t, client.status == statusClosed)
 }
 
 func TestClientTimer(t *testing.T) {
@@ -169,7 +169,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	require.Nil(t, disconnect)
 	client.triggerConnect()
 	client.expire()
-	require.True(t, client.closed)
+	require.True(t, client.status == statusClosed)
 }
 
 func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
@@ -199,7 +199,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
 	client.expire()
-	require.False(t, client.closed)
+	require.False(t, client.status == statusClosed)
 	require.Equal(t, expireAt, client.exp)
 }
 
@@ -559,9 +559,8 @@ func TestClientUnsubscribe(t *testing.T) {
 
 	unsubscribed := make(chan struct{})
 
-	node.On().Unsubscribe(func(_ context.Context, _ *Client, _ UnsubscribeEvent) UnsubscribeReply {
+	node.On().Unsubscribe(func(_ context.Context, _ *Client, _ UnsubscribeEvent) {
 		close(unsubscribed)
-		return UnsubscribeReply{}
 	})
 
 	err := client.Unsubscribe("test")
@@ -595,22 +594,21 @@ func TestClientAliveHandler(t *testing.T) {
 	disconnected := make(chan struct{})
 	numCalls := 0
 
-	node.On().Alive(func(_ context.Context, _ *Client, _ AliveEvent) AliveReply {
+	node.On().Alive(func(_ context.Context, _ *Client, _ AliveEvent) {
 		numCalls++
 		if numCalls >= 50 && !closed {
 			close(done)
 			closed = true
 			client.Close(DisconnectForceNoReconnect)
 		}
-		return AliveReply{}
 	})
 
-	node.On().Disconnect(func(_ context.Context, _ *Client, _ DisconnectEvent) DisconnectReply {
+	node.On().Disconnect(func(_ context.Context, _ *Client, _ DisconnectEvent) {
 		close(disconnected)
-		return DisconnectReply{}
 	})
 
 	connectClient(t, client)
+	client.triggerConnect()
 	client.scheduleOnConnectTimers()
 
 	select {
@@ -905,7 +903,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 	time.Sleep(100 * time.Millisecond)
 	client.mu.Lock()
-	require.True(t, client.closed)
+	require.True(t, client.status == statusClosed)
 	client.mu.Unlock()
 }
 
@@ -920,12 +918,12 @@ func TestClientCloseExpired(t *testing.T) {
 	connectClient(t, client)
 	client.scheduleOnConnectTimers()
 	client.mu.RLock()
-	require.False(t, client.closed)
+	require.False(t, client.status == statusClosed)
 	client.mu.RUnlock()
 	time.Sleep(4 * time.Second)
 	client.mu.RLock()
 	defer client.mu.RUnlock()
-	require.True(t, client.closed)
+	require.True(t, client.status == statusClosed)
 }
 
 func TestClientConnectExpiredError(t *testing.T) {
@@ -1532,15 +1530,13 @@ func TestCloseNoRace(t *testing.T) {
 
 	done := make(chan struct{})
 
-	node.On().Connected(func(ctx context.Context, client *Client) Event {
+	node.On().Connect(func(ctx context.Context, client *Client) {
 		client.Close(DisconnectForceNoReconnect)
 		time.Sleep(time.Second)
-		return EventAll
 	})
 
-	node.On().Disconnect(func(_ context.Context, _ *Client, _ DisconnectEvent) DisconnectReply {
+	node.On().Disconnect(func(_ context.Context, _ *Client, _ DisconnectEvent) {
 		close(done)
-		return DisconnectReply{}
 	})
 
 	transport := newTestTransport()

@@ -102,9 +102,8 @@ func createCentrifugeNode() (*centrifuge.Node, error) {
 		return nil, err
 	}
 
-	node.On().Connected(func(ctx context.Context, client *centrifuge.Client) centrifuge.Event {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 		log.Printf("client %s connected via %s", client.UserID(), client.Transport().Name())
-		return centrifuge.EventAll
 	})
 
 	node.On().Subscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
@@ -117,9 +116,8 @@ func createCentrifugeNode() (*centrifuge.Node, error) {
 		return centrifuge.PublishReply{}
 	})
 
-	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
+	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) {
 		log.Printf("client %s disconnected", client.UserID())
-		return centrifuge.DisconnectReply{}
 	})
 
 	if err := node.Run(); err != nil {

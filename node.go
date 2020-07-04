@@ -962,7 +962,7 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 // to be called once before Node Run called.
 type ClientEventHub struct {
 	connectingHandler    ConnectingHandler
-	connectedHandler     ConnectedHandler
+	connectHandler       ConnectHandler
 	aliveHandler         AliveHandler
 	refreshHandler       RefreshHandler
 	disconnectHandler    DisconnectHandler
@@ -984,12 +984,12 @@ func (c *ClientEventHub) Connecting(handler ConnectingHandler) {
 	c.connectingHandler = handler
 }
 
-// Connected allows setting ConnectedHandler.
-// ConnectedHandler called after client connection successfully established,
+// Connect allows setting ConnectHandler.
+// ConnectHandler called after client connection successfully established,
 // authenticated and Connect Reply already sent to client. This is a place where
 // application can start communicating with client.
-func (c *ClientEventHub) Connected(handler ConnectedHandler) {
-	c.connectedHandler = handler
+func (c *ClientEventHub) Connect(handler ConnectHandler) {
+	c.connectHandler = handler
 }
 
 // Alive allows setting AliveHandler.

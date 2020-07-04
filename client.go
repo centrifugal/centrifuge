@@ -42,10 +42,13 @@ const (
 	timerOpExpire   timerOp = 3
 )
 
+// Event represent possible client events.
 type Event uint64
 
+// Known client events.
 const (
-	EventSubscribe Event = 1 << iota
+	EventConnect Event = 1 << iota
+	EventSubscribe
 	EventUnsubscribe
 	EventPublish
 	EventDisconnect
@@ -53,21 +56,29 @@ const (
 	EventRefresh
 	EventSubRefresh
 	EventRPC
+	EventMessage
 	EventHistory
 	EventPresence
 	EventPresenceStats
-	EventMessage
 )
 
-const EventAll = EventSubscribe | EventUnsubscribe | EventPublish |
-	EventDisconnect | EventAlive | EventRefresh | EventSubRefresh |
-	EventRPC | EventHistory | EventPresence | EventPresenceStats |
-	EventMessage
+// EventAll mask contains all known client events.
+const EventAll = EventConnect | EventSubscribe | EventUnsubscribe | EventPublish |
+	EventDisconnect | EventAlive | EventRefresh | EventSubRefresh | EventRPC |
+	EventMessage | EventHistory | EventPresence | EventPresenceStats
+
+type status uint8
+
+const (
+	statusConnecting status = 1
+	statusConnected  status = 2
+	statusClosed     status = 3
+)
 
 // Client represents client connection to server.
 type Client struct {
 	mu                sync.RWMutex
-	disconnectMu      sync.Mutex // allows to sync disconnect handler setting and call.
+	connectMu         sync.Mutex // allows to sync connect with disconnect.
 	presenceMu        sync.Mutex // allows to sync presence routine with client closing.
 	ctx               context.Context
 	transport         Transport
@@ -82,9 +93,9 @@ type Client struct {
 	user              string
 	info              []byte
 	publicationsOnce  sync.Once
-	closed            bool
 	authenticated     bool
 	clientSideRefresh bool
+	status            status
 	timerOp           timerOp
 	nextPresence      int64
 	nextExpire        int64
@@ -111,6 +122,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		channels:     make(map[string]ChannelContext),
 		pubSubSync:   recovery.NewPubSubSync(),
 		publications: newPubQueue(),
+		status:       statusConnecting,
 	}
 
 	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
@@ -156,7 +168,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 
 func (c *Client) onTimerOp() {
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return
 	}
@@ -174,7 +186,7 @@ func (c *Client) onTimerOp() {
 
 // Lock must be held outside.
 func (c *Client) scheduleNextTimer() {
-	if c.closed {
+	if c.status == statusClosed {
 		return
 	}
 	c.stopTimer()
@@ -226,7 +238,7 @@ func (c *Client) addExpireUpdate(after time.Duration) {
 func (c *Client) closeUnauthenticated() {
 	c.mu.RLock()
 	authenticated := c.authenticated
-	closed := c.closed
+	closed := c.status == statusClosed
 	c.mu.RUnlock()
 	if !authenticated && !closed {
 		_ = c.close(DisconnectStale)
@@ -295,7 +307,7 @@ func (c *Client) updatePresence() {
 	defer c.presenceMu.Unlock()
 	config := c.node.Config()
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return
 	}
@@ -305,7 +317,7 @@ func (c *Client) updatePresence() {
 	}
 	c.mu.Unlock()
 	if c.node.clientEvents.aliveHandler != nil && c.hasEvent(EventAlive) {
-		_ = c.node.clientEvents.aliveHandler(c.ctx, c, AliveEvent{})
+		c.node.clientEvents.aliveHandler(c.ctx, c, AliveEvent{})
 	}
 	for channel, channelContext := range channels {
 		if !c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay) {
@@ -437,7 +449,7 @@ func (c *Client) Unsubscribe(ch string, opts ...UnsubscribeOption) error {
 	}
 
 	c.mu.RLock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.RUnlock()
 		return nil
 	}
@@ -487,14 +499,15 @@ func (c *Client) Close(disconnect *Disconnect) error {
 func (c *Client) close(disconnect *Disconnect) error {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
-	c.disconnectMu.Lock()
-	defer c.disconnectMu.Unlock()
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return nil
 	}
-	c.closed = true
+	prevStatus := c.status
+	c.status = statusClosed
 
 	c.stopTimer()
 
@@ -538,7 +551,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 	if disconnect != nil {
 		serverDisconnectCount.WithLabelValues(strconv.Itoa(disconnect.Code)).Inc()
 	}
-	if c.node.clientEvents.disconnectHandler != nil && c.hasEvent(EventDisconnect) {
+	if c.node.clientEvents.disconnectHandler != nil && c.hasEvent(EventDisconnect) && prevStatus == statusConnected {
 		c.node.clientEvents.disconnectHandler(c.ctx, c, DisconnectEvent{
 			Disconnect: disconnect,
 		})
@@ -568,7 +581,7 @@ func (c *Client) clientInfo(ch string) *protocol.ClientInfo {
 // Handle raw data encoded with Centrifuge protocol. Not goroutine-safe.
 func (c *Client) Handle(data []byte) bool {
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return false
 	}
@@ -677,7 +690,7 @@ type replyWriter struct {
 // handle dispatches Command into correct command handler.
 func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Reply) error, flush func() error) *Disconnect {
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return nil
 	}
@@ -746,7 +759,7 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 
 func (c *Client) expire() {
 	c.mu.RLock()
-	closed := c.closed
+	closed := c.status == statusClosed
 	clientSideRefresh := c.clientSideRefresh
 	c.mu.RUnlock()
 	if closed {
@@ -788,7 +801,7 @@ func (c *Client) expire() {
 	if !clientSideRefresh && c.node.clientEvents.refreshHandler != nil && c.hasEvent(EventRefresh) {
 		if ttl > 0 {
 			c.mu.Lock()
-			if !c.closed {
+			if c.status != statusClosed {
 				c.addExpireUpdate(time.Duration(ttl) * time.Second)
 			}
 			c.mu.Unlock()
@@ -819,23 +832,17 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 }
 
 func (c *Client) triggerConnect() {
-	c.disconnectMu.Lock()
-	if c.closed {
-		c.disconnectMu.Unlock()
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+	if c.status == statusClosed {
 		return
 	}
-	if c.node.clientEvents.connectedHandler == nil {
-		c.disconnectMu.Unlock()
-		atomic.StoreUint64(&c.events, uint64(EventAll))
+	if c.node.clientEvents.connectHandler == nil || !c.hasEvent(EventConnect) {
+		c.status = statusConnected
 		return
 	}
-	events := c.node.clientEvents.connectedHandler(c.ctx, c)
-	if events > 0 {
-		atomic.StoreUint64(&c.events, uint64(events))
-	} else {
-		atomic.StoreUint64(&c.events, uint64(EventAll))
-	}
-	c.disconnectMu.Unlock()
+	c.node.clientEvents.connectHandler(c.ctx, c)
+	c.status = statusConnected
 }
 
 func (c *Client) scheduleOnConnectTimers() {
@@ -1152,7 +1159,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 
 	c.mu.RLock()
 	authenticated := c.authenticated
-	closed := c.closed
+	closed := c.status == statusClosed
 	c.mu.RUnlock()
 
 	if closed {
@@ -1174,6 +1181,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		channels          []string
 		clientSideRefresh bool
 	)
+
+	events := EventAll
 
 	if c.node.clientEvents.connectingHandler != nil {
 		reply := c.node.clientEvents.connectingHandler(c.ctx, c.transport, ConnectEvent{
@@ -1202,6 +1211,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		}
 		clientSideRefresh = reply.ClientSideRefresh
 		channels = append(channels, reply.Channels...)
+		if reply.Events > 0 {
+			events = reply.Events
+		}
 	}
 
 	if credentials == nil {
@@ -1215,6 +1227,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		expires bool
 		ttl     uint32
 	)
+
+	atomic.StoreUint64(&c.events, uint64(events))
 
 	c.mu.Lock()
 	c.clientSideRefresh = clientSideRefresh
@@ -1232,7 +1246,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 
 	user := c.user
 	exp := c.exp
-	closed = c.closed
+	closed = c.status == statusClosed
 	c.mu.Unlock()
 
 	if closed {

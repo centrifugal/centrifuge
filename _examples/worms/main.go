@@ -61,9 +61,8 @@ func main() {
 		}
 	})
 
-	node.On().Connected(func(ctx context.Context, client *centrifuge.Client) centrifuge.Event {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 		log.Printf("worm connected via %s", client.Transport().Name())
-		return centrifuge.EventAll
 	})
 
 	node.On().Message(func(ctx context.Context, client *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
@@ -78,14 +77,12 @@ func main() {
 		return centrifuge.SubscribeReply{}
 	})
 
-	node.On().Unsubscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
+	node.On().Unsubscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
 		log.Printf("worm unsubscribed from %s", e.Channel)
-		return centrifuge.UnsubscribeReply{}
 	})
 
-	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
+	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) {
 		log.Printf("worm disconnected, disconnect: %s", e.Disconnect)
-		return centrifuge.DisconnectReply{}
 	})
 
 	if err := node.Run(); err != nil {

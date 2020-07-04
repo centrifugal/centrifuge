@@ -83,10 +83,9 @@ func main() {
 		}
 	})
 
-	node.On().Connected(func(ctx context.Context, client *centrifuge.Client) centrifuge.Event {
+	node.On().Connect(func(ctx context.Context, client *centrifuge.Client) {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
-		return centrifuge.EventAll
 	})
 
 	node.On().Refresh(func(ctx context.Context, client *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
@@ -119,9 +118,8 @@ func main() {
 		}
 	})
 
-	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
+	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) {
 		log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
-		return centrifuge.DisconnectReply{}
 	})
 
 	if err := node.Run(); err != nil {

@@ -34,6 +34,9 @@ type ConnectReply struct {
 	// i.e. send refresh commands with new connection JWT. If not set
 	// then server-side refresh handler will be used.
 	ClientSideRefresh bool
+	// Events to be called for connection. Zero value means all events for
+	// all client event handlers set to Node.
+	Events Event
 }
 
 // ConnectingHandler called when new client authenticates on server.
@@ -41,8 +44,8 @@ type ConnectReply struct {
 // your operations inside.
 type ConnectingHandler func(context.Context, TransportInfo, ConnectEvent) ConnectReply
 
-// ConnectedHandler called when new client connects to server.
-type ConnectedHandler func(context.Context, *Client) Event
+// ConnectHandler called when client connected to server and ready to communicate.
+type ConnectHandler func(context.Context, *Client)
 
 // RefreshEvent contains fields related to refresh event.
 type RefreshEvent struct {
@@ -87,13 +90,10 @@ type RefreshHandler func(context.Context, *Client, RefreshEvent) RefreshReply
 // AliveEvent can contain some connection stuff in future. But not at moment.
 type AliveEvent struct{}
 
-// AliveReply can contain some useful stuff in future. But not at moment.
-type AliveReply struct{}
-
 // AliveHandler called periodically while connection alive. This is a helper
 // to do periodic things which can tolerate some approximation in time. This
 // callback will run every ClientPresenceUpdateInterval and can save you a timer.
-type AliveHandler func(context.Context, *Client, AliveEvent) AliveReply
+type AliveHandler func(context.Context, *Client, AliveEvent)
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
@@ -105,15 +105,12 @@ type DisconnectEvent struct {
 	Disconnect *Disconnect
 }
 
-// DisconnectReply contains fields determining the reaction on disconnect event.
-type DisconnectReply struct{}
-
 // DisconnectHandler called when client disconnects from server. The important
 // thing to remember is that you should not rely entirely on this handler to
 // clean up non-expiring resources (in your database for example). Why? Because
 // in case of any non-graceful node shutdown (kill -9, process crash, machine lost)
 // disconnect handler will never be called (obviously) so you can have stale data.
-type DisconnectHandler func(context.Context, *Client, DisconnectEvent) DisconnectReply
+type DisconnectHandler func(context.Context, *Client, DisconnectEvent)
 
 // SubscribeEvent contains fields related to subscribe event.
 type SubscribeEvent struct {
@@ -150,11 +147,8 @@ type UnsubscribeEvent struct {
 	Channel string
 }
 
-// UnsubscribeReply contains fields determining the reaction on unsubscribe event.
-type UnsubscribeReply struct{}
-
 // UnsubscribeHandler called when client unsubscribed from channel.
-type UnsubscribeHandler func(context.Context, *Client, UnsubscribeEvent) UnsubscribeReply
+type UnsubscribeHandler func(context.Context, *Client, UnsubscribeEvent)
 
 // PublishEvent contains fields related to publish event.
 // Note that this event called before actual publish to Engine

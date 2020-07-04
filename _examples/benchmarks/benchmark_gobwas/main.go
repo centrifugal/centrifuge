@@ -62,16 +62,10 @@ func main() {
 		}
 	})
 
-	node.On().Connected(func(ctx context.Context, client *centrifuge.Client) centrifuge.Event {
-		return centrifuge.EventAll
-	})
+	node.On().Connect(func(ctx context.Context, c *centrifuge.Client) {})
 
 	node.On().Subscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
 		return centrifuge.SubscribeReply{}
-	})
-
-	node.On().Unsubscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-		return centrifuge.UnsubscribeReply{}
 	})
 
 	node.On().Publish(func(ctx context.Context, client *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
@@ -86,10 +80,6 @@ func main() {
 			}
 		}
 		return centrifuge.MessageReply{}
-	})
-
-	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-		return centrifuge.DisconnectReply{}
 	})
 
 	if err := node.Run(); err != nil {
