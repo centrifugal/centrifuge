@@ -1577,6 +1577,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
+	client.events = uint64(EventAll)
 
 	var nowTime time.Time
 	node.mu.Lock()
@@ -1598,7 +1599,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.False(t, got)
 
 	// refreshed but expired.
-	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+	node.clientEvents.subRefreshHandler = func(ctx context.Context, client *Client, event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{Expired: true}
 	}
@@ -1607,7 +1608,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.False(t, got)
 
 	// refreshed but not really.
-	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+	node.clientEvents.subRefreshHandler = func(ctx context.Context, client *Client, event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{ExpireAt: 150}
 	}
@@ -1616,7 +1617,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.False(t, got)
 
 	// refreshed but unknown channel.
-	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+	node.clientEvents.subRefreshHandler = func(ctx context.Context, client *Client, event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{
 			ExpireAt: 250,
@@ -1630,7 +1631,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 
 	// refreshed.
 	client.channels["channel"] = ChannelContext{}
-	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+	node.clientEvents.subRefreshHandler = func(ctx context.Context, client *Client, event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{
 			ExpireAt: 250,
