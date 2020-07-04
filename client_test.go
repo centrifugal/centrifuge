@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -1574,4 +1575,152 @@ func BenchmarkUUID(b *testing.B) {
 		}
 	}
 	b.ReportAllocs()
+}
+
+func TestClientCheckSubscriptionExpiration(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	var nowTime time.Time
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time {
+		return nowTime
+	}
+	node.mu.Unlock()
+
+	chanCtx := ChannelContext{expireAt: 100}
+
+	// not expired.
+	nowTime = time.Unix(100, 0)
+	got := client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
+	require.True(t, got)
+
+	// simple refresh unavailable.
+	nowTime = time.Unix(200, 0)
+	got = client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
+	require.False(t, got)
+
+	// refreshed but expired.
+	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+		require.Equal(t, "channel", event.Channel)
+		return SubRefreshReply{Expired: true}
+	}
+	nowTime = time.Unix(200, 0)
+	got = client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
+	require.False(t, got)
+
+	// refreshed but not really.
+	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+		require.Equal(t, "channel", event.Channel)
+		return SubRefreshReply{ExpireAt: 150}
+	}
+	nowTime = time.Unix(200, 0)
+	got = client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
+	require.False(t, got)
+
+	// refreshed but unknown channel.
+	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+		require.Equal(t, "channel", event.Channel)
+		return SubRefreshReply{
+			ExpireAt: 250,
+			Info:     []byte("info"),
+		}
+	}
+	nowTime = time.Unix(200, 0)
+	got = client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
+	require.True(t, got)
+	require.NotContains(t, client.channels, "channel")
+
+	// refreshed.
+	client.channels["channel"] = ChannelContext{}
+	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+		require.Equal(t, "channel", event.Channel)
+		return SubRefreshReply{
+			ExpireAt: 250,
+			Info:     []byte("info"),
+		}
+	}
+	nowTime = time.Unix(200, 0)
+	got = client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second)
+	require.True(t, got)
+	require.Contains(t, client.channels, "channel")
+	require.EqualValues(t, 250, client.channels["channel"].expireAt)
+	require.Equal(t, []byte("info"), client.channels["channel"].Info)
+}
+
+func TestClientCheckPosition(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time {
+		return time.Unix(200, 0)
+	}
+
+	var (
+		chanOpts    ChannelOptions
+		chanFound   bool
+		chanOptsErr error
+	)
+	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
+		require.Equal(t, "channel", channel)
+		return chanOpts, chanFound, chanOptsErr
+	}
+	node.mu.Unlock()
+
+	// channel option error.
+	chanOptsErr = errors.New("oops")
+	got := client.checkPosition(300*time.Second, "channel", ChannelContext{})
+	require.True(t, got)
+
+	// channel option not found.
+	chanOptsErr = nil
+	chanFound = false
+	got = client.checkPosition(300*time.Second, "channel", ChannelContext{})
+	require.True(t, got)
+
+	// not history recover.
+	chanOptsErr = nil
+	chanFound = true
+	got = client.checkPosition(300*time.Second, "channel", ChannelContext{})
+	require.True(t, got)
+
+	// not initial, not time to check.
+	chanOptsErr = nil
+	chanFound = true
+	chanOpts = ChannelOptions{HistoryRecover: true}
+	got = client.checkPosition(300*time.Second, "channel", ChannelContext{positionCheckTime: 50})
+	require.True(t, got)
+
+	// channel not found.
+	chanOptsErr = nil
+	chanFound = true
+	chanOpts = ChannelOptions{HistoryRecover: true}
+	got = client.checkPosition(50*time.Second, "channel", ChannelContext{
+		positionCheckTime: 50,
+	})
+	require.True(t, got)
+
+	// invalid position.
+	chanOptsErr = nil
+	chanFound = true
+	chanOpts = ChannelOptions{HistoryRecover: true}
+	client.channels["channel"] = ChannelContext{positionCheckFailures: 2}
+	got = client.checkPosition(50*time.Second, "channel", ChannelContext{
+		positionCheckTime: 50,
+	})
+	require.False(t, got)
+	require.Contains(t, client.channels, "channel")
+	require.EqualValues(t, 3, client.channels["channel"].positionCheckFailures)
+	require.EqualValues(t, 200, client.channels["channel"].positionCheckTime)
 }
