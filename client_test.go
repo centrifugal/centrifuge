@@ -1532,6 +1532,35 @@ func TestClientSideSubRefresh(t *testing.T) {
 	require.Nil(t, replies[0].Error)
 }
 
+func TestCloseNoRace(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.On().ClientConnected(func(ctx context.Context, client *Client) {
+		client.Close(DisconnectForceNoReconnect)
+		time.Sleep(time.Second)
+		client.On().Disconnect(func(event DisconnectEvent) DisconnectReply {
+			close(done)
+			return DisconnectReply{}
+		})
+	})
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+
+	client, _ := newClient(newCtx, node, transport)
+	connectClient(t, client)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for work done")
+	case <-done:
+	}
+}
+
 func BenchmarkUUID(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

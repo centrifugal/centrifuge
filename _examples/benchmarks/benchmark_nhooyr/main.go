@@ -179,26 +179,22 @@ func main() {
 	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
 
 		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			return centrifuge.SubscribeReply{}
 		})
 
 		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			// log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
 			return centrifuge.UnsubscribeReply{}
 		})
 
 		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			// Do not log here - lots of publications expected.
 			return centrifuge.PublishReply{}
 		})
 
 		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
-			// Do not log here - lots of messages expected.
 			err := client.Send(e.Data)
 			if err != nil {
 				if err != io.EOF {
-					log.Fatalln("error senfing to client:", err.Error())
+					log.Fatalln("error sending to client:", err.Error())
 				}
 			}
 			return centrifuge.MessageReply{}
@@ -207,8 +203,6 @@ func main() {
 		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
 			return centrifuge.DisconnectReply{}
 		})
-
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), client.Transport().Name(), client.Transport().Encoding())
 	})
 
 	if err := node.Run(); err != nil {

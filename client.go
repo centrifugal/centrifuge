@@ -113,11 +113,12 @@ const maxCheckPositionFailures int64 = 2
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
 	Info                  []byte
-	serverSide            bool
 	expireAt              int64
 	positionCheckTime     int64
 	positionCheckFailures int64
 	streamPosition        StreamPosition
+	serverSide            bool
+	clientSideRefresh     bool
 }
 
 type timerOp uint8
@@ -131,6 +132,7 @@ const (
 // Client represents client connection to server.
 type Client struct {
 	mu                sync.RWMutex
+	disconnectMu      sync.Mutex // allows to sync disconnect handler setting and call.
 	presenceMu        sync.Mutex // allows to sync presence routine with client closing.
 	ctx               context.Context
 	transport         Transport
@@ -145,16 +147,16 @@ type Client struct {
 	user              string
 	info              []byte
 	publicationsOnce  sync.Once
-	nextPresence      int64
-	nextExpire        int64
-	timer             *time.Timer
-	timerOp           timerOp
 	closed            bool
 	authenticated     bool
 	clientSideRefresh bool
+	timerOp           timerOp
+	nextPresence      int64
+	nextExpire        int64
+	timer             *time.Timer
 }
 
-// ClientCloseFunc should be called on Transport implementation close.
+// ClientCloseFunc must be called on Transport handler close to clean up Client.
 type ClientCloseFunc func() error
 
 // NewClient initializes new Client.
@@ -325,9 +327,10 @@ func (c *Client) updateChannelPresence(ch string) error {
 func (c *Client) checkSubscriptionExpiration(channel string, channelContext ChannelContext, delay time.Duration) bool {
 	now := time.Now().Unix()
 	expireAt := channelContext.expireAt
+	clientSideRefresh := channelContext.clientSideRefresh
 	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
 		// Subscription expired.
-		if c.eventHub.subRefreshHandler != nil {
+		if !clientSideRefresh && c.eventHub.subRefreshHandler != nil {
 			// Give subscription a chance to be refreshed via SubRefreshHandler.
 			reply := c.eventHub.subRefreshHandler(SubRefreshEvent{Channel: channel})
 			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
@@ -542,7 +545,7 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 // Close client connection with specific disconnect reason.
 // This method internally creates a new goroutine at moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
-// and alive callback ordering problems. Will be a noop if client
+// and alive callback ordering/sync problems. Will be a noop if client
 // already closed. Since this method runs a separate goroutine client
 // connection will be closed eventually (i.e. not immediately).
 func (c *Client) Close(disconnect *Disconnect) error {
@@ -555,6 +558,8 @@ func (c *Client) Close(disconnect *Disconnect) error {
 func (c *Client) close(disconnect *Disconnect) error {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
+	c.disconnectMu.Lock()
+	defer c.disconnectMu.Unlock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -609,7 +614,6 @@ func (c *Client) close(disconnect *Disconnect) error {
 			Disconnect: disconnect,
 		})
 	}
-
 	return nil
 }
 
@@ -882,9 +886,16 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 }
 
 func (c *Client) triggerConnect() {
-	if c.node.eventHub.connectedHandler != nil {
-		c.node.eventHub.connectedHandler(c.ctx, c)
+	if c.node.eventHub.connectedHandler == nil {
+		return
 	}
+	c.disconnectMu.Lock()
+	if c.closed {
+		c.disconnectMu.Unlock()
+		return
+	}
+	c.node.eventHub.connectedHandler(c.ctx, c)
+	c.disconnectMu.Unlock()
 }
 
 func (c *Client) scheduleOnConnectTimers() {
@@ -1834,9 +1845,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	}
 
 	channelContext := ChannelContext{
-		Info:       channelInfo,
-		serverSide: serverSide,
-		expireAt:   expireAt,
+		Info:              channelInfo,
+		serverSide:        serverSide,
+		clientSideRefresh: clientSideRefresh,
+		expireAt:          expireAt,
 		streamPosition: StreamPosition{
 			Offset: latestOffset,
 			Epoch:  latestEpoch,
