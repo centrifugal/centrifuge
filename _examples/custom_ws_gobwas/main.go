@@ -53,7 +53,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "",
@@ -61,33 +61,7 @@ func main() {
 		}
 	})
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
-
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{}
-		})
-
-		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
-			return centrifuge.UnsubscribeReply{}
-		})
-
-		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			return centrifuge.PublishReply{}
-		})
-
-		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
-			log.Printf("Message from user: %s, data: %s", client.UserID(), string(e.Data))
-			return centrifuge.MessageReply{}
-		})
-
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
-			return centrifuge.DisconnectReply{}
-		})
-
+	node.On().Connected(func(ctx context.Context, client *centrifuge.Client) centrifuge.Event {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with format: %s", client.UserID(), transport.Name(), transport.Protocol())
 
@@ -106,6 +80,32 @@ func main() {
 				time.Sleep(5 * time.Second)
 			}
 		}()
+		return centrifuge.EventAll
+	})
+
+	node.On().Subscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+		log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+		return centrifuge.SubscribeReply{}
+	})
+
+	node.On().Unsubscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
+		log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
+		return centrifuge.UnsubscribeReply{}
+	})
+
+	node.On().Publish(func(ctx context.Context, client *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+		log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+		return centrifuge.PublishReply{}
+	})
+
+	node.On().Message(func(ctx context.Context, client *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+		log.Printf("Message from user: %s, data: %s", client.UserID(), string(e.Data))
+		return centrifuge.MessageReply{}
+	})
+
+	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
+		log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+		return centrifuge.DisconnectReply{}
 	})
 
 	if err := node.Run(); err != nil {

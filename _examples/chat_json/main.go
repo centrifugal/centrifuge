@@ -125,7 +125,7 @@ func main() {
 				}
 			}
 		}()
-		return centrifuge.EventAll &^ centrifuge.EventDisconnect
+		return centrifuge.EventAll
 	})
 
 	node.On().Alive(func(ctx context.Context, client *centrifuge.Client, e centrifuge.AliveEvent) centrifuge.AliveReply {

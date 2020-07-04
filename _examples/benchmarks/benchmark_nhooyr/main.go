@@ -168,7 +168,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
@@ -176,33 +176,34 @@ func main() {
 		}
 	})
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().Connected(func(ctx context.Context, client *centrifuge.Client) centrifuge.Event {
+		return centrifuge.EventAll
+	})
 
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			return centrifuge.SubscribeReply{}
-		})
+	node.On().Subscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+		return centrifuge.SubscribeReply{}
+	})
 
-		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			return centrifuge.UnsubscribeReply{}
-		})
+	node.On().Unsubscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
+		return centrifuge.UnsubscribeReply{}
+	})
 
-		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			return centrifuge.PublishReply{}
-		})
+	node.On().Publish(func(ctx context.Context, client *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+		return centrifuge.PublishReply{}
+	})
 
-		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
-			err := client.Send(e.Data)
-			if err != nil {
-				if err != io.EOF {
-					log.Fatalln("error sending to client:", err.Error())
-				}
+	node.On().Message(func(ctx context.Context, client *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+		err := client.Send(e.Data)
+		if err != nil {
+			if err != io.EOF {
+				log.Fatalln("error sending to client:", err.Error())
 			}
-			return centrifuge.MessageReply{}
-		})
+		}
+		return centrifuge.MessageReply{}
+	})
 
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			return centrifuge.DisconnectReply{}
-		})
+	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
+		return centrifuge.DisconnectReply{}
 	})
 
 	if err := node.Run(); err != nil {

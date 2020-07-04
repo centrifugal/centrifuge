@@ -58,30 +58,30 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
-
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{}
-		})
-
-		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
-			return centrifuge.UnsubscribeReply{}
-		})
-
-		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			return centrifuge.PublishReply{}
-		})
-
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
-			return centrifuge.DisconnectReply{}
-		})
-
+	node.On().Connected(func(ctx context.Context, client *centrifuge.Client) centrifuge.Event {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
+		return centrifuge.EventAll
+	})
+
+	node.On().Subscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+		log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+		return centrifuge.SubscribeReply{}
+	})
+
+	node.On().Unsubscribe(func(ctx context.Context, client *centrifuge.Client, e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
+		log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
+		return centrifuge.UnsubscribeReply{}
+	})
+
+	node.On().Publish(func(ctx context.Context, client *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+		log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+		return centrifuge.PublishReply{}
+	})
+
+	node.On().Disconnect(func(ctx context.Context, client *centrifuge.Client, e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
+		log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+		return centrifuge.DisconnectReply{}
 	})
 
 	broker, err := natsbroker.New(node, natsbroker.Config{
