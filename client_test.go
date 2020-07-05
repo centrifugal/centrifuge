@@ -76,13 +76,12 @@ func TestClientClosedState(t *testing.T) {
 
 func TestClientTimer(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	node.config.ClientStaleCloseDelay = 25 * time.Second
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	require.NotNil(t, client.timer)
-	config := node.Config()
-	config.ClientStaleCloseDelay = 0
-	_ = node.Reload(config)
+	node.config.ClientStaleCloseDelay = 0
 	client, _ = newClient(context.Background(), node, transport)
 	require.Nil(t, client.timer)
 }
@@ -121,9 +120,6 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	_ = node.Reload(config)
-
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{
@@ -153,9 +149,6 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 		}
 	})
 
-	config := node.Config()
-	_ = node.Reload(config)
-
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{
@@ -176,9 +169,6 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	config := node.Config()
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -207,9 +197,6 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	config := node.Config()
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -373,12 +360,10 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistoryLifetime: 100,
 		HistorySize:     10,
 	})
-	_ = node.Reload(config)
 	transport := newTestTransport()
 	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
@@ -505,13 +490,11 @@ func TestClientSubscribeLast(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistorySize:     10,
 		HistoryLifetime: 60,
 		HistoryRecover:  true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -581,9 +564,7 @@ func TestClientAliveHandler(t *testing.T) {
 	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	config.ClientPresenceUpdateInterval = time.Millisecond
-	_ = node.Reload(config)
+	node.config.ClientPresenceUpdateInterval = time.Millisecond
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -710,9 +691,6 @@ func TestClientPublishHandler(t *testing.T) {
 		},
 	}
 
-	config := node.Config()
-	_ = node.Reload(config)
-
 	subscribeClient(t, client, "test")
 
 	node.clientEvents.publishHandler = func(_ *Client, e PublishEvent) PublishReply {
@@ -784,11 +762,9 @@ func TestClientPresence(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -819,11 +795,9 @@ func TestClientPresence(t *testing.T) {
 	require.Equal(t, uint32(1), presenceStatsResp.Result.NumUsers)
 	require.Equal(t, uint32(1), presenceStatsResp.Result.NumClients)
 
-	config = node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: false,
 	})
-	_ = node.Reload(config)
 
 	presenceResp, disconnect = client.presenceCmd(&protocol.PresenceRequest{
 		Channel: "test",
@@ -845,12 +819,10 @@ func TestClientHistory(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistorySize:     10,
 		HistoryLifetime: 60,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -875,12 +847,10 @@ func TestClientHistory(t *testing.T) {
 	require.Nil(t, historyResp.Error)
 	require.Equal(t, 10, len(historyResp.Result.Publications))
 
-	config = node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistorySize:     0,
 		HistoryLifetime: 0,
 	})
-	_ = node.Reload(config)
 
 	historyResp, disconnect = client.historyCmd(&protocol.HistoryRequest{
 		Channel: "test",
@@ -894,9 +864,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	config.ClientStaleCloseDelay = time.Millisecond
-	_ = node.Reload(config)
+	node.config.ClientStaleCloseDelay = time.Millisecond
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -947,11 +915,9 @@ func TestClientPresenceUpdate(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1205,13 +1171,10 @@ func TestClientHandleHistoryNotAvailableDueToOption(t *testing.T) {
 func TestClientHandleHistory(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistorySize:     1,
 		HistoryLifetime: 30,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1287,11 +1250,9 @@ func TestClientHandlePresence(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1367,11 +1328,9 @@ func TestClientHandlePresenceStats(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()

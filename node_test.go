@@ -134,13 +134,6 @@ func TestClientEventHub(t *testing.T) {
 	require.NotNil(t, h.disconnectHandler)
 }
 
-func TestSetConfig(t *testing.T) {
-	node := nodeWithTestEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	err := node.Reload(DefaultConfig)
-	require.NoError(t, err)
-}
-
 func TestNodeRegistry(t *testing.T) {
 	registry := newNodeRegistry("node1")
 	nodeInfo1 := controlpb.Node{UID: "node1"}
@@ -268,17 +261,14 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 
 func BenchmarkHistory(b *testing.B) {
 	e := testMemoryEngine()
-	conf := e.node.Config()
 	numMessages := 100
-	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
+	e.node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
 			HistorySize:     numMessages,
 			HistoryLifetime: 60,
 			HistoryRecover:  true,
 		}, true, nil
 	}
-	err := e.node.Reload(conf)
-	require.NoError(b, err)
 
 	channel := "test"
 
