@@ -67,18 +67,18 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
-// Authentication middleware. Centrifuge expects Credentials
-// with current user ID.
+// Authentication middleware. Centrifuge expects Credentials with current user ID.
 func auth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		// Put authentication credentials into context. Since we don't have
-		// any session backend here – simply set user ID as empty string.
+		// Put authentication credentials into request Context. Since we don't
+		// have any session backend yet – simply set user ID as empty string.
 		// Users with empty ID called anonymous users, in real app you should
 		// decide whether anonymous users allowed to connect to your server
-		// or not. There is also another way to set Credentials - ClientConnecting
-		// handler which is called after client sent first command to server
-		// called Connect. Without Credentials set connection won't be accepted.
+		// or not. There is also another way to set Credentials - returning them
+		// from ConnectingHandler which is called after client sent first command
+		// to server called Connect. Without Credentials set connection won't be
+		// accepted.
 		cred := &centrifuge.Credentials{
 			UserID: "",
 		}
@@ -141,7 +141,7 @@ func main() {
 		panic(err)
 	}
 
-	// Now configure http routes.
+	// Now configure HTTP routes.
 
 	// Serve Websocket connections using WebsocketHandler.
 	wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})
