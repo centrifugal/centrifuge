@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"sync"
 	"time"
 
@@ -78,6 +79,14 @@ func New(c Config) (*Node, error) {
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)
 	for i := 0; i < numSubLocks; i++ {
 		subLocks[i] = &sync.Mutex{}
+	}
+
+	if c.Name == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			return nil, err
+		}
+		c.Name = hostname
 	}
 
 	n := &Node{
