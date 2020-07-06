@@ -1,4 +1,4 @@
-package centrifuge
+package jwt
 
 import (
 	"crypto/rsa"
@@ -12,14 +12,57 @@ import (
 	"github.com/cristalhq/jwt/v3"
 )
 
-type tokenVerifierJWT struct {
-	mu         sync.RWMutex
-	algorithms *algorithms
+type ConnectToken struct {
+	// UserID tells library an ID of connecting user.
+	UserID string
+	// ExpireAt allows to set time in future when connection must be validated.
+	// Validation can be server-side using On().Refresh callback or client-side
+	// if On().Refresh not set.
+	ExpireAt int64
+	// Info contains additional information about connection. It will be
+	// included into Join/Leave messages, into Presence information, also
+	// info becomes a part of published message if it was published from
+	// client directly. In some cases having additional info can be an
+	// overhead – but you are simply free to not use it.
+	Info []byte
+	// Channels slice contains channels to subscribe connection to on server-side.
+	Channels []string
 }
 
-func newTokenVerifierJWT(tokenHMACSecretKey string, pubKey *rsa.PublicKey) tokenVerifier {
-	verifier := &tokenVerifierJWT{}
-	algorithms, err := newAlgorithms(tokenHMACSecretKey, pubKey)
+type SubscribeToken struct {
+	// Client is a unique client ID string set to each connection on server.
+	// Will be compared with actual client ID.
+	Client string
+	// Channel client wants to subscribe. Will be compared with channel in
+	// subscribe command.
+	Channel string
+	// ExpireAt allows to set time in future when connection must be validated.
+	// Validation can be server-side using On().SubRefresh callback or client-side
+	// if On().SubRefresh not set.
+	ExpireAt int64
+	// Info contains additional information about connection in channel.
+	// It will be included into Join/Leave messages, into Presence information,
+	// also channel info becomes a part of published message if it was published
+	// from subscribed client directly.
+	Info []byte
+	// ExpireTokenOnly used to indicate that library must only check token
+	// expiration but not turn on Subscription expiration checks on server side.
+	// This allows to implement one-time subscription tokens.
+	ExpireTokenOnly bool
+}
+
+type TokenVerifierConfig struct {
+	// HMACSecretKey is a secret key used to validate connection and subscription
+	// tokens generated using HMAC. Zero value means that HMAC tokens won't be allowed.
+	HMACSecretKey string
+	// RSAPublicKey is a public key used to validate connection and subscription
+	// tokens generated using RSA. Zero value means that RSA tokens won't be allowed.
+	RSAPublicKey *rsa.PublicKey
+}
+
+func NewTokenVerifier(config TokenVerifierConfig) *TokenVerifier {
+	verifier := &TokenVerifier{}
+	algorithms, err := newAlgorithms(config.HMACSecretKey, config.RSAPublicKey)
 	if err != nil {
 		panic(err)
 	}
@@ -27,8 +70,13 @@ func newTokenVerifierJWT(tokenHMACSecretKey string, pubKey *rsa.PublicKey) token
 	return verifier
 }
 
+type TokenVerifier struct {
+	mu         sync.RWMutex
+	algorithms *algorithms
+}
+
 var (
-	errTokenExpired         = errors.New("token expired")
+	ErrTokenExpired         = errors.New("token expired")
 	errUnsupportedAlgorithm = errors.New("unsupported JWT algorithm")
 	errDisabledAlgorithm    = errors.New("disabled JWT algorithm")
 )
@@ -40,11 +88,6 @@ type connectTokenClaims struct {
 	jwt.StandardClaims
 }
 
-// MarshalBinary to properly marshal custom claims to JSON.
-func (c *connectTokenClaims) MarshalBinary() ([]byte, error) {
-	return json.Marshal(c)
-}
-
 type subscribeTokenClaims struct {
 	Client          string          `json:"client,omitempty"`
 	Channel         string          `json:"channel,omitempty"`
@@ -52,11 +95,6 @@ type subscribeTokenClaims struct {
 	Base64Info      string          `json:"b64info,omitempty"`
 	ExpireTokenOnly bool            `json:"eto,omitempty"`
 	jwt.StandardClaims
-}
-
-// MarshalBinary to properly marshal custom claims to JSON.
-func (c *subscribeTokenClaims) MarshalBinary() ([]byte, error) {
-	return json.Marshal(c)
 }
 
 type algorithms struct {
@@ -136,35 +174,35 @@ func (s *algorithms) verify(token *jwt.Token) error {
 	return verifier.Verify(token.Payload(), token.Signature())
 }
 
-func (verifier *tokenVerifierJWT) verifySignature(token *jwt.Token) error {
+func (verifier *TokenVerifier) verifySignature(token *jwt.Token) error {
 	verifier.mu.RLock()
 	defer verifier.mu.RUnlock()
 	return verifier.algorithms.verify(token)
 }
 
-func (verifier *tokenVerifierJWT) VerifyConnectToken(t string) (connectToken, error) {
+func (verifier *TokenVerifier) VerifyConnectToken(t string) (ConnectToken, error) {
 	token, err := jwt.Parse([]byte(t))
 	if err != nil {
-		return connectToken{}, err
+		return ConnectToken{}, err
 	}
 
 	err = verifier.verifySignature(token)
 	if err != nil {
-		return connectToken{}, err
+		return ConnectToken{}, err
 	}
 
 	claims := &connectTokenClaims{}
 	err = json.Unmarshal(token.RawClaims(), claims)
 	if err != nil {
-		return connectToken{}, err
+		return ConnectToken{}, err
 	}
 
 	now := time.Now()
 	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
-		return connectToken{}, errTokenExpired
+		return ConnectToken{}, ErrTokenExpired
 	}
 
-	ct := connectToken{
+	ct := ConnectToken{
 		UserID:   claims.StandardClaims.Subject,
 		Info:     claims.Info,
 		Channels: claims.Channels,
@@ -175,36 +213,36 @@ func (verifier *tokenVerifierJWT) VerifyConnectToken(t string) (connectToken, er
 	if claims.Base64Info != "" {
 		byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 		if err != nil {
-			return connectToken{}, err
+			return ConnectToken{}, err
 		}
 		ct.Info = byteInfo
 	}
 	return ct, nil
 }
 
-func (verifier *tokenVerifierJWT) VerifySubscribeToken(t string) (subscribeToken, error) {
+func (verifier *TokenVerifier) VerifySubscribeToken(t string) (SubscribeToken, error) {
 	token, err := jwt.Parse([]byte(t))
 	if err != nil {
-		return subscribeToken{}, err
+		return SubscribeToken{}, err
 	}
 
 	err = verifier.verifySignature(token)
 	if err != nil {
-		return subscribeToken{}, err
+		return SubscribeToken{}, err
 	}
 
 	claims := &subscribeTokenClaims{}
 	err = json.Unmarshal(token.RawClaims(), claims)
 	if err != nil {
-		return subscribeToken{}, err
+		return SubscribeToken{}, err
 	}
 
 	now := time.Now()
 	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
-		return subscribeToken{}, errTokenExpired
+		return SubscribeToken{}, ErrTokenExpired
 	}
 
-	st := subscribeToken{
+	st := SubscribeToken{
 		Client:          claims.Client,
 		Info:            claims.Info,
 		Channel:         claims.Channel,
@@ -216,17 +254,17 @@ func (verifier *tokenVerifierJWT) VerifySubscribeToken(t string) (subscribeToken
 	if claims.Base64Info != "" {
 		byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 		if err != nil {
-			return subscribeToken{}, err
+			return SubscribeToken{}, err
 		}
 		st.Info = byteInfo
 	}
 	return st, nil
 }
 
-func (verifier *tokenVerifierJWT) Reload(config Config) error {
+func (verifier *TokenVerifier) Reload(config TokenVerifierConfig) error {
 	verifier.mu.Lock()
 	defer verifier.mu.Unlock()
-	alg, err := newAlgorithms(config.TokenHMACSecretKey, config.TokenRSAPublicKey)
+	alg, err := newAlgorithms(config.HMACSecretKey, config.RSAPublicKey)
 	if err != nil {
 		return err
 	}

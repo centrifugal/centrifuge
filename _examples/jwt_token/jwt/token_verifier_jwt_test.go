@@ -1,4 +1,4 @@
-package centrifuge
+package jwt
 
 import (
 	"crypto/rand"
@@ -88,7 +88,7 @@ func Test_tokenVerifierJWT_Signer(t *testing.T) {
 }
 
 func Test_tokenVerifierJWT_Valid(t *testing.T) {
-	verifier := newTokenVerifierJWT("secret", nil)
+	verifier := NewTokenVerifier(TokenVerifierConfig{"secret", nil})
 	ct, err := verifier.VerifyConnectToken(jwtValid)
 	require.NoError(t, err)
 	require.Equal(t, "2694", ct.UserID)
@@ -97,40 +97,40 @@ func Test_tokenVerifierJWT_Valid(t *testing.T) {
 }
 
 func Test_tokenVerifierJWT_Expired(t *testing.T) {
-	verifier := newTokenVerifierJWT("secret", nil)
+	verifier := NewTokenVerifier(TokenVerifierConfig{"secret", nil})
 	_, err := verifier.VerifyConnectToken(jwtExpired)
 	require.Error(t, err)
-	require.Equal(t, errTokenExpired, err)
+	require.Equal(t, ErrTokenExpired, err)
 }
 
 func Test_tokenVerifierJWT_DisabledAlgorithm(t *testing.T) {
-	verifier := newTokenVerifierJWT("", nil)
+	verifier := NewTokenVerifier(TokenVerifierConfig{"", nil})
 	_, err := verifier.VerifyConnectToken(jwtExpired)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errDisabledAlgorithm), err.Error())
 }
 
 func Test_tokenVerifierJWT_InvalidSignature(t *testing.T) {
-	verifier := newTokenVerifierJWT("secret", nil)
+	verifier := NewTokenVerifier(TokenVerifierConfig{"secret", nil})
 	_, err := verifier.VerifyConnectToken(jwtInvalidSignature)
 	require.Error(t, err)
 }
 
 func Test_tokenVerifierJWT_WithNotBefore(t *testing.T) {
-	verifier := newTokenVerifierJWT("secret", nil)
+	verifier := NewTokenVerifier(TokenVerifierConfig{"secret", nil})
 	_, err := verifier.VerifyConnectToken(jwtNotBefore)
 	require.Error(t, err)
 }
 
 func Test_tokenVerifierJWT_StringAudience(t *testing.T) {
-	verifier := newTokenVerifierJWT("secret", nil)
+	verifier := NewTokenVerifier(TokenVerifierConfig{"secret", nil})
 	ct, err := verifier.VerifyConnectToken(jwtStringAud)
 	require.NoError(t, err)
 	require.Equal(t, "2694", ct.UserID)
 }
 
 func Test_tokenVerifierJWT_ArrayAudience(t *testing.T) {
-	verifier := newTokenVerifierJWT("secret", nil)
+	verifier := NewTokenVerifier(TokenVerifierConfig{"secret", nil})
 	ct, err := verifier.VerifyConnectToken(jwtArrayAud)
 	require.NoError(t, err)
 	require.Equal(t, "2694", ct.UserID)
@@ -143,13 +143,13 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 
 	privateKey, pubKey := generateTestRSAKeys(t)
 
-	verifierJWT := newTokenVerifierJWT("secret", pubKey)
+	verifierJWT := NewTokenVerifier(TokenVerifierConfig{"secret", pubKey})
 	_time := time.Now()
 	tests := []struct {
 		name     string
-		verifier tokenVerifier
+		verifier *TokenVerifier
 		args     args
-		want     connectToken
+		want     ConnectToken
 		wantErr  bool
 		expired  bool
 	}{
@@ -159,7 +159,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			args: args{
 				token: getConnToken("user1", _time.Add(24*time.Hour).Unix(), nil),
 			},
-			want: connectToken{
+			want: ConnectToken{
 				UserID:   "user1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
 				Info:     []byte("{}"),
@@ -171,7 +171,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			args: args{
 				token: getConnToken("user1", _time.Add(24*time.Hour).Unix(), privateKey),
 			},
-			want: connectToken{
+			want: ConnectToken{
 				UserID:   "user1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
 				Info:     []byte("{}"),
@@ -183,7 +183,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			args: args{
 				token: "Invalid jwt",
 			},
-			want:    connectToken{},
+			want:    ConnectToken{},
 			wantErr: true,
 			expired: false,
 		}, {
@@ -192,7 +192,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			args: args{
 				token: getConnToken("user1", _time.Add(-24*time.Hour).Unix(), nil),
 			},
-			want:    connectToken{},
+			want:    ConnectToken{},
 			wantErr: true,
 			expired: true,
 		},
@@ -206,7 +206,7 @@ func Test_tokenVerifierJWT_VerifyConnectToken(t *testing.T) {
 			if !tt.wantErr && err != nil {
 				t.Errorf("VerifyConnectToken() should not return error")
 			}
-			if tt.expired && err != errTokenExpired {
+			if tt.expired && err != ErrTokenExpired {
 				t.Errorf("VerifyConnectToken() should return token expired error")
 			}
 			if !reflect.DeepEqual(got, tt.want) {
@@ -223,13 +223,13 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 
 	privateKey, pubKey := generateTestRSAKeys(t)
 
-	verifierJWT := newTokenVerifierJWT("secret", pubKey)
+	verifierJWT := NewTokenVerifier(TokenVerifierConfig{"secret", pubKey})
 	_time := time.Now()
 	tests := []struct {
 		name     string
-		verifier tokenVerifier
+		verifier *TokenVerifier
 		args     args
-		want     subscribeToken
+		want     SubscribeToken
 		wantErr  bool
 		expired  bool
 	}{
@@ -237,7 +237,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			name:     "Empty JWT",
 			verifier: verifierJWT,
 			args:     args{},
-			want:     subscribeToken{},
+			want:     SubscribeToken{},
 			wantErr:  true,
 			expired:  false,
 		}, {
@@ -246,7 +246,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			args: args{
 				token: "randomToken",
 			},
-			want:    subscribeToken{},
+			want:    SubscribeToken{},
 			wantErr: true,
 			expired: false,
 		}, {
@@ -255,7 +255,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			args: args{
 				token: getSubscribeToken("channel1", "client1", _time.Add(-24*time.Hour).Unix(), nil),
 			},
-			want:    subscribeToken{},
+			want:    SubscribeToken{},
 			wantErr: true,
 			expired: true,
 		}, {
@@ -264,7 +264,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			args: args{
 				token: getSubscribeToken("channel1", "client1", _time.Add(24*time.Hour).Unix(), nil),
 			},
-			want: subscribeToken{
+			want: SubscribeToken{
 				Client:   "client1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
 				Info:     []byte("{}"),
@@ -277,7 +277,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			args: args{
 				token: getSubscribeToken("channel1", "client1", _time.Add(24*time.Hour).Unix(), privateKey),
 			},
-			want: subscribeToken{
+			want: SubscribeToken{
 				Client:   "client1",
 				ExpireAt: _time.Add(24 * time.Hour).Unix(),
 				Info:     []byte("{}"),
@@ -295,7 +295,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 			if !tt.wantErr && err != nil {
 				t.Errorf("VerifySubscribeToken() should not return error")
 			}
-			if tt.expired && err != errTokenExpired {
+			if tt.expired && err != ErrTokenExpired {
 				t.Errorf("VerifySubscribeToken() should return token expired error")
 			}
 			if !reflect.DeepEqual(got, tt.want) {
@@ -306,7 +306,7 @@ func Test_tokenVerifierJWT_VerifySubscribeToken(t *testing.T) {
 }
 
 func BenchmarkConnectTokenVerify_Valid(b *testing.B) {
-	verifierJWT := newTokenVerifierJWT("secret", nil)
+	verifierJWT := NewTokenVerifier(TokenVerifierConfig{"secret", nil})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := verifierJWT.VerifyConnectToken(jwtValid)
@@ -319,10 +319,10 @@ func BenchmarkConnectTokenVerify_Valid(b *testing.B) {
 }
 
 func BenchmarkConnectTokenVerify_Expired(b *testing.B) {
-	verifier := newTokenVerifierJWT("secret", nil)
+	verifier := NewTokenVerifier(TokenVerifierConfig{"secret", nil})
 	for i := 0; i < b.N; i++ {
 		_, err := verifier.VerifyConnectToken(jwtExpired)
-		if err != errTokenExpired {
+		if err != ErrTokenExpired {
 			panic(err)
 		}
 	}

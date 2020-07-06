@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
@@ -17,72 +18,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// ClientEventHub allows to deal with client event handlers.
-// All its methods are not goroutine-safe and supposed to be called once on client connect.
-type ClientEventHub struct {
-	refreshHandler     RefreshHandler
-	presenceHandler    PresenceHandler
-	disconnectHandler  DisconnectHandler
-	subscribeHandler   SubscribeHandler
-	unsubscribeHandler UnsubscribeHandler
-	publishHandler     PublishHandler
-	subRefreshHandler  SubRefreshHandler
-	rpcHandler         RPCHandler
-	messageHandler     MessageHandler
-}
-
-// Refresh called when it's time to refresh expiring client connection.
-func (c *ClientEventHub) Refresh(h RefreshHandler) {
-	c.refreshHandler = h
-}
-
-// Presence called periodically for active connection.
-func (c *ClientEventHub) Presence(h PresenceHandler) {
-	c.presenceHandler = h
-}
-
-// Disconnect allows to set DisconnectHandler.
-// DisconnectHandler called when client disconnected.
-func (c *ClientEventHub) Disconnect(h DisconnectHandler) {
-	c.disconnectHandler = h
-}
-
-// Message allows to set MessageHandler.
-// MessageHandler called when client sent asynchronous message.
-func (c *ClientEventHub) Message(h MessageHandler) {
-	c.messageHandler = h
-}
-
-// RPC allows to set RPCHandler.
-// RPCHandler will be executed on every incoming RPC call.
-func (c *ClientEventHub) RPC(h RPCHandler) {
-	c.rpcHandler = h
-}
-
-// SubRefresh allows to set SubRefreshHandler.
-// SubRefreshHandler called when it's time to refresh client subscription.
-func (c *ClientEventHub) SubRefresh(h SubRefreshHandler) {
-	c.subRefreshHandler = h
-}
-
-// Subscribe allows to set SubscribeHandler.
-// SubscribeHandler called when client subscribes on channel.
-func (c *ClientEventHub) Subscribe(h SubscribeHandler) {
-	c.subscribeHandler = h
-}
-
-// Unsubscribe allows to set UnsubscribeHandler.
-// UnsubscribeHandler called when client unsubscribes from channel.
-func (c *ClientEventHub) Unsubscribe(h UnsubscribeHandler) {
-	c.unsubscribeHandler = h
-}
-
-// Publish allows to set PublishHandler.
-// PublishHandler called when client publishes message into channel.
-func (c *ClientEventHub) Publish(h PublishHandler) {
-	c.publishHandler = h
-}
-
 // We poll current position in channel from history storage periodically.
 // If client position is wrong maxCheckPositionFailures times in a row
 // then client will be disconnected with InsufficientState reason.
@@ -91,11 +26,12 @@ const maxCheckPositionFailures int64 = 2
 // ChannelContext contains extra context for channel connection subscribed to.
 type ChannelContext struct {
 	Info                  []byte
-	serverSide            bool
 	expireAt              int64
 	positionCheckTime     int64
 	positionCheckFailures int64
 	streamPosition        StreamPosition
+	serverSide            bool
+	clientSideRefresh     bool
 }
 
 type timerOp uint8
@@ -106,71 +42,91 @@ const (
 	timerOpExpire   timerOp = 3
 )
 
+// Event represent possible client events.
+type Event uint64
+
+// Known client events.
+const (
+	EventConnect Event = 1 << iota
+	EventSubscribe
+	EventUnsubscribe
+	EventPublish
+	EventDisconnect
+	EventAlive
+	EventRefresh
+	EventSubRefresh
+	EventRPC
+	EventMessage
+	EventHistory
+	EventPresence
+	EventPresenceStats
+)
+
+// EventAll mask contains all known client events.
+const EventAll = EventConnect | EventSubscribe | EventUnsubscribe | EventPublish |
+	EventDisconnect | EventAlive | EventRefresh | EventSubRefresh | EventRPC |
+	EventMessage | EventHistory | EventPresence | EventPresenceStats
+
+type status uint8
+
+const (
+	statusConnecting status = 1
+	statusConnected  status = 2
+	statusClosed     status = 3
+)
+
 // Client represents client connection to server.
 type Client struct {
 	mu                sync.RWMutex
+	connectMu         sync.Mutex // allows to sync connect with disconnect.
 	presenceMu        sync.Mutex // allows to sync presence routine with client closing.
 	ctx               context.Context
 	transport         Transport
 	node              *Node
+	events            uint64
 	exp               int64
 	publications      *pubQueue
 	channels          map[string]ChannelContext
-	disconnect        *Disconnect
-	eventHub          *ClientEventHub
 	messageWriter     *writer
 	pubSubSync        *recovery.PubSubSync
 	uid               string
 	user              string
 	info              []byte
 	publicationsOnce  sync.Once
+	authenticated     bool
+	clientSideRefresh bool
+	status            status
+	timerOp           timerOp
 	nextPresence      int64
 	nextExpire        int64
 	timer             *time.Timer
-	timerOp           timerOp
-	closed            bool
-	authenticated     bool
-	clientSideRefresh bool
 }
 
-type CloseFunc func() error
-
-type TransportClient struct {
-	c *Client
-}
-
-func (c *TransportClient) ID() string {
-	return c.c.ID()
-}
-
-func (c *TransportClient) Handle(data []byte) bool {
-	return c.c.handle(data)
-}
+// ClientCloseFunc must be called on Transport handler close to clean up Client.
+type ClientCloseFunc func() error
 
 // NewClient initializes new Client.
-func NewClient(ctx context.Context, n *Node, t Transport) (*TransportClient, CloseFunc, error) {
+func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseFunc, error) {
 	uuidObject, err := uuid.NewRandom()
 	if err != nil {
 		return nil, nil, err
 	}
-
-	config := n.Config()
 
 	c := &Client{
 		ctx:          ctx,
 		uid:          uuidObject.String(),
 		node:         n,
 		transport:    t,
-		eventHub:     &ClientEventHub{},
 		channels:     make(map[string]ChannelContext),
 		pubSubSync:   recovery.NewPubSubSync(),
 		publications: newPubQueue(),
+		status:       statusConnecting,
 	}
 
 	transportMessagesSentCounter := transportMessagesSent.WithLabelValues(t.Name())
 
 	messageWriterConf := writerConfig{
-		MaxQueueSize: config.ClientQueueMaxSize,
+		MaxQueueSize: n.config.ClientQueueMaxSize,
 		WriteFn: func(data []byte) error {
 			if err := t.Write(data); err != nil {
 				go func() { _ = c.close(DisconnectWriteError) }()
@@ -197,7 +153,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*TransportClient, Clo
 
 	c.messageWriter = newWriter(messageWriterConf)
 
-	staleCloseDelay := config.ClientStaleCloseDelay
+	staleCloseDelay := n.config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !c.authenticated {
 		c.mu.Lock()
 		c.timerOp = timerOpStale
@@ -205,12 +161,12 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*TransportClient, Clo
 		c.mu.Unlock()
 	}
 
-	return &TransportClient{c: c}, func() error { return c.close(nil) }, nil
+	return c, func() error { return c.close(nil) }, nil
 }
 
 func (c *Client) onTimerOp() {
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return
 	}
@@ -228,7 +184,7 @@ func (c *Client) onTimerOp() {
 
 // Lock must be held outside.
 func (c *Client) scheduleNextTimer() {
-	if c.closed {
+	if c.status == statusClosed {
 		return
 	}
 	c.stopTimer()
@@ -261,7 +217,7 @@ func (c *Client) stopTimer() {
 
 // Lock must be held outside.
 func (c *Client) addPresenceUpdate() {
-	config := c.node.Config()
+	config := c.node.config
 	presenceInterval := config.ClientPresenceUpdateInterval
 	c.nextPresence = time.Now().Add(presenceInterval).UnixNano()
 	c.scheduleNextTimer()
@@ -280,7 +236,7 @@ func (c *Client) addExpireUpdate(after time.Duration) {
 func (c *Client) closeUnauthenticated() {
 	c.mu.RLock()
 	authenticated := c.authenticated
-	closed := c.closed
+	closed := c.status == statusClosed
 	c.mu.RUnlock()
 	if !authenticated && !closed {
 		_ = c.close(DisconnectStale)
@@ -301,8 +257,8 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 // updateChannelPresence updates client presence info for channel so it
 // won't expire until client disconnect.
 func (c *Client) updateChannelPresence(ch string) error {
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
+	chOpts, found, err := c.node.channelOptions(ch)
+	if err != nil || !found {
 		return nil
 	}
 	if !chOpts.Presence {
@@ -312,14 +268,19 @@ func (c *Client) updateChannelPresence(ch string) error {
 	return c.node.addPresence(ch, c.uid, info)
 }
 
+func (c *Client) Context() context.Context {
+	return c.ctx
+}
+
 func (c *Client) checkSubscriptionExpiration(channel string, channelContext ChannelContext, delay time.Duration) bool {
-	now := time.Now().Unix()
+	now := c.node.nowTimeGetter().Unix()
 	expireAt := channelContext.expireAt
+	clientSideRefresh := channelContext.clientSideRefresh
 	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
 		// Subscription expired.
-		if c.eventHub.subRefreshHandler != nil {
+		if !clientSideRefresh && c.node.clientEvents.subRefreshHandler != nil && c.hasEvent(EventSubRefresh) {
 			// Give subscription a chance to be refreshed via SubRefreshHandler.
-			reply := c.eventHub.subRefreshHandler(SubRefreshEvent{Channel: channel})
+			reply := c.node.clientEvents.subRefreshHandler(c, SubRefreshEvent{Channel: channel})
 			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
 				return false
 			}
@@ -346,9 +307,9 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 func (c *Client) updatePresence() {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
-	config := c.node.Config()
+	config := c.node.config
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return
 	}
@@ -357,8 +318,8 @@ func (c *Client) updatePresence() {
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
-	if c.eventHub.presenceHandler != nil {
-		_ = c.eventHub.presenceHandler(PresenceEvent{})
+	if c.node.clientEvents.aliveHandler != nil && c.hasEvent(EventAlive) {
+		c.node.clientEvents.aliveHandler(c, AliveEvent{})
 	}
 	for channel, channelContext := range channels {
 		if !c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay) {
@@ -392,14 +353,14 @@ func (c *Client) updatePresence() {
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelContext ChannelContext) bool {
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
+	chOpts, found, err := c.node.channelOptions(ch)
+	if err != nil || !found {
 		return true
 	}
 	if !chOpts.HistoryRecover {
 		return true
 	}
-	nowUnix := time.Now().Unix()
+	nowUnix := c.node.nowTimeGetter().Unix()
 
 	isInitialCheck := channelContext.positionCheckTime == 0
 	isTimeToCheck := nowUnix-channelContext.positionCheckTime > int64(checkDelay.Seconds())
@@ -417,7 +378,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, channelConte
 	isValidPosition := streamTop.Offset == position.Offset && streamTop.Epoch == position.Epoch
 	keepConnection := true
 	c.mu.Lock()
-	if channelContext, ok = c.channels[ch]; ok {
+	if channelContext, ok := c.channels[ch]; ok {
 		channelContext.positionCheckTime = nowUnix
 		if !isValidPosition {
 			channelContext.positionCheckFailures++
@@ -457,11 +418,6 @@ func (c *Client) Channels() map[string]ChannelContext {
 	return channels
 }
 
-// On returns ClientEventHub to set various event handlers to client.
-func (c *Client) On() *ClientEventHub {
-	return c.eventHub
-}
-
 // Send data to client. This sends an asynchronous message – data will be
 // just written to connection. on client side this message can be handled
 // with Message handler.
@@ -495,7 +451,7 @@ func (c *Client) Unsubscribe(ch string, opts ...UnsubscribeOption) error {
 	}
 
 	c.mu.RLock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.RUnlock()
 		return nil
 	}
@@ -532,7 +488,9 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 // Close client connection with specific disconnect reason.
 // This method internally creates a new goroutine at moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
-// and presence callback ordering problems.
+// and alive callback ordering/sync problems. Will be a noop if client
+// already closed. Since this method runs a separate goroutine client
+// connection will be closed eventually (i.e. not immediately).
 func (c *Client) Close(disconnect *Disconnect) error {
 	go func() {
 		_ = c.close(disconnect)
@@ -543,18 +501,17 @@ func (c *Client) Close(disconnect *Disconnect) error {
 func (c *Client) close(disconnect *Disconnect) error {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return nil
 	}
-	c.closed = true
+	prevStatus := c.status
+	c.status = statusClosed
 
 	c.stopTimer()
-
-	if c.disconnect != nil {
-		disconnect = c.disconnect
-	}
 
 	channels := make(map[string]ChannelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
@@ -596,13 +553,16 @@ func (c *Client) close(disconnect *Disconnect) error {
 	if disconnect != nil {
 		serverDisconnectCount.WithLabelValues(strconv.Itoa(disconnect.Code)).Inc()
 	}
-	if c.eventHub.disconnectHandler != nil {
-		c.eventHub.disconnectHandler(DisconnectEvent{
+	if c.node.clientEvents.disconnectHandler != nil && c.hasEvent(EventDisconnect) && prevStatus == statusConnected {
+		c.node.clientEvents.disconnectHandler(c, DisconnectEvent{
 			Disconnect: disconnect,
 		})
 	}
-
 	return nil
+}
+
+func (c *Client) hasEvent(e Event) bool {
+	return Event(atomic.LoadUint64(&c.events))&e != 0
 }
 
 // Lock must be held outside.
@@ -621,9 +581,9 @@ func (c *Client) clientInfo(ch string) *protocol.ClientInfo {
 }
 
 // Handle raw data encoded with Centrifuge protocol. Not goroutine-safe.
-func (c *Client) handle(data []byte) bool {
+func (c *Client) Handle(data []byte) bool {
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return false
 	}
@@ -732,7 +692,7 @@ type replyWriter struct {
 // handle dispatches Command into correct command handler.
 func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Reply) error, flush func() error) *Disconnect {
 	c.mu.Lock()
-	if c.closed {
+	if c.status == statusClosed {
 		c.mu.Unlock()
 		return nil
 	}
@@ -801,7 +761,7 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 
 func (c *Client) expire() {
 	c.mu.RLock()
-	closed := c.closed
+	closed := c.status == statusClosed
 	clientSideRefresh := c.clientSideRefresh
 	c.mu.RUnlock()
 	if closed {
@@ -810,8 +770,8 @@ func (c *Client) expire() {
 
 	now := time.Now().Unix()
 
-	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
-		reply := c.eventHub.refreshHandler(RefreshEvent{})
+	if !clientSideRefresh && c.node.clientEvents.refreshHandler != nil && c.hasEvent(EventRefresh) {
+		reply := c.node.clientEvents.refreshHandler(c, RefreshEvent{})
 		if reply.Disconnect != nil {
 			_ = c.close(reply.Disconnect)
 			return
@@ -840,10 +800,10 @@ func (c *Client) expire() {
 
 	ttl := exp - now
 
-	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
+	if !clientSideRefresh && c.node.clientEvents.refreshHandler != nil && c.hasEvent(EventRefresh) {
 		if ttl > 0 {
 			c.mu.Lock()
-			if !c.closed {
+			if c.status != statusClosed {
 				c.addExpireUpdate(time.Duration(ttl) * time.Second)
 			}
 			c.mu.Unlock()
@@ -868,11 +828,23 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) *Disconnect
 	if disconnect != nil {
 		return disconnect
 	}
-	if c.node.eventHub.connectedHandler != nil {
-		c.node.eventHub.connectedHandler(c.ctx, c)
-	}
+	c.triggerConnect()
 	c.scheduleOnConnectTimers()
 	return nil
+}
+
+func (c *Client) triggerConnect() {
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+	if c.status != statusConnecting {
+		return
+	}
+	if c.node.clientEvents.connectHandler == nil || !c.hasEvent(EventConnect) {
+		c.status = statusConnected
+		return
+	}
+	c.node.clientEvents.connectHandler(c)
+	c.status = statusConnected
 }
 
 func (c *Client) scheduleOnConnectTimers() {
@@ -882,7 +854,7 @@ func (c *Client) scheduleOnConnectTimers() {
 	if c.exp > 0 {
 		expireAfter := time.Duration(c.exp-time.Now().Unix()) * time.Second
 		if c.clientSideRefresh {
-			conf := c.node.Config()
+			conf := c.node.config
 			expireAfter += conf.ClientExpiredCloseDelay
 		}
 		c.addExpireUpdate(expireAfter)
@@ -1123,13 +1095,13 @@ func (c *Client) handlePing(params protocol.Raw, rw *replyWriter) *Disconnect {
 }
 
 func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) *Disconnect {
-	if c.eventHub.rpcHandler != nil {
+	if c.node.clientEvents.rpcHandler != nil && c.hasEvent(EventRPC) {
 		cmd, err := protocol.GetParamsDecoder(c.transport.Protocol().toProto()).DecodeRPC(params)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding rpc", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
 		}
-		rpcReply := c.eventHub.rpcHandler(RPCEvent{
+		rpcReply := c.node.clientEvents.rpcHandler(c, RPCEvent{
 			Method: cmd.Method,
 			Data:   cmd.Data,
 		})
@@ -1159,13 +1131,13 @@ func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) *Disconnect {
 }
 
 func (c *Client) handleSend(params protocol.Raw) *Disconnect {
-	if c.eventHub.messageHandler != nil {
+	if c.node.clientEvents.messageHandler != nil && c.hasEvent(EventMessage) {
 		cmd, err := protocol.GetParamsDecoder(c.transport.Protocol().toProto()).DecodeSend(params)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding message", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
 		}
-		messageReply := c.eventHub.messageHandler(MessageEvent{
+		messageReply := c.node.clientEvents.messageHandler(c, MessageEvent{
 			Data: cmd.Data,
 		})
 		if messageReply.Disconnect != nil {
@@ -1189,7 +1161,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 
 	c.mu.RLock()
 	authenticated := c.authenticated
-	closed := c.closed
+	closed := c.status == statusClosed
 	c.mu.RUnlock()
 
 	if closed {
@@ -1201,10 +1173,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		return DisconnectBadRequest
 	}
 
-	config := c.node.Config()
+	config := c.node.config
 	version := config.Version
-	insecure := config.ClientInsecure
-	clientAnonymous := config.ClientAnonymous
 	userConnectionLimit := config.ClientUserConnectionLimit
 
 	var (
@@ -1214,11 +1184,14 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		clientSideRefresh bool
 	)
 
-	if c.node.eventHub.connectingHandler != nil {
-		reply := c.node.eventHub.connectingHandler(c.ctx, c.transport, ConnectEvent{
-			ClientID: c.ID(),
-			Data:     cmd.Data,
-			Token:    cmd.Token,
+	events := EventAll
+
+	if c.node.clientEvents.connectingHandler != nil {
+		reply := c.node.clientEvents.connectingHandler(c.ctx, ConnectEvent{
+			ClientID:  c.ID(),
+			Data:      cmd.Data,
+			Token:     cmd.Token,
+			Transport: c.transport,
 		})
 		if reply.Disconnect != nil {
 			return reply.Disconnect
@@ -1241,6 +1214,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		}
 		clientSideRefresh = reply.ClientSideRefresh
 		channels = append(channels, reply.Channels...)
+		if reply.Events > 0 {
+			events = reply.Events
+		}
 	}
 
 	if credentials == nil {
@@ -1255,55 +1231,26 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		ttl     uint32
 	)
 
+	atomic.StoreUint64(&c.events, uint64(events))
+
 	c.mu.Lock()
 	c.clientSideRefresh = clientSideRefresh
 	c.mu.Unlock()
 
-	switch {
-	case credentials != nil:
-		// Server-side auth.
-		c.mu.Lock()
-		c.user = credentials.UserID
-		c.info = credentials.Info
-		c.exp = credentials.ExpireAt
-		c.mu.Unlock()
-	case cmd.Token != "":
-		var (
-			token connectToken
-			err   error
-		)
-		if token, err = c.node.verifyConnectToken(cmd.Token); err != nil {
-			if err == errTokenExpired {
-				resp.Error = ErrorTokenExpired.toProto()
-				_ = rw.write(&protocol.Reply{Error: resp.Error})
-				return nil
-			}
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid connection token", map[string]interface{}{"error": err.Error(), "client": c.uid}))
-			return DisconnectInvalidToken
-		}
-
-		c.mu.Lock()
-		c.user = token.UserID
-		c.exp = token.ExpireAt
-		c.mu.Unlock()
-
-		if len(token.Info) > 0 {
-			c.mu.Lock()
-			c.info = token.Info
-			c.mu.Unlock()
-		}
-
-		channels = append(channels, token.Channels...)
-	case !insecure && !clientAnonymous:
+	if credentials == nil {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client credentials not found", map[string]interface{}{"client": c.uid}))
 		return DisconnectBadRequest
 	}
 
-	c.mu.RLock()
+	c.mu.Lock()
+	c.user = credentials.UserID
+	c.info = credentials.Info
+	c.exp = credentials.ExpireAt
+
 	user := c.user
 	exp := c.exp
-	closed = c.closed
-	c.mu.RUnlock()
+	closed = c.status == statusClosed
+	c.mu.Unlock()
 
 	if closed {
 		return DisconnectNormal
@@ -1319,7 +1266,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	}
 
 	c.mu.RLock()
-	if exp > 0 && !insecure {
+	if exp > 0 {
 		expires = true
 		now := time.Now().Unix()
 		if exp < now {
@@ -1361,10 +1308,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	resp.Result.Client = c.uid
 	if authData != nil {
 		resp.Result.Data = authData
-	}
-
-	if config.UserSubscribeToPersonal && c.user != "" {
-		channels = append(channels, c.node.PersonalChannel(c.user))
 	}
 
 	var subCtxMap map[string]subscribeContext
@@ -1497,7 +1440,7 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 		return resp, DisconnectBadRequest
 	}
 
-	config := c.node.Config()
+	config := c.node.config
 
 	c.mu.RLock()
 	clientSideRefresh := c.clientSideRefresh
@@ -1511,8 +1454,8 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 	var expireAt int64
 	var info []byte
 
-	if c.eventHub.refreshHandler != nil {
-		reply := c.eventHub.refreshHandler(RefreshEvent{
+	if c.node.clientEvents.refreshHandler != nil && c.hasEvent(EventRefresh) {
+		reply := c.node.clientEvents.refreshHandler(c, RefreshEvent{
 			Token: cmd.Token,
 		})
 		if reply.Disconnect != nil {
@@ -1524,20 +1467,7 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 		expireAt = reply.ExpireAt
 		info = reply.Info
 	} else {
-		var (
-			token     connectToken
-			errVerify error
-		)
-		if token, errVerify = c.node.verifyConnectToken(cmd.Token); errVerify != nil {
-			if errVerify == errTokenExpired {
-				resp.Error = ErrorTokenExpired.toProto()
-				return resp, nil
-			}
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid refresh token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid}))
-			return resp, DisconnectInvalidToken
-		}
-		expireAt = token.ExpireAt
-		info = token.Info
+		return resp, DisconnectExpired
 	}
 
 	res := &protocol.RefreshResult{
@@ -1574,28 +1504,26 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 	return resp, nil
 }
 
-func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, serverSide bool) (ChannelOptions, *Error, *Disconnect) {
+func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (ChannelOptions, *Error, *Disconnect) {
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for subscribe", map[string]interface{}{"user": c.user, "client": c.uid}))
 		return ChannelOptions{}, nil, DisconnectBadRequest
 	}
 
-	chOpts, ok := c.node.ChannelOpts(channel)
-	if !ok {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on non existing namespace", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, ErrorNamespaceNotFound, nil
+	chOpts, found, err := c.node.channelOptions(channel)
+	if err != nil {
+		c.node.logger.log(newLogEntry(LogLevelError, "error getting channel options", map[string]interface{}{"error": err.Error(), "channel": channel, "user": c.user, "client": c.uid}))
+		return ChannelOptions{}, toClientErr(err), nil
+	}
+	if !found {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "subscription to unknown channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
+		return ChannelOptions{}, toClientErr(err), nil
 	}
 
-	if !serverSide && chOpts.ServerSide {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to subscribe on server side channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, ErrorPermissionDenied, nil
-	}
-
-	config := c.node.Config()
+	config := c.node.config
 	channelMaxLength := config.ChannelMaxLength
 	channelLimit := config.ClientChannelLimit
-	insecure := config.ClientInsecure
 
 	if channelMaxLength > 0 && len(channel) > channelMaxLength {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long", map[string]interface{}{"max": channelMaxLength, "channel": channel, "user": c.user, "client": c.uid}))
@@ -1612,21 +1540,11 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest, server
 	}
 
 	c.mu.RLock()
-	_, ok = c.channels[channel]
+	_, ok := c.channels[channel]
 	c.mu.RUnlock()
 	if ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		return ChannelOptions{}, ErrorAlreadySubscribed, nil
-	}
-
-	if !c.node.userAllowed(channel, c.user) {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, ErrorPermissionDenied, nil
-	}
-
-	if !chOpts.Anonymous && c.user == "" && !insecure {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "anonymous user is not allowed to subscribe on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, ErrorPermissionDenied, nil
 	}
 
 	return chOpts, nil, nil
@@ -1638,60 +1556,33 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 		expireAt    int64
 	)
 
-	isPrivateChannel := c.node.privateChannel(cmd.Channel)
+	var clientSideRefresh bool
 
-	if !serverSide && isPrivateChannel {
-		if cmd.Token == "" {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
-			return nil, 0, false, ErrorPermissionDenied, nil
-		}
-		var (
-			token     subscribeToken
-			errVerify error
-		)
-		if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
-			if errVerify == errTokenExpired {
-				return nil, 0, false, ErrorTokenExpired, nil
+	if !serverSide {
+		if c.node.clientEvents.subscribeHandler != nil && c.hasEvent(EventSubscribe) {
+			reply := c.node.clientEvents.subscribeHandler(c, SubscribeEvent{
+				Channel: cmd.Channel,
+				Token:   cmd.Token,
+			})
+			if reply.Disconnect != nil {
+				return nil, 0, false, nil, reply.Disconnect
 			}
-			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid, "user": c.UserID()}))
-			return nil, 0, false, ErrorPermissionDenied, nil
-		}
-		if c.uid != token.Client {
-			return nil, 0, false, ErrorPermissionDenied, nil
-		}
-		if cmd.Channel != token.Channel {
-			return nil, 0, false, ErrorPermissionDenied, nil
-		}
-		expireAt = token.ExpireAt
-		if token.ExpireTokenOnly {
-			expireAt = 0
-		}
-		channelInfo = token.Info
-	}
-
-	if !serverSide && c.eventHub.subscribeHandler != nil {
-		reply := c.eventHub.subscribeHandler(SubscribeEvent{
-			Channel: cmd.Channel,
-		})
-		if reply.Disconnect != nil {
-			return nil, 0, false, nil, reply.Disconnect
-		}
-		if reply.Error != nil {
-			return nil, 0, false, reply.Error, nil
-		}
-		if len(reply.ChannelInfo) > 0 && !isPrivateChannel {
-			channelInfo = reply.ChannelInfo
-		}
-		if reply.ExpireAt > 0 && !isPrivateChannel {
-			expireAt = reply.ExpireAt
+			if reply.Error != nil {
+				return nil, 0, false, reply.Error, nil
+			}
+			if len(reply.ChannelInfo) > 0 {
+				channelInfo = reply.ChannelInfo
+			}
+			if reply.ExpireAt > 0 {
+				expireAt = reply.ExpireAt
+			}
+			clientSideRefresh = reply.ClientSideRefresh
+		} else {
+			return nil, 0, false, ErrorNotAvailable, nil
 		}
 	}
 
-	// At moment we expose expiration details to client only in case
-	// of private channel subscription.
-	exposeExpiration := !serverSide && isPrivateChannel
-
-	return channelInfo, expireAt, exposeExpiration, nil, nil
+	return channelInfo, expireAt, clientSideRefresh, nil, nil
 }
 
 func handleErrorDisconnect(rw *replyWriter, replyError *Error, disconnect *Disconnect, serverSide bool) subscribeContext {
@@ -1734,12 +1625,12 @@ type subscribeContext struct {
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
 func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, serverSide bool) subscribeContext {
-	chOpts, replyError, disconnect := c.validateSubscribeRequest(cmd, serverSide)
+	chOpts, replyError, disconnect := c.validateSubscribeRequest(cmd)
 	if disconnect != nil || replyError != nil {
 		return handleErrorDisconnect(rw, replyError, disconnect, serverSide)
 	}
 
-	channelInfo, expireAt, exposeExpiration, replyError, disconnect := c.extractSubscribeData(cmd, serverSide)
+	channelInfo, expireAt, clientSideRefresh, replyError, disconnect := c.extractSubscribeData(cmd, serverSide)
 	if disconnect != nil || replyError != nil {
 		return handleErrorDisconnect(rw, replyError, disconnect, serverSide)
 	}
@@ -1753,10 +1644,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			c.node.logger.log(newLogEntry(LogLevelInfo, "subscription expiration must be greater than now", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
 			return handleErrorDisconnect(rw, ErrorExpired, nil, serverSide)
 		}
-		if exposeExpiration {
-			// Only expose expiration info to client in private channel case.
-			// In other scenarios expiration will be handled by SubRefreshHandler
-			// on Go application backend side.
+		if clientSideRefresh {
 			res.Expires = true
 			res.TTL = uint32(ttl)
 		}
@@ -1914,9 +1802,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	}
 
 	channelContext := ChannelContext{
-		Info:       channelInfo,
-		serverSide: serverSide,
-		expireAt:   expireAt,
+		Info:              channelInfo,
+		serverSide:        serverSide,
+		clientSideRefresh: clientSideRefresh,
+		expireAt:          expireAt,
 		streamPosition: StreamPosition{
 			Offset: latestOffset,
 			Epoch:  latestEpoch,
@@ -2033,7 +1922,12 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 	}
 
 	resp := &clientproto.SubRefreshResponse{}
-	res := &protocol.SubRefreshResult{}
+
+	if cmd.Token == "" {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "subscription refresh token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
+		resp.Error = ErrorBadRequest.toProto()
+		return resp, nil
+	}
 
 	c.mu.RLock()
 	_, okChannel := c.channels[channel]
@@ -2044,49 +1938,43 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 		return resp, nil
 	}
 
-	if cmd.Token == "" {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "subscription refresh token required", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
-		resp.Error = ErrorBadRequest.toProto()
-		return resp, nil
-	}
-	var (
-		token     subscribeToken
-		errVerify error
-	)
-	if token, errVerify = c.node.verifySubscribeToken(cmd.Token); errVerify != nil {
-		if errVerify == errTokenExpired {
-			resp.Error = ErrorTokenExpired.toProto()
-			return resp, nil
+	res := &protocol.SubRefreshResult{}
+
+	var expireAt int64
+	var info []byte
+
+	if c.node.clientEvents.subRefreshHandler != nil && c.hasEvent(EventSubRefresh) {
+		reply := c.node.clientEvents.subRefreshHandler(c, SubRefreshEvent{
+			Channel: cmd.Channel,
+			Token:   cmd.Token,
+		})
+		if reply.Disconnect != nil {
+			return resp, reply.Disconnect
 		}
-		c.node.logger.log(newLogEntry(LogLevelInfo, "invalid subscription refresh token", map[string]interface{}{"error": errVerify.Error(), "client": c.uid, "user": c.UserID()}))
-		resp.Error = ErrorBadRequest.toProto()
-		return resp, nil
+		if reply.Expired {
+			return resp, DisconnectExpired
+		}
+		expireAt = reply.ExpireAt
+		info = reply.Info
+	} else {
+		return resp, DisconnectExpired
 	}
 
-	if c.uid != token.Client {
-		resp.Error = ErrorBadRequest.toProto()
-		return resp, nil
-	}
-	if cmd.Channel != token.Channel {
-		resp.Error = ErrorBadRequest.toProto()
-		return resp, nil
-	}
-
-	if token.ExpireAt > 0 {
+	if expireAt > 0 {
 		res.Expires = true
 		now := time.Now().Unix()
-		if token.ExpireAt < now {
+		if expireAt < now {
 			resp.Error = ErrorExpired.toProto()
 			return resp, nil
 		}
-		res.TTL = uint32(token.ExpireAt - now)
+		res.TTL = uint32(expireAt - now)
 	}
 
 	c.mu.Lock()
 	channelContext, okChan := c.channels[channel]
 	if okChan {
-		channelContext.Info = token.Info
-		channelContext.expireAt = token.ExpireAt
+		channelContext.Info = info
+		channelContext.expireAt = expireAt
 	}
 	c.channels[channel] = channelContext
 	c.mu.Unlock()
@@ -2097,9 +1985,9 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 
 // Lock must be held outside.
 func (c *Client) unsubscribe(channel string) error {
-	chOpts, ok := c.node.ChannelOpts(channel)
-	if !ok {
-		return ErrorNamespaceNotFound
+	chOpts, _, err := c.node.channelOptions(channel)
+	if err != nil {
+		return err
 	}
 
 	c.mu.RLock()
@@ -2132,8 +2020,8 @@ func (c *Client) unsubscribe(channel string) error {
 			return err
 		}
 
-		if !serverSide && c.eventHub.unsubscribeHandler != nil {
-			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
+		if !serverSide && c.node.clientEvents.unsubscribeHandler != nil && c.hasEvent(EventUnsubscribe) {
+			c.node.clientEvents.unsubscribeHandler(c, UnsubscribeEvent{
 				Channel: channel,
 			})
 		}
@@ -2156,11 +2044,7 @@ func (c *Client) unsubscribeCmd(cmd *protocol.UnsubscribeRequest) (*clientproto.
 	resp := &clientproto.UnsubscribeResponse{}
 
 	if err := c.unsubscribe(channel); err != nil {
-		if err == ErrorNamespaceNotFound {
-			resp.Error = ErrorNamespaceNotFound.toProto()
-		} else {
-			resp.Error = ErrorInternal.toProto()
-		}
+		resp.Error = toClientErr(err).toProto()
 		return resp, nil
 	}
 
@@ -2180,36 +2064,12 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 
 	resp := &clientproto.PublishResponse{}
 
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "attempt to publish to non-existing namespace", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid}))
-		resp.Error = ErrorNamespaceNotFound.toProto()
-		return resp, nil
-	}
-
-	if chOpts.SubscribeToPublish {
-		c.mu.RLock()
-		_, ok := c.channels[ch]
-		c.mu.RUnlock()
-		if !ok {
-			resp.Error = ErrorPermissionDenied.toProto()
-			return resp, nil
-		}
-	}
-
 	c.mu.RLock()
 	info := c.clientInfo(ch)
 	c.mu.RUnlock()
 
-	insecure := c.node.Config().ClientInsecure
-
-	if !chOpts.Publish && !insecure {
-		resp.Error = ErrorPermissionDenied.toProto()
-		return resp, nil
-	}
-
-	if c.eventHub.publishHandler != nil {
-		reply := c.eventHub.publishHandler(PublishEvent{
+	if c.node.clientEvents.publishHandler != nil && c.hasEvent(EventPublish) {
+		reply := c.node.clientEvents.publishHandler(c, PublishEvent{
 			Channel: ch,
 			Data:    data,
 			Info: &ClientInfo{
@@ -2229,6 +2089,9 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 		if reply.Data != nil {
 			data = reply.Data
 		}
+	} else {
+		resp.Error = ErrorNotAvailable.toProto()
+		return resp, nil
 	}
 
 	_, err := c.node.publish(ch, data, info)
@@ -2241,47 +2104,54 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 	return resp, nil
 }
 
+func toClientErr(err error) *Error {
+	if clientErr, ok := err.(*Error); ok {
+		return clientErr
+	}
+	return ErrorInternal
+}
+
 // presenceCmd handles presence command - it shows which clients
 // are subscribed on channel at this moment. This method also checks if
 // presence information turned on for channel (based on channel options
 // for namespace or project)
 func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.PresenceResponse, *Disconnect) {
 	ch := cmd.Channel
-
 	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
 	resp := &clientproto.PresenceResponse{}
 
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
-		resp.Error = ErrorNamespaceNotFound.toProto()
+	chOpts, found, err := c.node.channelOptions(ch)
+	if err != nil {
+		resp.Error = toClientErr(err).toProto()
 		return resp, nil
 	}
-
-	c.mu.RLock()
-	_, ok = c.channels[ch]
-	c.mu.RUnlock()
-
-	if !ok {
-		resp.Error = ErrorPermissionDenied.toProto()
+	if !found {
+		resp.Error = ErrorUnknownChannel.toProto()
 		return resp, nil
 	}
-
-	if !chOpts.Presence || chOpts.PresenceDisableForClient {
+	if !chOpts.Presence || c.node.clientEvents.presenceHandler == nil || !c.hasEvent(EventPresence) {
 		resp.Error = ErrorNotAvailable.toProto()
+		return resp, nil
+	}
+
+	reply := c.node.clientEvents.presenceHandler(c, PresenceEvent{
+		Channel: ch,
+	})
+	if reply.Disconnect != nil {
+		return nil, reply.Disconnect
+	}
+	if reply.Error != nil {
+		resp.Error = reply.Error.toProto()
 		return resp, nil
 	}
 
 	presence, err := c.node.Presence(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting presence", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
-		if clientErr, ok := err.(*Error); ok {
-			resp.Error = clientErr.toProto()
-			return resp, nil
-		}
-		resp.Error = ErrorInternal.toProto()
+		resp.Error = toClientErr(err).toProto()
 		return resp, nil
 	}
 
@@ -2296,30 +2166,34 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 // about active clients in channel.
 func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientproto.PresenceStatsResponse, *Disconnect) {
 	ch := cmd.Channel
-
 	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
 	resp := &clientproto.PresenceStatsResponse{}
 
-	c.mu.RLock()
-	_, ok := c.channels[ch]
-	c.mu.RUnlock()
-
-	if !ok {
-		resp.Error = ErrorPermissionDenied.toProto()
+	chOpts, found, err := c.node.channelOptions(ch)
+	if err != nil {
+		resp.Error = toClientErr(err).toProto()
 		return resp, nil
 	}
-
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
-		resp.Error = ErrorNamespaceNotFound.toProto()
+	if !found {
+		resp.Error = ErrorUnknownChannel.toProto()
 		return resp, nil
 	}
-
-	if !chOpts.Presence || chOpts.PresenceDisableForClient {
+	if !chOpts.Presence || c.node.clientEvents.presenceStatsHandler == nil || !c.hasEvent(EventPresenceStats) {
 		resp.Error = ErrorNotAvailable.toProto()
+		return resp, nil
+	}
+
+	reply := c.node.clientEvents.presenceStatsHandler(c, PresenceStatsEvent{
+		Channel: ch,
+	})
+	if reply.Disconnect != nil {
+		return nil, reply.Disconnect
+	}
+	if reply.Error != nil {
+		resp.Error = reply.Error.toProto()
 		return resp, nil
 	}
 
@@ -2345,30 +2219,34 @@ func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientpr
 // ErrorNotAvailable.
 func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryResponse, *Disconnect) {
 	ch := cmd.Channel
-
 	if ch == "" {
 		return nil, DisconnectBadRequest
 	}
 
 	resp := &clientproto.HistoryResponse{}
 
-	c.mu.RLock()
-	_, ok := c.channels[ch]
-	c.mu.RUnlock()
-
-	if !ok {
-		resp.Error = ErrorPermissionDenied.toProto()
+	chOpts, found, err := c.node.channelOptions(ch)
+	if err != nil {
+		resp.Error = toClientErr(err).toProto()
 		return resp, nil
 	}
-
-	chOpts, ok := c.node.ChannelOpts(ch)
-	if !ok {
-		resp.Error = ErrorNamespaceNotFound.toProto()
+	if !found {
+		resp.Error = ErrorUnknownChannel.toProto()
 		return resp, nil
 	}
-
-	if (chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0) || chOpts.HistoryDisableForClient {
+	if chOpts.HistorySize <= 0 || chOpts.HistoryLifetime <= 0 || c.node.clientEvents.historyHandler == nil || !c.hasEvent(EventHistory) {
 		resp.Error = ErrorNotAvailable.toProto()
+		return resp, nil
+	}
+
+	reply := c.node.clientEvents.historyHandler(c, HistoryEvent{
+		Channel: ch,
+	})
+	if reply.Disconnect != nil {
+		return nil, reply.Disconnect
+	}
+	if reply.Error != nil {
+		resp.Error = reply.Error.toProto()
 		return resp, nil
 	}
 

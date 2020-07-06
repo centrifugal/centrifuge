@@ -93,6 +93,11 @@ func TestRedisEngine(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, len(p))
 
+			s, err := e.PresenceStats("channel")
+			require.NoError(t, err)
+			require.Equal(t, 1, s.NumUsers)
+			require.Equal(t, 1, s.NumClients)
+
 			err = e.RemovePresence("channel", "uid")
 			require.NoError(t, err)
 
@@ -866,17 +871,25 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool) *Node {
 	if err != nil {
 		panic(err)
 	}
+	n.On().Subscribe(func(_ *Client, _ SubscribeEvent) SubscribeReply {
+		return SubscribeReply{}
+	})
+	n.On().Publish(func(_ *Client, _ PublishEvent) PublishReply {
+		return PublishReply{}
+	})
 	return n
 }
 
 func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bool) {
 	node := nodeWithRedisEngine(t, useStreams)
 
-	config := node.Config()
-	config.HistorySize = tt.HistorySize
-	config.HistoryLifetime = tt.HistoryLifetime
-	config.HistoryRecover = true
-	_ = node.Reload(config)
+	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
+		return ChannelOptions{
+			HistorySize:     tt.HistorySize,
+			HistoryLifetime: tt.HistoryLifetime,
+			HistoryRecover:  true,
+		}, true, nil
+	}
 
 	transport := newTestTransport()
 	ctx := context.Background()

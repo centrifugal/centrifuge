@@ -51,35 +51,38 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 
-	cfg.Anonymous = true
-
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+		return centrifuge.ConnectReply{
+			Credentials: &centrifuge.Credentials{
+				UserID: "",
+			},
+		}
+	})
 
-		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
-			var ev event
-			_ = json.Unmarshal(e.Data, &ev)
-			_, _ = node.Publish("moving", ev.Payload)
-			return centrifuge.MessageReply{}
-		})
+	node.On().Connect(func(c *centrifuge.Client) {
+		log.Printf("worm connected via %s", c.Transport().Name())
+	})
 
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("worm disconnected, disconnect: %s", e.Disconnect)
-			return centrifuge.DisconnectReply{}
-		})
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+		var ev event
+		_ = json.Unmarshal(e.Data, &ev)
+		_, _ = node.Publish("moving", ev.Payload)
+		return centrifuge.MessageReply{}
+	})
 
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("worm subscribed on %s", e.Channel)
-			return centrifuge.SubscribeReply{}
-		})
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+		log.Printf("worm subscribed on %s", e.Channel)
+		return centrifuge.SubscribeReply{}
+	})
 
-		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			log.Printf("worm unsubscribed from %s", e.Channel)
-			return centrifuge.UnsubscribeReply{}
-		})
+	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+		log.Printf("worm unsubscribed from %s", e.Channel)
+	})
 
-		log.Printf("worm connected via %s", client.Transport().Name())
+	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		log.Printf("worm disconnected, disconnect: %s", e.Disconnect)
 	})
 
 	if err := node.Run(); err != nil {
