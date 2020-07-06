@@ -576,7 +576,7 @@ func TestClientAliveHandler(t *testing.T) {
 	disconnected := make(chan struct{})
 	numCalls := 0
 
-	node.On().Alive(func(_ *Client, _ AliveEvent) {
+	node.On().Alive(func(_ *Client) {
 		numCalls++
 		if numCalls >= 50 && !closed {
 			close(done)
