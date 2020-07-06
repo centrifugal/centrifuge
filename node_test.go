@@ -118,22 +118,20 @@ func nodeWithMemoryEngineNoHandlers() *Node {
 
 func nodeWithMemoryEngine() *Node {
 	n := nodeWithMemoryEngineNoHandlers()
-	n.On().ClientConnected(func(ctx context.Context, client *Client) {
-		client.On().Subscribe(func(_ SubscribeEvent) SubscribeReply {
-			return SubscribeReply{}
-		})
-		client.On().Publish(func(_ PublishEvent) PublishReply {
-			return PublishReply{}
-		})
+	n.On().Subscribe(func(_ *Client, _ SubscribeEvent) SubscribeReply {
+		return SubscribeReply{}
+	})
+	n.On().Publish(func(_ *Client, _ PublishEvent) PublishReply {
+		return PublishReply{}
 	})
 	return n
 }
 
-func TestSetConfig(t *testing.T) {
-	node := nodeWithTestEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	err := node.Reload(DefaultConfig)
-	require.NoError(t, err)
+func TestClientEventHub(t *testing.T) {
+	h := &ClientEventHub{}
+	handler := func(_ *Client, _ DisconnectEvent) {}
+	h.Disconnect(handler)
+	require.NotNil(t, h.disconnectHandler)
 }
 
 func TestNodeRegistry(t *testing.T) {
@@ -263,17 +261,14 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 
 func BenchmarkHistory(b *testing.B) {
 	e := testMemoryEngine()
-	conf := e.node.Config()
 	numMessages := 100
-	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
+	e.node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
 			HistorySize:     numMessages,
 			HistoryLifetime: 60,
 			HistoryRecover:  true,
 		}, true, nil
 	}
-	err := e.node.Reload(conf)
-	require.NoError(b, err)
 
 	channel := "test"
 

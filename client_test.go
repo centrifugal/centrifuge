@@ -35,15 +35,6 @@ func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	return c, nil
 }
 
-func TestClientEventHub(t *testing.T) {
-	h := ClientEventHub{}
-	handler := func(e DisconnectEvent) DisconnectReply {
-		return DisconnectReply{}
-	}
-	h.Disconnect(handler)
-	require.NotNil(t, h.disconnectHandler)
-}
-
 func TestSetCredentials(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{})
@@ -69,7 +60,7 @@ func TestClientInitialState(t *testing.T) {
 	require.Equal(t, 0, len(client.Channels()))
 	require.Equal(t, ProtocolTypeJSON, client.Transport().Protocol())
 	require.Equal(t, "test_transport", client.Transport().Name())
-	require.False(t, client.closed)
+	require.True(t, client.status == statusConnecting)
 	require.False(t, client.authenticated)
 }
 
@@ -80,18 +71,17 @@ func TestClientClosedState(t *testing.T) {
 	client, _ := newClient(context.Background(), node, transport)
 	err := client.close(nil)
 	require.NoError(t, err)
-	require.True(t, client.closed)
+	require.True(t, client.status == statusClosed)
 }
 
 func TestClientTimer(t *testing.T) {
 	node := nodeWithMemoryEngine()
+	node.config.ClientStaleCloseDelay = 25 * time.Second
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport()
 	client, _ := newClient(context.Background(), node, transport)
 	require.NotNil(t, client.timer)
-	config := node.Config()
-	config.ClientStaleCloseDelay = 0
-	_ = node.Reload(config)
+	node.config.ClientStaleCloseDelay = 0
 	client, _ = newClient(context.Background(), node, transport)
 	require.Nil(t, client.timer)
 }
@@ -130,9 +120,6 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	_ = node.Reload(config)
-
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{
@@ -156,8 +143,11 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	_ = node.Reload(config)
+	node.On().Refresh(func(_ *Client, _ RefreshEvent) RefreshReply {
+		return RefreshReply{
+			Expired: true,
+		}
+	})
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -166,26 +156,19 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 		ExpireAt: time.Now().Unix() + 60,
 	})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().Refresh(func(e RefreshEvent) RefreshReply {
-		return RefreshReply{
-			Expired: true,
-		}
-	})
 
 	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
+	client.triggerConnect()
 	client.expire()
-	require.True(t, client.closed)
+	require.True(t, client.status == statusClosed)
 }
 
 func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	config := node.Config()
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -196,7 +179,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	expireAt := time.Now().Unix() + 60
-	client.On().Refresh(func(e RefreshEvent) RefreshReply {
+	node.On().Refresh(func(_ *Client, _ RefreshEvent) RefreshReply {
 		return RefreshReply{
 			ExpireAt: expireAt,
 		}
@@ -207,16 +190,13 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	disconnect := client.connectCmd(&protocol.ConnectRequest{}, rw)
 	require.Nil(t, disconnect)
 	client.expire()
-	require.False(t, client.closed)
+	require.False(t, client.status == statusClosed)
 	require.Equal(t, expireAt, client.exp)
 }
 
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	config := node.Config()
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -226,7 +206,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	})
 	client, _ := newClient(newCtx, node, transport)
 
-	client.On().Refresh(func(e RefreshEvent) RefreshReply {
+	node.On().Refresh(func(_ *Client, _ RefreshEvent) RefreshReply {
 		return RefreshReply{}
 	})
 
@@ -380,12 +360,10 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistoryLifetime: 100,
 		HistorySize:     10,
 	})
-	_ = node.Reload(config)
 	transport := newTestTransport()
 	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
@@ -455,7 +433,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.On().ClientConnecting(func(context.Context, TransportInfo, ConnectEvent) ConnectReply {
+	node.On().Connecting(func(context.Context, ConnectEvent) ConnectReply {
 		return ConnectReply{
 			Channels: []string{
 				"server-side-1",
@@ -512,13 +490,11 @@ func TestClientSubscribeLast(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistorySize:     10,
 		HistoryLifetime: 60,
 		HistoryRecover:  true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -567,9 +543,8 @@ func TestClientUnsubscribe(t *testing.T) {
 
 	unsubscribed := make(chan struct{})
 
-	client.On().Unsubscribe(func(event UnsubscribeEvent) UnsubscribeReply {
+	node.On().Unsubscribe(func(_ *Client, _ UnsubscribeEvent) {
 		close(unsubscribed)
-		return UnsubscribeReply{}
 	})
 
 	err := client.Unsubscribe("test")
@@ -589,9 +564,7 @@ func TestClientAliveHandler(t *testing.T) {
 	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	config.ClientPresenceUpdateInterval = time.Millisecond
-	_ = node.Reload(config)
+	node.config.ClientPresenceUpdateInterval = time.Millisecond
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -603,22 +576,21 @@ func TestClientAliveHandler(t *testing.T) {
 	disconnected := make(chan struct{})
 	numCalls := 0
 
-	client.On().Alive(func(event AliveEvent) AliveReply {
+	node.On().Alive(func(_ *Client, _ AliveEvent) {
 		numCalls++
 		if numCalls >= 50 && !closed {
 			close(done)
 			closed = true
 			client.Close(DisconnectForceNoReconnect)
 		}
-		return AliveReply{}
 	})
 
-	client.On().Disconnect(func(event DisconnectEvent) DisconnectReply {
+	node.On().Disconnect(func(_ *Client, _ DisconnectEvent) {
 		close(disconnected)
-		return DisconnectReply{}
 	})
 
 	connectClient(t, client)
+	client.triggerConnect()
 	client.scheduleOnConnectTimers()
 
 	select {
@@ -719,12 +691,9 @@ func TestClientPublishHandler(t *testing.T) {
 		},
 	}
 
-	config := node.Config()
-	_ = node.Reload(config)
-
 	subscribeClient(t, client, "test")
 
-	client.eventHub.publishHandler = func(e PublishEvent) PublishReply {
+	node.clientEvents.publishHandler = func(_ *Client, e PublishEvent) PublishReply {
 		var msg testClientMessage
 		err := json.Unmarshal(e.Data, &msg)
 		require.NoError(t, err)
@@ -793,20 +762,18 @@ func TestClientPresence(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().Presence(func(event PresenceEvent) PresenceReply {
+	node.On().Presence(func(_ *Client, _ PresenceEvent) PresenceReply {
 		return PresenceReply{}
 	})
-	client.On().PresenceStats(func(event PresenceStatsEvent) PresenceStatsReply {
+	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) PresenceStatsReply {
 		return PresenceStatsReply{}
 	})
 
@@ -828,11 +795,9 @@ func TestClientPresence(t *testing.T) {
 	require.Equal(t, uint32(1), presenceStatsResp.Result.NumUsers)
 	require.Equal(t, uint32(1), presenceStatsResp.Result.NumClients)
 
-	config = node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: false,
 	})
-	_ = node.Reload(config)
 
 	presenceResp, disconnect = client.presenceCmd(&protocol.PresenceRequest{
 		Channel: "test",
@@ -854,19 +819,17 @@ func TestClientHistory(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistorySize:     10,
 		HistoryLifetime: 60,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
 
-	client.On().History(func(event HistoryEvent) HistoryReply {
+	node.On().History(func(_ *Client, _ HistoryEvent) HistoryReply {
 		return HistoryReply{}
 	})
 
@@ -884,12 +847,10 @@ func TestClientHistory(t *testing.T) {
 	require.Nil(t, historyResp.Error)
 	require.Equal(t, 10, len(historyResp.Result.Publications))
 
-	config = node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistorySize:     0,
 		HistoryLifetime: 0,
 	})
-	_ = node.Reload(config)
 
 	historyResp, disconnect = client.historyCmd(&protocol.HistoryRequest{
 		Channel: "test",
@@ -903,9 +864,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	config.ClientStaleCloseDelay = time.Millisecond
-	_ = node.Reload(config)
+	node.config.ClientStaleCloseDelay = time.Millisecond
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -913,7 +872,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 	time.Sleep(100 * time.Millisecond)
 	client.mu.Lock()
-	require.True(t, client.closed)
+	require.True(t, client.status == statusClosed)
 	client.mu.Unlock()
 }
 
@@ -928,12 +887,12 @@ func TestClientCloseExpired(t *testing.T) {
 	connectClient(t, client)
 	client.scheduleOnConnectTimers()
 	client.mu.RLock()
-	require.False(t, client.closed)
+	require.False(t, client.status == statusClosed)
 	client.mu.RUnlock()
 	time.Sleep(4 * time.Second)
 	client.mu.RLock()
 	defer client.mu.RUnlock()
-	require.True(t, client.closed)
+	require.True(t, client.status == statusClosed)
 }
 
 func TestClientConnectExpiredError(t *testing.T) {
@@ -956,11 +915,9 @@ func TestClientPresenceUpdate(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
@@ -1063,7 +1020,7 @@ func TestClientHandleRPC(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().RPC(func(event RPCEvent) RPCReply {
+	node.On().RPC(func(_ *Client, event RPCEvent) RPCReply {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
 		return RPCReply{}
@@ -1090,7 +1047,7 @@ func TestClientHandleSend(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().Message(func(event MessageEvent) MessageReply {
+	node.On().Message(func(_ *Client, event MessageEvent) MessageReply {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
 		return MessageReply{}
@@ -1116,7 +1073,7 @@ func TestClientHandlePublishNotAllowed(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().Publish(func(event PublishEvent) PublishReply {
+	node.On().Publish(func(_ *Client, _ PublishEvent) PublishReply {
 		return PublishReply{
 			Error: ErrorPermissionDenied,
 		}
@@ -1143,7 +1100,7 @@ func TestClientHandlePublish(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().Publish(func(event PublishEvent) PublishReply {
+	node.On().Publish(func(_ *Client, event PublishEvent) PublishReply {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
 		require.Equal(t, "test", event.Channel)
@@ -1193,7 +1150,7 @@ func TestClientHandleHistoryNotAvailableDueToOption(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().History(func(event HistoryEvent) HistoryReply {
+	node.On().History(func(_ *Client, _ HistoryEvent) HistoryReply {
 		return HistoryReply{}
 	})
 	connectClient(t, client)
@@ -1214,19 +1171,16 @@ func TestClientHandleHistoryNotAvailableDueToOption(t *testing.T) {
 func TestClientHandleHistory(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		HistorySize:     1,
 		HistoryLifetime: 30,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().History(func(event HistoryEvent) HistoryReply {
+	node.On().History(func(_ *Client, _ HistoryEvent) HistoryReply {
 		return HistoryReply{}
 	})
 	connectClient(t, client)
@@ -1274,7 +1228,7 @@ func TestClientHandlePresenceNotAvailableDueToOption(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().Presence(func(event PresenceEvent) PresenceReply {
+	node.On().Presence(func(_ *Client, _ PresenceEvent) PresenceReply {
 		return PresenceReply{}
 	})
 	connectClient(t, client)
@@ -1296,17 +1250,15 @@ func TestClientHandlePresence(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().Presence(func(event PresenceEvent) PresenceReply {
+	node.On().Presence(func(_ *Client, _ PresenceEvent) PresenceReply {
 		return PresenceReply{}
 	})
 	connectClient(t, client)
@@ -1354,7 +1306,7 @@ func TestClientHandlePresenceStatsNotAvailableDueToOption(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().PresenceStats(func(event PresenceStatsEvent) PresenceStatsReply {
+	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) PresenceStatsReply {
 		return PresenceStatsReply{}
 	})
 	connectClient(t, client)
@@ -1376,17 +1328,15 @@ func TestClientHandlePresenceStats(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	config := node.Config()
-	setTestChannelOptions(&config, ChannelOptions{
+	setTestChannelOptions(&node.config, ChannelOptions{
 		Presence: true,
 	})
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	client.On().PresenceStats(func(event PresenceStatsEvent) PresenceStatsReply {
+	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) PresenceStatsReply {
 		return PresenceStatsReply{}
 	})
 	connectClient(t, client)
@@ -1447,14 +1397,14 @@ func TestClientSideRefresh(t *testing.T) {
 	})
 	client, _ := newClient(newCtx, node, transport)
 
-	node.On().ClientConnecting(func(ctx context.Context, info TransportInfo, event ConnectEvent) ConnectReply {
+	node.On().Connecting(func(ctx context.Context, event ConnectEvent) ConnectReply {
 		return ConnectReply{
 			ClientSideRefresh: true,
 		}
 	})
 
 	expireAt := time.Now().Unix() + 60
-	client.On().Refresh(func(e RefreshEvent) RefreshReply {
+	node.On().Refresh(func(_ *Client, e RefreshEvent) RefreshReply {
 		require.Equal(t, "test", e.Token)
 		return RefreshReply{
 			ExpireAt: expireAt,
@@ -1492,20 +1442,21 @@ func TestClientSideSubRefresh(t *testing.T) {
 	})
 	client, _ := newClient(newCtx, node, transport)
 
-	node.On().ClientConnecting(func(ctx context.Context, info TransportInfo, event ConnectEvent) ConnectReply {
-		client.On().Subscribe(func(event SubscribeEvent) SubscribeReply {
-			return SubscribeReply{
-				ExpireAt:          time.Now().Unix() + 10,
-				ClientSideRefresh: true,
-			}
-		})
+	node.On().Connecting(func(ctx context.Context, event ConnectEvent) ConnectReply {
 		return ConnectReply{
 			ClientSideRefresh: true,
 		}
 	})
 
+	node.On().Subscribe(func(_ *Client, _ SubscribeEvent) SubscribeReply {
+		return SubscribeReply{
+			ExpireAt:          time.Now().Unix() + 10,
+			ClientSideRefresh: true,
+		}
+	})
+
 	expireAt := time.Now().Unix() + 60
-	client.On().SubRefresh(func(e SubRefreshEvent) SubRefreshReply {
+	node.On().SubRefresh(func(_ *Client, e SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "test_token", e.Token)
 		return SubRefreshReply{
 			ExpireAt: expireAt,
@@ -1539,13 +1490,13 @@ func TestCloseNoRace(t *testing.T) {
 
 	done := make(chan struct{})
 
-	node.On().ClientConnected(func(ctx context.Context, client *Client) {
+	node.On().Connect(func(client *Client) {
 		client.Close(DisconnectForceNoReconnect)
 		time.Sleep(time.Second)
-		client.On().Disconnect(func(event DisconnectEvent) DisconnectReply {
-			close(done)
-			return DisconnectReply{}
-		})
+	})
+
+	node.On().Disconnect(func(_ *Client, _ DisconnectEvent) {
+		close(done)
 	})
 
 	transport := newTestTransport()
@@ -1585,6 +1536,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
+	client.events = uint64(EventAll)
 
 	var nowTime time.Time
 	node.mu.Lock()
@@ -1606,7 +1558,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.False(t, got)
 
 	// refreshed but expired.
-	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+	node.clientEvents.subRefreshHandler = func(client *Client, event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{Expired: true}
 	}
@@ -1615,7 +1567,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.False(t, got)
 
 	// refreshed but not really.
-	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+	node.clientEvents.subRefreshHandler = func(client *Client, event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{ExpireAt: 150}
 	}
@@ -1624,7 +1576,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.False(t, got)
 
 	// refreshed but unknown channel.
-	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+	node.clientEvents.subRefreshHandler = func(client *Client, event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{
 			ExpireAt: 250,
@@ -1638,7 +1590,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 
 	// refreshed.
 	client.channels["channel"] = ChannelContext{}
-	client.eventHub.subRefreshHandler = func(event SubRefreshEvent) SubRefreshReply {
+	node.clientEvents.subRefreshHandler = func(client *Client, event SubRefreshEvent) SubRefreshReply {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{
 			ExpireAt: 250,

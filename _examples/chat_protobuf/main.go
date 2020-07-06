@@ -52,58 +52,18 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 		}
 	})
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
-
-		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			return centrifuge.RefreshReply{
-				ExpireAt: time.Now().Unix() + 10,
-			}
-		})
-
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{}
-		})
-
-		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
-			return centrifuge.UnsubscribeReply{}
-		})
-
-		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			return centrifuge.PublishReply{}
-		})
-
-		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
-			log.Printf("RPC from user: %s, data: %s", client.UserID(), string(e.Data))
-			return centrifuge.RPCReply{
-				Data: []byte(`{"year": "2020"}`),
-			}
-		})
-
-		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
-			log.Printf("message from user: %s, data: %s", client.UserID(), string(e.Data))
-			return centrifuge.MessageReply{}
-		})
-
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
-			return centrifuge.DisconnectReply{}
-		})
-
-		transport := client.Transport()
-		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
+	node.On().Connect(func(c *centrifuge.Client) {
+		transport := c.Transport()
+		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
 
 		go func() {
-			err := client.Send([]byte("hello"))
+			err := c.Send([]byte("hello"))
 			if err != nil {
 				if err == io.EOF {
 					return
@@ -111,6 +71,43 @@ func main() {
 				log.Fatalln(err.Error())
 			}
 		}()
+	})
+
+	node.On().Refresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 10,
+		}
+	})
+
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
+		return centrifuge.SubscribeReply{}
+	})
+
+	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
+	})
+
+	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
+		return centrifuge.PublishReply{}
+	})
+
+	node.On().RPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) centrifuge.RPCReply {
+		log.Printf("RPC from user: %s, data: %s", c.UserID(), string(e.Data))
+		return centrifuge.RPCReply{
+			Data: []byte(`{"year": "2020"}`),
+		}
+	})
+
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+		log.Printf("message from user: %s, data: %s", c.UserID(), string(e.Data))
+		return centrifuge.MessageReply{}
+	})
+
+	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
 	})
 
 	if err := node.Run(); err != nil {

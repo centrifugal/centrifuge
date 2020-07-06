@@ -871,13 +871,11 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool) *Node {
 	if err != nil {
 		panic(err)
 	}
-	n.On().ClientConnected(func(ctx context.Context, client *Client) {
-		client.On().Subscribe(func(_ SubscribeEvent) SubscribeReply {
-			return SubscribeReply{}
-		})
-		client.On().Publish(func(_ PublishEvent) PublishReply {
-			return PublishReply{}
-		})
+	n.On().Subscribe(func(_ *Client, _ SubscribeEvent) SubscribeReply {
+		return SubscribeReply{}
+	})
+	n.On().Publish(func(_ *Client, _ PublishEvent) PublishReply {
+		return PublishReply{}
 	})
 	return n
 }
@@ -885,15 +883,13 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool) *Node {
 func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bool) {
 	node := nodeWithRedisEngine(t, useStreams)
 
-	config := node.Config()
-	config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
+	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
 			HistorySize:     tt.HistorySize,
 			HistoryLifetime: tt.HistoryLifetime,
 			HistoryRecover:  true,
 		}, true, nil
 	}
-	_ = node.Reload(config)
 
 	transport := newTestTransport()
 	ctx := context.Background()

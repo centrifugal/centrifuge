@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"sync"
 	"time"
 
@@ -44,8 +45,8 @@ type Node struct {
 	shutdown bool
 	// shutdownCh is a channel which is closed when node shutdown initiated.
 	shutdownCh chan struct{}
-	// eventHub to manage event handlers attached to node.
-	eventHub *NodeEventHub
+	// clientEvents to manage event handlers attached to node.
+	clientEvents *ClientEventHub
 	// logger allows to log throughout library code and proxy log entries to
 	// configured log handler.
 	logger *logger
@@ -62,7 +63,7 @@ type Node struct {
 
 	subDissolver *dissolve.Dissolver
 
-	// mockable access to current time.
+	// nowTimeGetter provides access to current time.
 	nowTimeGetter nowtime.Getter
 }
 
@@ -80,6 +81,14 @@ func New(c Config) (*Node, error) {
 		subLocks[i] = &sync.Mutex{}
 	}
 
+	if c.Name == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			return nil, err
+		}
+		c.Name = hostname
+	}
+
 	n := &Node{
 		uid:            uid,
 		nodes:          newNodeRegistry(uid),
@@ -90,7 +99,7 @@ func New(c Config) (*Node, error) {
 		logger:         nil,
 		controlEncoder: controlproto.NewProtobufEncoder(),
 		controlDecoder: controlproto.NewProtobufDecoder(),
-		eventHub:       &NodeEventHub{},
+		clientEvents:   &ClientEventHub{},
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
@@ -130,14 +139,6 @@ func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
 }
 
-// Config returns a copy of node Config.
-func (n *Node) Config() Config {
-	n.mu.RLock()
-	c := n.config
-	n.mu.RUnlock()
-	return c
-}
-
 // SetEngine binds Engine to node.
 func (n *Node) SetEngine(e Engine) {
 	n.broker = e.(Broker)
@@ -163,17 +164,6 @@ func (n *Node) SetPresenceManager(m PresenceManager) {
 // Hub returns node's Hub.
 func (n *Node) Hub() *Hub {
 	return n.hub
-}
-
-// Reload node config.
-func (n *Node) Reload(c Config) error {
-	if err := c.Validate(); err != nil {
-		return err
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.config = c
-	return nil
 }
 
 // Run performs node startup actions. At moment must be called once on start
@@ -210,8 +200,8 @@ func (n *Node) LogEnabled(level LogLevel) bool {
 }
 
 // On allows access to NodeEventHub.
-func (n *Node) On() *NodeEventHub {
-	return n.eventHub
+func (n *Node) On() *ClientEventHub {
+	return n.clientEvents
 }
 
 // Shutdown sets shutdown flag to Node so handlers could stop accepting
@@ -251,7 +241,7 @@ func (n *Node) updateGauges() {
 	numClientsGauge.Set(float64(n.hub.NumClients()))
 	numUsersGauge.Set(float64(n.hub.NumUsers()))
 	numChannelsGauge.Set(float64(n.hub.NumChannels()))
-	version := n.Config().Version
+	version := n.config.Version
 	if version == "" {
 		version = "_"
 	}
@@ -272,7 +262,6 @@ func (n *Node) updateMetrics() {
 
 // Centrifuge library uses Prometheus metrics for instrumentation. But we also try to
 // aggregate Prometheus metrics periodically and share this information between nodes.
-// At moment this allows to show metrics in Centrifugo admin interface.
 func (n *Node) initMetrics() error {
 	if n.config.NodeInfoMetricsAggregateInterval == 0 {
 		return nil
@@ -655,7 +644,7 @@ func (n *Node) pubUnsubscribe(user string, ch string) error {
 }
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
-// nodes could disconnect user from Centrifugo.
+// nodes could disconnect user from server.
 func (n *Node) pubDisconnect(user string, reconnect bool) error {
 	// TODO: handle reconnect flag.
 	disconnect := &controlpb.Disconnect{
@@ -962,26 +951,114 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 	r.mu.Unlock()
 }
 
-// NodeEventHub allows to bind events to Node.
-// All its methods are not goroutine-safe. Event handlers must be
-// set before Node run method called.
-type NodeEventHub struct {
-	connectingHandler ConnectingHandler
-	connectedHandler  ConnectedHandler
+// ClientEventHub allows binding client event handlers.
+// All ClientEventHub methods are not goroutine-safe and supposed
+// to be called once before Node Run called.
+type ClientEventHub struct {
+	connectingHandler    ConnectingHandler
+	connectHandler       ConnectHandler
+	aliveHandler         AliveHandler
+	refreshHandler       RefreshHandler
+	disconnectHandler    DisconnectHandler
+	subscribeHandler     SubscribeHandler
+	unsubscribeHandler   UnsubscribeHandler
+	publishHandler       PublishHandler
+	subRefreshHandler    SubRefreshHandler
+	rpcHandler           RPCHandler
+	messageHandler       MessageHandler
+	presenceHandler      PresenceHandler
+	presenceStatsHandler PresenceStatsHandler
+	historyHandler       HistoryHandler
 }
 
-// ClientConnecting happens when client sends Connect command to server. In this
-// handler client can reject connection or provide Credentials for it.
-func (h *NodeEventHub) ClientConnecting(handler ConnectingHandler) {
-	h.connectingHandler = handler
+// Connecting allows setting ConnectingHandler.
+// ConnectingHandler will be called when client sends Connect command to server.
+// In this handler server can reject connection or provide Credentials for it.
+func (c *ClientEventHub) Connecting(handler ConnectingHandler) {
+	c.connectingHandler = handler
 }
 
-// ClientConnected called after client connection has been successfully established,
-// authenticated and connect reply already sent to client. This is a place where
-// application should set all required connection event callbacks and can start
-// communicating with client.
-func (h *NodeEventHub) ClientConnected(handler ConnectedHandler) {
-	h.connectedHandler = handler
+// Connect allows setting ConnectHandler.
+// ConnectHandler called after client connection successfully established,
+// authenticated and Connect Reply already sent to client. This is a place where
+// application can start communicating with client.
+func (c *ClientEventHub) Connect(handler ConnectHandler) {
+	c.connectHandler = handler
+}
+
+// Alive allows setting AliveHandler.
+// AliveHandler called periodically for active client connection.
+func (c *ClientEventHub) Alive(h AliveHandler) {
+	c.aliveHandler = h
+}
+
+// Refresh allows setting RefreshHandler.
+// RefreshHandler called when it's time to refresh expiring client connection.
+func (c *ClientEventHub) Refresh(h RefreshHandler) {
+	c.refreshHandler = h
+}
+
+// Disconnect allows setting DisconnectHandler.
+// DisconnectHandler called when client disconnected from Node.
+func (c *ClientEventHub) Disconnect(h DisconnectHandler) {
+	c.disconnectHandler = h
+}
+
+// Message allows setting MessageHandler.
+// MessageHandler called when client sent asynchronous message.
+func (c *ClientEventHub) Message(h MessageHandler) {
+	c.messageHandler = h
+}
+
+// RPC allows setting RPCHandler.
+// RPCHandler will be executed on every incoming RPC call.
+func (c *ClientEventHub) RPC(h RPCHandler) {
+	c.rpcHandler = h
+}
+
+// SubRefresh allows setting SubRefreshHandler.
+// SubRefreshHandler called when it's time to refresh client subscription.
+func (c *ClientEventHub) SubRefresh(h SubRefreshHandler) {
+	c.subRefreshHandler = h
+}
+
+// Subscribe allows setting SubscribeHandler.
+// SubscribeHandler called when client subscribes on channel.
+func (c *ClientEventHub) Subscribe(h SubscribeHandler) {
+	c.subscribeHandler = h
+}
+
+// Unsubscribe allows setting UnsubscribeHandler.
+// UnsubscribeHandler called when client unsubscribes from channel.
+func (c *ClientEventHub) Unsubscribe(h UnsubscribeHandler) {
+	c.unsubscribeHandler = h
+}
+
+// Publish allows setting PublishHandler.
+// PublishHandler called when client publishes message into channel.
+func (c *ClientEventHub) Publish(h PublishHandler) {
+	c.publishHandler = h
+}
+
+// Presence allows setting PresenceHandler.
+// PresenceHandler called when Presence request from client received.
+// At this moment you can only return a custom error or disconnect client.
+func (c *ClientEventHub) Presence(h PresenceHandler) {
+	c.presenceHandler = h
+}
+
+// PresenceStats allows settings PresenceStatsHandler.
+// PresenceStatsHandler called when PresenceStats request from client received.
+// At this moment you can only return a custom error or disconnect client.
+func (c *ClientEventHub) PresenceStats(h PresenceStatsHandler) {
+	c.presenceStatsHandler = h
+}
+
+// History allows settings HistoryHandler.
+// HistoryHandler called when History request from client received.
+// At this moment you can only return a custom error or disconnect client.
+func (c *ClientEventHub) History(h HistoryHandler) {
+	c.historyHandler = h
 }
 
 type brokerEventHandler struct {
