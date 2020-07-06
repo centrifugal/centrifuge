@@ -46,13 +46,8 @@ func channelSubscribeAllowed(channel string) bool {
 
 func main() {
 	cfg := centrifuge.DefaultConfig
-
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
-
-	if err := cfg.Validate(); err != nil {
-		log.Fatal(err)
-	}
 
 	node, _ := centrifuge.New(cfg)
 

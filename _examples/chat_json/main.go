@@ -82,10 +82,6 @@ func main() {
 		return centrifuge.ChannelOptions{}, true, nil
 	}
 
-	if err := cfg.Validate(); err != nil {
-		log.Fatal(err)
-	}
-
 	node, _ := centrifuge.New(cfg)
 
 	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
@@ -104,7 +100,7 @@ func main() {
 
 	node.On().Connect(func(c *centrifuge.Client) {
 		transport := c.Transport()
-		log.Printf("user %s connected via %s with protocol: %s and val %s", c.UserID(), transport.Name(), transport.Protocol())
+		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
 
 		// Event handler should not block, so start separate goroutine to
 		// periodically send messages to client.
@@ -126,7 +122,7 @@ func main() {
 		}()
 	})
 
-	node.On().Alive(func(c *centrifuge.Client, e centrifuge.AliveEvent) {
+	node.On().Alive(func(c *centrifuge.Client) {
 		log.Printf("user %s connection is still active", c.UserID())
 	})
 

@@ -22,11 +22,11 @@ func handleLog(e centrifuge.LogEntry) {
 }
 
 func waitExitSignal(n *centrifuge.Node) {
-	sigs := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigs
+		<-sigCh
 		n.Shutdown(context.Background())
 		done <- true
 	}()

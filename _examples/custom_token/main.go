@@ -40,10 +40,6 @@ func main() {
 	// Better to keep default in production. Here we just speeding up things a bit.
 	cfg.ClientExpiredCloseDelay = 5 * time.Second
 
-	if err := cfg.Validate(); err != nil {
-		log.Fatal(err)
-	}
-
 	node, _ := centrifuge.New(cfg)
 
 	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
