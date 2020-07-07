@@ -280,7 +280,18 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 		// Subscription expired.
 		if !clientSideRefresh && c.node.clientEvents.subRefreshHandler != nil && c.hasEvent(EventSubRefresh) {
 			// Give subscription a chance to be refreshed via SubRefreshHandler.
-			reply := c.node.clientEvents.subRefreshHandler(c, SubRefreshEvent{Channel: channel})
+			reply, err := c.node.clientEvents.subRefreshHandler(c, SubRefreshEvent{Channel: channel})
+			if err != nil {
+				switch t := err.(type) {
+				case *Disconnect:
+					// TODO: handle this disconnect properly.
+					go func() { _ = c.close(t) }()
+					return false
+				default:
+					// TODO: should delay check?
+					return false
+				}
+			}
 			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
 				return false
 			}
@@ -771,10 +782,17 @@ func (c *Client) expire() {
 	now := time.Now().Unix()
 
 	if !clientSideRefresh && c.node.clientEvents.refreshHandler != nil && c.hasEvent(EventRefresh) {
-		reply := c.node.clientEvents.refreshHandler(c, RefreshEvent{})
-		if reply.Disconnect != nil {
-			_ = c.close(reply.Disconnect)
-			return
+		reply, err := c.node.clientEvents.refreshHandler(c, RefreshEvent{})
+		if err != nil {
+			switch t := err.(type) {
+			case *Disconnect:
+				_ = c.close(t)
+				return
+			default:
+				// TODO: check with delay.
+				_ = c.close(DisconnectServerError)
+				return
+			}
 		}
 		if reply.Expired {
 			_ = c.close(DisconnectExpired)
@@ -1101,16 +1119,18 @@ func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) *Disconnect {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding rpc", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
 		}
-		rpcReply := c.node.clientEvents.rpcHandler(c, RPCEvent{
+		rpcReply, err := c.node.clientEvents.rpcHandler(c, RPCEvent{
 			Method: cmd.Method,
 			Data:   cmd.Data,
 		})
-		if rpcReply.Disconnect != nil {
-			return rpcReply.Disconnect
-		}
-		if rpcReply.Error != nil {
-			_ = rw.write(&protocol.Reply{Error: rpcReply.Error.toProto()})
-			return nil
+		if err != nil {
+			switch t := err.(type) {
+			case *Disconnect:
+				return t
+			default:
+				_ = rw.write(&protocol.Reply{Error: toClientErr(err).toProto()})
+				return nil
+			}
 		}
 
 		result := &protocol.RPCResult{
@@ -1137,11 +1157,15 @@ func (c *Client) handleSend(params protocol.Raw) *Disconnect {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding message", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
 		}
-		messageReply := c.node.clientEvents.messageHandler(c, MessageEvent{
+		err = c.node.clientEvents.messageHandler(c, MessageEvent{
 			Data: cmd.Data,
 		})
-		if messageReply.Disconnect != nil {
-			return messageReply.Disconnect
+		if err != nil {
+			switch t := err.(type) {
+			case *Disconnect:
+				return t
+			default:
+			}
 		}
 		return nil
 	}
@@ -1187,19 +1211,20 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 	events := EventAll
 
 	if c.node.clientEvents.connectingHandler != nil {
-		reply := c.node.clientEvents.connectingHandler(c.ctx, ConnectEvent{
+		reply, err := c.node.clientEvents.connectingHandler(c.ctx, ConnectEvent{
 			ClientID:  c.ID(),
 			Data:      cmd.Data,
 			Token:     cmd.Token,
 			Transport: c.transport,
 		})
-		if reply.Disconnect != nil {
-			return reply.Disconnect
-		}
-		if reply.Error != nil {
-			resp.Error = reply.Error.toProto()
-			_ = rw.write(&protocol.Reply{Error: resp.Error})
-			return nil
+		if err != nil {
+			switch t := err.(type) {
+			case *Disconnect:
+				return t
+			default:
+				_ = rw.write(&protocol.Reply{Error: toClientErr(err).toProto()})
+				return nil
+			}
 		}
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
@@ -1455,11 +1480,17 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 	var info []byte
 
 	if c.node.clientEvents.refreshHandler != nil && c.hasEvent(EventRefresh) {
-		reply := c.node.clientEvents.refreshHandler(c, RefreshEvent{
+		reply, err := c.node.clientEvents.refreshHandler(c, RefreshEvent{
 			Token: cmd.Token,
 		})
-		if reply.Disconnect != nil {
-			return resp, reply.Disconnect
+		if err != nil {
+			switch t := err.(type) {
+			case *Disconnect:
+				return resp, t
+			default:
+				// TODO: should delay check?
+				return resp, DisconnectServerError
+			}
 		}
 		if reply.Expired {
 			return resp, DisconnectExpired
@@ -1560,15 +1591,17 @@ func (c *Client) extractSubscribeData(cmd *protocol.SubscribeRequest, serverSide
 
 	if !serverSide {
 		if c.node.clientEvents.subscribeHandler != nil && c.hasEvent(EventSubscribe) {
-			reply := c.node.clientEvents.subscribeHandler(c, SubscribeEvent{
+			reply, err := c.node.clientEvents.subscribeHandler(c, SubscribeEvent{
 				Channel: cmd.Channel,
 				Token:   cmd.Token,
 			})
-			if reply.Disconnect != nil {
-				return nil, 0, false, nil, reply.Disconnect
-			}
-			if reply.Error != nil {
-				return nil, 0, false, reply.Error, nil
+			if err != nil {
+				switch t := err.(type) {
+				case *Disconnect:
+					return nil, 0, false, nil, t
+				default:
+					return nil, 0, false, toClientErr(err), nil
+				}
 			}
 			if len(reply.ChannelInfo) > 0 {
 				channelInfo = reply.ChannelInfo
@@ -1944,12 +1977,18 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 	var info []byte
 
 	if c.node.clientEvents.subRefreshHandler != nil && c.hasEvent(EventSubRefresh) {
-		reply := c.node.clientEvents.subRefreshHandler(c, SubRefreshEvent{
+		reply, err := c.node.clientEvents.subRefreshHandler(c, SubRefreshEvent{
 			Channel: cmd.Channel,
 			Token:   cmd.Token,
 		})
-		if reply.Disconnect != nil {
-			return resp, reply.Disconnect
+		if err != nil {
+			switch t := err.(type) {
+			case *Disconnect:
+				return resp, t
+			default:
+				// TODO: should delay check?
+				return resp, DisconnectServerError
+			}
 		}
 		if reply.Expired {
 			return resp, DisconnectExpired
@@ -2069,7 +2108,7 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 	c.mu.RUnlock()
 
 	if c.node.clientEvents.publishHandler != nil && c.hasEvent(EventPublish) {
-		reply := c.node.clientEvents.publishHandler(c, PublishEvent{
+		reply, err := c.node.clientEvents.publishHandler(c, PublishEvent{
 			Channel: ch,
 			Data:    data,
 			Info: &ClientInfo{
@@ -2079,12 +2118,14 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 				ChanInfo: info.ChanInfo,
 			},
 		})
-		if reply.Disconnect != nil {
-			return resp, reply.Disconnect
-		}
-		if reply.Error != nil {
-			resp.Error = reply.Error.toProto()
-			return resp, nil
+		if err != nil {
+			switch t := err.(type) {
+			case *Disconnect:
+				return resp, t
+			default:
+				resp.Error = toClientErr(err).toProto()
+				return resp, nil
+			}
 		}
 		if reply.Data != nil {
 			data = reply.Data
@@ -2137,15 +2178,17 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 		return resp, nil
 	}
 
-	reply := c.node.clientEvents.presenceHandler(c, PresenceEvent{
+	_, err = c.node.clientEvents.presenceHandler(c, PresenceEvent{
 		Channel: ch,
 	})
-	if reply.Disconnect != nil {
-		return nil, reply.Disconnect
-	}
-	if reply.Error != nil {
-		resp.Error = reply.Error.toProto()
-		return resp, nil
+	if err != nil {
+		switch t := err.(type) {
+		case *Disconnect:
+			return resp, t
+		default:
+			resp.Error = toClientErr(err).toProto()
+			return resp, nil
+		}
 	}
 
 	presence, err := c.node.Presence(ch)
@@ -2186,15 +2229,17 @@ func (c *Client) presenceStatsCmd(cmd *protocol.PresenceStatsRequest) (*clientpr
 		return resp, nil
 	}
 
-	reply := c.node.clientEvents.presenceStatsHandler(c, PresenceStatsEvent{
+	_, err = c.node.clientEvents.presenceStatsHandler(c, PresenceStatsEvent{
 		Channel: ch,
 	})
-	if reply.Disconnect != nil {
-		return nil, reply.Disconnect
-	}
-	if reply.Error != nil {
-		resp.Error = reply.Error.toProto()
-		return resp, nil
+	if err != nil {
+		switch t := err.(type) {
+		case *Disconnect:
+			return resp, t
+		default:
+			resp.Error = toClientErr(err).toProto()
+			return resp, nil
+		}
 	}
 
 	stats, err := c.node.PresenceStats(ch)
@@ -2239,15 +2284,17 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 		return resp, nil
 	}
 
-	reply := c.node.clientEvents.historyHandler(c, HistoryEvent{
+	_, err = c.node.clientEvents.historyHandler(c, HistoryEvent{
 		Channel: ch,
 	})
-	if reply.Disconnect != nil {
-		return nil, reply.Disconnect
-	}
-	if reply.Error != nil {
-		resp.Error = reply.Error.toProto()
-		return resp, nil
+	if err != nil {
+		switch t := err.(type) {
+		case *Disconnect:
+			return resp, t
+		default:
+			resp.Error = toClientErr(err).toProto()
+			return resp, nil
+		}
 	}
 
 	historyResult, err := c.node.fullHistory(ch)
