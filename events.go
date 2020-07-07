@@ -53,12 +53,11 @@ type RefreshEvent struct {
 
 // RefreshReply contains fields determining the reaction on refresh event.
 type RefreshReply struct {
-	// Expired when set mean that connection must be closed with DisconnectExpired reason.
-	Expired bool
 	// ExpireAt defines time in future when connection should expire,
 	// zero value means no expiration.
 	ExpireAt int64
-	// Info allows to modify connection information, zero value means no modification.
+	// Info allows to modify connection information,
+	// zero value means no modification of current connection Info.
 	Info []byte
 }
 
@@ -169,8 +168,6 @@ type SubRefreshEvent struct {
 // SubRefreshReply contains fields determining the reaction on
 // subscription refresh event.
 type SubRefreshReply struct {
-	// Expired when set mean that connection must be closed with DisconnectExpired reason.
-	Expired bool
 	// ExpireAt is a new Unix time of expiration. Zero value means no expiration.
 	ExpireAt int64
 	// Info is a new channel-scope info. Zero value means do not change previous one.

@@ -292,7 +292,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 					return false
 				}
 			}
-			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
+			if reply.ExpireAt > 0 && reply.ExpireAt < now {
 				return false
 			}
 			c.mu.Lock()
@@ -496,13 +496,13 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 	return nil
 }
 
-// Close client connection with specific disconnect reason.
+// Disconnect client connection with specific disconnect code and reason.
 // This method internally creates a new goroutine at moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
 // and alive callback ordering/sync problems. Will be a noop if client
 // already closed. Since this method runs a separate goroutine client
 // connection will be closed eventually (i.e. not immediately).
-func (c *Client) Close(disconnect *Disconnect) error {
+func (c *Client) Disconnect(disconnect *Disconnect) error {
 	go func() {
 		_ = c.close(disconnect)
 	}()
@@ -793,10 +793,6 @@ func (c *Client) expire() {
 				_ = c.close(DisconnectServerError)
 				return
 			}
-		}
-		if reply.Expired {
-			_ = c.close(DisconnectExpired)
-			return
 		}
 		if reply.ExpireAt > 0 {
 			c.mu.Lock()
@@ -1492,9 +1488,6 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 				return resp, DisconnectServerError
 			}
 		}
-		if reply.Expired {
-			return resp, DisconnectExpired
-		}
 		expireAt = reply.ExpireAt
 		info = reply.Info
 	} else {
@@ -1990,9 +1983,6 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 				return resp, DisconnectServerError
 			}
 		}
-		if reply.Expired {
-			return resp, DisconnectExpired
-		}
 		expireAt = reply.ExpireAt
 		info = reply.Info
 	} else {
@@ -2108,7 +2098,7 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 	c.mu.RUnlock()
 
 	if c.node.clientEvents.publishHandler != nil && c.hasEvent(EventPublish) {
-		reply, err := c.node.clientEvents.publishHandler(c, PublishEvent{
+		_, err := c.node.clientEvents.publishHandler(c, PublishEvent{
 			Channel: ch,
 			Data:    data,
 			Info: &ClientInfo{
@@ -2126,9 +2116,6 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 				resp.Error = toClientErr(err).toProto()
 				return resp, nil
 			}
-		}
-		if reply.Data != nil {
-			data = reply.Data
 		}
 	} else {
 		resp.Error = ErrorNotAvailable.toProto()
