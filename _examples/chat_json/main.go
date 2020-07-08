@@ -89,13 +89,13 @@ func main() {
 	})
 	node.SetEngine(engine)
 
-	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
 			Channels: []string{"#" + cred.UserID},
-		}
+		}, nil
 	})
 
 	node.On().Connect(func(c *centrifuge.Client) {
@@ -126,56 +126,69 @@ func main() {
 		log.Printf("user %s connection is still active", c.UserID())
 	})
 
-	node.On().Refresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+	node.On().Refresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
 		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
-		return centrifuge.RefreshReply{ExpireAt: time.Now().Unix() + 60}
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 60,
+		}, nil
 	})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+		reply := centrifuge.SubscribeReply{}
 		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
 		if !channelSubscribeAllowed(e.Channel) {
-			return centrifuge.SubscribeReply{Error: centrifuge.ErrorPermissionDenied}
+			return reply, centrifuge.ErrorPermissionDenied
 		}
-		return centrifuge.SubscribeReply{}
+		return reply, nil
 	})
 
 	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
 		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
 	})
 
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+		reply := centrifuge.PublishReply{}
 		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
 		if _, ok := c.Channels()[e.Channel]; !ok {
-			return centrifuge.PublishReply{Error: centrifuge.ErrorPermissionDenied}
+			return reply, centrifuge.ErrorPermissionDenied
 		}
 		var msg clientMessage
 		err := json.Unmarshal(e.Data, &msg)
 		if err != nil {
-			return centrifuge.PublishReply{Error: centrifuge.ErrorBadRequest}
+			return reply, centrifuge.ErrorBadRequest
 		}
 		msg.Timestamp = time.Now().Unix()
 		data, _ := json.Marshal(msg)
-		return centrifuge.PublishReply{
-			Data: data,
+
+		// In this example we take over publish since we want to publish modified data to channel.
+		// We could also return an empty PublishReply to let Centrifuge proceed with publish itself
+		// and just let client publication pass through towards a channel.
+		if result, err := node.Publish(e.Channel, data); err != nil {
+			return reply, err
+		} else {
+			reply.Result = &result
 		}
+		return reply, nil
 	})
 
-	node.On().RPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) centrifuge.RPCReply {
+	node.On().RPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) (centrifuge.RPCReply, error) {
 		log.Printf("RPC from user: %s, data: %s, method: %s", c.UserID(), string(e.Data), e.Method)
-		return centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}
+		return centrifuge.RPCReply{
+			Data: []byte(`{"year": "2020"}`),
+		}, nil
 	})
 
-	node.On().Presence(func(c *centrifuge.Client, e centrifuge.PresenceEvent) centrifuge.PresenceReply {
+	node.On().Presence(func(c *centrifuge.Client, e centrifuge.PresenceEvent) (centrifuge.PresenceReply, error) {
 		log.Printf("user %s calls presence on %s", c.UserID(), e.Channel)
+		reply := centrifuge.PresenceReply{}
 		if _, ok := c.Channels()[e.Channel]; !ok {
-			return centrifuge.PresenceReply{Error: centrifuge.ErrorPermissionDenied}
+			return reply, centrifuge.ErrorPermissionDenied
 		}
-		return centrifuge.PresenceReply{}
+		return reply, nil
 	})
 
-	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
 		log.Printf("message from user: %s, data: %s", c.UserID(), string(e.Data))
-		return centrifuge.MessageReply{}
 	})
 
 	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {

@@ -782,26 +782,40 @@ func (n *Node) removePresence(ch string, uid string) error {
 	return n.presenceManager.RemovePresence(ch, uid)
 }
 
+// PresenceResult wraps presence.
+type PresenceResult struct {
+	Presence map[string]*ClientInfo
+}
+
 // Presence returns a map with information about active clients in channel.
-func (n *Node) Presence(ch string) (map[string]*ClientInfo, error) {
+func (n *Node) Presence(ch string) (PresenceResult, error) {
 	if n.presenceManager == nil {
-		return nil, ErrorNotAvailable
+		return PresenceResult{}, ErrorNotAvailable
 	}
 	actionCount.WithLabelValues("presence").Inc()
 	presence, err := n.presenceManager.Presence(ch)
 	if err != nil {
-		return nil, err
+		return PresenceResult{}, err
 	}
-	return presence, nil
+	return PresenceResult{Presence: presence}, nil
+}
+
+// PresenceStatsResult wraps presence stats.
+type PresenceStatsResult struct {
+	PresenceStats
 }
 
 // PresenceStats returns presence stats from engine.
-func (n *Node) PresenceStats(ch string) (PresenceStats, error) {
+func (n *Node) PresenceStats(ch string) (PresenceStatsResult, error) {
 	if n.presenceManager == nil {
-		return PresenceStats{}, nil
+		return PresenceStatsResult{}, nil
 	}
 	actionCount.WithLabelValues("presence_stats").Inc()
-	return n.presenceManager.PresenceStats(ch)
+	presenceStats, err := n.presenceManager.PresenceStats(ch)
+	if err != nil {
+		return PresenceStatsResult{}, err
+	}
+	return PresenceStatsResult{PresenceStats: presenceStats}, nil
 }
 
 // HistoryResult contains Publications and current stream top StreamPosition.
@@ -958,11 +972,11 @@ type ClientEventHub struct {
 	connectingHandler    ConnectingHandler
 	connectHandler       ConnectHandler
 	aliveHandler         AliveHandler
-	refreshHandler       RefreshHandler
 	disconnectHandler    DisconnectHandler
 	subscribeHandler     SubscribeHandler
 	unsubscribeHandler   UnsubscribeHandler
 	publishHandler       PublishHandler
+	refreshHandler       RefreshHandler
 	subRefreshHandler    SubRefreshHandler
 	rpcHandler           RPCHandler
 	messageHandler       MessageHandler
