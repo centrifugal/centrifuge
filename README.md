@@ -116,9 +116,9 @@ func main() {
 	// disconnect client from server if needed. But now we just accept
 	// all subscriptions to all channels. In real life you may use a more
 	// complex permission check here.
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		log.Printf("client subscribes on channel %s", e.Channel)
-		return centrifuge.SubscribeReply{}
+		return centrifuge.SubscribeReply{}, nil
 	})
 
 	// By default, clients can not publish messages into channels. By setting
@@ -127,9 +127,9 @@ func main() {
 	// you have a possibility to validate publication request before message will
 	// be published into channel and reach active subscribers. In our simple chat
 	// app we allow everyone to publish into any channel.
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		log.Printf("client publishes into channel %s: %s", e.Channel, string(e.Data))
-		return centrifuge.PublishReply{}
+		return centrifuge.PublishReply{}, nil
 	})
 
 	// Set Disconnect handler to react on client disconnect events.
