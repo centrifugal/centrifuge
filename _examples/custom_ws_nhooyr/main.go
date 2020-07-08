@@ -60,12 +60,12 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "",
 			},
-		}
+		}, nil
 	})
 
 	node.On().Connect(func(c *centrifuge.Client) {
@@ -92,57 +92,50 @@ func main() {
 		}()
 	})
 
-	node.On().Refresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) centrifuge.RefreshReply {
+	node.On().Refresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
 		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
 		return centrifuge.RefreshReply{
 			ExpireAt: time.Now().Unix() + 60,
-		}
+		}, nil
 	})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
 		return centrifuge.SubscribeReply{
 			ExpireAt: time.Now().Unix() + 60,
-		}
+		}, nil
 	})
 
-	node.On().SubRefresh(func(c *centrifuge.Client, e centrifuge.SubRefreshEvent) centrifuge.SubRefreshReply {
+	node.On().SubRefresh(func(c *centrifuge.Client, e centrifuge.SubRefreshEvent) (centrifuge.SubRefreshReply, error) {
 		log.Printf("user %s subscription on channel %s is going to expire, refreshing", c.UserID(), e.Channel)
 		return centrifuge.SubRefreshReply{
 			ExpireAt: time.Now().Unix() + 60,
-		}
+		}, nil
 	})
 
 	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
 		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
 	})
 
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
 		var msg clientMessage
 		err := json.Unmarshal(e.Data, &msg)
 		if err != nil {
-			return centrifuge.PublishReply{
-				Error: centrifuge.ErrorBadRequest,
-			}
+			return centrifuge.PublishReply{}, centrifuge.ErrorBadRequest
 		}
-		msg.Timestamp = time.Now().Unix()
-		data, _ := json.Marshal(msg)
-		return centrifuge.PublishReply{
-			Data: data,
-		}
+		return centrifuge.PublishReply{}, nil
 	})
 
-	node.On().RPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) centrifuge.RPCReply {
+	node.On().RPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) (centrifuge.RPCReply, error) {
 		log.Printf("RPC from user: %s, data: %s", c.UserID(), string(e.Data))
 		return centrifuge.RPCReply{
 			Data: []byte(`{"year": "2020"}`),
-		}
+		}, nil
 	})
 
-	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
 		log.Printf("Message from user: %s, data: %s", c.UserID(), string(e.Data))
-		return centrifuge.MessageReply{}
 	})
 
 	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {

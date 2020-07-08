@@ -38,8 +38,6 @@ type ConnectReply struct {
 }
 
 // ConnectingHandler called when new client authenticates on server.
-// This handler will be called from many goroutines, remember to synchronize
-// your operations inside.
 type ConnectingHandler func(context.Context, ConnectEvent) (ConnectReply, error)
 
 // ConnectHandler called when client connected to server and ready to communicate.
@@ -47,12 +45,17 @@ type ConnectHandler func(*Client)
 
 // RefreshEvent contains fields related to refresh event.
 type RefreshEvent struct {
+	// ClientSideRefresh is true for refresh initiated by client-side refresh workflow.
+	ClientSideRefresh bool
 	// Token will only be set in case of using client-side refresh mechanism.
 	Token string
 }
 
 // RefreshReply contains fields determining the reaction on refresh event.
 type RefreshReply struct {
+	// Expired tells Centrifuge that connection expired. In this case connection will be
+	// closed with DisconnectExpired.
+	Expired bool
 	// ExpireAt defines time in future when connection should expire,
 	// zero value means no expiration.
 	ExpireAt int64
@@ -62,8 +65,7 @@ type RefreshReply struct {
 }
 
 // RefreshHandler called when it's time to validate client connection and
-// update it's expiration time if it's still actual. This handler can be
-// called concurrently with other client connection handlers.
+// update it's expiration time if it's still actual.
 //
 // Centrifuge library supports two ways of refreshing connection: client-side
 // and server-side.
@@ -138,10 +140,9 @@ type UnsubscribeEvent struct {
 // UnsubscribeHandler called when client unsubscribed from channel.
 type UnsubscribeHandler func(*Client, UnsubscribeEvent)
 
-// PublishEvent contains fields related to publish event.
-// Note that this event called before actual publish to Engine
-// so handler has an option to reject this publication returning
-// an error in PublishReply.
+// PublishEvent contains fields related to publish event. Note that this event
+// called before actual publish to Engine so handler has an option to reject this
+// publication returning an error.
 type PublishEvent struct {
 	// Channel client wants to publish data to.
 	Channel string
@@ -152,13 +153,20 @@ type PublishEvent struct {
 }
 
 // PublishReply contains fields determining the result on publish.
-type PublishReply struct{}
+type PublishReply struct {
+	// Result if set will tell Centrifuge that message already published to
+	// channel by handler code.
+	Result *PublishResult
+}
 
 // PublishHandler called when client publishes into channel.
 type PublishHandler func(*Client, PublishEvent) (PublishReply, error)
 
 // SubRefreshEvent contains fields related to subscription refresh event.
 type SubRefreshEvent struct {
+	// ClientSideRefresh is true for refresh initiated by client-side subscription
+	// refresh workflow.
+	ClientSideRefresh bool
 	// Channel to which SubRefreshEvent belongs to.
 	Channel string
 	// Token will only be set in case of using client-side subscription refresh mechanism.
@@ -168,6 +176,9 @@ type SubRefreshEvent struct {
 // SubRefreshReply contains fields determining the reaction on
 // subscription refresh event.
 type SubRefreshReply struct {
+	// Expired tells Centrifuge that subscription expired. In this case connection will be
+	// closed with DisconnectExpired.
+	Expired bool
 	// ExpireAt is a new Unix time of expiration. Zero value means no expiration.
 	ExpireAt int64
 	// Info is a new channel-scope info. Zero value means do not change previous one.
@@ -212,7 +223,7 @@ type MessageEvent struct {
 }
 
 // MessageHandler must handle incoming async message from client.
-type MessageHandler func(*Client, MessageEvent) error
+type MessageHandler func(*Client, MessageEvent)
 
 // PresenceEvent has channel operation called for.
 type PresenceEvent struct {

@@ -282,17 +282,9 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 			// Give subscription a chance to be refreshed via SubRefreshHandler.
 			reply, err := c.node.clientEvents.subRefreshHandler(c, SubRefreshEvent{Channel: channel})
 			if err != nil {
-				switch t := err.(type) {
-				case *Disconnect:
-					// TODO: handle this disconnect properly.
-					go func() { _ = c.close(t) }()
-					return false
-				default:
-					// TODO: should delay check?
-					return false
-				}
+				return false
 			}
-			if reply.ExpireAt > 0 && reply.ExpireAt < now {
+			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
 				return false
 			}
 			c.mu.Lock()
@@ -789,10 +781,13 @@ func (c *Client) expire() {
 				_ = c.close(t)
 				return
 			default:
-				// TODO: check with delay.
 				_ = c.close(DisconnectServerError)
 				return
 			}
+		}
+		if reply.Expired {
+			_ = c.close(DisconnectExpired)
+			return
 		}
 		if reply.ExpireAt > 0 {
 			c.mu.Lock()
@@ -1153,16 +1148,9 @@ func (c *Client) handleSend(params protocol.Raw) *Disconnect {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding message", map[string]interface{}{"error": err.Error()}))
 			return DisconnectBadRequest
 		}
-		err = c.node.clientEvents.messageHandler(c, MessageEvent{
+		c.node.clientEvents.messageHandler(c, MessageEvent{
 			Data: cmd.Data,
 		})
-		if err != nil {
-			switch t := err.(type) {
-			case *Disconnect:
-				return t
-			default:
-			}
-		}
 		return nil
 	}
 	return nil
@@ -1477,16 +1465,20 @@ func (c *Client) refreshCmd(cmd *protocol.RefreshRequest) (*clientproto.RefreshR
 
 	if c.node.clientEvents.refreshHandler != nil && c.hasEvent(EventRefresh) {
 		reply, err := c.node.clientEvents.refreshHandler(c, RefreshEvent{
-			Token: cmd.Token,
+			ClientSideRefresh: true,
+			Token:             cmd.Token,
 		})
 		if err != nil {
 			switch t := err.(type) {
 			case *Disconnect:
 				return resp, t
 			default:
-				// TODO: should delay check?
-				return resp, DisconnectServerError
+				resp.Error = toClientErr(err).toProto()
+				return resp, nil
 			}
+		}
+		if reply.Expired {
+			return resp, DisconnectExpired
 		}
 		expireAt = reply.ExpireAt
 		info = reply.Info
@@ -1956,12 +1948,19 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 	}
 
 	c.mu.RLock()
-	_, okChannel := c.channels[channel]
+	ctx, okChannel := c.channels[channel]
+	clientSideRefresh := ctx.clientSideRefresh
 	c.mu.RUnlock()
 	if !okChannel {
 		// Must be subscribed to refresh.
 		resp.Error = ErrorPermissionDenied.toProto()
 		return resp, nil
+	}
+
+	if !clientSideRefresh {
+		// Client not supposed to send sub refresh command in case of server-side
+		// subscription refresh mechanism.
+		return resp, DisconnectBadRequest
 	}
 
 	res := &protocol.SubRefreshResult{}
@@ -1971,17 +1970,21 @@ func (c *Client) subRefreshCmd(cmd *protocol.SubRefreshRequest) (*clientproto.Su
 
 	if c.node.clientEvents.subRefreshHandler != nil && c.hasEvent(EventSubRefresh) {
 		reply, err := c.node.clientEvents.subRefreshHandler(c, SubRefreshEvent{
-			Channel: cmd.Channel,
-			Token:   cmd.Token,
+			ClientSideRefresh: true,
+			Channel:           cmd.Channel,
+			Token:             cmd.Token,
 		})
 		if err != nil {
 			switch t := err.(type) {
 			case *Disconnect:
 				return resp, t
 			default:
-				// TODO: should delay check?
-				return resp, DisconnectServerError
+				resp.Error = toClientErr(err).toProto()
+				return resp, nil
 			}
+		}
+		if reply.Expired {
+			return resp, DisconnectExpired
 		}
 		expireAt = reply.ExpireAt
 		info = reply.Info
@@ -2097,8 +2100,10 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 	info := c.clientInfo(ch)
 	c.mu.RUnlock()
 
+	var publishResult *PublishResult
+
 	if c.node.clientEvents.publishHandler != nil && c.hasEvent(EventPublish) {
-		_, err := c.node.clientEvents.publishHandler(c, PublishEvent{
+		reply, err := c.node.clientEvents.publishHandler(c, PublishEvent{
 			Channel: ch,
 			Data:    data,
 			Info: &ClientInfo{
@@ -2117,16 +2122,19 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 				return resp, nil
 			}
 		}
+		publishResult = reply.Result
 	} else {
 		resp.Error = ErrorNotAvailable.toProto()
 		return resp, nil
 	}
 
-	_, err := c.node.publish(ch, data, info)
-	if err != nil {
-		c.node.logger.log(newLogEntry(LogLevelError, "error publishing", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
-		resp.Error = ErrorInternal.toProto()
-		return resp, nil
+	if publishResult == nil {
+		_, err := c.node.publish(ch, data, info)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error publishing", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
+			resp.Error = ErrorInternal.toProto()
+			return resp, nil
+		}
 	}
 
 	return resp, nil
@@ -2178,7 +2186,7 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 		}
 	}
 
-	presence, err := c.node.Presence(ch)
+	result, err := c.node.Presence(ch)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error getting presence", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		resp.Error = toClientErr(err).toProto()
@@ -2186,7 +2194,7 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 	}
 
 	resp.Result = &protocol.PresenceResult{
-		Presence: presence,
+		Presence: result.Presence,
 	}
 
 	return resp, nil

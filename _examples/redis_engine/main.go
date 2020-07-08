@@ -63,18 +63,18 @@ func main() {
 		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
 	})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
-		return centrifuge.SubscribeReply{}
+		return centrifuge.SubscribeReply{}, nil
 	})
 
 	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
 		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
 	})
 
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
+	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
-		return centrifuge.PublishReply{}
+		return centrifuge.PublishReply{}, nil
 	})
 
 	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {

@@ -63,11 +63,6 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-// Function to handle Centrifuge internal logs.
-func handleLog(e centrifuge.LogEntry) {
-	log.Printf("%s: %v", e.Message, e.Fields)
-}
-
 // Authentication middleware. Centrifuge expects Credentials with current user ID.
 // Without provided Credentials client connection won't be accepted.
 func auth(h http.Handler) http.Handler {
@@ -94,16 +89,15 @@ func main() {
 	// We use default config here as starting point. Default config contains
 	// reasonable values for available options.
 	cfg := centrifuge.DefaultConfig
-	// Centrifuge library exposes logs with different log level. In your app
-	// you can set special function to handle these log entries in a way you want.
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
 
 	// Node is the core object in Centrifuge library responsible for many useful
 	// things. For example Node allows to publish messages to channels from server
 	// side with its Publish method, but in this example we will publish messages
 	// only from client side.
-	node, _ := centrifuge.New(cfg)
+	node, err := centrifuge.New(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Set ConnectHandler called when client successfully connected to Node. Your code
 	// inside handler must be synchronized since it will be called concurrently from
@@ -145,7 +139,7 @@ func main() {
 
 	// Run node. This method does not block.
 	if err := node.Run(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Now configure HTTP routes.
@@ -159,7 +153,7 @@ func main() {
 
 	log.Printf("Starting server, visit http://localhost:8000")
 	if err := http.ListenAndServe(":8000", nil); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 }
 ```
@@ -218,3 +212,20 @@ Open several browser tabs with http://localhost:8000 and see chat in action.
 This example is only the top of an iceberg. Though it should give you an insight on library API.
 
 Keep in mind that Centrifuge library is not a framework to build chat apps. It's a general purpose real-time transport for your messages with some helpful primitives. You can build many kinds of real-time apps on top of this library including chats but depending on application you may need to write business logic yourself.
+
+### Tips
+
+#### Logging
+
+Centrifuge library exposes logs with different log level. In your app you can set special function to handle these log entries in a way you want.
+
+```go
+// Function to handle Centrifuge internal logs.
+func handleLog(e centrifuge.LogEntry) {
+	log.Printf("%s: %v", e.Message, e.Fields)
+}
+
+cfg := centrifuge.DefaultConfig
+cfg.LogLevel = centrifuge.LogLevelDebug
+cfg.LogHandler = handleLog
+```

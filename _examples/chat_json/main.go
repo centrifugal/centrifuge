@@ -159,8 +159,14 @@ func main() {
 		}
 		msg.Timestamp = time.Now().Unix()
 		data, _ := json.Marshal(msg)
-		if _, err := node.Publish(e.Channel, data); err != nil {
+
+		// In this example we take over publish since we want to publish modified data to channel.
+		// We could also return an empty PublishReply to let Centrifuge proceed with publish itself
+		// and just let client publication pass through towards a channel.
+		if result, err := node.Publish(e.Channel, data); err != nil {
 			return reply, err
+		} else {
+			reply.Result = &result
 		}
 		return reply, nil
 	})
@@ -181,9 +187,8 @@ func main() {
 		return reply, nil
 	})
 
-	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) error {
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
 		log.Printf("message from user: %s, data: %s", c.UserID(), string(e.Data))
-		return nil
 	})
 
 	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {

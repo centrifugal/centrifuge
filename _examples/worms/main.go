@@ -53,28 +53,27 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "",
 			},
-		}
+		}, nil
 	})
 
 	node.On().Connect(func(c *centrifuge.Client) {
 		log.Printf("worm connected via %s", c.Transport().Name())
 	})
 
-	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
 		var ev event
 		_ = json.Unmarshal(e.Data, &ev)
 		_, _ = node.Publish("moving", ev.Payload)
-		return centrifuge.MessageReply{}
 	})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		log.Printf("worm subscribed on %s", e.Channel)
-		return centrifuge.SubscribeReply{}
+		return centrifuge.SubscribeReply{}, nil
 	})
 
 	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {

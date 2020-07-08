@@ -59,32 +59,31 @@ func main() {
 		node.SetEngine(engine)
 	}
 
-	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
 			},
-		}
+		}, nil
 	})
 
 	node.On().Connect(func(c *centrifuge.Client) {})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-		return centrifuge.SubscribeReply{}
+	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+		return centrifuge.SubscribeReply{}, nil
 	})
 
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) centrifuge.PublishReply {
-		return centrifuge.PublishReply{}
+	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+		return centrifuge.PublishReply{}, nil
 	})
 
-	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) centrifuge.MessageReply {
+	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
 		err := c.Send(e.Data)
 		if err != nil {
 			if err != io.EOF {
 				log.Fatalln("error sending to client:", err.Error())
 			}
 		}
-		return centrifuge.MessageReply{}
 	})
 
 	if err := node.Run(); err != nil {

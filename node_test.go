@@ -118,11 +118,11 @@ func nodeWithMemoryEngineNoHandlers() *Node {
 
 func nodeWithMemoryEngine() *Node {
 	n := nodeWithMemoryEngineNoHandlers()
-	n.On().Subscribe(func(_ *Client, _ SubscribeEvent) SubscribeReply {
-		return SubscribeReply{}
+	n.On().Subscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
+		return SubscribeReply{}, nil
 	})
-	n.On().Publish(func(_ *Client, _ PublishEvent) PublishReply {
-		return PublishReply{}
+	n.On().Publish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
+		return PublishReply{}, nil
 	})
 	return n
 }
