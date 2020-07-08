@@ -429,6 +429,65 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 	}
 }
 
+func TestUserConnectionLimit(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.ClientUserConnectionLimit = 1
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+
+	client, _ := newClient(newCtx, node, transport)
+	connectClient(t, client)
+
+	var replies []*protocol.Reply
+	rw := testReplyWriter(&replies)
+	anotherClient, _ := newClient(newCtx, node, transport)
+	disconnect := anotherClient.connectCmd(&protocol.ConnectRequest{}, rw)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorLimitExceeded.toProto(), replies[0].Error)
+}
+
+func TestConnectingReply(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.On().Connecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		newCtx := context.WithValue(ctx, "key", "val")
+		return ConnectReply{
+			Context: newCtx,
+			Data:    []byte("{}"),
+			Credentials: &Credentials{
+				UserID: "12",
+			},
+			Events: EventAll,
+		}, nil
+	})
+
+	done := make(chan struct{})
+
+	node.On().Connect(func(c *Client) {
+		v, ok := c.Context().Value("key").(string)
+		require.True(t, ok)
+		require.Equal(t, "val", v)
+		require.Equal(t, "12", c.UserID())
+		close(done)
+	})
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+	connectClient(t, client)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+}
+
 func TestServerSideSubscriptions(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1112,6 +1171,44 @@ func TestClientHandlePublish(t *testing.T) {
 	}, rw.write, rw.flush)
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
+
+	node.On().Publish(func(_ *Client, event PublishEvent) (PublishReply, error) {
+		return PublishReply{}, ErrorLimitExceeded
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePublish,
+		Params: []byte(`{"channel": "test", "data": {}}`),
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorLimitExceeded.toProto(), replies[0].Error)
+
+	node.On().Publish(func(_ *Client, event PublishEvent) (PublishReply, error) {
+		return PublishReply{}, DisconnectBadRequest
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePublish,
+		Params: []byte(`{"channel": "test", "data": {}}`),
+	}, rw.write, rw.flush)
+	require.Equal(t, DisconnectBadRequest, disconnect)
+
+	node.On().Publish(func(_ *Client, event PublishEvent) (PublishReply, error) {
+		return PublishReply{}, errors.New("boom")
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePublish,
+		Params: []byte(`{"channel": "test", "data": {}}`),
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorInternal.toProto(), replies[0].Error)
 }
 
 func TestClientHandleHistoryNotAvailable(t *testing.T) {
@@ -1190,6 +1287,44 @@ func TestClientHandleHistory(t *testing.T) {
 	}, rw.write, rw.flush)
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
+
+	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+		return HistoryReply{}, ErrorPermissionDenied
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypeHistory,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
+
+	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+		return HistoryReply{}, DisconnectBadRequest
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypeHistory,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Equal(t, DisconnectBadRequest, disconnect)
+
+	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+		return HistoryReply{}, errors.New("boom")
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypeHistory,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorInternal.toProto(), replies[0].Error)
 }
 
 func TestClientHandlePresenceNotAvailable(t *testing.T) {
@@ -1268,6 +1403,44 @@ func TestClientHandlePresence(t *testing.T) {
 	}, rw.write, rw.flush)
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
+
+	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+		return PresenceReply{}, ErrorPermissionDenied
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePresence,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
+
+	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+		return PresenceReply{}, DisconnectBadRequest
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePresence,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Equal(t, DisconnectBadRequest, disconnect)
+
+	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+		return PresenceReply{}, errors.New("boom")
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePresence,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorInternal.toProto(), replies[0].Error)
 }
 
 func TestClientHandlePresenceStatsNotAvailable(t *testing.T) {
@@ -1338,7 +1511,6 @@ func TestClientHandlePresenceStats(t *testing.T) {
 
 	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
-
 	disconnect := client.handleCommand(&protocol.Command{
 		ID:     2,
 		Method: protocol.MethodTypePresenceStats,
@@ -1346,6 +1518,44 @@ func TestClientHandlePresenceStats(t *testing.T) {
 	}, rw.write, rw.flush)
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
+
+	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+		return PresenceStatsReply{}, ErrorPermissionDenied
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePresenceStats,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
+
+	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+		return PresenceStatsReply{}, DisconnectBadRequest
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePresenceStats,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Equal(t, DisconnectBadRequest, disconnect)
+
+	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+		return PresenceStatsReply{}, errors.New("boom")
+	})
+	replies = []*protocol.Reply{}
+	rw = testReplyWriter(&replies)
+	disconnect = client.handleCommand(&protocol.Command{
+		ID:     2,
+		Method: protocol.MethodTypePresenceStats,
+		Params: []byte(`{"channel": "test"}`),
+	}, rw.write, rw.flush)
+	require.Nil(t, disconnect)
+	require.Equal(t, ErrorInternal.toProto(), replies[0].Error)
 }
 
 func TestClientHandleMalformedCommand(t *testing.T) {

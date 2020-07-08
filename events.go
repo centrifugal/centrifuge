@@ -155,7 +155,11 @@ type PublishEvent struct {
 // PublishReply contains fields determining the result on publish.
 type PublishReply struct {
 	// Result if set will tell Centrifuge that message already published to
-	// channel by handler code.
+	// channel by handler code. In this case Centrifuge won't try to publish
+	// into channel again after handler returned PublishReply. This can be
+	// useful if you need to know new Publication offset in your code or you
+	// want to make sure message successfully published to Engine on server
+	// side (otherwise only client will get an error).
 	Result *PublishResult
 }
 
