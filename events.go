@@ -29,8 +29,8 @@ type ConnectReply struct {
 	// Channels slice contains channels to subscribe connection to on server-side.
 	Channels []string
 	// ClientSideRefresh tells library to use client-side refresh logic:
-	// i.e. send refresh commands with new connection JWT. If not set
-	// then server-side refresh handler will be used.
+	// i.e. send refresh commands with new connection token. If not set
+	// then server-side refresh mechanism will be used.
 	ClientSideRefresh bool
 	// Events mask to be called for connection. Zero value means all events for
 	// all client event handlers set to Node.
@@ -77,11 +77,7 @@ type RefreshReply struct {
 // If ClientSideRefresh in ConnectReply inside ConnectingHandler set to true then
 // library uses client-side refresh mechanism. In this case library relies on
 // Refresh commands sent from client periodically to refresh connection. Refresh
-// command contains updated connection token. In case of using client-side refresh
-// you only need to set this callback if you want to validate connection token
-// yourself in a custom way. In you rely on builtin Centrifuge JWT support then
-// connection refresh will happen without involving your application at all so
-// you must skip setting this handler on connection.
+// command contains updated connection token.
 type RefreshHandler func(*Client, RefreshEvent) (RefreshReply, error)
 
 // AliveHandler called periodically while connection alive. This is a helper
@@ -195,11 +191,7 @@ type SubRefreshReply struct {
 // If ClientSideRefresh in SubscribeReply inside SubscribeHandler set to true then
 // library uses client-side subscription refresh mechanism. In this case library relies on
 // SubRefresh commands sent from client periodically to refresh subscription. SubRefresh
-// command contains updated subscription token. In case of using client-side refresh
-// you only need to set this callback if you want to validate connection token yourself
-// in a custom way. In you rely on builtin Centrifuge JWT support then connection
-// refresh will happen without involving your application at all so you must skip
-// setting this handler on connection.
+// command contains updated subscription token.
 type SubRefreshHandler func(*Client, SubRefreshEvent) (SubRefreshReply, error)
 
 // RPCEvent contains fields related to rpc request.

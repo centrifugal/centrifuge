@@ -118,20 +118,20 @@ func nodeWithMemoryEngineNoHandlers() *Node {
 
 func nodeWithMemoryEngine() *Node {
 	n := nodeWithMemoryEngineNoHandlers()
-	n.On().Subscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
+	n.OnSubscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
 		return SubscribeReply{}, nil
 	})
-	n.On().Publish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
+	n.OnPublish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
 		return PublishReply{}, nil
 	})
 	return n
 }
 
 func TestClientEventHub(t *testing.T) {
-	h := &ClientEventHub{}
-	handler := func(_ *Client, _ DisconnectEvent) {}
-	h.Disconnect(handler)
-	require.NotNil(t, h.disconnectHandler)
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	n.OnDisconnect(func(_ *Client, _ DisconnectEvent) {})
+	require.NotNil(t, n.clientEvents.disconnectHandler)
 }
 
 func TestNodeRegistry(t *testing.T) {

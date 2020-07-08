@@ -871,10 +871,10 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool) *Node {
 	if err != nil {
 		panic(err)
 	}
-	n.On().Subscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
+	n.OnSubscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
 		return SubscribeReply{}, nil
 	})
-	n.On().Publish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
+	n.OnPublish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
 		return PublishReply{}, nil
 	})
 	return n

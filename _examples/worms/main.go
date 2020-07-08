@@ -53,7 +53,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "",
@@ -61,26 +61,26 @@ func main() {
 		}, nil
 	})
 
-	node.On().Connect(func(c *centrifuge.Client) {
+	node.OnConnect(func(c *centrifuge.Client) {
 		log.Printf("worm connected via %s", c.Transport().Name())
 	})
 
-	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
+	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
 		var ev event
 		_ = json.Unmarshal(e.Data, &ev)
 		_, _ = node.Publish("moving", ev.Payload)
 	})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		log.Printf("worm subscribed on %s", e.Channel)
 		return centrifuge.SubscribeReply{}, nil
 	})
 
-	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
 		log.Printf("worm unsubscribed from %s", e.Channel)
 	})
 
-	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
 		log.Printf("worm disconnected, disconnect: %s", e.Disconnect)
 	})
 

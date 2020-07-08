@@ -92,7 +92,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(c *centrifuge.Client) {
+	node.OnConnect(func(c *centrifuge.Client) {
 		transport := c.Transport()
 		log.Printf("user %s connected via %s.", c.UserID(), transport.Name())
 
@@ -116,23 +116,23 @@ func main() {
 		}()
 	})
 
-	node.On().Refresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
+	node.OnRefresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
 		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
 		return centrifuge.RefreshReply{
 			ExpireAt: time.Now().Unix() + 10,
 		}, nil
 	})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
 		return centrifuge.SubscribeReply{}, nil
 	})
 
-	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
 		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
 	})
 
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
 		var msg clientMessage
 		err := json.Unmarshal(e.Data, &msg)
@@ -142,18 +142,18 @@ func main() {
 		return centrifuge.PublishReply{}, nil
 	})
 
-	node.On().RPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) (centrifuge.RPCReply, error) {
+	node.OnRPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) (centrifuge.RPCReply, error) {
 		log.Printf("RPC from user: %s, data: %s", c.UserID(), string(e.Data))
 		return centrifuge.RPCReply{
 			Data: []byte(`{"year": "2020"}`),
 		}, nil
 	})
 
-	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
+	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
 		log.Printf("Message from user: %s, data: %s", c.UserID(), string(e.Data))
 	})
 
-	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
 		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
 	})
 

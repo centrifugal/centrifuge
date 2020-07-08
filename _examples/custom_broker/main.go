@@ -58,26 +58,26 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connect(func(c *centrifuge.Client) {
+	node.OnConnect(func(c *centrifuge.Client) {
 		transport := c.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
 	})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
 		return centrifuge.SubscribeReply{}, nil
 	})
 
-	node.On().Unsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
 		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
 	})
 
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
 		return centrifuge.PublishReply{}, nil
 	})
 
-	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
 		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
 	})
 

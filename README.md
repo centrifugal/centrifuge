@@ -103,7 +103,7 @@ func main() {
 	// inside handler must be synchronized since it will be called concurrently from
 	// different goroutines (belonging to different client connections). This is also
 	// true for other event handlers.
-	node.On().Connect(func(c *centrifuge.Client) {
+	node.OnConnect(func(c *centrifuge.Client) {
 		// In our example transport will always be Websocket but it can also be SockJS.
 		transportName := c.Transport().Name()
 		// In our example clients connect with JSON protocol but it can also be Protobuf.
@@ -116,7 +116,7 @@ func main() {
 	// disconnect client from server if needed. But now we just accept
 	// all subscriptions to all channels. In real life you may use a more
 	// complex permission check here.
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		log.Printf("client subscribes on channel %s", e.Channel)
 		return centrifuge.SubscribeReply{}, nil
 	})
@@ -127,13 +127,13 @@ func main() {
 	// you have a possibility to validate publication request before message will
 	// be published into channel and reach active subscribers. In our simple chat
 	// app we allow everyone to publish into any channel.
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		log.Printf("client publishes into channel %s: %s", e.Channel, string(e.Data))
 		return centrifuge.PublishReply{}, nil
 	})
 
 	// Set Disconnect handler to react on client disconnect events.
-	node.On().Disconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
 		log.Printf("client disconnected")
 	})
 

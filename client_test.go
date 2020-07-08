@@ -143,7 +143,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.On().Refresh(func(_ *Client, _ RefreshEvent) (RefreshReply, error) {
+	node.OnRefresh(func(_ *Client, _ RefreshEvent) (RefreshReply, error) {
 		return RefreshReply{
 			Expired: true,
 		}, nil
@@ -179,7 +179,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	expireAt := time.Now().Unix() + 60
-	node.On().Refresh(func(_ *Client, _ RefreshEvent) (RefreshReply, error) {
+	node.OnRefresh(func(_ *Client, _ RefreshEvent) (RefreshReply, error) {
 		return RefreshReply{
 			ExpireAt: expireAt,
 		}, nil
@@ -206,7 +206,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	})
 	client, _ := newClient(newCtx, node, transport)
 
-	node.On().Refresh(func(_ *Client, _ RefreshEvent) (RefreshReply, error) {
+	node.OnRefresh(func(_ *Client, _ RefreshEvent) (RefreshReply, error) {
 		return RefreshReply{}, nil
 	})
 
@@ -453,7 +453,7 @@ func TestConnectingReply(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.On().Connecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
 		newCtx := context.WithValue(ctx, "key", "val")
 		return ConnectReply{
 			Context: newCtx,
@@ -467,7 +467,7 @@ func TestConnectingReply(t *testing.T) {
 
 	done := make(chan struct{})
 
-	node.On().Connect(func(c *Client) {
+	node.OnConnect(func(c *Client) {
 		v, ok := c.Context().Value("key").(string)
 		require.True(t, ok)
 		require.Equal(t, "val", v)
@@ -492,7 +492,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.On().Connecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
 		return ConnectReply{
 			Channels: []string{
 				"server-side-1",
@@ -602,7 +602,7 @@ func TestClientUnsubscribe(t *testing.T) {
 
 	unsubscribed := make(chan struct{})
 
-	node.On().Unsubscribe(func(_ *Client, _ UnsubscribeEvent) {
+	node.OnUnsubscribe(func(_ *Client, _ UnsubscribeEvent) {
 		close(unsubscribed)
 	})
 
@@ -635,7 +635,7 @@ func TestClientAliveHandler(t *testing.T) {
 	disconnected := make(chan struct{})
 	numCalls := 0
 
-	node.On().Alive(func(_ *Client) {
+	node.OnAlive(func(_ *Client) {
 		numCalls++
 		if numCalls >= 50 && !closed {
 			close(done)
@@ -644,7 +644,7 @@ func TestClientAliveHandler(t *testing.T) {
 		}
 	})
 
-	node.On().Disconnect(func(_ *Client, _ DisconnectEvent) {
+	node.OnDisconnect(func(_ *Client, _ DisconnectEvent) {
 		close(disconnected)
 	})
 
@@ -826,10 +826,10 @@ func TestClientPresence(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+	node.OnPresence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
 		return PresenceReply{}, nil
 	})
-	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+	node.OnPresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
 		return PresenceStatsReply{}, nil
 	})
 
@@ -885,7 +885,7 @@ func TestClientHistory(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
 
-	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+	node.OnHistory(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
 		return HistoryReply{}, nil
 	})
 
@@ -1076,7 +1076,7 @@ func TestClientHandleRPC(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().RPC(func(_ *Client, event RPCEvent) (RPCReply, error) {
+	node.OnRPC(func(_ *Client, event RPCEvent) (RPCReply, error) {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
 		return RPCReply{}, nil
@@ -1103,7 +1103,7 @@ func TestClientHandleSend(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().Message(func(_ *Client, event MessageEvent) {
+	node.OnMessage(func(_ *Client, event MessageEvent) {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
 	})
@@ -1128,7 +1128,7 @@ func TestClientHandlePublishNotAllowed(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().Publish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
+	node.OnPublish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
 		return PublishReply{}, ErrorPermissionDenied
 	})
 	connectClient(t, client)
@@ -1153,7 +1153,7 @@ func TestClientHandlePublish(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().Publish(func(_ *Client, event PublishEvent) (PublishReply, error) {
+	node.OnPublish(func(_ *Client, event PublishEvent) (PublishReply, error) {
 		expectedData, _ := json.Marshal("hello")
 		require.Equal(t, expectedData, event.Data)
 		require.Equal(t, "test", event.Channel)
@@ -1172,7 +1172,7 @@ func TestClientHandlePublish(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
 
-	node.On().Publish(func(_ *Client, event PublishEvent) (PublishReply, error) {
+	node.OnPublish(func(_ *Client, event PublishEvent) (PublishReply, error) {
 		return PublishReply{}, ErrorLimitExceeded
 	})
 	replies = []*protocol.Reply{}
@@ -1185,7 +1185,7 @@ func TestClientHandlePublish(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorLimitExceeded.toProto(), replies[0].Error)
 
-	node.On().Publish(func(_ *Client, event PublishEvent) (PublishReply, error) {
+	node.OnPublish(func(_ *Client, event PublishEvent) (PublishReply, error) {
 		return PublishReply{}, DisconnectBadRequest
 	})
 	replies = []*protocol.Reply{}
@@ -1197,7 +1197,7 @@ func TestClientHandlePublish(t *testing.T) {
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
 
-	node.On().Publish(func(_ *Client, event PublishEvent) (PublishReply, error) {
+	node.OnPublish(func(_ *Client, event PublishEvent) (PublishReply, error) {
 		return PublishReply{}, errors.New("boom")
 	})
 	replies = []*protocol.Reply{}
@@ -1241,7 +1241,7 @@ func TestClientHandleHistoryNotAvailableDueToOption(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+	node.OnHistory(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
 		return HistoryReply{}, nil
 	})
 	connectClient(t, client)
@@ -1271,7 +1271,7 @@ func TestClientHandleHistory(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+	node.OnHistory(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
 		return HistoryReply{}, nil
 	})
 	connectClient(t, client)
@@ -1288,7 +1288,7 @@ func TestClientHandleHistory(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
 
-	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+	node.OnHistory(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
 		return HistoryReply{}, ErrorPermissionDenied
 	})
 	replies = []*protocol.Reply{}
@@ -1301,7 +1301,7 @@ func TestClientHandleHistory(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
 
-	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+	node.OnHistory(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
 		return HistoryReply{}, DisconnectBadRequest
 	})
 	replies = []*protocol.Reply{}
@@ -1313,7 +1313,7 @@ func TestClientHandleHistory(t *testing.T) {
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
 
-	node.On().History(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
+	node.OnHistory(func(_ *Client, _ HistoryEvent) (HistoryReply, error) {
 		return HistoryReply{}, errors.New("boom")
 	})
 	replies = []*protocol.Reply{}
@@ -1357,7 +1357,7 @@ func TestClientHandlePresenceNotAvailableDueToOption(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+	node.OnPresence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
 		return PresenceReply{}, nil
 	})
 	connectClient(t, client)
@@ -1387,7 +1387,7 @@ func TestClientHandlePresence(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+	node.OnPresence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
 		return PresenceReply{}, nil
 	})
 	connectClient(t, client)
@@ -1404,7 +1404,7 @@ func TestClientHandlePresence(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
 
-	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+	node.OnPresence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
 		return PresenceReply{}, ErrorPermissionDenied
 	})
 	replies = []*protocol.Reply{}
@@ -1417,7 +1417,7 @@ func TestClientHandlePresence(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
 
-	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+	node.OnPresence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
 		return PresenceReply{}, DisconnectBadRequest
 	})
 	replies = []*protocol.Reply{}
@@ -1429,7 +1429,7 @@ func TestClientHandlePresence(t *testing.T) {
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
 
-	node.On().Presence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
+	node.OnPresence(func(_ *Client, _ PresenceEvent) (PresenceReply, error) {
 		return PresenceReply{}, errors.New("boom")
 	})
 	replies = []*protocol.Reply{}
@@ -1473,7 +1473,7 @@ func TestClientHandlePresenceStatsNotAvailableDueToOption(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+	node.OnPresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
 		return PresenceStatsReply{}, nil
 	})
 	connectClient(t, client)
@@ -1503,7 +1503,7 @@ func TestClientHandlePresenceStats(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
-	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+	node.OnPresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
 		return PresenceStatsReply{}, nil
 	})
 	connectClient(t, client)
@@ -1519,7 +1519,7 @@ func TestClientHandlePresenceStats(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Nil(t, replies[0].Error)
 
-	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+	node.OnPresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
 		return PresenceStatsReply{}, ErrorPermissionDenied
 	})
 	replies = []*protocol.Reply{}
@@ -1532,7 +1532,7 @@ func TestClientHandlePresenceStats(t *testing.T) {
 	require.Nil(t, disconnect)
 	require.Equal(t, ErrorPermissionDenied.toProto(), replies[0].Error)
 
-	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+	node.OnPresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
 		return PresenceStatsReply{}, DisconnectBadRequest
 	})
 	replies = []*protocol.Reply{}
@@ -1544,7 +1544,7 @@ func TestClientHandlePresenceStats(t *testing.T) {
 	}, rw.write, rw.flush)
 	require.Equal(t, DisconnectBadRequest, disconnect)
 
-	node.On().PresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
+	node.OnPresenceStats(func(_ *Client, _ PresenceStatsEvent) (PresenceStatsReply, error) {
 		return PresenceStatsReply{}, errors.New("boom")
 	})
 	replies = []*protocol.Reply{}
@@ -1601,14 +1601,14 @@ func TestClientSideRefresh(t *testing.T) {
 	})
 	client, _ := newClient(newCtx, node, transport)
 
-	node.On().Connecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		return ConnectReply{
 			ClientSideRefresh: true,
 		}, nil
 	})
 
 	expireAt := time.Now().Unix() + 60
-	node.On().Refresh(func(_ *Client, e RefreshEvent) (RefreshReply, error) {
+	node.OnRefresh(func(_ *Client, e RefreshEvent) (RefreshReply, error) {
 		require.Equal(t, "test", e.Token)
 		return RefreshReply{
 			ExpireAt: expireAt,
@@ -1646,13 +1646,13 @@ func TestClientSideSubRefresh(t *testing.T) {
 	})
 	client, _ := newClient(newCtx, node, transport)
 
-	node.On().Connecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		return ConnectReply{
 			ClientSideRefresh: true,
 		}, nil
 	})
 
-	node.On().Subscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
+	node.OnSubscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
 		return SubscribeReply{
 			ExpireAt:          time.Now().Unix() + 10,
 			ClientSideRefresh: true,
@@ -1660,7 +1660,7 @@ func TestClientSideSubRefresh(t *testing.T) {
 	})
 
 	expireAt := time.Now().Unix() + 60
-	node.On().SubRefresh(func(_ *Client, e SubRefreshEvent) (SubRefreshReply, error) {
+	node.OnSubRefresh(func(_ *Client, e SubRefreshEvent) (SubRefreshReply, error) {
 		require.Equal(t, "test_token", e.Token)
 		return SubRefreshReply{
 			ExpireAt: expireAt,
@@ -1694,12 +1694,12 @@ func TestCloseNoRace(t *testing.T) {
 
 	done := make(chan struct{})
 
-	node.On().Connect(func(client *Client) {
+	node.OnConnect(func(client *Client) {
 		require.NoError(t, client.Disconnect(DisconnectForceNoReconnect))
 		time.Sleep(time.Second)
 	})
 
-	node.On().Disconnect(func(_ *Client, _ DisconnectEvent) {
+	node.OnDisconnect(func(_ *Client, _ DisconnectEvent) {
 		close(done)
 	})
 

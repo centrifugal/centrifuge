@@ -168,7 +168,7 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().Connecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
@@ -176,17 +176,17 @@ func main() {
 		}, nil
 	})
 
-	node.On().Connect(func(c *centrifuge.Client) {})
+	node.OnConnect(func(c *centrifuge.Client) {})
 
-	node.On().Subscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		return centrifuge.SubscribeReply{}, nil
 	})
 
-	node.On().Publish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		return centrifuge.PublishReply{}, nil
 	})
 
-	node.On().Message(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
+	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
 		err := c.Send(e.Data)
 		if err != nil {
 			if err != io.EOF {
