@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/bufpool"
+
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/recovery"
@@ -136,16 +138,16 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 			return nil
 		},
 		WriteManyFn: func(data ...[]byte) error {
-			buf := getBuffer()
+			buf := bufpool.GetBuffer()
 			for _, payload := range data {
 				buf.Write(payload)
 			}
 			if err := t.Write(buf.Bytes()); err != nil {
 				go func() { _ = c.close(DisconnectWriteError) }()
-				putBuffer(buf)
+				bufpool.PutBuffer(buf)
 				return err
 			}
-			putBuffer(buf)
+			bufpool.PutBuffer(buf)
 			transportMessagesSentCounter.Add(float64(len(data)))
 			return nil
 		},

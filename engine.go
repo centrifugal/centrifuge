@@ -5,6 +5,21 @@ import (
 	"time"
 )
 
+// Publication is a data sent to channel.
+type Publication struct {
+	Offset uint64
+	Data   []byte
+	Info   *ClientInfo
+}
+
+// ClientInfo contains information about client connection.
+type ClientInfo struct {
+	ClientID string
+	UserID   string
+	ConnInfo []byte
+	ChanInfo []byte
+}
+
 // PresenceStats represents a short presence information for channel.
 type PresenceStats struct {
 	// NumClients is a number of client connections in channel.
