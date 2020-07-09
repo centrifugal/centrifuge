@@ -471,30 +471,30 @@ func TestRedisConsistentIndex(t *testing.T) {
 func TestRedisExtractPushData(t *testing.T) {
 	data := []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
 	pushData, pushType, offset := extractPushData(data)
-	require.Equal(t, pubType, pushType)
+	require.Equal(t, pubPushType, pushType)
 	require.Equal(t, uint64(16901), offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
 	pushData, pushType, offset = extractPushData(data)
-	require.Equal(t, pubType, pushType)
+	require.Equal(t, pubPushType, pushType)
 	require.Equal(t, uint64(0), offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__4294967337__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
 	pushData, pushType, offset = extractPushData(data)
-	require.Equal(t, pubType, pushType)
+	require.Equal(t, pubPushType, pushType)
 	require.Equal(t, uint64(4294967337), offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__j__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
 	pushData, pushType, offset = extractPushData(data)
-	require.Equal(t, joinType, pushType)
+	require.Equal(t, joinPushType, pushType)
 	require.Equal(t, uint64(0), offset)
 
 	data = []byte(`__l__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
 	pushData, pushType, offset = extractPushData(data)
-	require.Equal(t, leaveType, pushType)
+	require.Equal(t, leavePushType, pushType)
 	require.Equal(t, uint64(0), offset)
 }
 

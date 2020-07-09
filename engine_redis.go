@@ -764,14 +764,14 @@ func (s *shard) historyListKey(ch string) channelID {
 	if s.useCluster() {
 		ch = "{" + ch + "}"
 	}
-	return channelID(s.config.Prefix + ".history.list." + ch)
+	return channelID(s.config.Prefix + ".list." + ch)
 }
 
 func (s *shard) historyStreamKey(ch string) channelID {
 	if s.useCluster() {
 		ch = "{" + ch + "}"
 	}
-	return channelID(s.config.Prefix + ".history.stream." + ch)
+	return channelID(s.config.Prefix + ".stream." + ch)
 }
 
 func (s *shard) historyMetaKey(ch string) channelID {
@@ -781,8 +781,7 @@ func (s *shard) historyMetaKey(ch string) channelID {
 	if s.useStreams {
 		return channelID(s.config.Prefix + ".stream.meta." + ch)
 	}
-	// TODO v1: rename to list.meta.
-	return channelID(s.config.Prefix + ".seq.meta." + ch)
+	return channelID(s.config.Prefix + ".list.meta." + ch)
 }
 
 // Run Redis shard.
@@ -1029,14 +1028,14 @@ func (s *shard) extractChannel(chID channelID) string {
 }
 
 var (
-	joinTypeSuffix  = []byte("__j__")
-	leaveTypeSuffix = []byte("__l__")
+	joinTypePrefix  = []byte("__j__")
+	leaveTypePrefix = []byte("__l__")
 )
 
 func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, chID channelID, data []byte) error {
 	pushData, pushType, offset := extractPushData(data)
 	channel := s.extractChannel(chID)
-	if pushType == pubType {
+	if pushType == pubPushType {
 		var pub protocol.Publication
 		err := pub.Unmarshal(pushData)
 		if err != nil {
@@ -1049,14 +1048,14 @@ func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, chID c
 			pub.Offset = offset
 		}
 		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub))
-	} else if pushType == joinType {
+	} else if pushType == joinPushType {
 		var info protocol.ClientInfo
 		err := info.Unmarshal(pushData)
 		if err != nil {
 			return err
 		}
 		_ = eventHandler.HandleJoin(channel, infoFromProto(&info))
-	} else if pushType == leaveType {
+	} else if pushType == leavePushType {
 		var info protocol.ClientInfo
 		err := info.Unmarshal(pushData)
 		if err != nil {
@@ -1382,7 +1381,7 @@ func (s *shard) PublishJoin(ch string, info *ClientInfo, _ *ChannelOptions) erro
 
 	pr := pubRequest{
 		channel: chID,
-		message: append(joinTypeSuffix, byteMessage...),
+		message: append(joinTypePrefix, byteMessage...),
 		err:     eChan,
 	}
 	select {
@@ -1413,7 +1412,7 @@ func (s *shard) PublishLeave(ch string, info *ClientInfo, _ *ChannelOptions) err
 
 	pr := pubRequest{
 		channel: chID,
-		message: append(leaveTypeSuffix, byteMessage...),
+		message: append(leaveTypePrefix, byteMessage...),
 		err:     eChan,
 	}
 	select {
@@ -1835,9 +1834,9 @@ func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo,
 type pushType int
 
 const (
-	pubType   pushType = 0
-	joinType  pushType = 1
-	leaveType pushType = 2
+	pubPushType   pushType = 0
+	joinPushType  pushType = 1
+	leavePushType pushType = 2
 )
 
 func extractPushData(data []byte) ([]byte, pushType, uint64) {
@@ -1845,14 +1844,14 @@ func extractPushData(data []byte) ([]byte, pushType, uint64) {
 	if bytes.HasPrefix(data, []byte("__")) {
 		parts := bytes.SplitN(data, []byte("__"), 3)
 		if bytes.Equal(parts[1], []byte("j")) {
-			return parts[2], joinType, 0
+			return parts[2], joinPushType, 0
 		} else if bytes.Equal(parts[1], []byte("l")) {
-			return parts[2], leaveType, 0
+			return parts[2], leavePushType, 0
 		}
 		offset, _ := strconv.ParseUint(string(parts[1]), 10, 64)
-		return parts[2], pubType, offset
+		return parts[2], pubPushType, offset
 	}
-	return data, pubType, offset
+	return data, pubPushType, offset
 }
 
 func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
