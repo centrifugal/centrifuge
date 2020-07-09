@@ -569,15 +569,15 @@ func (c *Client) hasEvent(e Event) bool {
 }
 
 // Lock must be held outside.
-func (c *Client) clientInfo(ch string) *protocol.ClientInfo {
+func (c *Client) clientInfo(ch string) *ClientInfo {
 	var channelInfo protocol.Raw
 	channelContext, ok := c.channels[ch]
 	if ok {
 		channelInfo = channelContext.Info
 	}
-	return &protocol.ClientInfo{
-		User:     c.user,
-		Client:   c.uid,
+	return &ClientInfo{
+		UserID:   c.user,
+		ClientID: c.uid,
 		ConnInfo: c.info,
 		ChanInfo: channelInfo,
 	}
@@ -911,12 +911,9 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) *Disconne
 		return nil
 	}
 	if ctx.chOpts.JoinLeave && ctx.clientInfo != nil {
-		join := &protocol.Join{
-			Info: *ctx.clientInfo,
-		}
 		// Flush prevents Join message to be delivered before subscribe response.
 		_ = rw.flush()
-		go func() { _ = c.node.publishJoin(cmd.Channel, join, &ctx.chOpts) }()
+		go func() { _ = c.node.publishJoin(cmd.Channel, ctx.clientInfo, &ctx.chOpts) }()
 	}
 	return nil
 }
@@ -1392,10 +1389,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		for channel, subCtx := range subCtxMap {
 			go func(channel string, subCtx subscribeContext) {
 				if subCtx.chOpts.JoinLeave && subCtx.clientInfo != nil {
-					join := &protocol.Join{
-						Info: *subCtx.clientInfo,
-					}
-					_ = c.node.publishJoin(channel, join, &subCtx.chOpts)
+					_ = c.node.publishJoin(channel, subCtx.clientInfo, &subCtx.chOpts)
 				}
 			}(channel, subCtx)
 		}
@@ -1632,7 +1626,7 @@ func incRecoverCount(recovered bool) {
 type subscribeContext struct {
 	result         *protocol.SubscribeResult
 	chOpts         ChannelOptions
-	clientInfo     *protocol.ClientInfo
+	clientInfo     *ClientInfo
 	err            *Error
 	disconnect     *Disconnect
 	channelContext ChannelContext
@@ -1670,9 +1664,9 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 
 	channel := cmd.Channel
 
-	info := &protocol.ClientInfo{
-		User:     c.user,
-		Client:   c.uid,
+	info := &ClientInfo{
+		ClientID: c.uid,
+		UserID:   c.user,
 		ConnInfo: c.info,
 		ChanInfo: channelInfo,
 	}
@@ -1714,7 +1708,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 	var (
 		latestOffset  uint64
 		latestEpoch   string
-		recoveredPubs []*Publication
+		recoveredPubs []*protocol.Publication
 	)
 
 	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
@@ -1744,7 +1738,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			latestOffset = historyResult.Offset
 			latestEpoch = historyResult.Epoch
 
-			recoveredPubs = historyResult.Publications
+			recoveredPubs = make([]*protocol.Publication, 0, len(historyResult.Publications))
+			for _, pub := range historyResult.Publications {
+				recoveredPubs = append(recoveredPubs, pubToProto(pub))
+			}
 
 			nextOffset := cmdOffset + 1
 			var recovered bool
@@ -2041,10 +2038,7 @@ func (c *Client) unsubscribe(channel string) error {
 		}
 
 		if chOpts.JoinLeave {
-			leave := &protocol.Leave{
-				Info: *info,
-			}
-			_ = c.node.publishLeave(channel, leave, &chOpts)
+			_ = c.node.publishLeave(channel, info, &chOpts)
 		}
 
 		if err := c.node.removeSubscription(channel, c); err != nil {
@@ -2106,12 +2100,7 @@ func (c *Client) publishCmd(cmd *protocol.PublishRequest) (*clientproto.PublishR
 		reply, err := c.node.clientEvents.publishHandler(c, PublishEvent{
 			Channel: ch,
 			Data:    data,
-			Info: &ClientInfo{
-				User:     info.User,
-				Client:   info.Client,
-				ConnInfo: info.ConnInfo,
-				ChanInfo: info.ChanInfo,
-			},
+			Info:    info,
 		})
 		if err != nil {
 			switch t := err.(type) {
@@ -2193,8 +2182,13 @@ func (c *Client) presenceCmd(cmd *protocol.PresenceRequest) (*clientproto.Presen
 		return resp, nil
 	}
 
+	presence := make(map[string]*protocol.ClientInfo, len(result.Presence))
+	for k, v := range result.Presence {
+		presence[k] = infoToProto(v)
+	}
+
 	resp.Result = &protocol.PresenceResult{
-		Presence: result.Presence,
+		Presence: presence,
 	}
 
 	return resp, nil
@@ -2299,8 +2293,13 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 		return resp, nil
 	}
 
+	pubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
+	for _, pub := range historyResult.Publications {
+		pubs = append(pubs, pubToProto(pub))
+	}
+
 	resp.Result = &protocol.HistoryResult{
-		Publications: historyResult.Publications,
+		Publications: pubs,
 	}
 
 	return resp, nil

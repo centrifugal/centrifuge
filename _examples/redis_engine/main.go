@@ -55,6 +55,15 @@ func main() {
 	cfg := centrifuge.DefaultConfig
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
+	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
+		return centrifuge.ChannelOptions{
+			Presence:        true,
+			JoinLeave:       true,
+			HistorySize:     100,
+			HistoryLifetime: 300,
+			HistoryRecover:  true,
+		}, true, nil
+	}
 
 	node, _ := centrifuge.New(cfg)
 
@@ -101,10 +110,10 @@ func main() {
 				Host: "localhost",
 				Port: 6379,
 			},
-			{
-				Host: "localhost",
-				Port: 6380,
-			},
+			//{
+			//	Host: "localhost",
+			//	Port: 6380,
+			//},
 		},
 	})
 	if err != nil {
@@ -116,35 +125,35 @@ func main() {
 		log.Fatal(err)
 	}
 
-	go func() {
-		// Publish channel notifications from server periodically.
-		i := 1
-		for {
-			_, err := node.Publish("chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`))
-			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
-			}
-			i++
-			time.Sleep(5000 * time.Millisecond)
-		}
-	}()
+	//go func() {
+	//	// Publish channel notifications from server periodically.
+	//	i := 1
+	//	for {
+	//		_, err := node.Publish("chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`))
+	//		if err != nil {
+	//			log.Printf("error publishing to personal channel: %s", err)
+	//		}
+	//		i++
+	//		time.Sleep(5000 * time.Millisecond)
+	//	}
+	//}()
 
-	// Simulate some work inside Redis.
-	for i := 0; i < 10; i++ {
-		go func(i int) {
-			for {
-				time.Sleep(time.Second)
-				_, err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
-				if err != nil {
-					log.Println(err.Error())
-				}
-				_, err = node.History("chat:" + strconv.Itoa(i))
-				if err != nil {
-					log.Println(err.Error())
-				}
-			}
-		}(i)
-	}
+	//// Simulate some work inside Redis.
+	//for i := 0; i < 10; i++ {
+	//	go func(i int) {
+	//		for {
+	//			time.Sleep(time.Second)
+	//			_, err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
+	//			if err != nil {
+	//				log.Println(err.Error())
+	//			}
+	//			_, err = node.History("chat:" + strconv.Itoa(i))
+	//			if err != nil {
+	//				log.Println(err.Error())
+	//			}
+	//		}
+	//	}(i)
+	//}
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/", http.FileServer(http.Dir("./")))

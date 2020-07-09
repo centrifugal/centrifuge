@@ -684,32 +684,32 @@ func TestClientPublishNotAvailable(t *testing.T) {
 
 type testBrokerEventHandler struct {
 	// Publication must register callback func to handle Publications received.
-	HandlePublicationFunc func(ch string, pub *protocol.Publication) error
+	HandlePublicationFunc func(ch string, pub *Publication) error
 	// Join must register callback func to handle Join messages received.
-	HandleJoinFunc func(ch string, join *protocol.Join) error
+	HandleJoinFunc func(ch string, info *ClientInfo) error
 	// Leave must register callback func to handle Leave messages received.
-	HandleLeaveFunc func(ch string, leave *protocol.Leave) error
+	HandleLeaveFunc func(ch string, info *ClientInfo) error
 	// Control must register callback func to handle Control data received.
 	HandleControlFunc func([]byte) error
 }
 
-func (b *testBrokerEventHandler) HandlePublication(ch string, pub *protocol.Publication) error {
+func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication) error {
 	if b.HandlePublicationFunc != nil {
 		return b.HandlePublicationFunc(ch, pub)
 	}
 	return nil
 }
 
-func (b *testBrokerEventHandler) HandleJoin(ch string, join *protocol.Join) error {
+func (b *testBrokerEventHandler) HandleJoin(ch string, info *ClientInfo) error {
 	if b.HandleJoinFunc != nil {
-		return b.HandleJoinFunc(ch, join)
+		return b.HandleJoinFunc(ch, info)
 	}
 	return nil
 }
 
-func (b *testBrokerEventHandler) HandleLeave(ch string, leave *protocol.Leave) error {
+func (b *testBrokerEventHandler) HandleLeave(ch string, info *ClientInfo) error {
 	if b.HandleLeaveFunc != nil {
-		return b.HandleLeaveFunc(ch, leave)
+		return b.HandleLeaveFunc(ch, info)
 	}
 	return nil
 }
@@ -737,7 +737,7 @@ func TestClientPublishHandler(t *testing.T) {
 	connectClient(t, client)
 
 	node.broker.(*MemoryEngine).eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *protocol.Publication) error {
+		HandlePublicationFunc: func(ch string, pub *Publication) error {
 			var msg testClientMessage
 			err := json.Unmarshal(pub.Data, &msg)
 			require.NoError(t, err)

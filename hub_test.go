@@ -205,7 +205,7 @@ func TestHubBroadcastJoinJSON(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(node.hub.users), 1)
 	err = node.hub.broadcastJoin(
-		"test", &protocol.Join{Info: ClientInfo{Client: "broadcast_client"}})
+		"test", &protocol.Join{Info: protocol.ClientInfo{Client: "broadcast_client"}})
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
@@ -228,7 +228,7 @@ func TestHubBroadcastJoinProtobuf(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(node.hub.users), 1)
 	err = node.hub.broadcastJoin(
-		"test", &protocol.Join{Info: ClientInfo{Client: "broadcast_client"}})
+		"test", &protocol.Join{Info: protocol.ClientInfo{Client: "broadcast_client"}})
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
@@ -252,7 +252,7 @@ func TestHubBroadcastLeaveJSON(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(node.hub.users), 1)
 	err = node.hub.broadcastLeave(
-		"test", &protocol.Leave{Info: ClientInfo{Client: "broadcast_client"}})
+		"test", &protocol.Leave{Info: protocol.ClientInfo{Client: "broadcast_client"}})
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
@@ -275,7 +275,7 @@ func TestHubBroadcastLeaveProtobuf(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(node.hub.users), 1)
 	err = node.hub.broadcastLeave(
-		"test", &protocol.Leave{Info: ClientInfo{Client: "broadcast_client"}})
+		"test", &protocol.Leave{Info: protocol.ClientInfo{Client: "broadcast_client"}})
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
