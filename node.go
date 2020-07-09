@@ -893,12 +893,6 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 	if err != nil {
 		return HistoryResult{}, err
 	}
-	// TODO now: ???
-	//if hasFlag(CompatibilityFlags, UseSeqGen) {
-	//	for i := 0; i < len(pubs); i++ {
-	//		pubs[i].Seq, pubs[i].Gen = recovery.UnpackUint64(pubs[i].Offset)
-	//	}
-	//}
 	return HistoryResult{
 		StreamPosition: streamTop,
 		Publications:   pubs,
@@ -1132,17 +1126,25 @@ type brokerEventHandler struct {
 
 // HandlePublication coming from Engine.
 func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication) error {
+	if pub == nil {
+		panic("nil Publication received, this should never happen")
+	}
 	return h.node.handlePublication(ch, pubToProto(pub))
 }
 
 // HandleJoin coming from Engine.
 func (h *brokerEventHandler) HandleJoin(ch string, info *ClientInfo) error {
-	// TODO now: nil pointer check?
+	if info == nil {
+		panic("nil join info received, this should never happen")
+	}
 	return h.node.handleJoin(ch, &protocol.Join{Info: *infoToProto(info)})
 }
 
 // HandleLeave coming from Engine.
 func (h *brokerEventHandler) HandleLeave(ch string, info *ClientInfo) error {
+	if info == nil {
+		panic("nil leave info received, this should never happen")
+	}
 	return h.node.handleLeave(ch, &protocol.Leave{Info: *infoToProto(info)})
 }
 
