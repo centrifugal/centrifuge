@@ -55,6 +55,11 @@ func main() {
 	cfg := centrifuge.DefaultConfig
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
+	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
+		return centrifuge.ChannelOptions{
+			JoinLeave: true,
+		}, true, nil
+	}
 
 	node, _ := centrifuge.New(cfg)
 

@@ -8,7 +8,7 @@
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
         <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -81,6 +81,7 @@
                 function handleMessage(message) {
                     console.log("new message received", message);
                     var clientID;
+                    console.log(message);
                     if (message.info){
                         clientID = message.info.client;
                     } else {
