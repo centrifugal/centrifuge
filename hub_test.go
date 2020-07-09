@@ -15,6 +15,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
 type testTransport struct {
 	mu         sync.Mutex
 	sink       chan []byte
@@ -205,7 +214,7 @@ func TestHubBroadcastJoinJSON(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(node.hub.users), 1)
 	err = node.hub.broadcastJoin(
-		"test", &protocol.Join{Info: ClientInfo{Client: "broadcast_client"}})
+		"test", &protocol.Join{Info: protocol.ClientInfo{Client: "broadcast_client"}})
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
@@ -228,7 +237,7 @@ func TestHubBroadcastJoinProtobuf(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(node.hub.users), 1)
 	err = node.hub.broadcastJoin(
-		"test", &protocol.Join{Info: ClientInfo{Client: "broadcast_client"}})
+		"test", &protocol.Join{Info: protocol.ClientInfo{Client: "broadcast_client"}})
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
@@ -252,7 +261,7 @@ func TestHubBroadcastLeaveJSON(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(node.hub.users), 1)
 	err = node.hub.broadcastLeave(
-		"test", &protocol.Leave{Info: ClientInfo{Client: "broadcast_client"}})
+		"test", &protocol.Leave{Info: protocol.ClientInfo{Client: "broadcast_client"}})
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
@@ -275,7 +284,7 @@ func TestHubBroadcastLeaveProtobuf(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, len(node.hub.users), 1)
 	err = node.hub.broadcastLeave(
-		"test", &protocol.Leave{Info: ClientInfo{Client: "broadcast_client"}})
+		"test", &protocol.Leave{Info: protocol.ClientInfo{Client: "broadcast_client"}})
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
