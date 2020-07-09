@@ -432,10 +432,10 @@ const (
 redis.replicate_commands()
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
- epoch = redis.call("hget", KEYS[2], "e")
+  epoch = redis.call("hget", KEYS[2], "e")
 else
- epoch = redis.call('time')[1]
- redis.call("hset", KEYS[2], "e", epoch)
+  epoch = redis.call('time')[1]
+  redis.call("hset", KEYS[2], "e", epoch)
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
 if ARGV[5] ~= '0' then
@@ -464,10 +464,10 @@ return {offset, epoch}
 redis.replicate_commands()
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
- epoch = redis.call("hget", KEYS[2], "e")
+  epoch = redis.call("hget", KEYS[2], "e")
 else
- epoch = redis.call('time')[1]
- redis.call("hset", KEYS[2], "e", epoch)
+  epoch = redis.call('time')[1]
+  redis.call("hset", KEYS[2], "e", epoch)
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
 if ARGV[5] ~= '0' then
@@ -496,10 +496,10 @@ if ARGV[3] ~= '0' and offset ~= false then
 end
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
- epoch = redis.call("hget", KEYS[2], "e")
+  epoch = redis.call("hget", KEYS[2], "e")
 else
- epoch = redis.call('time')[1]
- redis.call("hset", KEYS[2], "e", epoch)
+  epoch = redis.call('time')[1]
+  redis.call("hset", KEYS[2], "e", epoch)
 end
 local pubs = nil
 if ARGV[1] ~= "0" then
@@ -523,18 +523,18 @@ if ARGV[3] ~= '0' and offset ~= false then
 end
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
- epoch = redis.call("hget", KEYS[2], "e")
+  epoch = redis.call("hget", KEYS[2], "e")
 else
- epoch = redis.call('time')[1]
- redis.call("hset", KEYS[2], "e", epoch)
+  epoch = redis.call('time')[1]
+  redis.call("hset", KEYS[2], "e", epoch)
 end
 local pubs = nil
 if ARGV[1] ~= "0" then
- if ARGV[3] ~= "0" then
-   pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
- else
+  if ARGV[3] ~= "0" then
+    pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
+  else
 	pubs = redis.call("xrange", KEYS[1], ARGV[2], "+")
- end
+  end
 end
 return {offset, epoch, pubs}
 	`
@@ -569,10 +569,10 @@ redis.call("zrem", KEYS[1], ARGV[1])
 	presenceSource = `
 local expired = redis.call("zrangebyscore", KEYS[1], "0", ARGV[1])
 if #expired > 0 then
- for num = 1, #expired do
-   redis.call("hdel", KEYS[2], expired[num])
- end
- redis.call("zremrangebyscore", KEYS[1], "0", ARGV[1])
+  for num = 1, #expired do
+    redis.call("hdel", KEYS[2], expired[num])
+  end
+  redis.call("zremrangebyscore", KEYS[1], "0", ARGV[1])
 end
 return redis.call("hgetall", KEYS[2])
 	`
@@ -1027,6 +1027,7 @@ func (s *shard) extractChannel(chID channelID) string {
 	return strings.TrimPrefix(string(chID), s.messagePrefix)
 }
 
+// Define prefixes to distinguish Join and Leave messages coming from PUB/SUB.
 var (
 	joinTypePrefix  = []byte("__j__")
 	leaveTypePrefix = []byte("__l__")
@@ -1350,7 +1351,7 @@ func (s *shard) Publish(ch string, pub *Publication, _ *ChannelOptions) error {
 
 	pr := pubRequest{
 		channel: chID,
-		message: append(byteMessage),
+		message: byteMessage,
 		err:     eChan,
 	}
 	select {

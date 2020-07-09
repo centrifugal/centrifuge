@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/bufpool"
-
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/recovery"

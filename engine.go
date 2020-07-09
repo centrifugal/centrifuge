@@ -7,16 +7,24 @@ import (
 
 // Publication is a data sent to channel.
 type Publication struct {
+	// Offset is an incremental position number inside history stream.
 	Offset uint64
-	Data   []byte
-	Info   *ClientInfo
+	// Data published to channel.
+	Data []byte
+	// Info is an optional information about client connection published this data.
+	Info *ClientInfo
 }
 
 // ClientInfo contains information about client connection.
 type ClientInfo struct {
+	// ClientID is a client unique id.
 	ClientID string
-	UserID   string
+	// UserID is an ID of authenticated user. Zero value means anonymous user.
+	UserID string
+	// ConnInfo is an additional information about connection.
 	ConnInfo []byte
+	// ChanInfo is an additional information about connection in context of
+	// channel subscription.
 	ChanInfo []byte
 }
 
