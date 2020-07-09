@@ -1741,7 +1741,11 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 
 			recoveredPubs = make([]*protocol.Publication, 0, len(historyResult.Publications))
 			for _, pub := range historyResult.Publications {
-				recoveredPubs = append(recoveredPubs, pubToProto(pub))
+				protoPub := pubToProto(pub)
+				if useSeqGen {
+					protoPub.Seq, protoPub.Gen = recovery.UnpackUint64(protoPub.Offset)
+				}
+				recoveredPubs = append(recoveredPubs, protoPub)
 			}
 
 			nextOffset := cmdOffset + 1
@@ -2296,7 +2300,11 @@ func (c *Client) historyCmd(cmd *protocol.HistoryRequest) (*clientproto.HistoryR
 
 	pubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
 	for _, pub := range historyResult.Publications {
-		pubs = append(pubs, pubToProto(pub))
+		protoPub := pubToProto(pub)
+		if hasFlag(CompatibilityFlags, UseSeqGen) {
+			protoPub.Seq, protoPub.Gen = recovery.UnpackUint64(protoPub.Offset)
+		}
+		pubs = append(pubs, protoPub)
 	}
 
 	resp.Result = &protocol.HistoryResult{
