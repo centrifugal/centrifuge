@@ -468,6 +468,55 @@ func TestRedisConsistentIndex(t *testing.T) {
 	require.True(t, sameFraction > 0.7)
 }
 
+func TestRedisEngineHandlePubSubMessage(t *testing.T) {
+	e := NewTestRedisEngineWithPrefix(t, getUniquePrefix(), false)
+	err := e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication) error {
+		require.Equal(t, "test", ch)
+		return nil
+	}}, e.shards[0].messageChannelID("test"), []byte("__16901__dsdsd"))
+	require.Error(t, err)
+
+	pub := &protocol.Publication{
+		Data: []byte("{}"),
+	}
+	data, err := pub.Marshal()
+	require.NoError(t, err)
+	var publicationHandlerCalled bool
+	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication) error {
+		publicationHandlerCalled = true
+		require.Equal(t, "test", ch)
+		require.Equal(t, uint64(16901), pub.Offset)
+		return nil
+	}}, e.shards[0].messageChannelID("test"), []byte("__16901__"+string(data)))
+	require.NoError(t, err)
+	require.True(t, publicationHandlerCalled)
+
+	info := &protocol.ClientInfo{
+		User: "12",
+	}
+	data, err = info.Marshal()
+	require.NoError(t, err)
+	var joinHandlerCalled bool
+	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandleJoinFunc: func(ch string, info *ClientInfo) error {
+		joinHandlerCalled = true
+		require.Equal(t, "test", ch)
+		require.Equal(t, "12", info.UserID)
+		return nil
+	}}, e.shards[0].messageChannelID("test"), append(joinTypePrefix, data...))
+	require.NoError(t, err)
+	require.True(t, joinHandlerCalled)
+
+	var leaveHandlerCalled bool
+	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandleLeaveFunc: func(ch string, info *ClientInfo) error {
+		leaveHandlerCalled = true
+		require.Equal(t, "test", ch)
+		require.Equal(t, "12", info.UserID)
+		return nil
+	}}, e.shards[0].messageChannelID("test"), append(leaveTypePrefix, data...))
+	require.NoError(t, err)
+	require.True(t, leaveHandlerCalled)
+}
+
 func TestRedisExtractPushData(t *testing.T) {
 	data := []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
 	pushData, pushType, offset := extractPushData(data)
