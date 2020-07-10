@@ -69,7 +69,7 @@ func main() {
 		// periodically send messages to client.
 		go func() {
 			for {
-				err := c.Send(centrifuge.Raw(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+				err := c.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
 				if err != nil {
 					if err != io.EOF {
 						log.Println(err.Error())
