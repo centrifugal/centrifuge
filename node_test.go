@@ -150,6 +150,116 @@ func TestNodeRegistry(t *testing.T) {
 	require.Equal(t, 1, len(registry.list()))
 }
 
+func TestNode_SetBroker(t *testing.T) {
+	n, _ := New(DefaultConfig)
+	engine := testMemoryEngine()
+	n.SetBroker(engine)
+	require.Equal(t, n.broker, engine)
+}
+
+func TestNode_SetHistoryManager(t *testing.T) {
+	n, _ := New(DefaultConfig)
+	engine := testMemoryEngine()
+	n.SetHistoryManager(engine)
+	require.Equal(t, n.historyManager, engine)
+}
+
+func TestNode_SetPresenceManager(t *testing.T) {
+	n, _ := New(DefaultConfig)
+	engine := testMemoryEngine()
+	n.SetPresenceManager(engine)
+	require.Equal(t, n.presenceManager, engine)
+}
+
+func TestNode_Channels(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	_, err := n.Channels()
+	require.NoError(t, err)
+}
+
+func TestNode_Info(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	info, err := n.Info()
+	require.NoError(t, err)
+	require.Len(t, info.Nodes, 1)
+}
+
+func TestNode_handleJoin(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.handleJoin("test", &protocol.Join{
+		Info: protocol.ClientInfo{},
+	})
+	require.NoError(t, err)
+}
+
+func TestNode_handleLeave(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.handleLeave("test", &protocol.Leave{
+		Info: protocol.ClientInfo{},
+	})
+	require.NoError(t, err)
+}
+
+func TestNode_Unsubscribe(t *testing.T) {
+	n := nodeWithMemoryEngine()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.Unsubscribe("42", "test_channel")
+	require.NoError(t, err)
+	client := newTestConnectedClient(t, n, "42")
+	err = n.addClient(client)
+	require.NoError(t, err)
+	subscribeClient(t, client, "test_channel")
+	done := make(chan struct{})
+	n.OnUnsubscribe(func(client *Client, event UnsubscribeEvent) {
+		require.Equal(t, "42", client.UserID())
+		close(done)
+	})
+	err = n.Unsubscribe("42", "test_channel")
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
+func TestNode_Disconnect(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.Disconnect("42")
+	require.NoError(t, err)
+	client := newTestConnectedClient(t, n, "42")
+	err = n.addClient(client)
+	require.NoError(t, err)
+	done := make(chan struct{})
+	n.OnDisconnect(func(client *Client, event DisconnectEvent) {
+		require.Equal(t, "42", client.UserID())
+		close(done)
+	})
+	err = n.Disconnect("42")
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
+func TestNode_RemoveHistory(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.RemoveHistory("test_user")
+	require.NoError(t, err)
+}
+
+func TestIndex(t *testing.T) {
+	require.Equal(t, 0, index("2121", 1))
+}
+
 var testPayload = map[string]interface{}{
 	"_id":        "5adece493c1a23736b037c52",
 	"index":      2,

@@ -35,6 +35,17 @@ func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 	return c, nil
 }
 
+func newTestConnectedClient(t *testing.T, n *Node, userID string) *Client {
+	transport := newTestTransport()
+	ctx := SetCredentials(context.Background(), &Credentials{
+		UserID: userID,
+	})
+	client, err := newClient(ctx, n, transport)
+	require.NoError(t, err)
+	connectClient(t, client)
+	return client
+}
+
 func TestSetCredentials(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{})
@@ -1879,4 +1890,9 @@ func TestClientCheckPosition(t *testing.T) {
 	require.Contains(t, client.channels, "channel")
 	require.EqualValues(t, 3, client.channels["channel"].positionCheckFailures)
 	require.EqualValues(t, 200, client.channels["channel"].positionCheckTime)
+}
+
+func TestErrLogLevel(t *testing.T) {
+	require.Equal(t, LogLevelInfo, errLogLevel(ErrorNotAvailable))
+	require.Equal(t, LogLevelError, errLogLevel(errors.New("boom")))
 }
