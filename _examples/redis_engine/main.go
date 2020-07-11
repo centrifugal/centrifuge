@@ -55,33 +55,39 @@ func main() {
 	cfg := centrifuge.DefaultConfig
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
+	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
+		return centrifuge.ChannelOptions{
+			Presence:        true,
+			JoinLeave:       true,
+			HistorySize:     100,
+			HistoryLifetime: 300,
+			HistoryRecover:  true,
+		}, true, nil
+	}
 
 	node, _ := centrifuge.New(cfg)
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+	node.OnConnect(func(c *centrifuge.Client) {
+		transport := c.Transport()
+		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
+	})
 
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{}
-		})
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
+		return centrifuge.SubscribeReply{}, nil
+	})
 
-		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
-			return centrifuge.UnsubscribeReply{}
-		})
+	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
+	})
 
-		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			return centrifuge.PublishReply{}
-		})
+	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
+		return centrifuge.PublishReply{}, nil
+	})
 
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
-			return centrifuge.DisconnectReply{}
-		})
-
-		transport := client.Transport()
-		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
 	})
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{

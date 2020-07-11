@@ -3,15 +3,14 @@ package natsbroker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 	"sync"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/protocol"
-
-	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go"
 )
 
 type (
@@ -54,6 +53,10 @@ func (b *NatsBroker) clientChannel(ch string) channelID {
 	return channelID(b.config.Prefix + ".client." + ch)
 }
 
+func (b *NatsBroker) extractChannel(subject string) string {
+	return strings.TrimPrefix(subject, b.config.Prefix+".client.")
+}
+
 // Run runs engine after node initialized.
 func (b *NatsBroker) Run(h centrifuge.BrokerEventHandler) error {
 	b.eventHandler = h
@@ -79,18 +82,29 @@ func (b *NatsBroker) Close(_ context.Context) error {
 	return nil
 }
 
+type pushType int
+
+const (
+	pubPushType   pushType = 0
+	joinPushType  pushType = 1
+	leavePushType pushType = 2
+)
+
+type push struct {
+	Type pushType        `json:"type,omitempty"`
+	Data json.RawMessage `json:"data"`
+}
+
 // Publish - see Engine interface description.
-func (b *NatsBroker) Publish(ch string, pub *protocol.Publication, _ *centrifuge.ChannelOptions) error {
-	data, err := pub.Marshal()
+func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, _ *centrifuge.ChannelOptions) error {
+	data, err := json.Marshal(pub)
 	if err != nil {
 		return err
 	}
-	push := &protocol.Push{
-		Type:    protocol.PushTypePublication,
-		Channel: ch,
-		Data:    data,
-	}
-	byteMessage, err := push.Marshal()
+	byteMessage, err := json.Marshal(push{
+		Type: pubPushType,
+		Data: data,
+	})
 	if err != nil {
 		return err
 	}
@@ -98,17 +112,15 @@ func (b *NatsBroker) Publish(ch string, pub *protocol.Publication, _ *centrifuge
 }
 
 // PublishJoin - see Engine interface description.
-func (b *NatsBroker) PublishJoin(ch string, join *protocol.Join, _ *centrifuge.ChannelOptions) error {
-	data, err := join.Marshal()
+func (b *NatsBroker) PublishJoin(ch string, info *centrifuge.ClientInfo, _ *centrifuge.ChannelOptions) error {
+	data, err := json.Marshal(info)
 	if err != nil {
 		return err
 	}
-	push := &protocol.Push{
-		Type:    protocol.PushTypeJoin,
-		Channel: ch,
-		Data:    data,
-	}
-	byteMessage, err := push.Marshal()
+	byteMessage, err := json.Marshal(push{
+		Type: joinPushType,
+		Data: data,
+	})
 	if err != nil {
 		return err
 	}
@@ -116,17 +128,15 @@ func (b *NatsBroker) PublishJoin(ch string, join *protocol.Join, _ *centrifuge.C
 }
 
 // PublishLeave - see Engine interface description.
-func (b *NatsBroker) PublishLeave(ch string, leave *protocol.Leave, _ *centrifuge.ChannelOptions) error {
-	data, err := leave.Marshal()
+func (b *NatsBroker) PublishLeave(ch string, info *centrifuge.ClientInfo, _ *centrifuge.ChannelOptions) error {
+	data, err := json.Marshal(info)
 	if err != nil {
 		return err
 	}
-	push := &protocol.Push{
-		Type:    protocol.PushTypeLeave,
-		Channel: ch,
-		Data:    data,
-	}
-	byteMessage, err := push.Marshal()
+	byteMessage, err := json.Marshal(push{
+		Type: leavePushType,
+		Data: data,
+	})
 	if err != nil {
 		return err
 	}
@@ -138,41 +148,42 @@ func (b *NatsBroker) PublishControl(data []byte) error {
 	return b.nc.Publish(string(b.controlChannel()), data)
 }
 
-func (b *NatsBroker) handleClientMessage(data []byte) error {
-	var push protocol.Push
-	err := push.Unmarshal(data)
+func (b *NatsBroker) handleClientMessage(subject string, data []byte) error {
+	var p push
+	err := json.Unmarshal(data, &p)
 	if err != nil {
 		return err
 	}
-	switch push.Type {
-	case protocol.PushTypePublication:
-		var pub protocol.Publication
-		err := pub.Unmarshal(push.Data)
+	channel := b.extractChannel(subject)
+	switch p.Type {
+	case pubPushType:
+		var pub centrifuge.Publication
+		err := json.Unmarshal(p.Data, &pub)
 		if err != nil {
 			return err
 		}
-		_ = b.eventHandler.HandlePublication(push.Channel, &pub)
-	case protocol.PushTypeJoin:
-		var join protocol.Join
-		err := join.Unmarshal(push.Data)
+		_ = b.eventHandler.HandlePublication(channel, &pub)
+	case joinPushType:
+		var info centrifuge.ClientInfo
+		err := json.Unmarshal(p.Data, &info)
 		if err != nil {
 			return err
 		}
-		_ = b.eventHandler.HandleJoin(push.Channel, &join)
-	case protocol.PushTypeLeave:
-		var leave protocol.Leave
-		err := leave.Unmarshal(push.Data)
+		_ = b.eventHandler.HandleJoin(channel, &info)
+	case leavePushType:
+		var info centrifuge.ClientInfo
+		err := json.Unmarshal(p.Data, &info)
 		if err != nil {
 			return err
 		}
-		_ = b.eventHandler.HandleLeave(push.Channel, &leave)
+		_ = b.eventHandler.HandleLeave(channel, &info)
 	default:
 	}
 	return nil
 }
 
 func (b *NatsBroker) handleClient(m *nats.Msg) {
-	_ = b.handleClientMessage(m.Data)
+	_ = b.handleClientMessage(m.Subject, m.Data)
 }
 
 func (b *NatsBroker) handleControl(m *nats.Msg) {

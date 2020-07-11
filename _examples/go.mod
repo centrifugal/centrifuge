@@ -6,7 +6,6 @@ replace github.com/centrifugal/centrifuge => ../
 
 require (
 	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/protocol v0.3.3
 	github.com/cristalhq/jwt/v3 v3.0.0
 	github.com/dchest/uniuri v0.0.0-20200228104902-7aecb25e1fe5
 	github.com/gin-contrib/sessions v0.0.3

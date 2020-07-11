@@ -29,17 +29,17 @@ func (e *TestEngine) Run(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestEngine) Publish(_ string, _ *protocol.Publication, _ *ChannelOptions) error {
+func (e *TestEngine) Publish(_ string, _ *Publication, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishJoin(_ string, _ *protocol.Join, _ *ChannelOptions) error {
+func (e *TestEngine) PublishJoin(_ string, _ *ClientInfo, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishLeave(_ string, _ *protocol.Leave, _ *ChannelOptions) error {
+func (e *TestEngine) PublishLeave(_ string, _ *ClientInfo, _ *ChannelOptions) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
 	return nil
 }
@@ -57,7 +57,7 @@ func (e *TestEngine) Unsubscribe(_ string) error {
 	return nil
 }
 
-func (e *TestEngine) AddPresence(_ string, _ string, _ *protocol.ClientInfo, _ time.Duration) error {
+func (e *TestEngine) AddPresence(_ string, _ string, _ *ClientInfo, _ time.Duration) error {
 	return nil
 }
 
@@ -65,19 +65,19 @@ func (e *TestEngine) RemovePresence(_ string, _ string) error {
 	return nil
 }
 
-func (e *TestEngine) Presence(_ string) (map[string]*protocol.ClientInfo, error) {
-	return map[string]*protocol.ClientInfo{}, nil
+func (e *TestEngine) Presence(_ string) (map[string]*ClientInfo, error) {
+	return map[string]*ClientInfo{}, nil
 }
 
 func (e *TestEngine) PresenceStats(_ string) (PresenceStats, error) {
 	return PresenceStats{}, nil
 }
 
-func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*protocol.Publication, StreamPosition, error) {
+func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*Publication, StreamPosition, error) {
 	return nil, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, _ *protocol.Publication, _ *ChannelOptions) (StreamPosition, bool, error) {
+func (e *TestEngine) AddHistory(_ string, _ *Publication, _ *ChannelOptions) (StreamPosition, bool, error) {
 	return StreamPosition{}, false, nil
 }
 
@@ -118,22 +118,20 @@ func nodeWithMemoryEngineNoHandlers() *Node {
 
 func nodeWithMemoryEngine() *Node {
 	n := nodeWithMemoryEngineNoHandlers()
-	n.On().ClientConnected(func(ctx context.Context, client *Client) {
-		client.On().Subscribe(func(_ SubscribeEvent) SubscribeReply {
-			return SubscribeReply{}
-		})
-		client.On().Publish(func(_ PublishEvent) PublishReply {
-			return PublishReply{}
-		})
+	n.OnSubscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
+		return SubscribeReply{}, nil
+	})
+	n.OnPublish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
+		return PublishReply{}, nil
 	})
 	return n
 }
 
-func TestSetConfig(t *testing.T) {
-	node := nodeWithTestEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	err := node.Reload(DefaultConfig)
-	require.NoError(t, err)
+func TestClientEventHub(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	n.OnDisconnect(func(_ *Client, _ DisconnectEvent) {})
+	require.NotNil(t, n.clientEvents.disconnectHandler)
 }
 
 func TestNodeRegistry(t *testing.T) {
@@ -150,6 +148,116 @@ func TestNodeRegistry(t *testing.T) {
 	registry.clean(time.Second)
 	// Current node info should still be in node registry - we never delete it.
 	require.Equal(t, 1, len(registry.list()))
+}
+
+func TestNode_SetBroker(t *testing.T) {
+	n, _ := New(DefaultConfig)
+	engine := testMemoryEngine()
+	n.SetBroker(engine)
+	require.Equal(t, n.broker, engine)
+}
+
+func TestNode_SetHistoryManager(t *testing.T) {
+	n, _ := New(DefaultConfig)
+	engine := testMemoryEngine()
+	n.SetHistoryManager(engine)
+	require.Equal(t, n.historyManager, engine)
+}
+
+func TestNode_SetPresenceManager(t *testing.T) {
+	n, _ := New(DefaultConfig)
+	engine := testMemoryEngine()
+	n.SetPresenceManager(engine)
+	require.Equal(t, n.presenceManager, engine)
+}
+
+func TestNode_Channels(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	_, err := n.Channels()
+	require.NoError(t, err)
+}
+
+func TestNode_Info(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	info, err := n.Info()
+	require.NoError(t, err)
+	require.Len(t, info.Nodes, 1)
+}
+
+func TestNode_handleJoin(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.handleJoin("test", &protocol.Join{
+		Info: protocol.ClientInfo{},
+	})
+	require.NoError(t, err)
+}
+
+func TestNode_handleLeave(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.handleLeave("test", &protocol.Leave{
+		Info: protocol.ClientInfo{},
+	})
+	require.NoError(t, err)
+}
+
+func TestNode_Unsubscribe(t *testing.T) {
+	n := nodeWithMemoryEngine()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.Unsubscribe("42", "test_channel")
+	require.NoError(t, err)
+	client := newTestConnectedClient(t, n, "42")
+	err = n.addClient(client)
+	require.NoError(t, err)
+	subscribeClient(t, client, "test_channel")
+	done := make(chan struct{})
+	n.OnUnsubscribe(func(client *Client, event UnsubscribeEvent) {
+		require.Equal(t, "42", client.UserID())
+		close(done)
+	})
+	err = n.Unsubscribe("42", "test_channel")
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
+func TestNode_Disconnect(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.Disconnect("42")
+	require.NoError(t, err)
+	client := newTestConnectedClient(t, n, "42")
+	err = n.addClient(client)
+	require.NoError(t, err)
+	done := make(chan struct{})
+	n.OnDisconnect(func(client *Client, event DisconnectEvent) {
+		require.Equal(t, "42", client.UserID())
+		close(done)
+	})
+	err = n.Disconnect("42")
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
+func TestNode_RemoveHistory(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	err := n.RemoveHistory("test_user")
+	require.NoError(t, err)
+}
+
+func TestIndex(t *testing.T) {
+	require.Equal(t, 0, index("2121", 1))
 }
 
 var testPayload = map[string]interface{}{
@@ -263,17 +371,14 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 
 func BenchmarkHistory(b *testing.B) {
 	e := testMemoryEngine()
-	conf := e.node.Config()
 	numMessages := 100
-	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+	e.node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
 			HistorySize:     numMessages,
 			HistoryLifetime: 60,
 			HistoryRecover:  true,
-		}, nil
+		}, true, nil
 	}
-	err := e.node.Reload(conf)
-	require.NoError(b, err)
 
 	channel := "test"
 

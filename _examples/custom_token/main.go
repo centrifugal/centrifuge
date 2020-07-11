@@ -40,10 +40,6 @@ func main() {
 	// Better to keep default in production. Here we just speeding up things a bit.
 	cfg.ClientExpiredCloseDelay = 5 * time.Second
 
-	if err := cfg.Validate(); err != nil {
-		log.Fatal(err)
-	}
-
 	node, _ := centrifuge.New(cfg)
 
 	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
@@ -51,12 +47,10 @@ func main() {
 	})
 	node.SetEngine(engine)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		// We need to apply token parsing logic here and return connection credentials.
 		if !strings.HasPrefix(e.Token, "I am ") {
-			return centrifuge.ConnectReply{
-				Disconnect: centrifuge.DisconnectInvalidToken,
-			}
+			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
 		userID := strings.TrimPrefix(e.Token, "I am ")
 		credentials := &centrifuge.Credentials{
@@ -67,35 +61,29 @@ func main() {
 		return centrifuge.ConnectReply{
 			ClientSideRefresh: true, // This is required to use client-side refresh.
 			Credentials:       credentials,
-		}
+		}, nil
 	})
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+	node.OnConnect(func(c *centrifuge.Client) {
+		log.Printf("user %s connected", c.UserID())
+	})
 
-		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-			log.Printf("user %s sent refresh command with token: %s", client.UserID(), e.Token)
-			if !strings.HasPrefix(e.Token, "I am ") {
-				return centrifuge.RefreshReply{
-					Disconnect: centrifuge.DisconnectInvalidToken,
-				}
-			}
-			userID := strings.TrimPrefix(e.Token, "I am ")
-			if userID != client.UserID() {
-				return centrifuge.RefreshReply{
-					Disconnect: centrifuge.DisconnectInvalidToken,
-				}
-			}
-			return centrifuge.RefreshReply{
-				ExpireAt: time.Now().Unix() + 5,
-			}
-		})
+	node.OnRefresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
+		log.Printf("user %s sent refresh command with token: %s", c.UserID(), e.Token)
+		if !strings.HasPrefix(e.Token, "I am ") {
+			return centrifuge.RefreshReply{}, centrifuge.DisconnectInvalidToken
+		}
+		userID := strings.TrimPrefix(e.Token, "I am ")
+		if userID != c.UserID() {
+			return centrifuge.RefreshReply{}, centrifuge.DisconnectInvalidToken
+		}
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 5,
+		}, nil
+	})
 
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
-			return centrifuge.DisconnectReply{}
-		})
-
-		log.Printf("user %s connected", client.UserID())
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
 	})
 
 	if err := node.Run(); err != nil {

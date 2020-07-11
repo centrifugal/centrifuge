@@ -21,8 +21,8 @@ func testMemoryEngine() *MemoryEngine {
 	return e
 }
 
-func newTestPublication() *protocol.Publication {
-	return &protocol.Publication{Data: []byte("{}")}
+func newTestPublication() *Publication {
+	return &Publication{Data: []byte("{}")}
 }
 
 func TestMemoryEnginePublishHistory(t *testing.T) {
@@ -34,7 +34,7 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	err := e.Publish("channel", newTestPublication(), nil)
 	require.NoError(t, err)
 
-	require.NoError(t, e.AddPresence("channel", "uid", &protocol.ClientInfo{}, time.Second))
+	require.NoError(t, e.AddPresence("channel", "uid", &ClientInfo{}, time.Second))
 	p, err := e.Presence("channel")
 	require.NoError(t, err)
 	require.Equal(t, 1, len(p))
@@ -96,9 +96,9 @@ func TestMemoryPresenceHub(t *testing.T) {
 	testCh2 := "channel2"
 	uid := "uid"
 
-	info := &protocol.ClientInfo{
-		User:   "user",
-		Client: "client",
+	info := &ClientInfo{
+		UserID:   "user",
+		ClientID: "client",
 	}
 
 	_ = h.add(testCh1, uid, info)
@@ -188,26 +188,37 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 1, len(hist))
 }
 
-func TestMemoryHistoryHubSequenceTTL(t *testing.T) {
+func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	h := newHistoryHub(1 * time.Second)
 	h.runCleanups()
 
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
+	h.RLock()
+	require.Equal(t, int64(0), h.nextRemoveCheck)
+	h.RUnlock()
 	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
 	_, _ = h.add(ch1, pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
 	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 	_, _ = h.add(ch2, pub, &ChannelOptions{HistorySize: 2, HistoryLifetime: 1})
 	h.RLock()
+	require.True(t, h.nextRemoveCheck > 0)
 	require.Equal(t, 2, len(h.streams))
 	h.RUnlock()
+	pubs, _, err := h.get(ch1, HistoryFilter{Limit: -1})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	pubs, _, err = h.get(ch2, HistoryFilter{Limit: -1})
+	require.NoError(t, err)
+	require.Len(t, pubs, 2)
 
 	time.Sleep(2 * time.Second)
 
 	// test that stream cleaned up by periodic task
 	h.RLock()
 	require.Equal(t, 0, len(h.streams))
+	require.Equal(t, int64(0), h.nextRemoveCheck)
 	h.RUnlock()
 }
 
@@ -217,7 +228,7 @@ func TestMemoryEngineRecover(t *testing.T) {
 	rawData := protocol.Raw("{}")
 
 	for i := 0; i < 5; i++ {
-		pub := &protocol.Publication{Data: rawData}
+		pub := &Publication{Data: rawData}
 		_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
 		require.NoError(t, err)
 	}
@@ -239,7 +250,7 @@ func TestMemoryEngineRecover(t *testing.T) {
 	require.Equal(t, uint64(5), pubs[2].Offset)
 
 	for i := 0; i < 10; i++ {
-		pub := &protocol.Publication{Data: rawData}
+		pub := &Publication{Data: rawData}
 		_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
 		require.NoError(t, err)
 	}
@@ -270,7 +281,7 @@ func TestMemoryEngineRecover(t *testing.T) {
 func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw(`{"bench": true}`)
-	pub := &protocol.Publication{UID: "test UID", Data: rawData}
+	pub := &Publication{Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
@@ -283,7 +294,7 @@ func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
 func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw(`{"bench": true}`)
-	pub := &protocol.Publication{UID: "test UID", Data: rawData}
+	pub := &Publication{Data: rawData}
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -299,7 +310,7 @@ func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
 func BenchmarkMemoryPublish_History_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw(`{"bench": true}`)
-	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
+	pub := &Publication{Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
@@ -324,7 +335,7 @@ func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			pub := &protocol.Publication{UID: "test-uid", Data: rawData}
+			pub := &Publication{Data: rawData}
 			var err error
 			streamTop, _, err := e.AddHistory("channel", pub, chOpts)
 			if err != nil {
@@ -343,7 +354,7 @@ func BenchmarkMemoryAddPresence_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
+		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -355,7 +366,7 @@ func BenchmarkMemoryAddPresence_OneChannel_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
+			err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -365,7 +376,7 @@ func BenchmarkMemoryAddPresence_OneChannel_Parallel(b *testing.B) {
 
 func BenchmarkMemoryPresence_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
-	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := e.Presence("channel")
@@ -377,7 +388,7 @@ func BenchmarkMemoryPresence_OneChannel(b *testing.B) {
 
 func BenchmarkMemoryPresence_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
-	_ = e.AddPresence("channel", "uid", &protocol.ClientInfo{}, 300*time.Second)
+	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -392,7 +403,7 @@ func BenchmarkMemoryPresence_OneChannel_Parallel(b *testing.B) {
 func BenchmarkMemoryHistory_OneChannel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw("{}")
-	pub := &protocol.Publication{UID: "test UID", Data: rawData}
+	pub := &Publication{Data: rawData}
 	for i := 0; i < 4; i++ {
 		_, _, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
@@ -411,7 +422,7 @@ func BenchmarkMemoryHistory_OneChannel(b *testing.B) {
 func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
 	e := testMemoryEngine()
 	rawData := protocol.Raw("{}")
-	pub := &protocol.Publication{UID: "test-uid", Data: rawData}
+	pub := &Publication{Data: rawData}
 	for i := 0; i < 4; i++ {
 		_, _, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
 	}
@@ -435,7 +446,7 @@ func BenchmarkMemoryRecover_OneChannel_Parallel(b *testing.B) {
 	numMessages := 1000
 	numMissing := 5
 	for i := 1; i <= numMessages; i++ {
-		pub := &protocol.Publication{Data: rawData}
+		pub := &Publication{Data: rawData}
 		_, _, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
 	}
 	b.ResetTimer()
@@ -488,8 +499,8 @@ var recoverTestChannels = []recoverTestChannel{
 }
 
 func setTestChannelOptions(c *Config, opts ChannelOptions) {
-	c.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
-		return opts, nil
+	c.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
+		return opts, true, nil
 	}
 }
 
@@ -497,14 +508,11 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := nodeWithMemoryEngine()
-
-			config := node.Config()
-			setTestChannelOptions(&config, ChannelOptions{
+			setTestChannelOptions(&node.config, ChannelOptions{
 				HistorySize:     tt.HistorySize,
 				HistoryLifetime: tt.HistoryLifetime,
 				HistoryRecover:  true,
 			})
-			_ = node.Reload(config)
 
 			for _, recoverTestChannel := range recoverTestChannels {
 				channel := recoverTestChannel.ChannelPrefix + tt.Name
@@ -564,17 +572,14 @@ type historyIterationTest struct {
 }
 
 func (it *historyIterationTest) prepareHistoryIteration(t testing.TB, node *Node) StreamPosition {
-	conf := node.Config()
 	numMessages := it.NumMessages
-	conf.ChannelOptionsFunc = func(channel string) (ChannelOptions, error) {
+	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
 			HistorySize:     numMessages,
 			HistoryLifetime: 60,
 			HistoryRecover:  true,
-		}, nil
+		}, true, nil
 	}
-	err := node.Reload(conf)
-	require.NoError(t, err)
 
 	channel := historyIterationChannel
 

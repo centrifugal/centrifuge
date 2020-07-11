@@ -26,9 +26,16 @@ type Disconnect struct {
 	cachedCloseText string
 }
 
+var _ error = (*Disconnect)(nil)
+
 // String representation.
 func (d *Disconnect) String() string {
 	return fmt.Sprintf("code: %d, reason: %s, reconnect: %t", d.Code, d.Reason, d.Reconnect)
+}
+
+// Error representation.
+func (d *Disconnect) Error() string {
+	return fmt.Sprintf("disconnected: code: %d, reason: %s, reconnect: %t", d.Code, d.Reason, d.Reconnect)
 }
 
 // CloseText allows to build disconnect advice sent inside Close frame.

@@ -1,3 +1,25 @@
+v0.10.0
+=======
+
+This release is a massive rewrite of Centrifuge library (actually of some part of it) which should make library a more generic solution. Several opinionated and restrictive parts removed to make Centrifuge feel as a reasonably thin wrapper on top of strict client-server protocol.
+
+Most work done inside [#129](https://github.com/centrifugal/centrifuge/pull/129) pr and relates to [#128](https://github.com/centrifugal/centrifuge/issues/128) issue.
+
+Release highlights:
+
+* Layer with namespace configuration and channel rules removed. Now developer is responsible for all permission checks and channel rules.
+* Hard dependency on JWT and predefined claims removed. Users are now free to use any token implementation – like [Paceto](https://github.com/paragonie/paseto) tokens for example, use any custom claims etc.
+* Event handlers that not set now always lead to `Not available` error returned to client.
+* All event handlers now should be set to `Node` before calling its `Run` method.
+* Centrifuge still needs to know some core options for channels to understand whether to use presence inside channels, keep Publication history stream or not. It's now done over user-defined callback function in Node Config called `ChannelOptionsFunc`. See its detailed description in [library docs](https://godoc.org/github.com/centrifugal/centrifuge#ChannelOptionsFunc).
+* More idiomatic error handling in event handlers, see [#134](https://github.com/centrifugal/centrifuge/pull/134).
+* Aliases to `Raw`, `Publication` and `ClientInfo` Protobuf types removed from library public API, see [#136](https://github.com/centrifugal/centrifuge/issues/136)
+* Support Redis Sentinel password option
+
+Look at updated [example in README](https://github.com/centrifugal/centrifuge#quick-example) and [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder to find out more. 
+
+I hope to provide more guidance about library concepts in the future. I feel sorry for breaking things here but since we don't have v1 release yet, I believe this is acceptable. An important note is that while this release has lots of removed parts it's still possible (and not too hard) to implement the same functionality as before on top of this library. Feel free to ask any questions in our community chats.
+
 v0.9.1
 ======
 

@@ -102,24 +102,22 @@ func createCentrifugeNode() (*centrifuge.Node, error) {
 		return nil, err
 	}
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+	node.OnConnect(func(c *centrifuge.Client) {
+		log.Printf("client %s connected via %s", c.UserID(), c.Transport().Name())
+	})
 
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("client %s subscribes on channel %s", client.UserID(), e.Channel)
-			return centrifuge.SubscribeReply{}
-		})
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+		log.Printf("client %s subscribes on channel %s", c.UserID(), e.Channel)
+		return centrifuge.SubscribeReply{}, nil
+	})
 
-		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			log.Printf("client %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			return centrifuge.PublishReply{}
-		})
+	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+		log.Printf("client %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
+		return centrifuge.PublishReply{}, nil
+	})
 
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("client %s disconnected", client.UserID())
-			return centrifuge.DisconnectReply{}
-		})
-
-		log.Printf("client %s connected via %s", client.UserID(), client.Transport().Name())
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		log.Printf("client %s disconnected", c.UserID())
 	})
 
 	if err := node.Run(); err != nil {

@@ -9,7 +9,7 @@
         </style>
         <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
         <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="//cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@latest/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -160,9 +160,9 @@
                 $('#form').submit(function(event) {
                     event.preventDefault();
                     sub.publish({"input": input.val()}).then(function() {
-                        // console.log('message accepted by server');
+                        drawText("Successfully published to channel");
                     }, function(err) {
-                        // console.log('error publishing message', err);
+                        drawText("Publish error: " + JSON.stringify(err));
                     });
                     input.val('');
                 });

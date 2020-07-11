@@ -16,8 +16,7 @@ type ConnectToken struct {
 	// UserID tells library an ID of connecting user.
 	UserID string
 	// ExpireAt allows to set time in future when connection must be validated.
-	// Validation can be server-side using On().Refresh callback or client-side
-	// if On().Refresh not set.
+	// Validation can be server-side or client-side using Refresh handler.
 	ExpireAt int64
 	// Info contains additional information about connection. It will be
 	// included into Join/Leave messages, into Presence information, also
@@ -37,8 +36,7 @@ type SubscribeToken struct {
 	// subscribe command.
 	Channel string
 	// ExpireAt allows to set time in future when connection must be validated.
-	// Validation can be server-side using On().SubRefresh callback or client-side
-	// if On().SubRefresh not set.
+	// Validation can be server-side or client-side using SubRefresh handler.
 	ExpireAt int64
 	// Info contains additional information about connection in channel.
 	// It will be included into Join/Leave messages, into Presence information,

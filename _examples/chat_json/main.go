@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,25 +67,19 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
 
-	// Turn on all
-	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, error) {
-		if channel == exampleChannel {
-			// For exampleChannel turn on all features. You should only
-			// enable channel options where really needed to consume less
-			// resources on server.
+	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
+		if channel == exampleChannel || strings.HasPrefix(channel, "#") {
+			// For exampleChannel and personal channel turn on all features. You should only
+			// enable channel options where really needed to consume less resources on server.
 			return centrifuge.ChannelOptions{
 				Presence:        true,
 				JoinLeave:       true,
 				HistorySize:     100,
 				HistoryLifetime: 300,
 				HistoryRecover:  true,
-			}, nil
+			}, true, nil
 		}
-		return centrifuge.ChannelOptions{}, nil
-	}
-
-	if err := cfg.Validate(); err != nil {
-		log.Fatal(err)
+		return centrifuge.ChannelOptions{}, true, nil
 	}
 
 	node, _ := centrifuge.New(cfg)
@@ -94,92 +89,28 @@ func main() {
 	})
 	node.SetEngine(engine)
 
-	node.On().ClientConnecting(func(ctx context.Context, t centrifuge.TransportInfo, e centrifuge.ConnectEvent) centrifuge.ConnectReply {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
 			Channels: []string{"#" + cred.UserID},
-		}
+		}, nil
 	})
 
-	node.On().ClientConnected(func(ctx context.Context, client *centrifuge.Client) {
+	node.OnConnect(func(c *centrifuge.Client) {
+		transport := c.Transport()
+		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
 
-		client.On().Alive(func(e centrifuge.AliveEvent) centrifuge.AliveReply {
-			log.Printf("user %s connection is still active", client.UserID())
-			return centrifuge.AliveReply{}
-		})
-
-		client.On().Refresh(func(e centrifuge.RefreshEvent) centrifuge.RefreshReply {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			return centrifuge.RefreshReply{ExpireAt: time.Now().Unix() + 60}
-		})
-
-		client.On().Subscribe(func(e centrifuge.SubscribeEvent) centrifuge.SubscribeReply {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			if !channelSubscribeAllowed(e.Channel) {
-				return centrifuge.SubscribeReply{Error: centrifuge.ErrorPermissionDenied}
-			}
-			return centrifuge.SubscribeReply{}
-		})
-
-		client.On().Unsubscribe(func(e centrifuge.UnsubscribeEvent) centrifuge.UnsubscribeReply {
-			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
-			return centrifuge.UnsubscribeReply{}
-		})
-
-		client.On().Publish(func(e centrifuge.PublishEvent) centrifuge.PublishReply {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			if _, ok := client.Channels()[e.Channel]; !ok {
-				return centrifuge.PublishReply{Error: centrifuge.ErrorPermissionDenied}
-			}
-			var msg clientMessage
-			err := json.Unmarshal(e.Data, &msg)
-			if err != nil {
-				return centrifuge.PublishReply{Error: centrifuge.ErrorBadRequest}
-			}
-			msg.Timestamp = time.Now().Unix()
-			data, _ := json.Marshal(msg)
-			return centrifuge.PublishReply{
-				Data: data,
-			}
-		})
-
-		client.On().RPC(func(e centrifuge.RPCEvent) centrifuge.RPCReply {
-			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
-			return centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}
-		})
-
-		client.On().Presence(func(e centrifuge.PresenceEvent) centrifuge.PresenceReply {
-			log.Printf("user %s calls presence on %s", client.UserID(), e.Channel)
-			if _, ok := client.Channels()[e.Channel]; !ok {
-				return centrifuge.PresenceReply{Error: centrifuge.ErrorPermissionDenied}
-			}
-			return centrifuge.PresenceReply{}
-		})
-
-		client.On().Message(func(e centrifuge.MessageEvent) centrifuge.MessageReply {
-			log.Printf("message from user: %s, data: %s", client.UserID(), string(e.Data))
-			return centrifuge.MessageReply{}
-		})
-
-		client.On().Disconnect(func(e centrifuge.DisconnectEvent) centrifuge.DisconnectReply {
-			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
-			return centrifuge.DisconnectReply{}
-		})
-
-		transport := client.Transport()
-		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
-
-		// Connect handler should not block, so start separate goroutine to
+		// Event handler should not block, so start separate goroutine to
 		// periodically send messages to client.
 		go func() {
 			for {
 				select {
-				case <-ctx.Done():
+				case <-c.Context().Done():
 					return
 				case <-time.After(5 * time.Second):
-					err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+					err := c.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
 					if err != nil {
 						if err == io.EOF {
 							return
@@ -189,6 +120,79 @@ func main() {
 				}
 			}
 		}()
+	})
+
+	node.OnAlive(func(c *centrifuge.Client) {
+		log.Printf("user %s connection is still active", c.UserID())
+	})
+
+	node.OnRefresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
+		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 60,
+		}, nil
+	})
+
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+		reply := centrifuge.SubscribeReply{}
+		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
+		if !channelSubscribeAllowed(e.Channel) {
+			return reply, centrifuge.ErrorPermissionDenied
+		}
+		return reply, nil
+	})
+
+	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
+	})
+
+	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+		reply := centrifuge.PublishReply{}
+		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
+		if _, ok := c.Channels()[e.Channel]; !ok {
+			return reply, centrifuge.ErrorPermissionDenied
+		}
+		var msg clientMessage
+		err := json.Unmarshal(e.Data, &msg)
+		if err != nil {
+			return reply, centrifuge.ErrorBadRequest
+		}
+		msg.Timestamp = time.Now().Unix()
+		data, _ := json.Marshal(msg)
+
+		// In this example we take over publish since we want to publish modified data to channel.
+		// We could also return an empty PublishReply to let Centrifuge proceed with publish itself
+		// and just let client publication pass through towards a channel.
+		if result, err := node.Publish(e.Channel, data); err != nil {
+			return reply, err
+		} else {
+			reply.Result = &result
+		}
+		return reply, nil
+	})
+
+	node.OnRPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) (centrifuge.RPCReply, error) {
+		log.Printf("RPC from user: %s, data: %s, method: %s", c.UserID(), string(e.Data), e.Method)
+		return centrifuge.RPCReply{
+			Data: []byte(`{"year": "2020"}`),
+		}, nil
+	})
+
+	node.OnPresence(func(c *centrifuge.Client, e centrifuge.PresenceEvent) (centrifuge.PresenceReply, error) {
+		log.Printf("user %s calls presence on %s", c.UserID(), e.Channel)
+		reply := centrifuge.PresenceReply{}
+		if _, ok := c.Channels()[e.Channel]; !ok {
+			return reply, centrifuge.ErrorPermissionDenied
+		}
+		return reply, nil
+	})
+
+	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
+		log.Printf("message from user: %s, data: %s", c.UserID(), string(e.Data))
+	})
+
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
 	})
 
 	if err := node.Run(); err != nil {
