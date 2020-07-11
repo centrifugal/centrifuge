@@ -103,194 +103,206 @@ func TestHub(t *testing.T) {
 }
 
 func TestHubUnsubscribe(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
+	n := nodeWithMemoryEngine()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	client := newTestSubscribedClient(t, n, "42", "test_channel")
+	transport := client.transport.(*testTransport)
 	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	// No such user.
-	err = node.hub.unsubscribe("1", "test")
+
+	// Unsubscribe not existed user.
+	err := n.hub.unsubscribe("1", "test_channel")
 	require.NoError(t, err)
-	// Subscribed user.
-	err = node.hub.unsubscribe("42", "test")
+
+	// Unsubscribe subscribed user.
+	err = n.hub.unsubscribe("42", "test_channel")
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
-		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test\",\"data\":{}}}\n", string(data))
+		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}\n", string(data))
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
+	require.NotContains(t, n.hub.subs, "test_channel")
 }
 
 func TestHubDisconnect(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
-	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	// No such user.
-	err = node.hub.disconnect("1", false)
+	n := nodeWithMemoryEngine()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	client := newTestSubscribedClient(t, n, "42", "test_channel")
+	clientWithReconnect := newTestSubscribedClient(t, n, "24", "test_channel_reconnect")
+	require.Len(t, n.hub.conns, 2)
+	require.Len(t, n.hub.users, 2)
+	require.Len(t, n.hub.subs, 2)
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+	n.clientEvents.disconnectHandler = func(c *Client, e DisconnectEvent) {
+		defer wg.Done()
+		switch c.user {
+		case "42":
+			require.False(t, e.Disconnect.Reconnect)
+		case "24":
+			require.True(t, e.Disconnect.Reconnect)
+		}
+	}
+
+	// Disconnect not existed user.
+	err := n.hub.disconnect("1", false)
 	require.NoError(t, err)
-	// Subscribed user.
-	err = node.hub.disconnect("42", false)
+
+	// Disconnect subscribed user.
+	err = n.hub.disconnect("42", false)
 	require.NoError(t, err)
 	select {
-	case <-transport.closeCh:
+	case <-client.transport.(*testTransport).closeCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
-}
+	require.NotContains(t, n.hub.conns, client.uid)
+	require.NotContains(t, n.hub.users, "42")
+	require.NotContains(t, n.hub.subs, "test_channel")
 
-func TestHubBroadcastPublicationJSON(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
-	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	err = node.hub.broadcastPublication(
-		"test", &protocol.Publication{Data: []byte(`{"data": "broadcasted_data"}`)}, &ChannelOptions{})
+	// Disconnect subscribed user with reconnect.
+	err = n.hub.disconnect("24", true)
 	require.NoError(t, err)
 	select {
-	case data := <-transport.sink:
-		require.True(t, strings.Contains(string(data), "broadcasted_data"))
+	case <-clientWithReconnect.transport.(*testTransport).closeCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
+	require.NotContains(t, n.hub.conns, clientWithReconnect.uid)
+	require.NotContains(t, n.hub.users, "24")
+	require.NotContains(t, n.hub.subs, "test_channel_reconnect")
+
+	wg.Wait()
+
+	require.Len(t, n.hub.conns, 0)
+	require.Len(t, n.hub.users, 0)
+	require.Len(t, n.hub.subs, 0)
 }
 
-func TestHubBroadcastPublicationProtobuf(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
-	transport.protoType = ProtocolTypeProtobuf
-	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	err = node.hub.broadcastPublication(
-		"test", &protocol.Publication{Data: []byte(`{"data": "broadcasted_data"}`)}, &ChannelOptions{})
-	require.NoError(t, err)
-	select {
-	case data := <-transport.sink:
-		require.True(t, strings.Contains(string(data), "broadcasted_data"))
-	case <-time.After(2 * time.Second):
-		t.Fatal("no data in sink")
+func TestHubBroadcastPublication(t *testing.T) {
+	tcs := []struct {
+		name         string
+		protocolType ProtocolType
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := nodeWithMemoryEngine()
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			client := newTestSubscribedClient(t, n, "42", "test_channel")
+			transport := client.transport.(*testTransport)
+			transport.sink = make(chan []byte, 100)
+			transport.protoType = tc.protocolType
+
+			// Broadcast to not existed channel.
+			err := n.hub.broadcastPublication(
+				"not_test_channel",
+				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				&ChannelOptions{},
+			)
+
+			// Broadcast to existed channel.
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				&ChannelOptions{},
+			)
+			require.NoError(t, err)
+			select {
+			case data := <-transport.sink:
+				require.True(t, strings.Contains(string(data), "broadcast_data"))
+			case <-time.After(2 * time.Second):
+				t.Fatal("no data in sink")
+			}
+		})
 	}
 }
 
-func TestHubBroadcastJoinJSON(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
-	transport.sink = make(chan []byte, 100)
-	transport.protoType = ProtocolTypeProtobuf
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	err = node.hub.broadcastJoin(
-		"test", &protocol.Join{Info: protocol.ClientInfo{Client: "broadcast_client"}})
-	require.NoError(t, err)
-	select {
-	case data := <-transport.sink:
-		require.True(t, strings.Contains(string(data), "broadcast_client"))
-	case <-time.After(2 * time.Second):
-		t.Fatal("no data in sink")
+func TestHubBroadcastJoin(t *testing.T) {
+	tcs := []struct {
+		name         string
+		protocolType ProtocolType
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := nodeWithMemoryEngine()
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			client := newTestSubscribedClient(t, n, "42", "test_channel")
+			transport := client.transport.(*testTransport)
+			transport.sink = make(chan []byte, 100)
+			transport.protoType = tc.protocolType
+
+			// Broadcast to not existed channel.
+			err := n.hub.broadcastJoin("not_test_channel", &protocol.Join{
+				Info: protocol.ClientInfo{Client: "broadcast_client"},
+			})
+			require.NoError(t, err)
+
+			// Broadcast to existed channel.
+			err = n.hub.broadcastJoin("test_channel", &protocol.Join{
+				Info: protocol.ClientInfo{Client: "broadcast_client"},
+			})
+			require.NoError(t, err)
+			select {
+			case data := <-transport.sink:
+				require.True(t, strings.Contains(string(data), "broadcast_client"))
+			case <-time.After(2 * time.Second):
+				t.Fatal("no data in sink")
+			}
+		})
 	}
 }
 
-func TestHubBroadcastJoinProtobuf(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
-	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	err = node.hub.broadcastJoin(
-		"test", &protocol.Join{Info: protocol.ClientInfo{Client: "broadcast_client"}})
-	require.NoError(t, err)
-	select {
-	case data := <-transport.sink:
-		require.True(t, strings.Contains(string(data), "broadcast_client"))
-	case <-time.After(2 * time.Second):
-		t.Fatal("no data in sink")
+func TestHubBroadcastLeave(t *testing.T) {
+	tcs := []struct {
+		name         string
+		protocolType ProtocolType
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
 	}
-}
 
-func TestHubBroadcastLeaveJSON(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
-	transport.sink = make(chan []byte, 100)
-	transport.protoType = ProtocolTypeProtobuf
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	err = node.hub.broadcastLeave(
-		"test", &protocol.Leave{Info: protocol.ClientInfo{Client: "broadcast_client"}})
-	require.NoError(t, err)
-	select {
-	case data := <-transport.sink:
-		require.True(t, strings.Contains(string(data), "broadcast_client"))
-	case <-time.After(2 * time.Second):
-		t.Fatal("no data in sink")
-	}
-}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := nodeWithMemoryEngine()
+			defer func() { _ = n.Shutdown(context.Background()) }()
 
-func TestHubBroadcastLeaveProtobuf(t *testing.T) {
-	node := nodeWithMemoryEngine()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
-	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	err = node.hub.broadcastLeave(
-		"test", &protocol.Leave{Info: protocol.ClientInfo{Client: "broadcast_client"}})
-	require.NoError(t, err)
-	select {
-	case data := <-transport.sink:
-		require.True(t, strings.Contains(string(data), "broadcast_client"))
-	case <-time.After(2 * time.Second):
-		t.Fatal("no data in sink")
+			client := newTestSubscribedClient(t, n, "42", "test_channel")
+			transport := client.transport.(*testTransport)
+			transport.sink = make(chan []byte, 100)
+			transport.protoType = tc.protocolType
+
+			// Broadcast to not existed channel.
+			err := n.hub.broadcastLeave("not_test_channel", &protocol.Leave{
+				Info: protocol.ClientInfo{Client: "broadcast_client"},
+			})
+			require.NoError(t, err)
+
+			// Broadcast to existed channel.
+			err = n.hub.broadcastLeave("test_channel", &protocol.Leave{
+				Info: protocol.ClientInfo{Client: "broadcast_client"},
+			})
+			require.NoError(t, err)
+			select {
+			case data := <-transport.sink:
+				require.Contains(t, string(data), "broadcast_client")
+			case <-time.After(2 * time.Second):
+				t.Fatal("no data in sink")
+			}
+		})
 	}
 }
 

@@ -40,9 +40,24 @@ func newTestConnectedClient(t *testing.T, n *Node, userID string) *Client {
 	ctx := SetCredentials(context.Background(), &Credentials{
 		UserID: userID,
 	})
+
 	client, err := newClient(ctx, n, transport)
 	require.NoError(t, err)
+
 	connectClient(t, client)
+	require.Contains(t, n.hub.users, userID)
+	require.Contains(t, n.hub.conns, client.uid)
+
+	return client
+}
+
+func newTestSubscribedClient(t *testing.T, n *Node, userID, chanID string) *Client {
+	client := newTestConnectedClient(t, n, userID)
+
+	subscribeClient(t, client, chanID)
+	require.Contains(t, n.hub.subs, chanID)
+	require.Contains(t, client.channels, chanID)
+
 	return client
 }
 
