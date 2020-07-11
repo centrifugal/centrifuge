@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -207,17 +208,17 @@ func TestNode_handleLeave(t *testing.T) {
 func TestNode_Unsubscribe(t *testing.T) {
 	n := nodeWithMemoryEngine()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+
 	err := n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
-	client := newTestConnectedClient(t, n, "42")
-	err = n.addClient(client)
-	require.NoError(t, err)
-	subscribeClient(t, client, "test_channel")
+	client := newTestSubscribedClient(t, n, "42", "test_channel")
+
 	done := make(chan struct{})
 	n.OnUnsubscribe(func(client *Client, event UnsubscribeEvent) {
 		require.Equal(t, "42", client.UserID())
 		close(done)
 	})
+
 	err = n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
 	select {
@@ -225,21 +226,24 @@ func TestNode_Unsubscribe(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
+	require.NotContains(t, n.hub.subs, "test_channel")
+	require.NotContains(t, client.channels, "test_channel")
 }
 
 func TestNode_Disconnect(t *testing.T) {
 	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+
 	err := n.Disconnect("42")
 	require.NoError(t, err)
 	client := newTestConnectedClient(t, n, "42")
-	err = n.addClient(client)
-	require.NoError(t, err)
+
 	done := make(chan struct{})
 	n.OnDisconnect(func(client *Client, event DisconnectEvent) {
 		require.Equal(t, "42", client.UserID())
 		close(done)
 	})
+
 	err = n.Disconnect("42")
 	require.NoError(t, err)
 	select {
@@ -247,13 +251,112 @@ func TestNode_Disconnect(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
+	require.NotContains(t, n.hub.conns, client.uid)
+	require.NotContains(t, n.hub.users, "42")
+}
+
+func TestNode_pubUnsubscribe(t *testing.T) {
+	node := nodeWithTestEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	testEngine, _ := node.broker.(*TestEngine)
+	require.EqualValues(t, 1, testEngine.publishControlCount)
+
+	err := node.pubUnsubscribe("42", "holypeka")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, testEngine.publishControlCount)
+}
+
+func TestNode_pubDisconnect(t *testing.T) {
+	node := nodeWithTestEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	testEngine, _ := node.broker.(*TestEngine)
+	require.EqualValues(t, 1, testEngine.publishControlCount)
+
+	err := node.pubDisconnect("42", false)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, testEngine.publishControlCount)
+}
+
+func TestNode_publishJoin(t *testing.T) {
+	n := nodeWithTestEngine()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	testEngine, _ := n.broker.(*TestEngine)
+	require.EqualValues(t, 0, testEngine.publishJoinCount)
+
+	// Publish without options.
+	err := n.publishJoin("test_channel", &ClientInfo{}, &ChannelOptions{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, testEngine.publishJoinCount)
+
+	// Publish with default/correct options.
+	err = n.publishJoin("test_channel", &ClientInfo{}, nil)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, testEngine.publishJoinCount)
+
+	// Publish with error options.
+	n.config.ChannelOptionsFunc = func(_ string) (ChannelOptions, bool, error) {
+		return ChannelOptions{}, false, errors.New("oops")
+	}
+	err = n.publishJoin("test_channel", &ClientInfo{}, nil)
+	require.Error(t, err, "oops")
+	require.EqualValues(t, 2, testEngine.publishJoinCount)
+
+	// Publish with not found options.
+	n.config.ChannelOptionsFunc = func(_ string) (ChannelOptions, bool, error) {
+		return ChannelOptions{}, false, nil
+	}
+	err = n.publishJoin("test_channel", &ClientInfo{}, nil)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, testEngine.publishJoinCount)
+}
+
+func TestNode_publishLeave(t *testing.T) {
+	n := nodeWithTestEngine()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	testEngine, _ := n.broker.(*TestEngine)
+	require.EqualValues(t, 0, testEngine.publishLeaveCount)
+
+	// Publish without options.
+	err := n.publishLeave("test_channel", &ClientInfo{}, &ChannelOptions{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, testEngine.publishLeaveCount)
+
+	// Publish with default/correct options.
+	err = n.publishLeave("test_channel", &ClientInfo{}, nil)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, testEngine.publishLeaveCount)
+
+	// Publish with error options.
+	n.config.ChannelOptionsFunc = func(_ string) (ChannelOptions, bool, error) {
+		return ChannelOptions{}, false, errors.New("oops")
+	}
+	err = n.publishLeave("test_channel", &ClientInfo{}, nil)
+	require.Error(t, err, "oops")
+	require.EqualValues(t, 2, testEngine.publishLeaveCount)
+
+	// Publish with not found options.
+	n.config.ChannelOptionsFunc = func(_ string) (ChannelOptions, bool, error) {
+		return ChannelOptions{}, false, nil
+	}
+	err = n.publishLeave("test_channel", &ClientInfo{}, nil)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, testEngine.publishLeaveCount)
 }
 
 func TestNode_RemoveHistory(t *testing.T) {
 	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+
 	err := n.RemoveHistory("test_user")
 	require.NoError(t, err)
+
+	n.historyManager = nil
+	err = n.RemoveHistory("test_user")
+	require.EqualError(t, err, "108: not available")
 }
 
 func TestIndex(t *testing.T) {
