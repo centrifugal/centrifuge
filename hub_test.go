@@ -120,28 +120,51 @@ func TestHubUnsubscribe(t *testing.T) {
 }
 
 func TestHubDisconnect(t *testing.T) {
+	// Initialize node.
 	node := nodeWithMemoryEngine()
+	node.On().disconnectHandler = func(client *Client, event DisconnectEvent) {
+		switch client.user {
+		case "42":
+			require.True(t, event.Disconnect.Reconnect)
+		case "24":
+			require.False(t, event.Disconnect.Reconnect)
+		}
+	}
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport()
-	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, len(node.hub.users), 1)
-	// No such user.
-	err = node.hub.disconnect("1", false)
+
+	// Initialize clients.
+	client := InitializeSubscribedClient(t, node, "42", "test")
+	transport, _ := client.transport.(*testTransport)
+	anotherClient := InitializeSubscribedClient(t, node, "24", "tset")
+	anotherTransport, _ := client.transport.(*testTransport)
+	require.EqualValues(t, 2, len(node.hub.subs))
+
+	// Disconnect not existed client.
+	err := node.hub.disconnect("1", false)
 	require.NoError(t, err)
-	// Subscribed user.
-	err = node.hub.disconnect("42", false)
+
+	err = node.hub.disconnect("42", true)
+	err = node.hub.disconnect("24", false)
+
+	// Disconnect existed client with reconnect.
 	require.NoError(t, err)
 	select {
 	case <-transport.closeCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
+	require.NotContains(t, node.hub.subs, "42")
+	require.NotContains(t, client.channels, "test")
+
+	// Disconnect another user without reconnect.
+	require.NoError(t, err)
+	select {
+	case <-anotherTransport.closeCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+	require.NotContains(t, node.hub.subs, "24")
+	require.NotContains(t, anotherClient.channels, "tset")
 }
 
 func TestHubBroadcastPublicationJSON(t *testing.T) {

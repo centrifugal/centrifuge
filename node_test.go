@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/controlpb"
-
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
+
+	"github.com/centrifugal/centrifuge/internal/controlpb"
 )
 
 type TestEngine struct {
@@ -289,4 +289,77 @@ func BenchmarkHistory(b *testing.B) {
 	}
 	b.StopTimer()
 	b.ReportAllocs()
+}
+
+func TestNodeUnsubscribe(t *testing.T) {
+	// Initialize node.
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Initialize client.
+	client := InitializeSubscribedClient(t, node, "42", "holypeka")
+	transport, _ := client.transport.(*testTransport)
+
+	// Unsubscribe client.
+	err := node.Unsubscribe("42", "holypeka")
+	require.NoError(t, err)
+
+	select {
+	case data := <-transport.sink:
+		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"holypeka\",\"data\":{}}}\n", string(data))
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+	require.NotContains(t, node.hub.subs, "42")
+	require.NotContains(t, client.channels, "holypeka")
+}
+
+func TestNodeDisconnect(t *testing.T) {
+	// Initialize node.
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Initialize client.
+	client := InitializeSubscribedClient(t, node, "42", "holypeka")
+	transport, _ := client.transport.(*testTransport)
+
+	// Disconnect user.
+	err := node.Disconnect("42")
+	require.NoError(t, err)
+
+	select {
+	case <-transport.closeCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no data in sink")
+	}
+	require.NotContains(t, node.hub.subs, "42")
+	require.NotContains(t, client.channels, "holypeka")
+}
+
+func TestNodePubUnsubscribe(t *testing.T) {
+	// Initialize node.
+	node := nodeWithTestEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	testEngine, _ := node.broker.(*TestEngine)
+	require.EqualValues(t, 1, testEngine.publishControlCount)
+
+	// Publish unsubscribe command.
+	err := node.pubUnsubscribe("42", "holypeka")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, testEngine.publishControlCount)
+}
+
+func TestNodePubDisconnect(t *testing.T) {
+	// Initialize node.
+	node := nodeWithTestEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	testEngine, _ := node.broker.(*TestEngine)
+	require.EqualValues(t, 1, testEngine.publishControlCount)
+
+	// Publish disconnect command.
+	err := node.pubDisconnect("42", false)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, testEngine.publishControlCount)
 }

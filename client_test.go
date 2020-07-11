@@ -558,6 +558,10 @@ func TestClientUnsubscribe(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("unsubscribe handler not called")
 	}
+
+	client.status = statusClosed
+	err = client.Unsubscribe("test")
+	require.NoError(t, err)
 }
 
 func TestClientAliveHandler(t *testing.T) {
