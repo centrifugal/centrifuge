@@ -314,8 +314,14 @@ func TestHubShutdown(t *testing.T) {
 	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	_ = h.add(c)
+
 	err = h.shutdown(context.Background())
 	assert.NoError(t, err)
+
+	ctxCanceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = h.shutdown(ctxCanceled)
+	require.EqualError(t, err, "context canceled")
 }
 
 func TestHubSubscriptions(t *testing.T) {

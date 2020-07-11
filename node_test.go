@@ -350,8 +350,13 @@ func TestNode_publishLeave(t *testing.T) {
 func TestNode_RemoveHistory(t *testing.T) {
 	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+
 	err := n.RemoveHistory("test_user")
 	require.NoError(t, err)
+
+	n.historyManager = nil
+	err = n.RemoveHistory("test_user")
+	require.EqualError(t, err, "108: not available")
 }
 
 func TestIndex(t *testing.T) {
