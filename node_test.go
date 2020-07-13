@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/controlpb"
-
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
+
+	"github.com/centrifugal/centrifuge/internal/controlpb"
+	"github.com/centrifugal/centrifuge/internal/controlproto"
 )
 
 type TestEngine struct {
@@ -502,4 +503,208 @@ func BenchmarkHistory(b *testing.B) {
 	}
 	b.StopTimer()
 	b.ReportAllocs()
+}
+
+func TestNode_handleControl(t *testing.T) {
+	t.Run("BrokenData", func(t *testing.T) {
+		t.Parallel()
+
+		n := nodeWithTestEngine()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		err := n.handleControl([]byte("random"))
+		require.EqualError(t, err, "unexpected EOF")
+	})
+
+	t.Run("Node", func(t *testing.T) {
+		t.Parallel()
+
+		n := nodeWithTestEngine()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		enc := controlproto.NewProtobufEncoder()
+		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Method: controlpb.MethodTypeNode,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		paramsBytes, err := enc.EncodeNode(&controlpb.Node{
+			Name: "new_node",
+		})
+		require.NoError(t, err)
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Method: controlpb.MethodTypeNode,
+			Params: paramsBytes,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+		err = n.handleControl(cmdBytes)
+		require.NoError(t, err)
+		require.NotContains(t, n.nodes.nodes, "new_node")
+	})
+
+	t.Run("Unsubscribe", func(t *testing.T) {
+		t.Parallel()
+
+		n := nodeWithMemoryEngine()
+		done := make(chan struct{})
+		n.OnUnsubscribe(func(client *Client, event UnsubscribeEvent) {
+			require.Equal(t, "42", client.UserID())
+			close(done)
+		})
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		client := newTestSubscribedClient(t, n, "42", "test_channel")
+
+		enc := controlproto.NewProtobufEncoder()
+		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: controlpb.MethodTypeUnsubscribe,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		paramsBytes, err := enc.EncodeUnsubscribe(&controlpb.Unsubscribe{
+			Channel: "test_channel",
+			User:    "42",
+		})
+		require.NoError(t, err)
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: controlpb.MethodTypeUnsubscribe,
+			Params: paramsBytes,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+		err = n.handleControl(cmdBytes)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			require.Fail(t, "timeout")
+		}
+		require.NoError(t, err)
+		require.NotContains(t, n.hub.subs, "test_channel")
+	})
+
+	t.Run("Disconnect", func(t *testing.T) {
+		t.Parallel()
+
+		n := nodeWithMemoryEngine()
+		done := make(chan struct{})
+		n.OnDisconnect(func(client *Client, event DisconnectEvent) {
+			require.Equal(t, "42", client.UserID())
+			close(done)
+		})
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		client := newTestSubscribedClient(t, n, "42", "test_channel")
+
+		enc := controlproto.NewProtobufEncoder()
+		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: controlpb.MethodTypeDisconnect,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		paramsBytes, err := enc.EncodeDisconnect(&controlpb.Disconnect{
+			User: "42",
+		})
+		require.NoError(t, err)
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: controlpb.MethodTypeDisconnect,
+			Params: paramsBytes,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+		err = n.handleControl(cmdBytes)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			require.Fail(t, "timeout")
+		}
+		require.NoError(t, err)
+		require.NotContains(t, n.hub.subs, "test_channel")
+		require.NotContains(t, n.hub.users, "42")
+		require.NotContains(t, n.hub.conns, client.uid)
+	})
+
+	t.Run("Unknown", func(t *testing.T) {
+		t.Parallel()
+
+		n := nodeWithMemoryEngine()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		client := newTestSubscribedClient(t, n, "42", "test_channel")
+
+		enc := controlproto.NewProtobufEncoder()
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: -1,
+			Params: nil,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(cmdBytes)
+		require.EqualError(t, err, "control method not found: -1")
+	})
+}
+
+func Test_infoFromProto(t *testing.T) {
+	info := infoFromProto(nil)
+	require.Nil(t, info)
+
+	info = infoFromProto(&protocol.ClientInfo{
+		User:   "user",
+		Client: "client",
+	})
+	require.NotNil(t, info)
+	require.Equal(t, info.UserID, "user")
+	require.Equal(t, info.ClientID, "client")
+	require.Nil(t, info.ConnInfo)
+	require.Nil(t, info.ChanInfo)
+
+	info = infoFromProto(&protocol.ClientInfo{
+		User:     "user",
+		Client:   "client",
+		ConnInfo: []byte("conn_info"),
+		ChanInfo: []byte("chan_info"),
+	})
+	require.NotNil(t, info)
+	require.Equal(t, info.UserID, "user")
+	require.Equal(t, info.ClientID, "client")
+	require.Equal(t, info.ConnInfo, []byte("conn_info"))
+	require.Equal(t, info.ChanInfo, []byte("chan_info"))
+}
+
+func Test_infoToProto(t *testing.T) {
+	info := infoToProto(nil)
+	require.Nil(t, info)
+
+	info = infoToProto(&ClientInfo{
+		UserID:   "user",
+		ClientID: "client",
+	})
+	require.NotNil(t, info)
+	require.Equal(t, info.User, "user")
+	require.Equal(t, info.Client, "client")
+	require.Nil(t, info.ConnInfo)
+	require.Nil(t, info.ChanInfo)
+
+	info = infoToProto(&ClientInfo{
+		UserID:   "user",
+		ClientID: "client",
+		ConnInfo: []byte("conn_info"),
+		ChanInfo: []byte("chan_info"),
+	})
+	require.NotNil(t, info)
+	require.Equal(t, info.User, "user")
+	require.Equal(t, info.Client, "client")
+	require.Equal(t, info.ConnInfo, protocol.Raw("conn_info"))
+	require.Equal(t, info.ChanInfo, protocol.Raw("chan_info"))
 }
