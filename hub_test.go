@@ -91,12 +91,23 @@ func TestHub(t *testing.T) {
 	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
 	c.user = "test"
+	err = h.remove(c)
+	assert.NoError(t, err)
 	_ = h.add(c)
 	assert.Equal(t, len(h.users), 1)
+
 	conns := h.userConnections("test")
 	assert.Equal(t, 1, len(conns))
 	assert.Equal(t, 1, h.NumClients())
 	assert.Equal(t, 1, h.NumUsers())
+
+	validUID := c.uid
+	c.uid = "invalid"
+	_ = h.remove(c)
+	assert.Len(t, h.users, 1)
+	assert.Len(t, conns, 1)
+
+	c.uid = validUID
 	_ = h.remove(c)
 	assert.Equal(t, len(h.users), 0)
 	assert.Equal(t, 1, len(conns))
