@@ -12,7 +12,7 @@ func TestAcquireTimer(t *testing.T) {
 		t.Parallel()
 
 		// Empty pool.
-		timer := AcquireTimer(0 * time.Second)
+		timer := AcquireTimer(24 * time.Hour)
 		require.NotNil(t, timer)
 
 		// Stop timer.
@@ -33,7 +33,7 @@ func TestAcquireTimer(t *testing.T) {
 			require.NotNil(t, r)
 		}()
 
-		timer := time.NewTimer(0 * time.Second)
+		timer := time.NewTimer(24 * time.Hour)
 		timerPool.Put(timer)
 		AcquireTimer(0 * time.Second)
 	})
@@ -50,8 +50,8 @@ func TestReleaseTimer(t *testing.T) {
 	require.Nil(t, pooledTimer)
 
 	// Release active timer.
-	timer = time.NewTimer(0 * time.Second)
+	timer = time.NewTimer(24 * time.Hour)
 	ReleaseTimer(timer)
 	pooledTimer = timerPool.Get()
-	require.Equal(t, timer, pooledTimer)
+	require.NotNil(t, pooledTimer)
 }
