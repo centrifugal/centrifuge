@@ -22,7 +22,7 @@ func TestAcquireTimer(t *testing.T) {
 
 		// Pool with timer.
 		pooledTimer := AcquireTimer(0 * time.Second)
-		require.Equal(t, timer, pooledTimer)
+		require.NotNil(t, pooledTimer)
 	})
 
 	t.Run("Panic", func(t *testing.T) {
