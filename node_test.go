@@ -708,3 +708,37 @@ func Test_infoToProto(t *testing.T) {
 	require.Equal(t, info.ConnInfo, protocol.Raw("conn_info"))
 	require.Equal(t, info.ChanInfo, protocol.Raw("chan_info"))
 }
+
+func Test_pubToProto(t *testing.T) {
+	pub := pubToProto(nil)
+	require.Nil(t, pub)
+
+	pub = pubToProto(&Publication{
+		Offset: 42,
+		Data:   []byte("data"),
+		Info: &ClientInfo{
+			ClientID: "client_id",
+		},
+	})
+	require.Equal(t, uint64(42), pub.Offset)
+	require.Equal(t, protocol.Raw("data"), pub.Data)
+	require.NotNil(t, pub.Info)
+	require.Equal(t, pub.Info.Client, "client_id")
+}
+
+func Test_pubFromProto(t *testing.T) {
+	pub := pubFromProto(nil)
+	require.Nil(t, pub)
+
+	pub = pubFromProto(&protocol.Publication{
+		Data: []byte("data"),
+		Info: &protocol.ClientInfo{
+			Client: "client_id",
+		},
+		Offset: 42,
+	})
+	require.Equal(t, uint64(42), pub.Offset)
+	require.Equal(t, []byte("data"), pub.Data)
+	require.NotNil(t, pub.Info)
+	require.Equal(t, pub.Info.ClientID, "client_id")
+}

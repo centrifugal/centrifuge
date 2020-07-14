@@ -146,8 +146,12 @@ func TestWriter(t *testing.T) {
 	assert.Nil(t, disconnect)
 	<-transport.ch
 	assert.Equal(t, transport.count, 1)
-	w.close()
+	err := w.close()
+	assert.NoError(t, err)
 	assert.True(t, w.closed)
+	// Close already deactivated Writer.
+	err = w.close()
+	assert.NoError(t, err)
 }
 
 func TestWriterDisconnect(t *testing.T) {

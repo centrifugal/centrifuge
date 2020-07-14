@@ -19,3 +19,10 @@ func TestWithResubscribe(t *testing.T) {
 	opt(opts)
 	assert.Equal(t, true, opts.Resubscribe)
 }
+
+func TestWithReconnect(t *testing.T) {
+	opt := WithReconnect()
+	opts := &DisconnectOptions{}
+	opt(opts)
+	assert.Equal(t, true, opts.Reconnect)
+}
