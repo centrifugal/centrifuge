@@ -339,20 +339,41 @@ func TestHubSubscriptions(t *testing.T) {
 	h := newHub()
 	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
 	assert.NoError(t, err)
+
 	_, _ = h.addSub("test1", c)
 	_, _ = h.addSub("test2", c)
 	assert.Equal(t, 2, h.NumChannels())
-	var channels []string
-	channels = append(channels, h.Channels()...)
-	assert.True(t, stringInSlice("test1", channels))
-	assert.True(t, stringInSlice("test2", channels))
-	assert.True(t, h.NumSubscribers("test1") > 0)
-	assert.True(t, h.NumSubscribers("test2") > 0)
-	_, _ = h.removeSub("test1", c)
-	_, _ = h.removeSub("test2", c)
+	assert.Contains(t, h.Channels(), "test1")
+	assert.Contains(t, h.Channels(), "test2")
+	assert.NotZero(t, h.NumSubscribers("test1"))
+	assert.NotZero(t, h.NumSubscribers("test2"))
+
+	// Not exited sub.
+	removed, err := h.removeSub("not_existed", c)
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	// Exited sub with invalid uid.
+	validUID := c.uid
+	c.uid = "invalid"
+	removed, err = h.removeSub("test1", c)
+	require.NoError(t, err)
+	require.True(t, removed)
+	c.uid = validUID
+
+	// Exited sub.
+	removed, err = h.removeSub("test1", c)
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	// Exited sub.
+	removed, err =  h.removeSub("test2", c)
+	require.NoError(t, err)
+	require.True(t, removed)
+
 	assert.Equal(t, h.NumChannels(), 0)
-	assert.False(t, h.NumSubscribers("test1") > 0)
-	assert.False(t, h.NumSubscribers("test2") > 0)
+	assert.Zero(t, h.NumSubscribers("test1"))
+	assert.Zero(t, h.NumSubscribers("test2"))
 }
 
 func TestPreparedReply(t *testing.T) {
