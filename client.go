@@ -269,6 +269,8 @@ func (c *Client) updateChannelPresence(ch string) error {
 	return c.node.addPresence(ch, c.uid, info)
 }
 
+// Context returns client Context. This context will be canceled when
+// client connection closes.
 func (c *Client) Context() context.Context {
 	return c.ctx
 }
