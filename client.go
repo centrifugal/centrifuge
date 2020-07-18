@@ -1529,7 +1529,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (Chann
 	}
 	if !found {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "subscription to unknown channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
-		return ChannelOptions{}, toClientErr(err), nil
+		return ChannelOptions{}, ErrorUnknownChannel, nil
 	}
 
 	config := c.node.config
