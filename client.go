@@ -1199,6 +1199,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 			ClientID:  c.ID(),
 			Data:      cmd.Data,
 			Token:     cmd.Token,
+			Name:      cmd.Name,
+			Version:   cmd.Version,
 			Transport: c.transport,
 		})
 		if err != nil {
