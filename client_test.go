@@ -571,6 +571,22 @@ func TestServerSideSubscriptions(t *testing.T) {
 	}
 }
 
+func TestClient_IsSubscribed(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+
+	client, _ := newClient(newCtx, node, transport)
+	connectClient(t, client)
+
+	require.False(t, client.IsSubscribed("test"))
+	_ = subscribeClient(t, client, "test")
+	require.True(t, client.IsSubscribed("test"))
+}
+
 func TestClientSubscribeLast(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
