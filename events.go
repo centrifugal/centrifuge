@@ -12,6 +12,10 @@ type ConnectEvent struct {
 	Token string
 	// Data received from client as part of Connect Command.
 	Data []byte
+	// Name can contain client name if provided on connect.
+	Name string
+	// Version can contain client version if provided on connect.
+	Version string
 	// Transport contains information about transport used by client.
 	Transport TransportInfo
 }
