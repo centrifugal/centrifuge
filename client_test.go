@@ -571,6 +571,22 @@ func TestServerSideSubscriptions(t *testing.T) {
 	}
 }
 
+func TestClient_IsSubscribed(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+
+	client, _ := newClient(newCtx, node, transport)
+	connectClient(t, client)
+
+	require.False(t, client.IsSubscribed("test"))
+	_ = subscribeClient(t, client, "test")
+	require.True(t, client.IsSubscribed("test"))
+}
+
 func TestClientSubscribeLast(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1775,7 +1791,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	}
 	node.mu.Unlock()
 
-	chanCtx := ChannelContext{expireAt: 100}
+	chanCtx := channelContext{expireAt: 100}
 
 	// not expired.
 	nowTime = time.Unix(100, 0)
@@ -1819,7 +1835,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.NotContains(t, client.channels, "channel")
 
 	// refreshed.
-	client.channels["channel"] = ChannelContext{}
+	client.channels["channel"] = channelContext{}
 	node.clientEvents.subRefreshHandler = func(client *Client, event SubRefreshEvent) (SubRefreshReply, error) {
 		require.Equal(t, "channel", event.Channel)
 		return SubRefreshReply{
@@ -1862,33 +1878,33 @@ func TestClientCheckPosition(t *testing.T) {
 
 	// channel option error.
 	chanOptsErr = errors.New("oops")
-	got := client.checkPosition(300*time.Second, "channel", ChannelContext{})
+	got := client.checkPosition(300*time.Second, "channel", channelContext{})
 	require.True(t, got)
 
 	// channel option not found.
 	chanOptsErr = nil
 	chanFound = false
-	got = client.checkPosition(300*time.Second, "channel", ChannelContext{})
+	got = client.checkPosition(300*time.Second, "channel", channelContext{})
 	require.True(t, got)
 
 	// not history recover.
 	chanOptsErr = nil
 	chanFound = true
-	got = client.checkPosition(300*time.Second, "channel", ChannelContext{})
+	got = client.checkPosition(300*time.Second, "channel", channelContext{})
 	require.True(t, got)
 
 	// not initial, not time to check.
 	chanOptsErr = nil
 	chanFound = true
 	chanOpts = ChannelOptions{HistoryRecover: true}
-	got = client.checkPosition(300*time.Second, "channel", ChannelContext{positionCheckTime: 50})
+	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50})
 	require.True(t, got)
 
 	// channel not found.
 	chanOptsErr = nil
 	chanFound = true
 	chanOpts = ChannelOptions{HistoryRecover: true}
-	got = client.checkPosition(50*time.Second, "channel", ChannelContext{
+	got = client.checkPosition(50*time.Second, "channel", channelContext{
 		positionCheckTime: 50,
 	})
 	require.True(t, got)
@@ -1897,8 +1913,8 @@ func TestClientCheckPosition(t *testing.T) {
 	chanOptsErr = nil
 	chanFound = true
 	chanOpts = ChannelOptions{HistoryRecover: true}
-	client.channels["channel"] = ChannelContext{positionCheckFailures: 2}
-	got = client.checkPosition(50*time.Second, "channel", ChannelContext{
+	client.channels["channel"] = channelContext{positionCheckFailures: 2}
+	got = client.checkPosition(50*time.Second, "channel", channelContext{
 		positionCheckTime: 50,
 	})
 	require.False(t, got)
