@@ -98,7 +98,7 @@ func main() {
 
 	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
-		if _, ok := c.Channels()[e.Channel]; !ok {
+		if !c.IsSubscribed(e.Channel) {
 			return centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied
 		}
 		var msg clientMessage

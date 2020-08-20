@@ -29,14 +29,17 @@ func newWebsocketTransport(conn net.Conn, protoType centrifuge.ProtocolType) *cu
 	}
 }
 
+// Name implementation.
 func (t *customWebsocketTransport) Name() string {
 	return websocketTransportName
 }
 
+// Protocol implementation.
 func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.protoType
 }
 
+// Encoding implementation.
 func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
@@ -80,6 +83,7 @@ func (t *customWebsocketTransport) Write(data []byte) error {
 	}
 }
 
+// Close implementation.
 func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) error {
 	t.mu.Lock()
 	if t.closed {

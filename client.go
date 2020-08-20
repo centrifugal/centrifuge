@@ -565,7 +565,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": disconnect.Reason, "reconnect": disconnect.Reconnect}))
 	}
 	if disconnect != nil {
-		serverDisconnectCount.WithLabelValues(strconv.Itoa(disconnect.Code)).Inc()
+		serverDisconnectCount.WithLabelValues(strconv.FormatUint(uint64(disconnect.Code), 10)).Inc()
 	}
 	if c.node.clientEvents.disconnectHandler != nil && c.hasEvent(EventDisconnect) && prevStatus == statusConnected {
 		c.node.clientEvents.disconnectHandler(c, DisconnectEvent{

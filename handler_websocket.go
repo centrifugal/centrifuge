@@ -135,7 +135,7 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 	t.mu.Unlock()
 
 	if disconnect != nil {
-		msg := websocket.FormatCloseMessage(disconnect.Code, disconnect.CloseText())
+		msg := websocket.FormatCloseMessage(int(disconnect.Code), disconnect.CloseText())
 		err := t.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
 		if err != nil {
 			return t.conn.Close()

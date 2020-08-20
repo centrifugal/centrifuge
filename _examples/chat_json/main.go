@@ -149,7 +149,7 @@ func main() {
 	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
 		reply := centrifuge.PublishReply{}
 		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
-		if _, ok := c.Channels()[e.Channel]; !ok {
+		if !c.IsSubscribed(e.Channel) {
 			return reply, centrifuge.ErrorPermissionDenied
 		}
 		var msg clientMessage
@@ -181,7 +181,7 @@ func main() {
 	node.OnPresence(func(c *centrifuge.Client, e centrifuge.PresenceEvent) (centrifuge.PresenceReply, error) {
 		log.Printf("user %s calls presence on %s", c.UserID(), e.Channel)
 		reply := centrifuge.PresenceReply{}
-		if _, ok := c.Channels()[e.Channel]; !ok {
+		if !c.IsSubscribed(e.Channel) {
 			return reply, centrifuge.ErrorPermissionDenied
 		}
 		return reply, nil
