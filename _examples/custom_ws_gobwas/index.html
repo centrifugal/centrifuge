@@ -42,8 +42,8 @@
                 });
 
                 // subscribe on channel and bind various event listeners. Actual
-                // subscription request will be firer after client will connect to
-                // Centrifugo and will be authorized.
+                // subscription request will be sent after client connects to
+                // a server.
                 var sub = centrifuge.subscribe(channel, handleMessage)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
@@ -51,7 +51,7 @@
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
 
-                // Trigger actual connection establishing with Centrifugo server.
+                // Trigger actual connection establishing with a server.
                 // At this moment actual client work starts - i.e. subscriptions
                 // defined start subscribing etc.
                 centrifuge.connect();

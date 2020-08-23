@@ -29,7 +29,7 @@
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                 });
 
-                // Trigger actual connection establishing with Centrifugo server.
+                // Trigger actual connection establishing with a server.
                 // At this moment actual client work starts - i.e. subscriptions
                 // defined start subscribing etc.
                 centrifuge.connect();

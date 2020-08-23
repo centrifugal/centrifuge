@@ -25,8 +25,8 @@ type ConnectReply struct {
 	// Context allows to return modified context.
 	Context context.Context
 	// Credentials should be set if app wants to authenticate connection.
-	// This field still optional as auth could be provided through HTTP
-	// middleware or via JWT token.
+	// This field is optional since auth Credentials could be set through
+	// HTTP middleware.
 	Credentials *Credentials
 	// Data allows to set custom data in connect reply.
 	Data []byte
