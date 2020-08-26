@@ -78,13 +78,13 @@ const (
 
 // Client represents client connection to server.
 type Client struct {
+	events            uint64
 	mu                sync.RWMutex
 	connectMu         sync.Mutex // allows to sync connect with disconnect.
 	presenceMu        sync.Mutex // allows to sync presence routine with client closing.
 	ctx               context.Context
 	transport         Transport
 	node              *Node
-	events            uint64
 	exp               int64
 	publications      *pubQueue
 	channels          map[string]channelContext

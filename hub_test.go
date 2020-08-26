@@ -15,15 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
-
 type testTransport struct {
 	mu         sync.Mutex
 	sink       chan []byte
@@ -367,7 +358,7 @@ func TestHubSubscriptions(t *testing.T) {
 	require.True(t, removed)
 
 	// Exited sub.
-	removed, err =  h.removeSub("test2", c)
+	removed, err = h.removeSub("test2", c)
 	require.NoError(t, err)
 	require.True(t, removed)
 
