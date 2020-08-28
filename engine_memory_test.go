@@ -34,6 +34,12 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 	err := e.Publish("channel", newTestPublication(), nil)
 	require.NoError(t, err)
 
+	err = e.PublishJoin("channel", &ClientInfo{}, nil)
+	require.NoError(t, err)
+
+	err = e.PublishLeave("channel", &ClientInfo{}, nil)
+	require.NoError(t, err)
+
 	require.NoError(t, e.AddPresence("channel", "uid", &ClientInfo{}, time.Second))
 	p, err := e.Presence("channel")
 	require.NoError(t, err)
@@ -103,18 +109,40 @@ func TestMemoryPresenceHub(t *testing.T) {
 
 	_ = h.add(testCh1, uid, info)
 	require.Equal(t, 1, len(h.presence))
+
 	_ = h.add(testCh2, uid, info)
 	require.Equal(t, 2, len(h.presence))
-	_ = h.remove(testCh1, uid)
-	// remove non existing must not fail
-	err := h.remove(testCh1, uid)
-	require.Equal(t, nil, err)
+
+	stats, err := h.getStats(testCh1)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumClients)
+	require.Equal(t, 1, stats.NumUsers)
+
+	// stats for unknown channel must not fail.
+	stats, err = h.getStats("unknown_channel")
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumClients)
+	require.Equal(t, 0, stats.NumUsers)
+
+	// remove non existing client ID must not fail.
+	err = h.remove(testCh1, "unknown_client_id")
+	require.NoError(t, err)
+
+	// valid remove.
+	err = h.remove(testCh1, uid)
+	require.NoError(t, err)
+
+	// remove non existing channel must not fail.
+	err = h.remove(testCh1, uid)
+	require.NoError(t, err)
+
 	require.Equal(t, 1, len(h.presence))
 	p, err := h.get(testCh1)
-	require.Equal(t, nil, err)
+	require.NoError(t, err)
 	require.Equal(t, 0, len(p))
+
 	p, err = h.get(testCh2)
-	require.Equal(t, nil, err)
+	require.NoError(t, err)
 	require.Equal(t, 1, len(p))
 }
 
