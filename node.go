@@ -108,21 +108,8 @@ func New(c Config) (*Node, error) {
 		n.logger = newLogger(c.LogLevel, c.LogHandler)
 	}
 
-	e, err := NewMemoryEngine(n, MemoryEngineConfig{})
-	if err != nil {
-		return nil, err
-	}
+	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
-
-	if err := initMetricsRegistry(prometheus.DefaultRegisterer, c.MetricsNamespace); err != nil {
-		switch err.(type) {
-		case prometheus.AlreadyRegisteredError:
-			// Can happens when node initialized several times since we use DefaultRegisterer,
-			// skip for now.
-		default:
-			return nil, err
-		}
-	}
 	return n, nil
 }
 
@@ -248,7 +235,6 @@ func (n *Node) updateGauges() {
 	numClientsGauge.Set(float64(n.hub.NumClients()))
 	numUsersGauge.Set(float64(n.hub.NumUsers()))
 	numChannelsGauge.Set(float64(n.hub.NumChannels()))
-	numNodesGauge.Set(float64(len(n.nodes.list())))
 	version := n.config.Version
 	if version == "" {
 		version = "_"
