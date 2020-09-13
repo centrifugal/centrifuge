@@ -63,13 +63,56 @@ var (
 
 	transportMessagesSentWebsocket prometheus.Counter
 	transportMessagesSentSockJS    prometheus.Counter
+
+	commandDurationConnect       prometheus.Observer
+	commandDurationSubscribe     prometheus.Observer
+	commandDurationUnsubscribe   prometheus.Observer
+	commandDurationPublish       prometheus.Observer
+	commandDurationPresence      prometheus.Observer
+	commandDurationPresenceStats prometheus.Observer
+	commandDurationHistory       prometheus.Observer
+	commandDurationPing          prometheus.Observer
+	commandDurationSend          prometheus.Observer
+	commandDurationRPC           prometheus.Observer
+	commandDurationRefresh       prometheus.Observer
+	commandDurationSubRefresh    prometheus.Observer
 )
 
 func observeCommandDuration(method protocol.MethodType, d time.Duration) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 
-	commandDurationSummary.WithLabelValues(strings.ToLower(protocol.MethodType_name[int32(method)])).Observe(d.Seconds())
+	var observer prometheus.Observer
+
+	switch method {
+	case protocol.MethodTypeConnect:
+		observer = commandDurationConnect
+	case protocol.MethodTypeSubscribe:
+		observer = commandDurationSubscribe
+	case protocol.MethodTypeUnsubscribe:
+		observer = commandDurationUnsubscribe
+	case protocol.MethodTypePublish:
+		observer = commandDurationPublish
+	case protocol.MethodTypePresence:
+		observer = commandDurationPresence
+	case protocol.MethodTypePresenceStats:
+		observer = commandDurationPresenceStats
+	case protocol.MethodTypeHistory:
+		observer = commandDurationHistory
+	case protocol.MethodTypePing:
+		observer = commandDurationPing
+	case protocol.MethodTypeSend:
+		observer = commandDurationSend
+	case protocol.MethodTypeRPC:
+		observer = commandDurationRPC
+	case protocol.MethodTypeRefresh:
+		observer = commandDurationRefresh
+	case protocol.MethodTypeSubRefresh:
+		observer = commandDurationSubRefresh
+	default:
+		return
+	}
+	observer.Observe(d.Seconds())
 }
 
 func setBuildInfo(version string) {
@@ -358,9 +401,9 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	messagesReceivedCountControl = messagesReceivedCount.WithLabelValues("control")
 
 	messagesSentCountPublication = messagesSentCount.WithLabelValues("publication")
-	messagesSentCountJoin = messagesReceivedCount.WithLabelValues("join")
-	messagesSentCountLeave = messagesReceivedCount.WithLabelValues("leave")
-	messagesSentCountControl = messagesReceivedCount.WithLabelValues("control")
+	messagesSentCountJoin = messagesSentCount.WithLabelValues("join")
+	messagesSentCountLeave = messagesSentCount.WithLabelValues("leave")
+	messagesSentCountControl = messagesSentCount.WithLabelValues("control")
 
 	actionCountAddClient = actionCount.WithLabelValues("add_client")
 	actionCountRemoveClient = actionCount.WithLabelValues("remove_client")
@@ -383,6 +426,23 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 
 	transportMessagesSentWebsocket = transportMessagesSent.WithLabelValues(transportWebsocket)
 	transportMessagesSentSockJS = transportMessagesSent.WithLabelValues(transportSockJS)
+
+	labelForMethod := func(methodType protocol.MethodType) string {
+		return strings.ToLower(protocol.MethodType_name[int32(methodType)])
+	}
+
+	commandDurationConnect = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypeConnect))
+	commandDurationSubscribe = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypeSubscribe))
+	commandDurationUnsubscribe = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypeUnsubscribe))
+	commandDurationPublish = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypePublish))
+	commandDurationPresence = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypePresence))
+	commandDurationPresenceStats = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypePresenceStats))
+	commandDurationHistory = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypeHistory))
+	commandDurationPing = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypePing))
+	commandDurationSend = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypeSend))
+	commandDurationRPC = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypeRPC))
+	commandDurationRefresh = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypeRefresh))
+	commandDurationSubRefresh = commandDurationSummary.WithLabelValues(labelForMethod(protocol.MethodTypeSubRefresh))
 
 	if err := registry.Register(messagesSentCount); err != nil {
 		return err
