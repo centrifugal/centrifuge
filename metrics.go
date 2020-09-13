@@ -4,9 +4,44 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-var metricsNamespace = "centrifuge"
+// default namespace for prometheus metrics.
+var defaultMetricsNamespace = "centrifuge"
 
 var (
+	messagesSentCount      *prometheus.CounterVec
+	messagesReceivedCount  *prometheus.CounterVec
+	actionCount            *prometheus.CounterVec
+	numClientsGauge        prometheus.Gauge
+	numUsersGauge          prometheus.Gauge
+	buildInfoGauge         *prometheus.GaugeVec
+	numChannelsGauge       prometheus.Gauge
+	numNodesGauge          prometheus.Gauge
+	replyErrorCount        *prometheus.CounterVec
+	serverDisconnectCount  *prometheus.CounterVec
+	commandDurationSummary *prometheus.SummaryVec
+	recoverCount           *prometheus.CounterVec
+	transportConnectCount  *prometheus.CounterVec
+	transportMessagesSent  *prometheus.CounterVec
+
+	messagesReceivedCountPublication prometheus.Counter
+	messagesReceivedCountJoin        prometheus.Counter
+	messagesReceivedCountLeave       prometheus.Counter
+	messagesReceivedCountControl     prometheus.Counter
+
+	messagesSentCountPublication prometheus.Counter
+	messagesSentCountJoin        prometheus.Counter
+	messagesSentCountLeave       prometheus.Counter
+	messagesSentCountControl     prometheus.Counter
+)
+
+func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string) error {
+	if metricsNamespace == "" {
+		metricsNamespace = defaultMetricsNamespace
+	}
+	if registry == nil {
+		registry = prometheus.DefaultRegisterer
+	}
+
 	messagesSentCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
@@ -40,6 +75,13 @@ var (
 		Subsystem: "node",
 		Name:      "num_users",
 		Help:      "Number of unique users connected.",
+	})
+
+	numNodesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "num_nodes",
+		Help:      "Number of nodes in cluster.",
 	})
 
 	buildInfoGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -98,34 +140,49 @@ var (
 		Name:      "messages_sent",
 		Help:      "Number of messages sent over specific transport.",
 	}, []string{"transport"})
-)
 
-var (
-	messagesReceivedCountPublication prometheus.Counter
-	messagesReceivedCountJoin        prometheus.Counter
-	messagesReceivedCountLeave       prometheus.Counter
-	messagesReceivedCountControl     prometheus.Counter
-
-	messagesSentCountPublication prometheus.Counter
-	messagesSentCountJoin        prometheus.Counter
-	messagesSentCountLeave       prometheus.Counter
-	messagesSentCountControl     prometheus.Counter
-)
-
-func init() {
-	prometheus.MustRegister(messagesSentCount)
-	prometheus.MustRegister(messagesReceivedCount)
-	prometheus.MustRegister(actionCount)
-	prometheus.MustRegister(numClientsGauge)
-	prometheus.MustRegister(numUsersGauge)
-	prometheus.MustRegister(numChannelsGauge)
-	prometheus.MustRegister(commandDurationSummary)
-	prometheus.MustRegister(replyErrorCount)
-	prometheus.MustRegister(serverDisconnectCount)
-	prometheus.MustRegister(recoverCount)
-	prometheus.MustRegister(transportConnectCount)
-	prometheus.MustRegister(transportMessagesSent)
-	prometheus.MustRegister(buildInfoGauge)
+	if err := registry.Register(messagesSentCount); err != nil {
+		return err
+	}
+	if err := registry.Register(messagesReceivedCount); err != nil {
+		return err
+	}
+	if err := registry.Register(actionCount); err != nil {
+		return err
+	}
+	if err := registry.Register(numClientsGauge); err != nil {
+		return err
+	}
+	if err := registry.Register(numUsersGauge); err != nil {
+		return err
+	}
+	if err := registry.Register(numChannelsGauge); err != nil {
+		return err
+	}
+	if err := registry.Register(numNodesGauge); err != nil {
+		return err
+	}
+	if err := registry.Register(commandDurationSummary); err != nil {
+		return err
+	}
+	if err := registry.Register(replyErrorCount); err != nil {
+		return err
+	}
+	if err := registry.Register(serverDisconnectCount); err != nil {
+		return err
+	}
+	if err := registry.Register(recoverCount); err != nil {
+		return err
+	}
+	if err := registry.Register(transportConnectCount); err != nil {
+		return err
+	}
+	if err := registry.Register(transportMessagesSent); err != nil {
+		return err
+	}
+	if err := registry.Register(buildInfoGauge); err != nil {
+		return err
+	}
 
 	messagesReceivedCountPublication = messagesReceivedCount.WithLabelValues("publication")
 	messagesReceivedCountJoin = messagesReceivedCount.WithLabelValues("join")
@@ -136,4 +193,5 @@ func init() {
 	messagesSentCountJoin = messagesReceivedCount.WithLabelValues("join")
 	messagesSentCountLeave = messagesReceivedCount.WithLabelValues("leave")
 	messagesSentCountControl = messagesReceivedCount.WithLabelValues("control")
+	return nil
 }
