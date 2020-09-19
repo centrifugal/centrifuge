@@ -112,13 +112,16 @@
 
             function handleMessage(message) {
                 var clientID;
+                var user;
                 if (message.info) {
                     clientID = message.info.client;
+                    user = message.info.user;
                 } else {
                     clientID = null;
+                    user = null;
                 }
                 var inputText = message.data["input"].toString();
-                var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                var text = safeTagsReplace(user + " says: " + inputText) + ' <span class="muted">from ' + clientID + '</span>';
                 drawText(text);
             }
 

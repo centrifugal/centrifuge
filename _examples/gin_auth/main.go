@@ -90,6 +90,16 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
 
+	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
+		return centrifuge.ChannelOptions{
+			Presence:        true,
+			JoinLeave:       true,
+			HistorySize:     100,
+			HistoryLifetime: 300,
+			HistoryRecover:  true,
+		}, true, nil
+	}
+
 	node, _ := centrifuge.New(cfg)
 
 	node.OnConnect(func(c *centrifuge.Client) {
@@ -116,20 +126,21 @@ func main() {
 		}()
 	})
 
-	node.OnRefresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
-		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 10,
-		}, nil
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
 	})
 
-	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
-		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
-		return centrifuge.SubscribeReply{}, nil
+	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
+		log.Printf("Message from user: %s, data: %s", c.UserID(), string(e.Data))
 	})
 
-	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
-		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
+	node.OnPresence(func(c *centrifuge.Client, e centrifuge.PresenceEvent) (centrifuge.PresenceReply, error) {
+		log.Printf("user %s calls presence on %s", c.UserID(), e.Channel)
+		reply := centrifuge.PresenceReply{}
+		if !c.IsSubscribed(e.Channel) {
+			return reply, centrifuge.ErrorPermissionDenied
+		}
+		return reply, nil
 	})
 
 	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
@@ -142,6 +153,13 @@ func main() {
 		return centrifuge.PublishReply{}, nil
 	})
 
+	node.OnRefresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
+		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
+		return centrifuge.RefreshReply{
+			ExpireAt: time.Now().Unix() + 10,
+		}, nil
+	})
+
 	node.OnRPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) (centrifuge.RPCReply, error) {
 		log.Printf("RPC from user: %s, data: %s", c.UserID(), string(e.Data))
 		return centrifuge.RPCReply{
@@ -149,12 +167,13 @@ func main() {
 		}, nil
 	})
 
-	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
-		log.Printf("Message from user: %s, data: %s", c.UserID(), string(e.Data))
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
+		return centrifuge.SubscribeReply{}, nil
 	})
 
-	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
-		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
+	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
+		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
 	})
 
 	// We also start a separate goroutine for centrifuge itself, since we
