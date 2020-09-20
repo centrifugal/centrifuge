@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <title></title>
@@ -7,7 +7,6 @@
         input[type="text"] {
             width: 300px;
         }
-
         .muted {
             color: #CCCCCC;
             font-size: 10px;
@@ -19,7 +18,7 @@
             src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
     <script type="text/javascript">
         // helper functions to work with escaping html.
-        var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+        const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
 
         function replaceTag(tag) {
             return tagsToReplace[tag] || tag;
@@ -29,12 +28,12 @@
             return str.replace(/[&<>]/g, replaceTag);
         }
 
-        var channel = "chat:index";
+        const channel = "chat:index";
 
         function getParam(name, url) {
             if (!url) url = window.location.href;
             name = name.replace(/[\[\]]/g, '\\$&');
-            var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+            const regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
                 results = regex.exec(url);
             if (!results) return null;
             if (!results[2]) return '';
@@ -42,14 +41,14 @@
         }
 
         $(function () {
-            var input = $("#input");
-            var container = $('#messages');
-            var centrifuge = new Centrifuge('ws://localhost:8080/connection/websocket');
+            const input = $("#input");
+            const container = $('#messages');
+            const centrifuge = new Centrifuge('ws://localhost:8080/connection/websocket');
             // var centrifuge = new Centrifuge('http://localhost:8080/connection/sockjs');
             centrifuge.setConnectData({"user-agent": navigator.userAgent});
             // bind listeners on centrifuge object instance events.
             centrifuge.on('connect', function (ctx) {
-                drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
+                drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' as user: ' + ctx.data.email);
                 input.attr("disabled", false);
             });
             centrifuge.on('message', function (data) {
@@ -62,30 +61,15 @@
                 input.attr("disabled", true);
             });
 
-            // show how many users currently in channel.
-            function showPresence(sub) {
-                sub.presence().then(function (result) {
-                    var count = 0;
-                    for (var key in result.presence) {
-                        count++;
-                    }
-                    drawText('Now in this room: ' + count + ' clients');
-                }, function (err) {
-                    drawText("Presence error: " + JSON.stringify(err));
-                });
-            }
-
             // subscribe on channel and bind various event listeners. Actual
             // subscription request will be sent after client connects to
             // a server.
-            var sub = centrifuge.subscribe(channel, handleMessage)
+            const sub = centrifuge.subscribe(channel, handleMessage)
                 .on("join", handleJoin)
                 .on("leave", handleLeave)
                 .on("unsubscribe", handleUnsubscribe)
                 .on("subscribe", handleSubscribe)
                 .on("error", handleSubscribeError);
-
-            showPresence(sub);
 
             // Trigger actual connection establishing with a server.
             // At this moment actual client work starts - i.e. subscriptions
@@ -94,11 +78,8 @@
 
             function handleSubscribe(ctx) {
                 drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
-                if (ctx.isResubscribe) {
-                    showPresence(sub);
-                }
                 // This can be whatever JSON you want.
-                var rpcRequest = {"method": "getCurrentYear"}
+                const rpcRequest = {"method": "getCurrentYear"};
                 centrifuge.rpc(rpcRequest).then(function (data) {
                     drawText(JSON.stringify(data));
                 }, function (err) {
@@ -111,14 +92,14 @@
             }
 
             function handleMessage(message) {
-                var clientID;
+                let clientID;
                 if (message.info) {
                     clientID = message.info.client;
                 } else {
                     clientID = null;
                 }
-                var inputText = message.data["input"].toString();
-                var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                const inputText = message.data["input"].toString();
+                const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                 drawText(text);
             }
 
@@ -147,29 +128,6 @@
                 });
                 input.val('');
             });
-            if (getParam("disconnect") == "1") {
-                function reconnect() {
-                    setTimeout(function () {
-                        centrifuge.disconnect();
-                        setTimeout(function () {
-                            reconnect();
-                        }, 11000);
-                    }, 4000);
-                }
-
-                reconnect();
-            }
-            if (getParam("publish") == "1") {
-                var publishInterval = parseInt(getParam("publishInterval")) || 1000;
-                var counter = 0
-                setInterval(function () {
-                    sub.publish({"input": counter.toString()}).then(function () {
-                    }, function (err) {
-                        drawText("Publish error: " + JSON.stringify(err));
-                    });
-                    counter++;
-                }, publishInterval);
-            }
         });
     </script>
 </head>

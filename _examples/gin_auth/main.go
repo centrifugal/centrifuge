@@ -25,6 +25,10 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
+type connectData struct {
+	Email string `json:"email"`
+}
+
 type contextKey int
 
 var ginContextKey contextKey
@@ -91,6 +95,21 @@ func main() {
 	cfg.LogHandler = handleLog
 
 	node, _ := centrifuge.New(cfg)
+
+	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		// Let's include user email into connect reply, so we can display user name in chat.
+		// This is an optional step actually.
+		cred, ok := centrifuge.GetCredentials(ctx)
+		if !ok {
+			return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+		}
+		data, _ := json.Marshal(connectData{
+			Email: cred.UserID,
+		})
+		return centrifuge.ConnectReply{
+			Data: data,
+		}, nil
+	})
 
 	node.OnConnect(func(c *centrifuge.Client) {
 		transport := c.Transport()

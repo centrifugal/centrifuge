@@ -1,4 +1,4 @@
-Example demonstrates simple chat with JSON protocol sharing session auth with [gin-gonic](https://github.com/gin-gonic/gin).
+Example demonstrates a simple chat with JSON protocol sharing session auth with [gin-gonic](https://github.com/gin-gonic/gin).
 
 Client uses Websocket by default, but you can simply uncomment one line in `chat.html` to use SockJS instead. 
 
