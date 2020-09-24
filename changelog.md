@@ -1,3 +1,8 @@
+v0.11.2
+=======
+
+* Fix non-working websocket close with custom disconnect code: this is a regression introduced by v0.11.0.
+
 v0.11.1
 =======
 
