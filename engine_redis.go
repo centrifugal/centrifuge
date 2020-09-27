@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/FZambia/sentinel"
@@ -1874,8 +1873,6 @@ func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
 	}
 	pubs := make([]*Publication, 0, len(values))
 
-	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
-
 	for i := 0; i < len(values); i++ {
 		streamElementValues, err := redis.Values(values[i], nil)
 		if err != nil {
@@ -1912,11 +1909,7 @@ func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
-		if useSeqGen {
-			pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
-		} else {
-			pub.Offset = offset
-		}
+		pub.Offset = offset
 		pubs = append(pubs, pubFromProto(&pub))
 	}
 	return pubs, nil
@@ -1928,8 +1921,6 @@ func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
 		return nil, err
 	}
 	pubs := make([]*Publication, 0, len(values))
-
-	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
 
 	for i := len(values) - 1; i >= 0; i-- {
 		value, okValue := values[i].([]byte)
@@ -1944,12 +1935,7 @@ func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
-
-		if useSeqGen {
-			pub.Seq, pub.Gen = recovery.UnpackUint64(offset)
-		} else {
-			pub.Offset = offset
-		}
+		pub.Offset = offset
 		pubs = append(pubs, pubFromProto(&pub))
 	}
 	return pubs, nil
