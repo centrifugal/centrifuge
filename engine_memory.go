@@ -25,7 +25,11 @@ type MemoryEngine struct {
 	presenceHub  *presenceHub
 	historyHub   *historyHub
 	eventHandler BrokerEventHandler
-	// pubLocks synchronizes access to adding/removing subscriptions.
+
+	// pubLocks synchronize access to publishing. We have to sync publish
+	// to handle publications in the order of offset to prevent InsufficientState
+	// errors.
+	// TODO: maybe replace with sharded pool of workers with buffered channels.
 	pubLocks map[int]*sync.Mutex
 }
 
@@ -43,7 +47,7 @@ type MemoryEngineConfig struct {
 	HistoryMetaTTL time.Duration
 }
 
-const numPubLocks = 16384
+const numPubLocks = 4096
 
 // NewMemoryEngine initializes Memory Engine.
 func NewMemoryEngine(n *Node, c MemoryEngineConfig) (*MemoryEngine, error) {
@@ -60,8 +64,7 @@ func NewMemoryEngine(n *Node, c MemoryEngineConfig) (*MemoryEngine, error) {
 	return e, nil
 }
 
-// Run runs memory engine - we do not have any logic here as Memory Engine ready to work
-// just after initialization.
+// Run runs memory engine.
 func (e *MemoryEngine) Run(h BrokerEventHandler) error {
 	e.eventHandler = h
 	e.historyHub.runCleanups()

@@ -32,7 +32,7 @@ type Node struct {
 	config Config
 	// hub to manage client connections.
 	hub *Hub
-	// broker is responsible for PUB/SUB mechanics.
+	// broker is responsible for PUB/SUB and history streaming mechanics.
 	broker Broker
 	// presenceManager is responsible for presence information management.
 	presenceManager PresenceManager

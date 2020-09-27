@@ -26,7 +26,6 @@ func handleLog(e centrifuge.LogEntry) {
 
 func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Our middleware logic goes here...
 		ctx := r.Context()
 		ctx = centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
 			UserID: "42",
@@ -91,10 +90,6 @@ func main() {
 	})
 
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		// This allows to publish into Redis channel when adding Publication
-		// to history instead of making separate Publish call thus saving one RTT.
-		PublishOnHistoryAdd: true,
-
 		// We are using Redis streams here for history.
 		UseStreams: true,
 

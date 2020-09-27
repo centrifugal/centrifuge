@@ -2,16 +2,6 @@ package centrifuge
 
 import "time"
 
-// PublishOptions define some fields to alter behaviour of Publish operation.
-type PublishOptions struct {
-	HistoryTTL  time.Duration
-	HistorySize int
-
-	// skipHistory ...
-	// Deprecated – will be removed in Centrifuge v0.13.0.
-	skipHistory bool
-}
-
 // PublishOption is a type to represent various Publish options.
 type PublishOption func(*PublishOptions)
 

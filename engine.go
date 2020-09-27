@@ -84,6 +84,19 @@ type Closer interface {
 	Close(ctx context.Context) error
 }
 
+// PublishOptions define some fields to alter behaviour of Publish operation.
+type PublishOptions struct {
+	// HistoryTTL sets history ttl to expire inactive history streams.
+	// Actually current engines only work with seconds resolution for TTL.
+	HistoryTTL time.Duration
+	// HistorySize sets history size limit to prevent infinite stream growth.
+	HistorySize int
+
+	// skipHistory ...
+	// Deprecated – will be removed in Centrifuge v0.13.0.
+	skipHistory bool
+}
+
 // Broker is responsible for PUB/SUB mechanics.
 type Broker interface {
 	// Run called once on start when broker already set to node. At
