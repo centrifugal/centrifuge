@@ -10,7 +10,7 @@ func TestSkipHistory(t *testing.T) {
 	opt := SkipHistory()
 	opts := &PublishOptions{}
 	opt(opts)
-	assert.Equal(t, true, opts.SkipHistory)
+	assert.Equal(t, true, opts.skipHistory)
 }
 
 func TestWithResubscribe(t *testing.T) {

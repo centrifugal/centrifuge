@@ -208,7 +208,20 @@ func main() {
 				log.Printf("error publishing to personal channel: %s", err)
 			}
 			i++
-			time.Sleep(5000 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
+	go func() {
+		// Publish personal notifications for user 42 periodically.
+		i := 1
+		for {
+			_, err := node.Publish("#42", []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
+			if err != nil {
+				log.Printf("error publishing to personal channel: %s", err)
+			}
+			i++
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 
