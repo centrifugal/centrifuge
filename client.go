@@ -1742,9 +1742,6 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			recoveredPubs = make([]*protocol.Publication, 0, len(historyResult.Publications))
 			for _, pub := range historyResult.Publications {
 				protoPub := pubToProto(pub)
-				if useSeqGen {
-					protoPub.Seq, protoPub.Gen = recovery.UnpackUint64(protoPub.Offset)
-				}
 				recoveredPubs = append(recoveredPubs, protoPub)
 			}
 
@@ -1773,10 +1770,11 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		}
 
 		res.Epoch = latestEpoch
-		res.Offset = latestOffset
 
 		if useSeqGen {
 			res.Seq, res.Gen = recovery.UnpackUint64(latestOffset)
+		} else {
+			res.Offset = latestOffset
 		}
 
 		c.pubSubSync.LockBuffer(channel)
@@ -1790,7 +1788,23 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 		}
 	}
 
+	if len(recoveredPubs) > 0 {
+		if useSeqGen {
+			// recoveredPubs are in descending order.
+			latestOffset = recoveredPubs[0].Offset
+		} else {
+			latestOffset = recoveredPubs[len(recoveredPubs)-1].Offset
+		}
+	}
+
 	res.Publications = recoveredPubs
+	if useSeqGen && len(res.Publications) > 0 {
+		for i := range res.Publications {
+			res.Publications[i].Seq, res.Publications[i].Gen = recovery.UnpackUint64(res.Publications[i].Offset)
+			res.Publications[i].Offset = 0
+		}
+	}
+
 	if !serverSide {
 		// Write subscription reply only if initiated by client.
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeSubscribeResult(res)
@@ -1804,15 +1818,6 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 			return ctx
 		}
 		_ = rw.write(&protocol.Reply{Result: replyRes})
-	}
-
-	if len(recoveredPubs) > 0 {
-		if useSeqGen {
-			// recoveredPubs are in descending order.
-			latestOffset = recoveredPubs[0].Offset
-		} else {
-			latestOffset = recoveredPubs[len(recoveredPubs)-1].Offset
-		}
 	}
 
 	if !serverSide && chOpts.HistoryRecover {
@@ -1869,6 +1874,9 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
 	if pubOffset != nextExpectedOffset {
+		if c.node.logger.enabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
+		}
 		// Oops: sth lost, let client reconnect to recover its state.
 		go func() { _ = c.close(DisconnectInsufficientState) }()
 		c.mu.Unlock()
