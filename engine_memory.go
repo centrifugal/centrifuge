@@ -72,7 +72,7 @@ func (e *MemoryEngine) Run(h BrokerEventHandler) error {
 }
 
 func (e *MemoryEngine) pubLock(ch string) *sync.Mutex {
-	return e.pubLocks[index(ch, numSubLocks)]
+	return e.pubLocks[index(ch, numPubLocks)]
 }
 
 // Publish adds message into history hub and calls node method to handle message.
