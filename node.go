@@ -499,7 +499,7 @@ func (n *Node) publish(ch string, data []byte, info *ClientInfo, opts ...Publish
 	return PublishResult{StreamPosition: streamPos}, nil
 }
 
-// PublishResult ...
+// PublishResult returned from Publish operation.
 type PublishResult struct {
 	StreamPosition
 }

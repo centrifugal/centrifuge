@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"net/http"
@@ -31,6 +32,42 @@ func TestWebsocketHandler(t *testing.T) {
 	assert.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
 	assert.NotNil(t, conn)
 	defer conn.Close()
+}
+
+func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
+	n, _ := New(Config{})
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, DisconnectInvalidToken
+	})
+
+	connectRequest := &protocol.ConnectRequest{
+		Token: "boom",
+	}
+	params, _ := json.Marshal(connectRequest)
+	cmd := &protocol.Command{
+		ID:     1,
+		Method: protocol.MethodTypeConnect,
+		Params: params,
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_, _, err = conn.ReadMessage()
+	assert.Error(t, err)
+	closeErr, ok := err.(*websocket.CloseError)
+	assert.True(t, ok)
+	assert.Equal(t, int(DisconnectInvalidToken.Code), closeErr.Code)
 }
 
 func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
