@@ -11,10 +11,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/centrifugal/protocol"
 	"github.com/gorilla/websocket"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWebsocketHandler(t *testing.T) {
@@ -27,10 +28,10 @@ func TestWebsocketHandler(t *testing.T) {
 	url := "ws" + server.URL[4:]
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
-	assert.NotNil(t, conn)
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
 	defer conn.Close()
 }
 
@@ -44,10 +45,13 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	url := "ws" + server.URL[4:]
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer resp.Body.Close()
 
+	var graceCh chan struct{}
+
 	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		graceCh = event.Transport.(*websocketTransport).graceCh
 		return ConnectReply{}, DisconnectInvalidToken
 	})
 
@@ -64,15 +68,20 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 
 	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
 	_, _, err = conn.ReadMessage()
-	assert.Error(t, err)
+	require.Error(t, err)
 	closeErr, ok := err.(*websocket.CloseError)
-	assert.True(t, ok)
-	assert.Equal(t, int(DisconnectInvalidToken.Code), closeErr.Code)
+	require.True(t, ok)
+	require.Equal(t, int(DisconnectInvalidToken.Code), closeErr.Code)
+	select {
+	case <-graceCh:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for graceful close")
+	}
 }
 
 func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
-	assert.NoError(b, err)
+	require.NoError(b, err)
 	defer resp.Body.Close()
 
 	connectRequest := &protocol.ConnectRequest{}
@@ -86,7 +95,7 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 
 	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
 	_, _, err = conn.ReadMessage()
-	assert.NoError(b, err)
+	require.NoError(b, err)
 
 	subscribeRequest := &protocol.SubscribeRequest{
 		Channel: channel,
@@ -100,13 +109,13 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	cmdBytes, _ = json.Marshal(cmd)
 	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
 	_, _, err = conn.ReadMessage()
-	assert.NoError(b, err)
+	require.NoError(b, err)
 	return conn
 }
 
 func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Conn {
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
-	assert.NoError(b, err)
+	require.NoError(b, err)
 	defer resp.Body.Close()
 
 	connectRequest := &protocol.ConnectRequest{}
@@ -127,7 +136,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 
 	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
 	_, _, err = conn.ReadMessage()
-	assert.NoError(b, err)
+	require.NoError(b, err)
 
 	subscribeRequest := &protocol.SubscribeRequest{
 		Channel: channel,
@@ -148,7 +157,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 
 	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
 	_, _, err = conn.ReadMessage()
-	assert.NoError(b, err)
+	require.NoError(b, err)
 	return conn
 }
 
@@ -201,28 +210,28 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 
 			_, err := n.Publish("test"+strconv.Itoa(i), payload)
 			if err != nil {
-				assert.Fail(t, err.Error())
+				require.Fail(t, err.Error())
 			}
 
 			_, data, err := conns[i].ReadMessage()
 			if err != nil {
-				assert.Fail(t, err.Error())
+				require.Fail(t, err.Error())
 			}
 
 			var rep protocol.Reply
 			err = json.Unmarshal(data, &rep)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			var push protocol.Push
 			err = json.Unmarshal(rep.Result, &push)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			var pub protocol.Publication
 			err = json.Unmarshal(push.Data, &pub)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			if !strings.Contains(string(pub.Data), string(payload)) {
-				assert.Fail(t, "ooops, where is our payload? %s %s", string(payload), string(pub.Data))
+				require.Fail(t, "ooops, where is our payload? %s %s", string(payload), string(pub.Data))
 			}
 		}(i)
 	}

@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const numQueueMessages = 4
@@ -143,15 +143,15 @@ func TestWriter(t *testing.T) {
 		WriteManyFn:        transport.writeMany,
 	})
 	disconnect := w.enqueue([]byte("test"))
-	assert.Nil(t, disconnect)
+	require.Nil(t, disconnect)
 	<-transport.ch
-	assert.Equal(t, transport.count, 1)
+	require.Equal(t, transport.count, 1)
 	err := w.close()
-	assert.NoError(t, err)
-	assert.True(t, w.closed)
+	require.NoError(t, err)
+	require.True(t, w.closed)
 	// Close already deactivated Writer.
 	err = w.close()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }
 
 func TestWriterDisconnect(t *testing.T) {
@@ -162,5 +162,5 @@ func TestWriterDisconnect(t *testing.T) {
 		WriteManyFn:  transport.writeMany,
 	})
 	disconnect := w.enqueue([]byte("test"))
-	assert.NotNil(t, disconnect)
+	require.NotNil(t, disconnect)
 }

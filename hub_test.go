@@ -11,7 +11,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/prepared"
 
 	"github.com/centrifugal/protocol"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,28 +79,28 @@ func (t *testTransport) Close(disconnect *Disconnect) error {
 func TestHub(t *testing.T) {
 	h := newHub()
 	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c.user = "test"
 	err = h.remove(c)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_ = h.add(c)
-	assert.Equal(t, len(h.users), 1)
+	require.Equal(t, len(h.users), 1)
 
 	conns := h.userConnections("test")
-	assert.Equal(t, 1, len(conns))
-	assert.Equal(t, 1, h.NumClients())
-	assert.Equal(t, 1, h.NumUsers())
+	require.Equal(t, 1, len(conns))
+	require.Equal(t, 1, h.NumClients())
+	require.Equal(t, 1, h.NumUsers())
 
 	validUID := c.uid
 	c.uid = "invalid"
 	_ = h.remove(c)
-	assert.Len(t, h.users, 1)
-	assert.Len(t, conns, 1)
+	require.Len(t, h.users, 1)
+	require.Len(t, conns, 1)
 
 	c.uid = validUID
 	_ = h.remove(c)
-	assert.Equal(t, len(h.users), 0)
-	assert.Equal(t, 1, len(conns))
+	require.Equal(t, len(h.users), 0)
+	require.Equal(t, 1, len(conns))
 }
 
 func TestHubUnsubscribe(t *testing.T) {
@@ -311,14 +310,14 @@ func TestHubBroadcastLeave(t *testing.T) {
 func TestHubShutdown(t *testing.T) {
 	h := newHub()
 	err := h.shutdown(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	h = newHub()
 	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_ = h.add(c)
 
 	err = h.shutdown(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ctxCanceled, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -329,15 +328,15 @@ func TestHubShutdown(t *testing.T) {
 func TestHubSubscriptions(t *testing.T) {
 	h := newHub()
 	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	_, _ = h.addSub("test1", c)
 	_, _ = h.addSub("test2", c)
-	assert.Equal(t, 2, h.NumChannels())
-	assert.Contains(t, h.Channels(), "test1")
-	assert.Contains(t, h.Channels(), "test2")
-	assert.NotZero(t, h.NumSubscribers("test1"))
-	assert.NotZero(t, h.NumSubscribers("test2"))
+	require.Equal(t, 2, h.NumChannels())
+	require.Contains(t, h.Channels(), "test1")
+	require.Contains(t, h.Channels(), "test2")
+	require.NotZero(t, h.NumSubscribers("test1"))
+	require.NotZero(t, h.NumSubscribers("test2"))
 
 	// Not exited sub.
 	removed, err := h.removeSub("not_existed", c)
@@ -362,24 +361,24 @@ func TestHubSubscriptions(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, removed)
 
-	assert.Equal(t, h.NumChannels(), 0)
-	assert.Zero(t, h.NumSubscribers("test1"))
-	assert.Zero(t, h.NumSubscribers("test2"))
+	require.Equal(t, h.NumChannels(), 0)
+	require.Zero(t, h.NumSubscribers("test1"))
+	require.Zero(t, h.NumSubscribers("test2"))
 }
 
 func TestPreparedReply(t *testing.T) {
 	reply := protocol.Reply{}
 	preparedReply := prepared.NewReply(&reply, protocol.TypeJSON)
 	data := preparedReply.Data()
-	assert.NotNil(t, data)
+	require.NotNil(t, data)
 }
 
 func TestUserConnections(t *testing.T) {
 	h := newHub()
 	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_ = h.add(c)
 
 	connections := h.userConnections(c.UserID())
-	assert.Equal(t, h.conns, connections)
+	require.Equal(t, h.conns, connections)
 }

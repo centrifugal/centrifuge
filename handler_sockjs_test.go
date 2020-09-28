@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/websocket"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSockjsHandler(t *testing.T) {
@@ -21,12 +21,12 @@ func TestSockjsHandler(t *testing.T) {
 	url := "ws" + server.URL[4:]
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0pbfvm/websocket", nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
-	assert.NotNil(t, conn)
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
 	defer conn.Close()
 	_, p, err := conn.ReadMessage()
-	assert.NoError(t, err)
-	assert.Equal(t, "o", string(p)) // open frame of SockJS protocol.
+	require.NoError(t, err)
+	require.Equal(t, "o", string(p)) // open frame of SockJS protocol.
 }

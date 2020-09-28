@@ -3,12 +3,12 @@ package centrifuge
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLogLevelToString(t *testing.T) {
 	level := LogLevelToString(LogLevelDebug)
-	assert.Equal(t, "debug", level)
+	require.Equal(t, "debug", level)
 }
 
 type testHandler struct {
@@ -22,24 +22,24 @@ func (h *testHandler) Handle(_ LogEntry) {
 func TestLogger(t *testing.T) {
 	h := testHandler{}
 	l := newLogger(LogLevelError, h.Handle)
-	assert.NotNil(t, l)
+	require.NotNil(t, l)
 	l.log(newLogEntry(LogLevelDebug, "test"))
-	assert.Equal(t, 0, h.count)
+	require.Equal(t, 0, h.count)
 	l.log(newLogEntry(LogLevelError, "test"))
-	assert.Equal(t, 1, h.count)
-	assert.False(t, l.enabled(LogLevelDebug))
-	assert.True(t, l.enabled(LogLevelError))
+	require.Equal(t, 1, h.count)
+	require.False(t, l.enabled(LogLevelDebug))
+	require.True(t, l.enabled(LogLevelError))
 }
 
 func TestNewLogEntry(t *testing.T) {
 	entry := newLogEntry(LogLevelDebug, "test")
-	assert.Equal(t, LogLevelDebug, entry.Level)
-	assert.Equal(t, "test", entry.Message)
-	assert.Nil(t, entry.Fields)
+	require.Equal(t, LogLevelDebug, entry.Level)
+	require.Equal(t, "test", entry.Message)
+	require.Nil(t, entry.Fields)
 
 	entry = newLogEntry(LogLevelError, "test", map[string]interface{}{"one": true})
-	assert.Equal(t, LogLevelError, entry.Level)
-	assert.Equal(t, "test", entry.Message)
-	assert.NotNil(t, entry.Fields)
-	assert.Equal(t, true, entry.Fields["one"].(bool))
+	require.Equal(t, LogLevelError, entry.Level)
+	require.Equal(t, "test", entry.Message)
+	require.NotNil(t, entry.Fields)
+	require.Equal(t, true, entry.Fields["one"].(bool))
 }
