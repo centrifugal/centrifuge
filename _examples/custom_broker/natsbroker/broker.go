@@ -24,6 +24,8 @@ type Config struct {
 	Prefix  string
 }
 
+var _ centrifuge.Broker = (*NatsBroker)(nil)
+
 // NatsBroker is a broker on top of Nats messaging system.
 type NatsBroker struct {
 	node   *centrifuge.Node
@@ -33,6 +35,16 @@ type NatsBroker struct {
 	subsMu       sync.Mutex
 	subs         map[channelID]*nats.Subscription
 	eventHandler centrifuge.BrokerEventHandler
+}
+
+// History ...
+func (b *NatsBroker) History(_ string, _ centrifuge.HistoryFilter) ([]*centrifuge.Publication, centrifuge.StreamPosition, error) {
+	return nil, centrifuge.StreamPosition{}, centrifuge.ErrorNotAvailable
+}
+
+// RemoveHistory ...
+func (b *NatsBroker) RemoveHistory(_ string) error {
+	return centrifuge.ErrorNotAvailable
 }
 
 // New creates NatsEngine.
@@ -96,23 +108,23 @@ type push struct {
 }
 
 // Publish - see Engine interface description.
-func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, _ *centrifuge.ChannelOptions) error {
+func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, _ centrifuge.PublishOptions) (centrifuge.StreamPosition, error) {
 	data, err := json.Marshal(pub)
 	if err != nil {
-		return err
+		return centrifuge.StreamPosition{}, err
 	}
 	byteMessage, err := json.Marshal(push{
 		Type: pubPushType,
 		Data: data,
 	})
 	if err != nil {
-		return err
+		return centrifuge.StreamPosition{}, err
 	}
-	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
+	return centrifuge.StreamPosition{}, b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
 // PublishJoin - see Engine interface description.
-func (b *NatsBroker) PublishJoin(ch string, info *centrifuge.ClientInfo, _ *centrifuge.ChannelOptions) error {
+func (b *NatsBroker) PublishJoin(ch string, info *centrifuge.ClientInfo) error {
 	data, err := json.Marshal(info)
 	if err != nil {
 		return err
@@ -128,7 +140,7 @@ func (b *NatsBroker) PublishJoin(ch string, info *centrifuge.ClientInfo, _ *cent
 }
 
 // PublishLeave - see Engine interface description.
-func (b *NatsBroker) PublishLeave(ch string, info *centrifuge.ClientInfo, _ *centrifuge.ChannelOptions) error {
+func (b *NatsBroker) PublishLeave(ch string, info *centrifuge.ClientInfo) error {
 	data, err := json.Marshal(info)
 	if err != nil {
 		return err

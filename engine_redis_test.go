@@ -44,10 +44,9 @@ func NewTestRedisEngineWithPrefix(tb testing.TB, prefix string, useStreams bool)
 		ReadTimeout: 100 * time.Second,
 	}
 	e, err := NewRedisEngine(n, RedisEngineConfig{
-		UseStreams:          useStreams,
-		PublishOnHistoryAdd: true,
-		HistoryMetaTTL:      300 * time.Second,
-		Shards:              []RedisShardConfig{redisConf},
+		UseStreams:     useStreams,
+		HistoryMetaTTL: 300 * time.Second,
+		Shards:         []RedisShardConfig{redisConf},
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -69,10 +68,9 @@ func NewTestRedisEngineClusterWithPrefix(tb testing.TB, prefix string, useStream
 		ReadTimeout:  100 * time.Second,
 	}
 	e, err := NewRedisEngine(n, RedisEngineConfig{
-		UseStreams:          useStreams,
-		PublishOnHistoryAdd: true,
-		HistoryMetaTTL:      300 * time.Second,
-		Shards:              []RedisShardConfig{redisConf},
+		UseStreams:     useStreams,
+		HistoryMetaTTL: 300 * time.Second,
+		Shards:         []RedisShardConfig{redisConf},
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -118,8 +116,10 @@ func TestRedisEngine(t *testing.T) {
 
 			pub := newTestPublication()
 
-			require.NoError(t, e.Publish("channel", pub, nil))
-			require.NoError(t, e.Publish("channel", pub, nil))
+			_, err = e.Publish("channel", pub, PublishOptions{})
+			require.NoError(t, err)
+			_, err = e.Publish("channel", pub, PublishOptions{})
+			require.NoError(t, err)
 			require.NoError(t, e.Subscribe("channel"))
 			require.NoError(t, e.Unsubscribe("channel"))
 
@@ -142,7 +142,7 @@ func TestRedisEngine(t *testing.T) {
 			pub = &Publication{Data: rawData}
 
 			// test adding history
-			_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+			_, err = e.Publish("channel", pub, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
 			pubs, _, err := e.History("channel", HistoryFilter{
 				Limit: -1,
@@ -152,11 +152,11 @@ func TestRedisEngine(t *testing.T) {
 			require.Equal(t, pubs[0].Data, []byte("{}"))
 
 			// test history limit
-			_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+			_, err = e.Publish("channel", pub, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+			_, err = e.Publish("channel", pub, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 1})
+			_, err = e.Publish("channel", pub, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
 			pubs, _, err = e.History("channel", HistoryFilter{
 				Limit: 2,
@@ -165,11 +165,11 @@ func TestRedisEngine(t *testing.T) {
 			require.Equal(t, 2, len(pubs))
 
 			// test history limit greater than history size
-			_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+			_, err = e.Publish("channel", pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+			_, err = e.Publish("channel", pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			_, _, err = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 1, HistoryLifetime: 1})
+			_, err = e.Publish("channel", pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 			require.NoError(t, err)
 
 			// ask all history.
@@ -190,8 +190,8 @@ func TestRedisEngine(t *testing.T) {
 			err = e.PublishControl([]byte(""))
 			require.NoError(t, nil, err)
 
-			require.NoError(t, e.PublishJoin("channel", &ClientInfo{}, nil))
-			require.NoError(t, e.PublishLeave("channel", &ClientInfo{}, nil))
+			require.NoError(t, e.PublishJoin("channel", &ClientInfo{}))
+			require.NoError(t, e.PublishLeave("channel", &ClientInfo{}))
 		})
 	}
 }
@@ -210,7 +210,7 @@ func TestRedisCurrentPosition(t *testing.T) {
 			require.Equal(t, uint64(0), streamTop.Offset)
 
 			pub := &Publication{Data: []byte("{}")}
-			_, _, err = e.AddHistory(channel, pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+			_, err = e.Publish(channel, pub, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 			require.NoError(t, err)
 
 			_, streamTop, err = e.History(channel, HistoryFilter{
@@ -231,7 +231,7 @@ func TestRedisEngineRecover(t *testing.T) {
 
 			for i := 0; i < 5; i++ {
 				pub := &Publication{Data: rawData}
-				_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+				_, err := e.Publish("channel", pub, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 				require.NoError(t, err)
 			}
 
@@ -253,7 +253,7 @@ func TestRedisEngineRecover(t *testing.T) {
 
 			for i := 0; i < 10; i++ {
 				pub := &Publication{Data: rawData}
-				_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 10, HistoryLifetime: 2})
+				_, err := e.Publish("channel", pub, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 				require.NoError(t, err)
 			}
 
@@ -602,7 +602,7 @@ func BenchmarkRedisPublish_OneChannel(b *testing.B) {
 	pub := &Publication{Data: rawData}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		_, err := e.Publish("channel", pub, PublishOptions{})
 		if err != nil {
 			panic(err)
 		}
@@ -617,7 +617,7 @@ func BenchmarkRedisPublish_OneChannel_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := e.Publish("channel", pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			_, err := e.Publish("channel", pub, PublishOptions{})
 			if err != nil {
 				panic(err)
 			}
@@ -636,7 +636,7 @@ func BenchmarkRedisPublish_ManyChannels(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
 		j++
-		err := e.Publish(channel, pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+		_, err := e.Publish(channel, pub, PublishOptions{})
 		if err != nil {
 			panic(err)
 		}
@@ -654,7 +654,7 @@ func BenchmarkRedisPublish_ManyChannels_Parallel(b *testing.B) {
 		for pb.Next() {
 			channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
 			j++
-			err := e.Publish(channel, pub, &ChannelOptions{HistorySize: 0, HistoryLifetime: 0})
+			_, err := e.Publish(channel, pub, PublishOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -670,13 +670,13 @@ func BenchmarkRedisPublish_History_OneChannel(b *testing.B) {
 			pub := &Publication{Data: rawData}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
+				chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
 				var err error
-				_, published, err := e.AddHistory("channel", pub, chOpts)
+				pos, err := e.Publish("channel", pub, chOpts)
 				if err != nil {
 					b.Fatal(err)
 				}
-				if !published {
+				if pos.Offset == 0 {
 					b.Fail()
 				}
 			}
@@ -689,18 +689,18 @@ func BenchmarkRedisPublish_History_OneChannel_Parallel(b *testing.B) {
 		b.Run(tt.Name, func(b *testing.B) {
 			e := newTestRedisEngine(b, tt.UseStreams, false)
 			rawData := []byte(`{"bench": true}`)
-			chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
+			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
 			b.SetParallelism(128)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
 					pub := &Publication{Data: rawData}
 					var err error
-					_, published, err := e.AddHistory("channel", pub, chOpts)
+					pos, err := e.Publish("channel", pub, chOpts)
 					if err != nil {
 						b.Fatal(err)
 					}
-					if !published {
+					if pos.Offset == 0 {
 						b.Fail()
 					}
 				}
@@ -720,13 +720,13 @@ func BenchmarkRedisPublish_History_ManyChannels(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				j++
 				channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
-				chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
+				chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
 				var err error
-				_, published, err := e.AddHistory(channel, pub, chOpts)
+				pos, err := e.Publish(channel, pub, chOpts)
 				if err != nil {
 					b.Fatal(err)
 				}
-				if !published {
+				if pos.Offset == 0 {
 					b.Fail()
 				}
 			}
@@ -739,7 +739,7 @@ func BenchmarkRedisPublish_History_ManyChannels_Parallel(b *testing.B) {
 		b.Run(tt.Name, func(b *testing.B) {
 			e := newTestRedisEngine(b, tt.UseStreams, false)
 			rawData := []byte(`{"bench": true}`)
-			chOpts := &ChannelOptions{HistorySize: 100, HistoryLifetime: 100}
+			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
 			b.SetParallelism(128)
 			j := 0
 			b.ResetTimer()
@@ -749,11 +749,11 @@ func BenchmarkRedisPublish_History_ManyChannels_Parallel(b *testing.B) {
 					channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
 					pub := &Publication{Data: rawData}
 					var err error
-					_, published, err := e.AddHistory(channel, pub, chOpts)
+					pos, err := e.Publish(channel, pub, chOpts)
 					if err != nil {
 						b.Fatal(err)
 					}
-					if !published {
+					if pos.Offset == 0 {
 						b.Fail()
 					}
 				}
@@ -883,7 +883,7 @@ func BenchmarkRedisHistory_OneChannel(b *testing.B) {
 			rawData := []byte("{}")
 			pub := &Publication{Data: rawData}
 			for i := 0; i < 4; i++ {
-				_, _, _ = e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+				_, _ = e.Publish("channel", pub, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
 			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -905,7 +905,7 @@ func BenchmarkRedisHistory_OneChannel_Parallel(b *testing.B) {
 			rawData := []byte("{}")
 			pub := &Publication{Data: rawData}
 			for i := 0; i < 4; i++ {
-				_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: 4, HistoryLifetime: 300})
+				_, err := e.Publish("channel", pub, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
 			}
 			b.ResetTimer()
@@ -932,7 +932,7 @@ func BenchmarkRedisRecover_OneChannel_Parallel(b *testing.B) {
 			numMissing := 5
 			for i := 1; i <= numMessages; i++ {
 				pub := &Publication{Data: rawData}
-				_, _, err := e.AddHistory("channel", pub, &ChannelOptions{HistorySize: numMessages, HistoryLifetime: 300, HistoryRecover: true})
+				_, err := e.Publish("channel", pub, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
 			}
 			b.ResetTimer()
@@ -1005,7 +1005,7 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 	var replies []*protocol.Reply
 	rw := testReplyWriter(&replies)
 
-	_, streamTop, err := node.historyManager.History(channel, HistoryFilter{
+	_, streamTop, err := node.broker.History(channel, HistoryFilter{
 		Limit: 0,
 		Since: nil,
 	})

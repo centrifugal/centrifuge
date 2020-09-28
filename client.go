@@ -920,7 +920,7 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) *Disconne
 	if ctx.chOpts.JoinLeave && ctx.clientInfo != nil {
 		// Flush prevents Join message to be delivered before subscribe response.
 		_ = rw.flush()
-		go func() { _ = c.node.publishJoin(cmd.Channel, ctx.clientInfo, &ctx.chOpts) }()
+		go func() { _ = c.node.publishJoin(cmd.Channel, ctx.clientInfo) }()
 	}
 	return nil
 }
@@ -1398,7 +1398,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) *Disc
 		for channel, subCtx := range subCtxMap {
 			go func(channel string, subCtx subscribeContext) {
 				if subCtx.chOpts.JoinLeave && subCtx.clientInfo != nil {
-					_ = c.node.publishJoin(channel, subCtx.clientInfo, &subCtx.chOpts)
+					_ = c.node.publishJoin(channel, subCtx.clientInfo)
 				}
 			}(channel, subCtx)
 		}
@@ -2051,7 +2051,7 @@ func (c *Client) unsubscribe(channel string) error {
 		}
 
 		if chOpts.JoinLeave {
-			_ = c.node.publishLeave(channel, info, &chOpts)
+			_ = c.node.publishLeave(channel, info)
 		}
 
 		if err := c.node.removeSubscription(channel, c); err != nil {

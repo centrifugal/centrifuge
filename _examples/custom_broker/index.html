@@ -35,28 +35,12 @@
                     input.attr("disabled", true);
                 });
 
-                // show how many users currently in channel.
-                function showPresence(sub) {
-                    sub.presence().then(function(result) {
-                        var count = 0;
-                        for (var key in result.presence){
-                            count++;
-                        }
-                        drawText('Now in this room: ' + count + ' clients');
-                    }, function(err) {
-                        console.log("presence error", err);
-                        drawText("Presence error");
-                    });
-                }
-
                 var sub = centrifuge.subscribe(channel, handleMessage)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
                         .on("unsubscribe", handleUnsubscribe)
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
-
-                showPresence(sub);
 
                 // Trigger actual connection establishing with a server.
                 // At this moment actual client work starts - i.e. subscriptions
@@ -65,9 +49,6 @@
 
                 function handleSubscribe(ctx) {
                     drawText('Subscribed on channel ' + ctx.channel);
-                    if (ctx.isResubscribe) {
-                        showPresence(sub);
-                    }
                 }
 
                 function handleSubscribeError(err) {

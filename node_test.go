@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -31,17 +30,17 @@ func (e *TestEngine) Run(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestEngine) Publish(_ string, _ *Publication, _ *ChannelOptions) error {
+func (e *TestEngine) Publish(_ string, _ *Publication, _ PublishOptions) (StreamPosition, error) {
 	atomic.AddInt32(&e.publishCount, 1)
-	return nil
+	return StreamPosition{}, nil
 }
 
-func (e *TestEngine) PublishJoin(_ string, _ *ClientInfo, _ *ChannelOptions) error {
+func (e *TestEngine) PublishJoin(_ string, _ *ClientInfo) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
 	return nil
 }
 
-func (e *TestEngine) PublishLeave(_ string, _ *ClientInfo, _ *ChannelOptions) error {
+func (e *TestEngine) PublishLeave(_ string, _ *ClientInfo) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
 	return nil
 }
@@ -157,13 +156,6 @@ func TestNode_SetBroker(t *testing.T) {
 	engine := testMemoryEngine()
 	n.SetBroker(engine)
 	require.Equal(t, n.broker, engine)
-}
-
-func TestNode_SetHistoryManager(t *testing.T) {
-	n, _ := New(DefaultConfig)
-	engine := testMemoryEngine()
-	n.SetHistoryManager(engine)
-	require.Equal(t, n.historyManager, engine)
 }
 
 func TestNode_SetPresenceManager(t *testing.T) {
@@ -288,28 +280,12 @@ func TestNode_publishJoin(t *testing.T) {
 	require.EqualValues(t, 0, testEngine.publishJoinCount)
 
 	// Publish without options.
-	err := n.publishJoin("test_channel", &ClientInfo{}, &ChannelOptions{})
+	err := n.publishJoin("test_channel", &ClientInfo{})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, testEngine.publishJoinCount)
 
 	// Publish with default/correct options.
-	err = n.publishJoin("test_channel", &ClientInfo{}, nil)
-	require.NoError(t, err)
-	require.EqualValues(t, 2, testEngine.publishJoinCount)
-
-	// Publish with error options.
-	n.config.ChannelOptionsFunc = func(_ string) (ChannelOptions, bool, error) {
-		return ChannelOptions{}, false, errors.New("oops")
-	}
-	err = n.publishJoin("test_channel", &ClientInfo{}, nil)
-	require.Error(t, err, "oops")
-	require.EqualValues(t, 2, testEngine.publishJoinCount)
-
-	// Publish with not found options.
-	n.config.ChannelOptionsFunc = func(_ string) (ChannelOptions, bool, error) {
-		return ChannelOptions{}, false, nil
-	}
-	err = n.publishJoin("test_channel", &ClientInfo{}, nil)
+	err = n.publishJoin("test_channel", &ClientInfo{})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testEngine.publishJoinCount)
 }
@@ -322,28 +298,12 @@ func TestNode_publishLeave(t *testing.T) {
 	require.EqualValues(t, 0, testEngine.publishLeaveCount)
 
 	// Publish without options.
-	err := n.publishLeave("test_channel", &ClientInfo{}, &ChannelOptions{})
+	err := n.publishLeave("test_channel", &ClientInfo{})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, testEngine.publishLeaveCount)
 
 	// Publish with default/correct options.
-	err = n.publishLeave("test_channel", &ClientInfo{}, nil)
-	require.NoError(t, err)
-	require.EqualValues(t, 2, testEngine.publishLeaveCount)
-
-	// Publish with error options.
-	n.config.ChannelOptionsFunc = func(_ string) (ChannelOptions, bool, error) {
-		return ChannelOptions{}, false, errors.New("oops")
-	}
-	err = n.publishLeave("test_channel", &ClientInfo{}, nil)
-	require.Error(t, err, "oops")
-	require.EqualValues(t, 2, testEngine.publishLeaveCount)
-
-	// Publish with not found options.
-	n.config.ChannelOptionsFunc = func(_ string) (ChannelOptions, bool, error) {
-		return ChannelOptions{}, false, nil
-	}
-	err = n.publishLeave("test_channel", &ClientInfo{}, nil)
+	err = n.publishLeave("test_channel", &ClientInfo{})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testEngine.publishLeaveCount)
 }
@@ -354,10 +314,6 @@ func TestNode_RemoveHistory(t *testing.T) {
 
 	err := n.RemoveHistory("test_user")
 	require.NoError(t, err)
-
-	n.historyManager = nil
-	err = n.RemoveHistory("test_user")
-	require.EqualError(t, err, "108: not available")
 }
 
 func TestIndex(t *testing.T) {

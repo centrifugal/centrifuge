@@ -26,7 +26,6 @@ func handleLog(e centrifuge.LogEntry) {
 
 func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Our middleware logic goes here...
 		ctx := r.Context()
 		ctx = centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
 			UserID: "42",
@@ -58,6 +57,7 @@ func main() {
 	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
 		return centrifuge.ChannelOptions{
 			JoinLeave: true,
+			Presence:  true,
 		}, true, nil
 	}
 
@@ -95,7 +95,7 @@ func main() {
 
 	node.SetBroker(broker)
 
-	// Let Redis engine do the rest.
+	// Let Redis engine do the presence stuff.
 	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
 		Shards: []centrifuge.RedisShardConfig{
 			{
@@ -107,14 +107,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	node.SetHistoryManager(engine)
 	node.SetPresenceManager(engine)
 
-	// If you only need unreliable PUB/SUB streaming then you can go without Redis.
-	// Make sure you don't use channels with history and presence options enabled
-	// in that case. Just remove Redis engine initialization above and uncomment
+	// If you only need unreliable PUB/SUB then you can go without Redis.
+	// Just remove Redis engine initialization above and uncomment
 	// the following two lines of code:
-	// node.SetHistoryManager(nil)
 	// node.SetPresenceManager(nil)
 
 	if err := node.Run(); err != nil {

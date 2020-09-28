@@ -24,7 +24,6 @@ func handleLog(e centrifuge.LogEntry) {
 
 func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Our middleware logic goes here...
 		ctx := r.Context()
 		ctx = centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
 			UserID: "",
