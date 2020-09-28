@@ -1334,7 +1334,7 @@ func (s *shard) runDataPipeline() {
 	}
 }
 
-// Publish adds Publication to history Stream or List and sends to PUB/SUB.
+// Publish adds Publication to history Stream or List if needed and sends to PUB/SUB.
 func (s *shard) Publish(ch string, pub *Publication, opts PublishOptions) (StreamPosition, error) {
 	byteMessage, err := pubToProto(pub).Marshal()
 	if err != nil {
@@ -1343,7 +1343,7 @@ func (s *shard) Publish(ch string, pub *Publication, opts PublishOptions) (Strea
 
 	publishChannel := s.messageChannelID(ch)
 
-	if opts.HistorySize <= 0 {
+	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {
 		// Fast path – publish without history.
 		eChan := make(chan error, 1)
 

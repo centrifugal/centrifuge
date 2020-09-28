@@ -87,7 +87,7 @@ type Closer interface {
 // PublishOptions define some fields to alter behaviour of Publish operation.
 type PublishOptions struct {
 	// HistoryTTL sets history ttl to expire inactive history streams.
-	// Actually current engines only work with seconds resolution for TTL.
+	// Current Engine implementations only work with seconds resolution for TTL.
 	HistoryTTL time.Duration
 	// HistorySize sets history size limit to prevent infinite stream growth.
 	HistorySize int
@@ -108,11 +108,17 @@ type Broker interface {
 	// Unsubscribe node from channel to stop listening messages from it.
 	Unsubscribe(ch string) error
 
-	// Publish allows to send Publication Push into channel. Publications should
-	// be delivered to all clients subscribed on this channel at moment on
-	// any Centrifuge node (with at most once delivery guarantee).
-	// Broker can maintain publication history inside channel according to
-	// channel options if needed.
+	// Publish allows to send Publication into channel. Publications should be
+	// delivered to all clients subscribed to this channel at moment on any
+	// Centrifuge node (with at most once delivery guarantee).
+	//
+	// Broker can optionally maintain publication history inside channel according
+	// to PublishOptions provided. See History method for rules that should be implemented
+	// for accessing Publications from history stream.
+	//
+	// Saving message to a history stream and publish to PUB/SUB should be an atomic
+	// operation per channel.
+	//
 	// StreamPosition returned here describes current stream top offset and epoch.
 	// For channels without history this StreamPosition should be empty.
 	Publish(ch string, pub *Publication, opts PublishOptions) (StreamPosition, error)

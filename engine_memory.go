@@ -82,7 +82,7 @@ func (e *MemoryEngine) Publish(ch string, pub *Publication, opts PublishOptions)
 	mu.Lock()
 	defer mu.Unlock()
 
-	if opts.HistorySize > 0 {
+	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {
 		streamTop, err := e.historyHub.add(ch, pub, opts)
 		if err != nil {
 			return StreamPosition{}, err
