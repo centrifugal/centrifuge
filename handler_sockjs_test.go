@@ -1,17 +1,47 @@
 package centrifuge
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/centrifugal/protocol"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
 
+func sockjsData(data []byte) []byte {
+	quoted, _ := json.Marshal(string(data))
+	return []byte(fmt.Sprintf("[%s]", string(quoted)))
+}
+
 func TestSockjsHandler(t *testing.T) {
 	n, _ := New(Config{})
 	mux := http.NewServeMux()
+
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, transportSockJS, event.Transport.Name())
+		require.Equal(t, ProtocolTypeJSON, event.Transport.Protocol())
+		require.Equal(t, EncodingTypeJSON, event.Transport.Encoding())
+		return ConnectReply{
+			Credentials: &Credentials{UserID: "user"},
+			Data:        []byte(`{"SockJS connect response": 1}`),
+		}, nil
+	})
+
+	doneCh := make(chan struct{})
+
+	n.OnConnect(func(client *Client) {
+		err := client.Send([]byte(`{"SockJS write": 1}`))
+		require.NoError(t, err)
+	})
+
 	mux.Handle("/connection/sockjs/", NewSockjsHandler(n, SockjsConfig{
 		HandlerPrefix: "/connection/sockjs",
 	}))
@@ -29,4 +59,38 @@ func TestSockjsHandler(t *testing.T) {
 	_, p, err := conn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, "o", string(p)) // open frame of SockJS protocol.
+
+	connectRequest := &protocol.ConnectRequest{
+		Token: "boom",
+	}
+	params, _ := json.Marshal(connectRequest)
+	cmd := &protocol.Command{
+		ID:     1,
+		Method: protocol.MethodTypeConnect,
+		Params: params,
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	_ = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
+
+	_, p, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.Contains(t, string(p), "SockJS connect response")
+
+	go func() {
+		defer close(doneCh)
+		if !strings.Contains(string(p), "SockJS write") {
+			for {
+				_, p, err = conn.ReadMessage()
+				if strings.Contains(string(p), "SockJS write") {
+					break
+				}
+			}
+		}
+	}()
+
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for closing done channel")
+	}
 }

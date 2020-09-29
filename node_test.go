@@ -133,6 +133,14 @@ func TestErrorMessage(t *testing.T) {
 	require.Equal(t, "111: too many requests", errMessage)
 }
 
+func TestNode_Shutdown(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	require.NoError(t, n.Shutdown(context.Background()))
+	require.True(t, n.shutdown)
+	// Test second call does not return error.
+	require.NoError(t, n.Shutdown(context.Background()))
+}
+
 func TestClientEventHub(t *testing.T) {
 	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -154,6 +162,26 @@ func TestNodeRegistry(t *testing.T) {
 	registry.clean(time.Second)
 	// Current node info should still be in node registry - we never delete it.
 	require.Equal(t, 1, len(registry.list()))
+}
+
+func TestNodeLogHandler(t *testing.T) {
+	c := DefaultConfig
+	doneCh := make(chan struct{})
+	c.LogHandler = func(entry LogEntry) {
+		require.Equal(t, LogLevelInfo, entry.Level)
+		require.Equal(t, "test2", entry.Message)
+		close(doneCh)
+	}
+	c.LogLevel = LogLevelInfo
+	n, _ := New(c)
+	// Debug should not be logged.
+	n.Log(NewLogEntry(LogLevelDebug, "test1", nil))
+	n.Log(NewLogEntry(LogLevelInfo, "test2", nil))
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout processing log in handler")
+	}
 }
 
 func TestNode_SetBroker(t *testing.T) {
