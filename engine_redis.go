@@ -257,24 +257,30 @@ func makePoolFactory(s *shard, n *Node, conf RedisShardConfig) func(addr string,
 			Wait:        true,
 			IdleTimeout: conf.IdleTimeout,
 			Dial: func() (redis.Conn, error) {
-				var err error
+				var c redis.Conn
 				if useSentinel {
-					serverAddr, err = sntnl.MasterAddr()
+					masterAddr, err := sntnl.MasterAddr()
 					if err != nil {
 						return nil, err
 					}
 					lastMu.Lock()
-					if serverAddr != lastMaster {
-						n.Log(NewLogEntry(LogLevelInfo, "Redis master discovered", map[string]interface{}{"addr": serverAddr}))
-						lastMaster = serverAddr
+					if masterAddr != lastMaster {
+						n.Log(NewLogEntry(LogLevelInfo, "Redis master discovered", map[string]interface{}{"addr": masterAddr}))
+						lastMaster = masterAddr
 					}
 					lastMu.Unlock()
-				}
-
-				c, err := redis.Dial("tcp", serverAddr, dialOpts...)
-				if err != nil {
-					n.Log(NewLogEntry(LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error()}))
-					return nil, err
+					c, err = redis.Dial("tcp", masterAddr, dialOpts...)
+					if err != nil {
+						n.Log(NewLogEntry(LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error(), "addr": masterAddr}))
+						return nil, err
+					}
+				} else {
+					var err error
+					c, err = redis.Dial("tcp", serverAddr, dialOpts...)
+					if err != nil {
+						n.Log(NewLogEntry(LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error(), "addr": serverAddr}))
+						return nil, err
+					}
 				}
 
 				if password != "" {
