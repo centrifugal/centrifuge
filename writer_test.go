@@ -249,14 +249,13 @@ func TestWriterDisconnectSlow(t *testing.T) {
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
 	})
-	go w.run()
 	defer func() { _ = w.close() }()
 
 	disconnect := w.enqueue([]byte("test"))
 	require.Equal(t, DisconnectSlow, disconnect)
 }
 
-func TestWriterDisconnectClosed(t *testing.T) {
+func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 	transport := newFakeTransport(nil)
 
 	w := newWriter(writerConfig{
