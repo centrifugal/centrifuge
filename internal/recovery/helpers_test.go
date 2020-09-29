@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"math"
 	"testing"
 
 	"github.com/centrifugal/protocol"
@@ -74,4 +75,18 @@ func TestMergePublicationsOrder(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, pubs, 3)
 	require.True(t, pubs[0].Offset < pubs[1].Offset)
+}
+
+func TestUnpackUint64(t *testing.T) {
+	seq, gen := UnpackUint64(1)
+	require.Equal(t, uint32(1), seq)
+	require.Equal(t, uint32(0), gen)
+
+	seq, gen = UnpackUint64(math.MaxUint64)
+	require.Equal(t, uint32(math.MaxUint32), seq)
+	require.Equal(t, uint32(math.MaxUint32), gen)
+
+	seq, gen = UnpackUint64(math.MaxUint32 + 1)
+	require.Equal(t, uint32(0), seq)
+	require.Equal(t, uint32(1), gen)
 }

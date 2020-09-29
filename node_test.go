@@ -128,6 +128,11 @@ func nodeWithMemoryEngine() *Node {
 	return n
 }
 
+func TestErrorMessage(t *testing.T) {
+	errMessage := ErrorTooManyRequests.Error()
+	require.Equal(t, "111: too many requests", errMessage)
+}
+
 func TestClientEventHub(t *testing.T) {
 	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()

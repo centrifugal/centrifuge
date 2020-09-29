@@ -253,6 +253,7 @@ func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	result := extractConnectResult(replies, client.Transport().Protocol())
 	require.Equal(t, client.uid, result.Client)
 	client.triggerConnect()
+	client.scheduleOnConnectTimers()
 	return result
 }
 
@@ -1027,6 +1028,46 @@ func TestClientPresenceUpdate(t *testing.T) {
 
 	err := client.updateChannelPresence("test")
 	require.NoError(t, err)
+}
+
+func TestClientSubExpired(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	setTestChannelOptions(&node.config, ChannelOptions{
+		Presence: true,
+	})
+	node.config.ClientExpiredSubCloseDelay = 0
+	node.config.ClientPresenceUpdateInterval = 10 * time.Millisecond
+
+	node.OnSubscribe(func(client *Client, event SubscribeEvent) (SubscribeReply, error) {
+		return SubscribeReply{
+			ExpireAt: time.Now().Unix() + 1,
+		}, nil
+	})
+
+	doneCh := make(chan struct{})
+
+	node.OnDisconnect(func(client *Client, event DisconnectEvent) {
+		if event.Disconnect == DisconnectSubExpired {
+			close(doneCh)
+		}
+		return
+	})
+
+	transport := newTestTransport()
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for disconnect due to expired subscription")
+	}
 }
 
 func TestClientSend(t *testing.T) {

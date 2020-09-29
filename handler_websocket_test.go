@@ -35,6 +35,58 @@ func TestWebsocketHandler(t *testing.T) {
 	defer conn.Close()
 }
 
+func TestWebsocketHandlerPing(t *testing.T) {
+	n, _ := New(Config{})
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		PingInterval: 10 * time.Millisecond,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials: &Credentials{
+				UserID: "test",
+			},
+		}, nil
+	})
+
+	url := "ws" + server.URL[4:]
+
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer conn.Close()
+
+	closeCh := make(chan struct{})
+	var once sync.Once
+
+	conn.SetPingHandler(func(appData string) error {
+		once.Do(func() {
+			close(closeCh)
+		})
+		return nil
+	})
+
+	go func() {
+		for {
+			_, _, err = conn.ReadMessage()
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	select {
+	case <-closeCh:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for ping")
+	}
+}
+
 func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	n, _ := New(Config{})
 	mux := http.NewServeMux()
