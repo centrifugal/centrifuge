@@ -26,7 +26,6 @@ func newWriter(config writerConfig) *writer {
 		config:   config,
 		messages: queue.New(),
 	}
-	go w.runWriteRoutine()
 	return w
 }
 
@@ -34,7 +33,9 @@ const (
 	defaultMaxMessagesInFrame = 4
 )
 
-func (w *writer) runWriteRoutine() {
+// run supposed to be run in goroutine, this goroutine will be closed as
+// soon as queue is closed.
+func (w *writer) run() {
 	maxMessagesInFrame := w.config.MaxMessagesInFrame
 	if maxMessagesInFrame == 0 {
 		maxMessagesInFrame = defaultMaxMessagesInFrame
@@ -127,6 +128,7 @@ func (w *writer) close() error {
 	remaining := w.messages.CloseRemaining()
 	if len(remaining) > 0 {
 		w.mu.Lock()
+		// TODO: make it respect MaxMessagesInFrame option.
 		_ = w.config.WriteManyFn(remaining...)
 		w.mu.Unlock()
 	}

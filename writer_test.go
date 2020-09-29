@@ -2,9 +2,11 @@ package centrifuge
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -87,6 +89,7 @@ func BenchmarkWriteMerge(b *testing.B) {
 		WriteFn:            transport.writeSingle,
 		WriteManyFn:        transport.writeCombined,
 	})
+	go writer.run()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -103,6 +106,8 @@ func BenchmarkWriteMergeDisabled(b *testing.B) {
 		WriteFn:            transport.writeSingle,
 		WriteManyFn:        transport.writeCombined,
 	})
+	go writer.run()
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		runWrite(writer, transport)
@@ -111,37 +116,51 @@ func BenchmarkWriteMergeDisabled(b *testing.B) {
 }
 
 type fakeTransport struct {
-	count int
-	ch    chan struct{}
+	count          int
+	writeError     error
+	ch             chan struct{}
+	writeCalls     int
+	writeManyCalls int
 }
 
-func newFakeTransport() *fakeTransport {
+func newFakeTransport(writeError error) *fakeTransport {
 	return &fakeTransport{
-		ch: make(chan struct{}, 1),
+		ch:         make(chan struct{}, 1),
+		writeError: writeError,
 	}
 }
 
 func (t *fakeTransport) writeMany(bufs ...[]byte) error {
+	t.writeManyCalls++
 	for range bufs {
 		t.count++
 		t.ch <- struct{}{}
+	}
+	if t.writeError != nil {
+		return t.writeError
 	}
 	return nil
 }
 
 func (t *fakeTransport) write(_ []byte) error {
+	t.writeCalls++
 	t.count++
 	t.ch <- struct{}{}
+	if t.writeError != nil {
+		return t.writeError
+	}
 	return nil
 }
 
 func TestWriter(t *testing.T) {
-	transport := newFakeTransport()
+	transport := newFakeTransport(nil)
 	w := newWriter(writerConfig{
 		MaxMessagesInFrame: 4,
 		WriteFn:            transport.write,
 		WriteManyFn:        transport.writeMany,
 	})
+	go w.run()
+
 	disconnect := w.enqueue([]byte("test"))
 	require.Nil(t, disconnect)
 	<-transport.ch
@@ -154,13 +173,138 @@ func TestWriter(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestWriterDisconnect(t *testing.T) {
-	transport := newFakeTransport()
+func TestWriterWriteMany(t *testing.T) {
+	transport := newFakeTransport(nil)
+
+	w := newWriter(writerConfig{
+		MaxQueueSize:       10 * 1024,
+		MaxMessagesInFrame: 4,
+		WriteFn:            transport.write,
+		WriteManyFn:        transport.writeMany,
+	})
+
+	numMessages := 4 * w.config.MaxMessagesInFrame
+	for i := 0; i < numMessages; i++ {
+		disconnect := w.enqueue([]byte("test"))
+		require.Nil(t, disconnect)
+	}
+
+	doneCh := make(chan struct{})
+
+	go func() {
+		defer close(doneCh)
+		w.run()
+	}()
+
+	for i := 0; i < numMessages; i++ {
+		<-transport.ch
+	}
+
+	require.Equal(t, transport.count, numMessages)
+	require.Equal(t, numMessages/w.config.MaxMessagesInFrame, transport.writeManyCalls)
+	err := w.close()
+	require.NoError(t, err)
+
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for write routine close")
+	}
+}
+
+func TestWriterWriteRemaining(t *testing.T) {
+	transport := newFakeTransport(nil)
+
+	w := newWriter(writerConfig{
+		MaxQueueSize:       10 * 1024,
+		MaxMessagesInFrame: 4,
+		WriteFn:            transport.write,
+		WriteManyFn:        transport.writeMany,
+	})
+
+	numMessages := 4 * w.config.MaxMessagesInFrame
+	for i := 0; i < numMessages; i++ {
+		disconnect := w.enqueue([]byte("test"))
+		require.Nil(t, disconnect)
+	}
+
+	go func() {
+		err := w.close()
+		require.NoError(t, err)
+	}()
+
+	for i := 0; i < numMessages; i++ {
+		<-transport.ch
+	}
+
+	require.Equal(t, transport.count, numMessages)
+	require.Equal(t, 1, transport.writeManyCalls)
+}
+
+func TestWriterDisconnectSlow(t *testing.T) {
+	transport := newFakeTransport(nil)
+
 	w := newWriter(writerConfig{
 		MaxQueueSize: 1,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
 	})
+	defer func() { _ = w.close() }()
+
+	disconnect := w.enqueue([]byte("test"))
+	require.Equal(t, DisconnectSlow, disconnect)
+}
+
+func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
+	transport := newFakeTransport(nil)
+
+	w := newWriter(writerConfig{
+		MaxQueueSize: 1,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	})
+	go w.run()
+	_ = w.close()
+
+	disconnect := w.enqueue([]byte("test"))
+	require.Equal(t, DisconnectNormal, disconnect)
+}
+
+func TestWriterWriteError(t *testing.T) {
+	errWrite := errors.New("write error")
+	transport := newFakeTransport(errWrite)
+
+	w := newWriter(writerConfig{
+		MaxQueueSize: 1,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	})
+
+	doneCh := make(chan struct{})
+
+	go func() {
+		defer close(doneCh)
+		w.run()
+	}()
+
+	defer func() { _ = w.close() }()
+
 	disconnect := w.enqueue([]byte("test"))
 	require.NotNil(t, disconnect)
+
+	go func() {
+		for {
+			select {
+			case <-doneCh:
+				return
+			case <-transport.ch:
+			}
+		}
+	}()
+
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for write routine close")
+	}
 }

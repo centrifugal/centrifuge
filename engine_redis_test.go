@@ -78,9 +78,38 @@ func NewTestRedisEngineClusterWithPrefix(tb testing.TB, prefix string, useStream
 	n.SetEngine(e)
 	err = n.Run()
 	if err != nil {
-		panic(err)
+		tb.Fatal(err)
 	}
 	return e
+}
+
+func NewTestRedisEngineSentinel(tb testing.TB) *RedisEngine {
+	n, _ := New(Config{})
+	redisConf := RedisShardConfig{
+		SentinelAddrs:      []string{"127.0.0.1:26379"},
+		SentinelMasterName: "mymaster",
+		ReadTimeout:        100 * time.Second,
+	}
+	e, err := NewRedisEngine(n, RedisEngineConfig{
+		Shards: []RedisShardConfig{redisConf},
+	})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	n.SetEngine(e)
+	err = n.Run()
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return e
+}
+
+func TestRedisEngineSentinel(t *testing.T) {
+	e := NewTestRedisEngineSentinel(t)
+	_, _, err := e.History("test", HistoryFilter{
+		Limit: -1,
+	})
+	require.NoError(t, err)
 }
 
 var redisTests = []struct {
