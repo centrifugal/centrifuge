@@ -35,9 +35,12 @@ const (
 
 func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 	// Wait for message from queue.
-	msg, ok := w.messages.Wait()
+	_, ok := w.messages.Wait()
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	msg, ok := w.messages.Remove()
 	if !ok {
 		if w.messages.Closed() {
 			return false

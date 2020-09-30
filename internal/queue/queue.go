@@ -36,7 +36,7 @@ type Queue interface {
 	// be returned immediately.
 	// Will return "", false if the queue is closed.
 	// Otherwise the return value of "remove" is returned.
-	Wait() ([]byte, bool)
+	Wait() bool
 
 	// Cap returns the capacity (without allocations).
 	Cap() int
@@ -160,19 +160,19 @@ func (q *byteQueue) Closed() bool {
 // be returned immediately.
 // Will return nil, false if the queue is closed.
 // Otherwise the return value of "remove" is returned.
-func (q *byteQueue) Wait() ([]byte, bool) {
+func (q *byteQueue) Wait() bool {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
-		return nil, false
+		return false
 	}
 	if q.cnt != 0 {
 		q.mu.Unlock()
-		return q.Remove()
+		return true
 	}
 	q.cond.Wait()
 	q.mu.Unlock()
-	return q.Remove()
+	return true
 }
 
 // Remove will remove a []byte from the queue.

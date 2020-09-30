@@ -51,12 +51,7 @@ func (t *sockjsTransport) Write(data []byte) error {
 	case <-t.closeCh:
 		return nil
 	default:
-		println("--->", string(data))
-		err := t.session.Send(string(data))
-		if err != nil {
-			println(err.Error())
-		}
-		return err
+		return t.session.Send(string(data))
 	}
 }
 
