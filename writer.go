@@ -139,10 +139,7 @@ func (w *writer) close() error {
 	remaining := w.messages.CloseRemaining()
 	if len(remaining) > 0 {
 		// TODO: make it respect MaxMessagesInFrame option.
-		err := w.config.WriteManyFn(remaining...)
-		if err != nil {
-			println("remaining", err.Error())
-		}
+		_ = w.config.WriteManyFn(remaining...)
 	}
 
 	return nil

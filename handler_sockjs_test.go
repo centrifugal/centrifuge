@@ -84,7 +84,6 @@ func TestSockjsHandler(t *testing.T) {
 	loop:
 		for {
 			_, p, err = conn.ReadMessage()
-			println(string(p))
 			if err != nil {
 				break loop
 			}
