@@ -155,11 +155,10 @@ func (q *byteQueue) Closed() bool {
 	return c
 }
 
-// Wait for a []byte to be added.
-// If there is items on the queue the first will
-// be returned immediately.
-// Will return nil, false if the queue is closed.
-// Otherwise the return value of "remove" is returned.
+// Wait for a message to be added.
+// If there are items on the queue will return immediately.
+// Will return false if the queue is closed.
+// Otherwise returns true.
 func (q *byteQueue) Wait() bool {
 	q.mu.Lock()
 	if q.closed {

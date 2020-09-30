@@ -104,7 +104,7 @@ func TestSockjsHandler(t *testing.T) {
 
 	select {
 	case <-doneCh:
-	case <-time.After(10 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for closing done channel")
 	}
 }

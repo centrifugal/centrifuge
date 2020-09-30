@@ -197,7 +197,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 		for {
 			if msg, err := sess.Recv(); err == nil {
 				if ok := c.Handle([]byte(msg)); !ok {
-					break
+					return
 				}
 				continue
 			}
