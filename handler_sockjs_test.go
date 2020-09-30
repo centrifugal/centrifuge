@@ -40,6 +40,7 @@ func TestSockjsHandler(t *testing.T) {
 	n.OnConnect(func(client *Client) {
 		err := client.Send([]byte(`{"SockJS write": 1}`))
 		require.NoError(t, err)
+		_ = client.Disconnect(DisconnectForceReconnect)
 	})
 
 	mux.Handle("/connection/sockjs/", NewSockjsHandler(n, SockjsConfig{
@@ -72,16 +73,30 @@ func TestSockjsHandler(t *testing.T) {
 	cmdBytes, _ := json.Marshal(cmd)
 	_ = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
 
-	_, p, err = conn.ReadMessage()
-	require.NoError(t, err)
-	require.Contains(t, string(p), "SockJS connect response")
-
 	go func() {
-		defer close(doneCh)
-		if !strings.Contains(string(p), "SockJS write") {
+		pos := 0
+		contentExpected := []string{
+			"SockJS connect response",
+			"SockJS write",
+			"force reconnect",
+		}
+
+	loop:
+		for {
+			_, p, err = conn.ReadMessage()
+			println(string(p))
+			if err != nil {
+				break loop
+			}
+
 			for {
-				_, p, err = conn.ReadMessage()
-				if strings.Contains(string(p), "SockJS write") {
+				if strings.Contains(string(p), contentExpected[pos]) {
+					pos++
+					if pos >= len(contentExpected) {
+						close(doneCh)
+						break loop
+					}
+				} else {
 					break
 				}
 			}
@@ -90,7 +105,7 @@ func TestSockjsHandler(t *testing.T) {
 
 	select {
 	case <-doneCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for closing done channel")
 	}
 }

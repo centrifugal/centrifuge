@@ -122,7 +122,7 @@ func (q *byteQueue) Close() {
 	q.cond.Broadcast()
 }
 
-// CloseRemaining will close the queue and return all entried in the queue.
+// CloseRemaining will close the queue and return all entries in the queue.
 // All goroutines in wait() will return.
 func (q *byteQueue) CloseRemaining() [][]byte {
 	q.mu.Lock()
