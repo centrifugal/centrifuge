@@ -42,11 +42,15 @@ func TestByteQueueWait(t *testing.T) {
 	q.Add([]byte("1"))
 	q.Add([]byte("2"))
 
-	s, ok := q.Wait()
+	ok := q.Wait()
+	require.Equal(t, true, ok)
+	s, ok := q.Remove()
 	require.Equal(t, true, ok)
 	require.Equal(t, "1", string(s))
 
-	s, ok = q.Wait()
+	ok = q.Wait()
+	require.Equal(t, true, ok)
+	s, ok = q.Remove()
 	require.Equal(t, true, ok)
 	require.Equal(t, "2", string(s))
 
@@ -54,7 +58,9 @@ func TestByteQueueWait(t *testing.T) {
 		q.Add([]byte("3"))
 	}()
 
-	s, ok = q.Wait()
+	ok = q.Wait()
+	require.Equal(t, true, ok)
+	s, ok = q.Remove()
 	require.Equal(t, true, ok)
 	require.Equal(t, "3", string(s))
 }
@@ -73,7 +79,7 @@ func TestByteQueueClose(t *testing.T) {
 	ok = q.Add([]byte("3"))
 	require.Equal(t, false, ok)
 
-	_, ok = q.Wait()
+	ok = q.Wait()
 	require.Equal(t, false, ok)
 
 	_, ok = q.Remove()
@@ -111,10 +117,11 @@ func addAndConsume(q Queue, n int) {
 	go func() {
 		count := 0
 		for {
-			_, ok := q.Wait()
+			ok := q.Wait()
 			if !ok {
 				continue
 			}
+			q.Remove()
 			count++
 			if count == n {
 				close(done)
