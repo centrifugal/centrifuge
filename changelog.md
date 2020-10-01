@@ -4,17 +4,17 @@ v0.12.0
 This release is a step back in Engine separation and has some important fixes and improvements. Backwards incompatible changes are all about Engine interfaces so if you are using built-in Memory or Redis engines you should be fine to upgrade. Otherwise, take a closer look on first and second points below.
 
 * `HistoryManager` interface removed and its methods now part of `Broker` interface{}. The reason behind this is that Broker should be responsible for an atomicity of saving message into history stream and publish to PUB/SUB. More details in [#158](https://github.com/centrifugal/centrifuge/pull/158)
-* cleaner `Broker` interface methods without `ChannelOptions`
-* fix reconnects due to `InsufficientState` errors in channels with `HistoryRecover` option on when using Memory Engine and frequently publishing in parallel (from different goroutines)
-* fix reconnects due to `InsufficientState` errors when using legacy seq, gen fields - [#157](https://github.com/centrifugal/centrifuge/pull/157)
-* fix returning custom disconnect for SockJS transport
-* possibility to define history stream options in `Publish` call
-* deprecate Broker/Engine `Channels` method – see [#147](https://github.com/centrifugal/centrifuge/issues/147)
-* increase test coverage up to 83% so [#106](https://github.com/centrifugal/centrifuge/issues/106) is finally closed
-* test Sentinel scenario in CI
-* refactor queue writer to prevent possible message loss on connection close - [160](https://github.com/centrifugal/centrifuge/pull/160)
-* fix inconsistent tests of Redis Cluster recovery due to PUB/SUB buffering
-* minor improvements in Gin auth example - [#154](https://github.com/centrifugal/centrifuge/pull/154)
+* Cleaner `Broker` interface methods without `ChannelOptions`
+* Fix reconnects due to `InsufficientState` errors in channels with `HistoryRecover` option on when using Memory Engine and frequently publishing in parallel (from different goroutines)
+* Fix reconnects due to `InsufficientState` errors when using legacy seq, gen fields - [#157](https://github.com/centrifugal/centrifuge/pull/157)
+* Fix returning custom disconnect for SockJS transport
+* Possibility to define history stream options in `Publish` call
+* Deprecate Broker/Engine `Channels` method – see [#147](https://github.com/centrifugal/centrifuge/issues/147)
+* Increase test coverage up to 83% so [#106](https://github.com/centrifugal/centrifuge/issues/106) is finally closed
+* Test Sentinel scenario in CI
+* Refactor queue writer to prevent possible message loss on connection close - [160](https://github.com/centrifugal/centrifuge/pull/160)
+* Fix inconsistent tests of Redis Cluster recovery due to PUB/SUB buffering
+* Minor improvements in Gin auth example - [#154](https://github.com/centrifugal/centrifuge/pull/154)
 
 I have a plan for future library versions to remove `ChannelOptionFunc` completely (but still have a control over channel feature set). This is still in research – if you are interested welcome to [#161](https://github.com/centrifugal/centrifuge/issues/161).
 
