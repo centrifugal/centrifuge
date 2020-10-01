@@ -1634,6 +1634,27 @@ type subscribeContext struct {
 	channelContext channelContext
 }
 
+func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+	latestOffset := historyResult.Offset
+	latestEpoch := historyResult.Epoch
+
+	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
+	for _, pub := range historyResult.Publications {
+		protoPub := pubToProto(pub)
+		recoveredPubs = append(recoveredPubs, protoPub)
+	}
+
+	nextOffset := cmdOffset + 1
+	var recovered bool
+	if len(recoveredPubs) == 0 {
+		recovered = latestOffset == cmdOffset && latestEpoch == cmdEpoch
+	} else {
+		recovered = recoveredPubs[0].Offset == nextOffset && latestEpoch == cmdEpoch
+	}
+
+	return recoveredPubs, recovered
+}
+
 // subscribeCmd handles subscribe command - clients send this when subscribe
 // on channel, if channel if private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
@@ -1736,23 +1757,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, rw *replyWriter, s
 				ctx.disconnect = DisconnectServerError
 				return ctx
 			}
-
 			latestOffset = historyResult.Offset
 			latestEpoch = historyResult.Epoch
-
-			recoveredPubs = make([]*protocol.Publication, 0, len(historyResult.Publications))
-			for _, pub := range historyResult.Publications {
-				protoPub := pubToProto(pub)
-				recoveredPubs = append(recoveredPubs, protoPub)
-			}
-
-			nextOffset := cmdOffset + 1
 			var recovered bool
-			if len(recoveredPubs) == 0 {
-				recovered = latestOffset == cmdOffset && latestEpoch == cmd.Epoch
-			} else {
-				recovered = recoveredPubs[0].Offset == nextOffset && latestEpoch == cmd.Epoch
-			}
+			recoveredPubs, recovered = isRecovered(historyResult, cmdOffset, cmd.Epoch)
 			res.Recovered = recovered
 			incRecover(res.Recovered)
 		} else {

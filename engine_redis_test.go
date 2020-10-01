@@ -1006,6 +1006,7 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node 
 
 func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bool, useCluster bool) {
 	node := nodeWithRedisEngine(t, useStreams, useCluster)
+	defer node.Shutdown(context.Background())
 
 	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{
@@ -1014,11 +1015,6 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 			HistoryRecover:  true,
 		}, true, nil
 	}
-
-	transport := newTestTransport()
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
 
 	channel := "test_recovery_redis_" + tt.Name
 
@@ -1029,31 +1025,17 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 
 	time.Sleep(time.Duration(tt.Sleep) * time.Second)
 
-	connectClient(t, client)
-
-	var replies []*protocol.Reply
-	rw := testReplyWriter(&replies)
-
 	_, streamTop, err := node.broker.History(channel, HistoryFilter{
 		Limit: 0,
 		Since: nil,
 	})
 	require.NoError(t, err)
 
-	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
-		Channel: channel,
-		Recover: true,
-		Offset:  tt.SinceOffset,
-		Epoch:   streamTop.Epoch,
-	}, rw, false)
-	require.Nil(t, subCtx.disconnect)
-	require.NotEmpty(t, replies)
-	require.Nil(t, replies[0].Error)
-	res := extractSubscribeResult(replies, client.Transport().Protocol())
-	require.Equal(t, tt.NumRecovered, len(res.Publications))
-	require.Equal(t, tt.Recovered, res.Recovered)
-
-	node.Shutdown(context.Background())
+	historyResult, err := node.recoverHistory(channel, StreamPosition{tt.SinceOffset, streamTop.Epoch})
+	require.NoError(t, err)
+	recoveredPubs, recovered := isRecovered(historyResult, tt.SinceOffset, streamTop.Epoch)
+	require.Equal(t, tt.NumRecovered, len(recoveredPubs))
+	require.Equal(t, tt.Recovered, recovered)
 }
 
 func TestRedisClientSubscribeRecoverStreams(t *testing.T) {
