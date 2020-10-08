@@ -65,14 +65,14 @@ type Node struct {
 	// nowTimeGetter provides access to current time.
 	nowTimeGetter nowtime.Getter
 
-	// workerPool used to process commands received from clients.
-	workerPool *gpool.Pool
+	// cmdWorkerPool used to process commands received from clients.
+	cmdWorkerPool *gpool.Pool
 }
 
 const (
 	numSubLocks            = 16384
 	numSubDissolverWorkers = 64
-	workerPoolSize         = 16384
+	workerPoolSize         = 8128
 )
 
 // New creates Node with provided Config.
@@ -106,7 +106,7 @@ func New(c Config) (*Node, error) {
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
-		workerPool:     gpool.NewPool(workerPoolSize, 0),
+		cmdWorkerPool:  gpool.NewPool(workerPoolSize),
 	}
 
 	if c.LogHandler != nil {
@@ -238,7 +238,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	}()
 	go func() {
 		defer wg.Done()
-		_ = n.workerPool.Close(ctx)
+		_ = n.cmdWorkerPool.Close(ctx)
 	}()
 	go func() {
 		defer wg.Done()

@@ -24,13 +24,13 @@ func TestWorker_New(t *testing.T) {
 		done <- true
 	}
 
-	worker.jobQueue <- job
+	worker.jobs <- job
 	<-done
 	require.Equal(t, true, called)
 }
 
 func TestPool_New(t *testing.T) {
-	pool := NewPool(1000, 10000)
+	pool := NewPool(1000)
 	defer func() { _ = pool.Close(context.Background()) }()
 
 	numJobs := 10000
@@ -47,7 +47,7 @@ func TestPool_New(t *testing.T) {
 			require.Equal(t, uint64(1), arg)
 		}
 
-		pool.JobQueue <- job
+		pool.Jobs <- job
 	}
 
 	wg.Wait()
@@ -56,13 +56,13 @@ func TestPool_New(t *testing.T) {
 }
 
 func TestPool_Close(t *testing.T) {
-	pool := NewPool(100, 10)
+	pool := NewPool(100)
 
 	numJobs := 1000
 
 	for i := 0; i < numJobs; i++ {
 		job := func() {}
-		pool.JobQueue <- job
+		pool.Jobs <- job
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -71,9 +71,9 @@ func TestPool_Close(t *testing.T) {
 }
 
 func TestPool_CloseContext(t *testing.T) {
-	pool := NewPool(1, 0)
+	pool := NewPool(1)
 
-	pool.JobQueue <- func() {
+	pool.Jobs <- func() {
 		time.Sleep(5 * time.Second)
 	}
 
@@ -85,14 +85,14 @@ func TestPool_CloseContext(t *testing.T) {
 }
 
 func BenchmarkPool_RawPerformance(b *testing.B) {
-	pool := NewPool(1, 0)
+	pool := NewPool(1)
 	defer func() { _ = pool.Close(context.Background()) }()
 
 	ch := make(chan struct{}, 1)
 	b.ResetTimer()
 
 	for n := 0; n < b.N; n++ {
-		pool.JobQueue <- func() {
+		pool.Jobs <- func() {
 			ch <- struct{}{}
 		}
 		<-ch
@@ -100,13 +100,13 @@ func BenchmarkPool_RawPerformance(b *testing.B) {
 }
 
 func BenchmarkPool_Sequential(b *testing.B) {
-	pool := NewPool(16, 0)
+	pool := NewPool(16)
 	defer func() { _ = pool.Close(context.Background()) }()
 
 	for n := 0; n < b.N; n++ {
 		var wg sync.WaitGroup
 		wg.Add(1)
-		pool.JobQueue <- func() {
+		pool.Jobs <- func() {
 			time.Sleep(100 * time.Millisecond)
 			wg.Done()
 		}
@@ -115,7 +115,7 @@ func BenchmarkPool_Sequential(b *testing.B) {
 }
 
 func BenchmarkPool_Parallel(b *testing.B) {
-	pool := NewPool(4096, 0)
+	pool := NewPool(4096)
 	defer func() { _ = pool.Close(context.Background()) }()
 
 	b.SetParallelism(4096)
@@ -123,7 +123,7 @@ func BenchmarkPool_Parallel(b *testing.B) {
 		for pb.Next() {
 			var wg sync.WaitGroup
 			wg.Add(1)
-			pool.JobQueue <- func() {
+			pool.Jobs <- func() {
 				time.Sleep(100 * time.Millisecond)
 				wg.Done()
 			}

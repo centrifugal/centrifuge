@@ -20,15 +20,19 @@ import (
 // We poll current position in channel from history storage periodically.
 // If client position is wrong maxCheckPositionFailures times in a row
 // then client will be disconnected with InsufficientState reason.
-const maxCheckPositionFailures int64 = 2
+const maxCheckPositionFailures uint8 = 2
+
+// This is a maximum number of protocol commands that can be processed
+// concurrently by a single client connection.
+const maxClientConcurrentCommands = 16
 
 // channelContext contains extra context for channel connection subscribed to.
 type channelContext struct {
 	Info                  []byte
 	expireAt              int64
 	positionCheckTime     int64
-	positionCheckFailures int64
 	streamPosition        StreamPosition
+	positionCheckFailures uint8
 	serverSide            bool
 	clientSideRefresh     bool
 }
@@ -73,8 +77,6 @@ const (
 	statusConnected  status = 2
 	statusClosed     status = 3
 )
-
-const maxClientConcurrentCommands = 16
 
 // Client represents client connection to server.
 type Client struct {
@@ -648,7 +650,7 @@ func (c *Client) Handle(data []byte) bool {
 		select {
 		case <-c.ctx.Done():
 			return false
-		case c.node.workerPool.JobQueue <- func() {
+		case c.node.cmdWorkerPool.Jobs <- func() {
 			defer func() { <-c.semaphore }()
 
 			select {

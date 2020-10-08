@@ -6,16 +6,16 @@ import "context"
 type Job func()
 
 type worker struct {
-	jobQueue chan Job
-	stop     chan struct{}
-	done     chan struct{}
+	jobs chan Job
+	stop chan struct{}
+	done chan struct{}
 }
 
-func newWorker(jobQueue chan Job) *worker {
+func newWorker(jobs chan Job) *worker {
 	return &worker{
-		jobQueue: jobQueue,
-		stop:     make(chan struct{}, 1),
-		done:     make(chan struct{}, 1),
+		jobs: jobs,
+		stop: make(chan struct{}, 1),
+		done: make(chan struct{}, 1),
 	}
 }
 
@@ -23,7 +23,7 @@ func (w *worker) start() {
 	go func() {
 		for {
 			select {
-			case job := <-w.jobQueue:
+			case job := <-w.jobs:
 				job()
 			case <-w.stop:
 				w.done <- struct{}{}
@@ -35,25 +35,25 @@ func (w *worker) start() {
 
 // Pool of worker goroutines.
 type Pool struct {
-	workers  []*worker
-	JobQueue chan Job
+	workers []*worker
+	Jobs    chan Job
 }
 
 // NewPool will make a pool of worker goroutines.
-// Returned object contains JobQueue to send a job for execution.
-func NewPool(numWorkers int, jobQueueLen int) *Pool {
-	jobQueue := make(chan Job, jobQueueLen)
+// Returned object contains Jobs to send a job for execution.
+func NewPool(numWorkers int) *Pool {
+	jobs := make(chan Job, 0)
 	workers := make([]*worker, 0, numWorkers)
 
 	for i := 0; i < numWorkers; i++ {
-		worker := newWorker(jobQueue)
+		worker := newWorker(jobs)
 		worker.start()
 		workers = append(workers, worker)
 	}
 
 	return &Pool{
-		JobQueue: jobQueue,
-		workers:  workers,
+		Jobs:    jobs,
+		workers: workers,
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -43,34 +42,11 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
-const exampleChannel = "chat:index"
-
-// Check whether channel is allowed for subscribing. In real case permission
-// check will probably be more complex than in this example.
-func channelSubscribeAllowed(channel string) bool {
-	return channel == exampleChannel
-}
-
 func main() {
 	cfg := centrifuge.DefaultConfig
 
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
-
-	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
-		if channel == exampleChannel || strings.HasPrefix(channel, "#") {
-			// For exampleChannel and personal channel turn on all features. You should only
-			// enable channel options where really needed to consume less resources on server.
-			return centrifuge.ChannelOptions{
-				Presence:        true,
-				JoinLeave:       true,
-				HistorySize:     100,
-				HistoryLifetime: 300,
-				HistoryRecover:  true,
-			}, true, nil
-		}
-		return centrifuge.ChannelOptions{}, true, nil
-	}
 
 	node, _ := centrifuge.New(cfg)
 
@@ -100,7 +76,7 @@ func main() {
 	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		reply := centrifuge.SubscribeReply{}
 		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		return reply, nil
 	})
 
