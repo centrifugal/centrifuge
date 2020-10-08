@@ -11,6 +11,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
+	"github.com/centrifugal/centrifuge/internal/gpool"
 	"github.com/centrifugal/centrifuge/internal/nowtime"
 
 	"github.com/FZambia/eagle"
@@ -19,9 +20,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Node is a heart of centrifuge library – it internally keeps and manages
-// client connections, maintains information about other centrifuge nodes,
-// keeps useful references to things like engine, hub etc.
+// Node is a heart of Centrifuge library – it keeps and manages client connections,
+// maintains information about other centrifuge nodes, keeps references to common
+// things like Engine (Broker and PresenceManager), Hub etc.
 type Node struct {
 	mu sync.RWMutex
 	// unique id for this node.
@@ -58,18 +59,23 @@ type Node struct {
 	metricsExporter *eagle.Eagle
 	metricsSnapshot *eagle.Metrics
 
+	// subDissolver used to reliably clear unused subscriptions in Engine.
 	subDissolver *dissolve.Dissolver
 
 	// nowTimeGetter provides access to current time.
 	nowTimeGetter nowtime.Getter
+
+	// workerPool used to process commands received from clients.
+	workerPool *gpool.Pool
 }
 
 const (
 	numSubLocks            = 16384
 	numSubDissolverWorkers = 64
+	workerPoolSize         = 16384
 )
 
-// New creates Node, the only required argument is config.
+// New creates Node with provided Config.
 func New(c Config) (*Node, error) {
 	uid := uuid.Must(uuid.NewRandom()).String()
 
@@ -100,6 +106,7 @@ func New(c Config) (*Node, error) {
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
+		workerPool:     gpool.NewPool(workerPoolSize, 0),
 	}
 
 	if c.LogHandler != nil {
@@ -223,8 +230,22 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			defer func() { _ = closer.Close(ctx) }()
 		}
 	}
-	_ = n.subDissolver.Close()
-	return n.hub.shutdown(ctx)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		_ = n.subDissolver.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		_ = n.workerPool.Close(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		_ = n.hub.shutdown(ctx)
+	}()
+	wg.Wait()
+	return ctx.Err()
 }
 
 // NotifyShutdown returns a channel which will be closed on node shutdown.

@@ -2,13 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,11 +16,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type clientMessage struct {
-	Timestamp int64  `json:"timestamp"`
-	Input     string `json:"input"`
-}
-
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
@@ -32,9 +24,7 @@ func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID:   "42",
-			ExpireAt: time.Now().Unix() + 60,
-			Info:     []byte(`{"name": "Alexander"}`),
+			UserID: "42",
 		})
 		r = r.WithContext(newCtx)
 		h.ServeHTTP(w, r)
@@ -47,7 +37,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		n.Shutdown(context.Background())
+		_ = n.Shutdown(context.Background())
 		done <- true
 	}()
 	<-done
@@ -101,42 +91,16 @@ func main() {
 	node.OnConnect(func(c *centrifuge.Client) {
 		transport := c.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
-
-		// Event handler should not block, so start separate goroutine to
-		// periodically send messages to client.
-		go func() {
-			for {
-				select {
-				case <-c.Context().Done():
-					return
-				case <-time.After(5 * time.Second):
-					err := c.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-					if err != nil {
-						if err == io.EOF {
-							return
-						}
-						log.Printf("error sending message: %s", err)
-					}
-				}
-			}
-		}()
 	})
 
 	node.OnAlive(func(c *centrifuge.Client) {
 		log.Printf("user %s connection is still active", c.UserID())
 	})
 
-	node.OnRefresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
-		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 60,
-		}, nil
-	})
-
 	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
 		reply := centrifuge.SubscribeReply{}
 		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1000 * time.Millisecond)
 		return reply, nil
 	})
 
@@ -144,50 +108,12 @@ func main() {
 		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
 	})
 
-	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
-		reply := centrifuge.PublishReply{}
-		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
-		if !c.IsSubscribed(e.Channel) {
-			return reply, centrifuge.ErrorPermissionDenied
-		}
-		var msg clientMessage
-		err := json.Unmarshal(e.Data, &msg)
-		if err != nil {
-			return reply, centrifuge.ErrorBadRequest
-		}
-		msg.Timestamp = time.Now().Unix()
-		data, _ := json.Marshal(msg)
-
-		// In this example we take over publish since we want to publish modified data to channel.
-		// We could also return an empty PublishReply to let Centrifuge proceed with publish itself
-		// and just let client publication pass through towards a channel.
-		if result, err := node.Publish(e.Channel, data); err != nil {
-			return reply, err
-		} else {
-			reply.Result = &result
-		}
-		return reply, nil
-	})
-
 	node.OnRPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) (centrifuge.RPCReply, error) {
 		log.Printf("RPC from user: %s, data: %s, method: %s", c.UserID(), string(e.Data), e.Method)
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		return centrifuge.RPCReply{
 			Data: []byte(`{"year": "2020"}`),
 		}, nil
-	})
-
-	node.OnPresence(func(c *centrifuge.Client, e centrifuge.PresenceEvent) (centrifuge.PresenceReply, error) {
-		log.Printf("user %s calls presence on %s", c.UserID(), e.Channel)
-		reply := centrifuge.PresenceReply{}
-		if !c.IsSubscribed(e.Channel) {
-			return reply, centrifuge.ErrorPermissionDenied
-		}
-		return reply, nil
-	})
-
-	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
-		log.Printf("message from user: %s, data: %s", c.UserID(), string(e.Data))
 	})
 
 	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
@@ -197,19 +123,6 @@ func main() {
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
-
-	go func() {
-		// Publish personal notifications for user 42 periodically.
-		i := 1
-		for {
-			_, err := node.Publish("#42", []byte(`{"message": "personal `+strconv.Itoa(i)+`"}`))
-			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
-			}
-			i++
-			time.Sleep(5000 * time.Millisecond)
-		}
-	}()
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ReadBufferSize:     1024,

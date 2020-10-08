@@ -31,7 +31,7 @@
                 const container = $('#messages');
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
-                    timeout: 10000,
+                    timeout: 5000,
                 });
                 // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
                 //     sockjsTransports: [
@@ -65,7 +65,7 @@
                 setTimeout(function () {
                     const rpcRequest = {"method": "getCurrentYear"};
 
-                    for (let i = 0; i < 10; i++) {
+                    for (let i = 0; i < 100; i++) {
                         // This can be whatever JSON you want.
                         const j = i;
                         centrifuge.rpc(rpcRequest).then(function(data){

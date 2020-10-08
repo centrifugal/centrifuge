@@ -74,7 +74,7 @@ const (
 	statusClosed     status = 3
 )
 
-const maxClientConcurrentCommands = 1
+const maxClientConcurrentCommands = 16
 
 // Client represents client connection to server.
 type Client struct {
@@ -610,53 +610,9 @@ func (c *Client) Handle(data []byte) bool {
 		return false
 	}
 
-	var encodeErr error
-
 	protoType := c.transport.Protocol().toProto()
-	encoder := protocol.GetReplyEncoder(protoType)
 	decoder := protocol.GetCommandDecoder(protoType, data)
-
-	defer func() {
-		if encodeErr != nil {
-			return
-		}
-		protocol.PutCommandDecoder(protoType, decoder)
-		protocol.PutReplyEncoder(protoType, encoder)
-	}()
-
-	var writeMu sync.Mutex
-
-	write := func(rep *protocol.Reply) error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-
-		encodeErr = encoder.Encode(rep)
-		if encodeErr != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
-		}
-		return encodeErr
-	}
-
-	flush := func() error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-
-		buf := encoder.Finish()
-		if len(buf) > 0 {
-			disconnect := c.messageWriter.enqueue(buf)
-			if disconnect != nil {
-				if c.node.logger.enabled(LogLevelDebug) {
-					c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-				}
-				go func() { _ = c.close(disconnect) }()
-				return fmt.Errorf("flush error")
-			}
-		}
-		encoder.Reset()
-		return nil
-	}
-
-	var wg sync.WaitGroup
+	defer protocol.PutCommandDecoder(protoType, decoder)
 
 	for {
 		cmd, err := decoder.Decode()
@@ -683,35 +639,79 @@ func (c *Client) Handle(data []byte) bool {
 			return false
 		}
 
-		disconnect := c.handleCommand(cmd, write, flush)
 		select {
 		case <-c.ctx.Done():
 			return false
-		default:
+		case c.semaphore <- struct{}{}:
 		}
 
-		if disconnect != nil {
-			if disconnect != DisconnectNormal {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-			}
-			go func() { _ = c.close(disconnect) }()
+		select {
+		case <-c.ctx.Done():
 			return false
-		}
-		if encodeErr != nil {
-			go func() { _ = c.close(DisconnectServerError) }()
-			return false
-		}
-	}
+		case c.node.workerPool.JobQueue <- func() {
+			defer func() { <-c.semaphore }()
 
-	buf := encoder.Finish()
-	if len(buf) > 0 {
-		disconnect := c.messageWriter.enqueue(buf)
-		if disconnect != nil {
-			if c.node.logger.enabled(LogLevelDebug) {
-				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			select {
+			case <-c.ctx.Done():
+				return
+			default:
 			}
-			go func() { _ = c.close(disconnect) }()
-			return false
+
+			encoder := protocol.GetReplyEncoder(protoType)
+			defer protocol.PutReplyEncoder(protoType, encoder)
+
+			flush := func() error {
+				buf := encoder.Finish()
+				if len(buf) > 0 {
+					disconnect := c.messageWriter.enqueue(buf)
+					if disconnect != nil {
+						if c.node.logger.enabled(LogLevelDebug) {
+							c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+						}
+						go func() { _ = c.close(disconnect) }()
+						return fmt.Errorf("flush error")
+					}
+				}
+				encoder.Reset()
+				return nil
+			}
+
+			var encodeErr error
+
+			write := func(rep *protocol.Reply) error {
+				rep.ID = cmd.ID
+				if rep.Error != nil {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Error()}))
+					incReplyError(cmd.Method, rep.Error.Code)
+				}
+
+				encodeErr = encoder.Encode(rep)
+				if encodeErr != nil {
+					c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
+				}
+				return encodeErr
+			}
+
+			disconnect := c.handleCommand(cmd, write, flush)
+			select {
+			case <-c.ctx.Done():
+				return
+			default:
+			}
+			if disconnect != nil {
+				if disconnect != DisconnectNormal {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+				}
+				go func() { _ = c.close(disconnect) }()
+				return
+			}
+			if encodeErr != nil {
+				go func() { _ = c.close(DisconnectServerError) }()
+				return
+			}
+			_ = flush()
+		}:
+			// function consumed by worker for processing.
 		}
 	}
 
@@ -724,7 +724,7 @@ type replyWriter struct {
 }
 
 // handle dispatches Command into correct command handler.
-func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Reply) error, flush func() error) *Disconnect {
+func (c *Client) handleCommand(cmd *protocol.Command, write func(*protocol.Reply) error, flush func() error) *Disconnect {
 	c.mu.Lock()
 	if c.status == statusClosed {
 		c.mu.Unlock()
@@ -732,21 +732,12 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 	}
 	c.mu.Unlock()
 
-	var disconnect *Disconnect
-
 	method := cmd.Method
 	params := cmd.Params
 
-	write := func(rep *protocol.Reply) error {
-		rep.ID = cmd.ID
-		if rep.Error != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Error()}))
-			incReplyError(cmd.Method, rep.Error.Code)
-		}
-		return writeFn(rep)
-	}
-
 	rw := &replyWriter{write, flush}
+
+	var disconnect *Disconnect
 
 	started := time.Now()
 	switch method {

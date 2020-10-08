@@ -47,7 +47,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		n.Shutdown(context.Background())
+		_ = n.Shutdown(context.Background())
 		done <- true
 	}()
 	<-done
