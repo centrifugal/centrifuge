@@ -74,6 +74,8 @@ const (
 	statusClosed     status = 3
 )
 
+const maxClientConcurrentCommands = 1
+
 // Client represents client connection to server.
 type Client struct {
 	events            uint64
@@ -99,6 +101,7 @@ type Client struct {
 	nextPresence      int64
 	nextExpire        int64
 	timer             *time.Timer
+	semaphore         chan struct{}
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -120,6 +123,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		pubSubSync:   recovery.NewPubSubSync(),
 		publications: newPubQueue(),
 		status:       statusConnecting,
+		semaphore:    make(chan struct{}, maxClientConcurrentCommands),
 	}
 
 	messageWriterConf := writerConfig{
@@ -500,7 +504,7 @@ func (c *Client) sendUnsub(ch string, resubscribe bool) error {
 // This method internally creates a new goroutine at moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
 // and alive callback ordering/sync problems. Will be a noop if client
-// already closed. Since this method runs a separate goroutine client
+// already closed. As this method runs a separate goroutine client
 // connection will be closed eventually (i.e. not immediately).
 func (c *Client) Disconnect(disconnect *Disconnect) error {
 	go func() {
@@ -606,10 +610,53 @@ func (c *Client) Handle(data []byte) bool {
 		return false
 	}
 
-	protoType := c.transport.Protocol().toProto()
+	var encodeErr error
 
+	protoType := c.transport.Protocol().toProto()
 	encoder := protocol.GetReplyEncoder(protoType)
 	decoder := protocol.GetCommandDecoder(protoType, data)
+
+	defer func() {
+		if encodeErr != nil {
+			return
+		}
+		protocol.PutCommandDecoder(protoType, decoder)
+		protocol.PutReplyEncoder(protoType, encoder)
+	}()
+
+	var writeMu sync.Mutex
+
+	write := func(rep *protocol.Reply) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+
+		encodeErr = encoder.Encode(rep)
+		if encodeErr != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
+		}
+		return encodeErr
+	}
+
+	flush := func() error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+
+		buf := encoder.Finish()
+		if len(buf) > 0 {
+			disconnect := c.messageWriter.enqueue(buf)
+			if disconnect != nil {
+				if c.node.logger.enabled(LogLevelDebug) {
+					c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+				}
+				go func() { _ = c.close(disconnect) }()
+				return fmt.Errorf("flush error")
+			}
+		}
+		encoder.Reset()
+		return nil
+	}
+
+	var wg sync.WaitGroup
 
 	for {
 		cmd, err := decoder.Decode()
@@ -619,54 +666,35 @@ func (c *Client) Handle(data []byte) bool {
 			}
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
 			go func() { _ = c.close(DisconnectBadRequest) }()
-			protocol.PutCommandDecoder(protoType, decoder)
-			protocol.PutReplyEncoder(protoType, encoder)
 			return false
 		}
-		var encodeErr error
-		write := func(rep *protocol.Reply) error {
-			encodeErr = encoder.Encode(rep)
-			if encodeErr != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
-			}
-			return encodeErr
+
+		if cmd.Method != protocol.MethodTypeConnect && !c.authenticated {
+			// Client must send connect command first.
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
+			go func() { _ = c.close(DisconnectBadRequest) }()
+			return false
 		}
-		flush := func() error {
-			buf := encoder.Finish()
-			if len(buf) > 0 {
-				disconnect := c.messageWriter.enqueue(buf)
-				if disconnect != nil {
-					if c.node.logger.enabled(LogLevelDebug) {
-						c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-					}
-					protocol.PutCommandDecoder(protoType, decoder)
-					protocol.PutReplyEncoder(protoType, encoder)
-					go func() { _ = c.close(disconnect) }()
-					return fmt.Errorf("flush error")
-				}
-			}
-			encoder.Reset()
-			return nil
+
+		if cmd.ID == 0 && cmd.Method != protocol.MethodTypeSend {
+			// Only send command from client can be sent without incremental ID.
+			c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
+			go func() { _ = c.close(DisconnectBadRequest) }()
+			return false
 		}
+
 		disconnect := c.handleCommand(cmd, write, flush)
 		select {
 		case <-c.ctx.Done():
-			if encodeErr == nil {
-				protocol.PutCommandDecoder(protoType, decoder)
-				protocol.PutReplyEncoder(protoType, encoder)
-			}
-			return true
+			return false
 		default:
 		}
+
 		if disconnect != nil {
 			if disconnect != DisconnectNormal {
 				c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			}
 			go func() { _ = c.close(disconnect) }()
-			if encodeErr == nil {
-				protocol.PutCommandDecoder(protoType, decoder)
-				protocol.PutReplyEncoder(protoType, encoder)
-			}
 			return false
 		}
 		if encodeErr != nil {
@@ -683,14 +711,9 @@ func (c *Client) Handle(data []byte) bool {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 			}
 			go func() { _ = c.close(disconnect) }()
-			protocol.PutCommandDecoder(protoType, decoder)
-			protocol.PutReplyEncoder(protoType, encoder)
 			return false
 		}
 	}
-
-	protocol.PutCommandDecoder(protoType, decoder)
-	protocol.PutReplyEncoder(protoType, encoder)
 
 	return true
 }
@@ -725,28 +748,14 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 
 	rw := &replyWriter{write, flush}
 
-	if cmd.ID == 0 && method != protocol.MethodTypeSend {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-		_ = rw.write(&protocol.Reply{Error: ErrorBadRequest.toProto()})
-		return nil
-	}
-
-	if method != protocol.MethodTypeConnect && !c.authenticated {
-		// Client must send connect command first.
-		_ = rw.write(&protocol.Reply{Error: ErrorUnauthorized.toProto()})
-		return nil
-	}
-
 	started := time.Now()
 	switch method {
 	case protocol.MethodTypeConnect:
 		disconnect = c.handleConnect(params, rw)
-	case protocol.MethodTypeRefresh:
-		disconnect = c.handleRefresh(params, rw)
+	case protocol.MethodTypePing:
+		disconnect = c.handlePing(params, rw)
 	case protocol.MethodTypeSubscribe:
 		disconnect = c.handleSubscribe(params, rw)
-	case protocol.MethodTypeSubRefresh:
-		disconnect = c.handleSubRefresh(params, rw)
 	case protocol.MethodTypeUnsubscribe:
 		disconnect = c.handleUnsubscribe(params, rw)
 	case protocol.MethodTypePublish:
@@ -757,12 +766,14 @@ func (c *Client) handleCommand(cmd *protocol.Command, writeFn func(*protocol.Rep
 		disconnect = c.handlePresenceStats(params, rw)
 	case protocol.MethodTypeHistory:
 		disconnect = c.handleHistory(params, rw)
-	case protocol.MethodTypePing:
-		disconnect = c.handlePing(params, rw)
 	case protocol.MethodTypeRPC:
 		disconnect = c.handleRPC(params, rw)
 	case protocol.MethodTypeSend:
 		disconnect = c.handleSend(params)
+	case protocol.MethodTypeRefresh:
+		disconnect = c.handleRefresh(params, rw)
+	case protocol.MethodTypeSubRefresh:
+		disconnect = c.handleSubRefresh(params, rw)
 	default:
 		_ = rw.write(&protocol.Reply{Error: ErrorMethodNotFound.toProto()})
 	}
