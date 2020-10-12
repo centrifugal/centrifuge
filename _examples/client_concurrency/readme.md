@@ -1,6 +1,8 @@
 Example demonstrates a scenario where client calls many subscribe and RPC commands.
 
-In this example we artificially sleep in Subscribe and RPC handlers to demonstrate that response times on frontend side are reasonable. This is achieved since Centrifuge processes client commands in parallel (with concurrency limit for a single connection).
+In this example we emulate potentially slow operation in Subscribe and RPC handlers by sleeping on 500 ms. To avoid blocking client connection read loop we run these slow operations in goroutines. A bounded semaphore inside client connect closure used to limit concurrency of operations running in goroutines for a single client connection.
+
+In real application you may want to use goroutine pools for operations to have a better control on program memory consumption. 
 
 To start example run the following command from example directory:
 

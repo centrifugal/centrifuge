@@ -64,36 +64,67 @@ func main() {
 		}, nil
 	})
 
-	node.OnConnect(func(c *centrifuge.Client) {
-		transport := c.Transport()
-		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
-	})
+	node.OnConnect(func(client *centrifuge.Client) {
 
-	node.OnAlive(func(c *centrifuge.Client) {
-		log.Printf("user %s connection is still active", c.UserID())
-	})
+		semaphore := make(chan struct{}, 16)
 
-	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
-		reply := centrifuge.SubscribeReply{}
-		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
-		time.Sleep(100 * time.Millisecond)
-		return reply, nil
-	})
+		client.OnAlive(func() {
+			log.Printf("user %s connection is still active", client.UserID())
+		})
 
-	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
-		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
-	})
+		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				cb(centrifuge.SubscribeReply{}, nil)
+			}()
+		})
 
-	node.OnRPC(func(c *centrifuge.Client, e centrifuge.RPCEvent) (centrifuge.RPCReply, error) {
-		log.Printf("RPC from user: %s, data: %s, method: %s", c.UserID(), string(e.Data), e.Method)
-		time.Sleep(100 * time.Millisecond)
-		return centrifuge.RPCReply{
-			Data: []byte(`{"year": "2020"}`),
-		}, nil
-	})
+		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
+			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
+		})
 
-	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
-		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
+		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
+			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
+			semaphore <- struct{}{}
+			go func() {
+				defer func() { <-semaphore }()
+				time.Sleep(100 * time.Millisecond)
+				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+			}()
+		})
+
+		client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
+			cb(centrifuge.HistoryReply{}, nil)
+		})
+
+		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
+			cb(centrifuge.PresenceReply{}, nil)
+		})
+
+		client.OnPresenceStats(func(e centrifuge.PresenceStatsEvent, cb centrifuge.PresenceStatsCallback) {
+			cb(centrifuge.PresenceStatsReply{}, nil)
+		})
+
+		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
+			cb(centrifuge.RefreshReply{}, nil)
+		})
+
+		client.OnSubRefresh(func(e centrifuge.SubRefreshEvent, cb centrifuge.SubRefreshCallback) {
+			cb(centrifuge.SubRefreshReply{}, nil)
+		})
+
+		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
+			log.Printf("Publish from user: %s, data: %s, channel: %s", client.UserID(), string(e.Data), e.Channel)
+			cb(centrifuge.PublishReply{}, nil)
+		})
+
+		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+		})
+
+		transport := client.Transport()
+		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 	})
 
 	if err := node.Run(); err != nil {
