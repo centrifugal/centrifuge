@@ -25,7 +25,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		n.Shutdown(context.Background())
+		_ = n.Shutdown(context.Background())
 		done <- true
 	}()
 	<-done
@@ -64,26 +64,28 @@ func main() {
 		}, nil
 	})
 
-	node.OnConnect(func(c *centrifuge.Client) {
-		log.Printf("user %s connected", c.UserID())
-	})
+	node.OnConnect(func(client *centrifuge.Client) {
+		log.Printf("user %s connected", client.UserID())
 
-	node.OnRefresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
-		log.Printf("user %s sent refresh command with token: %s", c.UserID(), e.Token)
-		if !strings.HasPrefix(e.Token, "I am ") {
-			return centrifuge.RefreshReply{}, centrifuge.DisconnectInvalidToken
-		}
-		userID := strings.TrimPrefix(e.Token, "I am ")
-		if userID != c.UserID() {
-			return centrifuge.RefreshReply{}, centrifuge.DisconnectInvalidToken
-		}
-		return centrifuge.RefreshReply{
-			ExpireAt: time.Now().Unix() + 5,
-		}, nil
-	})
+		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
+			log.Printf("user %s sent refresh command with token: %s", client.UserID(), e.Token)
+			if !strings.HasPrefix(e.Token, "I am ") {
+				cb(centrifuge.RefreshReply{}, centrifuge.DisconnectInvalidToken)
+				return
+			}
+			userID := strings.TrimPrefix(e.Token, "I am ")
+			if userID != client.UserID() {
+				cb(centrifuge.RefreshReply{}, centrifuge.DisconnectInvalidToken)
+				return
+			}
+			cb(centrifuge.RefreshReply{
+				ExpireAt: time.Now().Unix() + 5,
+			}, nil)
+		})
 
-	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
-		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
+		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+		})
 	})
 
 	if err := node.Run(); err != nil {
