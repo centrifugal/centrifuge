@@ -540,10 +540,8 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 
 			for _, recoverTestChannel := range recoverTestChannels {
 				channel := recoverTestChannel.ChannelPrefix + tt.Name
-				transport := newTestTransport()
-				ctx := context.Background()
-				newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-				client, _ := newClient(newCtx, node, transport)
+
+				client := newTestClient(t, node, "42")
 
 				for i := 1; i <= tt.NumPublications; i++ {
 					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
@@ -552,9 +550,6 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 				time.Sleep(time.Duration(tt.Sleep) * time.Second)
 
 				connectClient(t, client)
-
-				var replies []*protocol.Reply
-				rw := testReplyWriter(&replies)
 
 				_, streamTop, err := node.broker.History(channel, HistoryFilter{
 					Limit: 0,
@@ -573,10 +568,12 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 					subscribeCmd.Offset = tt.SinceOffset
 				}
 
-				subCtx := client.subscribeCmd(subscribeCmd, rw, false)
-				require.Nil(t, subCtx.disconnect)
-				require.Nil(t, replies[0].Error)
-				res := extractSubscribeResult(replies, client.Transport().Protocol())
+				rwWrapper := testReplyWriterWrapper()
+
+				disconnect := client.handleSubscribe(getJSONEncodedParams(t, subscribeCmd), rwWrapper.rw)
+				require.Nil(t, disconnect)
+				require.Nil(t, rwWrapper.replies[0].Error)
+				res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
 				require.Equal(t, tt.NumRecovered, len(res.Publications))
 				require.Equal(t, tt.Recovered, res.Recovered)
 				if len(res.Publications) > 1 {

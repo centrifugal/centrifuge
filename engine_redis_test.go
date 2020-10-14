@@ -995,18 +995,20 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node 
 	if err != nil {
 		panic(err)
 	}
-	n.OnSubscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
-		return SubscribeReply{}, nil
-	})
-	n.OnPublish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
-		return PublishReply{}, nil
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
+			cb(PublishReply{}, nil)
+		})
 	})
 	return n
 }
 
 func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bool, useCluster bool) {
 	node := nodeWithRedisEngine(t, useStreams, useCluster)
-	defer node.Shutdown(context.Background())
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
 		return ChannelOptions{

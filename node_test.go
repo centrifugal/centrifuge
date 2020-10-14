@@ -106,6 +106,7 @@ func nodeWithTestEngine() *Node {
 
 func nodeWithMemoryEngineNoHandlers() *Node {
 	c := DefaultConfig
+	c.LogLevel = LogLevelDebug
 	n, err := New(c)
 	if err != nil {
 		panic(err)
@@ -119,11 +120,13 @@ func nodeWithMemoryEngineNoHandlers() *Node {
 
 func nodeWithMemoryEngine() *Node {
 	n := nodeWithMemoryEngineNoHandlers()
-	n.OnSubscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
-		return SubscribeReply{}, nil
-	})
-	n.OnPublish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
-		return PublishReply{}, nil
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
+			cb(PublishReply{}, nil)
+		})
 	})
 	return n
 }
@@ -144,8 +147,8 @@ func TestNode_Shutdown(t *testing.T) {
 func TestClientEventHub(t *testing.T) {
 	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
-	n.OnDisconnect(func(_ *Client, _ DisconnectEvent) {})
-	require.NotNil(t, n.clientEvents.disconnectHandler)
+	n.OnConnect(func(_ *Client) {})
+	require.NotNil(t, n.clientEvents.connectHandler)
 }
 
 func TestNodeRegistry(t *testing.T) {
@@ -232,18 +235,24 @@ func TestNode_handleLeave(t *testing.T) {
 }
 
 func TestNode_Unsubscribe(t *testing.T) {
-	n := nodeWithMemoryEngine()
+	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	err := n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
-	client := newTestSubscribedClient(t, n, "42", "test_channel")
 
 	done := make(chan struct{})
-	n.OnUnsubscribe(func(client *Client, event UnsubscribeEvent) {
-		require.Equal(t, "42", client.UserID())
-		close(done)
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			require.Equal(t, "42", client.UserID())
+			close(done)
+		})
 	})
+
+	client := newTestSubscribedClient(t, n, "42", "test_channel")
 
 	err = n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
@@ -262,13 +271,16 @@ func TestNode_Disconnect(t *testing.T) {
 
 	err := n.Disconnect("42")
 	require.NoError(t, err)
-	client := newTestConnectedClient(t, n, "42")
 
 	done := make(chan struct{})
-	n.OnDisconnect(func(client *Client, event DisconnectEvent) {
-		require.Equal(t, "42", client.UserID())
-		close(done)
+	n.OnConnect(func(client *Client) {
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, "42", client.UserID())
+			close(done)
+		})
 	})
+
+	client := newTestConnectedClient(t, n, "42")
 
 	err = n.Disconnect("42")
 	require.NoError(t, err)
@@ -402,18 +414,15 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 }
 
 func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
-	transport := newTestTransport()
+	transport := newTestTransport(func() {})
 	transport.setProtocolType(protoType)
 	transport.setSink(sink)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "test_user_id"})
-	client, _ := newClient(newCtx, node, transport)
+	client := newTestClient(b, node, "test_user_id")
 	connectClient(b, client)
-	var replies []*protocol.Reply
-	rw := testReplyWriter(&replies)
+	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, rw, false)
+	}, ChannelOptions{}, SubscribeReply{}, rwWrapper.rw, false)
 	require.Nil(b, subCtx.disconnect)
 }
 
@@ -537,11 +546,16 @@ func TestNode_handleControl(t *testing.T) {
 	t.Run("Unsubscribe", func(t *testing.T) {
 		t.Parallel()
 
-		n := nodeWithMemoryEngine()
+		n := nodeWithMemoryEngineNoHandlers()
 		done := make(chan struct{})
-		n.OnUnsubscribe(func(client *Client, event UnsubscribeEvent) {
-			require.Equal(t, "42", client.UserID())
-			close(done)
+		n.OnConnect(func(client *Client) {
+			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+				cb(SubscribeReply{}, nil)
+			})
+			client.OnUnsubscribe(func(event UnsubscribeEvent) {
+				require.Equal(t, "42", client.UserID())
+				close(done)
+			})
 		})
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -583,9 +597,14 @@ func TestNode_handleControl(t *testing.T) {
 
 		n := nodeWithMemoryEngine()
 		done := make(chan struct{})
-		n.OnDisconnect(func(client *Client, event DisconnectEvent) {
-			require.Equal(t, "42", client.UserID())
-			close(done)
+		n.OnConnect(func(client *Client) {
+			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+				cb(SubscribeReply{}, nil)
+			})
+			client.OnDisconnect(func(event DisconnectEvent) {
+				require.Equal(t, "42", client.UserID())
+				close(done)
+			})
 		})
 		defer func() { _ = n.Shutdown(context.Background()) }()
 

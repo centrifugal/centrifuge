@@ -11,7 +11,6 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
-	"github.com/centrifugal/centrifuge/internal/gpool"
 	"github.com/centrifugal/centrifuge/internal/nowtime"
 
 	"github.com/FZambia/eagle"
@@ -64,15 +63,11 @@ type Node struct {
 
 	// nowTimeGetter provides access to current time.
 	nowTimeGetter nowtime.Getter
-
-	// cmdWorkerPool used to process commands received from clients.
-	cmdWorkerPool *gpool.Pool
 }
 
 const (
 	numSubLocks            = 16384
 	numSubDissolverWorkers = 64
-	workerPoolSize         = 8128
 )
 
 // New creates Node with provided Config.
@@ -106,7 +101,6 @@ func New(c Config) (*Node, error) {
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
-		cmdWorkerPool:  gpool.NewPool(workerPoolSize),
 	}
 
 	if c.LogHandler != nil {
@@ -231,14 +225,10 @@ func (n *Node) Shutdown(ctx context.Context) error {
 		}
 	}
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		_ = n.subDissolver.Close()
-	}()
-	go func() {
-		defer wg.Done()
-		_ = n.cmdWorkerPool.Close(ctx)
 	}()
 	go func() {
 		defer wg.Done()
