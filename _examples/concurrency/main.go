@@ -12,7 +12,6 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -65,7 +64,7 @@ func main() {
 	})
 
 	node.OnConnect(func(client *centrifuge.Client) {
-
+		// Declare concurrency semaphore for client connection closure.
 		semaphore := make(chan struct{}, 16)
 
 		client.OnAlive(func() {
@@ -74,7 +73,9 @@ func main() {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+			semaphore <- struct{}{}
 			go func() {
+				defer func() { <-semaphore }()
 				time.Sleep(200 * time.Millisecond)
 				cb(centrifuge.SubscribeReply{}, nil)
 			}()
@@ -145,7 +146,6 @@ func main() {
 	})
 	http.Handle("/connection/sockjs/", authMiddleware(sockjsHandler))
 
-	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
