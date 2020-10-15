@@ -198,11 +198,6 @@ func main() {
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 		})
-
-		go func() {
-			time.Sleep(2 * time.Second)
-			_ = client.Disconnect(centrifuge.DisconnectForceReconnect)
-		}()
 	})
 
 	if err := node.Run(); err != nil {
@@ -213,12 +208,25 @@ func main() {
 		// Publish personal notifications for user 42 periodically.
 		i := 1
 		for {
-			_, err := node.Publish("chat:index", []byte(`{"input": "personal `+strconv.Itoa(i)+`"}`))
+			_, err := node.Publish("#42", []byte(`{"personal": "`+strconv.Itoa(i)+`"}`))
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
 			}
 			i++
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(5000 * time.Millisecond)
+		}
+	}()
+
+	go func() {
+		// Publish to channel periodically.
+		i := 1
+		for {
+			_, err := node.Publish("chat:index", []byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`))
+			if err != nil {
+				log.Printf("error publishing to personal channel: %s", err)
+			}
+			i++
+			time.Sleep(10000 * time.Millisecond)
 		}
 	}()
 
