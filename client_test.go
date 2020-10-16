@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1102,6 +1103,159 @@ func TestClientHandleCommandNotAuthenticated(t *testing.T) {
 	case <-client.Context().Done():
 	case <-time.After(time.Second):
 		require.Fail(t, "client not closed")
+	}
+}
+
+func TestClientHandleUnknownMethod(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test",
+	})
+	cmd := &protocol.Command{ID: 1, Method: 10000, Params: params}
+	disconnect := client.handleCommand(cmd)
+	require.Nil(t, disconnect)
+}
+
+func TestClientHandleCommandWithBrokenParams(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	var numDisconnectCalls int
+	var numConnectCalls int
+	var wg sync.WaitGroup
+	wg.Add(11)
+
+	node.OnConnect(func(client *Client) {
+		numConnectCalls++
+
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+
+		client.OnRPC(func(e RPCEvent, cb RPCCallback) {
+			cb(RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+		})
+
+		client.OnMessage(func(event MessageEvent) {})
+
+		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+			cb(HistoryReply{}, nil)
+		})
+
+		client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
+			cb(PresenceReply{}, nil)
+		})
+
+		client.OnPresenceStats(func(e PresenceStatsEvent, cb PresenceStatsCallback) {
+			cb(PresenceStatsReply{}, nil)
+		})
+
+		client.OnRefresh(func(e RefreshEvent, cb RefreshCallback) {
+			cb(RefreshReply{}, nil)
+		})
+
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			cb(SubRefreshReply{}, nil)
+		})
+
+		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
+			cb(PublishReply{}, nil)
+		})
+
+		client.OnDisconnect(func(event DisconnectEvent) {
+			numDisconnectCalls++
+			require.Equal(t, DisconnectBadRequest, event.Disconnect)
+			wg.Done()
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+
+	data, err := json.Marshal(&protocol.Command{
+		ID: 1, Method: protocol.MethodTypeConnect, Params: []byte("[]"),
+	})
+	require.NoError(t, err)
+	proceed := client.Handle(data)
+	require.False(t, proceed)
+	select {
+	case <-client.Context().Done():
+	case <-time.After(time.Second):
+		require.Fail(t, "client not closed")
+	}
+	// Check no connect and no disconnect event called.
+	require.Equal(t, 0, numDisconnectCalls)
+	require.Equal(t, 0, numConnectCalls)
+
+	// Now check other methods.
+	methods := []protocol.MethodType{
+		protocol.MethodTypeSubscribe,
+		protocol.MethodTypePing,
+		protocol.MethodTypePublish,
+		protocol.MethodTypeUnsubscribe,
+		protocol.MethodTypePresence,
+		protocol.MethodTypePresenceStats,
+		protocol.MethodTypeHistory,
+		protocol.MethodTypeRefresh,
+		protocol.MethodTypeRPC,
+		protocol.MethodTypeSend,
+		protocol.MethodTypeSubRefresh,
+	}
+
+	for _, method := range methods {
+		client = newTestClient(t, node, "42")
+		connectClient(t, client)
+		data, err := json.Marshal(&protocol.Command{
+			ID: 1, Method: method, Params: []byte("[]"),
+		})
+		require.NoError(t, err)
+		proceed := client.Handle(data)
+		require.False(t, proceed)
+		select {
+		case <-client.Context().Done():
+		case <-time.After(time.Second):
+			require.Fail(t, "client not closed")
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting wait group done")
+	}
+}
+
+func TestClientOnAlive(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.ClientPresenceUpdateInterval = time.Second
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+	var closeOnce sync.Once
+
+	node.OnConnect(func(client *Client) {
+		client.OnAlive(func() {
+			closeOnce.Do(func() {
+				close(done)
+			})
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting done close")
 	}
 }
 
