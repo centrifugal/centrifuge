@@ -1123,13 +1123,16 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
+	var counterMu sync.Mutex
 	var numDisconnectCalls int
 	var numConnectCalls int
 	var wg sync.WaitGroup
 	wg.Add(11)
 
 	node.OnConnect(func(client *Client) {
+		counterMu.Lock()
 		numConnectCalls++
+		counterMu.Unlock()
 
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{}, nil)
@@ -1166,7 +1169,9 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 		})
 
 		client.OnDisconnect(func(event DisconnectEvent) {
+			counterMu.Lock()
 			numDisconnectCalls++
+			counterMu.Unlock()
 			require.Equal(t, DisconnectBadRequest, event.Disconnect)
 			wg.Done()
 		})
@@ -1186,8 +1191,10 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 		require.Fail(t, "client not closed")
 	}
 	// Check no connect and no disconnect event called.
+	counterMu.Lock()
 	require.Equal(t, 0, numDisconnectCalls)
 	require.Equal(t, 0, numConnectCalls)
+	counterMu.Unlock()
 
 	// Now check other methods.
 	methods := []protocol.MethodType{
