@@ -217,14 +217,12 @@ func TestHubBroadcastPublication(t *testing.T) {
 			err := n.hub.broadcastPublication(
 				"not_test_channel",
 				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
-				&ChannelOptions{},
 			)
 
 			// Broadcast to existed channel.
 			err = n.hub.broadcastPublication(
 				"test_channel",
 				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
-				&ChannelOptions{},
 			)
 			require.NoError(t, err)
 			select {

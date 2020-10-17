@@ -30,12 +30,19 @@ type ConnectReply struct {
 	Credentials *Credentials
 	// Data allows to set custom data in connect reply.
 	Data []byte
-	// Channels slice contains channels to subscribe connection to on server-side.
-	Channels []string
+	// Subs slice contains channels to subscribe connection to on server-side.
+	Subscriptions []Subscription
 	// ClientSideRefresh tells library to use client-side refresh logic:
 	// i.e. send refresh commands with new connection token. If not set
 	// then server-side refresh mechanism will be used.
 	ClientSideRefresh bool
+}
+
+type Subscription struct {
+	Channel   string
+	Recover   bool
+	Presence  bool
+	JoinLeave bool
 }
 
 // ConnectingHandler called when new client authenticates on server.
@@ -128,6 +135,10 @@ type SubscribeReply struct {
 	// SubRefresh commands with new Subscription Token. If not set then server-side
 	// SubRefresh handler will be used.
 	ClientSideRefresh bool
+
+	Recover   bool
+	Presence  bool
+	JoinLeave bool
 }
 
 // SubscribeHandler called when client wants to subscribe on channel.

@@ -13,6 +13,13 @@ func WithHistory(size int, ttl time.Duration) PublishOption {
 	}
 }
 
+// WithHistory tells broker to save message to history stream.
+func WithClientInfo(info *ClientInfo) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.clientInfo = info
+	}
+}
+
 // SkipHistory tells broker to skip saving message to history stream.
 // Deprecated – will be removed in Centrifuge v0.13.0.
 func SkipHistory() PublishOption {
