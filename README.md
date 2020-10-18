@@ -219,7 +219,7 @@ Some useful advices about library here.
 
 #### Connection life cycle
 
-Here is a sequence of events for connection:
+Let's describe some aspects related to connection life cycle and event handling in Centrifuge:
 
 * If you set middleware for transport handlers (`WebsocketHandler`, `SockjsHandler`) – then it will be called first before a client sent any command to a server and handler had a chance to start working. Just like a regular HTTP middleware. You can put `Credentials` to `Context` to authenticate connection.
 * `node.OnConnecting` called as soon as client sent `Connect` command to server. At this point no `Client` instance exists. You have incoming `Context` and `Transport` information. You still can authenticate Client at this point (based on string token sent from client side or any other way). Also, you can add extra data to context and return modified context to Centrifuge. Context cancelled as soon as client connection closes. This handler is synchronous and connection read loop can't proceed until you return `ConnectReply`. 
