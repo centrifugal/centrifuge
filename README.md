@@ -217,6 +217,18 @@ Keep in mind that Centrifuge library is not a framework to build chat apps. It's
 
 Some useful advices about library here.
 
+#### Connection life cycle
+
+Here is a sequence of events for connection:
+
+* If you set middleware for transport handlers (`WebsocketHandler`, `SockjsHandler`) – then it will be called first before a client sent any command to a server and handler had a chance to start working. Just like a regular HTTP middleware. You can put `Credentials` to `Context` to authenticate connection.
+* `node.OnConnecting` called as soon as client sent `Connect` command to server. At this point no `Client` instance exists. You have incoming `Context` and `Transport` information. You still can authenticate Client at this point (based on string token sent from client side or any other way). Also, you can add extra data to context and return modified context to Centrifuge. Context cancelled as soon as client connection closes. This handler is synchronous and connection read loop can't proceed until you return `ConnectReply`. 
+* `node.OnConnect` then called (after a reply to `Connect` command already written to connection). Inside `OnConnect` closure you have a possibility to define per-connection event handlers. If particular handler not set then client will get `ErrorNotAvailable` errors requesting it. Remember that none of event handlers available in Centrifuge should block forever – do minimal work, start separate goroutines if you need blocking code.
+* Client initiated request handlers called one by one from connection reading goroutine. This includes `OnSubscribe`, `OnPublish`, `OnPresence`, `OnPresenceStats`, `OnHistory`, client-side `OnRefresh`, client-side `OnSubRefresh`.
+* Other handlers like `OnAlive`, `OnDisconnect`, server-side `OnSubRefresh`, server-side `OnRefresh` called from separate internal goroutines.
+* `OnAlive` handler must not be called after `OnDisconnect`.
+* Client initiated request handlers can be processed asynchronously in goroutines to manage operation concurrency. This is achieved using callback functions. See [concurrency](https://github.com/centrifugal/centrifuge/tree/master/_examples/concurrency) example for more details.
+
 #### Logging
 
 Centrifuge library exposes logs with different log level. In your app you can set special function to handle these log entries in a way you want.
