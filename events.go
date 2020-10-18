@@ -65,7 +65,8 @@ type RefreshReply struct {
 	Info []byte
 }
 
-// RefreshCallback ...
+// RefreshCallback should be called as soon as handler decides what to do
+// with connection refresh event.
 type RefreshCallback func(RefreshReply, error)
 
 // RefreshHandler called when it's time to validate client connection and
@@ -115,6 +116,8 @@ type SubscribeEvent struct {
 	Token string
 }
 
+// SubscribeCallback should be called as soon as handler decides what to do
+// with connection subscribe event.
 type SubscribeCallback func(SubscribeReply, error)
 
 // SubscribeReply contains fields determining the reaction on subscribe event.
@@ -165,6 +168,8 @@ type PublishReply struct {
 	Result *PublishResult
 }
 
+// PublishCallback should be called as soon as handler decides what to do
+// with connection PublishEvent.
 type PublishCallback func(PublishReply, error)
 
 // PublishHandler called when client publishes into channel.
@@ -193,7 +198,8 @@ type SubRefreshReply struct {
 	Info []byte
 }
 
-// SubRefreshCallback ...
+// SubRefreshCallback should be called as soon as handler decides what to do
+// with connection SubRefreshEvent.
 type SubRefreshCallback func(SubRefreshReply, error)
 
 // SubRefreshHandler called when it's time to validate client subscription to channel and
@@ -220,7 +226,8 @@ type RPCReply struct {
 	Data []byte
 }
 
-// RPCCallback ...
+// RPCCallback should be called as soon as handler decides what to do
+// with connection RPCEvent.
 type RPCCallback func(RPCReply, error)
 
 // RPCHandler must handle incoming command from client.
@@ -243,6 +250,8 @@ type PresenceEvent struct {
 // PresenceReply contains fields determining the reaction on presence request.
 type PresenceReply struct{}
 
+// PresenceCallback should be called as soon as handler decides what to do
+// with connection PresenceEvent.
 type PresenceCallback func(PresenceReply, error)
 
 // PresenceHandler called when presence request received from client.
@@ -256,6 +265,8 @@ type PresenceStatsEvent struct {
 // PresenceStatsReply contains fields determining the reaction on presence request.
 type PresenceStatsReply struct{}
 
+// PresenceStatsCallback should be called as soon as handler decides what to do
+// with connection PresenceStatsEvent.
 type PresenceStatsCallback func(PresenceStatsReply, error)
 
 // PresenceStatsHandler must handle incoming command from client.
@@ -269,6 +280,8 @@ type HistoryEvent struct {
 // HistoryReply contains fields determining the reaction on history request.
 type HistoryReply struct{}
 
+// HistoryCallback should be called as soon as handler decides what to do
+// with connection HistoryEvent.
 type HistoryCallback func(HistoryReply, error)
 
 // HistoryHandler must handle incoming command from client.
