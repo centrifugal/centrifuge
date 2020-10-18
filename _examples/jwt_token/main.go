@@ -60,21 +60,25 @@ func main() {
 		HMACSecretKey: "secret",
 	})
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
 		log.Printf("client connecting with token: %s", e.Token)
 		token, err := tokenVerifier.VerifyConnectToken(e.Token)
 		if err != nil {
 			if err == jwt.ErrTokenExpired {
-				return centrifuge.ConnectReply{}, centrifuge.ErrorTokenExpired
+				return centrifuge.ConnectResult{}, centrifuge.ErrorTokenExpired
 			}
-			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
+			return centrifuge.ConnectResult{}, centrifuge.DisconnectInvalidToken
 		}
-		return centrifuge.ConnectReply{
+		subs := make([]centrifuge.Subscription, 0, len(token.Channels))
+		for _, ch := range token.Channels {
+			subs = append(subs, centrifuge.Subscription{Channel: ch})
+		}
+		return centrifuge.ConnectResult{
 			Credentials: &centrifuge.Credentials{
 				UserID:   token.UserID,
 				ExpireAt: token.ExpireAt,
 			},
-			Channels: token.Channels,
+			Subscriptions: subs,
 		}, nil
 	})
 
@@ -84,31 +88,31 @@ func main() {
 
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
 			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			cb(centrifuge.RefreshReply{ExpireAt: time.Now().Unix() + 60}, nil)
+			cb(centrifuge.RefreshResult{ExpireAt: time.Now().Unix() + 60}, nil)
 		})
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			if !channelSubscribeAllowed(e.Channel) {
-				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.SubscribeResult{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
-			cb(centrifuge.SubscribeReply{}, nil)
+			cb(centrifuge.SubscribeResult{}, nil)
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 			if !client.IsSubscribed(e.Channel) {
-				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.PublishResult{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)
 			if err != nil {
-				cb(centrifuge.PublishReply{}, centrifuge.ErrorBadRequest)
+				cb(centrifuge.PublishResult{}, centrifuge.ErrorBadRequest)
 				return
 			}
-			cb(centrifuge.PublishReply{}, nil)
+			cb(node.Publish(e.Channel, e.Data))
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {

@@ -52,8 +52,8 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		return centrifuge.ConnectReply{
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
+		return centrifuge.ConnectResult{
 			Credentials: &centrifuge.Credentials{
 				UserID: "",
 			},
@@ -71,7 +71,7 @@ func main() {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("worm subscribed on %s", e.Channel)
-			cb(centrifuge.SubscribeReply{}, nil)
+			cb(centrifuge.SubscribeResult{}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {

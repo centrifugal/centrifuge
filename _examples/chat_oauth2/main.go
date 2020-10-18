@@ -107,12 +107,12 @@ func createCentrifugeNode() (*centrifuge.Node, error) {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("client %s subscribes on channel %s", client.UserID(), e.Channel)
-			cb(centrifuge.SubscribeReply{}, nil)
+			cb(centrifuge.SubscribeResult{}, nil)
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("client %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			cb(centrifuge.PublishReply{}, nil)
+			cb(node.Publish(e.Channel, e.Data))
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {

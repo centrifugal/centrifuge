@@ -361,7 +361,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext chan
 			resultCB(false)
 			return
 		}
-		cb := func(reply SubRefreshReply, err error) {
+		cb := func(reply SubRefreshResult, err error) {
 			if err != nil {
 				resultCB(false)
 				return
@@ -886,7 +886,7 @@ func (c *Client) expire() {
 		return
 	}
 	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
-		cb := func(reply RefreshReply, err error) {
+		cb := func(reply RefreshResult, err error) {
 			if err != nil {
 				switch t := err.(type) {
 				case *Disconnect:
@@ -992,7 +992,7 @@ func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
 		Token:             cmd.Token,
 	}
 
-	cb := func(reply RefreshReply, err error) {
+	cb := func(reply RefreshResult, err error) {
 		defer rw.done()
 
 		if err != nil {
@@ -1076,7 +1076,7 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 		Token:   cmd.Token,
 	}
 
-	cb := func(reply SubscribeReply, err error) {
+	cb := func(reply SubscribeResult, err error) {
 		defer rw.done()
 
 		if err != nil {
@@ -1097,7 +1097,7 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 
 		_ = rw.flush()
 
-		if ctx.chOpts.JoinLeave && ctx.clientInfo != nil {
+		if channelHasFlag(ctx.channelContext.flags, flagJoinLeave) && ctx.clientInfo != nil {
 			go func() { _ = c.node.publishJoin(cmd.Channel, ctx.clientInfo) }()
 		}
 	}
@@ -1148,7 +1148,7 @@ func (c *Client) handleSubRefresh(params protocol.Raw, rw *replyWriter) error {
 		Token:             cmd.Token,
 	}
 
-	cb := func(reply SubRefreshReply, err error) {
+	cb := func(reply SubRefreshResult, err error) {
 		defer rw.done()
 
 		if err != nil {
@@ -1247,23 +1247,12 @@ func (c *Client) handlePublish(params protocol.Raw, rw *replyWriter) error {
 		Info:    info,
 	}
 
-	cb := func(reply PublishReply, err error) {
+	cb := func(_ PublishResult, err error) {
 		defer rw.done()
 
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
 			return
-		}
-
-		publishResult := reply.Result
-
-		if publishResult == nil {
-			_, err := c.node.publish(channel, data, WithClientInfo(info))
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error publishing", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				c.writeErrorFlush(rw, toClientErr(err))
-				return
-			}
 		}
 
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodePublishResult(&protocol.PublishResult{})
@@ -1299,17 +1288,10 @@ func (c *Client) handlePresence(params protocol.Raw, rw *replyWriter) error {
 		Channel: channel,
 	}
 
-	cb := func(reply PresenceReply, err error) {
+	cb := func(result PresenceResult, err error) {
 		defer rw.done()
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
-			return
-		}
-
-		result, err := c.node.Presence(channel)
-		if err != nil {
-			c.node.logger.log(newLogEntry(errLogLevel(err), "error getting presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			c.writeErrorFlush(rw, toClientErr(err))
 			return
 		}
 
@@ -1353,17 +1335,10 @@ func (c *Client) handlePresenceStats(params protocol.Raw, rw *replyWriter) error
 		Channel: channel,
 	}
 
-	cb := func(reply PresenceStatsReply, err error) {
+	cb := func(result PresenceStatsResult, err error) {
 		defer rw.done()
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
-			return
-		}
-
-		result, err := c.node.PresenceStats(channel)
-		if err != nil {
-			c.node.logger.log(newLogEntry(errLogLevel(err), "error getting presence stats", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			c.writeErrorFlush(rw, toClientErr(err))
 			return
 		}
 
@@ -1403,22 +1378,15 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		Channel: channel,
 	}
 
-	cb := func(reply HistoryReply, err error) {
+	cb := func(result HistoryResult, err error) {
 		defer rw.done()
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
 			return
 		}
 
-		historyResult, err := c.node.fullHistory(channel)
-		if err != nil {
-			c.node.logger.log(newLogEntry(errLogLevel(err), "error getting history", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			c.writeErrorFlush(rw, toClientErr(err))
-			return
-		}
-
-		pubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
-		for _, pub := range historyResult.Publications {
+		pubs := make([]*protocol.Publication, 0, len(result.Publications))
+		for _, pub := range result.Publications {
 			protoPub := pubToProto(pub)
 			if hasFlag(CompatibilityFlags, UseSeqGen) {
 				protoPub.Seq, protoPub.Gen = recovery.UnpackUint64(protoPub.Offset)
@@ -1494,7 +1462,7 @@ func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) error {
 		Data:   cmd.Data,
 	}
 
-	cb := func(reply RPCReply, err error) {
+	cb := func(reply RPCResult, err error) {
 		defer rw.done()
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
@@ -1710,7 +1678,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 						disconnect: validateDisconnect,
 					}
 				} else {
-					subCtx = c.subscribeCmd(subCmd, SubscribeReply{
+					subCtx = c.subscribeCmd(subCmd, SubscribeResult{
 						Recover: sub.Recover, JoinLeave: sub.JoinLeave, Presence: sub.Presence,
 					}, rw, true)
 				}
@@ -1758,7 +1726,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 	if len(subCtxMap) > 0 {
 		for channel, subCtx := range subCtxMap {
 			go func(channel string, subCtx subscribeContext) {
-				if subCtx.chOpts.JoinLeave && subCtx.clientInfo != nil {
+				if channelHasFlag(subCtx.channelContext.flags, flagJoinLeave) && subCtx.clientInfo != nil {
 					_ = c.node.publishJoin(channel, subCtx.clientInfo)
 				}
 			}(channel, subCtx)
@@ -1780,7 +1748,7 @@ func (c *Client) Subscribe(channel string) error {
 	if validateDisconnect != nil {
 		return validateDisconnect
 	}
-	subCtx := c.subscribeCmd(subCmd, SubscribeReply{}, nil, true)
+	subCtx := c.subscribeCmd(subCmd, SubscribeResult{}, nil, true)
 	if subCtx.err != nil {
 		return subCtx.err
 	}
@@ -1862,7 +1830,6 @@ func errorDisconnectContext(replyError *Error, disconnect *Disconnect) subscribe
 
 type subscribeContext struct {
 	result         *protocol.SubscribeResult
-	chOpts         ChannelOptions
 	clientInfo     *ClientInfo
 	err            *Error
 	disconnect     *Disconnect
@@ -1894,7 +1861,7 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 // on channel, if channel if private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
-func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeReply, rw *replyWriter, serverSide bool) subscribeContext {
+func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeResult, rw *replyWriter, serverSide bool) subscribeContext {
 
 	ctx := subscribeContext{}
 	res := &protocol.SubscribeResult{}

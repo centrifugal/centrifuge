@@ -73,9 +73,9 @@ func main() {
 	})
 	node.SetEngine(engine)
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
-		return centrifuge.ConnectReply{
+		return centrifuge.ConnectResult{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
 			Subscriptions: []centrifuge.Subscription{
@@ -113,7 +113,7 @@ func main() {
 
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
 			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			cb(centrifuge.RefreshReply{
+			cb(centrifuge.RefreshResult{
 				ExpireAt: time.Now().Unix() + 60,
 			}, nil)
 		})
@@ -121,15 +121,14 @@ func main() {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			if !channelSubscribeAllowed(e.Channel) {
-				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.SubscribeResult{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
-			reply := centrifuge.SubscribeReply{
+			cb(centrifuge.SubscribeResult{
 				Recover:   true,
 				Presence:  true,
 				JoinLeave: true,
-			}
-			cb(reply, nil)
+			}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -137,52 +136,42 @@ func main() {
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			reply := centrifuge.PublishReply{}
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 			if !client.IsSubscribed(e.Channel) {
-				cb(reply, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.PublishResult{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
+
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)
 			if err != nil {
-				cb(reply, centrifuge.ErrorBadRequest)
+				cb(centrifuge.PublishResult{}, centrifuge.ErrorBadRequest)
 				return
 			}
 			msg.Timestamp = time.Now().Unix()
 			data, _ := json.Marshal(msg)
 
-			// In this example we take over publish since we want to publish modified data to channel.
-			// We could also return an empty PublishReply to let Centrifuge proceed with publish itself
-			// and just let client publication pass through towards a channel.
-			if result, err := node.Publish(
+			cb(node.Publish(
 				e.Channel, data,
 				centrifuge.WithHistory(300, time.Minute),
 				centrifuge.WithClientInfo(e.Info),
-			); err != nil {
-				cb(reply, err)
-				return
-			} else {
-				reply.Result = &result
-			}
-			cb(reply, nil)
+			))
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
-			cb(centrifuge.RPCReply{
+			cb(centrifuge.RPCResult{
 				Data: []byte(`{"year": "2020"}`),
 			}, nil)
 		})
 
 		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
 			log.Printf("user %s calls presence on %s", client.UserID(), e.Channel)
-			reply := centrifuge.PresenceReply{}
 			if !client.IsSubscribed(e.Channel) {
-				cb(reply, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.PresenceResult{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
-			cb(reply, nil)
+			cb(node.Presence(e.Channel))
 		})
 
 		client.OnMessage(func(e centrifuge.MessageEvent) {
@@ -192,11 +181,6 @@ func main() {
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 		})
-
-		go func() {
-			time.Sleep(5 * time.Second)
-			_ = client.Disconnect(centrifuge.DisconnectForceReconnect)
-		}()
 	})
 
 	if err := node.Run(); err != nil {
@@ -212,7 +196,7 @@ func main() {
 				log.Printf("error publishing to personal channel: %s", err)
 			}
 			i++
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10000 * time.Millisecond)
 		}
 	}()
 

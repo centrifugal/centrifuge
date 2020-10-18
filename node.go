@@ -848,12 +848,6 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 	}, nil
 }
 
-// fullHistory extracts full history in channel.
-func (n *Node) fullHistory(ch string) (HistoryResult, error) {
-	incActionCount("history_full")
-	return n.History(ch, WithNoLimit())
-}
-
 // recoverHistory recovers publications since last UID seen by client.
 func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
 	incActionCount("history_recover")

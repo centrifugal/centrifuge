@@ -136,7 +136,7 @@ func TestHubDisconnect(t *testing.T) {
 
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{}, nil)
+			cb(SubscribeResult{}, nil)
 		})
 	})
 

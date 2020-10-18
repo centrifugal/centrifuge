@@ -96,17 +96,17 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
 		// Let's include user email into connect reply, so we can display user name in chat.
 		// This is an optional step actually.
 		cred, ok := centrifuge.GetCredentials(ctx)
 		if !ok {
-			return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+			return centrifuge.ConnectResult{}, centrifuge.DisconnectServerError
 		}
 		data, _ := json.Marshal(connectData{
 			Email: cred.UserID,
 		})
-		return centrifuge.ConnectReply{
+		return centrifuge.ConnectResult{
 			Data: data,
 		}, nil
 	})
@@ -136,14 +136,14 @@ func main() {
 
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
 			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			cb(centrifuge.RefreshReply{
+			cb(centrifuge.RefreshResult{
 				ExpireAt: time.Now().Unix() + 10,
 			}, nil)
 		})
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			cb(centrifuge.SubscribeReply{}, nil)
+			cb(centrifuge.SubscribeResult{}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -155,15 +155,15 @@ func main() {
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)
 			if err != nil {
-				cb(centrifuge.PublishReply{}, centrifuge.ErrorBadRequest)
+				cb(centrifuge.PublishResult{}, centrifuge.ErrorBadRequest)
 				return
 			}
-			cb(centrifuge.PublishReply{}, nil)
+			cb(node.Publish(e.Channel, e.Data))
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 			log.Printf("RPC from user: %s, data: %s", client.UserID(), string(e.Data))
-			cb(centrifuge.RPCReply{
+			cb(centrifuge.RPCResult{
 				Data: []byte(`{"year": "2020"}`),
 			}, nil)
 		})

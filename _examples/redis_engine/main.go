@@ -54,15 +54,6 @@ func main() {
 	cfg := centrifuge.DefaultConfig
 	cfg.LogLevel = centrifuge.LogLevelDebug
 	cfg.LogHandler = handleLog
-	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
-		return centrifuge.ChannelOptions{
-			Presence:        true,
-			JoinLeave:       true,
-			HistorySize:     100,
-			HistoryLifetime: 300,
-			HistoryRecover:  true,
-		}, true, nil
-	}
 
 	node, _ := centrifuge.New(cfg)
 
@@ -72,7 +63,11 @@ func main() {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			cb(centrifuge.SubscribeReply{}, nil)
+			cb(centrifuge.SubscribeResult{
+				Presence:  true,
+				JoinLeave: true,
+				Recover:   true,
+			}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -81,7 +76,7 @@ func main() {
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			cb(centrifuge.PublishReply{}, nil)
+			cb(node.Publish(e.Channel, e.Data, centrifuge.WithHistory(300, 5*time.Minute)))
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {

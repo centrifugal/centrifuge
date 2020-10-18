@@ -997,7 +997,7 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node 
 	}
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{}, nil)
+			cb(SubscribeResult{}, nil)
 		})
 		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
 			cb(PublishReply{}, nil)

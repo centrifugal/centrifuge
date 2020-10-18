@@ -60,8 +60,8 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		return centrifuge.ConnectReply{
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
+		return centrifuge.ConnectResult{
 			Credentials: &centrifuge.Credentials{
 				UserID: "",
 			},
@@ -93,21 +93,21 @@ func main() {
 
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
 			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			cb(centrifuge.RefreshReply{
+			cb(centrifuge.RefreshResult{
 				ExpireAt: time.Now().Unix() + 60,
 			}, nil)
 		})
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			cb(centrifuge.SubscribeReply{
+			cb(centrifuge.SubscribeResult{
 				ExpireAt: time.Now().Unix() + 60,
 			}, nil)
 		})
 
 		client.OnSubRefresh(func(e centrifuge.SubRefreshEvent, cb centrifuge.SubRefreshCallback) {
 			log.Printf("user %s subscription on channel %s is going to expire, refreshing", client.UserID(), e.Channel)
-			cb(centrifuge.SubRefreshReply{
+			cb(centrifuge.SubRefreshResult{
 				ExpireAt: time.Now().Unix() + 60,
 			}, nil)
 		})
@@ -121,15 +121,15 @@ func main() {
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)
 			if err != nil {
-				cb(centrifuge.PublishReply{}, centrifuge.ErrorBadRequest)
+				cb(centrifuge.PublishResult{}, centrifuge.ErrorBadRequest)
 				return
 			}
-			cb(centrifuge.PublishReply{}, nil)
+			cb(node.Publish(e.Channel, e.Data))
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 			log.Printf("RPC from user: %s, data: %s", client.UserID(), string(e.Data))
-			cb(centrifuge.RPCReply{
+			cb(centrifuge.RPCResult{
 				Data: []byte(`{"year": "2020"}`),
 			}, nil)
 		})

@@ -54,12 +54,14 @@ func main() {
 	})
 	node.SetEngine(engine)
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
-		return centrifuge.ConnectReply{
+		return centrifuge.ConnectResult{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
-			Channels: []string{"#" + cred.UserID},
+			Subscriptions: []centrifuge.Subscription{
+				{Channel: "#" + cred.UserID},
+			},
 		}, nil
 	})
 
@@ -77,7 +79,7 @@ func main() {
 			go func() {
 				defer func() { <-semaphore }()
 				time.Sleep(200 * time.Millisecond)
-				cb(centrifuge.SubscribeReply{}, nil)
+				cb(centrifuge.SubscribeResult{}, nil)
 			}()
 		})
 
@@ -91,33 +93,16 @@ func main() {
 			go func() {
 				defer func() { <-semaphore }()
 				time.Sleep(100 * time.Millisecond)
-				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+				cb(centrifuge.RPCResult{Data: []byte(`{"year": "2020"}`)}, nil)
 			}()
 		})
 
-		client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
-			cb(centrifuge.HistoryReply{}, nil)
-		})
-
-		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
-			cb(centrifuge.PresenceReply{}, nil)
-		})
-
-		client.OnPresenceStats(func(e centrifuge.PresenceStatsEvent, cb centrifuge.PresenceStatsCallback) {
-			cb(centrifuge.PresenceStatsReply{}, nil)
-		})
-
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
-			cb(centrifuge.RefreshReply{}, nil)
+			cb(centrifuge.RefreshResult{}, nil)
 		})
 
 		client.OnSubRefresh(func(e centrifuge.SubRefreshEvent, cb centrifuge.SubRefreshCallback) {
-			cb(centrifuge.SubRefreshReply{}, nil)
-		})
-
-		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			log.Printf("Publish from user: %s, data: %s, channel: %s", client.UserID(), string(e.Data), e.Channel)
-			cb(centrifuge.PublishReply{}, nil)
+			cb(centrifuge.SubRefreshResult{}, nil)
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
