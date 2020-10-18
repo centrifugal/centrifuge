@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -327,115 +328,111 @@ func TestClientSubscribe(t *testing.T) {
 	require.Equal(t, ErrorAlreadySubscribed, err)
 }
 
-//
-//func TestClientSubscribeReceivePublication(t *testing.T) {
-//	node := nodeWithMemoryEngine()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//	transport := newTestTransport(func() {})
-//	transport.sink = make(chan []byte, 100)
-//	ctx := context.Background()
-//	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-//	client, _ := newClient(newCtx, node, transport)
-//
-//	connectClient(t, client)
-//
-//	rwWrapper := testReplyWriterWrapper()
-//
-//	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
-//		Channel: "test",
-//	}, ChannelOptions{}, SubscribeResult{}, rwWrapper.rw, false)
-//	require.Nil(t, subCtx.disconnect)
-//	require.Nil(t, rwWrapper.replies[0].Error)
-//
-//	done := make(chan struct{})
-//	go func() {
-//		for data := range transport.sink {
-//			if strings.Contains(string(data), "test message") {
-//				close(done)
-//			}
-//		}
-//	}()
-//
-//	_, err := node.Publish("test", []byte(`{"text": "test message"}`))
-//	require.NoError(t, err)
-//
-//	select {
-//	case <-time.After(time.Second):
-//		require.Fail(t, "timeout receiving publication")
-//	case <-done:
-//	}
-//}
-//
-//func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
-//	node := nodeWithMemoryEngine()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//	setTestChannelOptions(&node.config, ChannelOptions{
-//		HistoryLifetime: 100,
-//		HistorySize:     10,
-//	})
-//	transport := newTestTransport(func() {})
-//	transport.sink = make(chan []byte, 100)
-//	ctx := context.Background()
-//	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-//	client, _ := newClient(newCtx, node, transport)
-//
-//	connectClient(t, client)
-//
-//	rwWrapper := testReplyWriterWrapper()
-//
-//	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
-//		Channel: "test",
-//	}, ChannelOptions{}, SubscribeResult{}, rwWrapper.rw, false)
-//	require.Nil(t, subCtx.disconnect)
-//	require.Nil(t, rwWrapper.replies[0].Error)
-//
-//	done := make(chan struct{})
-//	go func() {
-//		var offset uint64 = 1
-//		for data := range transport.sink {
-//			if strings.Contains(string(data), "test message") {
-//				dec := json.NewDecoder(strings.NewReader(string(data)))
-//				for {
-//					var push struct {
-//						Result struct {
-//							Channel string
-//							Data    struct {
-//								Offset uint64
-//							}
-//						}
-//					}
-//					err := dec.Decode(&push)
-//					if err == io.EOF {
-//						break
-//					}
-//					require.NoError(t, err)
-//					if push.Result.Data.Offset != offset {
-//						require.Fail(t, fmt.Sprintf("wrong offset: %d != %d", push.Result.Data.Offset, offset))
-//					}
-//					offset++
-//					if offset > 3 {
-//						close(done)
-//					}
-//				}
-//			}
-//		}
-//	}()
-//
-//	// Send 3 publications, expect client to receive them with
-//	// incremental sequence numbers.
-//	_, err := node.Publish("test", []byte(`{"text": "test message 1"}`))
-//	require.NoError(t, err)
-//	_, err = node.Publish("test", []byte(`{"text": "test message 2"}`))
-//	require.NoError(t, err)
-//	_, err = node.Publish("test", []byte(`{"text": "test message 3"}`))
-//	require.NoError(t, err)
-//
-//	select {
-//	case <-time.After(time.Second):
-//		require.Fail(t, "timeout receiving publications")
-//	case <-done:
-//	}
-//}
+func TestClientSubscribeReceivePublication(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport(func() {})
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+
+	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
+		Channel: "test",
+	}, SubscribeResult{}, rwWrapper.rw, false)
+	require.Nil(t, subCtx.disconnect)
+	require.Nil(t, rwWrapper.replies[0].Error)
+
+	done := make(chan struct{})
+	go func() {
+		for data := range transport.sink {
+			if strings.Contains(string(data), "test message") {
+				close(done)
+			}
+		}
+	}()
+
+	_, err := node.Publish("test", []byte(`{"text": "test message"}`))
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout receiving publication")
+	case <-done:
+	}
+}
+
+func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport(func() {})
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+
+	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
+		Channel: "test",
+	}, SubscribeResult{}, rwWrapper.rw, false)
+	require.Nil(t, subCtx.disconnect)
+	require.Nil(t, rwWrapper.replies[0].Error)
+
+	done := make(chan struct{})
+	go func() {
+		var offset uint64 = 1
+		for data := range transport.sink {
+			if strings.Contains(string(data), "test message") {
+				dec := json.NewDecoder(strings.NewReader(string(data)))
+				for {
+					var push struct {
+						Result struct {
+							Channel string
+							Data    struct {
+								Offset uint64
+							}
+						}
+					}
+					err := dec.Decode(&push)
+					if err == io.EOF {
+						break
+					}
+					require.NoError(t, err)
+					if push.Result.Data.Offset != offset {
+						require.Fail(t, fmt.Sprintf("wrong offset: %d != %d", push.Result.Data.Offset, offset))
+					}
+					offset++
+					if offset > 3 {
+						close(done)
+					}
+				}
+			}
+		}
+	}()
+
+	// Send 3 publications, expect client to receive them with
+	// incremental sequence numbers.
+	_, err := node.Publish("test", []byte(`{"text": "test message 1"}`), WithHistory(10, time.Minute))
+	require.NoError(t, err)
+	_, err = node.Publish("test", []byte(`{"text": "test message 2"}`), WithHistory(10, time.Minute))
+	require.NoError(t, err)
+	_, err = node.Publish("test", []byte(`{"text": "test message 3"}`), WithHistory(10, time.Minute))
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout receiving publications")
+	case <-done:
+	}
+}
 
 func TestUserConnectionLimit(t *testing.T) {
 	node := nodeWithMemoryEngine()
@@ -559,32 +556,33 @@ func TestClient_IsSubscribed(t *testing.T) {
 	require.True(t, client.IsSubscribed("test"))
 }
 
-//
-//func TestClientSubscribeLast(t *testing.T) {
-//	node := nodeWithMemoryEngine()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	setTestChannelOptions(&node.config, ChannelOptions{
-//		HistorySize:     10,
-//		HistoryLifetime: 60,
-//		HistoryRecover:  true,
-//	})
-//
-//	client := newTestClient(t, node, "42")
-//	connectClient(t, client)
-//
-//	result := subscribeClient(t, client, "test")
-//	require.Equal(t, uint32(0), result.Seq)
-//
-//	for i := 0; i < 10; i++ {
-//		_, _ = node.Publish("test", []byte("{}"))
-//	}
-//
-//	client = newTestClient(t, node, "42")
-//	connectClient(t, client)
-//	result = subscribeClient(t, client, "test")
-//	require.Equal(t, uint64(10), result.Offset, fmt.Sprintf("expected: 10, got %d", result.Offset))
-//}
+func TestClientSubscribeLast(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeResult{
+				Recover: true,
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	result := subscribeClient(t, client, "test")
+	require.Equal(t, uint32(0), result.Seq)
+
+	for i := 0; i < 10; i++ {
+		_, _ = node.Publish("test", []byte("{}"), WithHistory(10, time.Minute))
+	}
+
+	client = newTestClient(t, node, "42")
+	connectClient(t, client)
+	result = subscribeClient(t, client, "test")
+	require.Equal(t, uint64(10), result.Offset, fmt.Sprintf("expected: 10, got %d", result.Offset))
+}
 
 func newTestClient(t testing.TB, node *Node, userID string) *Client {
 	ctx, cancelFn := context.WithCancel(context.Background())
@@ -904,55 +902,56 @@ func TestClientPing(t *testing.T) {
 	require.Empty(t, rwWrapper.replies[0].Result)
 }
 
-//
-//func TestClientPresence(t *testing.T) {
-//	node := nodeWithMemoryEngine()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	setTestChannelOptions(&node.config, ChannelOptions{
-//		Presence: true,
-//	})
-//
-//	client := newTestClient(t, node, "42")
-//
-//	client.OnPresence(func(_ PresenceEvent, cb PresenceCallback) {
-//		cb(PresenceReply{}, nil)
-//	})
-//	client.OnPresenceStats(func(_ PresenceStatsEvent, cb PresenceStatsCallback) {
-//		cb(PresenceStatsReply{}, nil)
-//	})
-//
-//	connectClient(t, client)
-//	subscribeClient(t, client, "test")
-//
-//	rwWrapper := testReplyWriterWrapper()
-//	err := client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
-//		Channel: "",
-//	}), rwWrapper.rw)
-//	require.Equal(t, DisconnectBadRequest, err)
-//
-//	rwWrapper = testReplyWriterWrapper()
-//	err = client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
-//		Channel: "test",
-//	}), rwWrapper.rw)
-//	require.Nil(t, err)
-//	require.Len(t, rwWrapper.replies, 1)
-//	require.Nil(t, rwWrapper.replies[0].Error)
-//
-//	rwWrapper = testReplyWriterWrapper()
-//	err = client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
-//		Channel: "",
-//	}), rwWrapper.rw)
-//	require.Equal(t, DisconnectBadRequest, err)
-//
-//	rwWrapper = testReplyWriterWrapper()
-//	err = client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
-//		Channel: "test",
-//	}), rwWrapper.rw)
-//	require.Nil(t, err)
-//	require.Len(t, rwWrapper.replies, 1)
-//	require.Nil(t, rwWrapper.replies[0].Error)
-//}
+func TestClientPresence(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+		cb(SubscribeResult{
+			Presence: true,
+		}, nil)
+	})
+
+	client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
+		cb(node.Presence(e.Channel))
+	})
+	client.OnPresenceStats(func(e PresenceStatsEvent, cb PresenceStatsCallback) {
+		cb(node.PresenceStats(e.Channel))
+	})
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
+		Channel: "",
+	}), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Nil(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
+		Channel: "",
+	}), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Nil(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+}
 
 func TestClientPresenceNotAvailable(t *testing.T) {
 	node := nodeWithMemoryEngine()
@@ -986,44 +985,38 @@ func TestClientPresenceStatsNotAvailable(t *testing.T) {
 	require.Equal(t, ErrorNotAvailable, err)
 }
 
-//
-//func TestClientHistory(t *testing.T) {
-//	node := nodeWithMemoryEngine()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	setTestChannelOptions(&node.config, ChannelOptions{
-//		HistorySize:     10,
-//		HistoryLifetime: 60,
-//	})
-//
-//	client := newTestClient(t, node, "42")
-//
-//	client.OnHistory(func(_ HistoryEvent, cb HistoryCallback) {
-//		cb(HistoryReply{}, nil)
-//	})
-//
-//	for i := 0; i < 10; i++ {
-//		_, _ = node.Publish("test", []byte(`{}`))
-//	}
-//
-//	connectClient(t, client)
-//	subscribeClient(t, client, "test")
-//
-//	rwWrapper := testReplyWriterWrapper()
-//	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
-//		Channel: "",
-//	}), rwWrapper.rw)
-//	require.Equal(t, DisconnectBadRequest, err)
-//
-//	rwWrapper = testReplyWriterWrapper()
-//	err = client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
-//		Channel: "test",
-//	}), rwWrapper.rw)
-//	require.Nil(t, err)
-//	require.Len(t, rwWrapper.replies, 1)
-//	require.Nil(t, rwWrapper.replies[0].Error)
-//	//require.Equal(t, 10, len(historyResp.Result.Publications))
-//}
+func TestClientHistory(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+		cb(node.History(e.Channel, WithNoLimit()))
+	})
+
+	for i := 0; i < 10; i++ {
+		_, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
+	}
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
+		Channel: "",
+	}), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Nil(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	//require.Equal(t, 10, len(historyResp.Result.Publications))
+}
 
 func TestClientHistoryNotAvailable(t *testing.T) {
 	node := nodeWithMemoryEngine()
@@ -1340,62 +1333,67 @@ func TestClientConnectExpiredError(t *testing.T) {
 	require.False(t, client.authenticated)
 }
 
-//
-//func TestClientPresenceUpdate(t *testing.T) {
-//	node := nodeWithMemoryEngine()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	setTestChannelOptions(&node.config, ChannelOptions{
-//		Presence: true,
-//	})
-//
-//	client := newTestClient(t, node, "42")
-//
-//	connectClient(t, client)
-//	subscribeClient(t, client, "test")
-//
-//	err := client.updateChannelPresence("test")
-//	require.NoError(t, err)
-//}
+func TestClientPresenceUpdate(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
-//
-//func TestClientSubExpired(t *testing.T) {
-//	node := nodeWithMemoryEngineNoHandlers()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	setTestChannelOptions(&node.config, ChannelOptions{
-//		Presence: true,
-//	})
-//	node.config.ClientExpiredSubCloseDelay = 0
-//	node.config.ClientPresenceUpdateInterval = 10 * time.Millisecond
-//
-//	doneCh := make(chan struct{})
-//
-//	node.OnConnect(func(client *Client) {
-//		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-//			cb(SubscribeResult{
-//				ExpireAt: time.Now().Unix() + 1,
-//			}, nil)
-//		})
-//
-//		client.OnDisconnect(func(event DisconnectEvent) {
-//			if event.Disconnect == DisconnectSubExpired {
-//				close(doneCh)
-//			}
-//			return
-//		})
-//	})
-//
-//	client := newTestClient(t, node, "42")
-//	connectClient(t, client)
-//	subscribeClient(t, client, "test")
-//
-//	select {
-//	case <-doneCh:
-//	case <-time.After(5 * time.Second):
-//		t.Fatal("timeout waiting for disconnect due to expired subscription")
-//	}
-//}
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeResult{
+				Presence: true,
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	client.mu.RLock()
+	chCtx, ok := client.channels["test"]
+	client.mu.RUnlock()
+	require.True(t, ok)
+
+	err := client.updateChannelPresence("test", chCtx)
+	require.NoError(t, err)
+}
+
+func TestClientSubExpired(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.config.ClientExpiredSubCloseDelay = 0
+	node.config.ClientPresenceUpdateInterval = 10 * time.Millisecond
+
+	doneCh := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeResult{
+				ExpireAt: time.Now().Unix() + 1,
+				Presence: true,
+			}, nil)
+		})
+
+		client.OnDisconnect(func(event DisconnectEvent) {
+			if event.Disconnect == DisconnectSubExpired {
+				close(doneCh)
+			}
+			return
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting for disconnect due to expired subscription")
+	}
+}
 
 func TestClientSend(t *testing.T) {
 	node := nodeWithMemoryEngine()
@@ -1746,74 +1744,36 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.Equal(t, []byte("info"), client.channels["channel"].Info)
 }
 
-//func TestClientCheckPosition(t *testing.T) {
-//	node := nodeWithMemoryEngine()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	client := newTestClient(t, node, "42")
-//
-//	node.mu.Lock()
-//	node.nowTimeGetter = func() time.Time {
-//		return time.Unix(200, 0)
-//	}
-//
-//	var (
-//		chanOpts    ChannelOptions
-//		chanFound   bool
-//		chanOptsErr error
-//	)
-//	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
-//		require.Equal(t, "channel", channel)
-//		return chanOpts, chanFound, chanOptsErr
-//	}
-//	node.mu.Unlock()
-//
-//	// channel option error.
-//	chanOptsErr = errors.New("oops")
-//	got := client.checkPosition(300*time.Second, "channel", channelContext{})
-//	require.True(t, got)
-//
-//	// channel option not found.
-//	chanOptsErr = nil
-//	chanFound = false
-//	got = client.checkPosition(300*time.Second, "channel", channelContext{})
-//	require.True(t, got)
-//
-//	// not history recover.
-//	chanOptsErr = nil
-//	chanFound = true
-//	got = client.checkPosition(300*time.Second, "channel", channelContext{})
-//	require.True(t, got)
-//
-//	// not initial, not time to check.
-//	chanOptsErr = nil
-//	chanFound = true
-//	chanOpts = ChannelOptions{HistoryRecover: true}
-//	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50})
-//	require.True(t, got)
-//
-//	// channel not found.
-//	chanOptsErr = nil
-//	chanFound = true
-//	chanOpts = ChannelOptions{HistoryRecover: true}
-//	got = client.checkPosition(50*time.Second, "channel", channelContext{
-//		positionCheckTime: 50,
-//	})
-//	require.True(t, got)
-//
-//	// invalid position.
-//	chanOptsErr = nil
-//	chanFound = true
-//	chanOpts = ChannelOptions{HistoryRecover: true}
-//	client.channels["channel"] = channelContext{positionCheckFailures: 2}
-//	got = client.checkPosition(50*time.Second, "channel", channelContext{
-//		positionCheckTime: 50,
-//	})
-//	require.False(t, got)
-//	require.Contains(t, client.channels, "channel")
-//	require.EqualValues(t, 3, client.channels["channel"].positionCheckFailures)
-//	require.EqualValues(t, 200, client.channels["channel"].positionCheckTime)
-//}
+func TestClientCheckPosition(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time {
+		return time.Unix(200, 0)
+	}
+	node.mu.Unlock()
+
+	// no recover.
+	got := client.checkPosition(300*time.Second, "channel", channelContext{})
+	require.True(t, got)
+
+	// not initial, not time to check.
+	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagHistoryRecover})
+	require.True(t, got)
+
+	// invalid position.
+	client.channels["channel"] = channelContext{positionCheckFailures: 2, flags: flagHistoryRecover}
+	got = client.checkPosition(50*time.Second, "channel", channelContext{
+		positionCheckTime: 50, flags: flagHistoryRecover,
+	})
+	require.False(t, got)
+	require.Contains(t, client.channels, "channel")
+	require.EqualValues(t, 3, client.channels["channel"].positionCheckFailures)
+	require.EqualValues(t, 200, client.channels["channel"].positionCheckTime)
+}
 
 func TestErrLogLevel(t *testing.T) {
 	require.Equal(t, LogLevelInfo, errLogLevel(ErrorNotAvailable))
