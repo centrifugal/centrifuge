@@ -78,10 +78,6 @@ func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*Publication, StreamP
 	return nil, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, _ *Publication, _ *ChannelOptions) (StreamPosition, bool, error) {
-	return StreamPosition{}, false, nil
-}
-
 func (e *TestEngine) RemoveHistory(_ string) error {
 	return nil
 }
@@ -125,7 +121,7 @@ func nodeWithMemoryEngine() *Node {
 			cb(SubscribeResult{}, nil)
 		})
 		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
-			cb(PublishReply{}, nil)
+			cb(PublishResult{}, nil)
 		})
 	})
 	return n

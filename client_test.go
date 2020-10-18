@@ -953,32 +953,39 @@ func TestClientPing(t *testing.T) {
 //	require.Len(t, rwWrapper.replies, 1)
 //	require.Nil(t, rwWrapper.replies[0].Error)
 //}
-//
-//func TestClientPresenceNotAvailable(t *testing.T) {
-//	node := nodeWithMemoryEngine()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	setTestChannelOptions(&node.config, ChannelOptions{
-//		Presence: false,
-//	})
-//
-//	client := newTestClient(t, node, "42")
-//
-//	connectClient(t, client)
-//	subscribeClient(t, client, "test")
-//
-//	rwWrapper := testReplyWriterWrapper()
-//	err := client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
-//		Channel: "test",
-//	}), rwWrapper.rw)
-//	require.Equal(t, ErrorNotAvailable, err)
-//
-//	rwWrapper = testReplyWriterWrapper()
-//	err = client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
-//		Channel: "test",
-//	}), rwWrapper.rw)
-//	require.Equal(t, ErrorNotAvailable, err)
-//}
+
+func TestClientPresenceNotAvailable(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Equal(t, ErrorNotAvailable, err)
+}
+
+func TestClientPresenceStatsNotAvailable(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Equal(t, ErrorNotAvailable, err)
+}
+
 //
 //func TestClientHistory(t *testing.T) {
 //	node := nodeWithMemoryEngine()
@@ -1023,10 +1030,6 @@ func TestClientHistoryNotAvailable(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-
-	client.OnHistory(func(_ HistoryEvent, cb HistoryCallback) {
-		cb(HistoryResult{}, nil)
-	})
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
