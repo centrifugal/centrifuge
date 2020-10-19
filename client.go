@@ -120,7 +120,7 @@ const maxCheckPositionFailures uint8 = 2
 const (
 	flagPresence uint8 = 1 << iota
 	flagJoinLeave
-	flagHistoryRecover
+	flagRecover
 	flagServerSide
 	flagClientSideRefresh
 )
@@ -439,7 +439,7 @@ func (c *Client) updatePresence() {
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channelContext) bool {
-	if !channelHasFlag(chCtx.flags, flagHistoryRecover) {
+	if !channelHasFlag(chCtx.flags, flagRecover) {
 		return true
 	}
 	nowUnix := c.node.nowTimeGetter().Unix()
@@ -2026,7 +2026,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRes
 		channelFlags |= flagClientSideRefresh
 	}
 	if reply.Recover {
-		channelFlags |= flagHistoryRecover
+		channelFlags |= flagRecover
 	}
 	if reply.Presence {
 		channelFlags |= flagPresence
@@ -2110,7 +2110,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 	channelFlags := channelContext.flags
 	c.mu.Unlock()
 
-	if !channelHasFlag(channelFlags, flagHistoryRecover) {
+	if !channelHasFlag(channelFlags, flagRecover) {
 		return c.transportEnqueue(reply)
 	}
 

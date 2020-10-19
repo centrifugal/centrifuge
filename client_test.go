@@ -1761,13 +1761,13 @@ func TestClientCheckPosition(t *testing.T) {
 	require.True(t, got)
 
 	// not initial, not time to check.
-	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagHistoryRecover})
+	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagRecover})
 	require.True(t, got)
 
 	// invalid position.
-	client.channels["channel"] = channelContext{positionCheckFailures: 2, flags: flagHistoryRecover}
+	client.channels["channel"] = channelContext{positionCheckFailures: 2, flags: flagRecover}
 	got = client.checkPosition(50*time.Second, "channel", channelContext{
-		positionCheckTime: 50, flags: flagHistoryRecover,
+		positionCheckTime: 50, flags: flagRecover,
 	})
 	require.False(t, got)
 	require.Contains(t, client.channels, "channel")
