@@ -15,13 +15,6 @@ func TestWithHistory(t *testing.T) {
 	require.Equal(t, time.Second, opts.HistoryTTL)
 }
 
-func TestSkipHistory(t *testing.T) {
-	opt := SkipHistory()
-	opts := &PublishOptions{}
-	opt(opts)
-	require.Equal(t, true, opts.skipHistory)
-}
-
 func TestWithResubscribe(t *testing.T) {
 	opt := WithResubscribe()
 	opts := &UnsubscribeOptions{}

@@ -100,6 +100,18 @@ func TestClientOnTimerOpClosedClient(t *testing.T) {
 	require.False(t, client.timer.Stop())
 }
 
+func TestClientUnsubscribeClosedClient(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+	err := client.close(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+	err = client.Unsubscribe("test")
+	require.NoError(t, err)
+}
+
 func TestClientTimerSchedule(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -740,6 +752,74 @@ func testReplyWriterWrapper() *sliceReplyWriter {
 	return wrapper
 }
 
+func TestClientRefreshNotAvailable(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	rwWrapper := testReplyWriterWrapper()
+
+	cmd := &protocol.RefreshRequest{}
+	params := getJSONEncodedParams(t, cmd)
+
+	err := client.handleRefresh(params, rwWrapper.rw)
+	require.Equal(t, ErrorNotAvailable, err)
+}
+
+func TestClientRefreshEmptyToken(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
+		return ConnectResult{ClientSideRefresh: true}, nil
+	})
+
+	node.OnConnect(func(client *Client) {
+		client.OnRefresh(func(event RefreshEvent, callback RefreshCallback) {
+			callback(RefreshResult{
+				ExpireAt: time.Now().Unix() + 300,
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	rwWrapper := testReplyWriterWrapper()
+
+	cmd := &protocol.RefreshRequest{Token: ""}
+	params := getJSONEncodedParams(t, cmd)
+
+	err := client.handleRefresh(params, rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+}
+
+func TestClientRefreshUnexpected(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
+		return ConnectResult{ClientSideRefresh: false}, nil // we do not want client side refresh here.
+	})
+
+	node.OnConnect(func(client *Client) {
+		client.OnRefresh(func(event RefreshEvent, callback RefreshCallback) {
+			callback(RefreshResult{
+				ExpireAt: time.Now().Unix() + 300,
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	rwWrapper := testReplyWriterWrapper()
+
+	cmd := &protocol.RefreshRequest{Token: ""}
+	params := getJSONEncodedParams(t, cmd)
+
+	err := client.handleRefresh(params, rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+}
+
 func TestClientPublishNotAvailable(t *testing.T) {
 	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -964,6 +1044,21 @@ func TestClientPresenceNotAvailable(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Equal(t, ErrorNotAvailable, err)
+}
+
+func TestClientSubscribeNotAvailable(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test",
 	}), rwWrapper.rw)
 	require.Equal(t, ErrorNotAvailable, err)
@@ -1295,6 +1390,26 @@ func TestToClientError(t *testing.T) {
 	require.Equal(t, ErrorLimitExceeded, toClientErr(ErrorLimitExceeded))
 }
 
+func TestClientAlreadyAuthenticated(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
+	cmd := &protocol.Command{ID: 2, Method: protocol.MethodTypeConnect, Params: params}
+	data, err := json.Marshal(cmd)
+	require.NoError(t, err)
+	proceed := client.Handle(data)
+	require.False(t, proceed)
+	select {
+	case <-client.Context().Done():
+	case <-time.After(time.Second):
+		require.Fail(t, "client not closed")
+	}
+}
+
 func TestClientCloseExpired(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1469,6 +1584,19 @@ func TestClientHandleRPC(t *testing.T) {
 	require.Nil(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, rpcHandlerCalled)
+}
+
+func TestClientHandleSendNoHandlerSet(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSend(getJSONEncodedParams(t, &protocol.SendRequest{
+		Data: []byte(`{"data":"hello"}`),
+	}), rwWrapper.rw)
+	require.NoError(t, err)
 }
 
 func TestClientHandleSend(t *testing.T) {
@@ -1742,6 +1870,15 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.Contains(t, client.channels, "channel")
 	require.EqualValues(t, 250, client.channels["channel"].expireAt)
 	require.Equal(t, []byte("info"), client.channels["channel"].Info)
+
+	// Error from handler.
+	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
+		cb(SubRefreshResult{}, DisconnectExpired)
+	}
+	nowTime = time.Unix(200, 0)
+	client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second, func(b bool) {
+		require.False(t, b)
+	})
 }
 
 func TestClientCheckPosition(t *testing.T) {
