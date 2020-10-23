@@ -20,6 +20,7 @@ import (
 
 func TestWebsocketHandler(t *testing.T) {
 	n, _ := New(Config{})
+	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
 	server := httptest.NewServer(mux)
@@ -29,14 +30,15 @@ func TestWebsocketHandler(t *testing.T) {
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
 	require.NotNil(t, conn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 }
 
 func TestWebsocketHandlerPing(t *testing.T) {
 	n, _ := New(Config{})
+	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
 		PingInterval: time.Second,
@@ -56,10 +58,10 @@ func TestWebsocketHandlerPing(t *testing.T) {
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
 	require.NotNil(t, conn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	closeCh := make(chan struct{})
 	var once sync.Once
@@ -89,6 +91,7 @@ func TestWebsocketHandlerPing(t *testing.T) {
 
 func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	n, _ := New(Config{})
+	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
 	server := httptest.NewServer(mux)
@@ -98,7 +101,7 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var graceCh chan struct{}
 
@@ -134,7 +137,7 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(b, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	connectRequest := &protocol.ConnectRequest{}
 	params, _ := json.Marshal(connectRequest)
@@ -168,7 +171,7 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Conn {
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
 	require.NoError(b, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	connectRequest := &protocol.ConnectRequest{}
 	params, _ := connectRequest.Marshal()
@@ -228,6 +231,7 @@ func testAuthMiddleware(h http.Handler) http.Handler {
 // to invalid buffer pool usages.
 func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 	n := nodeWithMemoryEngine()
+	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
@@ -248,7 +252,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 	}
 	defer func() {
 		for _, conn := range conns {
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 
@@ -264,6 +268,73 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 			if err != nil {
 				require.Fail(t, err.Error())
 			}
+
+			_, data, err := conns[i].ReadMessage()
+			if err != nil {
+				require.Fail(t, err.Error())
+			}
+
+			var rep protocol.Reply
+			err = json.Unmarshal(data, &rep)
+			require.NoError(t, err)
+
+			var push protocol.Push
+			err = json.Unmarshal(rep.Result, &push)
+			require.NoError(t, err)
+
+			var pub protocol.Publication
+			err = json.Unmarshal(push.Data, &pub)
+			require.NoError(t, err)
+
+			if !strings.Contains(string(pub.Data), string(payload)) {
+				require.Fail(t, "ooops, where is our payload? %s %s", string(payload), string(pub.Data))
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
+	n := nodeWithMemoryEngine()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	numConns := 100
+
+	var conns []*websocket.Conn
+	for i := 0; i < numConns; i++ {
+		conn := newRealConnJSON(t, "test", url)
+		conns = append(conns, conn)
+	}
+	defer func() {
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	}()
+
+	payload := []byte(`{"input":"test"}`)
+
+	_, err := n.Publish("test", payload)
+	if err != nil {
+		require.Fail(t, err.Error())
+	}
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < numConns; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
 
 			_, data, err := conns[i].ReadMessage()
 			if err != nil {
@@ -320,7 +391,7 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
 			conn := bm.getConn(b, "test", url)
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				_, err := n.Publish("test", payload)
@@ -335,4 +406,5 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 			b.ReportAllocs()
 		})
 	}
+	b.ReportAllocs()
 }
