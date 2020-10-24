@@ -64,7 +64,10 @@ import (
 )
 
 // Authentication middleware. Centrifuge expects Credentials with current user ID.
-// Without provided Credentials client connection won't be accepted.
+// Without provided Credentials client connection won't be accepted. Another way
+// to authenticate connection is reacting to node.OnConnecting event where you may
+// authenticate connection based on custom token sent by client in first protocol
+// frame.
 func auth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -91,9 +94,8 @@ func main() {
 	cfg := centrifuge.DefaultConfig
 
 	// Node is the core object in Centrifuge library responsible for many useful
-	// things. For example Node allows to publish messages to channels from server
-	// side with its Publish method, but in this example we will publish messages
-	// only from client side.
+	// things. For example Node allows to publish messages to channels with its
+	// Publish method – we are using it below.
 	node, err := centrifuge.New(cfg)
 	if err != nil {
 		log.Fatal(err)
@@ -101,8 +103,9 @@ func main() {
 
 	// Set ConnectHandler called when client successfully connected to Node. Your code
 	// inside handler must be synchronized since it will be called concurrently from
-	// different goroutines (belonging to different client connections). This is also
-	// true for other event handlers.
+	// different goroutines (belonging to different client connections). See information
+	// about connection life cycle in library readme. This handler should not block – so
+	// do minimal work here, set required connection event handlers and return.
 	node.OnConnect(func(client *centrifuge.Client) {
 		// In our example transport will always be Websocket but it can also be SockJS.
 		transportName := client.Transport().Name()
@@ -114,21 +117,24 @@ func main() {
 		// initiated by client. Here you can theoretically return an error or
 		// disconnect client from server if needed. But now we just accept
 		// all subscriptions to all channels. In real life you may use a more
-		// complex permission check here.
+		// complex permission check here. The reason why we use callback style
+		// inside client event handlers is that it gives a possibility to control
+		// operation concurrency to developer and still control order of events.
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("client subscribes on channel %s", e.Channel)
-			cb(centrifuge.SubscribeReply{}, nil)
+			cb(centrifuge.SubscribeResult{}, nil)
 		})
 
 		// By default, clients can not publish messages into channels. By setting
 		// PublishHandler we tell Centrifuge that publish from client side is possible.
 		// Now each time client calls publish method this handler will be called and
-		// you have a possibility to validate publication request before message will
-		// be published into channel and reach active subscribers. In our simple chat
-		// app we allow everyone to publish into any channel.
+		// you have a possibility to validate publication request and then publish message
+		// into channel. Publication will reach active subscribers with at most once
+		// delivery guarantee. In our simple chat app we allow everyone to publish into
+		// any channel but in real case you may have more validation.
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("client publishes into channel %s: %s", e.Channel, string(e.Data))
-			cb(centrifuge.PublishReply{}, nil)
+			cb(node.Publish(e.Channel, e.Data))
 		})
 
 		// Set Disconnect handler to react on client disconnect events.
@@ -137,7 +143,8 @@ func main() {
 		})
 	})
 
-	// Run node. This method does not block.
+	// Run node. This method does not block. See also node.Shutdown method
+	// to finish application gracefully.
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
