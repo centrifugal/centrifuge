@@ -2114,8 +2114,6 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 		return c.transportEnqueue(reply)
 	}
 
-	// TODO: investigate whether external call that will result in
-	// long time blocking can be involved here.
 	c.pubSubSync.SyncPublication(ch, pub, func() {
 		_ = c.writePublicationUpdatePosition(ch, pub, reply)
 	})

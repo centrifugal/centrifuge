@@ -483,15 +483,20 @@ type PublishResult struct {
 	StreamPosition
 }
 
-// Publish sends data to all clients subscribed on channel. All running nodes will
-// receive it and send to all local channel subscribers.
+// Publish sends data to all clients subscribed on channel at this moment. All running
+// nodes will receive Publication and send it to all local channel subscribers.
 //
 // Data expected to be valid marshaled JSON or any binary payload.
-// Connections that work over JSON protocol can not handle custom binary payloads.
+// Connections that work over JSON protocol can not handle binary payloads.
 // Connections that work over Protobuf protocol can work both with JSON and binary payloads.
 //
 // So the rule here: if you have channel subscribers that work using JSON
 // protocol then you can not publish binary data to these channel.
+//
+// Channels in Centrifuge are ephemeral and its settings not persisted over different
+// publish operations. So if you want to have channel with history stream behind you
+// need to provide WithHistory option on every publish. To simplify working with different
+// channels you can make some type of publish wrapper in your own code.
 //
 // The returned PublishResult contains embedded StreamPosition that describes
 // position inside stream Publication was added too. For channels without history

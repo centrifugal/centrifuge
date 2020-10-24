@@ -229,6 +229,10 @@ Let's describe some aspects related to connection life cycle and event handling 
 * `OnAlive` handler must not be called after `OnDisconnect`.
 * Client initiated request handlers can be processed asynchronously in goroutines to manage operation concurrency. This is achieved using callback functions. See [concurrency](https://github.com/centrifugal/centrifuge/tree/master/_examples/concurrency) example for more details.
 
+#### Channel history stream 
+
+Centrifuge Broker interface supports saving Publication to history stream on publish. Depending on broker implementation this feature can be missing though. Builtin Memory and Redis engines support keeping Publication stream. When using default memory Engine Publication stream kept in process memory and lost as soon as process restarts. Redis engine keeps Publication stream in Redis LIST or STREAM data structures – reliability inherited from Redis configuration in this case. Centrifuge library publication stream not meant to be used as the only source of missed Publications for a client. It mostly exists to help many clients reconnect without creating a massive spike in load on your main application database. So application database still required in idiomatic use case. Centrifuge message recovery protocol feature designed to be used together with reasonably small Publication stream size all missed publications sent towards client in one protocol frame on resubscribe to channel.
+
 #### Logging
 
 Centrifuge library exposes logs with different log level. In your app you can set special function to handle these log entries in a way you want.
