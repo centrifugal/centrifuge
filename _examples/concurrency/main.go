@@ -54,9 +54,9 @@ func main() {
 	})
 	node.SetEngine(engine)
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
-		return centrifuge.ConnectResult{
+		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
 			Subscriptions: []centrifuge.Subscription{
@@ -79,7 +79,7 @@ func main() {
 			go func() {
 				defer func() { <-semaphore }()
 				time.Sleep(200 * time.Millisecond)
-				cb(centrifuge.SubscribeResult{}, nil)
+				cb(centrifuge.SubscribeReply{}, nil)
 			}()
 		})
 
@@ -93,16 +93,8 @@ func main() {
 			go func() {
 				defer func() { <-semaphore }()
 				time.Sleep(100 * time.Millisecond)
-				cb(centrifuge.RPCResult{Data: []byte(`{"year": "2020"}`)}, nil)
+				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
 			}()
-		})
-
-		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
-			cb(centrifuge.RefreshResult{}, nil)
-		})
-
-		client.OnSubRefresh(func(e centrifuge.SubRefreshEvent, cb centrifuge.SubRefreshCallback) {
-			cb(centrifuge.SubRefreshResult{}, nil)
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {

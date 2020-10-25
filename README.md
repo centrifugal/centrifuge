@@ -119,19 +119,19 @@ func main() {
 		// operation concurrency to developer and still control order of events.
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("client subscribes on channel %s", e.Channel)
-			cb(centrifuge.SubscribeResult{}, nil)
+			cb(centrifuge.SubscribeReply{}, nil)
 		})
 
 		// By default, clients can not publish messages into channels. By setting
 		// PublishHandler we tell Centrifuge that publish from client side is possible.
 		// Now each time client calls publish method this handler will be called and
-		// you have a possibility to validate publication request and then publish message
-		// into channel. Publication will reach active subscribers with at most once
-		// delivery guarantee. In our simple chat app we allow everyone to publish into
-		// any channel but in real case you may have more validation.
+		// you have a possibility to validate publication request. After returning 
+		// Publication will be published to channel and reach active subscribers with
+		// at most once delivery guarantee. In our simple chat app we allow everyone 
+		// to publish into any channel but in real case you may have more validation.
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("client publishes into channel %s: %s", e.Channel, string(e.Data))
-			cb(node.Publish(e.Channel, e.Data))
+			cb(centrifuge.PublishReply{}, nil)
 		})
 
 		// Set Disconnect handler to react on client disconnect events.

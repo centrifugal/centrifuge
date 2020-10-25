@@ -73,9 +73,9 @@ func main() {
 	})
 	node.SetEngine(engine)
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
-		return centrifuge.ConnectResult{
+		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
 			Subscriptions: []centrifuge.Subscription{
@@ -113,7 +113,7 @@ func main() {
 
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
 			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			cb(centrifuge.RefreshResult{
+			cb(centrifuge.RefreshReply{
 				ExpireAt: time.Now().Unix() + 60,
 			}, nil)
 		})
@@ -121,10 +121,10 @@ func main() {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			if !channelSubscribeAllowed(e.Channel) {
-				cb(centrifuge.SubscribeResult{}, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
-			cb(centrifuge.SubscribeResult{
+			cb(centrifuge.SubscribeReply{
 				Recover:   true,
 				Presence:  true,
 				JoinLeave: true,
@@ -138,29 +138,31 @@ func main() {
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 			if !client.IsSubscribed(e.Channel) {
-				cb(centrifuge.PublishResult{}, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
 
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)
 			if err != nil {
-				cb(centrifuge.PublishResult{}, centrifuge.ErrorBadRequest)
+				cb(centrifuge.PublishReply{}, centrifuge.ErrorBadRequest)
 				return
 			}
 			msg.Timestamp = time.Now().Unix()
 			data, _ := json.Marshal(msg)
 
-			cb(node.Publish(
+			result, err := node.Publish(
 				e.Channel, data,
 				centrifuge.WithHistory(300, time.Minute),
-				centrifuge.WithClientInfo(e.Info),
-			))
+				centrifuge.WithClientInfo(e.ClientInfo),
+			)
+
+			cb(centrifuge.PublishReply{Result: &result}, err)
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
-			cb(centrifuge.RPCResult{
+			cb(centrifuge.RPCReply{
 				Data: []byte(`{"year": "2020"}`),
 			}, nil)
 		})
@@ -168,10 +170,10 @@ func main() {
 		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
 			log.Printf("user %s calls presence on %s", client.UserID(), e.Channel)
 			if !client.IsSubscribed(e.Channel) {
-				cb(centrifuge.PresenceResult{}, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.PresenceReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
-			cb(node.Presence(e.Channel))
+			cb(centrifuge.PresenceReply{}, nil)
 		})
 
 		client.OnMessage(func(e centrifuge.MessageEvent) {

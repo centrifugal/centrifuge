@@ -53,8 +53,8 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
-		return centrifuge.ConnectResult{
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "",
 			},
@@ -83,7 +83,7 @@ func main() {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			cb(centrifuge.SubscribeResult{}, nil)
+			cb(centrifuge.SubscribeReply{}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -92,7 +92,7 @@ func main() {
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			cb(node.Publish(e.Channel, e.Data))
+			cb(centrifuge.PublishReply{}, nil)
 		})
 
 		client.OnMessage(func(e centrifuge.MessageEvent) {

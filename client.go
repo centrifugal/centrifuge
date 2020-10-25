@@ -361,7 +361,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext chan
 			resultCB(false)
 			return
 		}
-		cb := func(reply SubRefreshResult, err error) {
+		cb := func(reply SubRefreshReply, err error) {
 			if err != nil {
 				resultCB(false)
 				return
@@ -886,7 +886,7 @@ func (c *Client) expire() {
 		return
 	}
 	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
-		cb := func(reply RefreshResult, err error) {
+		cb := func(reply RefreshReply, err error) {
 			if err != nil {
 				switch t := err.(type) {
 				case *Disconnect:
@@ -992,7 +992,7 @@ func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
 		Token:             cmd.Token,
 	}
 
-	cb := func(reply RefreshResult, err error) {
+	cb := func(reply RefreshReply, err error) {
 		defer rw.done()
 
 		if err != nil {
@@ -1076,7 +1076,7 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 		Token:   cmd.Token,
 	}
 
-	cb := func(reply SubscribeResult, err error) {
+	cb := func(reply SubscribeReply, err error) {
 		defer rw.done()
 
 		if err != nil {
@@ -1148,7 +1148,7 @@ func (c *Client) handleSubRefresh(params protocol.Raw, rw *replyWriter) error {
 		Token:             cmd.Token,
 	}
 
-	cb := func(reply SubRefreshResult, err error) {
+	cb := func(reply SubRefreshReply, err error) {
 		defer rw.done()
 
 		if err != nil {
@@ -1242,17 +1242,30 @@ func (c *Client) handlePublish(params protocol.Raw, rw *replyWriter) error {
 	c.mu.RUnlock()
 
 	event := PublishEvent{
-		Channel: channel,
-		Data:    data,
-		Info:    info,
+		Channel:    channel,
+		Data:       data,
+		ClientInfo: info,
 	}
 
-	cb := func(_ PublishResult, err error) {
+	cb := func(reply PublishReply, err error) {
 		defer rw.done()
 
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
 			return
+		}
+
+		if reply.Result == nil {
+			_, err := c.node.Publish(
+				event.Channel, event.Data,
+				WithHistory(reply.HistorySize, reply.HistoryTTL),
+				WithClientInfo(reply.ClientInfo),
+			)
+			if err != nil {
+				c.node.logger.log(newLogEntry(LogLevelError, "error publish", map[string]interface{}{"error": err.Error()}))
+				c.writeErrorFlush(rw, ErrorInternal)
+				return
+			}
 		}
 
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodePublishResult(&protocol.PublishResult{})
@@ -1288,20 +1301,33 @@ func (c *Client) handlePresence(params protocol.Raw, rw *replyWriter) error {
 		Channel: channel,
 	}
 
-	cb := func(result PresenceResult, err error) {
+	cb := func(reply PresenceReply, err error) {
 		defer rw.done()
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
 			return
 		}
 
-		presence := make(map[string]*protocol.ClientInfo, len(result.Presence))
-		for k, v := range result.Presence {
-			presence[k] = infoToProto(v)
+		var presence map[string]*ClientInfo
+		if reply.Result == nil {
+			result, err := c.node.Presence(event.Channel)
+			if err != nil {
+				c.node.logger.log(newLogEntry(LogLevelError, "error getting presence", map[string]interface{}{"error": err.Error()}))
+				c.writeErrorFlush(rw, ErrorInternal)
+				return
+			}
+			presence = result.Presence
+		} else {
+			presence = reply.Result.Presence
+		}
+
+		protoPresence := make(map[string]*protocol.ClientInfo, len(presence))
+		for k, v := range presence {
+			protoPresence[k] = infoToProto(v)
 		}
 
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodePresenceResult(&protocol.PresenceResult{
-			Presence: presence,
+			Presence: protoPresence,
 		})
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding presence", map[string]interface{}{"error": err.Error()}))
@@ -1335,16 +1361,29 @@ func (c *Client) handlePresenceStats(params protocol.Raw, rw *replyWriter) error
 		Channel: channel,
 	}
 
-	cb := func(result PresenceStatsResult, err error) {
+	cb := func(reply PresenceStatsReply, err error) {
 		defer rw.done()
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
 			return
 		}
 
+		var presenceStats PresenceStats
+		if reply.Result == nil {
+			result, err := c.node.PresenceStats(event.Channel)
+			if err != nil {
+				c.node.logger.log(newLogEntry(LogLevelError, "error getting presence stats", map[string]interface{}{"error": err.Error()}))
+				c.writeErrorFlush(rw, ErrorInternal)
+				return
+			}
+			presenceStats = result.PresenceStats
+		} else {
+			presenceStats = reply.Result.PresenceStats
+		}
+
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodePresenceStatsResult(&protocol.PresenceStatsResult{
-			NumClients: uint32(result.NumClients),
-			NumUsers:   uint32(result.NumUsers),
+			NumClients: uint32(presenceStats.NumClients),
+			NumUsers:   uint32(presenceStats.NumUsers),
 		})
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding presence stats", map[string]interface{}{"error": err.Error()}))
@@ -1378,24 +1417,37 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		Channel: channel,
 	}
 
-	cb := func(result HistoryResult, err error) {
+	cb := func(reply HistoryReply, err error) {
 		defer rw.done()
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
 			return
 		}
 
-		pubs := make([]*protocol.Publication, 0, len(result.Publications))
-		for _, pub := range result.Publications {
+		var pubs []*Publication
+		if reply.Result == nil {
+			result, err := c.node.History(event.Channel, WithNoLimit())
+			if err != nil {
+				c.node.logger.log(newLogEntry(LogLevelError, "error getting history", map[string]interface{}{"error": err.Error()}))
+				c.writeErrorFlush(rw, ErrorInternal)
+				return
+			}
+			pubs = result.Publications
+		} else {
+			pubs = reply.Result.Publications
+		}
+
+		protoPubs := make([]*protocol.Publication, 0, len(pubs))
+		for _, pub := range pubs {
 			protoPub := pubToProto(pub)
 			if hasFlag(CompatibilityFlags, UseSeqGen) {
 				protoPub.Seq, protoPub.Gen = recovery.UnpackUint64(protoPub.Offset)
 			}
-			pubs = append(pubs, protoPub)
+			protoPubs = append(protoPubs, protoPub)
 		}
 
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeHistoryResult(&protocol.HistoryResult{
-			Publications: pubs,
+			Publications: protoPubs,
 		})
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding presence stats", map[string]interface{}{"error": err.Error()}))
@@ -1462,7 +1514,7 @@ func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) error {
 		Data:   cmd.Data,
 	}
 
-	cb := func(reply RPCResult, err error) {
+	cb := func(reply RPCReply, err error) {
 		defer rw.done()
 		if err != nil {
 			c.writeDisconnectOrErrorFlush(rw, err)
@@ -1678,7 +1730,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 						disconnect: validateDisconnect,
 					}
 				} else {
-					subCtx = c.subscribeCmd(subCmd, SubscribeResult{
+					subCtx = c.subscribeCmd(subCmd, SubscribeReply{
 						Recover: sub.Recover, JoinLeave: sub.JoinLeave, Presence: sub.Presence,
 					}, rw, true)
 				}
@@ -1748,7 +1800,7 @@ func (c *Client) Subscribe(channel string) error {
 	if validateDisconnect != nil {
 		return validateDisconnect
 	}
-	subCtx := c.subscribeCmd(subCmd, SubscribeResult{}, nil, true)
+	subCtx := c.subscribeCmd(subCmd, SubscribeReply{}, nil, true)
 	if subCtx.err != nil {
 		return subCtx.err
 	}
@@ -1861,7 +1913,7 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 // on channel, if channel if private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
-func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeResult, rw *replyWriter, serverSide bool) subscribeContext {
+func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeReply, rw *replyWriter, serverSide bool) subscribeContext {
 
 	ctx := subscribeContext{}
 	res := &protocol.SubscribeResult{}

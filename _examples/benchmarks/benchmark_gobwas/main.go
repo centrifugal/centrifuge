@@ -54,8 +54,8 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectResult, error) {
-		return centrifuge.ConnectResult{
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
 			},
@@ -64,11 +64,11 @@ func main() {
 
 	node.OnConnect(func(client *centrifuge.Client) {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			cb(centrifuge.SubscribeResult{}, nil)
+			cb(centrifuge.SubscribeReply{}, nil)
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			cb(node.Publish(e.Channel, e.Data))
+			cb(centrifuge.PublishReply{}, nil)
 		})
 
 		client.OnMessage(func(e centrifuge.MessageEvent) {

@@ -155,7 +155,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Nil(t, err)
-	result := extractConnectResult(rwWrapper.replies, client.Transport().Protocol())
+	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
 	require.Equal(t, false, result.Expires)
 	require.Equal(t, uint32(0), result.TTL)
 	require.True(t, client.authenticated)
@@ -168,7 +168,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnRefresh(func(_ RefreshEvent, callback RefreshCallback) {
-			callback(RefreshResult{
+			callback(RefreshReply{
 				Expired: true,
 			}, nil)
 		})
@@ -206,7 +206,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnRefresh(func(_ RefreshEvent, cb RefreshCallback) {
-			cb(RefreshResult{
+			cb(RefreshReply{
 				ExpireAt: expireAt,
 			}, nil)
 		})
@@ -234,7 +234,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnRefresh(func(_ RefreshEvent, cb RefreshCallback) {
-			cb(RefreshResult{}, nil)
+			cb(RefreshReply{}, nil)
 		})
 	})
 
@@ -249,7 +249,7 @@ func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	require.Nil(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
-	result := extractConnectResult(rwWrapper.replies, client.Transport().Protocol())
+	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
 	require.Equal(t, client.uid, result.Client)
 	client.triggerConnect()
 	client.scheduleOnConnectTimers()
@@ -272,7 +272,7 @@ func extractSubscribeResult(replies []*protocol.Reply, protoType ProtocolType) *
 	return &res
 }
 
-func extractConnectResult(replies []*protocol.Reply, protoType ProtocolType) *protocol.ConnectResult {
+func extractConnectReply(replies []*protocol.Reply, protoType ProtocolType) *protocol.ConnectResult {
 	var res protocol.ConnectResult
 	if protoType == ProtocolTypeJSON {
 		err := json.Unmarshal(replies[0].Result, &res)
@@ -355,7 +355,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, SubscribeResult{}, rwWrapper.rw, false)
+	}, SubscribeReply{}, rwWrapper.rw, false)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -394,7 +394,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, SubscribeResult{}, rwWrapper.rw, false)
+	}, SubscribeReply{}, rwWrapper.rw, false)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -468,9 +468,9 @@ func TestConnectingReply(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectResult, error) {
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
 		newCtx := context.WithValue(ctx, "key", "val")
-		return ConnectResult{
+		return ConnectReply{
 			Context: newCtx,
 			Data:    []byte("{}"),
 			Credentials: &Credentials{
@@ -503,8 +503,8 @@ func TestServerSideSubscriptions(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectResult, error) {
-		return ConnectResult{
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
 			Subscriptions: []Subscription{
 				{Channel: "server-side-1"},
 				{Channel: "$server-side-2"},
@@ -574,7 +574,7 @@ func TestClientSubscribeLast(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeResult{
+			cb(SubscribeReply{
 				Recover: true,
 			}, nil)
 		})
@@ -622,7 +622,7 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeResult{}, nil)
+			callback(SubscribeReply{}, nil)
 		})
 		client.OnUnsubscribe(func(_ UnsubscribeEvent) {
 			close(unsubscribed)
@@ -657,7 +657,7 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeResult{}, nil)
+			callback(SubscribeReply{}, nil)
 		})
 		client.OnUnsubscribe(func(_ UnsubscribeEvent) {
 			close(unsubscribed)
@@ -770,13 +770,13 @@ func TestClientRefreshEmptyToken(t *testing.T) {
 	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
-		return ConnectResult{ClientSideRefresh: true}, nil
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{ClientSideRefresh: true}, nil
 	})
 
 	node.OnConnect(func(client *Client) {
 		client.OnRefresh(func(event RefreshEvent, callback RefreshCallback) {
-			callback(RefreshResult{
+			callback(RefreshReply{
 				ExpireAt: time.Now().Unix() + 300,
 			}, nil)
 		})
@@ -797,13 +797,13 @@ func TestClientRefreshUnexpected(t *testing.T) {
 	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
-		return ConnectResult{ClientSideRefresh: false}, nil // we do not want client side refresh here.
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{ClientSideRefresh: false}, nil // we do not want client side refresh here.
 	})
 
 	node.OnConnect(func(client *Client) {
 		client.OnRefresh(func(event RefreshEvent, callback RefreshCallback) {
-			callback(RefreshResult{
+			callback(RefreshReply{
 				ExpireAt: time.Now().Unix() + 300,
 			}, nil)
 		})
@@ -887,7 +887,7 @@ func TestClientPublishHandler(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeResult{}, nil)
+			cb(SubscribeReply{}, nil)
 		})
 	})
 
@@ -915,20 +915,24 @@ func TestClientPublishHandler(t *testing.T) {
 		err := json.Unmarshal(e.Data, &msg)
 		require.NoError(t, err)
 		if msg.Input == "with disconnect" {
-			cb(PublishResult{}, DisconnectBadRequest)
+			cb(PublishReply{}, DisconnectBadRequest)
 			return
 		}
 		if msg.Input == "with error" {
-			cb(PublishResult{}, ErrorBadRequest)
+			cb(PublishReply{}, ErrorBadRequest)
 			return
 		}
 		if msg.Input == "with timestamp" {
 			msg.Timestamp = time.Now().Unix()
 			data, _ := json.Marshal(msg)
-			cb(node.Publish(e.Channel, data))
+			res, err := node.Publish(e.Channel, data)
+			require.NoError(t, err)
+			cb(PublishReply{
+				Result: &res,
+			}, nil)
 			return
 		}
-		cb(PublishResult{}, nil)
+		cb(PublishReply{}, nil)
 	}
 
 	rwWrapper := testReplyWriterWrapper()
@@ -989,16 +993,16 @@ func TestClientPresence(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-		cb(SubscribeResult{
+		cb(SubscribeReply{
 			Presence: true,
 		}, nil)
 	})
 
 	client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
-		cb(node.Presence(e.Channel))
+		cb(PresenceReply{}, nil)
 	})
 	client.OnPresenceStats(func(e PresenceStatsEvent, cb PresenceStatsCallback) {
-		cb(node.PresenceStats(e.Channel))
+		cb(PresenceStatsReply{}, nil)
 	})
 
 	connectClient(t, client)
@@ -1087,7 +1091,7 @@ func TestClientHistory(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
-		cb(node.History(e.Channel, WithNoLimit()))
+		cb(HistoryReply{}, nil)
 	})
 
 	for i := 0; i < 10; i++ {
@@ -1227,37 +1231,37 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 		counterMu.Unlock()
 
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeResult{}, nil)
+			cb(SubscribeReply{}, nil)
 		})
 
 		client.OnRPC(func(e RPCEvent, cb RPCCallback) {
-			cb(RPCResult{Data: []byte(`{"year": "2020"}`)}, nil)
+			cb(RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
 		})
 
 		client.OnMessage(func(event MessageEvent) {})
 
 		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
-			cb(HistoryResult{}, nil)
+			cb(HistoryReply{}, nil)
 		})
 
 		client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
-			cb(PresenceResult{}, nil)
+			cb(PresenceReply{}, nil)
 		})
 
 		client.OnPresenceStats(func(e PresenceStatsEvent, cb PresenceStatsCallback) {
-			cb(PresenceStatsResult{}, nil)
+			cb(PresenceStatsReply{}, nil)
 		})
 
 		client.OnRefresh(func(e RefreshEvent, cb RefreshCallback) {
-			cb(RefreshResult{}, nil)
+			cb(RefreshReply{}, nil)
 		})
 
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
-			cb(SubRefreshResult{}, nil)
+			cb(SubRefreshReply{}, nil)
 		})
 
 		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
-			cb(PublishResult{}, nil)
+			cb(PublishReply{}, nil)
 		})
 
 		client.OnDisconnect(func(event DisconnectEvent) {
@@ -1454,7 +1458,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeResult{
+			cb(SubscribeReply{
 				Presence: true,
 			}, nil)
 		})
@@ -1485,7 +1489,7 @@ func TestClientSubExpired(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeResult{
+			cb(SubscribeReply{
 				ExpireAt: time.Now().Unix() + 1,
 				Presence: true,
 			}, nil)
@@ -1570,7 +1574,7 @@ func TestClientHandleRPC(t *testing.T) {
 			rpcHandlerCalled = true
 			expectedData := []byte("{}")
 			require.Equal(t, expectedData, event.Data)
-			cb(RPCResult{}, nil)
+			cb(RPCReply{}, nil)
 		})
 	})
 
@@ -1631,7 +1635,7 @@ func TestClientHandlePublishNotAllowed(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnPublish(func(_ PublishEvent, cb PublishCallback) {
-			cb(PublishResult{}, ErrorPermissionDenied)
+			cb(PublishReply{}, ErrorPermissionDenied)
 		})
 	})
 
@@ -1658,7 +1662,7 @@ func TestClientHandlePublish(t *testing.T) {
 			expectedData := []byte(`{"hello":1}`)
 			require.Equal(t, expectedData, event.Data)
 			require.Equal(t, "test", event.Channel)
-			cb(PublishResult{}, nil)
+			cb(PublishReply{}, nil)
 		})
 	})
 
@@ -1692,8 +1696,8 @@ func TestClientSideRefresh(t *testing.T) {
 	})
 	client, _ := newClient(newCtx, node, transport)
 
-	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
-		return ConnectResult{
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
 			ClientSideRefresh: true,
 		}, nil
 	})
@@ -1703,7 +1707,7 @@ func TestClientSideRefresh(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnRefresh(func(e RefreshEvent, cb RefreshCallback) {
 			require.Equal(t, "test", e.Token)
-			cb(RefreshResult{
+			cb(RefreshReply{
 				ExpireAt: expireAt,
 			}, nil)
 		})
@@ -1732,8 +1736,8 @@ func TestClientSideSubRefresh(t *testing.T) {
 	})
 	client, _ := newClient(newCtx, node, transport)
 
-	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
-		return ConnectResult{
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
 			ClientSideRefresh: true,
 		}, nil
 	})
@@ -1742,7 +1746,7 @@ func TestClientSideSubRefresh(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeResult{
+			cb(SubscribeReply{
 				ExpireAt:          time.Now().Unix() + 10,
 				ClientSideRefresh: true,
 			}, nil)
@@ -1750,7 +1754,7 @@ func TestClientSideSubRefresh(t *testing.T) {
 
 		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 			require.Equal(t, "test_token", e.Token)
-			cb(SubRefreshResult{
+			cb(SubRefreshReply{
 				ExpireAt: expireAt,
 			}, nil)
 		})
@@ -1823,7 +1827,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	// refreshed but expired.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
 		require.Equal(t, "channel", event.Channel)
-		cb(SubRefreshResult{Expired: true}, nil)
+		cb(SubRefreshReply{Expired: true}, nil)
 	}
 	nowTime = time.Unix(200, 0)
 	client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second, func(b bool) {
@@ -1833,7 +1837,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	// refreshed but not really.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
 		require.Equal(t, "channel", event.Channel)
-		cb(SubRefreshResult{ExpireAt: 150}, nil)
+		cb(SubRefreshReply{ExpireAt: 150}, nil)
 	}
 	nowTime = time.Unix(200, 0)
 	client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second, func(b bool) {
@@ -1843,7 +1847,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	// refreshed but unknown channel.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
 		require.Equal(t, "channel", event.Channel)
-		cb(SubRefreshResult{
+		cb(SubRefreshReply{
 			ExpireAt: 250,
 			Info:     []byte("info"),
 		}, nil)
@@ -1858,7 +1862,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	client.channels["channel"] = channelContext{}
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
 		require.Equal(t, "channel", event.Channel)
-		cb(SubRefreshResult{
+		cb(SubRefreshReply{
 			ExpireAt: 250,
 			Info:     []byte("info"),
 		}, nil)
@@ -1873,7 +1877,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 
 	// Error from handler.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
-		cb(SubRefreshResult{}, DisconnectExpired)
+		cb(SubRefreshReply{}, DisconnectExpired)
 	}
 	nowTime = time.Unix(200, 0)
 	client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second, func(b bool) {

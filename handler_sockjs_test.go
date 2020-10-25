@@ -26,11 +26,11 @@ func TestSockjsHandler(t *testing.T) {
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 
-	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		require.Equal(t, transportSockJS, event.Transport.Name())
 		require.Equal(t, ProtocolTypeJSON, event.Transport.Protocol())
 		require.Equal(t, EncodingTypeJSON, event.Transport.Encoding())
-		return ConnectResult{
+		return ConnectReply{
 			Credentials: &Credentials{UserID: "user"},
 			Data:        []byte(`{"SockJS connect response": 1}`),
 		}, nil

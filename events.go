@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"time"
 )
 
 // ConnectEvent contains fields related to connecting event.
@@ -20,8 +21,8 @@ type ConnectEvent struct {
 	Transport TransportInfo
 }
 
-// ConnectResult contains reaction to ConnectEvent.
-type ConnectResult struct {
+// ConnectReply contains reaction to ConnectEvent.
+type ConnectReply struct {
 	// Context allows to return modified context.
 	Context context.Context
 	// Credentials should be set if app wants to authenticate connection.
@@ -52,7 +53,7 @@ type Subscription struct {
 }
 
 // ConnectingHandler called when new client authenticates on server.
-type ConnectingHandler func(context.Context, ConnectEvent) (ConnectResult, error)
+type ConnectingHandler func(context.Context, ConnectEvent) (ConnectReply, error)
 
 // ConnectHandler called when client connected to server and ready to communicate.
 type ConnectHandler func(*Client)
@@ -65,8 +66,8 @@ type RefreshEvent struct {
 	Token string
 }
 
-// RefreshResult contains fields determining the reaction on refresh event.
-type RefreshResult struct {
+// RefreshReply contains fields determining the reaction on refresh event.
+type RefreshReply struct {
 	// Expired tells Centrifuge that connection expired. In this case connection will be
 	// closed with DisconnectExpired.
 	Expired bool
@@ -80,7 +81,7 @@ type RefreshResult struct {
 
 // RefreshCallback should be called as soon as handler decides what to do
 // with connection refresh event.
-type RefreshCallback func(RefreshResult, error)
+type RefreshCallback func(RefreshReply, error)
 
 // RefreshHandler called when it's time to validate client connection and
 // update it's expiration time if it's still actual.
@@ -92,7 +93,7 @@ type RefreshCallback func(RefreshResult, error)
 // set and connection expiration time happens (by timer) – refresh handler will
 // be called.
 //
-// If ClientSideRefresh in ConnectResult inside ConnectingHandler set to true then
+// If ClientSideRefresh in ConnectReply inside ConnectingHandler set to true then
 // library uses client-side refresh mechanism. In this case library relies on
 // Refresh commands sent from client periodically to refresh connection. Refresh
 // command contains updated connection token.
@@ -131,10 +132,10 @@ type SubscribeEvent struct {
 
 // SubscribeCallback should be called as soon as handler decides what to do
 // with connection subscribe event.
-type SubscribeCallback func(SubscribeResult, error)
+type SubscribeCallback func(SubscribeReply, error)
 
-// SubscribeResult contains fields determining the reaction on subscribe event.
-type SubscribeResult struct {
+// SubscribeReply contains fields determining the reaction on subscribe event.
+type SubscribeReply struct {
 	// ExpireAt defines time in future when subscription should expire,
 	// zero value means no expiration.
 	ExpireAt int64
@@ -173,12 +174,30 @@ type PublishEvent struct {
 	Channel string
 	// Data client wants to publish.
 	Data []byte
-	// Info about client connection.
-	Info *ClientInfo
+	// ClientInfo about client connection.
+	ClientInfo *ClientInfo
 }
 
-// PublishCallback should be called with PublishResult or error.
-type PublishCallback func(PublishResult, error)
+// PublishReply contains fields determining the result on publish.
+type PublishReply struct {
+	// Control history size.
+	HistorySize int
+	// Control history TTL.
+	HistoryTTL time.Duration
+	// ClientInfo to include into Publication. By default no ClientInfo will be appended.
+	ClientInfo *ClientInfo
+
+	// Result if set will tell Centrifuge that message already published to
+	// channel by handler code. In this case Centrifuge won't try to publish
+	// into channel again after handler returned PublishReply. This can be
+	// useful if you need to know new Publication offset in your code or you
+	// want to make sure message successfully published to Engine on server
+	// side (otherwise only client will get an error).
+	Result *PublishResult
+}
+
+// PublishCallback should be called with PublishReply or error.
+type PublishCallback func(PublishReply, error)
 
 // PublishHandler called when client publishes into channel.
 type PublishHandler func(PublishEvent, PublishCallback)
@@ -194,9 +213,9 @@ type SubRefreshEvent struct {
 	Token string
 }
 
-// SubRefreshResult contains fields determining the reaction on
+// SubRefreshReply contains fields determining the reaction on
 // subscription refresh event.
-type SubRefreshResult struct {
+type SubRefreshReply struct {
 	// Expired tells Centrifuge that subscription expired. In this case connection will be
 	// closed with DisconnectExpired.
 	Expired bool
@@ -208,12 +227,12 @@ type SubRefreshResult struct {
 
 // SubRefreshCallback should be called as soon as handler decides what to do
 // with connection SubRefreshEvent.
-type SubRefreshCallback func(SubRefreshResult, error)
+type SubRefreshCallback func(SubRefreshReply, error)
 
 // SubRefreshHandler called when it's time to validate client subscription to channel and
 // update it's state if needed.
 //
-// If ClientSideRefresh in SubscribeResult inside SubscribeHandler set to true then
+// If ClientSideRefresh in SubscribeReply inside SubscribeHandler set to true then
 // library uses client-side subscription refresh mechanism. In this case library relies on
 // SubRefresh commands sent from client periodically to refresh subscription. SubRefresh
 // command contains updated subscription token.
@@ -228,15 +247,15 @@ type RPCEvent struct {
 	Data []byte
 }
 
-// RPCResult contains fields determining the reaction on rpc request.
-type RPCResult struct {
+// RPCReply contains fields determining the reaction on rpc request.
+type RPCReply struct {
 	// Data to return in RPC reply to client.
 	Data []byte
 }
 
 // RPCCallback should be called as soon as handler decides what to do
 // with connection RPCEvent.
-type RPCCallback func(RPCResult, error)
+type RPCCallback func(RPCReply, error)
 
 // RPCHandler must handle incoming command from client.
 type RPCHandler func(RPCEvent, RPCCallback)
@@ -255,8 +274,13 @@ type PresenceEvent struct {
 	Channel string
 }
 
-// PresenceCallback should be called with PresenceResult or error.
-type PresenceCallback func(PresenceResult, error)
+// PresenceReply contains fields determining the reaction on presence request.
+type PresenceReply struct {
+	Result *PresenceResult
+}
+
+// PresenceCallback should be called with PresenceReply or error.
+type PresenceCallback func(PresenceReply, error)
 
 // PresenceHandler called when presence request received from client.
 type PresenceHandler func(PresenceEvent, PresenceCallback)
@@ -267,10 +291,12 @@ type PresenceStatsEvent struct {
 }
 
 // PresenceStatsReply contains fields determining the reaction on presence request.
-type PresenceStatsReply struct{}
+type PresenceStatsReply struct {
+	Result *PresenceStatsResult
+}
 
-// PresenceStatsCallback should be called with PresenceStatsResult or error.
-type PresenceStatsCallback func(PresenceStatsResult, error)
+// PresenceStatsCallback should be called with PresenceStatsReply or error.
+type PresenceStatsCallback func(PresenceStatsReply, error)
 
 // PresenceStatsHandler must handle incoming command from client.
 type PresenceStatsHandler func(PresenceStatsEvent, PresenceStatsCallback)
@@ -280,8 +306,13 @@ type HistoryEvent struct {
 	Channel string
 }
 
-// HistoryCallback should be called with HistoryResult or error.
-type HistoryCallback func(HistoryResult, error)
+// HistoryReply contains fields determining the reaction on history request.
+type HistoryReply struct {
+	Result *HistoryResult
+}
+
+// HistoryCallback should be called with HistoryReply or error.
+type HistoryCallback func(HistoryReply, error)
 
 // HistoryHandler must handle incoming command from client.
 type HistoryHandler func(HistoryEvent, HistoryCallback)

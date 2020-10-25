@@ -63,7 +63,7 @@ func main() {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			cb(centrifuge.SubscribeResult{
+			cb(centrifuge.SubscribeReply{
 				Presence:  true,
 				JoinLeave: true,
 			}, nil)
@@ -75,7 +75,7 @@ func main() {
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			cb(node.Publish(e.Channel, e.Data))
+			cb(centrifuge.PublishReply{}, nil)
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {

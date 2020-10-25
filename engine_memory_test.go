@@ -528,7 +528,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			node := nodeWithMemoryEngineNoHandlers()
 			node.OnConnect(func(client *Client) {
 				client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-					cb(SubscribeResult{Recover: true}, nil)
+					cb(SubscribeReply{Recover: true}, nil)
 				})
 			})
 

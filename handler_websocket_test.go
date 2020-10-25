@@ -46,8 +46,8 @@ func TestWebsocketHandlerPing(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
-	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
-		return ConnectResult{
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
 			Credentials: &Credentials{
 				UserID: "test",
 			},
@@ -105,9 +105,9 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 
 	var graceCh chan struct{}
 
-	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectResult, error) {
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		graceCh = event.Transport.(*websocketTransport).graceCh
-		return ConnectResult{}, DisconnectInvalidToken
+		return ConnectReply{}, DisconnectInvalidToken
 	})
 
 	connectRequest := &protocol.ConnectRequest{

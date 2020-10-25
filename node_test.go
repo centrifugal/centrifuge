@@ -118,10 +118,10 @@ func nodeWithMemoryEngine() *Node {
 	n := nodeWithMemoryEngineNoHandlers()
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeResult{}, nil)
+			cb(SubscribeReply{}, nil)
 		})
 		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
-			cb(PublishResult{}, nil)
+			cb(PublishReply{}, nil)
 		})
 	})
 	return n
@@ -240,7 +240,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 	done := make(chan struct{})
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeResult{}, nil)
+			cb(SubscribeReply{}, nil)
 		})
 		client.OnUnsubscribe(func(event UnsubscribeEvent) {
 			require.Equal(t, "42", client.UserID())
@@ -418,7 +418,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, SubscribeResult{}, rwWrapper.rw, false)
+	}, SubscribeReply{}, rwWrapper.rw, false)
 	require.Nil(b, subCtx.disconnect)
 }
 
@@ -547,7 +547,7 @@ func TestNode_handleControl(t *testing.T) {
 		done := make(chan struct{})
 		n.OnConnect(func(client *Client) {
 			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-				cb(SubscribeResult{}, nil)
+				cb(SubscribeReply{}, nil)
 			})
 			client.OnUnsubscribe(func(event UnsubscribeEvent) {
 				require.Equal(t, "42", client.UserID())
@@ -596,7 +596,7 @@ func TestNode_handleControl(t *testing.T) {
 		done := make(chan struct{})
 		n.OnConnect(func(client *Client) {
 			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-				cb(SubscribeResult{}, nil)
+				cb(SubscribeReply{}, nil)
 			})
 			client.OnDisconnect(func(event DisconnectEvent) {
 				require.Equal(t, "42", client.UserID())
