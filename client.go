@@ -1873,10 +1873,7 @@ func errorDisconnectContext(replyError *Error, disconnect *Disconnect) subscribe
 		ctx.disconnect = disconnect
 		return ctx
 	}
-	if replyError != nil {
-		ctx.err = replyError
-		return ctx
-	}
+	ctx.err = replyError
 	return ctx
 }
 

@@ -301,11 +301,7 @@ func subscribeClient(t testing.TB, client *Client, ch string) *protocol.Subscrib
 func TestClientSubscribe(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	transport := newTestTransport(func() {})
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
-
+	client := newTestClient(t, node, "42")
 	connectClient(t, client)
 
 	require.Equal(t, 0, len(client.Channels()))
@@ -340,7 +336,7 @@ func TestClientSubscribe(t *testing.T) {
 	require.Equal(t, ErrorAlreadySubscribed, err)
 }
 
-func TestClientSubscribeError(t *testing.T) {
+func TestClientSubscribeEngineErrorOnSubscribe(t *testing.T) {
 	engine := NewTestEngine()
 	engine.errorOnSubscribe = true
 	node := nodeWithEngine(engine)
@@ -372,6 +368,115 @@ func TestClientSubscribeError(t *testing.T) {
 		require.Fail(t, "timeout waiting for channel close")
 	case <-done:
 	}
+}
+
+func TestClientSubscribeEngineErrorOnStreamTop(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnHistory = true
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Recover: true,
+			}, nil)
+		})
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectServerError, event.Disconnect)
+			close(done)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+}
+
+func TestClientSubscribeEngineErrorOnRecoverHistory(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnHistory = true
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Recover: true,
+			}, nil)
+		})
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectServerError, event.Disconnect)
+			close(done)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+		Recover: true,
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+}
+
+func TestClientSubscribeValidateErrors(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.ClientChannelLimit = 1
+	node.config.ChannelMaxLength = 10
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test2_very_long_channel_name",
+	}), rwWrapper.rw)
+	require.Equal(t, ErrorLimitExceeded, err)
+
+	subscribeClient(t, client, "test1")
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test2",
+	}), rwWrapper.rw)
+	require.Equal(t, ErrorLimitExceeded, err)
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "",
+	}), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
 }
 
 func TestClientSubscribeReceivePublication(t *testing.T) {

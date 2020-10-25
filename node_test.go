@@ -252,6 +252,15 @@ func TestNode_SetBroker(t *testing.T) {
 	require.Equal(t, n.broker, engine)
 }
 
+func TestNode_LogEnabled(t *testing.T) {
+	c := DefaultConfig
+	c.LogLevel = LogLevelInfo
+	c.LogHandler = func(entry LogEntry) {}
+	n, _ := New(c)
+	require.False(t, n.LogEnabled(LogLevelDebug))
+	require.True(t, n.LogEnabled(LogLevelInfo))
+}
+
 func TestNode_RunError(t *testing.T) {
 	engine := NewTestEngine()
 	engine.errorOnRun = true
