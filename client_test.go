@@ -340,6 +340,40 @@ func TestClientSubscribe(t *testing.T) {
 	require.Equal(t, ErrorAlreadySubscribed, err)
 }
 
+func TestClientSubscribeError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnSubscribe = true
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{}, nil)
+		})
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectServerError, event.Disconnect)
+			close(done)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+}
+
 func TestClientSubscribeReceivePublication(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -972,6 +1006,32 @@ func TestClientPublishHandler(t *testing.T) {
 	}
 }
 
+func TestClientPublishError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnPublish = true
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnPublish(func(event PublishEvent, cb PublishCallback) {
+			require.Equal(t, "test", event.Channel)
+			require.NotNil(t, event.ClientInfo)
+			cb(PublishReply{}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handlePublish(getJSONEncodedParams(t, &protocol.PublishRequest{
+		Channel: "test",
+		Data:    []byte(`{"input": "no time"}`),
+	}), rwWrapper.rw)
+	require.Nil(t, err)
+	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
+}
+
 func TestClientPing(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1037,6 +1097,30 @@ func TestClientPresence(t *testing.T) {
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
+func TestClientPresenceError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnPresence = true
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnPresence(func(event PresenceEvent, cb PresenceCallback) {
+			require.Equal(t, "test", event.Channel)
+			cb(PresenceReply{}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Nil(t, err)
+	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
+}
+
 func TestClientPresenceNotAvailable(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1084,6 +1168,30 @@ func TestClientPresenceStatsNotAvailable(t *testing.T) {
 	require.Equal(t, ErrorNotAvailable, err)
 }
 
+func TestClientPresenceStatsError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnPresenceStats = true
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnPresenceStats(func(event PresenceStatsEvent, cb PresenceStatsCallback) {
+			require.Equal(t, "test", event.Channel)
+			cb(PresenceStatsReply{}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Nil(t, err)
+	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
+}
+
 func TestClientHistory(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1115,6 +1223,30 @@ func TestClientHistory(t *testing.T) {
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	//require.Equal(t, 10, len(historyResp.Result.Publications))
+}
+
+func TestClientHistoryError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnHistory = true
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnHistory(func(event HistoryEvent, cb HistoryCallback) {
+			require.Equal(t, "test", event.Channel)
+			cb(HistoryReply{}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.Nil(t, err)
+	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
 }
 
 func TestClientHistoryNotAvailable(t *testing.T) {
