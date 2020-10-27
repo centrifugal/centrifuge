@@ -9,30 +9,34 @@ This release solves two important issues from v1.0.0 library milestone. It has A
 
 Since API changes are pretty big, let's look at example program and how to adapt it from v0.12.0 to v0.13.0.
 
+The program based on v0.12.0 API:
+
 ```go
 package main
 
 import (
+	"context"
+
 	"github.com/centrifugal/centrifuge"
 )
 
 func main() {
-    cfg := centrifuge.DefaultConfig
+	cfg := centrifuge.DefaultConfig
 	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
-        return centrifuge.ChannelOptions{
-            Presence:        true,
-            JoinLeave:       true,
-            HistorySize:     100,
-            HistoryLifetime: 300,
-            HistoryRecover:  true,
-        }, true, nil
+		return centrifuge.ChannelOptions{
+			Presence:        true,
+			JoinLeave:       true,
+			HistorySize:     100,
+			HistoryLifetime: 300,
+			HistoryRecover:  true,
+		}, true, nil
 	}
 
 	node, _ := centrifuge.New(cfg)
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
-            Credentials: &centrifuge.Credentials{UserID: "42"},
+			Credentials: &centrifuge.Credentials{UserID: "42"},
 			// Subscribe to server-side channel.
 			Channels: []string{"news"},
 		}, nil
@@ -58,13 +62,14 @@ func main() {
 }
 ```
 
-Now it becomes:
+With v0.13.0 becomes:
 
 ```go
 package main
 
 import (
-    "time"
+	"context"
+	"time"
 
 	"github.com/centrifugal/centrifuge"
 )
@@ -74,35 +79,35 @@ func main() {
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
-            Credentials: &centrifuge.Credentials{UserID: "42"},
+			Credentials: &centrifuge.Credentials{UserID: "42"},
 			// Subscribe to server-side channel.
 			Subscriptions: []centrifuge.Subscription{
-                {Channel: "news", Presence: true, JoinLeave: true, Recover: true},
-            },
+				{Channel: "news", Presence: true, JoinLeave: true, Recover: true},
+			},
 		}, nil
 	})
 
 	node.OnConnect(func(client *centrifuge.Client) {
 		println("client connected")
 
-        client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-            cb(centrifuge.SubscribeReply{
-                Presence: true, JoinLeave: true, Recover: true,
-            }, nil)
-        })
-    
-        client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-            // BTW you can publish here explicitly using node.Publish method – see Result
-            // field of PublishReply and chat_json example.
-            cb(centrifuge.PublishReply{
-                HistorySize: 100,
-                HistoryTTL: 5 * time.Minute,
-            }, nil)
-        })
+		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+			cb(centrifuge.SubscribeReply{
+				Presence: true, JoinLeave: true, Recover: true,
+			}, nil)
+		})
 
-        client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
-            println("client disconnected")
-        })
+		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
+			// BTW you can publish here explicitly using node.Publish method – see Result
+			// field of PublishReply and chat_json example.
+			cb(centrifuge.PublishReply{
+				HistorySize: 100,
+				HistoryTTL:  5 * time.Minute,
+			}, nil)
+		})
+
+		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+			println("client disconnected")
+		})
 	})
 
 	_ = node.Run()
