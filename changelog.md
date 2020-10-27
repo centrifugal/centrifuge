@@ -62,7 +62,7 @@ func main() {
 }
 ```
 
-With v0.13.0 becomes:
+With v0.13.0 the same program becomes:
 
 ```go
 package main
@@ -116,7 +116,9 @@ func main() {
 
 See [new example that demonstrates concurrency](https://github.com/centrifugal/centrifuge/tree/master/_examples/concurrency) using bounded semaphore.
 
-Also, note that every feature enabled for a channel increases resource usage on a server, so you should only enable presence, recovery, join/leave features and maintaining channel history only in channels where necessary.
+Note that every feature enabled for a channel increases resource usage on a server. You should only enable presence, recovery, join/leave features and maintaining history in channels where this is necessary.
+
+See also updated [Tips and tricks](https://github.com/centrifugal/centrifuge#tips-and-tricks) section in a README – it now contains information about connection life cycle and event handler concurrency. 
 
 v0.12.0
 =======
