@@ -1,3 +1,118 @@
+v0.13.0
+=======
+
+This release solves two important issues from v1.0.0 library milestone. It has API changes, though as always it's possible to implement the same as before, and adapting new version should be pretty straightforward.
+
+* [#163](https://github.com/centrifugal/centrifuge/issues/163) Provide a way to add concurrent processing of protocol commands. Before this change protocol commands could only be processed one by one. The obvious drawback in this case is that one slow RPC could result into stopping other requests from being processed thus affecting overall latency. This required changing client handler API and use asynchronous callback style API for returning replies from event handlers. This approach while not being very idiomatic allows using whatever concurrency strategy developer wants without losing the possibility to control event order.
+* [#161](https://github.com/centrifugal/centrifuge/issues/161) Eliminating `ChannelOptionsFunc` – now all channel options can be provided when calling `Publish` operation (history size and TTL) or by returning from event handlers inside `SubscribeReply` (enabling channel presence, join/leave messages, recovery in a channel). This means that channel options can now be controlled per-connection (not only per channel as before). For example if you need admin connection to subscribe to channel but not participate in channel presence – you are able to not enable presence for that connection.  
+* Server-side subscriptions now set over `Subscriptions` field (instead of `Channels`). `Subscription` struct has channel options, so you can explicitly provide them. Again – with per-connection resolution.
+
+Since API changes are pretty big, let's look at example program and how to adapt it from v0.12.0 to v0.13.0.
+
+```go
+package main
+
+import (
+	"github.com/centrifugal/centrifuge"
+)
+
+func main() {
+    cfg := centrifuge.DefaultConfig
+	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
+        return centrifuge.ChannelOptions{
+            Presence:        true,
+            JoinLeave:       true,
+            HistorySize:     100,
+            HistoryLifetime: 300,
+            HistoryRecover:  true,
+        }, true, nil
+	}
+
+	node, _ := centrifuge.New(cfg)
+
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		return centrifuge.ConnectReply{
+            Credentials: &centrifuge.Credentials{UserID: "42"},
+			// Subscribe to server-side channel.
+			Channels: []string{"news"},
+		}, nil
+	})
+
+	node.OnConnect(func(c *centrifuge.Client) {
+		println("client connected")
+	})
+
+	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
+		return centrifuge.SubscribeReply{}, nil
+	})
+
+	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
+		return centrifuge.PublishReply{}, nil
+	})
+
+	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
+		println("client disconnected")
+	})
+
+	_ = node.Run()
+}
+```
+
+Now it becomes:
+
+```go
+package main
+
+import (
+    "time"
+
+	"github.com/centrifugal/centrifuge"
+)
+
+func main() {
+	node, _ := centrifuge.New(centrifuge.DefaultConfig)
+
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		return centrifuge.ConnectReply{
+            Credentials: &centrifuge.Credentials{UserID: "42"},
+			// Subscribe to server-side channel.
+			Subscriptions: []centrifuge.Subscription{
+                {Channel: "news", Presence: true, JoinLeave: true, Recover: true},
+            },
+		}, nil
+	})
+
+	node.OnConnect(func(client *centrifuge.Client) {
+		println("client connected")
+
+        client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+            cb(centrifuge.SubscribeReply{
+                Presence: true, JoinLeave: true, Recover: true,
+            }, nil)
+        })
+    
+        client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
+            // BTW you can publish here explicitly using node.Publish method – see Result
+            // field of PublishReply and chat_json example.
+            cb(centrifuge.PublishReply{
+                HistorySize: 100,
+                HistoryTTL: 5 * time.Minute,
+            }, nil)
+        })
+
+        client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+            println("client disconnected")
+        })
+	})
+
+	_ = node.Run()
+}
+```
+
+See [new example that demonstrates concurrency](https://github.com/centrifugal/centrifuge/tree/master/_examples/concurrency) using bounded semaphore.
+
+Also, note that every feature enabled for a channel increases resource usage on a server, so you should only enable presence, recovery, join/leave features and maintaining channel history only in channels where necessary.
+
 v0.12.0
 =======
 
