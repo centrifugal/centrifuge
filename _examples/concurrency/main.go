@@ -59,7 +59,9 @@ func main() {
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
-			Channels: []string{"#" + cred.UserID},
+			Subscriptions: []centrifuge.Subscription{
+				{Channel: "#" + cred.UserID},
+			},
 		}, nil
 	})
 
@@ -93,31 +95,6 @@ func main() {
 				time.Sleep(100 * time.Millisecond)
 				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
 			}()
-		})
-
-		client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
-			cb(centrifuge.HistoryReply{}, nil)
-		})
-
-		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
-			cb(centrifuge.PresenceReply{}, nil)
-		})
-
-		client.OnPresenceStats(func(e centrifuge.PresenceStatsEvent, cb centrifuge.PresenceStatsCallback) {
-			cb(centrifuge.PresenceStatsReply{}, nil)
-		})
-
-		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
-			cb(centrifuge.RefreshReply{}, nil)
-		})
-
-		client.OnSubRefresh(func(e centrifuge.SubRefreshEvent, cb centrifuge.SubRefreshCallback) {
-			cb(centrifuge.SubRefreshReply{}, nil)
-		})
-
-		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			log.Printf("Publish from user: %s, data: %s, channel: %s", client.UserID(), string(e.Data), e.Channel)
-			cb(centrifuge.PublishReply{}, nil)
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {

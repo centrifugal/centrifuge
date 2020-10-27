@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,21 @@ import (
 )
 
 type TestEngine struct {
+	errorOnRun            bool
+	errorOnSubscribe      bool
+	errorOnUnsubscribe    bool
+	errorOnPublish        bool
+	errorOnPublishJoin    bool
+	errorOnPublishLeave   bool
+	errorOnPublishControl bool
+	errorOnPresence       bool
+	errorOnPresenceStats  bool
+	errorOnAddPresence    bool
+	errorOnRemovePresence bool
+	errorOnHistory        bool
+	errorOnChannels       bool
+	errorOnRemoveHistory  bool
+
 	publishCount        int32
 	publishJoinCount    int32
 	publishLeaveCount   int32
@@ -27,81 +43,123 @@ func NewTestEngine() *TestEngine {
 }
 
 func (e *TestEngine) Run(_ BrokerEventHandler) error {
+	if e.errorOnRun {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Publish(_ string, _ *Publication, _ PublishOptions) (StreamPosition, error) {
 	atomic.AddInt32(&e.publishCount, 1)
+	if e.errorOnPublish {
+		return StreamPosition{}, errors.New("boom")
+	}
 	return StreamPosition{}, nil
 }
 
 func (e *TestEngine) PublishJoin(_ string, _ *ClientInfo) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
+	if e.errorOnPublishJoin {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) PublishLeave(_ string, _ *ClientInfo) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
+	if e.errorOnPublishLeave {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) PublishControl(_ []byte) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
+	if e.errorOnPublishControl {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Subscribe(_ string) error {
+	if e.errorOnSubscribe {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Unsubscribe(_ string) error {
+	if e.errorOnUnsubscribe {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) AddPresence(_ string, _ string, _ *ClientInfo, _ time.Duration) error {
+	if e.errorOnAddPresence {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) RemovePresence(_ string, _ string) error {
+	if e.errorOnRemovePresence {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Presence(_ string) (map[string]*ClientInfo, error) {
+	if e.errorOnPresence {
+		return nil, errors.New("boom")
+	}
 	return map[string]*ClientInfo{}, nil
 }
 
 func (e *TestEngine) PresenceStats(_ string) (PresenceStats, error) {
+	if e.errorOnPresenceStats {
+		return PresenceStats{}, errors.New("boom")
+	}
 	return PresenceStats{}, nil
 }
 
 func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*Publication, StreamPosition, error) {
+	if e.errorOnHistory {
+		return nil, StreamPosition{}, errors.New("boom")
+	}
 	return nil, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, _ *Publication, _ *ChannelOptions) (StreamPosition, bool, error) {
-	return StreamPosition{}, false, nil
-}
-
 func (e *TestEngine) RemoveHistory(_ string) error {
+	if e.errorOnRemoveHistory {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Channels() ([]string, error) {
+	if e.errorOnChannels {
+		return nil, errors.New("boom")
+	}
 	return []string{}, nil
 }
 
-func nodeWithTestEngine() *Node {
+func nodeWithEngine(engine Engine) *Node {
 	c := DefaultConfig
 	n, err := New(c)
 	if err != nil {
 		panic(err)
 	}
-	n.SetEngine(NewTestEngine())
+	n.SetEngine(engine)
 	err = n.Run()
 	if err != nil {
 		panic(err)
 	}
 	return n
+}
+
+func nodeWithTestEngine() *Node {
+	return nodeWithEngine(NewTestEngine())
 }
 
 func nodeWithMemoryEngineNoHandlers() *Node {
@@ -192,6 +250,35 @@ func TestNode_SetBroker(t *testing.T) {
 	engine := testMemoryEngine()
 	n.SetBroker(engine)
 	require.Equal(t, n.broker, engine)
+}
+
+func TestNode_LogEnabled(t *testing.T) {
+	c := DefaultConfig
+	c.LogLevel = LogLevelInfo
+	c.LogHandler = func(entry LogEntry) {}
+	n, _ := New(c)
+	require.False(t, n.LogEnabled(LogLevelDebug))
+	require.True(t, n.LogEnabled(LogLevelInfo))
+}
+
+func TestNode_RunError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnRun = true
+	node, err := New(DefaultConfig)
+	require.NoError(t, err)
+	node.SetEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	require.Error(t, node.Run())
+}
+
+func TestNode_RunPubControlError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnPublishControl = true
+	node, err := New(DefaultConfig)
+	require.NoError(t, err)
+	node.SetEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	require.Error(t, node.Run())
 }
 
 func TestNode_SetPresenceManager(t *testing.T) {
@@ -422,7 +509,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, ChannelOptions{}, SubscribeReply{}, rwWrapper.rw, false)
+	}, SubscribeReply{}, rwWrapper.rw, false)
 	require.Nil(b, subCtx.disconnect)
 }
 
@@ -471,37 +558,38 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 	}
 }
 
-func BenchmarkHistory(b *testing.B) {
-	e := testMemoryEngine()
-	numMessages := 100
-	e.node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
-		return ChannelOptions{
-			HistorySize:     numMessages,
-			HistoryLifetime: 60,
-			HistoryRecover:  true,
-		}, true, nil
-	}
-
-	channel := "test"
-
-	for i := 1; i <= numMessages; i++ {
-		_, err := e.node.Publish(channel, []byte(`{}`))
-		require.NoError(b, err)
-	}
-
-	b.ResetTimer()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := e.node.History(channel)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-	}
-	b.StopTimer()
-	b.ReportAllocs()
-}
+//
+//func BenchmarkHistory(b *testing.B) {
+//	e := testMemoryEngine()
+//	numMessages := 100
+//	e.node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
+//		return ChannelOptions{
+//			HistorySize:     numMessages,
+//			HistoryLifetime: 60,
+//			HistoryRecover:  true,
+//		}, true, nil
+//	}
+//
+//	channel := "test"
+//
+//	for i := 1; i <= numMessages; i++ {
+//		_, err := e.node.Publish(channel, []byte(`{}`))
+//		require.NoError(b, err)
+//	}
+//
+//	b.ResetTimer()
+//
+//	b.ResetTimer()
+//	for i := 0; i < b.N; i++ {
+//		_, err := e.node.History(channel)
+//		if err != nil {
+//			b.Fatal(err)
+//		}
+//
+//	}
+//	b.StopTimer()
+//	b.ReportAllocs()
+//}
 
 func TestNode_handleControl(t *testing.T) {
 	t.Run("BrokenData", func(t *testing.T) {

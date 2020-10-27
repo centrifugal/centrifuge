@@ -1010,18 +1010,10 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 	node := nodeWithRedisEngine(t, useStreams, useCluster)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
-		return ChannelOptions{
-			HistorySize:     tt.HistorySize,
-			HistoryLifetime: tt.HistoryLifetime,
-			HistoryRecover:  true,
-		}, true, nil
-	}
-
 	channel := "test_recovery_redis_" + tt.Name
 
 	for i := 1; i <= tt.NumPublications; i++ {
-		_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
+		_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(tt.HistorySize, time.Duration(tt.HistoryLifetime)*time.Second))
 		require.NoError(t, err)
 	}
 

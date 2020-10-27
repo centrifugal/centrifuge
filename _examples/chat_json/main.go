@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -67,21 +66,6 @@ func main() {
 	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
 
-	cfg.ChannelOptionsFunc = func(channel string) (centrifuge.ChannelOptions, bool, error) {
-		if channel == exampleChannel || strings.HasPrefix(channel, "#") {
-			// For exampleChannel and personal channel turn on all features. You should only
-			// enable channel options where really needed to consume less resources on server.
-			return centrifuge.ChannelOptions{
-				Presence:        true,
-				JoinLeave:       true,
-				HistorySize:     100,
-				HistoryLifetime: 300,
-				HistoryRecover:  true,
-			}, true, nil
-		}
-		return centrifuge.ChannelOptions{}, true, nil
-	}
-
 	node, _ := centrifuge.New(cfg)
 
 	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
@@ -94,7 +78,9 @@ func main() {
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
-			Channels: []string{"#" + cred.UserID},
+			Subscriptions: []centrifuge.Subscription{
+				{Channel: "#" + cred.UserID, Recover: true, Presence: true, JoinLeave: true},
+			},
 		}, nil
 	})
 
@@ -133,13 +119,16 @@ func main() {
 		})
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			reply := centrifuge.SubscribeReply{}
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			if !channelSubscribeAllowed(e.Channel) {
-				cb(reply, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
-			cb(reply, nil)
+			cb(centrifuge.SubscribeReply{
+				Recover:   true,
+				Presence:  true,
+				JoinLeave: true,
+			}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -147,31 +136,28 @@ func main() {
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			reply := centrifuge.PublishReply{}
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 			if !client.IsSubscribed(e.Channel) {
-				cb(reply, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
+
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)
 			if err != nil {
-				cb(reply, centrifuge.ErrorBadRequest)
+				cb(centrifuge.PublishReply{}, centrifuge.ErrorBadRequest)
 				return
 			}
 			msg.Timestamp = time.Now().Unix()
 			data, _ := json.Marshal(msg)
 
-			// In this example we take over publish since we want to publish modified data to channel.
-			// We could also return an empty PublishReply to let Centrifuge proceed with publish itself
-			// and just let client publication pass through towards a channel.
-			if result, err := node.Publish(e.Channel, data); err != nil {
-				cb(reply, err)
-				return
-			} else {
-				reply.Result = &result
-			}
-			cb(reply, nil)
+			result, err := node.Publish(
+				e.Channel, data,
+				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithClientInfo(e.ClientInfo),
+			)
+
+			cb(centrifuge.PublishReply{Result: &result}, err)
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
@@ -183,12 +169,11 @@ func main() {
 
 		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
 			log.Printf("user %s calls presence on %s", client.UserID(), e.Channel)
-			reply := centrifuge.PresenceReply{}
 			if !client.IsSubscribed(e.Channel) {
-				cb(reply, centrifuge.ErrorPermissionDenied)
+				cb(centrifuge.PresenceReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
-			cb(reply, nil)
+			cb(centrifuge.PresenceReply{}, nil)
 		})
 
 		client.OnMessage(func(e centrifuge.MessageEvent) {
@@ -208,12 +193,12 @@ func main() {
 		// Publish personal notifications for user 42 periodically.
 		i := 1
 		for {
-			_, err := node.Publish("#42", []byte(`{"personal": "`+strconv.Itoa(i)+`"}`))
+			_, err := node.Publish("#42", []byte(`{"personal": "`+strconv.Itoa(i)+`"}`), centrifuge.WithHistory(300, time.Minute))
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
 			}
 			i++
-			time.Sleep(5000 * time.Millisecond)
+			time.Sleep(10000 * time.Millisecond)
 		}
 	}()
 
@@ -221,7 +206,7 @@ func main() {
 		// Publish to channel periodically.
 		i := 1
 		for {
-			_, err := node.Publish("chat:index", []byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`))
+			_, err := node.Publish("chat:index", []byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`), centrifuge.WithHistory(300, time.Minute))
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
 			}

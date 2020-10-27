@@ -83,7 +83,7 @@ func runWrite(w *writer, t *benchmarkTransport) {
 // BenchmarkWriteMergeDisabled.
 func BenchmarkWriteMerge(b *testing.B) {
 	transport := newBenchmarkTransport()
-	defer transport.close()
+	defer func() { _ = transport.close() }()
 	writer := newWriter(writerConfig{
 		MaxMessagesInFrame: 4,
 		WriteFn:            transport.writeSingle,
@@ -100,7 +100,7 @@ func BenchmarkWriteMerge(b *testing.B) {
 
 func BenchmarkWriteMergeDisabled(b *testing.B) {
 	transport := newBenchmarkTransport()
-	defer transport.close()
+	defer func() { _ = transport.close() }()
 	writer := newWriter(writerConfig{
 		MaxMessagesInFrame: 1,
 		WriteFn:            transport.writeSingle,

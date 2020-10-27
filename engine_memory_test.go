@@ -522,20 +522,14 @@ var recoverTestChannels = []recoverTestChannel{
 	{"test_recovery_memory_seq_", true},
 }
 
-func setTestChannelOptions(c *Config, opts ChannelOptions) {
-	c.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
-		return opts, true, nil
-	}
-}
-
 func TestMemoryClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
-			node := nodeWithMemoryEngine()
-			setTestChannelOptions(&node.config, ChannelOptions{
-				HistorySize:     tt.HistorySize,
-				HistoryLifetime: tt.HistoryLifetime,
-				HistoryRecover:  true,
+			node := nodeWithMemoryEngineNoHandlers()
+			node.OnConnect(func(client *Client) {
+				client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+					cb(SubscribeReply{Recover: true}, nil)
+				})
 			})
 
 			for _, recoverTestChannel := range recoverTestChannels {
@@ -544,7 +538,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 				client := newTestClient(t, node, "42")
 
 				for i := 1; i <= tt.NumPublications; i++ {
-					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`))
+					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(tt.HistorySize, time.Duration(tt.HistoryLifetime)*time.Second))
 				}
 
 				time.Sleep(time.Duration(tt.Sleep) * time.Second)
@@ -594,13 +588,6 @@ type historyIterationTest struct {
 
 func (it *historyIterationTest) prepareHistoryIteration(t testing.TB, node *Node) StreamPosition {
 	numMessages := it.NumMessages
-	node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
-		return ChannelOptions{
-			HistorySize:     numMessages,
-			HistoryLifetime: 60,
-			HistoryRecover:  true,
-		}, true, nil
-	}
 
 	channel := historyIterationChannel
 
@@ -609,7 +596,7 @@ func (it *historyIterationTest) prepareHistoryIteration(t testing.TB, node *Node
 	startPosition := historyResult.StreamPosition
 
 	for i := 1; i <= numMessages; i++ {
-		_, err := node.Publish(channel, []byte(`{}`))
+		_, err := node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Minute))
 		require.NoError(t, err)
 	}
 

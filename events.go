@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"time"
 )
 
 // ConnectEvent contains fields related to connecting event.
@@ -20,7 +21,7 @@ type ConnectEvent struct {
 	Transport TransportInfo
 }
 
-// ConnectReply contains fields determining the reaction on auth event.
+// ConnectReply contains reaction to ConnectEvent.
 type ConnectReply struct {
 	// Context allows to return modified context.
 	Context context.Context
@@ -30,12 +31,25 @@ type ConnectReply struct {
 	Credentials *Credentials
 	// Data allows to set custom data in connect reply.
 	Data []byte
-	// Channels slice contains channels to subscribe connection to on server-side.
-	Channels []string
+	// Subs slice contains channels to subscribe connection to on server-side.
+	Subscriptions []Subscription
 	// ClientSideRefresh tells library to use client-side refresh logic:
 	// i.e. send refresh commands with new connection token. If not set
 	// then server-side refresh mechanism will be used.
 	ClientSideRefresh bool
+}
+
+// Subscription describes server-side client subscription to channel.
+type Subscription struct {
+	// Channel to subscribe connection to.
+	Channel string
+	// Recover turns on recovery option for channel. Make sure you are using recovery in channels
+	// that maintain Publication history stream.
+	Recover bool
+	// Presence turns on participating in channel presence.
+	Presence bool
+	// JoinLeave enables sending Join and Leave messages for this client in channel.
+	JoinLeave bool
 }
 
 // ConnectingHandler called when new client authenticates on server.
@@ -131,6 +145,13 @@ type SubscribeReply struct {
 	// SubRefresh commands with new Subscription Token. If not set then server-side
 	// SubRefresh handler will be used.
 	ClientSideRefresh bool
+	// Recover turns on recovery option for channel. Make sure you are using recovery in channels
+	// that maintain Publication history stream.
+	Recover bool
+	// Presence turns on participating in channel presence.
+	Presence bool
+	// JoinLeave enables sending Join and Leave messages for this client in channel.
+	JoinLeave bool
 }
 
 // SubscribeHandler called when client wants to subscribe on channel.
@@ -153,12 +174,19 @@ type PublishEvent struct {
 	Channel string
 	// Data client wants to publish.
 	Data []byte
-	// Info about client connection.
-	Info *ClientInfo
+	// ClientInfo about client connection.
+	ClientInfo *ClientInfo
 }
 
 // PublishReply contains fields determining the result on publish.
 type PublishReply struct {
+	// Control history size.
+	HistorySize int
+	// Control history TTL.
+	HistoryTTL time.Duration
+	// ClientInfo to include into Publication. By default no ClientInfo will be appended.
+	ClientInfo *ClientInfo
+
 	// Result if set will tell Centrifuge that message already published to
 	// channel by handler code. In this case Centrifuge won't try to publish
 	// into channel again after handler returned PublishReply. This can be
@@ -168,8 +196,7 @@ type PublishReply struct {
 	Result *PublishResult
 }
 
-// PublishCallback should be called as soon as handler decides what to do
-// with connection PublishEvent.
+// PublishCallback should be called with PublishReply or error.
 type PublishCallback func(PublishReply, error)
 
 // PublishHandler called when client publishes into channel.
@@ -248,10 +275,11 @@ type PresenceEvent struct {
 }
 
 // PresenceReply contains fields determining the reaction on presence request.
-type PresenceReply struct{}
+type PresenceReply struct {
+	Result *PresenceResult
+}
 
-// PresenceCallback should be called as soon as handler decides what to do
-// with connection PresenceEvent.
+// PresenceCallback should be called with PresenceReply or error.
 type PresenceCallback func(PresenceReply, error)
 
 // PresenceHandler called when presence request received from client.
@@ -263,10 +291,11 @@ type PresenceStatsEvent struct {
 }
 
 // PresenceStatsReply contains fields determining the reaction on presence request.
-type PresenceStatsReply struct{}
+type PresenceStatsReply struct {
+	Result *PresenceStatsResult
+}
 
-// PresenceStatsCallback should be called as soon as handler decides what to do
-// with connection PresenceStatsEvent.
+// PresenceStatsCallback should be called with PresenceStatsReply or error.
 type PresenceStatsCallback func(PresenceStatsReply, error)
 
 // PresenceStatsHandler must handle incoming command from client.
@@ -278,10 +307,11 @@ type HistoryEvent struct {
 }
 
 // HistoryReply contains fields determining the reaction on history request.
-type HistoryReply struct{}
+type HistoryReply struct {
+	Result *HistoryResult
+}
 
-// HistoryCallback should be called as soon as handler decides what to do
-// with connection HistoryEvent.
+// HistoryCallback should be called with HistoryReply or error.
 type HistoryCallback func(HistoryReply, error)
 
 // HistoryHandler must handle incoming command from client.
