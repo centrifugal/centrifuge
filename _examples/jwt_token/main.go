@@ -69,9 +69,9 @@ func main() {
 			}
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
-		subs := make([]centrifuge.Subscription, 0, len(token.Channels))
+		subs := make(map[string]centrifuge.SubscribeOptions, len(token.Channels))
 		for _, ch := range token.Channels {
-			subs = append(subs, centrifuge.Subscription{Channel: ch})
+			subs[ch] = centrifuge.SubscribeOptions{}
 		}
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{

@@ -64,9 +64,11 @@ func main() {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			cb(centrifuge.SubscribeReply{
-				Presence:  true,
-				JoinLeave: true,
-				Recover:   true,
+				Options: centrifuge.SubscribeOptions{
+					Presence:  true,
+					JoinLeave: true,
+					Recover:   true,
+				},
 			}, nil)
 		})
 
@@ -77,8 +79,10 @@ func main() {
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 			cb(centrifuge.PublishReply{
-				HistorySize: 100,
-				HistoryTTL:  5 * time.Second,
+				Options: centrifuge.PublishOptions{
+					HistorySize: 100,
+					HistoryTTL:  5 * time.Second,
+				},
 			}, nil)
 		})
 

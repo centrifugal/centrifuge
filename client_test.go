@@ -381,7 +381,7 @@ func TestClientSubscribeEngineErrorOnStreamTop(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Recover: true,
+				Options: SubscribeOptions{Recover: true},
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
@@ -416,9 +416,7 @@ func TestClientSubscribeEngineErrorOnRecoverHistory(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{
-				Recover: true,
-			}, nil)
+			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
 			require.Equal(t, DisconnectServerError, event.Disconnect)
@@ -644,9 +642,9 @@ func TestServerSideSubscriptions(t *testing.T) {
 
 	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
 		return ConnectReply{
-			Subscriptions: []Subscription{
-				{Channel: "server-side-1"},
-				{Channel: "$server-side-2"},
+			Subscriptions: map[string]SubscribeOptions{
+				"server-side-1":  {},
+				"$server-side-2": {},
 			},
 		}, nil
 	})
@@ -713,9 +711,7 @@ func TestClientSubscribeLast(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{
-				Recover: true,
-			}, nil)
+			cb(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
 		})
 	})
 
@@ -1158,9 +1154,7 @@ func TestClientPresence(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-		cb(SubscribeReply{
-			Presence: true,
-		}, nil)
+		cb(SubscribeReply{Options: SubscribeOptions{Presence: true}}, nil)
 	})
 
 	client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
@@ -1696,7 +1690,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
-				Presence: true,
+				Options: SubscribeOptions{Presence: true},
 			}, nil)
 		})
 	})
@@ -1727,8 +1721,10 @@ func TestClientSubExpired(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
-				ExpireAt: time.Now().Unix() + 1,
-				Presence: true,
+				Options: SubscribeOptions{
+					ExpireAt: time.Now().Unix() + 1,
+					Presence: true,
+				},
 			}, nil)
 		})
 
@@ -1984,7 +1980,9 @@ func TestClientSideSubRefresh(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
-				ExpireAt:          time.Now().Unix() + 10,
+				Options: SubscribeOptions{
+					ExpireAt: time.Now().Unix() + 10,
+				},
 				ClientSideRefresh: true,
 			}, nil)
 		})

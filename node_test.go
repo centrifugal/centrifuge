@@ -49,7 +49,7 @@ func (e *TestEngine) Run(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestEngine) Publish(_ string, _ *Publication, _ PublishOptions) (StreamPosition, error) {
+func (e *TestEngine) Publish(_ string, _ []byte, _ PublishOptions) (StreamPosition, error) {
 	atomic.AddInt32(&e.publishCount, 1)
 	if e.errorOnPublish {
 		return StreamPosition{}, errors.New("boom")
