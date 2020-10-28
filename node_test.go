@@ -501,10 +501,12 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 }
 
 func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
-	transport := newTestTransport(func() {})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
 	transport.setProtocolType(protoType)
 	transport.setSink(sink)
-	client := newTestClient(b, node, "test_user_id")
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "test"})
+	client, _ := newClient(newCtx, node, transport)
 	connectClient(b, client)
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -558,38 +560,30 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 	}
 }
 
-//
-//func BenchmarkHistory(b *testing.B) {
-//	e := testMemoryEngine()
-//	numMessages := 100
-//	e.node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
-//		return ChannelOptions{
-//			HistorySize:     numMessages,
-//			HistoryLifetime: 60,
-//			HistoryRecover:  true,
-//		}, true, nil
-//	}
-//
-//	channel := "test"
-//
-//	for i := 1; i <= numMessages; i++ {
-//		_, err := e.node.Publish(channel, []byte(`{}`))
-//		require.NoError(b, err)
-//	}
-//
-//	b.ResetTimer()
-//
-//	b.ResetTimer()
-//	for i := 0; i < b.N; i++ {
-//		_, err := e.node.History(channel)
-//		if err != nil {
-//			b.Fatal(err)
-//		}
-//
-//	}
-//	b.StopTimer()
-//	b.ReportAllocs()
-//}
+func BenchmarkHistory(b *testing.B) {
+	e := testMemoryEngine()
+	numMessages := 100
+
+	channel := "test"
+
+	for i := 1; i <= numMessages; i++ {
+		_, err := e.node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Minute))
+		require.NoError(b, err)
+	}
+
+	b.ResetTimer()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := e.node.History(channel)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+	}
+	b.StopTimer()
+	b.ReportAllocs()
+}
 
 func TestNode_handleControl(t *testing.T) {
 	t.Run("BrokenData", func(t *testing.T) {
