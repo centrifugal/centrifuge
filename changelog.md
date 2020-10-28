@@ -127,7 +127,7 @@ As you can see there are three important changes:
 
 1) You should now set up event handlers inside `node.OnConnect` closure
 2) Event handlers now have callback argument that you should call with corresponding Reply as soon as you have it
-3) For server-side subscriptions you should now return slice of `Subscription` instead of `[]string` Channels slice.
+3) For server-side subscriptions you should now return `Subscriptions` field in `ConnectReply` which is `map[string]SubscribeOptions` instead of `[]string` slice.
 
 See [new example that demonstrates concurrency](https://github.com/centrifugal/centrifuge/tree/master/_examples/concurrency) using bounded semaphore.
 
