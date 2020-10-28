@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"context"
-	"time"
 )
 
 // ConnectEvent contains fields related to connecting event.
@@ -31,25 +30,12 @@ type ConnectReply struct {
 	Credentials *Credentials
 	// Data allows to set custom data in connect reply.
 	Data []byte
-	// Subs slice contains channels to subscribe connection to on server-side.
-	Subscriptions []Subscription
+	// Subscriptions map contains channels to subscribe connection to on server-side.
+	Subscriptions map[string]SubscribeOptions
 	// ClientSideRefresh tells library to use client-side refresh logic:
 	// i.e. send refresh commands with new connection token. If not set
 	// then server-side refresh mechanism will be used.
 	ClientSideRefresh bool
-}
-
-// Subscription describes server-side client subscription to channel.
-type Subscription struct {
-	// Channel to subscribe connection to.
-	Channel string
-	// Recover turns on recovery option for channel. Make sure you are using recovery in channels
-	// that maintain Publication history stream.
-	Recover bool
-	// Presence turns on participating in channel presence.
-	Presence bool
-	// JoinLeave enables sending Join and Leave messages for this client in channel.
-	JoinLeave bool
 }
 
 // ConnectingHandler called when new client authenticates on server.
@@ -136,22 +122,13 @@ type SubscribeCallback func(SubscribeReply, error)
 
 // SubscribeReply contains fields determining the reaction on subscribe event.
 type SubscribeReply struct {
-	// ExpireAt defines time in future when subscription should expire,
-	// zero value means no expiration.
-	ExpireAt int64
-	// ChannelInfo defines custom channel information, zero value means no channel information.
-	ChannelInfo []byte
+	// Options to control subscription.
+	Options SubscribeOptions
+
 	// ClientSideRefresh tells library to use client-side refresh logic: i.e. send
 	// SubRefresh commands with new Subscription Token. If not set then server-side
 	// SubRefresh handler will be used.
 	ClientSideRefresh bool
-	// Recover turns on recovery option for channel. Make sure you are using recovery in channels
-	// that maintain Publication history stream.
-	Recover bool
-	// Presence turns on participating in channel presence.
-	Presence bool
-	// JoinLeave enables sending Join and Leave messages for this client in channel.
-	JoinLeave bool
 }
 
 // SubscribeHandler called when client wants to subscribe on channel.
@@ -180,12 +157,8 @@ type PublishEvent struct {
 
 // PublishReply contains fields determining the result on publish.
 type PublishReply struct {
-	// Control history size.
-	HistorySize int
-	// Control history TTL.
-	HistoryTTL time.Duration
-	// ClientInfo to include into Publication. By default no ClientInfo will be appended.
-	ClientInfo *ClientInfo
+	// Options to control publication.
+	Options PublishOptions
 
 	// Result if set will tell Centrifuge that message already published to
 	// channel by handler code. In this case Centrifuge won't try to publish

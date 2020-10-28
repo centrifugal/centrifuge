@@ -108,7 +108,11 @@ type push struct {
 }
 
 // Publish - see Engine interface description.
-func (b *NatsBroker) Publish(ch string, pub *centrifuge.Publication, _ centrifuge.PublishOptions) (centrifuge.StreamPosition, error) {
+func (b *NatsBroker) Publish(ch string, data []byte, opts centrifuge.PublishOptions) (centrifuge.StreamPosition, error) {
+	pub := &centrifuge.Publication{
+		Data: data,
+		Info: opts.ClientInfo,
+	}
 	data, err := json.Marshal(pub)
 	if err != nil {
 		return centrifuge.StreamPosition{}, err

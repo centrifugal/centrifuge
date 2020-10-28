@@ -16,14 +16,14 @@ func TestWithHistory(t *testing.T) {
 }
 
 func TestWithResubscribe(t *testing.T) {
-	opt := WithResubscribe()
+	opt := WithResubscribe(true)
 	opts := &UnsubscribeOptions{}
 	opt(opts)
 	require.Equal(t, true, opts.Resubscribe)
 }
 
 func TestWithReconnect(t *testing.T) {
-	opt := WithReconnect()
+	opt := WithReconnect(true)
 	opts := &DisconnectOptions{}
 	opt(opts)
 	require.Equal(t, true, opts.Reconnect)

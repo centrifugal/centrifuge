@@ -101,7 +101,9 @@ func main() {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			cb(centrifuge.SubscribeReply{
-				ExpireAt: time.Now().Unix() + 60,
+				Options: centrifuge.SubscribeOptions{
+					ExpireAt: time.Now().Unix() + 60,
+				},
 			}, nil)
 		})
 

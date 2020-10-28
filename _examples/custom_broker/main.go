@@ -64,8 +64,10 @@ func main() {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			cb(centrifuge.SubscribeReply{
-				Presence:  true,
-				JoinLeave: true,
+				Options: centrifuge.SubscribeOptions{
+					Presence:  true,
+					JoinLeave: true,
+				},
 			}, nil)
 		})
 

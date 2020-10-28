@@ -59,8 +59,8 @@ func main() {
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to personal several server-side channel.
-			Subscriptions: []centrifuge.Subscription{
-				{Channel: "#" + cred.UserID},
+			Subscriptions: map[string]centrifuge.SubscribeOptions{
+				"#" + cred.UserID: {},
 			},
 		}, nil
 	})

@@ -5,7 +5,10 @@ This release solves two important issues from v1.0.0 library milestone. It has A
 
 * [#163](https://github.com/centrifugal/centrifuge/issues/163) Provide a way to add concurrent processing of protocol commands. Before this change protocol commands could only be processed one by one. The obvious drawback in this case is that one slow RPC could result into stopping other requests from being processed thus affecting overall latency. This required changing client handler API and use asynchronous callback style API for returning replies from event handlers. This approach while not being very idiomatic allows using whatever concurrency strategy developer wants without losing the possibility to control event order.
 * [#161](https://github.com/centrifugal/centrifuge/issues/161) Eliminating `ChannelOptionsFunc` – now all channel options can be provided when calling `Publish` operation (history size and TTL) or by returning from event handlers inside `SubscribeReply` (enabling channel presence, join/leave messages, recovery in a channel). This means that channel options can now be controlled per-connection (not only per channel as before). For example if you need admin connection to subscribe to channel but not participate in channel presence – you are able to not enable presence for that connection.  
-* Server-side subscriptions now set over `Subscriptions` field (instead of `Channels`). `Subscription` struct has channel options, so you can explicitly provide them. Again – with per-connection resolution.
+* Server-side subscriptions now set over `Subscriptions` map (instead of `Channels`). Again – subscribe options can be set with per-connection resolution.
+* Change signature of `Publish` method in `Broker` interface – method now accepts `[]byte` data instead of `*Publication`.  
+* Function options for `Unsubbscribe` and `Disconnect` methods now have boolean argument.
+* History functional option `WithNoLimit` removed – use `WithLimit(centrifuge.NoLimit)` instead. 
 
 Since API changes are pretty big, let's look at example program and how to adapt it from v0.12.0 to v0.13.0.
 
@@ -81,8 +84,8 @@ func main() {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{UserID: "42"},
 			// Subscribe to server-side channel.
-			Subscriptions: []centrifuge.Subscription{
-				{Channel: "news", Presence: true, JoinLeave: true, Recover: true},
+			Subscriptions: map[string]centrifuge.SubscribeOptions{
+				"news": {Presence: true, JoinLeave: true, Recover: true},
 			},
 		}, nil
 	})
@@ -92,7 +95,11 @@ func main() {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			cb(centrifuge.SubscribeReply{
-				Presence: true, JoinLeave: true, Recover: true,
+				Options: centrifuge.SubscribeOptions{
+					Presence:  true,
+					JoinLeave: true,
+					Recover:   true,
+				},
 			}, nil)
 		})
 
@@ -100,8 +107,10 @@ func main() {
 			// BTW you can publish here explicitly using node.Publish method – see Result
 			// field of PublishReply and chat_json example.
 			cb(centrifuge.PublishReply{
-				HistorySize: 100,
-				HistoryTTL:  5 * time.Minute,
+				Options: centrifuge.PublishOptions{
+					HistorySize: 100,
+					HistoryTTL:  5 * time.Minute,
+				},
 			}, nil)
 		})
 
@@ -113,6 +122,12 @@ func main() {
 	_ = node.Run()
 }
 ```
+
+As you can see there are three important changes:
+
+1) You should now set up event handlers inside `node.OnConnect` closure
+2) Event handlers now have callback argument that you should call with corresponding Reply as soon as you have it
+3) For server-side subscriptions you should now return `Subscriptions` field in `ConnectReply` which is `map[string]SubscribeOptions` instead of `[]string` slice.
 
 See [new example that demonstrates concurrency](https://github.com/centrifugal/centrifuge/tree/master/_examples/concurrency) using bounded semaphore.
 
