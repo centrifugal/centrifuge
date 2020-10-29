@@ -1,17 +1,22 @@
 name: build
 on: [push, pull_request]
 jobs:
+  golangci:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v2
+        with:
+          version: v1.29
   build:
+    name: test
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         go-version: [1.14, 1.15]
         redis-version: [6]
-        platform: [ubuntu-latest]
-
-    runs-on: ${{ matrix.platform }}
-
-    name: Build with Go ${{ matrix.go }}
-
     steps:
       - name: Install Go stable version
         uses: actions/setup-go@v2
@@ -20,12 +25,6 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v2
-
-      - name: Install GolangCI-Lint
-        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.27.0
-
-      - name: Lint
-        run: golangci-lint run ./...
 
       - name: Start single Redis
         uses: supercharge/redis-github-action@1.1.0
