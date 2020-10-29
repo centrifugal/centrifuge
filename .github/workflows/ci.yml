@@ -11,7 +11,7 @@ jobs:
         with:
           version: v1.29
   build:
-    name: Test with ${{ matrix.go-version }}
+    name: Test with Go ${{ matrix.go-version }}
     runs-on: ubuntu-latest
     strategy:
       matrix:

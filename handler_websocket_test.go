@@ -22,12 +22,39 @@ func TestWebsocketHandler(t *testing.T) {
 	n, _ := New(Config{})
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
-	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		UseWriteBufferPool: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
 	url := "ws" + server.URL[4:]
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+}
+
+func TestWebsocketHandlerProtobuf(t *testing.T) {
+	n, _ := New(Config{})
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		UseWriteBufferPool: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf&encoding=binary", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -46,6 +73,7 @@ func TestWebsocketHandlerPing(t *testing.T) {
 	defer server.Close()
 
 	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, EncodingTypeJSON, event.Transport.Encoding())
 		return ConnectReply{
 			Credentials: &Credentials{
 				UserID: "test",

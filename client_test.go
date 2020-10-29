@@ -1960,6 +1960,156 @@ func TestClientSideRefresh(t *testing.T) {
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
+func TestServerSideRefresh(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+
+	startExpireAt := time.Now().Unix() + 1
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: startExpireAt,
+	})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			ClientSideRefresh: false,
+		}, nil
+	})
+
+	expireAt := time.Now().Unix() + 60
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnRefresh(func(e RefreshEvent, cb RefreshCallback) {
+			require.Equal(t, "", e.Token)
+			require.False(t, e.ClientSideRefresh)
+			cb(RefreshReply{
+				ExpireAt: expireAt,
+				Info:     []byte("{}"),
+			}, nil)
+			close(done)
+		})
+	})
+
+	connectClient(t, client)
+
+	select {
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for work done")
+	case <-done:
+	}
+
+	require.True(t, client.nextExpire > startExpireAt)
+	require.Equal(t, client.info, []byte("{}"))
+}
+
+func TestServerSideRefreshDisconnect(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+
+	startExpireAt := time.Now().Unix() + 1
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: startExpireAt,
+	})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			ClientSideRefresh: false,
+		}, nil
+	})
+
+	done := make(chan struct{})
+	disconnected := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnRefresh(func(e RefreshEvent, cb RefreshCallback) {
+			require.Equal(t, "", e.Token)
+			require.False(t, e.ClientSideRefresh)
+			cb(RefreshReply{}, DisconnectExpired)
+			close(done)
+		})
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectExpired, event.Disconnect)
+			close(disconnected)
+		})
+	})
+
+	connectClient(t, client)
+
+	select {
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for work done")
+	case <-done:
+	}
+
+	select {
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for client close")
+	case <-disconnected:
+	}
+}
+
+func TestServerSideRefreshCustomError(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+
+	startExpireAt := time.Now().Unix() + 1
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: startExpireAt,
+	})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			ClientSideRefresh: false,
+		}, nil
+	})
+
+	done := make(chan struct{})
+	disconnected := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnRefresh(func(e RefreshEvent, cb RefreshCallback) {
+			require.Equal(t, "", e.Token)
+			require.False(t, e.ClientSideRefresh)
+			cb(RefreshReply{}, errors.New("boom"))
+			close(done)
+		})
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectServerError, event.Disconnect)
+			close(disconnected)
+		})
+	})
+
+	connectClient(t, client)
+
+	select {
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for work done")
+	case <-done:
+	}
+
+	select {
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for client close")
+	case <-disconnected:
+	}
+}
+
 func TestClientSideSubRefresh(t *testing.T) {
 	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
