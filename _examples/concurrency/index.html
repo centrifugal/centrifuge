@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title></title>
+        <style type="text/css">
+            .muted {color: #CCCCCC; font-size: 10px;}
+        </style>
+        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+        <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+        <script type="text/javascript" src="//cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@latest/dist/centrifuge.min.js"></script>
+        <script type="text/javascript">
+            // helper functions to work with escaping html.
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            function replaceTag(tag) {return tagsToReplace[tag] || tag;}
+            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
+
+            const channel = "chat:index";
+
+            function getParam(name, url) {
+                if (!url) url = window.location.href;
+                name = name.replace(/[\[\]]/g, '\\$&');
+                const regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+                    results = regex.exec(url);
+                if (!results) return null;
+                if (!results[2]) return '';
+                return decodeURIComponent(results[2].replace(/\+/g, ' '));
+            }
+
+            $(function () {
+                const container = $('#messages');
+
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
+                    timeout: 5000,
+                });
+                // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
+                //     sockjsTransports: [
+                //         "xhr-streaming",
+                //     ]
+                // });
+
+                centrifuge.setConnectData({"user-agent": navigator.userAgent});
+
+                // bind listeners on centrifuge object instance events.
+                centrifuge.on('connect', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
+                });
+
+                centrifuge.on('disconnect', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                });
+
+                for (let i = 0; i < 10; i++) {
+                    // subscribe on channel and bind various event listeners. Actual
+                    // subscription request will be sent after client connects to
+                    // a server.
+                    centrifuge.subscribe(channel + i, handleMessage)
+                        .on("join", handleJoin)
+                        .on("leave", handleLeave)
+                        .on("unsubscribe", handleUnsubscribe)
+                        .on("subscribe", handleSubscribe)
+                        .on("error", handleSubscribeError);
+                }
+
+                setTimeout(function () {
+                    const rpcRequest = {"method": "getCurrentYear"};
+
+                    for (let i = 0; i < 100; i++) {
+                        // This can be whatever JSON you want.
+                        const j = i;
+                        centrifuge.rpc(rpcRequest).then(function(data){
+                            drawText("RPC " + j + " response data: " + JSON.stringify(data));
+                        }, function(err) {
+                            drawText("RPC error: " + JSON.stringify(err));
+                        });
+                    }
+                }, 1000);
+
+                // Trigger actual connection establishing with a server.
+                // At this moment actual client work starts - i.e. subscriptions
+                // defined start subscribing etc.
+                centrifuge.connect();
+
+                function handleSubscribe(ctx) {
+                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
+                }
+
+                function handleSubscribeError(err) {
+                    drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
+                }
+
+                function handleMessage(message) {
+                    let clientID;
+                    if (message.info){
+                        clientID = message.info.client;
+                    } else {
+                        clientID = null;
+                    }
+                    const inputText = message.data["input"].toString();
+                    const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                    drawText(text);
+                }
+
+                function handleJoin(message) {
+                    drawText('Client joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                }
+
+                function handleLeave(message) {
+                    drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                }
+
+                function handleUnsubscribe(sub) {
+                    drawText('Unsubscribed from channel ' + sub.channel);
+                }
+
+                function drawText(text) {
+                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                }
+
+                // For debug purposes only ...
+                if (getParam("disconnect") === "1") {
+                    function reconnect() {
+                        setTimeout(function() {
+                            centrifuge.disconnect();
+                            setTimeout(function(){
+                                reconnect();
+                            }, 11000);
+                        }, 4000);
+                    }
+                    reconnect();
+                }
+            });
+        </script>
+    </head>
+    <body>
+        <ul id="messages"></ul>
+    </body>
+</html>

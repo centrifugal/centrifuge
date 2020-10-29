@@ -77,7 +77,7 @@
                         drawText('Now in this room: ' + count + ' clients');
                     }, function(err) {
                         console.log("presence error", err);
-                        drawText("Presence error");
+                        drawText("Presence error: " + err.message);
                     });
                 }
 

@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -16,6 +17,21 @@ import (
 )
 
 type TestEngine struct {
+	errorOnRun            bool
+	errorOnSubscribe      bool
+	errorOnUnsubscribe    bool
+	errorOnPublish        bool
+	errorOnPublishJoin    bool
+	errorOnPublishLeave   bool
+	errorOnPublishControl bool
+	errorOnPresence       bool
+	errorOnPresenceStats  bool
+	errorOnAddPresence    bool
+	errorOnRemovePresence bool
+	errorOnHistory        bool
+	errorOnChannels       bool
+	errorOnRemoveHistory  bool
+
 	publishCount        int32
 	publishJoinCount    int32
 	publishLeaveCount   int32
@@ -27,76 +43,114 @@ func NewTestEngine() *TestEngine {
 }
 
 func (e *TestEngine) Run(_ BrokerEventHandler) error {
+	if e.errorOnRun {
+		return errors.New("boom")
+	}
 	return nil
 }
 
-func (e *TestEngine) Publish(_ string, _ *Publication, _ PublishOptions) (StreamPosition, error) {
+func (e *TestEngine) Publish(_ string, _ []byte, _ PublishOptions) (StreamPosition, error) {
 	atomic.AddInt32(&e.publishCount, 1)
+	if e.errorOnPublish {
+		return StreamPosition{}, errors.New("boom")
+	}
 	return StreamPosition{}, nil
 }
 
 func (e *TestEngine) PublishJoin(_ string, _ *ClientInfo) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
+	if e.errorOnPublishJoin {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) PublishLeave(_ string, _ *ClientInfo) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
+	if e.errorOnPublishLeave {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) PublishControl(_ []byte) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
+	if e.errorOnPublishControl {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Subscribe(_ string) error {
+	if e.errorOnSubscribe {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Unsubscribe(_ string) error {
+	if e.errorOnUnsubscribe {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) AddPresence(_ string, _ string, _ *ClientInfo, _ time.Duration) error {
+	if e.errorOnAddPresence {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) RemovePresence(_ string, _ string) error {
+	if e.errorOnRemovePresence {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Presence(_ string) (map[string]*ClientInfo, error) {
+	if e.errorOnPresence {
+		return nil, errors.New("boom")
+	}
 	return map[string]*ClientInfo{}, nil
 }
 
 func (e *TestEngine) PresenceStats(_ string) (PresenceStats, error) {
+	if e.errorOnPresenceStats {
+		return PresenceStats{}, errors.New("boom")
+	}
 	return PresenceStats{}, nil
 }
 
 func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*Publication, StreamPosition, error) {
+	if e.errorOnHistory {
+		return nil, StreamPosition{}, errors.New("boom")
+	}
 	return nil, StreamPosition{}, nil
 }
 
-func (e *TestEngine) AddHistory(_ string, _ *Publication, _ *ChannelOptions) (StreamPosition, bool, error) {
-	return StreamPosition{}, false, nil
-}
-
 func (e *TestEngine) RemoveHistory(_ string) error {
+	if e.errorOnRemoveHistory {
+		return errors.New("boom")
+	}
 	return nil
 }
 
 func (e *TestEngine) Channels() ([]string, error) {
+	if e.errorOnChannels {
+		return nil, errors.New("boom")
+	}
 	return []string{}, nil
 }
 
-func nodeWithTestEngine() *Node {
+func nodeWithEngine(engine Engine) *Node {
 	c := DefaultConfig
 	n, err := New(c)
 	if err != nil {
 		panic(err)
 	}
-	n.SetEngine(NewTestEngine())
+	n.SetEngine(engine)
 	err = n.Run()
 	if err != nil {
 		panic(err)
@@ -104,8 +158,13 @@ func nodeWithTestEngine() *Node {
 	return n
 }
 
+func nodeWithTestEngine() *Node {
+	return nodeWithEngine(NewTestEngine())
+}
+
 func nodeWithMemoryEngineNoHandlers() *Node {
 	c := DefaultConfig
+	c.LogLevel = LogLevelDebug
 	n, err := New(c)
 	if err != nil {
 		panic(err)
@@ -119,11 +178,13 @@ func nodeWithMemoryEngineNoHandlers() *Node {
 
 func nodeWithMemoryEngine() *Node {
 	n := nodeWithMemoryEngineNoHandlers()
-	n.OnSubscribe(func(_ *Client, _ SubscribeEvent) (SubscribeReply, error) {
-		return SubscribeReply{}, nil
-	})
-	n.OnPublish(func(_ *Client, _ PublishEvent) (PublishReply, error) {
-		return PublishReply{}, nil
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
+			cb(PublishReply{}, nil)
+		})
 	})
 	return n
 }
@@ -144,8 +205,8 @@ func TestNode_Shutdown(t *testing.T) {
 func TestClientEventHub(t *testing.T) {
 	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
-	n.OnDisconnect(func(_ *Client, _ DisconnectEvent) {})
-	require.NotNil(t, n.clientEvents.disconnectHandler)
+	n.OnConnect(func(_ *Client) {})
+	require.NotNil(t, n.clientEvents.connectHandler)
 }
 
 func TestNodeRegistry(t *testing.T) {
@@ -191,6 +252,35 @@ func TestNode_SetBroker(t *testing.T) {
 	require.Equal(t, n.broker, engine)
 }
 
+func TestNode_LogEnabled(t *testing.T) {
+	c := DefaultConfig
+	c.LogLevel = LogLevelInfo
+	c.LogHandler = func(entry LogEntry) {}
+	n, _ := New(c)
+	require.False(t, n.LogEnabled(LogLevelDebug))
+	require.True(t, n.LogEnabled(LogLevelInfo))
+}
+
+func TestNode_RunError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnRun = true
+	node, err := New(DefaultConfig)
+	require.NoError(t, err)
+	node.SetEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	require.Error(t, node.Run())
+}
+
+func TestNode_RunPubControlError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnPublishControl = true
+	node, err := New(DefaultConfig)
+	require.NoError(t, err)
+	node.SetEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	require.Error(t, node.Run())
+}
+
 func TestNode_SetPresenceManager(t *testing.T) {
 	n, _ := New(DefaultConfig)
 	engine := testMemoryEngine()
@@ -232,18 +322,24 @@ func TestNode_handleLeave(t *testing.T) {
 }
 
 func TestNode_Unsubscribe(t *testing.T) {
-	n := nodeWithMemoryEngine()
+	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	err := n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
-	client := newTestSubscribedClient(t, n, "42", "test_channel")
 
 	done := make(chan struct{})
-	n.OnUnsubscribe(func(client *Client, event UnsubscribeEvent) {
-		require.Equal(t, "42", client.UserID())
-		close(done)
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			require.Equal(t, "42", client.UserID())
+			close(done)
+		})
 	})
+
+	client := newTestSubscribedClient(t, n, "42", "test_channel")
 
 	err = n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
@@ -262,13 +358,16 @@ func TestNode_Disconnect(t *testing.T) {
 
 	err := n.Disconnect("42")
 	require.NoError(t, err)
-	client := newTestConnectedClient(t, n, "42")
 
 	done := make(chan struct{})
-	n.OnDisconnect(func(client *Client, event DisconnectEvent) {
-		require.Equal(t, "42", client.UserID())
-		close(done)
+	n.OnConnect(func(client *Client) {
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, "42", client.UserID())
+			close(done)
+		})
 	})
+
+	client := newTestConnectedClient(t, n, "42")
 
 	err = n.Disconnect("42")
 	require.NoError(t, err)
@@ -402,18 +501,17 @@ func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
 }
 
 func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
-	transport := newTestTransport()
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
 	transport.setProtocolType(protoType)
 	transport.setSink(sink)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "test_user_id"})
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "test"})
 	client, _ := newClient(newCtx, node, transport)
 	connectClient(b, client)
-	var replies []*protocol.Reply
-	rw := testReplyWriter(&replies)
+	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, rw, false)
+	}, SubscribeReply{}, rwWrapper.rw, false)
 	require.Nil(b, subCtx.disconnect)
 }
 
@@ -465,18 +563,11 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 func BenchmarkHistory(b *testing.B) {
 	e := testMemoryEngine()
 	numMessages := 100
-	e.node.config.ChannelOptionsFunc = func(channel string) (ChannelOptions, bool, error) {
-		return ChannelOptions{
-			HistorySize:     numMessages,
-			HistoryLifetime: 60,
-			HistoryRecover:  true,
-		}, true, nil
-	}
 
 	channel := "test"
 
 	for i := 1; i <= numMessages; i++ {
-		_, err := e.node.Publish(channel, []byte(`{}`))
+		_, err := e.node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Minute))
 		require.NoError(b, err)
 	}
 
@@ -537,11 +628,16 @@ func TestNode_handleControl(t *testing.T) {
 	t.Run("Unsubscribe", func(t *testing.T) {
 		t.Parallel()
 
-		n := nodeWithMemoryEngine()
+		n := nodeWithMemoryEngineNoHandlers()
 		done := make(chan struct{})
-		n.OnUnsubscribe(func(client *Client, event UnsubscribeEvent) {
-			require.Equal(t, "42", client.UserID())
-			close(done)
+		n.OnConnect(func(client *Client) {
+			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+				cb(SubscribeReply{}, nil)
+			})
+			client.OnUnsubscribe(func(event UnsubscribeEvent) {
+				require.Equal(t, "42", client.UserID())
+				close(done)
+			})
 		})
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -583,9 +679,14 @@ func TestNode_handleControl(t *testing.T) {
 
 		n := nodeWithMemoryEngine()
 		done := make(chan struct{})
-		n.OnDisconnect(func(client *Client, event DisconnectEvent) {
-			require.Equal(t, "42", client.UserID())
-			close(done)
+		n.OnConnect(func(client *Client) {
+			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+				cb(SubscribeReply{}, nil)
+			})
+			client.OnDisconnect(func(event DisconnectEvent) {
+				require.Equal(t, "42", client.UserID())
+				close(done)
+			})
 		})
 		defer func() { _ = n.Shutdown(context.Background()) }()
 

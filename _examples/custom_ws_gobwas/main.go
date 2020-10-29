@@ -37,7 +37,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		n.Shutdown(context.Background())
+		_ = n.Shutdown(context.Background())
 		done <- true
 	}()
 	<-done
@@ -61,15 +61,15 @@ func main() {
 		}, nil
 	})
 
-	node.OnConnect(func(c *centrifuge.Client) {
-		transport := c.Transport()
-		log.Printf("user %s connected via %s with format: %s", c.UserID(), transport.Name(), transport.Protocol())
+	node.OnConnect(func(client *centrifuge.Client) {
+		transport := client.Transport()
+		log.Printf("user %s connected via %s with format: %s", client.UserID(), transport.Name(), transport.Protocol())
 
 		// Connect handler should not block, so start separate goroutine to
 		// periodically send messages to client.
 		go func() {
 			for {
-				err := c.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+				err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
 				if err != nil {
 					if err != io.EOF {
 						log.Println(err.Error())
@@ -80,28 +80,28 @@ func main() {
 				time.Sleep(5 * time.Second)
 			}
 		}()
-	})
 
-	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
-		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
-		return centrifuge.SubscribeReply{}, nil
-	})
+		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+			cb(centrifuge.SubscribeReply{}, nil)
+		})
 
-	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
-		log.Printf("user %s unsubscribed from %s", c.UserID(), e.Channel)
-	})
+		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
+			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
+		})
 
-	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
-		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
-		return centrifuge.PublishReply{}, nil
-	})
+		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
+			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			cb(centrifuge.PublishReply{}, nil)
+		})
 
-	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
-		log.Printf("Message from user: %s, data: %s", c.UserID(), string(e.Data))
-	})
+		client.OnMessage(func(e centrifuge.MessageEvent) {
+			log.Printf("Message from user: %s, data: %s", client.UserID(), string(e.Data))
+		})
 
-	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
-		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
+		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+		})
 	})
 
 	if err := node.Run(); err != nil {

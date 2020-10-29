@@ -21,10 +21,12 @@ type testTransport struct {
 	closeCh    chan struct{}
 	disconnect *Disconnect
 	protoType  ProtocolType
+	cancelFn   func()
 }
 
-func newTestTransport() *testTransport {
+func newTestTransport(cancelFn func()) *testTransport {
 	return &testTransport{
+		cancelFn:  cancelFn,
 		protoType: ProtocolTypeJSON,
 		closeCh:   make(chan struct{}),
 	}
@@ -72,13 +74,14 @@ func (t *testTransport) Close(disconnect *Disconnect) error {
 	}
 	t.disconnect = disconnect
 	t.closed = true
+	t.cancelFn()
 	close(t.closeCh)
 	return nil
 }
 
 func TestHub(t *testing.T) {
 	h := newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	c.user = "test"
 	err = h.remove(c)
@@ -128,8 +131,14 @@ func TestHubUnsubscribe(t *testing.T) {
 }
 
 func TestHubDisconnect(t *testing.T) {
-	n := nodeWithMemoryEngine()
+	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
 
 	client := newTestSubscribedClient(t, n, "42", "test_channel")
 	clientWithReconnect := newTestSubscribedClient(t, n, "24", "test_channel_reconnect")
@@ -139,14 +148,15 @@ func TestHubDisconnect(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
-	n.clientEvents.disconnectHandler = func(c *Client, e DisconnectEvent) {
+
+	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
 		defer wg.Done()
-		switch c.user {
-		case "42":
-			require.False(t, e.Disconnect.Reconnect)
-		case "24":
-			require.True(t, e.Disconnect.Reconnect)
-		}
+		require.False(t, e.Disconnect.Reconnect)
+	}
+
+	clientWithReconnect.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		defer wg.Done()
+		require.True(t, e.Disconnect.Reconnect)
 	}
 
 	// Disconnect not existed user.
@@ -207,14 +217,12 @@ func TestHubBroadcastPublication(t *testing.T) {
 			err := n.hub.broadcastPublication(
 				"not_test_channel",
 				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
-				&ChannelOptions{},
 			)
 
 			// Broadcast to existed channel.
 			err = n.hub.broadcastPublication(
 				"test_channel",
 				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
-				&ChannelOptions{},
 			)
 			require.NoError(t, err)
 			select {
@@ -312,7 +320,7 @@ func TestHubShutdown(t *testing.T) {
 	err := h.shutdown(context.Background())
 	require.NoError(t, err)
 	h = newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	_ = h.add(c)
 
@@ -327,7 +335,7 @@ func TestHubShutdown(t *testing.T) {
 
 func TestHubSubscriptions(t *testing.T) {
 	h := newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport(func() {}))
 	require.NoError(t, err)
 
 	_, _ = h.addSub("test1", c)
@@ -375,7 +383,7 @@ func TestPreparedReply(t *testing.T) {
 
 func TestUserConnections(t *testing.T) {
 	h := newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport())
+	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	_ = h.add(c)
 

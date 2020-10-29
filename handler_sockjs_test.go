@@ -23,6 +23,7 @@ func sockjsData(data []byte) []byte {
 
 func TestSockjsHandler(t *testing.T) {
 	n, _ := New(Config{})
+	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 
 	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
@@ -53,10 +54,10 @@ func TestSockjsHandler(t *testing.T) {
 
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0pbfvm/websocket", nil)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
 	require.NotNil(t, conn)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_, p, err := conn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, "o", string(p)) // open frame of SockJS protocol.

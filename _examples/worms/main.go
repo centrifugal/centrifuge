@@ -39,7 +39,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		n.Shutdown(context.Background())
+		_ = n.Shutdown(context.Background())
 		done <- true
 	}()
 	<-done
@@ -60,27 +60,27 @@ func main() {
 		}, nil
 	})
 
-	node.OnConnect(func(c *centrifuge.Client) {
-		log.Printf("worm connected via %s", c.Transport().Name())
-	})
+	node.OnConnect(func(client *centrifuge.Client) {
+		log.Printf("worm connected via %s", client.Transport().Name())
 
-	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
-		var ev event
-		_ = json.Unmarshal(e.Data, &ev)
-		_, _ = node.Publish("moving", ev.Payload)
-	})
+		client.OnMessage(func(e centrifuge.MessageEvent) {
+			var ev event
+			_ = json.Unmarshal(e.Data, &ev)
+			_, _ = node.Publish("moving", ev.Payload)
+		})
 
-	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
-		log.Printf("worm subscribed on %s", e.Channel)
-		return centrifuge.SubscribeReply{}, nil
-	})
+		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+			log.Printf("worm subscribed on %s", e.Channel)
+			cb(centrifuge.SubscribeReply{}, nil)
+		})
 
-	node.OnUnsubscribe(func(c *centrifuge.Client, e centrifuge.UnsubscribeEvent) {
-		log.Printf("worm unsubscribed from %s", e.Channel)
-	})
+		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
+			log.Printf("worm unsubscribed from %s", e.Channel)
+		})
 
-	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
-		log.Printf("worm disconnected, disconnect: %s", e.Disconnect)
+		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+			log.Printf("worm disconnected, disconnect: %s", e.Disconnect)
+		})
 	})
 
 	if err := node.Run(); err != nil {

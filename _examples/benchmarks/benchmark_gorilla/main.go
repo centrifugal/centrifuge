@@ -27,7 +27,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		n.Shutdown(context.Background())
+		_ = n.Shutdown(context.Background())
 		done <- true
 	}()
 	<-done
@@ -66,23 +66,23 @@ func main() {
 		}, nil
 	})
 
-	node.OnConnect(func(c *centrifuge.Client) {})
+	node.OnConnect(func(client *centrifuge.Client) {
+		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+			cb(centrifuge.SubscribeReply{}, nil)
+		})
 
-	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
-		return centrifuge.SubscribeReply{}, nil
-	})
+		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
+			cb(centrifuge.PublishReply{}, nil)
+		})
 
-	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
-		return centrifuge.PublishReply{}, nil
-	})
-
-	node.OnMessage(func(c *centrifuge.Client, e centrifuge.MessageEvent) {
-		err := c.Send(e.Data)
-		if err != nil {
-			if err != io.EOF {
-				log.Fatalln("error sending to client:", err.Error())
+		client.OnMessage(func(e centrifuge.MessageEvent) {
+			err := client.Send(e.Data)
+			if err != nil {
+				if err != io.EOF {
+					log.Fatalln("error sending to client:", err.Error())
+				}
 			}
-		}
+		})
 	})
 
 	if err := node.Run(); err != nil {

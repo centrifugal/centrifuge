@@ -10,7 +10,7 @@ import (
 func TestDissolver(t *testing.T) {
 	d := New(4)
 	_ = d.Run()
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	ch := make(chan struct{})
 	numJobs := 1024
 	var wg sync.WaitGroup
@@ -46,7 +46,7 @@ func TestDissolver(t *testing.T) {
 func TestDissolverErrorHandling(t *testing.T) {
 	d := New(4)
 	_ = d.Run()
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	var numFails int
 	ch := make(chan struct{}, 1)
 	err := d.Submit(func() error {
@@ -85,7 +85,7 @@ func TestDissolverClose(t *testing.T) {
 func BenchmarkSubmitAndProcess(b *testing.B) {
 	d := New(1)
 	_ = d.Run()
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	ch := make(chan struct{}, 1)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -101,7 +101,7 @@ func BenchmarkSubmitAndProcess(b *testing.B) {
 func BenchmarkSubmitAndProcessParallel(b *testing.B) {
 	d := New(128)
 	_ = d.Run()
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	ch := make(chan struct{}, 1)
 	b.SetParallelism(128)
 	b.ResetTimer()

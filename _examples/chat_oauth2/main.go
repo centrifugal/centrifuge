@@ -102,22 +102,22 @@ func createCentrifugeNode() (*centrifuge.Node, error) {
 		return nil, err
 	}
 
-	node.OnConnect(func(c *centrifuge.Client) {
-		log.Printf("client %s connected via %s", c.UserID(), c.Transport().Name())
-	})
+	node.OnConnect(func(client *centrifuge.Client) {
+		log.Printf("client %s connected via %s", client.UserID(), client.Transport().Name())
 
-	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
-		log.Printf("client %s subscribes on channel %s", c.UserID(), e.Channel)
-		return centrifuge.SubscribeReply{}, nil
-	})
+		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+			log.Printf("client %s subscribes on channel %s", client.UserID(), e.Channel)
+			cb(centrifuge.SubscribeReply{}, nil)
+		})
 
-	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
-		log.Printf("client %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
-		return centrifuge.PublishReply{}, nil
-	})
+		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
+			log.Printf("client %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			cb(centrifuge.PublishReply{}, nil)
+		})
 
-	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
-		log.Printf("client %s disconnected", c.UserID())
+		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+			log.Printf("client %s disconnected", client.UserID())
+		})
 	})
 
 	if err := node.Run(); err != nil {
@@ -222,7 +222,7 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error getting user from token %s\n", err.Error())
 		return
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	contents, err := ioutil.ReadAll(response.Body)
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -23,9 +22,7 @@ func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		newCtx := centrifuge.SetCredentials(ctx, &centrifuge.Credentials{
-			UserID:   "42",
-			ExpireAt: time.Now().Unix() + 10,
-			Info:     []byte(`{"name": "Alexander"}`),
+			UserID: "42",
 		})
 		r = r.WithContext(newCtx)
 		h.ServeHTTP(w, r)
@@ -47,73 +44,85 @@ func waitExitSignal(n *centrifuge.Node) {
 func main() {
 	cfg := centrifuge.DefaultConfig
 
-	cfg.LogLevel = centrifuge.LogLevelDebug
+	cfg.LogLevel = centrifuge.LogLevelInfo
 	cfg.LogHandler = handleLog
 
 	node, _ := centrifuge.New(cfg)
 
+	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
+		HistoryMetaTTL: 120 * time.Second,
+	})
+	node.SetEngine(engine)
+
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
+			// Subscribe to personal several server-side channel.
+			Subscriptions: map[string]centrifuge.SubscribeOptions{
+				"#" + cred.UserID: {},
+			},
 		}, nil
 	})
 
 	node.OnConnect(func(client *centrifuge.Client) {
-		transport := client.Transport()
-		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
+		// Declare concurrency semaphore for client connection closure.
+		semaphore := make(chan struct{}, 16)
 
-		go func() {
-			err := client.Send([]byte("hello"))
-			if err != nil {
-				if err == io.EOF {
-					return
-				}
-				log.Fatalln(err.Error())
-			}
-		}()
-
-		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
-			cb(centrifuge.RefreshReply{
-				ExpireAt: time.Now().Unix() + 10,
-			}, nil)
+		client.OnAlive(func() {
+			log.Printf("user %s connection is still active", client.UserID())
 		})
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			cb(centrifuge.SubscribeReply{}, nil)
+			semaphore <- struct{}{}
+			go func() {
+				defer func() { <-semaphore }()
+				time.Sleep(200 * time.Millisecond)
+				cb(centrifuge.SubscribeReply{}, nil)
+			}()
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
 			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
 		})
 
-		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			cb(centrifuge.PublishReply{}, nil)
-		})
-
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
-			log.Printf("RPC from user: %s, data: %s", client.UserID(), string(e.Data))
-			cb(centrifuge.RPCReply{
-				Data: []byte(`{"year": "2020"}`),
-			}, nil)
-		})
-
-		client.OnMessage(func(e centrifuge.MessageEvent) {
-			log.Printf("message from user: %s, data: %s", client.UserID(), string(e.Data))
+			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
+			semaphore <- struct{}{}
+			go func() {
+				defer func() { <-semaphore }()
+				time.Sleep(100 * time.Millisecond)
+				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+			}()
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 		})
+
+		transport := client.Transport()
+		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 	})
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+		ReadBufferSize:     1024,
+		UseWriteBufferPool: true,
+	})
+	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
+
+	sockjsHandler := centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
+		URL:                      "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
+		HandlerPrefix:            "/connection/sockjs",
+		WebsocketReadBufferSize:  1024,
+		WebsocketWriteBufferSize: 1024,
+	})
+	http.Handle("/connection/sockjs/", authMiddleware(sockjsHandler))
+
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

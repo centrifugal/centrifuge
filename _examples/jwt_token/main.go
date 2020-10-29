@@ -32,7 +32,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		n.Shutdown(context.Background())
+		_ = n.Shutdown(context.Background())
 		done <- true
 	}()
 	<-done
@@ -69,48 +69,55 @@ func main() {
 			}
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
+		subs := make(map[string]centrifuge.SubscribeOptions, len(token.Channels))
+		for _, ch := range token.Channels {
+			subs[ch] = centrifuge.SubscribeOptions{}
+		}
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{
 				UserID:   token.UserID,
 				ExpireAt: token.ExpireAt,
 			},
-			Channels: token.Channels,
+			Subscriptions: subs,
 		}, nil
 	})
 
-	node.OnConnect(func(c *centrifuge.Client) {
-		transport := c.Transport()
-		log.Printf("user %s connected via %s with protocol: %s", c.UserID(), transport.Name(), transport.Protocol())
-	})
+	node.OnConnect(func(client *centrifuge.Client) {
+		transport := client.Transport()
+		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
-	node.OnRefresh(func(c *centrifuge.Client, e centrifuge.RefreshEvent) (centrifuge.RefreshReply, error) {
-		log.Printf("user %s connection is going to expire, refreshing", c.UserID())
-		return centrifuge.RefreshReply{ExpireAt: time.Now().Unix() + 60}, nil
-	})
+		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
+			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			cb(centrifuge.RefreshReply{ExpireAt: time.Now().Unix() + 60}, nil)
+		})
 
-	node.OnSubscribe(func(c *centrifuge.Client, e centrifuge.SubscribeEvent) (centrifuge.SubscribeReply, error) {
-		log.Printf("user %s subscribes on %s", c.UserID(), e.Channel)
-		if !channelSubscribeAllowed(e.Channel) {
-			return centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied
-		}
-		return centrifuge.SubscribeReply{}, nil
-	})
+		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+			if !channelSubscribeAllowed(e.Channel) {
+				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
+				return
+			}
+			cb(centrifuge.SubscribeReply{}, nil)
+		})
 
-	node.OnPublish(func(c *centrifuge.Client, e centrifuge.PublishEvent) (centrifuge.PublishReply, error) {
-		log.Printf("user %s publishes into channel %s: %s", c.UserID(), e.Channel, string(e.Data))
-		if !c.IsSubscribed(e.Channel) {
-			return centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied
-		}
-		var msg clientMessage
-		err := json.Unmarshal(e.Data, &msg)
-		if err != nil {
-			return centrifuge.PublishReply{}, centrifuge.ErrorBadRequest
-		}
-		return centrifuge.PublishReply{}, nil
-	})
+		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
+			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			if !client.IsSubscribed(e.Channel) {
+				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)
+				return
+			}
+			var msg clientMessage
+			err := json.Unmarshal(e.Data, &msg)
+			if err != nil {
+				cb(centrifuge.PublishReply{}, centrifuge.ErrorBadRequest)
+				return
+			}
+			cb(centrifuge.PublishReply{}, nil)
+		})
 
-	node.OnDisconnect(func(c *centrifuge.Client, e centrifuge.DisconnectEvent) {
-		log.Printf("user %s disconnected, disconnect: %s", c.UserID(), e.Disconnect)
+		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
+			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+		})
 	})
 
 	if err := node.Run(); err != nil {
