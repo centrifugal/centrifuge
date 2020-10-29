@@ -1581,7 +1581,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 
 	config := c.node.config
 	version := config.Version
-	userConnectionLimit := config.ClientUserConnectionLimit
+	userConnectionLimit := config.UserConnectionLimit
 
 	var (
 		credentials       *Credentials
@@ -1661,7 +1661,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 
 	if userConnectionLimit > 0 && user != "" && len(c.node.hub.userConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": user, "client": c.uid, "limit": userConnectionLimit}))
-		return ErrorLimitExceeded
+		return DisconnectConnectionLimit
 	}
 
 	c.mu.RLock()

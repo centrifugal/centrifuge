@@ -585,7 +585,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 
 func TestUserConnectionLimit(t *testing.T) {
 	node := nodeWithMemoryEngine()
-	node.config.ClientUserConnectionLimit = 1
+	node.config.UserConnectionLimit = 1
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -598,7 +598,7 @@ func TestUserConnectionLimit(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	anotherClient, _ := newClient(newCtx, node, transport)
 	err := anotherClient.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
-	require.Equal(t, ErrorLimitExceeded, err)
+	require.Equal(t, DisconnectConnectionLimit, err)
 }
 
 func TestConnectingReply(t *testing.T) {
