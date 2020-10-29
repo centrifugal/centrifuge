@@ -5,7 +5,7 @@ import "time"
 // PublishOption is a type to represent various Publish options.
 type PublishOption func(*PublishOptions)
 
-// WithHistory tells broker to save message to history stream with provided size and ttl.
+// WithHistory tells Broker to save message to history stream with provided size and ttl.
 func WithHistory(size int, ttl time.Duration) PublishOption {
 	return func(opts *PublishOptions) {
 		opts.HistorySize = size

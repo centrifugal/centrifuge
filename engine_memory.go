@@ -9,7 +9,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
-// MemoryEngine is builtin default engine which allows to run Centrifuge-based
+// MemoryEngine is builtin default Engine which allows to run Centrifuge-based
 // server without any external broker or storage. All data managed inside process
 // memory.
 //

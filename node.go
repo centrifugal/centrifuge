@@ -162,7 +162,7 @@ func (n *Node) Hub() *Hub {
 }
 
 // Run performs node startup actions. At moment must be called once on start
-// after engine set to Node.
+// after Engine set to Node.
 func (n *Node) Run() error {
 	eventHandler := &brokerEventHandler{n}
 	if err := n.broker.Run(eventHandler); err != nil {

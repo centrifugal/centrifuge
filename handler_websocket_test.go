@@ -27,7 +27,6 @@ func TestWebsocketHandler(t *testing.T) {
 	defer server.Close()
 
 	url := "ws" + server.URL[4:]
-
 	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()

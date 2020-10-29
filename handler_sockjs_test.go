@@ -52,7 +52,7 @@ func TestSockjsHandler(t *testing.T) {
 
 	url := "ws" + server.URL[4:]
 
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0pbfvm/websocket", nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)

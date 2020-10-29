@@ -154,7 +154,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
 	require.Equal(t, false, result.Expires)
 	require.Equal(t, uint32(0), result.TTL)
@@ -184,7 +184,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	client.triggerConnect()
 	client.expire()
 	require.True(t, client.status == statusClosed)
@@ -214,7 +214,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	client.expire()
 	require.False(t, client.status == statusClosed)
 	require.Equal(t, expireAt, client.exp)
@@ -246,7 +246,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
 	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
@@ -293,7 +293,7 @@ func subscribeClient(t testing.TB, client *Client, ch string) *protocol.Subscrib
 	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: ch,
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	return extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
 }
@@ -311,7 +311,7 @@ func TestClientSubscribe(t *testing.T) {
 	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test1",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, 1, len(rwWrapper.replies))
 	require.Nil(t, rwWrapper.replies[0].Error)
 	res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
@@ -324,7 +324,7 @@ func TestClientSubscribe(t *testing.T) {
 	err = client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test2",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, 2, len(client.Channels()))
 	require.Equal(t, 1, node.Hub().NumClients())
 	require.Equal(t, 2, node.Hub().NumChannels())
@@ -770,7 +770,7 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	params := getJSONEncodedParams(t, &protocol.UnsubscribeRequest{Channel: "test"})
 	err := client.handleUnsubscribe(params, rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	require.Equal(t, 0, len(client.Channels()))
 	require.Equal(t, 1, node.Hub().NumClients())
@@ -1075,7 +1075,7 @@ func TestClientPublishHandler(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{"input": "no time"}`),
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
 	rwWrapper = testReplyWriterWrapper()
@@ -1083,7 +1083,7 @@ func TestClientPublishHandler(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{"input": "with timestamp"}`),
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
 	rwWrapper = testReplyWriterWrapper()
@@ -1091,7 +1091,7 @@ func TestClientPublishHandler(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{"input": "with error"}`),
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, ErrorBadRequest.toProto(), rwWrapper.replies[0].Error)
 
 	rwWrapper = testReplyWriterWrapper()
@@ -1099,7 +1099,7 @@ func TestClientPublishHandler(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{"input": "with disconnect"}`),
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	select {
 	case <-client.Context().Done():
 	case <-time.After(time.Second):
@@ -1129,7 +1129,7 @@ func TestClientPublishError(t *testing.T) {
 		Channel: "test",
 		Data:    []byte(`{"input": "no time"}`),
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
 }
 
@@ -1142,7 +1142,7 @@ func TestClientPing(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePing(getJSONEncodedParams(t, &protocol.PingRequest{}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.Empty(t, rwWrapper.replies[0].Result)
 }
@@ -1177,7 +1177,7 @@ func TestClientPresence(t *testing.T) {
 	err = client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
 		Channel: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -1191,7 +1191,7 @@ func TestClientPresence(t *testing.T) {
 	err = client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
 		Channel: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
@@ -1216,7 +1216,7 @@ func TestClientPresenceError(t *testing.T) {
 	err := client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
 		Channel: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
 }
 
@@ -1287,7 +1287,7 @@ func TestClientPresenceStatsError(t *testing.T) {
 	err := client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
 		Channel: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
 }
 
@@ -1318,7 +1318,7 @@ func TestClientHistory(t *testing.T) {
 	err = client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
 		Channel: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	//require.Equal(t, 10, len(historyResp.Result.Publications))
@@ -1344,7 +1344,7 @@ func TestClientHistoryError(t *testing.T) {
 	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
 		Channel: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
 }
 
@@ -1818,7 +1818,7 @@ func TestClientHandleRPC(t *testing.T) {
 	err := client.handleRPC(getJSONEncodedParams(t, &protocol.RPCRequest{
 		Data: []byte("{}"),
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, rpcHandlerCalled)
 }
@@ -1856,7 +1856,7 @@ func TestClientHandleSend(t *testing.T) {
 	err := client.handleSend(getJSONEncodedParams(t, &protocol.SendRequest{
 		Data: []byte(`{"data":"hello"}`),
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.True(t, messageHandlerCalled)
 }
 
@@ -1880,7 +1880,7 @@ func TestClientHandlePublishNotAllowed(t *testing.T) {
 		Data:    []byte(`{"hello": 1}`),
 		Channel: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, ErrorPermissionDenied.toProto(), rwWrapper.replies[0].Error)
 }
 
@@ -1913,7 +1913,7 @@ func TestClientHandlePublish(t *testing.T) {
 		Data:    []byte(`{"hello":1}`),
 		Channel: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
@@ -1953,7 +1953,7 @@ func TestClientSideRefresh(t *testing.T) {
 	err := client.handleRefresh(getJSONEncodedParams(t, &protocol.RefreshRequest{
 		Token: "test",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
@@ -2004,7 +2004,7 @@ func TestClientSideSubRefresh(t *testing.T) {
 		Channel: "test",
 		Token:   "test_token",
 	}), rwWrapper.rw)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 

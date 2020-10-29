@@ -233,7 +233,7 @@ Let's describe some aspects related to connection life cycle and event handling 
 * `OnAlive` handler must not be called after `OnDisconnect`.
 * Client initiated request handlers can be processed asynchronously in goroutines to manage operation concurrency. This is achieved using callback functions. See [concurrency](https://github.com/centrifugal/centrifuge/tree/master/_examples/concurrency) example for more details.
 
-#### Channel history stream 
+#### Channel history stream
 
 Centrifuge Broker interface supports saving Publication to history stream on publish. Depending on broker implementation this feature can be missing though. Builtin Memory and Redis engines support keeping Publication stream.
 

@@ -86,7 +86,8 @@ func TestHub(t *testing.T) {
 	c.user = "test"
 	err = h.remove(c)
 	require.NoError(t, err)
-	_ = h.add(c)
+	err = h.add(c)
+	require.NoError(t, err)
 	require.Equal(t, len(h.users), 1)
 
 	conns := h.userConnections("test")
@@ -96,12 +97,14 @@ func TestHub(t *testing.T) {
 
 	validUID := c.uid
 	c.uid = "invalid"
-	_ = h.remove(c)
+	err = h.remove(c)
+	require.NoError(t, err)
 	require.Len(t, h.users, 1)
 	require.Len(t, conns, 1)
 
 	c.uid = validUID
-	_ = h.remove(c)
+	err = h.remove(c)
+	require.NoError(t, err)
 	require.Equal(t, len(h.users), 0)
 	require.Equal(t, 1, len(conns))
 }

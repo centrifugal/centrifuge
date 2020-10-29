@@ -40,7 +40,7 @@ func main() {
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{UserID: "42"},
-			// Subscribe to server-side channel.
+			// Subscribe to a server-side channel.
 			Channels: []string{"news"},
 		}, nil
 	})
@@ -83,7 +83,7 @@ func main() {
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Credentials: &centrifuge.Credentials{UserID: "42"},
-			// Subscribe to server-side channel.
+			// Subscribe to a server-side channel.
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
 				"news": {Presence: true, JoinLeave: true, Recover: true},
 			},

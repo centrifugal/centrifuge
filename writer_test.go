@@ -79,7 +79,7 @@ func runWrite(w *writer, t *benchmarkTransport) {
 }
 
 // BenchmarkWriteMerge allows to be sure that merging messages into one frame
-// works and makes sense from syscal economy perspective. Compare result to
+// works and makes sense from syscall economy perspective. Compare result to
 // BenchmarkWriteMergeDisabled.
 func BenchmarkWriteMerge(b *testing.B) {
 	transport := newBenchmarkTransport()

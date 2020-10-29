@@ -106,7 +106,7 @@ type Broker interface {
 	// Unsubscribe node from channel to stop listening messages from it.
 	Unsubscribe(ch string) error
 
-	// Publish allows to send Publication into channel. Publications should be
+	// Publish allows to send data into channel. Data should be
 	// delivered to all clients subscribed to this channel at moment on any
 	// Centrifuge node (with at most once delivery guarantee).
 	//

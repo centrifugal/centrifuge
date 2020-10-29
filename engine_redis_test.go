@@ -54,7 +54,7 @@ func NewTestRedisEngineWithPrefix(tb testing.TB, prefix string, useStreams bool)
 	n.SetEngine(e)
 	err = n.Run()
 	if err != nil {
-		panic(err)
+		tb.Fatal(err)
 	}
 	return e
 }
@@ -627,7 +627,7 @@ func BenchmarkRedisPublish_OneChannel(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := e.Publish("channel", rawData, PublishOptions{})
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -641,7 +641,7 @@ func BenchmarkRedisPublish_OneChannel_Parallel(b *testing.B) {
 		for pb.Next() {
 			_, err := e.Publish("channel", rawData, PublishOptions{})
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -659,7 +659,7 @@ func BenchmarkRedisPublish_ManyChannels(b *testing.B) {
 		j++
 		_, err := e.Publish(channel, rawData, PublishOptions{})
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -786,7 +786,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 		j++
 		err := e.Subscribe("subscribe" + strconv.Itoa(j))
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -801,7 +801,7 @@ func BenchmarkRedisSubscribe_Parallel(b *testing.B) {
 			i++
 			err := e.Subscribe("subscribe" + strconv.Itoa(i))
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -971,13 +971,13 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node 
 	c := DefaultConfig
 	n, err := New(c)
 	if err != nil {
-		panic(err)
+		tb.Fatal(err)
 	}
 	e := newTestRedisEngine(tb, useStreams, useCluster)
 	n.SetEngine(e)
 	err = n.Run()
 	if err != nil {
-		panic(err)
+		tb.Fatal(err)
 	}
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {

@@ -71,7 +71,7 @@ func (c *Client) OnSubRefresh(h SubRefreshHandler) {
 }
 
 // OnSubscribe allows setting SubscribeHandler.
-// SubscribeHandler called when client subscribes on channel.
+// SubscribeHandler called when client subscribes on a channel.
 func (c *Client) OnSubscribe(h SubscribeHandler) {
 	c.eventHub.subscribeHandler = h
 }

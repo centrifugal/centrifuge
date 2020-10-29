@@ -28,3 +28,10 @@ func TestWithReconnect(t *testing.T) {
 	opt(opts)
 	require.Equal(t, true, opts.Reconnect)
 }
+
+func TestWithLimit(t *testing.T) {
+	opt := WithLimit(NoLimit)
+	opts := &HistoryOptions{}
+	opt(opts)
+	require.Equal(t, NoLimit, opts.Limit)
+}

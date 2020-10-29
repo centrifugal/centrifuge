@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/protocol"
-	"github.com/stretchr/testify/require"
-
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
+
+	"github.com/centrifugal/protocol"
+	"github.com/stretchr/testify/require"
 )
 
 type TestEngine struct {

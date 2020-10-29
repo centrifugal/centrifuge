@@ -200,7 +200,7 @@ func main() {
 				log.Printf("error publishing to personal channel: %s", err)
 			}
 			i++
-			time.Sleep(10000 * time.Millisecond)
+			time.Sleep(5000 * time.Millisecond)
 		}
 	}()
 

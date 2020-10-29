@@ -313,7 +313,7 @@ func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := e.Publish("channel", rawData, PublishOptions{})
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
@@ -327,7 +327,7 @@ func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
 		for pb.Next() {
 			_, err := e.Publish("channel", rawData, PublishOptions{})
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 		}
 	})
@@ -342,10 +342,10 @@ func BenchmarkMemoryPublish_History_OneChannel(b *testing.B) {
 		var err error
 		streamTop, err := e.Publish("channel", rawData, chOpts)
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 		if streamTop.Offset == 0 {
-			panic("zero offset")
+			b.Fatal("zero offset")
 		}
 	}
 }
@@ -361,10 +361,10 @@ func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
 			var err error
 			streamTop, err := e.Publish("channel", rawData, chOpts)
 			if err != nil {
-				panic(err)
+				b.Fatal(err)
 			}
 			if streamTop.Offset == 0 {
-				panic("zero offset")
+				b.Fatal("zero offset")
 			}
 		}
 	})
