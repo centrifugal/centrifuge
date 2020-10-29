@@ -1,0 +1,48 @@
+name: build
+on: [push, pull_request]
+jobs:
+  build:
+    strategy:
+      matrix:
+        go-version: [1.14, 1.15]
+        redis-version: [6]
+        platform: [ubuntu-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    name: Build with Go ${{ matrix.go }}
+
+    steps:
+      - name: Install Go stable version
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install GolangCI-Lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.27.0
+
+      - name: Lint
+        run: golangci-lint run ./...
+
+      - name: Start single Redis
+        uses: supercharge/redis-github-action@1.1.0
+        with:
+          redis-version: ${{ matrix.redis-version }}
+
+      - name: Start Redis Cluster
+        run: docker run -d -e "IP=0.0.0.0" -p 7000-7006:7000-7006 grokzen/redis-cluster:latest
+
+      - name: Start Redis with Sentinel
+        run: docker run -d -p 26379:26379 joshula/redis-sentinel:latest --sentinel announce-ip 1.2.3.4 --sentinel announce-port 26379
+
+      - name: Test
+        run: go test -v -race -tags integration -coverprofile=coverage.out $(go list ./... | grep -v /_examples/)
+
+      - name: Upload code coverage to codecov
+        if: matrix.go == '1.15'
+        uses: codecov/codecov-action@v1
+        with:
+          file: ./coverage.out

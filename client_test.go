@@ -601,12 +601,16 @@ func TestUserConnectionLimit(t *testing.T) {
 	require.Equal(t, DisconnectConnectionLimit, err)
 }
 
+type testContextKey int
+
+var keyTest testContextKey = 1
+
 func TestConnectingReply(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
-		newCtx := context.WithValue(ctx, "key", "val")
+		newCtx := context.WithValue(ctx, keyTest, "val")
 		return ConnectReply{
 			Context: newCtx,
 			Data:    []byte("{}"),
@@ -619,7 +623,7 @@ func TestConnectingReply(t *testing.T) {
 	done := make(chan struct{})
 
 	node.OnConnect(func(c *Client) {
-		v, ok := c.Context().Value("key").(string)
+		v, ok := c.Context().Value(keyTest).(string)
 		require.True(t, ok)
 		require.Equal(t, "val", v)
 		require.Equal(t, "12", c.UserID())
@@ -1732,7 +1736,6 @@ func TestClientSubExpired(t *testing.T) {
 			if event.Disconnect == DisconnectSubExpired {
 				close(doneCh)
 			}
-			return
 		})
 	})
 

@@ -910,7 +910,6 @@ func (c *Client) expire() {
 				c.mu.Unlock()
 			}
 			c.checkExpired()
-			return
 		}
 		c.eventHub.refreshHandler(RefreshEvent{}, cb)
 	} else {

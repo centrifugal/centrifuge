@@ -45,10 +45,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 
 	msg, ok := w.messages.Remove()
 	if !ok {
-		if w.messages.Closed() {
-			return false
-		}
-		return true
+		return !w.messages.Closed()
 	}
 
 	var writeErr error
