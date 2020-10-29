@@ -1,25 +1,25 @@
 [![Join the chat at https://t.me/joinchat/ABFVWBE0AhkyyhREoaboXQ](https://img.shields.io/badge/Telegram-Group-blue.svg)](https://t.me/joinchat/ABFVWBE0AhkyyhREoaboXQ)
 [![Build Status](https://travis-ci.org/centrifugal/centrifuge.svg?branch=master)](https://travis-ci.org/centrifugal/centrifuge)
 [![Coverage Status](https://coveralls.io/repos/github/centrifugal/centrifuge/badge.svg?branch=master)](https://coveralls.io/github/centrifugal/centrifuge?branch=master)
-[![GoDoc](https://godoc.org/github.com/centrifugal/centrifuge?status.svg)](https://godoc.org/github.com/centrifugal/centrifuge)
+[![GoDoc](https://pkg.go.dev/badge/centrifugal/centrifuge)](https://pkg.go.dev/github.com/centrifugal/centrifuge)
 
-**This library has no v1 release yet, API still evolves. Use with strict versioning.** At this moment patch version updates only have backwards compatible changes and fixes, minor version updates can have backwards-incompatible API changes. See [v1.0.0 milestone](https://github.com/centrifugal/centrifuge/milestone/1).
+**This library has no v1 release yet, API still evolves. Use with strict versioning.** At this moment patch version updates only have backwards compatible changes and fixes, minor version updates can have backwards-incompatible API changes. See [v1.0.0 milestone](https://github.com/centrifugal/centrifuge/milestone/1). Master branch can have unreleased code.
 
 Centrifuge library is a real-time core of [Centrifugo](https://github.com/centrifugal/centrifugo) server. It's also supposed to be a general purpose real-time messaging library for Go programming language. The library built on top of strict client-server protocol schema and exposes various real-time oriented primitives for a developer. Centrifuge solves several problems a developer may come across when building complex real-time applications – like scalability (millions of connections), proper persistent connection management and invalidation, fast reconnect with message recovery, WebSocket fallback option.
 
 Library highlights:
 
-* Fast and optimized for low-latency communication with millions of client connections. See [benchmark](https://centrifugal.github.io/centrifugo/misc/benchmark/)
+* Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.github.io/centrifugo/misc/benchmark/)
 * WebSocket with JSON or binary Protobuf protocol
 * SockJS polyfill library support for browsers where WebSocket not available (JSON only)
 * Built-in horizontal scalability with Redis PUB/SUB, consistent Redis sharding, Sentinel and Redis Cluster for HA
-* Possibility to register custom PUB/SUB broker, history and presence storage implementations
+* Possibility to register custom PUB/SUB broker and presence storage implementations
 * Native authentication over HTTP middleware or custom token-based
 * Bidirectional asynchronous message communication and RPC calls
 * Channel concept to broadcast message to all active subscribers
-* Client-side and server-side subscriptions
+* Client-side and server-side channel subscriptions
 * Presence information for channels (show all active clients in channel)
-* History information for channels (last messages published into channel)
+* History information for channels (stream of messages published into channel)
 * Join/leave events for channels (aka client goes online/offline)
 * Message recovery mechanism for channels to survive PUB/SUB delivery problems, short network disconnects or node restart
 * Prometheus instrumentation
@@ -34,7 +34,7 @@ Client libraries:
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 
-See [Godoc](https://godoc.org/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples). You can also consider [Centrifugo server documentation](https://centrifugal.github.io/centrifugo/) as extra doc for this package (because it's built on top of Centrifuge library).
+See [Documentation](https://pkg.go.dev/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples). You can also consider [Centrifugo server documentation](https://centrifugal.github.io/centrifugo/) as extra doc for this package (because it's built on top of Centrifuge library).
 
 ### Installation
 
