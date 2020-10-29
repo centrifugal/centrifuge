@@ -9,6 +9,7 @@ This release solves two important issues from v1.0.0 library milestone. It has A
 * Change signature of `Publish` method in `Broker` interface – method now accepts `[]byte` data instead of `*Publication`.  
 * Function options for `Unsubbscribe` and `Disconnect` methods now have boolean argument.
 * History functional option `WithNoLimit` removed – use `WithLimit(centrifuge.NoLimit)` instead. 
+* Config option `ClientUserConnectionLimit` renamed to `UserConnectionLimit`. If `UserConnectionLimit` set then now connection will be disconnected with `DisconnectConnectionLimit` instead of returning a `LimitExceeded` error.
 
 Since API changes are pretty big, let's look at example program and how to adapt it from v0.12.0 to v0.13.0.
 
