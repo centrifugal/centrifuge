@@ -22,11 +22,18 @@ func TestWithResubscribe(t *testing.T) {
 	require.Equal(t, true, opts.Resubscribe)
 }
 
-func TestWithReconnect(t *testing.T) {
-	opt := WithReconnect(true)
+func TestWithDisconnect(t *testing.T) {
+	opt := WithDisconnect(DisconnectConnectionLimit)
 	opts := &DisconnectOptions{}
 	opt(opts)
-	require.Equal(t, true, opts.Reconnect)
+	require.Equal(t, DisconnectConnectionLimit, opts.Disconnect)
+}
+
+func TestWithClientWhitelist(t *testing.T) {
+	opt := WithClientWhitelist([]string{"client"})
+	opts := &DisconnectOptions{}
+	opt(opts)
+	require.Equal(t, []string{"client"}, opts.ClientWhitelist)
 }
 
 func TestWithLimit(t *testing.T) {

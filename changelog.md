@@ -1,3 +1,45 @@
+v0.14.0
+=======
+
+* Add possibility to disconnect user with custom `Disconnect` object, and with client ID whitelist.
+* Fix non-working `WithReconnect` option when calling `node.Disconnect` method.
+
+For example, this is how we can maintain only one connection to Centrifuge from a user globally across all Centrifuge nodes:
+
+```go
+node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+    cred, _ := centrifuge.GetCredentials(ctx)
+    err := node.Disconnect(
+        cred.UserID,
+        centrifuge.WithDisconnect(centrifuge.DisconnectConnectionLimit),
+        centrifuge.WithClientWhitelist([]string{e.ClientID}),
+    )
+    if err != nil {
+        return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+    }
+    return centrifuge.ConnectReply{}, nil
+})
+```
+
+Here is what changed since v0.13.0:
+
+```
+gorelease -base v0.13.0 -version v0.14.0
+github.com/centrifugal/centrifuge
+---------------------------------
+Incompatible changes:
+- DisconnectOptions.Reconnect: removed
+- DisconnectOptions: old is comparable, new is not
+- WithReconnect: removed
+Compatible changes:
+- DisconnectOptions.ClientWhitelist: added
+- DisconnectOptions.Disconnect: added
+- WithClientWhitelist: added
+- WithDisconnect: added
+
+v0.14.0 is a valid semantic version for this release.
+```
+
 v0.13.0
 =======
 
