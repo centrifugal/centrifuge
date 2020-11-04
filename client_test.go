@@ -842,7 +842,7 @@ func TestClientAliveHandler(t *testing.T) {
 			if numCalls >= 50 && !closed {
 				close(done)
 				closed = true
-				require.NoError(t, client.Disconnect(DisconnectForceNoReconnect))
+				client.Disconnect(DisconnectForceNoReconnect)
 			}
 		})
 
@@ -2168,7 +2168,7 @@ func TestCloseNoRace(t *testing.T) {
 	done := make(chan struct{})
 
 	node.OnConnect(func(client *Client) {
-		require.NoError(t, client.Disconnect(DisconnectForceNoReconnect))
+		client.Disconnect(DisconnectForceNoReconnect)
 		time.Sleep(time.Second)
 		client.OnDisconnect(func(_ DisconnectEvent) {
 			close(done)
