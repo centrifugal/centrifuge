@@ -4,6 +4,8 @@ jobs:
   golangci:
     name: Lint
     runs-on: ubuntu-latest
+    # Prevent duplicate builds on internal PRs.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     steps:
       - uses: actions/checkout@v2
       - name: golangci-lint
@@ -13,6 +15,8 @@ jobs:
   build:
     name: Test with Go ${{ matrix.go-version }}
     runs-on: ubuntu-latest
+    # Prevent duplicate builds on internal PRs.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       matrix:
         go-version: [1.14, 1.15]

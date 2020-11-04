@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title></title>
+        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+        <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+        <script type="text/javascript" src="//cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@latest/dist/centrifuge.min.js"></script>
+        <script type="text/javascript">
+            $(function () {
+                const container = $('#messages');
+
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+                // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
+                //     sockjsTransports: [
+                //         "xhr-streaming",
+                //     ]
+                // });
+
+                // bind listeners on centrifuge object instance events.
+                centrifuge.on('connect', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
+                });
+
+                centrifuge.on('disconnect', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                });
+
+                // Trigger actual connection establishing with a server.
+                // At this moment actual client work starts - i.e. subscriptions
+                // defined start subscribing etc.
+                centrifuge.connect();
+
+                function drawText(text) {
+                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                }
+            });
+        </script>
+    </head>
+    <body>
+        <ul id="messages"></ul>
+    </body>
+</html>

@@ -163,11 +163,11 @@ func TestHubDisconnect(t *testing.T) {
 	}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("1", false)
+	err := n.hub.disconnect("1", DisconnectForceNoReconnect, nil)
 	require.NoError(t, err)
 
 	// Disconnect subscribed user.
-	err = n.hub.disconnect("42", false)
+	err = n.hub.disconnect("42", DisconnectForceNoReconnect, nil)
 	require.NoError(t, err)
 	select {
 	case <-client.transport.(*testTransport).closeCh:
@@ -179,7 +179,7 @@ func TestHubDisconnect(t *testing.T) {
 	require.NotContains(t, n.hub.subs, "test_channel")
 
 	// Disconnect subscribed user with reconnect.
-	err = n.hub.disconnect("24", true)
+	err = n.hub.disconnect("24", DisconnectForceReconnect, nil)
 	require.NoError(t, err)
 	select {
 	case <-clientWithReconnect.transport.(*testTransport).closeCh:
@@ -195,6 +195,56 @@ func TestHubDisconnect(t *testing.T) {
 	require.Len(t, n.hub.conns, 0)
 	require.Len(t, n.hub.users, 0)
 	require.Len(t, n.hub.subs, 0)
+}
+
+func TestHubDisconnect_ClientWhitelist(t *testing.T) {
+	n := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+
+	client := newTestSubscribedClient(t, n, "12", "test_channel")
+	clientToKeep := newTestSubscribedClient(t, n, "12", "test_channel")
+
+	require.Len(t, n.hub.conns, 2)
+	require.Len(t, n.hub.users, 1)
+	require.Len(t, n.hub.subs, 1)
+	require.Len(t, n.hub.subs["test_channel"], 2)
+
+	shouldBeClosed := make(chan struct{})
+	shouldNotBeClosed := make(chan struct{})
+
+	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		close(shouldBeClosed)
+	}
+
+	clientToKeep.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		close(shouldNotBeClosed)
+	}
+
+	whitelist := []string{clientToKeep.ID()}
+
+	// Disconnect not existed user.
+	err := n.hub.disconnect("12", DisconnectConnectionLimit, whitelist)
+	require.NoError(t, err)
+
+	select {
+	case <-shouldBeClosed:
+		select {
+		case <-shouldNotBeClosed:
+			require.Fail(t, "client should not be disconnected")
+		case <-time.After(time.Second):
+			require.Len(t, n.hub.conns, 1)
+			require.Len(t, n.hub.users, 1)
+			require.Len(t, n.hub.subs["test_channel"], 1)
+		}
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	}
 }
 
 func TestHubBroadcastPublication(t *testing.T) {

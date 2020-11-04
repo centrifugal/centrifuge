@@ -41,7 +41,7 @@ func TestSockjsHandler(t *testing.T) {
 	n.OnConnect(func(client *Client) {
 		err := client.Send([]byte(`{"SockJS write": 1}`))
 		require.NoError(t, err)
-		_ = client.Disconnect(DisconnectForceReconnect)
+		client.Disconnect(DisconnectForceReconnect)
 	})
 
 	mux.Handle("/connection/sockjs/", NewSockjsHandler(n, SockjsConfig{
