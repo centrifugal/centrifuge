@@ -154,11 +154,6 @@ func (e *MemoryEngine) RemoveHistory(ch string) error {
 	return e.historyHub.remove(ch)
 }
 
-// Channels - see engine interface description.
-func (e *MemoryEngine) Channels() ([]string, error) {
-	return e.node.Hub().Channels(), nil
-}
-
 type presenceHub struct {
 	sync.RWMutex
 	presence map[string]map[string]*ClientInfo

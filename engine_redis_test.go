@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gomodule/redigo/redis"
+
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -136,14 +138,7 @@ func TestRedisEngine(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			e := newTestRedisEngine(t, tt.UseStreams, tt.UseCluster)
 
-			_, err := e.Channels()
-			if e.shards[0].useCluster() {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-
-			_, err = e.Publish("channel", testPublicationData(), PublishOptions{})
+			_, err := e.Publish("channel", testPublicationData(), PublishOptions{})
 			require.NoError(t, err)
 			_, err = e.Publish("channel", testPublicationData(), PublishOptions{})
 			require.NoError(t, err)
@@ -306,6 +301,12 @@ func TestRedisEngineRecover(t *testing.T) {
 	}
 }
 
+func pubSubChannels(t *testing.T, e *RedisEngine) ([]string, error) {
+	conn := e.shards[0].pool.Get()
+	defer func() { require.NoError(t, conn.Close()) }()
+	return redis.Strings(conn.Do("PUBSUB", "channels", e.shards[0].messagePrefix+"*"))
+}
+
 func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 	// Custom prefix to not collide with other tests.
 	e := NewTestRedisEngineWithPrefix(t, getUniquePrefix(), false)
@@ -316,24 +317,24 @@ func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 
 	require.NoError(t, e.Subscribe("1-test"))
 	require.NoError(t, e.Subscribe("1-test"))
-	channels, err := e.Channels()
+	channels, err := pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 1 {
 		// Redis PUBSUB CHANNELS command looks like eventual consistent, so sometimes
 		// it returns wrong results, sleeping for a while helps in such situations.
 		// See https://gist.github.com/FZambia/80a5241e06b4662f7fe89cfaf24072c3
 		time.Sleep(500 * time.Millisecond)
-		channels, err := e.Channels()
+		channels, err := pubSubChannels(t, e)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(channels), fmt.Sprintf("%#v", channels))
 	}
 
 	require.NoError(t, e.Unsubscribe("1-test"))
-	channels, err = e.Channels()
+	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 0 {
 		time.Sleep(500 * time.Millisecond)
-		channels, _ := e.Channels()
+		channels, _ := pubSubChannels(t, e)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
 
@@ -349,12 +350,12 @@ func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	channels, err = e.Channels()
+	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 
 	if len(channels) != 0 {
 		time.Sleep(500 * time.Millisecond)
-		channels, _ := e.Channels()
+		channels, _ := pubSubChannels(t, e)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
 
@@ -368,11 +369,11 @@ func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	channels, err = e.Channels()
+	channels, err = pubSubChannels(t, e)
 	require.Equal(t, nil, err)
 	if len(channels) != 0 {
 		time.Sleep(500 * time.Millisecond)
-		channels, err := e.Channels()
+		channels, err := pubSubChannels(t, e)
 		require.NoError(t, err)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
@@ -382,11 +383,11 @@ func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 		require.NoError(t, e.Subscribe("4-test"))
 		require.NoError(t, e.Unsubscribe("4-test"))
 	}
-	channels, err = e.Channels()
+	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 0 {
 		time.Sleep(500 * time.Millisecond)
-		channels, _ := e.Channels()
+		channels, _ := pubSubChannels(t, e)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
 
@@ -396,11 +397,11 @@ func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 			require.NoError(t, e.Subscribe("5-test-"+strconv.Itoa(i)))
 			require.NoError(t, e.Unsubscribe("5-test-"+strconv.Itoa(i)))
 		}
-		channels, err = e.Channels()
+		channels, err = pubSubChannels(t, e)
 		require.NoError(t, err)
 		if len(channels) != 0 {
 			time.Sleep(500 * time.Millisecond)
-			channels, err := e.Channels()
+			channels, err := pubSubChannels(t, e)
 			require.NoError(t, err)
 			require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 		}
@@ -415,11 +416,11 @@ func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	channels, err = e.Channels()
+	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 100 {
 		time.Sleep(500 * time.Millisecond)
-		channels, err := e.Channels()
+		channels, err := pubSubChannels(t, e)
 		require.NoError(t, err)
 		require.Equal(t, 100, len(channels), fmt.Sprintf("%#v", channels))
 	}
@@ -433,11 +434,11 @@ func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	channels, err = e.Channels()
+	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 0 {
 		time.Sleep(500 * time.Millisecond)
-		channels, _ := e.Channels()
+		channels, _ := pubSubChannels(t, e)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
 
@@ -457,11 +458,11 @@ func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	channels, err = e.Channels()
+	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 0 {
 		time.Sleep(500 * time.Millisecond)
-		channels, err := e.Channels()
+		channels, err := pubSubChannels(t, e)
 		require.NoError(t, err)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}

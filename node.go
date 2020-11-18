@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -63,6 +64,11 @@ type Node struct {
 
 	// nowTimeGetter provides access to current time.
 	nowTimeGetter nowtime.Getter
+
+	surveyHandler  SurveyHandler
+	surveyRegistry map[uint64]chan survey
+	surveyMu       sync.RWMutex
+	surveyID       uint64
 }
 
 const (
@@ -101,6 +107,7 @@ func New(c Config) (*Node, error) {
 		subLocks:       subLocks,
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
+		surveyRegistry: make(map[uint64]chan survey),
 	}
 
 	if c.LogHandler != nil {
@@ -205,6 +212,11 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	n.shutdown = true
 	close(n.shutdownCh)
 	n.mu.Unlock()
+	cmd := &controlpb.Command{
+		UID:    n.uid,
+		Method: controlpb.MethodTypeShutdown,
+	}
+	_ = n.publishControl(cmd)
 	if closer, ok := n.broker.(Closer); ok {
 		defer func() { _ = closer.Close(ctx) }()
 	}
@@ -318,15 +330,127 @@ func (n *Node) cleanNodeInfo() {
 	}
 }
 
-// Channels returns a slice of all channels currently active across all
-// Centrifuge nodes.
-// This is an instant snapshot of state, mostly useful for debugging in
-// development.
-// It does not scale well for massive deployments with large number of active
-// channels since response can be large.
-// Deprecated. See https://github.com/centrifugal/centrifuge/issues/147.
-func (n *Node) Channels() ([]string, error) {
-	return n.broker.Channels()
+func (n *Node) handleSurveyRequest(req *controlpb.SurveyRequest) error {
+	if n.surveyHandler == nil {
+		return nil
+	}
+	cb := func(reply SurveyReply) {
+		surveyResponse := &controlpb.SurveyResponse{
+			ID:   req.ID,
+			Code: reply.Code,
+			Data: reply.Data,
+		}
+		params, _ := n.controlEncoder.EncodeSurveyResponse(surveyResponse)
+
+		cmd := &controlpb.Command{
+			UID:    n.uid,
+			Method: controlpb.MethodTypeSurveyResponse,
+			Params: params,
+		}
+		_ = n.publishControl(cmd)
+	}
+	n.surveyHandler(SurveyEvent{Op: req.Op, Data: req.Data}, cb)
+	return nil
+}
+
+func (n *Node) handleSurveyResponse(uid string, resp *controlpb.SurveyResponse) error {
+	n.surveyMu.RLock()
+	defer n.surveyMu.RUnlock()
+	if ch, ok := n.surveyRegistry[resp.ID]; ok {
+		ch <- survey{
+			UID: uid,
+			Result: SurveyResult{
+				Code: resp.Code,
+				Data: resp.Data,
+			},
+		}
+	}
+	return nil
+}
+
+// SurveyResult from node.
+type SurveyResult struct {
+	Code uint32
+	Data []byte
+}
+
+type survey struct {
+	UID    string
+	Result SurveyResult
+}
+
+// Survey allows collecting data from all running Centrifuge nodes. This method publishes
+// control messages, then waits for replies from nodes. The maximum waiting time can be
+// controlled over context timeout.
+func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]SurveyResult, error) {
+	if n.surveyHandler == nil {
+		return nil, errors.New("no survey handler registered")
+	}
+	numNodes := len(n.nodes.list())
+
+	n.surveyMu.Lock()
+	n.surveyID++
+	surveyRequest := &controlpb.SurveyRequest{
+		ID:   n.surveyID,
+		Op:   op,
+		Data: data,
+	}
+	params, err := n.controlEncoder.EncodeSurveyRequest(surveyRequest)
+	if err != nil {
+		return nil, err
+	}
+	surveyChan := make(chan survey, numNodes)
+	n.surveyRegistry[surveyRequest.ID] = surveyChan
+	n.surveyMu.Unlock()
+
+	defer func() {
+		n.surveyMu.Lock()
+		defer n.surveyMu.Unlock()
+		delete(n.surveyRegistry, surveyRequest.ID)
+	}()
+
+	results := map[string]SurveyResult{}
+
+	n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
+		surveyChan <- survey{
+			UID: n.uid,
+			Result: SurveyResult{
+				Code: reply.Code,
+				Data: reply.Data,
+			},
+		}
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case resp := <-surveyChan:
+				results[resp.UID] = resp.Result
+				if len(results) == numNodes {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	cmd := &controlpb.Command{
+		UID:    n.uid,
+		Method: controlpb.MethodTypeSurveyRequest,
+		Params: params,
+	}
+	err = n.publishControl(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	wg.Wait()
+	return results, ctx.Err()
 }
 
 // Info contains information about all known server nodes.
@@ -396,6 +520,7 @@ func (n *Node) handleControl(data []byte) error {
 		return nil
 	}
 
+	uid := cmd.UID
 	method := cmd.Method
 	params := cmd.Params
 
@@ -407,6 +532,8 @@ func (n *Node) handleControl(data []byte) error {
 			return err
 		}
 		return n.nodeCmd(cmd)
+	case controlpb.MethodTypeShutdown:
+		return n.shutdownCmd(uid)
 	case controlpb.MethodTypeUnsubscribe:
 		cmd, err := n.controlDecoder.DecodeUnsubscribe(params)
 		if err != nil {
@@ -421,6 +548,20 @@ func (n *Node) handleControl(data []byte) error {
 			return err
 		}
 		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Whitelist)
+	case controlpb.MethodTypeSurveyRequest:
+		cmd, err := n.controlDecoder.DecodeSurveyRequest(params)
+		if err != nil {
+			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
+			return err
+		}
+		return n.handleSurveyRequest(cmd)
+	case controlpb.MethodTypeSurveyResponse:
+		cmd, err := n.controlDecoder.DecodeSurveyResponse(params)
+		if err != nil {
+			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
+			return err
+		}
+		return n.handleSurveyResponse(uid, cmd)
 	default:
 		n.logger.log(newLogEntry(LogLevelError, "unknown control message method", map[string]interface{}{"method": method}))
 		return fmt.Errorf("control method not found: %d", method)
@@ -675,9 +816,15 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	return nil
 }
 
-// nodeCmd handles ping control command i.e. updates information about known nodes.
+// nodeCmd handles node control command i.e. updates information about known nodes.
 func (n *Node) nodeCmd(node *controlpb.Node) error {
 	n.nodes.add(node)
+	return nil
+}
+
+// shutdownCmd handles shutdown control command sent when node leaves cluster.
+func (n *Node) shutdownCmd(nodeID string) error {
+	n.nodes.remove(nodeID)
 	return nil
 }
 
@@ -939,6 +1086,13 @@ func (r *nodeRegistry) add(info *controlpb.Node) {
 	r.mu.Unlock()
 }
 
+func (r *nodeRegistry) remove(uid string) {
+	r.mu.Lock()
+	delete(r.nodes, uid)
+	delete(r.updates, uid)
+	r.mu.Unlock()
+}
+
 func (r *nodeRegistry) clean(delay time.Duration) {
 	r.mu.Lock()
 	for uid := range r.nodes {
@@ -959,6 +1113,11 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 		}
 	}
 	r.mu.Unlock()
+}
+
+// OnSurvey allows to set SurveyHandler. This should be done before Node.Run called.
+func (n *Node) OnSurvey(handler SurveyHandler) {
+	n.surveyHandler = handler
 }
 
 // eventHub allows binding client event handlers.

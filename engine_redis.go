@@ -674,29 +674,6 @@ func (e *RedisEngine) RemoveHistory(ch string) error {
 	return e.getShard(ch).RemoveHistory(ch)
 }
 
-// Channels - see engine interface description.
-func (e *RedisEngine) Channels() ([]string, error) {
-	channelMap := map[string]struct{}{}
-	for _, shard := range e.shards {
-		shardChannels, err := shard.Channels()
-		if err != nil {
-			return nil, err
-		}
-		if !e.sharding {
-			// We have all channels on one shard.
-			return shardChannels, nil
-		}
-		for _, ch := range shardChannels {
-			channelMap[ch] = struct{}{}
-		}
-	}
-	channels := make([]string, 0, len(channelMap))
-	for ch := range channelMap {
-		channels = append(channels, ch)
-	}
-	return channels, nil
-}
-
 // newShard initializes new Redis shard.
 func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 	shard := &shard{
@@ -1148,7 +1125,6 @@ const (
 	dataOpHistory
 	dataOpAddHistory
 	dataOpHistoryRemove
-	dataOpChannels
 )
 
 type dataResponse struct {
@@ -1231,8 +1207,6 @@ func (s *shard) processClusterDataRequest(dr dataRequest) (interface{}, error) {
 		}
 	case dataOpHistoryRemove:
 		reply, err = conn.Do("DEL", dr.args...)
-	case dataOpChannels:
-		reply, err = conn.Do("PUBSUB", dr.args...)
 	}
 	return reply, err
 }
@@ -1297,8 +1271,6 @@ func (s *shard) runDataPipeline() {
 				}
 			case dataOpHistoryRemove:
 				_ = conn.Send("DEL", drs[i].args...)
-			case dataOpChannels:
-				_ = conn.Send("PUBSUB", drs[i].args...)
 			}
 		}
 
@@ -1775,33 +1747,6 @@ func (s *shard) RemoveHistory(ch string) error {
 	dr := newDataRequest(dataOpHistoryRemove, []interface{}{key})
 	resp := s.getDataResponse(dr)
 	return resp.err
-}
-
-// Channels - see engine interface description.
-// Requires Redis >= 2.8.0 (http://redis.io/commands/pubsub)
-func (s *shard) Channels() ([]string, error) {
-	if s.useCluster() {
-		return nil, errors.New("channels command not supported when Redis Cluster is used")
-	}
-	dr := newDataRequest(dataOpChannels, []interface{}{"CHANNELS", s.messagePrefix + "*"})
-	resp := s.getDataResponse(dr)
-	if resp.err != nil {
-		return nil, resp.err
-	}
-	values, err := redis.Values(resp.reply, nil)
-	if err != nil {
-		return nil, err
-	}
-	channels := make([]string, 0, len(values))
-	for i := 0; i < len(values); i++ {
-		value, okValue := values[i].([]byte)
-		if !okValue {
-			return nil, errors.New("error getting channelID value")
-		}
-		chID := channelID(value)
-		channels = append(channels, string(chID)[len(s.messagePrefix):])
-	}
-	return channels, nil
 }
 
 func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {

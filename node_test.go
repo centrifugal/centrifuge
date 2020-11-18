@@ -288,13 +288,6 @@ func TestNode_SetPresenceManager(t *testing.T) {
 	require.Equal(t, n.presenceManager, engine)
 }
 
-func TestNode_Channels(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
-	defer func() { _ = n.Shutdown(context.Background()) }()
-	_, err := n.Channels()
-	require.NoError(t, err)
-}
-
 func TestNode_Info(t *testing.T) {
 	n := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()

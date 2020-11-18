@@ -135,15 +135,6 @@ type Broker interface {
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
 	RemoveHistory(ch string) error
-
-	// Channels returns slice of currently active channels (with one or more
-	// subscribers) on all running nodes. This is possible with Redis but can
-	// be much harder in other PUB/SUB system. Anyway this information can only
-	// be used for admin needs to better understand state of system. So it's not
-	// a big problem if another Broker implementation won't support this method.
-	//
-	// Deprecated. See https://github.com/centrifugal/centrifuge/issues/147.
-	Channels() ([]string, error)
 }
 
 // PresenceManager is responsible for channel presence management.

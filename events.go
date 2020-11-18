@@ -290,3 +290,21 @@ type HistoryCallback func(HistoryReply, error)
 
 // HistoryHandler must handle incoming command from client.
 type HistoryHandler func(HistoryEvent, HistoryCallback)
+
+// SurveyEvent with Op and Data of survey.
+type SurveyEvent struct {
+	Op   string
+	Data []byte
+}
+
+// SurveyReply contains survey reply fields.
+type SurveyReply struct {
+	Code uint32
+	Data []byte
+}
+
+// SurveyCallback should be called with SurveyReply as soon as survey completed.
+type SurveyCallback func(SurveyReply)
+
+// SurveyHandler allows to set survey handler function.
+type SurveyHandler func(SurveyEvent, SurveyCallback)

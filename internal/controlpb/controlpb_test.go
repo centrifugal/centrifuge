@@ -13,6 +13,8 @@ It has these top-level messages:
 	Metrics
 	Unsubscribe
 	Disconnect
+	SurveyRequest
+	SurveyResponse
 */
 package controlpb
 
@@ -310,6 +312,118 @@ func TestDisconnectMarshalTo(t *testing.T) {
 	}
 }
 
+func TestSurveyRequestProto(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyRequest(popr, false)
+	dAtA, err := proto.Marshal(p)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	msg := &SurveyRequest{}
+	if err := proto.Unmarshal(dAtA, msg); err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	littlefuzz := make([]byte, len(dAtA))
+	copy(littlefuzz, dAtA)
+	for i := range dAtA {
+		dAtA[i] = byte(popr.Intn(256))
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Proto %#v", seed, msg, p)
+	}
+	if len(littlefuzz) > 0 {
+		fuzzamount := 100
+		for i := 0; i < fuzzamount; i++ {
+			littlefuzz[popr.Intn(len(littlefuzz))] = byte(popr.Intn(256))
+			littlefuzz = append(littlefuzz, byte(popr.Intn(256)))
+		}
+		// shouldn't panic
+		_ = proto.Unmarshal(littlefuzz, msg)
+	}
+}
+
+func TestSurveyRequestMarshalTo(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyRequest(popr, false)
+	size := p.Size()
+	dAtA := make([]byte, size)
+	for i := range dAtA {
+		dAtA[i] = byte(popr.Intn(256))
+	}
+	_, err := p.MarshalTo(dAtA)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	msg := &SurveyRequest{}
+	if err := proto.Unmarshal(dAtA, msg); err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	for i := range dAtA {
+		dAtA[i] = byte(popr.Intn(256))
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Proto %#v", seed, msg, p)
+	}
+}
+
+func TestSurveyResponseProto(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyResponse(popr, false)
+	dAtA, err := proto.Marshal(p)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	msg := &SurveyResponse{}
+	if err := proto.Unmarshal(dAtA, msg); err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	littlefuzz := make([]byte, len(dAtA))
+	copy(littlefuzz, dAtA)
+	for i := range dAtA {
+		dAtA[i] = byte(popr.Intn(256))
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Proto %#v", seed, msg, p)
+	}
+	if len(littlefuzz) > 0 {
+		fuzzamount := 100
+		for i := 0; i < fuzzamount; i++ {
+			littlefuzz[popr.Intn(len(littlefuzz))] = byte(popr.Intn(256))
+			littlefuzz = append(littlefuzz, byte(popr.Intn(256)))
+		}
+		// shouldn't panic
+		_ = proto.Unmarshal(littlefuzz, msg)
+	}
+}
+
+func TestSurveyResponseMarshalTo(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyResponse(popr, false)
+	size := p.Size()
+	dAtA := make([]byte, size)
+	for i := range dAtA {
+		dAtA[i] = byte(popr.Intn(256))
+	}
+	_, err := p.MarshalTo(dAtA)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	msg := &SurveyResponse{}
+	if err := proto.Unmarshal(dAtA, msg); err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	for i := range dAtA {
+		dAtA[i] = byte(popr.Intn(256))
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Proto %#v", seed, msg, p)
+	}
+}
+
 func TestCommandJSON(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
@@ -392,6 +506,42 @@ func TestDisconnectJSON(t *testing.T) {
 		t.Fatalf("seed = %d, err = %v", seed, err)
 	}
 	msg := &Disconnect{}
+	err = jsonpb.UnmarshalString(jsondata, msg)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Json Equal %#v", seed, msg, p)
+	}
+}
+func TestSurveyRequestJSON(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyRequest(popr, true)
+	marshaler := jsonpb.Marshaler{}
+	jsondata, err := marshaler.MarshalToString(p)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	msg := &SurveyRequest{}
+	err = jsonpb.UnmarshalString(jsondata, msg)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Json Equal %#v", seed, msg, p)
+	}
+}
+func TestSurveyResponseJSON(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyResponse(popr, true)
+	marshaler := jsonpb.Marshaler{}
+	jsondata, err := marshaler.MarshalToString(p)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	msg := &SurveyResponse{}
 	err = jsonpb.UnmarshalString(jsondata, msg)
 	if err != nil {
 		t.Fatalf("seed = %d, err = %v", seed, err)
@@ -540,6 +690,62 @@ func TestDisconnectProtoCompactText(t *testing.T) {
 	}
 }
 
+func TestSurveyRequestProtoText(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyRequest(popr, true)
+	dAtA := proto.MarshalTextString(p)
+	msg := &SurveyRequest{}
+	if err := proto.UnmarshalText(dAtA, msg); err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Proto %#v", seed, msg, p)
+	}
+}
+
+func TestSurveyRequestProtoCompactText(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyRequest(popr, true)
+	dAtA := proto.CompactTextString(p)
+	msg := &SurveyRequest{}
+	if err := proto.UnmarshalText(dAtA, msg); err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Proto %#v", seed, msg, p)
+	}
+}
+
+func TestSurveyResponseProtoText(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyResponse(popr, true)
+	dAtA := proto.MarshalTextString(p)
+	msg := &SurveyResponse{}
+	if err := proto.UnmarshalText(dAtA, msg); err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Proto %#v", seed, msg, p)
+	}
+}
+
+func TestSurveyResponseProtoCompactText(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyResponse(popr, true)
+	dAtA := proto.CompactTextString(p)
+	msg := &SurveyResponse{}
+	if err := proto.UnmarshalText(dAtA, msg); err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	if !p.Equal(msg) {
+		t.Fatalf("seed = %d, %#v !Proto %#v", seed, msg, p)
+	}
+}
+
 func TestCommandSize(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
@@ -632,6 +838,50 @@ func TestDisconnectSize(t *testing.T) {
 	seed := time.Now().UnixNano()
 	popr := rand.New(rand.NewSource(seed))
 	p := NewPopulatedDisconnect(popr, true)
+	size2 := proto.Size(p)
+	dAtA, err := proto.Marshal(p)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	size := p.Size()
+	if len(dAtA) != size {
+		t.Errorf("seed = %d, size %v != marshalled size %v", seed, size, len(dAtA))
+	}
+	if size2 != size {
+		t.Errorf("seed = %d, size %v != before marshal proto.Size %v", seed, size, size2)
+	}
+	size3 := proto.Size(p)
+	if size3 != size {
+		t.Errorf("seed = %d, size %v != after marshal proto.Size %v", seed, size, size3)
+	}
+}
+
+func TestSurveyRequestSize(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyRequest(popr, true)
+	size2 := proto.Size(p)
+	dAtA, err := proto.Marshal(p)
+	if err != nil {
+		t.Fatalf("seed = %d, err = %v", seed, err)
+	}
+	size := p.Size()
+	if len(dAtA) != size {
+		t.Errorf("seed = %d, size %v != marshalled size %v", seed, size, len(dAtA))
+	}
+	if size2 != size {
+		t.Errorf("seed = %d, size %v != before marshal proto.Size %v", seed, size, size2)
+	}
+	size3 := proto.Size(p)
+	if size3 != size {
+		t.Errorf("seed = %d, size %v != after marshal proto.Size %v", seed, size, size3)
+	}
+}
+
+func TestSurveyResponseSize(t *testing.T) {
+	seed := time.Now().UnixNano()
+	popr := rand.New(rand.NewSource(seed))
+	p := NewPopulatedSurveyResponse(popr, true)
 	size2 := proto.Size(p)
 	dAtA, err := proto.Marshal(p)
 	if err != nil {

@@ -23,6 +23,7 @@ func sockjsData(data []byte) []byte {
 
 func TestSockjsHandler(t *testing.T) {
 	n, _ := New(Config{})
+	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 

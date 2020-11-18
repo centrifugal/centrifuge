@@ -20,6 +20,7 @@ import (
 
 func TestWebsocketHandler(t *testing.T) {
 	n, _ := New(Config{})
+	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
@@ -42,6 +43,7 @@ func TestWebsocketHandler(t *testing.T) {
 
 func TestWebsocketHandlerProtobuf(t *testing.T) {
 	n, _ := New(Config{})
+	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
@@ -64,6 +66,7 @@ func TestWebsocketHandlerProtobuf(t *testing.T) {
 
 func TestWebsocketHandlerPing(t *testing.T) {
 	n, _ := New(Config{})
+	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
@@ -118,6 +121,7 @@ func TestWebsocketHandlerPing(t *testing.T) {
 
 func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	n, _ := New(Config{})
+	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
@@ -314,7 +318,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 			require.NoError(t, err)
 
 			if !strings.Contains(string(pub.Data), string(payload)) {
-				require.Fail(t, "ooops, where is our payload? %s %s", string(payload), string(pub.Data))
+				require.Fail(t, "where is our payload? %s %s", string(payload), string(pub.Data))
 			}
 		}(i)
 	}
@@ -381,7 +385,7 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 			require.NoError(t, err)
 
 			if !strings.Contains(string(pub.Data), string(payload)) {
-				require.Fail(t, "ooops, where is our payload? %s %s", string(payload), string(pub.Data))
+				require.Fail(t, "where is our payload? %s %s", string(payload), string(pub.Data))
 			}
 		}(i)
 	}
@@ -392,7 +396,7 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 // BenchmarkWebsocketHandler allows to benchmark full flow with one real
 // Websocket connection subscribed to one channel. This is not very representative
 // in terms of time for operation as network IO involved but useful to look at
-// total allocs and difference between JSON and Protobuf cases using various buffer sizes.
+// total allocations and difference between JSON and Protobuf cases using various buffer sizes.
 func BenchmarkWebsocketHandler(b *testing.B) {
 	n := nodeWithMemoryEngine()
 

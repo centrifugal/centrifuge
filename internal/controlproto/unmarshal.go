@@ -8,11 +8,14 @@ type Decoder interface {
 	DecodeNode([]byte) (*controlpb.Node, error)
 	DecodeUnsubscribe([]byte) (*controlpb.Unsubscribe, error)
 	DecodeDisconnect([]byte) (*controlpb.Disconnect, error)
+	DecodeSurveyRequest([]byte) (*controlpb.SurveyRequest, error)
+	DecodeSurveyResponse([]byte) (*controlpb.SurveyResponse, error)
 }
 
+var _ Decoder = (*ProtobufDecoder)(nil)
+
 // ProtobufDecoder ...
-type ProtobufDecoder struct {
-}
+type ProtobufDecoder struct{}
 
 // NewProtobufDecoder ...
 func NewProtobufDecoder() *ProtobufDecoder {
@@ -52,6 +55,26 @@ func (e *ProtobufDecoder) DecodeUnsubscribe(data []byte) (*controlpb.Unsubscribe
 // DecodeDisconnect ...
 func (e *ProtobufDecoder) DecodeDisconnect(data []byte) (*controlpb.Disconnect, error) {
 	var cmd controlpb.Disconnect
+	err := cmd.Unmarshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return &cmd, nil
+}
+
+// DecodeSurveyRequest ...
+func (e *ProtobufDecoder) DecodeSurveyRequest(data []byte) (*controlpb.SurveyRequest, error) {
+	var cmd controlpb.SurveyRequest
+	err := cmd.Unmarshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return &cmd, nil
+}
+
+// DecodeSurveyResponse ...
+func (e *ProtobufDecoder) DecodeSurveyResponse(data []byte) (*controlpb.SurveyResponse, error) {
+	var cmd controlpb.SurveyResponse
 	err := cmd.Unmarshal(data)
 	if err != nil {
 		return nil, err

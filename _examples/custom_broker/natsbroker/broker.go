@@ -236,8 +236,3 @@ func (b *NatsBroker) Unsubscribe(ch string) error {
 	}
 	return nil
 }
-
-// Channels - see Engine interface description.
-func (b *NatsBroker) Channels() ([]string, error) {
-	return nil, nil
-}
