@@ -413,11 +413,8 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 
 	n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
 		surveyChan <- survey{
-			UID: n.uid,
-			Result: SurveyResult{
-				Code: reply.Code,
-				Data: reply.Data,
-			},
+			UID:    n.uid,
+			Result: SurveyResult(reply),
 		}
 	})
 
