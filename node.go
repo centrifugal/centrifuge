@@ -357,12 +357,19 @@ func (n *Node) handleSurveyResponse(uid string, resp *controlpb.SurveyResponse) 
 	n.surveyMu.RLock()
 	defer n.surveyMu.RUnlock()
 	if ch, ok := n.surveyRegistry[resp.ID]; ok {
-		ch <- survey{
+		select {
+		case ch <- survey{
 			UID: uid,
 			Result: SurveyResult{
 				Code: resp.Code,
 				Data: resp.Data,
 			},
+		}:
+		default:
+			// Survey channel allocated with capacity enough to receive all survey replies,
+			// default case here means that channel has no reader anymore, so it's safe to
+			// skip message. This extra survey reply can come from extra node that just
+			// joined.
 		}
 	}
 	return nil
@@ -397,6 +404,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 	}
 	params, err := n.controlEncoder.EncodeSurveyRequest(surveyRequest)
 	if err != nil {
+		n.surveyMu.Unlock()
 		return nil, err
 	}
 	surveyChan := make(chan survey, numNodes)
