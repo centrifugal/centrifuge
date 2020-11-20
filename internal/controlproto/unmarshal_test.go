@@ -82,7 +82,7 @@ func TestDecoder(t *testing.T) {
 
 	decodedSurveyRequest, err := decoder.DecodeSurveyRequest(d)
 	require.NoError(t, err)
-	require.Equal(t, unsub, decodedSurveyRequest)
+	require.Equal(t, surveyRequest, decodedSurveyRequest)
 
 	surveyResponse := &controlpb.SurveyResponse{
 		ID:   1,
@@ -95,5 +95,5 @@ func TestDecoder(t *testing.T) {
 
 	decodedSurveyResponse, err := decoder.DecodeSurveyResponse(d)
 	require.NoError(t, err)
-	require.Equal(t, unsub, decodedSurveyResponse)
+	require.Equal(t, surveyResponse, decodedSurveyResponse)
 }
