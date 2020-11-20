@@ -70,4 +70,30 @@ func TestDecoder(t *testing.T) {
 	decodedUnsubscribe, err := decoder.DecodeUnsubscribe(d)
 	require.NoError(t, err)
 	require.Equal(t, unsub, decodedUnsubscribe)
+
+	surveyRequest := &controlpb.SurveyRequest{
+		ID:   1,
+		Op:   "test",
+		Data: nil,
+	}
+	d, err = encoder.EncodeSurveyRequest(surveyRequest)
+	require.NoError(t, err)
+	require.NotNil(t, d)
+
+	decodedSurveyRequest, err := decoder.DecodeSurveyRequest(d)
+	require.NoError(t, err)
+	require.Equal(t, unsub, decodedSurveyRequest)
+
+	surveyResponse := &controlpb.SurveyResponse{
+		ID:   1,
+		Code: 1,
+		Data: nil,
+	}
+	d, err = encoder.EncodeSurveyResponse(surveyResponse)
+	require.NoError(t, err)
+	require.NotNil(t, d)
+
+	decodedSurveyResponse, err := decoder.DecodeSurveyResponse(d)
+	require.NoError(t, err)
+	require.Equal(t, unsub, decodedSurveyResponse)
 }

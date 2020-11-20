@@ -28,16 +28,15 @@ func getUniquePrefix() string {
 	return "centrifuge-test-" + randString(3) + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-func newTestRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *RedisEngine {
+func newTestRedisEngine(tb testing.TB, n *Node, useStreams bool, useCluster bool) *RedisEngine {
 	if useCluster {
-		return NewTestRedisEngineClusterWithPrefix(tb, getUniquePrefix(), useStreams)
+		return NewTestRedisEngineClusterWithPrefix(tb, n, getUniquePrefix(), useStreams)
 	}
-	return NewTestRedisEngineWithPrefix(tb, getUniquePrefix(), useStreams)
+	return NewTestRedisEngineWithPrefix(tb, n, getUniquePrefix(), useStreams)
 }
 
-func NewTestRedisEngineWithPrefix(tb testing.TB, prefix string, useStreams bool) *RedisEngine {
-	n, _ := New(Config{})
-	redisConf := RedisShardConfig{
+func testRedisConf(prefix string) RedisShardConfig {
+	return RedisShardConfig{
 		Host:        testRedisHost,
 		Port:        testRedisPort,
 		DB:          testRedisDB,
@@ -45,6 +44,10 @@ func NewTestRedisEngineWithPrefix(tb testing.TB, prefix string, useStreams bool)
 		Prefix:      prefix,
 		ReadTimeout: 100 * time.Second,
 	}
+}
+
+func NewTestRedisEngineWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisEngine {
+	redisConf := testRedisConf(prefix)
 	e, err := NewRedisEngine(n, RedisEngineConfig{
 		UseStreams:     useStreams,
 		HistoryMetaTTL: 300 * time.Second,
@@ -61,8 +64,7 @@ func NewTestRedisEngineWithPrefix(tb testing.TB, prefix string, useStreams bool)
 	return e
 }
 
-func NewTestRedisEngineClusterWithPrefix(tb testing.TB, prefix string, useStreams bool) *RedisEngine {
-	n, _ := New(Config{})
+func NewTestRedisEngineClusterWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisEngine {
 	redisConf := RedisShardConfig{
 		ClusterAddrs: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
 		Password:     testRedisPassword,
@@ -136,7 +138,9 @@ var benchRedisTests = []struct {
 func TestRedisEngine(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
-			e := newTestRedisEngine(t, tt.UseStreams, tt.UseCluster)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(t, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			_, err := e.Publish("channel", testPublicationData(), PublishOptions{})
 			require.NoError(t, err)
@@ -220,7 +224,9 @@ func TestRedisEngine(t *testing.T) {
 func TestRedisCurrentPosition(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
-			e := newTestRedisEngine(t, tt.UseStreams, tt.UseCluster)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(t, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			channel := "test-current-position"
 
@@ -246,7 +252,9 @@ func TestRedisCurrentPosition(t *testing.T) {
 func TestRedisEngineRecover(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
-			e := newTestRedisEngine(t, tt.UseStreams, tt.UseCluster)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(t, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			rawData := []byte("{}")
 
@@ -309,7 +317,9 @@ func pubSubChannels(t *testing.T, e *RedisEngine) ([]string, error) {
 
 func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
 	// Custom prefix to not collide with other tests.
-	e := NewTestRedisEngineWithPrefix(t, getUniquePrefix(), false)
+	node, _ := New(DefaultConfig)
+	e := NewTestRedisEngineWithPrefix(t, node, getUniquePrefix(), false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	if e.shards[0].useCluster() {
 		t.Skip("Channels command is not supported when Redis Cluster is used")
@@ -531,7 +541,9 @@ func TestRedisConsistentIndex(t *testing.T) {
 }
 
 func TestRedisEngineHandlePubSubMessage(t *testing.T) {
-	e := NewTestRedisEngineWithPrefix(t, getUniquePrefix(), false)
+	node, _ := New(DefaultConfig)
+	e := NewTestRedisEngineWithPrefix(t, node, getUniquePrefix(), false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication) error {
 		require.Equal(t, "test", ch)
 		return nil
@@ -609,6 +621,74 @@ func TestRedisExtractPushData(t *testing.T) {
 	require.Equal(t, uint64(0), offset)
 }
 
+func TestNode_OnSurvey_TwoNodes(t *testing.T) {
+	redisConf := testRedisConf(getUniquePrefix())
+
+	node1, _ := New(DefaultConfig)
+	e1, _ := NewRedisEngine(node1, RedisEngineConfig{
+		Shards: []RedisShardConfig{redisConf},
+	})
+	node1.SetEngine(e1)
+	_ = node1.Run()
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+
+	node1.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
+		require.Nil(t, event.Data)
+		require.Equal(t, "test_op", event.Op)
+		callback(SurveyReply{
+			Data: []byte("1"),
+			Code: 1,
+		})
+	})
+
+	node2, _ := New(DefaultConfig)
+	e2, _ := NewRedisEngine(node1, RedisEngineConfig{
+		Shards: []RedisShardConfig{redisConf},
+	})
+	node2.SetEngine(e2)
+	_ = node2.Run()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+
+	node2.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
+		require.Nil(t, event.Data)
+		require.Equal(t, "test_op", event.Op)
+		callback(SurveyReply{
+			Data: []byte("2"),
+			Code: 2,
+		})
+	})
+
+	// Here we are waiting for 2 nodes join.
+	// Note: maybe introduce events in future?
+	i := 0
+	maxLoops := 20
+	time.Sleep(50 * time.Millisecond)
+	for {
+		info, err := node1.Info()
+		require.NoError(t, err)
+		if len(info.Nodes) == 2 {
+			break
+		}
+		i++
+		if i > maxLoops {
+			require.Fail(t, "timeout waiting for 2 nodes in cluster")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	results, err := node1.Survey(context.Background(), "test_op", nil)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	res, ok := results[node1.ID()]
+	require.True(t, ok)
+	require.Equal(t, uint32(1), res.Code)
+	require.Equal(t, []byte("1"), res.Data)
+	res, ok = results[node2.ID()]
+	require.True(t, ok)
+	require.Equal(t, uint32(2), res.Code)
+	require.Equal(t, []byte("2"), res.Data)
+}
+
 func BenchmarkRedisConsistentIndex(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		consistentIndex(strconv.Itoa(i), 4)
@@ -622,7 +702,9 @@ func BenchmarkRedisIndex(b *testing.B) {
 }
 
 func BenchmarkRedisPublish_OneChannel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -634,7 +716,9 @@ func BenchmarkRedisPublish_OneChannel(b *testing.B) {
 }
 
 func BenchmarkRedisPublish_OneChannel_Parallel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	b.SetParallelism(128)
 	b.ResetTimer()
@@ -651,7 +735,9 @@ func BenchmarkRedisPublish_OneChannel_Parallel(b *testing.B) {
 const benchmarkNumDifferentChannels = 1000
 
 func BenchmarkRedisPublish_ManyChannels(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	j := 0
 	b.ResetTimer()
@@ -666,7 +752,9 @@ func BenchmarkRedisPublish_ManyChannels(b *testing.B) {
 }
 
 func BenchmarkRedisPublish_ManyChannels_Parallel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	b.SetParallelism(128)
 	j := 0
@@ -686,7 +774,9 @@ func BenchmarkRedisPublish_ManyChannels_Parallel(b *testing.B) {
 func BenchmarkRedisPublish_History_OneChannel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			e := newTestRedisEngine(b, tt.UseStreams, false)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -707,7 +797,9 @@ func BenchmarkRedisPublish_History_OneChannel(b *testing.B) {
 func BenchmarkRedisPublish_History_OneChannel_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			e := newTestRedisEngine(b, tt.UseStreams, false)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
 			b.SetParallelism(128)
@@ -731,7 +823,9 @@ func BenchmarkRedisPublish_History_OneChannel_Parallel(b *testing.B) {
 func BenchmarkRedisPublish_History_ManyChannels(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			e := newTestRedisEngine(b, tt.UseStreams, false)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			j := 0
 			b.ResetTimer()
@@ -755,7 +849,9 @@ func BenchmarkRedisPublish_History_ManyChannels(b *testing.B) {
 func BenchmarkRedisPublish_History_ManyChannels_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			e := newTestRedisEngine(b, tt.UseStreams, false)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
 			b.SetParallelism(128)
@@ -780,7 +876,9 @@ func BenchmarkRedisPublish_History_ManyChannels_Parallel(b *testing.B) {
 }
 
 func BenchmarkRedisSubscribe(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	j := 0
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -793,7 +891,9 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 }
 
 func BenchmarkRedisSubscribe_Parallel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	i := 0
 	b.SetParallelism(128)
 	b.ResetTimer()
@@ -809,7 +909,9 @@ func BenchmarkRedisSubscribe_Parallel(b *testing.B) {
 }
 
 func BenchmarkRedisAddPresence_OneChannel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
@@ -820,7 +922,9 @@ func BenchmarkRedisAddPresence_OneChannel(b *testing.B) {
 }
 
 func BenchmarkRedisAddPresence_OneChannel_Parallel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -834,7 +938,9 @@ func BenchmarkRedisAddPresence_OneChannel_Parallel(b *testing.B) {
 }
 
 func BenchmarkRedisPresence_OneChannel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -846,7 +952,9 @@ func BenchmarkRedisPresence_OneChannel(b *testing.B) {
 }
 
 func BenchmarkRedisPresence_OneChannel_Parallel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	b.SetParallelism(128)
 	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	b.ResetTimer()
@@ -861,7 +969,9 @@ func BenchmarkRedisPresence_OneChannel_Parallel(b *testing.B) {
 }
 
 func BenchmarkRedisPresence_ManyChannels(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	j := 0
 	b.ResetTimer()
@@ -876,7 +986,9 @@ func BenchmarkRedisPresence_ManyChannels(b *testing.B) {
 }
 
 func BenchmarkRedisPresence_ManyChannels_Parallel(b *testing.B) {
-	e := newTestRedisEngine(b, false, false)
+	node, _ := New(DefaultConfig)
+	e := newTestRedisEngine(b, node, false, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
 	b.SetParallelism(128)
 	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
 	j := 0
@@ -896,7 +1008,9 @@ func BenchmarkRedisPresence_ManyChannels_Parallel(b *testing.B) {
 func BenchmarkRedisHistory_OneChannel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			e := newTestRedisEngine(b, tt.UseStreams, false)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			for i := 0; i < 4; i++ {
 				_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
@@ -917,7 +1031,9 @@ func BenchmarkRedisHistory_OneChannel(b *testing.B) {
 func BenchmarkRedisHistory_OneChannel_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			e := newTestRedisEngine(b, tt.UseStreams, false)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			for i := 0; i < 4; i++ {
 				_, err := e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
@@ -941,7 +1057,9 @@ func BenchmarkRedisHistory_OneChannel_Parallel(b *testing.B) {
 func BenchmarkRedisRecover_OneChannel_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			e := newTestRedisEngine(b, tt.UseStreams, false)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			numMessages := 1000
 			numMissing := 5
@@ -974,7 +1092,7 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node 
 	if err != nil {
 		tb.Fatal(err)
 	}
-	e := newTestRedisEngine(tb, useStreams, useCluster)
+	e := newTestRedisEngine(tb, n, useStreams, useCluster)
 	n.SetEngine(e)
 	err = n.Run()
 	if err != nil {
@@ -1052,7 +1170,9 @@ func TestRedisClientSubscribeRecoverListsCluster(t *testing.T) {
 func TestRedisEngineHistoryIteration(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
-			e := newTestRedisEngine(t, tt.UseStreams, tt.UseCluster)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(t, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{10000, 100}
 			startPosition := it.prepareHistoryIteration(t, e.node)
 			it.testHistoryIteration(t, e.node, startPosition)
@@ -1063,7 +1183,9 @@ func TestRedisEngineHistoryIteration(t *testing.T) {
 func BenchmarkRedisEngineHistoryIteration(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			e := newTestRedisEngine(b, tt.UseStreams, false)
+			node, _ := New(DefaultConfig)
+			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{10000, 100}
 			startPosition := it.prepareHistoryIteration(b, e.node)
 			b.ResetTimer()

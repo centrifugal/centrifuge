@@ -1049,14 +1049,11 @@ func (s *shard) runControlPubSub(eventHandler BrokerEventHandler) {
 		}()
 	}
 
-	go func() {
-		err := conn.Subscribe(controlChannel, nodeChannel, pingChannel)
-		if err != nil {
-			s.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
-			closeDoneOnce()
-			return
-		}
-	}()
+	err := conn.Subscribe(controlChannel, nodeChannel, pingChannel)
+	if err != nil {
+		s.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
+		return
+	}
 
 	for {
 		switch n := conn.ReceiveWithTimeout(10 * time.Second).(type) {

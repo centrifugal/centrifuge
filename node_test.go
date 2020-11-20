@@ -825,3 +825,55 @@ func Test_pubFromProto(t *testing.T) {
 	require.NotNil(t, pub.Info)
 	require.Equal(t, pub.Info.ClientID, "client_id")
 }
+
+func TestNode_OnSurvey(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
+		go func() {
+			require.Nil(t, event.Data)
+			require.Equal(t, "test_op", event.Op)
+			callback(SurveyReply{
+				Data: []byte("1"),
+				Code: 1,
+			})
+		}()
+	})
+
+	results, err := node.Survey(context.Background(), "test_op", nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	res, ok := results[node.ID()]
+	require.True(t, ok)
+	require.Equal(t, uint32(1), res.Code)
+	require.Equal(t, []byte("1"), res.Data)
+}
+
+func TestNode_OnSurvey_Timeout(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
+		go func() {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+			time.Sleep(time.Second)
+			callback(SurveyReply{
+				Data: []byte("1"),
+				Code: 1,
+			})
+		}()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err := node.Survey(ctx, "test_op", nil)
+	require.Error(t, err)
+	require.Equal(t, context.DeadlineExceeded, err)
+	close(done)
+}
