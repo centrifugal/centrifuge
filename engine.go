@@ -123,8 +123,10 @@ type Broker interface {
 	PublishJoin(ch string, info *ClientInfo) error
 	// PublishLeave publishes Leave Push message into channel.
 	PublishLeave(ch string, info *ClientInfo) error
-	// PublishControl allows to send control command data to all running nodes.
-	PublishControl(data []byte) error
+	// PublishControl allows to send control command data. If nodeID is empty string
+	// then message should be delivered to all running nodes, if nodeID is set then
+	// message should be delivered only to node with specified ID.
+	PublishControl(data []byte, nodeID string) error
 
 	// History used to extract Publications from history stream.
 	// Publications returned according to HistoryFilter which allows to set several

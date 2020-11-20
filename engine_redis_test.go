@@ -208,7 +208,7 @@ func TestRedisEngine(t *testing.T) {
 			require.Equal(t, 1, len(pubs))
 
 			// test publishing control message.
-			err = e.PublishControl([]byte(""))
+			err = e.PublishControl([]byte(""), "")
 			require.NoError(t, nil, err)
 
 			require.NoError(t, e.PublishJoin("channel", &ClientInfo{}))

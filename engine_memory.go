@@ -110,7 +110,7 @@ func (e *MemoryEngine) PublishLeave(ch string, info *ClientInfo) error {
 }
 
 // PublishControl - see Engine interface description.
-func (e *MemoryEngine) PublishControl(data []byte) error {
+func (e *MemoryEngine) PublishControl(data []byte, _ string) error {
 	return e.eventHandler.HandleControl(data)
 }
 

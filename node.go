@@ -143,6 +143,11 @@ func index(s string, numBuckets int) int {
 	return int(hash.Sum64() % uint64(numBuckets))
 }
 
+// ID returns unique Node identifier. This is a UUID v4 value.
+func (n *Node) ID() string {
+	return n.uid
+}
+
 func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
 }
@@ -180,7 +185,7 @@ func (n *Node) Run() error {
 		n.logger.log(newLogEntry(LogLevelError, "error on init metrics", map[string]interface{}{"error": err.Error()}))
 		return err
 	}
-	err = n.pubNode()
+	err = n.pubNode("")
 	if err != nil {
 		n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]interface{}{"error": err.Error()}))
 		return err
@@ -216,7 +221,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 		UID:    n.uid,
 		Method: controlpb.MethodTypeShutdown,
 	}
-	_ = n.publishControl(cmd)
+	_ = n.publishControl(cmd, "")
 	if closer, ok := n.broker.(Closer); ok {
 		defer func() { _ = closer.Close(ctx) }()
 	}
@@ -269,7 +274,7 @@ func (n *Node) updateMetrics() {
 }
 
 // Centrifuge library uses Prometheus metrics for instrumentation. But we also try to
-// aggregate Prometheus metrics periodically and share this information between nodes.
+// aggregate Prometheus metrics periodically and share this information between Nodes.
 func (n *Node) initMetrics() error {
 	if n.config.NodeInfoMetricsAggregateInterval == 0 {
 		return nil
@@ -308,7 +313,7 @@ func (n *Node) sendNodePing() {
 		case <-n.shutdownCh:
 			return
 		case <-time.After(nodeInfoPublishInterval):
-			err := n.pubNode()
+			err := n.pubNode("")
 			if err != nil {
 				n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]interface{}{"error": err.Error()}))
 			}
@@ -330,7 +335,7 @@ func (n *Node) cleanNodeInfo() {
 	}
 }
 
-func (n *Node) handleSurveyRequest(req *controlpb.SurveyRequest) error {
+func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyRequest) error {
 	if n.surveyHandler == nil {
 		return nil
 	}
@@ -347,7 +352,7 @@ func (n *Node) handleSurveyRequest(req *controlpb.SurveyRequest) error {
 			Method: controlpb.MethodTypeSurveyResponse,
 			Params: params,
 		}
-		_ = n.publishControl(cmd)
+		_ = n.publishControl(cmd, fromNodeID)
 	}
 	n.surveyHandler(SurveyEvent{Op: req.Op, Data: req.Data}, cb)
 	return nil
@@ -449,7 +454,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 		Method: controlpb.MethodTypeSurveyRequest,
 		Params: params,
 	}
-	err = n.publishControl(cmd)
+	err = n.publishControl(cmd, "")
 	if err != nil {
 		return nil, err
 	}
@@ -559,7 +564,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.handleSurveyRequest(cmd)
+		return n.handleSurveyRequest(uid, cmd)
 	case controlpb.MethodTypeSurveyResponse:
 		cmd, err := n.controlDecoder.DecodeSurveyResponse(params)
 		if err != nil {
@@ -665,13 +670,13 @@ func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 
 // publishControl publishes message into control channel so all running
 // nodes will receive and handle it.
-func (n *Node) publishControl(cmd *controlpb.Command) error {
+func (n *Node) publishControl(cmd *controlpb.Command, nodeID string) error {
 	incMessagesSent("control")
 	data, err := n.controlEncoder.EncodeCommand(cmd)
 	if err != nil {
 		return err
 	}
-	return n.broker.PublishControl(data)
+	return n.broker.PublishControl(data, nodeID)
 }
 
 func (n *Node) getMetrics(metrics eagle.Metrics) *controlpb.Metrics {
@@ -683,7 +688,7 @@ func (n *Node) getMetrics(metrics eagle.Metrics) *controlpb.Metrics {
 
 // pubNode sends control message to all nodes - this message
 // contains information about current node.
-func (n *Node) pubNode() error {
+func (n *Node) pubNode(nodeID string) error {
 	n.mu.RLock()
 	node := &controlpb.Node{
 		UID:         n.uid,
@@ -718,7 +723,7 @@ func (n *Node) pubNode() error {
 		n.logger.log(newLogEntry(LogLevelError, "error handling node command", map[string]interface{}{"error": err.Error()}))
 	}
 
-	return n.publishControl(cmd)
+	return n.publishControl(cmd, nodeID)
 }
 
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
@@ -734,7 +739,7 @@ func (n *Node) pubUnsubscribe(user string, ch string) error {
 		Method: controlpb.MethodTypeUnsubscribe,
 		Params: params,
 	}
-	return n.publishControl(cmd)
+	return n.publishControl(cmd, "")
 }
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
@@ -753,7 +758,7 @@ func (n *Node) pubDisconnect(user string, disconnect *Disconnect, whitelist []st
 		Method: controlpb.MethodTypeDisconnect,
 		Params: params,
 	}
-	return n.publishControl(cmd)
+	return n.publishControl(cmd, "")
 }
 
 // addClient registers authenticated connection in clientConnectionHub
@@ -823,7 +828,11 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 
 // nodeCmd handles node control command i.e. updates information about known nodes.
 func (n *Node) nodeCmd(node *controlpb.Node) error {
-	n.nodes.add(node)
+	isNewNode := n.nodes.add(node)
+	if isNewNode && node.UID != n.uid {
+		// New Node in cluster
+		_ = n.pubNode(node.UID)
+	}
 	return nil
 }
 
@@ -1071,7 +1080,8 @@ func (r *nodeRegistry) get(uid string) controlpb.Node {
 	return info
 }
 
-func (r *nodeRegistry) add(info *controlpb.Node) {
+func (r *nodeRegistry) add(info *controlpb.Node) bool {
+	var isNewNode bool
 	r.mu.Lock()
 	if node, ok := r.nodes[info.UID]; ok {
 		if info.Metrics != nil {
@@ -1086,9 +1096,11 @@ func (r *nodeRegistry) add(info *controlpb.Node) {
 		}
 	} else {
 		r.nodes[info.UID] = *info
+		isNewNode = true
 	}
 	r.updates[info.UID] = time.Now().Unix()
 	r.mu.Unlock()
+	return isNewNode
 }
 
 func (r *nodeRegistry) remove(uid string) {

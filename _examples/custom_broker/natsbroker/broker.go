@@ -61,6 +61,10 @@ func (b *NatsBroker) controlChannel() channelID {
 	return channelID(b.config.Prefix + ".control")
 }
 
+func (b *NatsBroker) nodeChannel(nodeID string) channelID {
+	return channelID(b.config.Prefix + ".node." + nodeID)
+}
+
 func (b *NatsBroker) clientChannel(ch string) channelID {
 	return channelID(b.config.Prefix + ".client." + ch)
 }
@@ -81,6 +85,10 @@ func (b *NatsBroker) Run(h centrifuge.BrokerEventHandler) error {
 		return err
 	}
 	_, err = nc.Subscribe(string(b.controlChannel()), b.handleControl)
+	if err != nil {
+		return err
+	}
+	_, err = nc.Subscribe(string(b.nodeChannel(b.node.ID())), b.handleControl)
 	if err != nil {
 		return err
 	}
@@ -160,8 +168,14 @@ func (b *NatsBroker) PublishLeave(ch string, info *centrifuge.ClientInfo) error 
 }
 
 // PublishControl - see Engine interface description.
-func (b *NatsBroker) PublishControl(data []byte) error {
-	return b.nc.Publish(string(b.controlChannel()), data)
+func (b *NatsBroker) PublishControl(data []byte, nodeID string) error {
+	var channelID channelID
+	if nodeID == "" {
+		channelID = b.controlChannel()
+	} else {
+		channelID = b.nodeChannel(nodeID)
+	}
+	return b.nc.Publish(string(channelID), data)
 }
 
 func (b *NatsBroker) handleClientMessage(subject string, data []byte) error {

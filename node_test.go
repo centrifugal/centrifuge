@@ -73,7 +73,7 @@ func (e *TestEngine) PublishLeave(_ string, _ *ClientInfo) error {
 	return nil
 }
 
-func (e *TestEngine) PublishControl(_ []byte) error {
+func (e *TestEngine) PublishControl(_ []byte, _ string) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
 	if e.errorOnPublishControl {
 		return errors.New("boom")
