@@ -165,6 +165,7 @@ func nodeWithTestEngine() *Node {
 func nodeWithMemoryEngineNoHandlers() *Node {
 	c := DefaultConfig
 	c.LogLevel = LogLevelDebug
+	c.LogHandler = func(entry LogEntry) {}
 	n, err := New(c)
 	if err != nil {
 		panic(err)
@@ -885,4 +886,13 @@ func TestNode_OnSurvey_Timeout(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, context.DeadlineExceeded, err)
 	close(done)
+}
+
+func TestErrors(t *testing.T) {
+	err := ErrorUnauthorized
+	protoErr := err.toProto()
+	require.Equal(t, uint32(ErrorUnauthorized.Code), protoErr.Code)
+	err = ErrorUnknownChannel
+	errText := err.Error()
+	require.Equal(t, "102: unknown channel", errText)
 }
