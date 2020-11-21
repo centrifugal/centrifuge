@@ -656,7 +656,7 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 	})
 
 	node2, _ := New(DefaultConfig)
-	e2, _ := NewRedisEngine(node1, RedisEngineConfig{
+	e2, _ := NewRedisEngine(node2, RedisEngineConfig{
 		Shards: []RedisShardConfig{redisConf},
 	})
 	node2.SetEngine(e2)
@@ -672,23 +672,7 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 		})
 	})
 
-	// Here we are waiting for 2 nodes join.
-	// Note: maybe introduce events in future?
-	i := 0
-	maxLoops := 20
-	time.Sleep(50 * time.Millisecond)
-	for {
-		info, err := node1.Info()
-		require.NoError(t, err)
-		if len(info.Nodes) == 2 {
-			break
-		}
-		i++
-		if i > maxLoops {
-			require.Fail(t, "timeout waiting for 2 nodes in cluster")
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
+	waitAllNodes(t, node1, 2)
 
 	results, err := node1.Survey(context.Background(), "test_op", nil)
 	require.NoError(t, err)
@@ -701,6 +685,88 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint32(2), res.Code)
 	require.Equal(t, []byte("2"), res.Data)
+}
+
+func waitAllNodes(tb testing.TB, node *Node, numNodes int) {
+	// Here we are waiting for 2 nodes join.
+	// Note: maybe introduce events in future?
+	i := 0
+	maxLoops := 20
+	time.Sleep(50 * time.Millisecond)
+	for {
+		info, err := node.Info()
+		require.NoError(tb, err)
+		if len(info.Nodes) == numNodes {
+			break
+		}
+		i++
+		if i > maxLoops {
+			require.Fail(tb, "timeout waiting for all nodes in cluster")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+var benchSurveyTests = []struct {
+	Name          string
+	NumOtherNodes int
+}{
+	{"1 node", 0},
+	{"2 nodes", 1},
+	{"3 nodes", 2},
+	{"4 nodes", 3},
+	{"5 nodes", 4},
+	{"10 nodes", 9},
+	{"100 nodes", 99},
+}
+
+func BenchmarkRedisSurvey(b *testing.B) {
+	for _, tt := range benchSurveyTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			redisConf := testRedisConf(getUniquePrefix())
+
+			for i := 0; i < tt.NumOtherNodes; i++ {
+				node, _ := New(DefaultConfig)
+				engine, _ := NewRedisEngine(node, RedisEngineConfig{
+					Shards: []RedisShardConfig{redisConf},
+				})
+				node.SetEngine(engine)
+				_ = node.Run()
+
+				node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
+					callback(SurveyReply{
+						Data: []byte("1"),
+						Code: 1,
+					})
+				})
+			}
+
+			node, _ := New(DefaultConfig)
+			engine, _ := NewRedisEngine(node, RedisEngineConfig{
+				Shards: []RedisShardConfig{redisConf},
+			})
+			node.SetEngine(engine)
+			_ = node.Run()
+
+			node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
+				callback(SurveyReply{
+					Data: []byte("2"),
+					Code: 2,
+				})
+			})
+
+			waitAllNodes(b, node, tt.NumOtherNodes+1)
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := node.Survey(context.Background(), "test_op", nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+		})
+	}
 }
 
 func BenchmarkRedisConsistentIndex(b *testing.B) {
