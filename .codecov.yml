@@ -1,2 +1,5 @@
+coverage:
+  status:
+    patch: off
 ignore:
   - "internal/controlpb/control*"  # generated code
