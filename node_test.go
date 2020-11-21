@@ -850,6 +850,15 @@ func TestNode_OnSurvey(t *testing.T) {
 	require.Equal(t, []byte("1"), res.Data)
 }
 
+func TestNode_OnSurvey_NoHandler(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	_, err := node.Survey(context.Background(), "test_op", nil)
+	require.Error(t, err)
+	require.Equal(t, errSurveyHandlerNotRegistered, err)
+}
+
 func TestNode_OnSurvey_Timeout(t *testing.T) {
 	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
