@@ -687,6 +687,68 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 	require.Equal(t, []byte("2"), res.Data)
 }
 
+func TestRedisPubSubTwoNodes(t *testing.T) {
+	redisConf := testRedisConf(getUniquePrefix())
+
+	node1, _ := New(DefaultConfig)
+	e1, _ := NewRedisEngine(node1, RedisEngineConfig{
+		Shards: []RedisShardConfig{redisConf},
+	})
+	messageCh := make(chan struct{})
+	joinCh := make(chan struct{})
+	leaveCh := make(chan struct{})
+	brokerEventHandler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error {
+			return nil
+		},
+		HandlePublicationFunc: func(ch string, pub *Publication) error {
+			close(messageCh)
+			return nil
+		},
+		HandleJoinFunc: func(ch string, info *ClientInfo) error {
+			close(joinCh)
+			return nil
+		},
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error {
+			close(leaveCh)
+			return nil
+		},
+	}
+	_ = e1.Run(brokerEventHandler)
+	require.NoError(t, e1.Subscribe("test"))
+
+	node2, _ := New(DefaultConfig)
+	e2, _ := NewRedisEngine(node2, RedisEngineConfig{
+		Shards: []RedisShardConfig{redisConf},
+	})
+	node2.SetEngine(e2)
+	_ = node2.Run()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+
+	_, err := node2.Publish("test", []byte("123"))
+	require.NoError(t, err)
+	err = e2.PublishJoin("test", &ClientInfo{})
+	require.NoError(t, err)
+	err = e2.PublishLeave("test", &ClientInfo{})
+	require.NoError(t, err)
+
+	select {
+	case <-messageCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB message")
+	}
+	select {
+	case <-joinCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB join message")
+	}
+	select {
+	case <-leaveCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB leave message")
+	}
+}
+
 func waitAllNodes(tb testing.TB, node *Node, numNodes int) {
 	// Here we are waiting for 2 nodes join.
 	// Note: maybe introduce events in future?
@@ -710,20 +772,29 @@ func waitAllNodes(tb testing.TB, node *Node, numNodes int) {
 var benchSurveyTests = []struct {
 	Name          string
 	NumOtherNodes int
+	DataSize      int
 }{
-	{"1 node", 0},
-	{"2 nodes", 1},
-	{"3 nodes", 2},
-	{"4 nodes", 3},
-	{"5 nodes", 4},
-	{"10 nodes", 9},
-	{"100 nodes", 99},
+	{"1 node 512B", 0, 512},
+	{"2 nodes 512B", 1, 512},
+	{"3 nodes 512B", 2, 512},
+	{"4 nodes 512B", 3, 512},
+	{"5 nodes 512B", 4, 512},
+	{"10 nodes 512B", 9, 512},
+	{"100 nodes 512B", 99, 512},
+	{"1 node 4KB", 0, 4096},
+	{"2 nodes 4KB", 1, 4096},
+	{"3 nodes 4KB", 2, 4096},
+	{"4 nodes 4KB", 3, 4096},
+	{"5 nodes 4KB", 4, 4096},
+	{"10 nodes 4KB", 9, 4096},
+	{"100 nodes 4KB", 99, 4096},
 }
 
 func BenchmarkRedisSurvey(b *testing.B) {
 	for _, tt := range benchSurveyTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			redisConf := testRedisConf(getUniquePrefix())
+			data := make([]byte, tt.DataSize)
 
 			for i := 0; i < tt.NumOtherNodes; i++ {
 				node, _ := New(DefaultConfig)
@@ -735,7 +806,7 @@ func BenchmarkRedisSurvey(b *testing.B) {
 
 				node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
 					callback(SurveyReply{
-						Data: []byte("1"),
+						Data: data,
 						Code: 1,
 					})
 				})
@@ -750,7 +821,7 @@ func BenchmarkRedisSurvey(b *testing.B) {
 
 			node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
 				callback(SurveyReply{
-					Data: []byte("2"),
+					Data: data,
 					Code: 2,
 				})
 			})
