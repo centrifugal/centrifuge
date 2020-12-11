@@ -25,7 +25,7 @@ import (
 const (
 	// redisPubSubWorkerChannelSize sets buffer size of channel to which we send all
 	// messages received from Redis PUB/SUB connection to process in separate goroutine.
-	redisPubSubWorkerChannelSize = 1024
+	redisPubSubWorkerChannelSize = 512
 	// redisSubscribeBatchLimit is a maximum number of channels to include in a single
 	// batch subscribe call.
 	redisSubscribeBatchLimit = 512
