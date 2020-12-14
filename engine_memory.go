@@ -110,7 +110,7 @@ func (e *MemoryEngine) PublishLeave(ch string, info *ClientInfo) error {
 }
 
 // PublishControl - see Engine interface description.
-func (e *MemoryEngine) PublishControl(data []byte) error {
+func (e *MemoryEngine) PublishControl(data []byte, _ string) error {
 	return e.eventHandler.HandleControl(data)
 }
 
@@ -152,11 +152,6 @@ func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication,
 // RemoveHistory - see engine interface description.
 func (e *MemoryEngine) RemoveHistory(ch string) error {
 	return e.historyHub.remove(ch)
-}
-
-// Channels - see engine interface description.
-func (e *MemoryEngine) Channels() ([]string, error) {
-	return e.node.Hub().Channels(), nil
 }
 
 type presenceHub struct {

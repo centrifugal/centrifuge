@@ -8,11 +8,14 @@ type Encoder interface {
 	EncodeNode(*controlpb.Node) ([]byte, error)
 	EncodeUnsubscribe(*controlpb.Unsubscribe) ([]byte, error)
 	EncodeDisconnect(*controlpb.Disconnect) ([]byte, error)
+	EncodeSurveyRequest(request *controlpb.SurveyRequest) ([]byte, error)
+	EncodeSurveyResponse(request *controlpb.SurveyResponse) ([]byte, error)
 }
 
+var _ Encoder = (*ProtobufEncoder)(nil)
+
 // ProtobufEncoder ...
-type ProtobufEncoder struct {
-}
+type ProtobufEncoder struct{}
 
 // NewProtobufEncoder ...
 func NewProtobufEncoder() *ProtobufEncoder {
@@ -36,5 +39,15 @@ func (e *ProtobufEncoder) EncodeUnsubscribe(cmd *controlpb.Unsubscribe) ([]byte,
 
 // EncodeDisconnect ...
 func (e *ProtobufEncoder) EncodeDisconnect(cmd *controlpb.Disconnect) ([]byte, error) {
+	return cmd.Marshal()
+}
+
+// EncodeSurveyRequest ...
+func (e *ProtobufEncoder) EncodeSurveyRequest(cmd *controlpb.SurveyRequest) ([]byte, error) {
+	return cmd.Marshal()
+}
+
+// EncodeSurveyRequest ...
+func (e *ProtobufEncoder) EncodeSurveyResponse(cmd *controlpb.SurveyResponse) ([]byte, error) {
 	return cmd.Marshal()
 }

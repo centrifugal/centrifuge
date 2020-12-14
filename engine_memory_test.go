@@ -11,7 +11,10 @@ import (
 )
 
 func testMemoryEngine() *MemoryEngine {
-	n, _ := New(Config{})
+	conf := DefaultConfig
+	conf.LogLevel = LogLevelDebug
+	conf.LogHandler = func(entry LogEntry) {}
+	n, _ := New(conf)
 	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
 	n.SetEngine(e)
 	err := n.Run()

@@ -19,6 +19,9 @@ enum MethodType {
     NODE = 0 [(gogoproto.enumvalue_customname) = "MethodTypeNode"];
     UNSUBSCRIBE = 1 [(gogoproto.enumvalue_customname) = "MethodTypeUnsubscribe"];
     DISCONNECT = 2 [(gogoproto.enumvalue_customname) = "MethodTypeDisconnect"];
+    SHUTDOWN = 3 [(gogoproto.enumvalue_customname) = "MethodTypeShutdown"];
+    SURVEY_REQUEST = 4 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyRequest"];
+    SURVEY_RESPONSE = 5 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyResponse"];
 }
 
 message Command {
@@ -54,4 +57,16 @@ message Disconnect {
     uint32 code = 3 [(gogoproto.jsontag) = "code"];
     string reason = 4 [(gogoproto.jsontag) = "reason"];
     bool reconnect = 5 [(gogoproto.jsontag) = "reconnect"];
+}
+
+message SurveyRequest {
+    uint64 id = 1 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id"];
+    string op = 2 [(gogoproto.jsontag) = "op"];
+    bytes data = 3 [(gogoproto.jsontag) = "data"];
+}
+
+message SurveyResponse {
+    uint64 id = 1 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id"];
+    uint32 code = 3 [(gogoproto.jsontag) = "code"];
+    bytes data = 4 [(gogoproto.jsontag) = "data"];
 }

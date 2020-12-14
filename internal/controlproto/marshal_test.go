@@ -53,4 +53,22 @@ func TestEncoder(t *testing.T) {
 	d, err = encoder.EncodeUnsubscribe(unsub)
 	require.NoError(t, err)
 	require.NotNil(t, d)
+
+	surveyRequest := &controlpb.SurveyRequest{
+		ID:   1,
+		Op:   "test",
+		Data: nil,
+	}
+	d, err = encoder.EncodeSurveyRequest(surveyRequest)
+	require.NoError(t, err)
+	require.NotNil(t, d)
+
+	surveyResponse := &controlpb.SurveyResponse{
+		ID:   1,
+		Code: 1,
+		Data: nil,
+	}
+	d, err = encoder.EncodeSurveyResponse(surveyResponse)
+	require.NoError(t, err)
+	require.NotNil(t, d)
 }

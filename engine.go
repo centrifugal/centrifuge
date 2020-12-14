@@ -123,8 +123,10 @@ type Broker interface {
 	PublishJoin(ch string, info *ClientInfo) error
 	// PublishLeave publishes Leave Push message into channel.
 	PublishLeave(ch string, info *ClientInfo) error
-	// PublishControl allows to send control command data to all running nodes.
-	PublishControl(data []byte) error
+	// PublishControl allows to send control command data. If nodeID is empty string
+	// then message should be delivered to all running nodes, if nodeID is set then
+	// message should be delivered only to node with specified ID.
+	PublishControl(data []byte, nodeID string) error
 
 	// History used to extract Publications from history stream.
 	// Publications returned according to HistoryFilter which allows to set several
@@ -135,15 +137,6 @@ type Broker interface {
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
 	RemoveHistory(ch string) error
-
-	// Channels returns slice of currently active channels (with one or more
-	// subscribers) on all running nodes. This is possible with Redis but can
-	// be much harder in other PUB/SUB system. Anyway this information can only
-	// be used for admin needs to better understand state of system. So it's not
-	// a big problem if another Broker implementation won't support this method.
-	//
-	// Deprecated. See https://github.com/centrifugal/centrifuge/issues/147.
-	Channels() ([]string, error)
 }
 
 // PresenceManager is responsible for channel presence management.

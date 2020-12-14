@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/timers"
@@ -24,7 +25,7 @@ import (
 const (
 	// redisPubSubWorkerChannelSize sets buffer size of channel to which we send all
 	// messages received from Redis PUB/SUB connection to process in separate goroutine.
-	redisPubSubWorkerChannelSize = 1024
+	redisPubSubWorkerChannelSize = 512
 	// redisSubscribeBatchLimit is a maximum number of channels to include in a single
 	// batch subscribe call.
 	redisSubscribeBatchLimit = 512
@@ -53,6 +54,8 @@ var errRedisOpTimeout = errors.New("operation timed out")
 const (
 	// redisControlChannelSuffix is a suffix for control channel.
 	redisControlChannelSuffix = ".control"
+	// redisNodeChannelPrefix is a suffix for node channel.
+	redisNodeChannelPrefix = ".node."
 	// redisPingChannelSuffix is a suffix for ping channel.
 	redisPingChannelSuffix = ".ping"
 	// redisClientChannelPrefix is a prefix before channel name for client messages.
@@ -66,10 +69,11 @@ const (
 // sharding and can work with Redis Cluster (including client-side sharding
 // between different Redis Clusters to scale PUB/SUB).
 type RedisEngine struct {
-	node     *Node
-	sharding bool
-	config   RedisEngineConfig
-	shards   []*shard
+	controlRound uint64 // Keep atomic on struct top for 32-bit architectures.
+	node         *Node
+	sharding     bool
+	config       RedisEngineConfig
+	shards       []*shard
 }
 
 var _ Engine = (*RedisEngine)(nil)
@@ -95,6 +99,9 @@ type shard struct {
 	addHistoryStreamScript *redis.Script
 	historyStreamScript    *redis.Script
 	messagePrefix          string
+	pingChannel            string
+	controlChannel         string
+	nodeChannel            string
 	HistoryMetaTTL         time.Duration
 	useStreams             bool
 }
@@ -621,16 +628,10 @@ func (e *RedisEngine) PublishLeave(ch string, info *ClientInfo) error {
 }
 
 // PublishControl - see engine interface description.
-func (e *RedisEngine) PublishControl(data []byte) error {
-	var err error
-	for _, shard := range e.shards {
-		err = shard.PublishControl(data)
-		if err != nil {
-			continue
-		}
-		return nil
-	}
-	return fmt.Errorf("publish control error, all shards failed: last error: %v", err)
+func (e *RedisEngine) PublishControl(data []byte, nodeID string) error {
+	currentRound := atomic.AddUint64(&e.controlRound, 1)
+	index := currentRound % uint64(len(e.shards))
+	return e.shards[index].PublishControl(data, nodeID)
 }
 
 // Subscribe - see engine interface description.
@@ -674,29 +675,6 @@ func (e *RedisEngine) RemoveHistory(ch string) error {
 	return e.getShard(ch).RemoveHistory(ch)
 }
 
-// Channels - see engine interface description.
-func (e *RedisEngine) Channels() ([]string, error) {
-	channelMap := map[string]struct{}{}
-	for _, shard := range e.shards {
-		shardChannels, err := shard.Channels()
-		if err != nil {
-			return nil, err
-		}
-		if !e.sharding {
-			// We have all channels on one shard.
-			return shardChannels, nil
-		}
-		for _, ch := range shardChannels {
-			channelMap[ch] = struct{}{}
-		}
-	}
-	channels := make([]string, 0, len(channelMap))
-	for ch := range channelMap {
-		channels = append(channels, ch)
-	}
-	return channels, nil
-}
-
 // newShard initializes new Redis shard.
 func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 	shard := &shard{
@@ -721,6 +699,9 @@ func newShard(n *Node, conf RedisShardConfig) (*shard, error) {
 	shard.dataCh = make(chan dataRequest)
 
 	shard.messagePrefix = conf.Prefix + redisClientChannelPrefix
+	shard.pingChannel = conf.Prefix + redisPingChannelSuffix
+	shard.nodeChannel = string(shard.nodeChannelID(n.ID()))
+	shard.controlChannel = conf.Prefix + redisControlChannelSuffix
 
 	if !shard.useCluster() {
 		// Only need data pipeline in non-cluster scenario.
@@ -736,16 +717,12 @@ func (s *shard) useCluster() bool {
 	return len(s.config.ClusterAddrs) != 0
 }
 
-func (s *shard) controlChannelID() channelID {
-	return channelID(s.config.Prefix + redisControlChannelSuffix)
-}
-
-func (s *shard) pingChannelID() channelID {
-	return channelID(s.config.Prefix + redisPingChannelSuffix)
-}
-
 func (s *shard) messageChannelID(ch string) channelID {
 	return channelID(s.messagePrefix + ch)
+}
+
+func (s *shard) nodeChannelID(nodeID string) channelID {
+	return channelID(s.config.Prefix + redisNodeChannelPrefix + nodeID)
 }
 
 func (s *shard) presenceHashKey(ch string) channelID {
@@ -796,6 +773,9 @@ func (s *shard) Run(h BrokerEventHandler) error {
 	})
 	go s.runForever(func() {
 		s.runPubSub(h)
+	})
+	go s.runForever(func() {
+		s.runControlPubSub(h)
 	})
 	return nil
 }
@@ -938,9 +918,6 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 		}
 	}()
 
-	controlChannel := s.controlChannelID()
-	pingChannel := s.pingChannelID()
-
 	// Run workers to spread received message processing work over worker goroutines.
 	workers := make(map[int]chan redis.Message)
 	for i := 0; i < numWorkers; i++ {
@@ -952,18 +929,11 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 				case <-done:
 					return
 				case n := <-ch:
-					chID := channelID(n.Channel)
-					switch chID {
-					case controlChannel:
-						err := eventHandler.HandleControl(n.Data)
-						if err != nil {
-							s.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
-							continue
-						}
-					case pingChannel:
+					switch n.Channel {
+					case s.pingChannel:
 						// Do nothing - this message just maintains connection open.
 					default:
-						err := s.handleRedisClientMessage(eventHandler, chID, n.Data)
+						err := s.handleRedisClientMessage(eventHandler, channelID(n.Channel), n.Data)
 						if err != nil {
 							s.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
 							continue
@@ -975,9 +945,8 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 	}
 
 	go func() {
-		chIDs := make([]channelID, 2)
-		chIDs[0] = controlChannel
-		chIDs[1] = pingChannel
+		chIDs := make([]channelID, 1)
+		chIDs[0] = channelID(s.pingChannel)
 
 		for _, ch := range s.node.Hub().Channels() {
 			if s.engine.getShard(ch) == s {
@@ -1017,6 +986,81 @@ func (s *shard) runPubSub(eventHandler BrokerEventHandler) {
 			// Add message to worker channel preserving message order - i.e. messages
 			// from the same channel will be processed in the same worker.
 			workers[index(n.Channel, numWorkers)] <- n
+		case redis.Subscription:
+		case error:
+			s.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
+			return
+		}
+	}
+}
+
+func (s *shard) runControlPubSub(eventHandler BrokerEventHandler) {
+	numWorkers := runtime.NumCPU()
+
+	s.node.Log(NewLogEntry(LogLevelDebug, fmt.Sprintf("running Redis control PUB/SUB, num workers: %d", numWorkers)))
+	defer func() {
+		s.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB"))
+	}()
+
+	poolConn := s.pool.Get()
+	if poolConn.Err() != nil {
+		// At this moment test on borrow could already return an error,
+		// we can't work with broken connection.
+		_ = poolConn.Close()
+		return
+	}
+
+	conn := redis.PubSubConn{Conn: poolConn}
+
+	done := make(chan struct{})
+	var doneOnce sync.Once
+	closeDoneOnce := func() {
+		doneOnce.Do(func() {
+			close(done)
+		})
+	}
+	defer closeDoneOnce()
+
+	controlChannel := s.controlChannel
+	nodeChannel := s.nodeChannel
+	pingChannel := s.pingChannel
+
+	// Run workers to spread message processing work over worker goroutines.
+	workCh := make(chan redis.Message)
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			for {
+				select {
+				case <-done:
+					return
+				case n := <-workCh:
+					switch n.Channel {
+					case pingChannel:
+						// Do nothing - this message just maintains connection open.
+					default:
+						err := eventHandler.HandleControl(n.Data)
+						if err != nil {
+							s.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
+							continue
+						}
+					}
+				}
+			}
+		}()
+	}
+
+	err := conn.Subscribe(controlChannel, nodeChannel, pingChannel)
+	if err != nil {
+		s.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
+		return
+	}
+
+	for {
+		switch n := conn.ReceiveWithTimeout(10 * time.Second).(type) {
+		case redis.Message:
+			// Add message to worker channel preserving message order - i.e. messages
+			// from the same channel will be processed in the same worker.
+			workCh <- n
 		case redis.Subscription:
 		case error:
 			s.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
@@ -1087,7 +1131,7 @@ func (s *shard) runPubSubPing() {
 		// Publish periodically to maintain PUB/SUB connection alive and allow
 		// PUB/SUB connection to close early if no data received for a period of time.
 		conn := s.pool.Get()
-		err := conn.Send("PUBLISH", s.pingChannelID(), nil)
+		err := conn.Send("PUBLISH", s.pingChannel, nil)
 		if err != nil {
 			s.node.Log(NewLogEntry(LogLevelError, "error publish ping to Redis channel", map[string]interface{}{"error": err.Error()}))
 			_ = conn.Close()
@@ -1148,7 +1192,6 @@ const (
 	dataOpHistory
 	dataOpAddHistory
 	dataOpHistoryRemove
-	dataOpChannels
 )
 
 type dataResponse struct {
@@ -1231,8 +1274,6 @@ func (s *shard) processClusterDataRequest(dr dataRequest) (interface{}, error) {
 		}
 	case dataOpHistoryRemove:
 		reply, err = conn.Do("DEL", dr.args...)
-	case dataOpChannels:
-		reply, err = conn.Do("PUBSUB", dr.args...)
 	}
 	return reply, err
 }
@@ -1297,8 +1338,6 @@ func (s *shard) runDataPipeline() {
 				}
 			case dataOpHistoryRemove:
 				_ = conn.Send("DEL", drs[i].args...)
-			case dataOpChannels:
-				_ = conn.Send("PUBSUB", drs[i].args...)
 			}
 		}
 
@@ -1471,10 +1510,15 @@ func (s *shard) PublishLeave(ch string, info *ClientInfo) error {
 }
 
 // PublishControl - see engine interface description.
-func (s *shard) PublishControl(data []byte) error {
+func (s *shard) PublishControl(data []byte, nodeID string) error {
 	eChan := make(chan error, 1)
 
-	chID := s.controlChannelID()
+	var chID channelID
+	if nodeID == "" {
+		chID = channelID(s.controlChannel)
+	} else {
+		chID = s.nodeChannelID(nodeID)
+	}
 
 	pr := pubRequest{
 		channel: chID,
@@ -1775,33 +1819,6 @@ func (s *shard) RemoveHistory(ch string) error {
 	dr := newDataRequest(dataOpHistoryRemove, []interface{}{key})
 	resp := s.getDataResponse(dr)
 	return resp.err
-}
-
-// Channels - see engine interface description.
-// Requires Redis >= 2.8.0 (http://redis.io/commands/pubsub)
-func (s *shard) Channels() ([]string, error) {
-	if s.useCluster() {
-		return nil, errors.New("channels command not supported when Redis Cluster is used")
-	}
-	dr := newDataRequest(dataOpChannels, []interface{}{"CHANNELS", s.messagePrefix + "*"})
-	resp := s.getDataResponse(dr)
-	if resp.err != nil {
-		return nil, resp.err
-	}
-	values, err := redis.Values(resp.reply, nil)
-	if err != nil {
-		return nil, err
-	}
-	channels := make([]string, 0, len(values))
-	for i := 0; i < len(values); i++ {
-		value, okValue := values[i].([]byte)
-		if !okValue {
-			return nil, errors.New("error getting channelID value")
-		}
-		chID := channelID(value)
-		channels = append(channels, string(chID)[len(s.messagePrefix):])
-	}
-	return channels, nil
 }
 
 func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {
