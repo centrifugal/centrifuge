@@ -393,14 +393,24 @@ type survey struct {
 
 var errSurveyHandlerNotRegistered = errors.New("no survey handler registered")
 
+const defaultSurveyTimeout = 10 * time.Second
+
 // Survey allows collecting data from all running Centrifuge nodes. This method publishes
 // control messages, then waits for replies from all running nodes. The maximum time to wait
-// can be controlled over context timeout. Be careful with running surveys without timeout –
-// this can result in endless blocking.
+// can be controlled over context timeout. If provided context does not have a deadline for
+// survey then this method uses default 10 seconds timeout.
 func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]SurveyResult, error) {
 	if n.surveyHandler == nil {
 		return nil, errSurveyHandlerNotRegistered
 	}
+
+	if _, ok := ctx.Deadline(); !ok {
+		// If no timeout provided then fallback to defaultSurveyTimeout to avoid endless surveys.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultSurveyTimeout)
+		defer cancel()
+	}
+
 	numNodes := len(n.nodes.list())
 
 	n.surveyMu.Lock()
