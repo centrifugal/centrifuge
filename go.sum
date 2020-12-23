@@ -11,8 +11,6 @@ github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973/go.mod h1:Dwedo/Wpr24
 github.com/beorn7/perks v1.0.0/go.mod h1:KWe93zE9D1o94FZ5RNwFwVgaQK1VOXiVxmqh+CedLV8=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
-github.com/centrifugal/protocol v0.3.5-0.20201223155729-6e127c25bc86 h1:VSCKM6gQefle8iaBeU7fUn5XEOLhbYVaKoCNOgN8ju8=
-github.com/centrifugal/protocol v0.3.5-0.20201223155729-6e127c25bc86/go.mod h1:2YbBCaDwQHl37ErRdMrKSj18X2yVvpkQYtSX6aVbe5A=
 github.com/centrifugal/protocol v0.3.5-0.20201223163602-a206c12d5abd h1:QB9TWOAYJGm4O09+Ril+dCm56M8BzBnb1kw96YcN9Wk=
 github.com/centrifugal/protocol v0.3.5-0.20201223163602-a206c12d5abd/go.mod h1:2YbBCaDwQHl37ErRdMrKSj18X2yVvpkQYtSX6aVbe5A=
 github.com/cespare/xxhash/v2 v2.1.1 h1:6MnRN8NT7+YBpUIWxHtefFZOKTAPgGjpQSxqLNn0+qY=
