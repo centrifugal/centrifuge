@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title></title>
+        <style type="text/css">
+            input[type="text"] { width: 300px; }
+            .muted {color: #CCCCCC; font-size: 10px;}
+        </style>
+        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/history_iteration/dist/centrifuge.js"></script>
+        <script type="text/javascript">
+            // helper functions to work with escaping html.
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            function replaceTag(tag) {return tagsToReplace[tag] || tag;}
+            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
+
+            const channel = "chat:index";
+            let since = null;
+
+            function getParam(name, url) {
+                if (!url) url = window.location.href;
+                name = name.replace(/[\[\]]/g, '\\$&');
+                const regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+                    results = regex.exec(url);
+                if (!results) return null;
+                if (!results[2]) return '';
+                return decodeURIComponent(results[2].replace(/\+/g, ' '));
+            }
+
+            $(function () {
+                const input = $("#input");
+                const container = $('#messages');
+
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
+                    minRetry: 5000
+                });
+
+                // bind listeners on centrifuge object instance events.
+                centrifuge.on('connect', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
+                    input.attr("disabled", false);
+                });
+
+                centrifuge.on('disconnect', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                    input.attr("disabled", true);
+                });
+
+                // subscribe on channel and bind various event listeners. Actual
+                // subscription request will be sent after client connects to
+                // a server.
+                var sub = centrifuge.subscribe(channel, handleMessage)
+                        .on("unsubscribe", handleUnsubscribe)
+                        .on("subscribe", handleSubscribe)
+                        .on("error", handleSubscribeError);
+
+                // Trigger actual connection establishing with a server.
+                // At this moment actual client work starts - i.e. subscriptions
+                // defined start subscribing etc.
+                centrifuge.connect();
+
+                async function restoreMissedPublications(ctx) {
+                    if (since == null) {
+                        // first time subscribing.
+                        since = {
+                            offset: ctx.offset,
+                            epoch: ctx.epoch
+                        }
+                        return;
+                    }
+                    if (since.offset < ctx.offset) {
+                        let recovered = false;
+                        while (true) {
+                            if (recovered) {
+                                break;
+                            }
+                            let resp = await sub.history({since: since, limit: 100});
+                            const pubs = resp.publications;
+                            if (pubs && pubs.length > 0) {
+                                for (let i in pubs) {
+                                    if (pubs.hasOwnProperty(i)) {
+                                        handleMessage(pubs[i]);
+                                        if (pubs[i].offset === resp.offset) {
+                                            recovered = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            } else {
+                                since = {
+                                    offset: resp.offset,
+                                    epoch: resp.epoch,
+                                }
+                            }
+                        }
+                    }
+                }
+
+                async function handleSubscribe(ctx) {
+                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', offset: ' + ctx.offset + ', epoch: ' + ctx.epoch + ')');
+                    await restoreMissedPublications(ctx)
+                }
+
+                function handleSubscribeError(err) {
+                    drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
+                }
+
+                function handleMessage(message) {
+                    if (message.offset === since.offset + 1) {
+                        since.offset = message.offset;
+                    } else {
+                        return;
+                    }
+                    let clientID;
+                    if (message.info){
+                        clientID = message.info.client;
+                    } else {
+                        clientID = null;
+                    }
+                    const inputText = message.data["input"].toString();
+                    const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                    drawText(text);
+                }
+
+                function handleUnsubscribe(sub) {
+                    // drawText('Unsubscribed from channel ' + sub.channel);
+                }
+
+                function drawText(text) {
+                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                }
+
+                $('#form').submit(function(event) {
+                    event.preventDefault();
+                    sub.publish({"input": input.val()}).then(function() {
+                        drawText("Successfully published to channel");
+                    }, function(err) {
+                        drawText("Publish error: " + JSON.stringify(err));
+                    });
+                    input.val('');
+                });
+            });
+        </script>
+    </head>
+    <body>
+        <form id="form">
+            <label for="input"></label><input type="text" id="input" autocomplete="off" />
+            <input type="submit" id="submit" value="»">
+        </form>
+        <ul id="messages"></ul>
+    </body>
+</html>

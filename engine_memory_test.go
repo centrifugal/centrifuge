@@ -613,7 +613,7 @@ func (it *historyIterationTest) testHistoryIteration(t testing.TB, node *Node, s
 	for {
 		res, err := node.History(
 			historyIterationChannel,
-			Since(StreamPosition{Offset: offset, Epoch: epoch}),
+			Since(&StreamPosition{Offset: offset, Epoch: epoch}),
 			WithLimit(iterateBy),
 		)
 		if err != nil {

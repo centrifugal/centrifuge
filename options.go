@@ -34,6 +34,9 @@ type SubscribeOptions struct {
 	Presence bool
 	// JoinLeave enables sending Join and Leave messages for this client in channel.
 	JoinLeave bool
+	// ExposeStreamPosition tells Centrifuge to include StreamPosition information to
+	// subscribe response.
+	ExposeStreamPosition bool
 }
 
 // UnsubscribeOptions define some fields to alter behaviour of Unsubscribe operation.
@@ -104,8 +107,8 @@ func WithLimit(limit int) HistoryOption {
 }
 
 // Since allows to set Since option.
-func Since(sp StreamPosition) HistoryOption {
+func Since(sp *StreamPosition) HistoryOption {
 	return func(opts *HistoryOptions) {
-		opts.Since = &sp
+		opts.Since = sp
 	}
 }

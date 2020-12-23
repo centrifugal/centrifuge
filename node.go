@@ -1036,7 +1036,7 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 // recoverHistory recovers publications since last UID seen by client.
 func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
 	incActionCount("history_recover")
-	return n.History(ch, WithLimit(NoLimit), Since(since))
+	return n.History(ch, WithLimit(NoLimit), Since(&since))
 }
 
 // streamTop returns current stream top position for channel.

@@ -760,7 +760,7 @@ func (c *Client) handleCommand(cmd *protocol.Command) *Disconnect {
 	write := func(rep *protocol.Reply) error {
 		rep.ID = cmd.ID
 		if rep.Error != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Error()}))
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
 			incReplyError(cmd.Method, rep.Error.Code)
 		}
 
@@ -1423,16 +1423,30 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		}
 
 		var pubs []*Publication
+		var offset uint64
+		var epoch string
 		if reply.Result == nil {
-			result, err := c.node.History(event.Channel, WithLimit(NoLimit))
+			limit := NoLimit
+			if cmd.UseLimit {
+				limit = int(cmd.Limit)
+			}
+			var since *StreamPosition
+			if cmd.UseSince {
+				since = &StreamPosition{cmd.Offset, cmd.Epoch}
+			}
+			result, err := c.node.History(event.Channel, WithLimit(limit), Since(since))
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting history", map[string]interface{}{"error": err.Error()}))
 				c.writeErrorFlush(rw, ErrorInternal)
 				return
 			}
 			pubs = result.Publications
+			offset = result.Offset
+			epoch = result.Epoch
 		} else {
 			pubs = reply.Result.Publications
+			offset = reply.Result.Offset
+			epoch = reply.Result.Epoch
 		}
 
 		protoPubs := make([]*protocol.Publication, 0, len(pubs))
@@ -1446,6 +1460,8 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeHistoryResult(&protocol.HistoryResult{
 			Publications: protoPubs,
+			Offset:       offset,
+			Epoch:        epoch,
 		})
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding presence stats", map[string]interface{}{"error": err.Error()}))
@@ -2034,6 +2050,19 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 			ctx.disconnect = DisconnectServerError
 			return ctx
 		}
+	} else if reply.Options.ExposeStreamPosition {
+		streamTop, err := c.node.streamTop(channel)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error getting recovery state for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+			if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
+				return errorDisconnectContext(clientErr, nil)
+			}
+			ctx.disconnect = DisconnectServerError
+			return ctx
+		}
+		res.Positioned = true
+		res.Offset = streamTop.Offset
+		res.Epoch = streamTop.Epoch
 	}
 
 	if len(recoveredPubs) > 0 {
