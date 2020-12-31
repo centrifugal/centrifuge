@@ -22,9 +22,7 @@
                 const input = $("#input");
                 const container = $('#messages');
 
-                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
-                    minRetry: 5000
-                });
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
@@ -60,20 +58,16 @@
                             }
                             let resp = await sub.history({since: since, limit: 100});
                             const pubs = resp.publications;
-                            if (pubs && pubs.length > 0) {
+                            if (pubs) {
                                 for (let i in pubs) {
-                                    if (pubs.hasOwnProperty(i)) {
-                                        handleMessage(pubs[i]);
-                                        if (pubs[i].offset === resp.offset) {
-                                            recovered = true;
-                                            break;
-                                        }
+                                    if (!pubs.hasOwnProperty(i)) {
+                                        continue
                                     }
-                                }
-                            } else {
-                                since = {
-                                    offset: resp.offset,
-                                    epoch: resp.epoch,
+                                    handleMessage(pubs[i]);
+                                    if (pubs[i].offset === resp.offset) {
+                                        recovered = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -90,11 +84,11 @@
                 }
 
                 function handleMessage(message) {
-                    if (message.offset === since.offset + 1) {
-                        since.offset = message.offset;
-                    } else {
+                    if (message.offset !== since.offset + 1) {
                         return;
                     }
+                    since.offset = message.offset;
+
                     let clientID;
                     if (message.info){
                         clientID = message.info.client;
