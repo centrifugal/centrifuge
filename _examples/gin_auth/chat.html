@@ -4,18 +4,11 @@
     <meta charset="utf-8">
     <title></title>
     <style type="text/css">
-        input[type="text"] {
-            width: 300px;
-        }
-        .muted {
-            color: #CCCCCC;
-            font-size: 10px;
-        }
+        input[type="text"] {width: 300px;}
+        .muted {color: #CCCCCC;font-size: 10px;}
     </style>
-    <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
     <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-    <script type="text/javascript"
-            src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
+    <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
     <script type="text/javascript">
         // helper functions to work with escaping html.
         const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -30,35 +23,29 @@
 
         const channel = "chat:index";
 
-        function getParam(name, url) {
-            if (!url) url = window.location.href;
-            name = name.replace(/[\[\]]/g, '\\$&');
-            const regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
-                results = regex.exec(url);
-            if (!results) return null;
-            if (!results[2]) return '';
-            return decodeURIComponent(results[2].replace(/\+/g, ' '));
-        }
+        window.addEventListener('load', function() {
+            const input = document.getElementById("input");
+            const container = document.getElementById('messages');
 
-        $(function () {
-            const input = $("#input");
-            const container = $('#messages');
             const centrifuge = new Centrifuge('ws://localhost:8080/connection/websocket');
-            // var centrifuge = new Centrifuge('http://localhost:8080/connection/sockjs');
+
             centrifuge.setConnectData({"user-agent": navigator.userAgent});
+
             // bind listeners on centrifuge object instance events.
             centrifuge.on('connect', function (ctx) {
                 drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' as user: ' + ctx.data.email);
-                input.attr("disabled", false);
+                input.removeAttribute('disabled');
             });
+
             centrifuge.on('message', function (data) {
                 drawText(JSON.stringify(data));
                 // echo data back to server.
                 centrifuge.send(data);
             });
+
             centrifuge.on('disconnect', function (ctx) {
                 drawText('Disconnected: ' + ctx.reason + (ctx.reconnect ? ", will try to reconnect" : ", won't try to reconnect"));
-                input.attr("disabled", true);
+                input.setAttribute('disabled', 'true');
             });
 
             // subscribe on channel and bind various event listeners. Actual
@@ -116,17 +103,19 @@
             }
 
             function drawText(text) {
-                container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                let e = document.createElement('li');
+                e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                container.insertBefore(e, container.firstChild);
             }
 
-            $('#form').submit(function (event) {
+            document.getElementById('form').addEventListener('submit', function(event) {
                 event.preventDefault();
-                sub.publish({"input": input.val()}).then(function () {
+                sub.publish({"input": input.value}).then(function () {
                     // console.log('message accepted by server');
                 }, function (err) {
                     // console.log('error publishing message', err);
                 });
-                input.val('');
+                input.value = '';
             });
         });
     </script>

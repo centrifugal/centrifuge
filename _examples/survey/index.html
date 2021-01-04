@@ -3,13 +3,18 @@
     <head>
         <meta charset="utf-8">
         <title></title>
-        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
-            $(function() {
-                var container = $('#messages');
+            window.addEventListener('load', function() {
+                const container = document.getElementById('messages');
 
-                var centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket');
+                function drawText(text) {
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
+                }
+
+                const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket');
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
@@ -24,10 +29,6 @@
                 centrifuge.subscribe(window.location.host);
 
                 centrifuge.connect();
-
-                function drawText(text) {
-                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
-                }
             });
         </script>
     </head>
