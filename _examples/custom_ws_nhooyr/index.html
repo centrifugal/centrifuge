@@ -7,40 +7,28 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
         <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
-            var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            var channel = "chat:index";
+            const channel = "chat:index";
 
-            function getParam(name, url) {
-                if (!url) url = window.location.href;
-                name = name.replace(/[\[\]]/g, '\\$&');
-                var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
-                    results = regex.exec(url);
-                if (!results) return null;
-                if (!results[2]) return '';
-                return decodeURIComponent(results[2].replace(/\+/g, ' '));
-            }
+            window.addEventListener('load', function() {
+                const input = document.getElementById("input");
+                const container = document.getElementById('messages');
 
-            $(function() {
-
-                var input = $("#input");
-                var container = $('#messages');
-
-                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
                 centrifuge.setConnectData({"user-agent": navigator.userAgent});
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
-                    input.attr("disabled", false);
+                    input.removeAttribute('disabled');
                 });
 
                 centrifuge.on('message', function(data) {
@@ -71,14 +59,14 @@
 
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                    input.attr("disabled", true);
+                    input.setAttribute('disabled', 'true');
                 });
 
                 // show how many users currently in channel.
                 function showPresence(sub) {
                     sub.presence().then(function(result) {
-                        var count = 0;
-                        for (var key in result.presence){
+                        let count = 0;
+                        for (let key in result.presence){
                             count++;
                         }
                         drawText('Presence: now in this room – ' + count + ' clients');
@@ -90,7 +78,7 @@
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                var sub = centrifuge.subscribe(channel, handleMessage)
+                const sub = centrifuge.subscribe(channel, handleMessage)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
                         .on("unsubscribe", handleUnsubscribe)
@@ -111,7 +99,7 @@
                     }
 
                     // This can be whatever JSON you want.
-                    var rpcRequest = {"method": "getCurrentYear"}
+                    const rpcRequest = {"method": "getCurrentYear"}
 
                     centrifuge.rpc(rpcRequest).then(function(data){
                         drawText("RPC response data: " + JSON.stringify(data));
@@ -125,14 +113,14 @@
                 }
 
                 function handleMessage(message) {
-                    var clientID;
+                    let clientID;
                     if (message.info){
                         clientID = message.info.client;
                     } else {
                         clientID = null;
                     }
-                    var inputText = message.data["input"].toString();
-                    var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                    const inputText = message.data["input"].toString();
+                    const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
 
@@ -149,42 +137,20 @@
                 }
 
                 function drawText(text) {
-                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
                 }
 
-                $('#form').submit(function(event) {
+                document.getElementById('form').addEventListener('submit', function(event) {
                     event.preventDefault();
-                    sub.publish({"input": input.val()}).then(function() {
+                    sub.publish({"input": input.value}).then(function() {
                         // console.log('message accepted by server');
                     }, function(err) {
                         // console.log('error publishing message', err);
                     });
-                    input.val('');
+                    input.value = '';
                 });
-
-                if (getParam("disconnect") == "1") {
-                    function reconnect() {
-                        setTimeout(function() {
-                            centrifuge.disconnect();
-                            setTimeout(function(){
-                                reconnect();
-                            }, 11000);
-                        }, 4000);
-                    }
-                    reconnect();
-                }
-
-                if (getParam("publish") == "1") {
-                    var publishInterval = parseInt(getParam("publishInterval")) || 1000;
-                    var counter = 0
-                    setInterval(function(){
-                        sub.publish({"input": counter.toString()}).then(function() {
-                        }, function(err) {
-                            drawText("Publish error: " + JSON.stringify(err));
-                        });
-                        counter++;
-                    }, publishInterval);
-                }
             });
         </script>
     </head>

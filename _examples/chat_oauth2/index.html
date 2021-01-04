@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
     <head>
         <meta charset="utf-8">
+        <title>Centrifuge + Oauth2</title>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
     </head>
     <body>
@@ -12,10 +13,10 @@
             <input type="text" id="input" />
         </div>
         <script type="text/javascript">
-            var centrifuge = new Centrifuge('ws://localhost:3000/connection/websocket');
+            const centrifuge = new Centrifuge('ws://localhost:3000/connection/websocket');
 
             function drawText(text) {
-                var div = document.createElement('div');
+                const div = document.createElement('div');
                 div.innerHTML = text;
                 document.body.appendChild(div);
             }
@@ -28,11 +29,11 @@
                 drawText('Disconnected: ' + ctx.reason + '<br>');
             });
 
-            var sub = centrifuge.subscribe("chat", function(message) {
+            const sub = centrifuge.subscribe("chat", function(message) {
                 drawText(message.info.user + ": " + message.data + '<br>');
             })
 
-            var input = document.getElementById("input");
+            const input = document.getElementById("input");
             input.addEventListener('keyup', function(e) {
                 if (e.keyCode == 13) {
                     sub.publish(this.value);
