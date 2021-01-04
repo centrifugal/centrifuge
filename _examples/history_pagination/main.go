@@ -48,7 +48,11 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
-const exampleChannel = "chat:index"
+const (
+	exampleChannel = "chat:index"
+	historySize    = 3000
+	historyTTL     = 5 * time.Minute
+)
 
 // Check whether channel is allowed for subscribing. In real case permission
 // check will probably be more complex than in this example.
@@ -86,13 +90,13 @@ func main() {
 			}
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
-					ExposeStreamPosition: true,
+					Position: true,
 				},
 			}, nil)
 		})
 
-		client.OnHistory(func(event centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
-			if !client.IsSubscribed(event.Channel) {
+		client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
+			if !client.IsSubscribed(e.Channel) {
 				cb(centrifuge.HistoryReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
@@ -121,7 +125,7 @@ func main() {
 
 			result, err := node.Publish(
 				e.Channel, data,
-				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithHistory(historySize, historyTTL),
 				centrifuge.WithClientInfo(e.ClientInfo),
 			)
 
@@ -141,8 +145,12 @@ func main() {
 		// Publish to channel periodically.
 		i := 1
 		for {
-			time.Sleep(100 * time.Millisecond)
-			_, err := node.Publish("chat:index", []byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`), centrifuge.WithHistory(3000, time.Minute))
+			time.Sleep(200 * time.Millisecond)
+			_, err := node.Publish(
+				"chat:index",
+				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(historySize, historyTTL),
+			)
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
 			}

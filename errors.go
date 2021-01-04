@@ -98,4 +98,9 @@ var (
 		Code:    111,
 		Message: "too many requests",
 	}
+	// ErrorWrongEpoch means that stream operates on different epoch.
+	ErrorWrongEpoch = &Error{
+		Code:    112,
+		Message: "wrong epoch",
+	}
 )

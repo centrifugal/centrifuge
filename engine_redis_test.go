@@ -605,34 +605,59 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 	require.True(t, leaveHandlerCalled)
 }
 
+func BenchmarkRedisExtractPushData(b *testing.B) {
+	data := []byte(`__p1:16901:xght__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, sp := extractPushData(data)
+		if sp.Offset != 16901 {
+			b.Fatal("wrong offset")
+		}
+		if sp.Epoch != "xght" {
+			b.Fatal("wrong epoch")
+		}
+	}
+	b.ReportAllocs()
+}
+
 func TestRedisExtractPushData(t *testing.T) {
-	data := []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset := extractPushData(data)
+	data := []byte(`__p1:16901:xyz.123__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	pushData, pushType, sp := extractPushData(data)
 	require.Equal(t, pubPushType, pushType)
-	require.Equal(t, uint64(16901), offset)
+	require.Equal(t, uint64(16901), sp.Offset)
+	require.Equal(t, "xyz.123", sp.Epoch)
+	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
+
+	data = []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	pushData, pushType, sp = extractPushData(data)
+	require.Equal(t, pubPushType, pushType)
+	require.Equal(t, uint64(16901), sp.Offset)
+	require.Equal(t, "", sp.Epoch)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset = extractPushData(data)
+	pushData, pushType, sp = extractPushData(data)
 	require.Equal(t, pubPushType, pushType)
-	require.Equal(t, uint64(0), offset)
+	require.Equal(t, uint64(0), sp.Offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__4294967337__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset = extractPushData(data)
+	pushData, pushType, sp = extractPushData(data)
 	require.Equal(t, pubPushType, pushType)
-	require.Equal(t, uint64(4294967337), offset)
+	require.Equal(t, uint64(4294967337), sp.Offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__j__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset = extractPushData(data)
+	pushData, pushType, sp = extractPushData(data)
 	require.Equal(t, joinPushType, pushType)
-	require.Equal(t, uint64(0), offset)
+	require.Equal(t, uint64(0), sp.Offset)
+	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__l__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset = extractPushData(data)
+	pushData, pushType, sp = extractPushData(data)
 	require.Equal(t, leavePushType, pushType)
-	require.Equal(t, uint64(0), offset)
+	require.Equal(t, uint64(0), sp.Offset)
+	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 }
 
 func TestNode_OnSurvey_TwoNodes(t *testing.T) {

@@ -270,6 +270,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 			err := n.hub.broadcastPublication(
 				"not_test_channel",
 				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				StreamPosition{},
 			)
 			require.NoError(t, err)
 
@@ -277,6 +278,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 			err = n.hub.broadcastPublication(
 				"test_channel",
 				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				StreamPosition{},
 			)
 			require.NoError(t, err)
 			select {

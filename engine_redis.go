@@ -453,7 +453,7 @@ local offset = redis.call("hincrby", KEYS[2], "s", 1)
 if ARGV[5] ~= '0' then
 	redis.call("expire", KEYS[2], ARGV[5])
 end
-local payload = "__" .. offset .. "__" .. ARGV[1]
+local payload = "__" .. "p1:" .. offset .. ":" .. epoch .. "__" .. ARGV[1]
 redis.call("lpush", KEYS[1], payload)
 redis.call("ltrim", KEYS[1], 0, ARGV[2])
 redis.call("expire", KEYS[1], ARGV[3])
@@ -489,7 +489,7 @@ end
 redis.call("xadd", KEYS[1], "MAXLEN", ARGV[2], offset, "d", ARGV[1])
 redis.call("expire", KEYS[1], ARGV[3])
 if ARGV[4] ~= '' then
-	local payload = "__" .. offset .. "__" .. ARGV[1]
+	local payload = "__" .. "p1:" .. offset .. ":" .. epoch .. "__" .. ARGV[1]
 	redis.call("publish", ARGV[4], payload)
 end
 return {offset, epoch}
@@ -1080,7 +1080,7 @@ var (
 )
 
 func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, chID channelID, data []byte) error {
-	pushData, pushType, offset := extractPushData(data)
+	pushData, pushType, sp := extractPushData(data)
 	channel := s.extractChannel(chID)
 	if pushType == pubPushType {
 		var pub protocol.Publication
@@ -1090,11 +1090,11 @@ func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, chID c
 		}
 		if pub.Offset == 0 {
 			// When adding to history and publishing happens atomically in Redis Engine
-			// offset is prepended to Publication payload. In this case we should attach
+			// position info is prepended to Publication payload. In this case we should attach
 			// it to unmarshalled Publication.
-			pub.Offset = offset
+			pub.Offset = sp.Offset
 		}
-		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub))
+		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp)
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo
 		err := info.Unmarshal(pushData)
@@ -1854,19 +1854,40 @@ const (
 	leavePushType pushType = 2
 )
 
-func extractPushData(data []byte) ([]byte, pushType, uint64) {
+var (
+	metaSep    = []byte("__")
+	contentSep = ":"
+)
+
+// See tests for supported format examples.
+func extractPushData(data []byte) ([]byte, pushType, StreamPosition) {
 	var offset uint64
-	if bytes.HasPrefix(data, []byte("__")) {
-		parts := bytes.SplitN(data, []byte("__"), 3)
-		if bytes.Equal(parts[1], []byte("j")) {
-			return parts[2], joinPushType, 0
-		} else if bytes.Equal(parts[1], []byte("l")) {
-			return parts[2], leavePushType, 0
+	var epoch string
+	if bytes.HasPrefix(data, metaSep) {
+		pos := bytes.Index(data[len(metaSep):], metaSep)
+		if pos > 0 {
+			content := data[len(metaSep) : len(metaSep)+pos]
+			rest := data[len(metaSep)+pos+len(metaSep):]
+			if bytes.Equal(content, []byte("j")) {
+				return rest, joinPushType, StreamPosition{}
+			} else if bytes.Equal(content, []byte("l")) {
+				return rest, leavePushType, StreamPosition{}
+			}
+			stringContent := string(content)
+			if strings.HasPrefix(stringContent, "p") {
+				stringContent = stringContent[3:]
+				epochDelimiterPos := strings.Index(stringContent, contentSep)
+				if epochDelimiterPos > 0 {
+					offset, _ = strconv.ParseUint(stringContent[:epochDelimiterPos], 10, 64)
+					epoch = stringContent[epochDelimiterPos+1:]
+				}
+			} else {
+				offset, _ = strconv.ParseUint(stringContent, 10, 64)
+			}
+			return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}
 		}
-		offset, _ := strconv.ParseUint(string(parts[1]), 10, 64)
-		return parts[2], pubPushType, offset
 	}
-	return data, pubPushType, offset
+	return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}
 }
 
 func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
@@ -1931,14 +1952,14 @@ func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
 			return nil, errors.New("error getting Message value")
 		}
 
-		pushData, _, offset := extractPushData(value)
+		pushData, _, sp := extractPushData(value)
 
 		var pub protocol.Publication
 		err = pub.Unmarshal(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
-		pub.Offset = offset
+		pub.Offset = sp.Offset
 		pubs = append(pubs, pubFromProto(&pub))
 	}
 	return pubs, nil

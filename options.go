@@ -27,16 +27,22 @@ type SubscribeOptions struct {
 	ExpireAt int64
 	// ChannelInfo defines custom channel information, zero value means no channel information.
 	ChannelInfo []byte
-	// Recover turns on recovery option for channel. Make sure you are using recovery in channels
-	// that maintain Publication history stream.
-	Recover bool
 	// Presence turns on participating in channel presence.
 	Presence bool
 	// JoinLeave enables sending Join and Leave messages for this client in channel.
 	JoinLeave bool
-	// ExposeStreamPosition tells Centrifuge to include StreamPosition information to
-	// subscribe response.
-	ExposeStreamPosition bool
+	// When position is on client will additionally sync its position inside
+	// a stream to prevent message loss. Make sure you are enabling Position in channels
+	// that maintain Publication history stream. When Position is on  Centrifuge will
+	// include StreamPosition information to subscribe response - for a client to be able
+	// to manually track its position inside a stream.
+	Position bool
+	// Recover turns on recovery option for a channel. In this case client will try to
+	// recover missed messages automatically upon resubscribe to a channel after reconnect
+	// to a server. This option also enables client position tracking inside a stream
+	// (like Position option) to prevent occasional message loss. Make sure you are using
+	// Recover in channels that maintain Publication history stream.
+	Recover bool
 }
 
 // UnsubscribeOptions define some fields to alter behaviour of Unsubscribe operation.

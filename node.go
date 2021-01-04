@@ -594,14 +594,14 @@ func (n *Node) handleControl(data []byte) error {
 // handlePublication handles messages published into channel and
 // coming from engine. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *protocol.Publication) error {
+func (n *Node) handlePublication(ch string, pub *protocol.Publication, sp StreamPosition) error {
 	incMessagesReceived("publication")
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastPublication(ch, pub)
+	return n.hub.broadcastPublication(ch, pub, sp)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -1178,11 +1178,11 @@ type brokerEventHandler struct {
 }
 
 // HandlePublication coming from Engine.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication) error {
+func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
 	if pub == nil {
 		panic("nil Publication received, this should never happen")
 	}
-	return h.node.handlePublication(ch, pubToProto(pub))
+	return h.node.handlePublication(ch, pubToProto(pub), sp)
 }
 
 // HandleJoin coming from Engine.

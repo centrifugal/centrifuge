@@ -5,12 +5,12 @@ import (
 	"time"
 )
 
-// Publication is a data sent to channel.
+// Publication is a data sent to a channel.
 type Publication struct {
-	// Offset is an incremental position number inside history stream.
+	// Offset is an incremental position number inside a history stream.
 	// Zero value means that channel does not maintain Publication stream.
 	Offset uint64
-	// Data published to channel.
+	// Data published to a channel.
 	Data []byte
 	// Info is an optional information about client connection published this data.
 	Info *ClientInfo
@@ -40,7 +40,7 @@ type PresenceStats struct {
 // BrokerEventHandler can handle messages received from PUB/SUB system.
 type BrokerEventHandler interface {
 	// HandlePublication to handle received Publications.
-	HandlePublication(ch string, pub *Publication) error
+	HandlePublication(ch string, pub *Publication, sp StreamPosition) error
 	// HandleJoin to handle received Join messages.
 	HandleJoin(ch string, info *ClientInfo) error
 	// HandleLeave to handle received Leave messages.
@@ -66,7 +66,7 @@ type HistoryFilter struct {
 type StreamPosition struct {
 	// Offset defines publication incremental offset inside a stream.
 	Offset uint64
-	// Epoch of sequence and generation. Allows to handle situations when storage
+	// Epoch allows handling situations when storage
 	// lost stream entirely for some reason (expired or lost after restart) and we
 	// want to track this fact to prevent successful recovery from another stream.
 	// I.e. for example we have stream [1, 2, 3], then it's lost and new stream

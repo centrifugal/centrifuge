@@ -978,7 +978,7 @@ func TestClientPublishNotAvailable(t *testing.T) {
 
 type testBrokerEventHandler struct {
 	// Publication must register callback func to handle Publications received.
-	HandlePublicationFunc func(ch string, pub *Publication) error
+	HandlePublicationFunc func(ch string, pub *Publication, sp StreamPosition) error
 	// Join must register callback func to handle Join messages received.
 	HandleJoinFunc func(ch string, info *ClientInfo) error
 	// Leave must register callback func to handle Leave messages received.
@@ -987,9 +987,9 @@ type testBrokerEventHandler struct {
 	HandleControlFunc func([]byte) error
 }
 
-func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication) error {
+func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
 	if b.HandlePublicationFunc != nil {
-		return b.HandlePublicationFunc(ch, pub)
+		return b.HandlePublicationFunc(ch, pub, sp)
 	}
 	return nil
 }
@@ -1034,7 +1034,7 @@ func TestClientPublishHandler(t *testing.T) {
 	connectClient(t, client)
 
 	node.broker.(*MemoryEngine).eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 			var msg testClientMessage
 			err := json.Unmarshal(pub.Data, &msg)
 			require.NoError(t, err)
@@ -1295,13 +1295,15 @@ func TestClientPresenceStatsError(t *testing.T) {
 	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
 }
 
-func TestClientHistory(t *testing.T) {
+func TestClientHistoryNoFilter(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
 
 	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+		require.Nil(t, e.Filter.Since)
+		require.Equal(t, NoLimit, e.Filter.Limit)
 		cb(HistoryReply{}, nil)
 	})
 
@@ -1325,10 +1327,125 @@ func TestClientHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
-	//require.Equal(t, 10, len(historyResp.Result.Publications))
+	var result protocol.HistoryResult
+	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	require.NoError(t, err)
+	require.Equal(t, 10, len(result.Publications))
+	require.Equal(t, uint64(10), result.Publications[9].Offset)
+	require.Equal(t, uint64(10), result.Offset)
+	require.NotZero(t, result.Epoch)
 }
 
-func TestClientHistoryError(t *testing.T) {
+func TestClientHistoryWithLimit(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+		require.Nil(t, e.Filter.Since)
+		require.Equal(t, 3, e.Filter.Limit)
+		cb(HistoryReply{}, nil)
+	})
+
+	for i := 0; i < 10; i++ {
+		_, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
+	}
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
+		Channel:  "test",
+		UseLimit: true,
+		Limit:    3,
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	var result protocol.HistoryResult
+	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	require.NoError(t, err)
+	require.Equal(t, 3, len(result.Publications))
+	require.Equal(t, uint64(10), result.Offset)
+	require.NotZero(t, result.Epoch)
+}
+
+func TestClientHistoryWithSinceAndLimit(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+		require.NotNil(t, e.Filter.Since)
+		require.Equal(t, 2, e.Filter.Limit)
+		cb(HistoryReply{}, nil)
+	})
+
+	var pubRes PublishResult
+	for i := 0; i < 10; i++ {
+		pubRes, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
+	}
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
+		Channel:  "test",
+		UseLimit: true,
+		Limit:    2,
+		UseSince: true,
+		Offset:   2,
+		Epoch:    pubRes.Epoch,
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	var result protocol.HistoryResult
+	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(result.Publications))
+	require.Equal(t, uint64(4), result.Publications[1].Offset)
+	require.Equal(t, uint64(10), result.Offset)
+	require.NotZero(t, result.Epoch)
+}
+
+func TestClientHistoryWrongEpoch(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+		require.NotNil(t, e.Filter.Since)
+		require.Equal(t, 2, e.Filter.Limit)
+		cb(HistoryReply{}, nil)
+	})
+
+	for i := 0; i < 10; i++ {
+		_, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
+	}
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
+		Channel:  "test",
+		UseLimit: true,
+		Limit:    2,
+		UseSince: true,
+		Offset:   2,
+		Epoch:    "wrong_one",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Equal(t, ErrorWrongEpoch.toProto(), rwWrapper.replies[0].Error)
+}
+
+func TestClientHistoryEngineError(t *testing.T) {
 	engine := NewTestEngine()
 	engine.errorOnHistory = true
 	node := nodeWithEngine(engine)

@@ -235,7 +235,7 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
 }
 
 // broadcastPublication sends message to all clients subscribed on channel.
-func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication) error {
+func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
 	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
 	if useSeqGen {
 		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
@@ -283,7 +283,7 @@ func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication) er
 				}
 				jsonPublicationReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
-			_ = c.writePublication(channel, pub, jsonPublicationReply)
+			_ = c.writePublication(channel, pub, jsonPublicationReply, sp)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufPublicationReply == nil {
 				// Do not send offset to clients for now.
@@ -308,7 +308,7 @@ func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication) er
 				}
 				protobufPublicationReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
-			_ = c.writePublication(channel, pub, protobufPublicationReply)
+			_ = c.writePublication(channel, pub, protobufPublicationReply, sp)
 		}
 	}
 	return nil

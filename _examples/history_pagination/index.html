@@ -7,7 +7,6 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/history_iteration/dist/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
@@ -16,67 +15,84 @@
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
             const channel = "chat:index";
-            let since = null;
 
-            $(function () {
-                const input = $("#input");
-                const container = $('#messages');
+            // Manually keep last seen stream position.
+            let streamPosition = null;
+
+            window.addEventListener('load', function() {
+                const input = document.getElementById('input');
+                const container = document.getElementById('messages');
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
-                    input.attr("disabled", false);
+                    input.removeAttribute("disabled");
                 });
 
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                    input.attr("disabled", true);
+                    input.setAttribute("disabled", 'true');
                 });
 
                 const sub = centrifuge.subscribe(channel, handleMessage)
                         .on("unsubscribe", handleUnsubscribe)
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
-                
+
                 centrifuge.connect();
 
-                async function restoreMissedPublications(ctx) {
-                    if (since == null) {
-                        // first time subscribing.
-                        since = {
-                            offset: ctx.offset,
-                            epoch: ctx.epoch
+                async function restoreMissedPublications() {
+                    let recovered = false;
+                    while (true) {
+                        if (recovered) {
+                            break;
                         }
-                        return;
-                    }
-                    if (since.offset < ctx.offset) {
-                        let recovered = false;
-                        while (true) {
-                            if (recovered) {
-                                break;
-                            }
-                            let resp = await sub.history({since: since, limit: 100});
-                            const pubs = resp.publications;
-                            if (pubs) {
-                                for (let i in pubs) {
-                                    if (!pubs.hasOwnProperty(i)) {
-                                        continue
-                                    }
-                                    handleMessage(pubs[i]);
-                                    if (pubs[i].offset === resp.offset) {
-                                        recovered = true;
-                                        break;
-                                    }
+                        let resp;
+                        try {
+                            const limit = 10;
+                            drawText("Since offset " + streamPosition.offset + " with limit " + limit)
+                            resp = await sub.history({since: streamPosition, limit: limit});
+                        } catch (e) {
+                            return false;
+                        }
+                        const pubs = resp.publications;
+                        if (pubs) {
+                            for (let i in pubs) {
+                                if (!pubs.hasOwnProperty(i)) {
+                                    continue
+                                }
+                                handleMessage(pubs[i]);
+                                if (pubs[i].offset === resp.offset) {
+                                    recovered = true;
+                                    break;
                                 }
                             }
+                        } else {
+                            recovered = true;
+                            break;
                         }
                     }
+                    return recovered;
                 }
 
                 async function handleSubscribe(ctx) {
-                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', offset: ' + ctx.offset + ', epoch: ' + ctx.epoch + ')');
-                    await restoreMissedPublications(ctx)
+                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ')');
+                    if (streamPosition == null) {
+                        streamPosition = {
+                            offset: ctx.offset,
+                            epoch: ctx.epoch
+                        }
+                    } else {
+                        drawText("Start missed publications recovery")
+                        const ok = await restoreMissedPublications();
+                        if (!ok) {
+                            drawText("Oops, seems like we can't recover");
+                            centrifuge.disconnect();
+                            return;
+                        }
+                        drawText("Successfully recovered")
+                    }
                 }
 
                 function handleSubscribeError(err) {
@@ -84,11 +100,14 @@
                 }
 
                 function handleMessage(message) {
-                    if (message.offset !== since.offset + 1) {
+                    if (message.offset !== streamPosition.offset + 1) {
                         return;
                     }
-                    since.offset = message.offset;
+                    drawMessage(message)
+                    streamPosition.offset = message.offset;
+                }
 
+                function drawMessage(message) {
                     let clientID;
                     if (message.info){
                         clientID = message.info.client;
@@ -105,17 +124,19 @@
                 }
 
                 function drawText(text) {
-                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
                 }
 
-                $('#form').submit(function(event) {
+                document.getElementById('form').addEventListener('submit', function(event) {
                     event.preventDefault();
-                    sub.publish({"input": input.val()}).then(function() {
+                    sub.publish({"input": input.value}).then(function() {
                         drawText("Successfully published to channel");
                     }, function(err) {
                         drawText("Publish error: " + JSON.stringify(err));
                     });
-                    input.val('');
+                    input.value = '';
                 });
             });
         </script>

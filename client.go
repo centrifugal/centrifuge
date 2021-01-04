@@ -120,6 +120,7 @@ const maxCheckPositionFailures uint8 = 2
 const (
 	flagPresence uint8 = 1 << iota
 	flagJoinLeave
+	flagPosition
 	flagRecover
 	flagServerSide
 	flagClientSideRefresh
@@ -443,7 +444,7 @@ func (c *Client) updatePresence() {
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channelContext) bool {
-	if !channelHasFlag(chCtx.flags, flagRecover) {
+	if !channelHasFlag(chCtx.flags, flagRecover) && !channelHasFlag(chCtx.flags, flagPosition) {
 		return true
 	}
 	nowUnix := c.node.nowTimeGetter().Unix()
@@ -1415,8 +1416,22 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		return DisconnectBadRequest
 	}
 
+	var filter HistoryFilter
+	if cmd.UseSince {
+		filter.Since = &StreamPosition{
+			Offset: cmd.Offset,
+			Epoch:  cmd.Epoch,
+		}
+	}
+	if cmd.UseLimit {
+		filter.Limit = int(cmd.Limit)
+	} else {
+		filter.Limit = NoLimit
+	}
+
 	event := HistoryEvent{
 		Channel: channel,
+		Filter:  filter,
 	}
 
 	cb := func(reply HistoryReply, err error) {
@@ -1430,15 +1445,7 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		var offset uint64
 		var epoch string
 		if reply.Result == nil {
-			limit := NoLimit
-			if cmd.UseLimit {
-				limit = int(cmd.Limit)
-			}
-			var since *StreamPosition
-			if cmd.UseSince {
-				since = &StreamPosition{cmd.Offset, cmd.Epoch}
-			}
-			result, err := c.node.History(event.Channel, WithLimit(limit), Since(since))
+			result, err := c.node.History(event.Channel, WithLimit(event.Filter.Limit), Since(event.Filter.Since))
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting history", map[string]interface{}{"error": err.Error()}))
 				c.writeErrorFlush(rw, ErrorInternal)
@@ -1451,6 +1458,11 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 			pubs = reply.Result.Publications
 			offset = reply.Result.Offset
 			epoch = reply.Result.Epoch
+		}
+
+		if event.Filter.Since != nil && event.Filter.Since.Epoch != "" && event.Filter.Since.Epoch != epoch {
+			c.writeErrorFlush(rw, ErrorWrongEpoch)
+			return
 		}
 
 		protoPubs := make([]*protocol.Publication, 0, len(pubs))
@@ -1836,6 +1848,7 @@ func (c *Client) Subscribe(channel string) error {
 		Offset:      subCtx.result.GetOffset(),
 		Epoch:       subCtx.result.GetEpoch(),
 		Recoverable: subCtx.result.GetRecoverable(),
+		Positioned:  subCtx.result.GetPositioned(),
 	}
 	if hasFlag(CompatibilityFlags, UseSeqGen) {
 		sub.Seq, sub.Gen = recovery.UnpackUint64(subCtx.result.GetOffset())
@@ -2054,16 +2067,20 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 			ctx.disconnect = DisconnectServerError
 			return ctx
 		}
-	} else if reply.Options.ExposeStreamPosition {
+	} else if reply.Options.Position {
 		streamTop, err := c.node.streamTop(channel)
 		if err != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error getting recovery state for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+			c.node.logger.log(newLogEntry(LogLevelError, "error getting stream top for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 				return errorDisconnectContext(clientErr, nil)
 			}
 			ctx.disconnect = DisconnectServerError
 			return ctx
 		}
+
+		latestOffset = streamTop.Offset
+		latestEpoch = streamTop.Epoch
+
 		res.Positioned = true
 		res.Offset = streamTop.Offset
 		res.Epoch = streamTop.Epoch
@@ -2113,6 +2130,9 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	if reply.Options.Recover {
 		channelFlags |= flagRecover
 	}
+	if reply.Options.Position {
+		channelFlags |= flagPosition
+	}
 	if reply.Options.Presence {
 		channelFlags |= flagPresence
 	}
@@ -2129,7 +2149,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 			Epoch:  latestEpoch,
 		},
 	}
-	if reply.Options.Recover {
+	if reply.Options.Recover || reply.Options.Position {
 		channelContext.positionCheckTime = time.Now().Unix()
 	}
 
@@ -2153,7 +2173,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	return ctx
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, reply *prepared.Reply) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok {
@@ -2163,6 +2183,16 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
+	pubEpoch := sp.Epoch
+	if pubEpoch != channelContext.streamPosition.Epoch {
+		if c.node.logger.enabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
+		}
+		// Oops: sth lost, let client reconnect to recover its state.
+		go func() { _ = c.close(DisconnectInsufficientState) }()
+		c.mu.Unlock()
+		return nil
+	}
 	if pubOffset != nextExpectedOffset {
 		if c.node.logger.enabled(LogLevelDebug) {
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
@@ -2180,7 +2210,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	return c.transportEnqueue(reply)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *prepared.Reply) error {
+func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
 	if pub.Offset == 0 {
 		return c.transportEnqueue(reply)
 	}
@@ -2195,12 +2225,12 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 	channelFlags := channelContext.flags
 	c.mu.Unlock()
 
-	if !channelHasFlag(channelFlags, flagRecover) {
+	if !channelHasFlag(channelFlags, flagRecover) && !channelHasFlag(channelFlags, flagPosition) {
 		return c.transportEnqueue(reply)
 	}
 
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, reply)
+		_ = c.writePublicationUpdatePosition(ch, pub, reply, sp)
 	})
 	return nil
 }
