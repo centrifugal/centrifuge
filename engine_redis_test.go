@@ -558,10 +558,12 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 	node := testNode(t)
 	e := NewTestRedisEngineWithPrefix(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	err := e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication) error {
+	err := e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		require.Equal(t, "test", ch)
+		require.Equal(t, uint64(16901), sp.Offset)
+		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.shards[0].messageChannelID("test"), []byte("__16901__dsdsd"))
+	}}, e.shards[0].messageChannelID("test"), []byte("__p1:16901:xyz__dsdsd"))
 	require.Error(t, err)
 
 	pub := &protocol.Publication{
@@ -570,12 +572,13 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 	data, err := pub.Marshal()
 	require.NoError(t, err)
 	var publicationHandlerCalled bool
-	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication) error {
+	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		publicationHandlerCalled = true
 		require.Equal(t, "test", ch)
-		require.Equal(t, uint64(16901), pub.Offset)
+		require.Equal(t, uint64(16901), sp.Offset)
+		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.shards[0].messageChannelID("test"), []byte("__16901__"+string(data)))
+	}}, e.shards[0].messageChannelID("test"), []byte("__p1:16901:xyz__"+string(data)))
 	require.NoError(t, err)
 	require.True(t, publicationHandlerCalled)
 
@@ -726,7 +729,7 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 		HandleControlFunc: func(bytes []byte) error {
 			return nil
 		},
-		HandlePublicationFunc: func(ch string, pub *Publication) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 			close(messageCh)
 			return nil
 		},
