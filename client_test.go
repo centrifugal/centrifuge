@@ -406,6 +406,77 @@ func TestClientSubscribeEngineErrorOnStreamTop(t *testing.T) {
 	}
 }
 
+func TestClientSubscribePositionedError(t *testing.T) {
+	engine := NewTestEngine()
+	engine.errorOnHistory = true
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{Position: true},
+			}, nil)
+		})
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectServerError, event.Disconnect)
+			close(done)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+
+	//var result protocol.SubscribeResult
+	//require.Nil(t, rwWrapper.replies[0].Error)
+	//err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	//require.NoError(t, err)
+	//require.Equal(t, 10, len(result.Publications))
+}
+
+func TestClientSubscribePositioned(t *testing.T) {
+	engine := NewTestEngine()
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{Position: true},
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+
+	var result protocol.SubscribeResult
+	require.Nil(t, rwWrapper.replies[0].Error)
+	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	require.NoError(t, err)
+	require.True(t, result.Positioned)
+}
+
 func TestClientSubscribeEngineErrorOnRecoverHistory(t *testing.T) {
 	engine := NewTestEngine()
 	engine.errorOnHistory = true
@@ -438,6 +509,62 @@ func TestClientSubscribeEngineErrorOnRecoverHistory(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for channel close")
 	case <-done:
+	}
+}
+
+func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
+	engine := NewTestEngine()
+	node := nodeWithEngine(engine)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+		})
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectInsufficientState, event.Disconnect)
+			close(done)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test",
+		Recover: true,
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+
+	err = node.handlePublication("test", &protocol.Publication{
+		Offset: offset, // offset 1 missed.
+	}, StreamPosition{offset, epoch})
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+}
+
+func TestClientUnexpectedOffsetEpoch(t *testing.T) {
+	tests := []struct {
+		Name   string
+		Offset uint64
+		Epoch  string
+	}{
+		{"wrong_offset", 2, ""},
+		{"wrong_epoch", 1, "xyz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			testUnexpectedOffsetEpoch(t, tt.Offset, tt.Epoch)
+		})
 	}
 }
 
@@ -772,8 +899,13 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 	subscribeClient(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
-	params := getJSONEncodedParams(t, &protocol.UnsubscribeRequest{Channel: "test"})
+	params := getJSONEncodedParams(t, &protocol.UnsubscribeRequest{Channel: ""})
 	err := client.handleUnsubscribe(params, rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+
+	rwWrapper = testReplyWriterWrapper()
+	params = getJSONEncodedParams(t, &protocol.UnsubscribeRequest{Channel: "test"})
+	err = client.handleUnsubscribe(params, rwWrapper.rw)
 	require.NoError(t, err)
 
 	require.Equal(t, 0, len(client.Channels()))
@@ -2256,21 +2388,48 @@ func TestClientSideSubRefresh(t *testing.T) {
 				ClientSideRefresh: true,
 			}, nil)
 		})
-
-		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
-			require.Equal(t, "test_token", e.Token)
-			cb(SubRefreshReply{
-				ExpireAt: expireAt,
-			}, nil)
-		})
 	})
 
 	connectClient(t, client)
 	subscribeClient(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
-
 	err := client.handleSubRefresh(getJSONEncodedParams(t, &protocol.SubRefreshRequest{
+		Channel: "test",
+		Token:   "test_token",
+	}), rwWrapper.rw)
+	require.Equal(t, ErrorNotAvailable, err)
+
+	client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+		require.Equal(t, "test_token", e.Token)
+		cb(SubRefreshReply{
+			ExpireAt: expireAt,
+		}, nil)
+	})
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubRefresh(getJSONEncodedParams(t, &protocol.SubRefreshRequest{
+		Channel: "test",
+		Token:   "",
+	}), rwWrapper.rw)
+	require.Equal(t, ErrorBadRequest, err)
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubRefresh(getJSONEncodedParams(t, &protocol.SubRefreshRequest{
+		Channel: "test1",
+		Token:   "test_token",
+	}), rwWrapper.rw)
+	require.Equal(t, ErrorPermissionDenied, err)
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubRefresh(getJSONEncodedParams(t, &protocol.SubRefreshRequest{
+		Channel: "",
+		Token:   "test_token",
+	}), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handleSubRefresh(getJSONEncodedParams(t, &protocol.SubRefreshRequest{
 		Channel: "test",
 		Token:   "test_token",
 	}), rwWrapper.rw)
