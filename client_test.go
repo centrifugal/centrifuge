@@ -299,8 +299,24 @@ func subscribeClient(t testing.TB, client *Client, ch string) *protocol.Subscrib
 }
 
 func TestClientSubscribe(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					JoinLeave:   true,
+					Presence:    true,
+					Position:    true,
+					Recover:     true,
+					ChannelInfo: []byte("{}"),
+					ExpireAt:    time.Now().Unix() + 3600,
+				},
+			}, nil)
+		})
+	})
+
 	client := newTestClient(t, node, "42")
 	connectClient(t, client)
 
@@ -440,12 +456,6 @@ func TestClientSubscribePositionedError(t *testing.T) {
 		require.Fail(t, "timeout waiting for channel close")
 	case <-done:
 	}
-
-	//var result protocol.SubscribeResult
-	//require.Nil(t, rwWrapper.replies[0].Error)
-	//err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
-	//require.NoError(t, err)
-	//require.Equal(t, 10, len(result.Publications))
 }
 
 func TestClientSubscribePositioned(t *testing.T) {
@@ -540,7 +550,7 @@ func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
 	require.NoError(t, err)
 
 	err = node.handlePublication("test", &protocol.Publication{
-		Offset: offset, // offset 1 missed.
+		Offset: offset,
 	}, StreamPosition{offset, epoch})
 	require.NoError(t, err)
 
@@ -1084,7 +1094,7 @@ func TestClientRefreshUnexpected(t *testing.T) {
 	connectClient(t, client)
 	rwWrapper := testReplyWriterWrapper()
 
-	cmd := &protocol.RefreshRequest{Token: ""}
+	cmd := &protocol.RefreshRequest{Token: "xxx"}
 	params := getJSONEncodedParams(t, cmd)
 
 	err := client.handleRefresh(params, rwWrapper.rw)
@@ -1284,7 +1294,7 @@ func TestClientPing(t *testing.T) {
 }
 
 func TestClientPresence(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := nodeWithMemoryEngineNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1316,6 +1326,10 @@ func TestClientPresence(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
+	var result protocol.PresenceResult
+	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(result.Presence))
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
@@ -2435,6 +2449,52 @@ func TestClientSideSubRefresh(t *testing.T) {
 	}), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
+}
+
+func TestClientSideSubRefreshUnexpected(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	transport := newTestTransport(func() {})
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{
+		UserID:   "42",
+		ExpireAt: time.Now().Unix() + 60,
+	})
+	client, _ := newClient(newCtx, node, transport)
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			ClientSideRefresh: true,
+		}, nil
+	})
+
+	expireAt := time.Now().Unix() + 60
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(_ SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				ClientSideRefresh: false,
+			}, nil)
+		})
+
+		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
+			require.Equal(t, "test_token", e.Token)
+			cb(SubRefreshReply{
+				ExpireAt: expireAt,
+			}, nil)
+		})
+	})
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubRefresh(getJSONEncodedParams(t, &protocol.SubRefreshRequest{
+		Channel: "test",
+		Token:   "test_token",
+	}), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
 }
 
 func TestCloseNoRace(t *testing.T) {
