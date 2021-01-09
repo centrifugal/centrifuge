@@ -255,7 +255,7 @@ function centrifuge.publish(msg_type, channel, data, info, ttl, size, meta_ttl)
             end
         end
     end
-    publish_to_subscribers(channel, {msg_type, channel, offset, data, info})
+    publish_to_subscribers(channel, {msg_type, channel, offset, epoch, data, info})
     wake_up_subscribers(channel)
     box.commit()
     return offset, epoch

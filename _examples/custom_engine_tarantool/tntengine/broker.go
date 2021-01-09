@@ -420,6 +420,7 @@ type pubSubMessage struct {
 	Type    string
 	Channel string
 	Offset  uint64
+	Epoch   string
 	Data    []byte
 	Info    []byte
 }
@@ -430,7 +431,7 @@ func (m *pubSubMessage) DecodeMsgpack(d *msgpack.Decoder) error {
 	if l, err = d.DecodeArrayLen(); err != nil {
 		return err
 	}
-	if l != 5 {
+	if l != 6 {
 		return fmt.Errorf("wrong array len: %d", l)
 	}
 	if m.Type, err = d.DecodeString(); err != nil {
@@ -440,6 +441,9 @@ func (m *pubSubMessage) DecodeMsgpack(d *msgpack.Decoder) error {
 		return err
 	}
 	if m.Offset, err = d.DecodeUint64(); err != nil {
+		return err
+	}
+	if m.Epoch, err = d.DecodeString(); err != nil {
 		return err
 	}
 	if data, err := d.DecodeString(); err != nil {

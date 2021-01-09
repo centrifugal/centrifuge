@@ -49,7 +49,6 @@ func NewShard(c ShardConfig) (*Shard, error) {
 		ReconnectDelay: 50 * time.Millisecond,
 		User:           c.User,
 		Password:       c.Password,
-		Logger:         emptyTarantoolLogger,
 		SkipSchema:     true,
 	}, MultiOpts{
 		ConnectionMode: c.ConnectionMode,
@@ -60,13 +59,6 @@ func NewShard(c ShardConfig) (*Shard, error) {
 	shard.mc = mc
 	return shard, nil
 }
-
-type tarantoolLogger struct{}
-
-func (l *tarantoolLogger) Report(_ tarantool.ConnLogKind, _ *tarantool.Connection, _ ...interface{}) {
-}
-
-var emptyTarantoolLogger = &tarantoolLogger{}
 
 func (s *Shard) Exec(request *tarantool.Request) (*tarantool.Response, error) {
 	conn, err := s.mc.LeaderConn()
@@ -93,7 +85,6 @@ func (s *Shard) pubSubConn() (*tarantool.Connection, func(), error) {
 		ReconnectDelay: 0,
 		User:           s.config.User,
 		Password:       s.config.Password,
-		Logger:         emptyTarantoolLogger,
 		SkipSchema:     true,
 	})
 	if err != nil {
