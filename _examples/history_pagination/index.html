@@ -7,8 +7,7 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <!--<script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/history_iteration/dist/centrifuge.js"></script>-->
-        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
+        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/history_iteration/dist/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -80,10 +79,7 @@
                 async function handleSubscribe(ctx) {
                     drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ')');
                     if (streamPosition == null) {
-                        streamPosition = {
-                            offset: ctx.offset,
-                            epoch: ctx.epoch
-                        }
+                        streamPosition = ctx.streamPosition;
                     } else {
                         drawText("Start missed publications recovery")
                         const ok = await restoreMissedPublications();
