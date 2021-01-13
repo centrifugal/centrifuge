@@ -1936,7 +1936,9 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 	if len(recoveredPubs) == 0 {
 		recovered = latestOffset == cmdOffset && latestEpoch == cmdEpoch
 	} else {
-		recovered = recoveredPubs[0].Offset == nextOffset && latestEpoch == cmdEpoch
+		recovered = recoveredPubs[0].Offset == nextOffset &&
+			recoveredPubs[len(recoveredPubs)-1].Offset == latestOffset &&
+			latestEpoch == cmdEpoch
 	}
 
 	return recoveredPubs, recovered

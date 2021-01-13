@@ -55,6 +55,11 @@ type Config struct {
 	// MetricsNamespace is a Prometheus metrics namespace to use for internal metrics.
 	// If not set then default namespace name `centrifuge` will be used.
 	MetricsNamespace string
+	// RecoveryPublicationLimit allows limiting number of Publications that could be
+	// restored during a recovery process. This is useful when you have large streams
+	// want to prevent massive number of missed messages to be sent to a client during
+	// recovery process. By default no limit used.
+	RecoveryPublicationLimit int
 }
 
 const (

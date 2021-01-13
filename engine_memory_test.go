@@ -494,18 +494,20 @@ type recoverTest struct {
 	SinceOffset     uint64
 	NumRecovered    int
 	Sleep           int
+	Limit           int
 	Recovered       bool
 }
 
 var recoverTests = []recoverTest{
-	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
-	{"from_position", 10, 60, 10, 8, 2, 0, true},
-	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, false},
-	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, false},
-	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, true},
-	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
-	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
-	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
+	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true},
+	{"from_position", 10, 60, 10, 8, 2, 0, 0, true},
+	{"from_position_limited", 10, 60, 10, 5, 2, 0, 2, false},
+	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, 0, false},
+	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false},
+	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true},
+	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true},
+	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, 0, false},
+	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true},
 }
 
 type recoverTestChannel struct {
@@ -522,6 +524,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := nodeWithMemoryEngineNoHandlers()
+			node.config.RecoveryPublicationLimit = tt.Limit
 			node.OnConnect(func(client *Client) {
 				client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 					opts := SubscribeOptions{Recover: true}

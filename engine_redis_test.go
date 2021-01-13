@@ -1290,6 +1290,7 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node 
 
 func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bool, useCluster bool) {
 	node := nodeWithRedisEngine(t, useStreams, useCluster)
+	node.config.RecoveryPublicationLimit = tt.Limit
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	channel := "test_recovery_redis_" + tt.Name

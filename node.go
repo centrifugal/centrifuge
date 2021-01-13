@@ -1033,13 +1033,18 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 	}, nil
 }
 
-// recoverHistory recovers publications since last UID seen by client.
+// recoverHistory recovers publications since StreamPosition last seen by client.
 func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
 	incActionCount("history_recover")
-	return n.History(ch, WithLimit(NoLimit), Since(&since))
+	limit := NoLimit
+	recoveryPublicationLimit := n.config.RecoveryPublicationLimit
+	if recoveryPublicationLimit > 0 {
+		limit = recoveryPublicationLimit
+	}
+	return n.History(ch, WithLimit(limit), Since(&since))
 }
 
-// streamTop returns current stream top position for channel.
+// streamTop returns current stream top StreamPosition for a channel.
 func (n *Node) streamTop(ch string) (StreamPosition, error) {
 	incActionCount("history_stream_top")
 	historyResult, err := n.History(ch)
