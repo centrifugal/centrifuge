@@ -1559,7 +1559,7 @@ func TestClientHistoryWithSinceAndLimit(t *testing.T) {
 	require.NotZero(t, result.Epoch)
 }
 
-func TestClientHistoryWrongEpoch(t *testing.T) {
+func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
 	node := nodeWithMemoryEngine()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1588,7 +1588,40 @@ func TestClientHistoryWrongEpoch(t *testing.T) {
 		Epoch:    "wrong_one",
 	}), rwWrapper.rw)
 	require.NoError(t, err)
-	require.Equal(t, ErrorWrongEpoch.toProto(), rwWrapper.replies[0].Error)
+	require.Equal(t, ErrorUnrecoverablePosition.toProto(), rwWrapper.replies[0].Error)
+}
+
+func TestClientHistoryUnrecoverablePositionOffset(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+		require.NotNil(t, e.Filter.Since)
+		require.Equal(t, 2, e.Filter.Limit)
+		cb(HistoryReply{}, nil)
+	})
+
+	var pubRes PublishResult
+	for i := 0; i < 20; i++ {
+		pubRes, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
+	}
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
+		Channel:  "test",
+		UseLimit: true,
+		Limit:    2,
+		UseSince: true,
+		Offset:   2,
+		Epoch:    pubRes.Epoch,
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Equal(t, ErrorUnrecoverablePosition.toProto(), rwWrapper.replies[0].Error)
 }
 
 func TestClientHistoryEngineError(t *testing.T) {

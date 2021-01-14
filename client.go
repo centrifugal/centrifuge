@@ -1460,9 +1460,15 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 			epoch = reply.Result.Epoch
 		}
 
-		if event.Filter.Since != nil && event.Filter.Since.Epoch != "" && event.Filter.Since.Epoch != epoch {
-			c.writeErrorFlush(rw, ErrorWrongEpoch)
-			return
+		if event.Filter.Since != nil {
+			sinceEpoch := event.Filter.Since.Epoch
+			sinceOffset := event.Filter.Since.Offset
+			epochOK := sinceEpoch == "" || sinceEpoch == epoch
+			offsetOK := event.Filter.Limit <= 0 || (sinceOffset <= offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset+1))
+			if !epochOK || !offsetOK {
+				c.writeErrorFlush(rw, ErrorUnrecoverablePosition)
+				return
+			}
 		}
 
 		protoPubs := make([]*protocol.Publication, 0, len(pubs))

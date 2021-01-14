@@ -98,9 +98,11 @@ var (
 		Code:    111,
 		Message: "too many requests",
 	}
-	// ErrorWrongEpoch means that stream operates on different epoch.
-	ErrorWrongEpoch = &Error{
+	// ErrorUnrecoverablePosition means that stream does not contain required
+	// range of publications to fulfill a history query. This can be happen to
+	// expiration, size limitation or due to wrong epoch.
+	ErrorUnrecoverablePosition = &Error{
 		Code:    112,
-		Message: "wrong epoch",
+		Message: "unrecoverable position",
 	}
 )
