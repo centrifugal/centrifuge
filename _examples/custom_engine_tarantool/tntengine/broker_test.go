@@ -63,6 +63,7 @@ var recoverTests = []recoverTest{
 	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true},
 	{"from_position", 10, 60, 10, 8, 2, 0, 0, true},
 	{"from_position_limited", 10, 60, 10, 5, 2, 0, 2, false},
+	{"from_position_with_server_limit", 10, 60, 10, 5, 1, 0, 1, false},
 	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, 0, false},
 	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false},
 	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true},

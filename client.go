@@ -1428,6 +1428,10 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 	} else {
 		filter.Limit = NoLimit
 	}
+	maxPublicationLimit := c.node.config.HistoryMaxPublicationLimit
+	if maxPublicationLimit > 0 && (filter.Limit < 0 || filter.Limit > maxPublicationLimit) {
+		filter.Limit = maxPublicationLimit
+	}
 
 	event := HistoryEvent{
 		Channel: channel,
