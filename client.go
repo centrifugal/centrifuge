@@ -1468,7 +1468,7 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 			sinceEpoch := event.Filter.Since.Epoch
 			sinceOffset := event.Filter.Since.Offset
 			epochOK := sinceEpoch == "" || sinceEpoch == epoch
-			offsetOK := event.Filter.Limit <= 0 || (sinceOffset <= offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset+1))
+			offsetOK := event.Filter.Limit <= 0 || sinceOffset == offset || (sinceOffset < offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset+1))
 			if !epochOK || !offsetOK {
 				c.writeErrorFlush(rw, ErrorUnrecoverablePosition)
 				return
