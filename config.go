@@ -55,13 +55,15 @@ type Config struct {
 	// MetricsNamespace is a Prometheus metrics namespace to use for internal metrics.
 	// If not set then default namespace name `centrifuge` will be used.
 	MetricsNamespace string
-	// HistoryMaxPublicationLimit allows limiting number of Publications that could be
-	// restored during a recovery process or maximum number of publications to be asked
-	// over client API history call. This is useful when you have large streams and
-	// want to prevent massive number of missed messages to be sent to a client during
-	// recovery process or when calling history without any limit explicitly set. By default
-	// no limit used. This option does not affect Node.History method.
+	// HistoryMaxPublicationLimit allows limiting maximum number of publications to be
+	// asked over client API history call. This is useful when you have large streams and
+	// want to prevent massive number of missed messages to be sent to a client when
+	// calling history without any limit explicitly set. By default no limit used.
+	// This option does not affect Node.History method.
 	HistoryMaxPublicationLimit int
+	// RecoveryMaxPublicationLimit allows limiting number of Publications that could be
+	// restored during automatic recovery process.
+	RecoveryMaxPublicationLimit int
 }
 
 const (

@@ -133,6 +133,15 @@ func isRecovered(historyResult centrifuge.HistoryResult, cmdOffset uint64, cmdEp
 	return recoveredPubs, recovered
 }
 
+// recoverHistory recovers publications since StreamPosition last seen by client.
+func recoverHistory(node *centrifuge.Node, ch string, since centrifuge.StreamPosition, maxPublicationLimit int) (centrifuge.HistoryResult, error) {
+	limit := centrifuge.NoLimit
+	if maxPublicationLimit > 0 {
+		limit = maxPublicationLimit
+	}
+	return node.History(ch, centrifuge.WithLimit(limit), centrifuge.Since(&since))
+}
+
 func testTarantoolClientSubscribeRecover(t *testing.T, tt recoverTest) {
 	node := nodeWithTarantoolBroker(t)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -150,12 +159,7 @@ func testTarantoolClientSubscribeRecover(t *testing.T, tt recoverTest) {
 	require.NoError(t, err)
 	streamTop := res.StreamPosition
 
-	limit := centrifuge.NoLimit
-	if tt.Limit > 0 {
-		limit = tt.Limit
-	}
-
-	historyResult, err := node.History(channel, centrifuge.WithLimit(limit), centrifuge.Since(&centrifuge.StreamPosition{Offset: tt.SinceOffset, Epoch: streamTop.Epoch}))
+	historyResult, err := recoverHistory(node, channel, centrifuge.StreamPosition{Offset: tt.SinceOffset, Epoch: streamTop.Epoch}, tt.Limit)
 	require.NoError(t, err)
 	recoveredPubs, recovered := isRecovered(historyResult, tt.SinceOffset, streamTop.Epoch)
 	require.Equal(t, tt.NumRecovered, len(recoveredPubs))

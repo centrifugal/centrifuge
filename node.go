@@ -1037,7 +1037,7 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
 	incActionCount("history_recover")
 	limit := NoLimit
-	maxPublicationLimit := n.config.HistoryMaxPublicationLimit
+	maxPublicationLimit := n.config.RecoveryMaxPublicationLimit
 	if maxPublicationLimit > 0 {
 		limit = maxPublicationLimit
 	}

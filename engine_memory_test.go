@@ -525,7 +525,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := nodeWithMemoryEngineNoHandlers()
-			node.config.HistoryMaxPublicationLimit = tt.Limit
+			node.config.RecoveryMaxPublicationLimit = tt.Limit
 			node.OnConnect(func(client *Client) {
 				client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 					opts := SubscribeOptions{Recover: true}
