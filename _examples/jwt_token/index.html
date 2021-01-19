@@ -7,8 +7,6 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-        <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
@@ -18,7 +16,7 @@
 
             const channel = "chat";
 
-            $(function () {
+            window.addEventListener('load', function() {
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
                 fetch('http://localhost:8000/token').then((response) => {
@@ -28,24 +26,24 @@
                     centrifuge.connect();
                 });
 
-                const input = $("#input");
-                const container = $('#messages');
+                const input = document.getElementById("input");
+                const container = document.getElementById('messages');
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
-                    input.attr("disabled", false);
+                    input.removeAttribute('disabled');
                 });
 
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                    input.attr("disabled", true);
+                    input.setAttribute('disabled', 'true');
                 });
 
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                var sub = centrifuge.subscribe(channel, handleMessage)
+                const sub = centrifuge.subscribe(channel, handleMessage)
                         .on("unsubscribe", handleUnsubscribe)
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
@@ -75,17 +73,19 @@
                 }
 
                 function drawText(text) {
-                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
                 }
 
-                $('#form').submit(function(event) {
+                document.getElementById('form').addEventListener('submit', function(event) {
                     event.preventDefault();
-                    sub.publish({"input": input.val()}).then(function() {
+                    sub.publish({"input": input.value}).then(function() {
                         // console.log('message accepted by server');
                     }, function(err) {
                         // console.log('error publishing message', err);
                     });
-                    input.val('');
+                    input.value = '';
                 });
             });
         </script>

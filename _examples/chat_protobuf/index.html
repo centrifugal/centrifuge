@@ -9,33 +9,30 @@
         </style>
         <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding-indexes.js"></script>
         <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding.js"></script>
-        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.protobuf.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
-            var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            var channel = "chat:index";
+            const channel = "chat:index";
 
-            $(function() {
+            window.addEventListener('load', function() {
+                const input = document.getElementById("input");
+                const container = document.getElementById('messages');
 
-                var input = $("#input");
-                var container = $('#messages');
-
-                var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket?format=protobuf');
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket?format=protobuf');
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
-                    input.attr("disabled", false);
+                    input.removeAttribute('disabled');
                 });
 
                 centrifuge.on('publish', function(ctx) {
-                    var str = new TextDecoder("utf-8").decode(ctx.data);
-                    data = JSON.parse(str);
-                    drawText('Server-side publication from channel ' + ctx.channel + ": " + JSON.stringify(data));
+                    let str = new TextDecoder("utf-8").decode(ctx.data);
+                    drawText('Server-side publication from channel ' + ctx.channel + ": " + str);
                 });
 
                 centrifuge.on('join', function(ctx) {
@@ -55,43 +52,27 @@
                 });
 
                 centrifuge.on('message', function(data) {
-                    var str = new TextDecoder("utf-8").decode(data);
+                    const str = new TextDecoder("utf-8").decode(data);
                     drawText(str);
                     // Echo data back to server with 'ack' prefix.
-                    var echoData = new TextEncoder("utf-8").encode("ack " + str);
+                    const echoData = new TextEncoder("utf-8").encode("ack " + str);
                     centrifuge.send(echoData);
                 });
 
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                    input.attr("disabled", true);
+                    input.removeAttribute('disabled');
                 });
-
-                // show how many users currently in channel.
-                function showPresence(sub) {
-                    sub.presence().then(function(result) {
-                        var count = 0;
-                        for (var key in result.presence){
-                            count++;
-                        }
-                        drawText('Now in this room: ' + count + ' clients');
-                    }, function(err) {
-                        console.log("presence error", err);
-                        drawText("Presence error: " + err.message);
-                    });
-                }
 
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                var sub = centrifuge.subscribe(channel, handleMessage)
+                const sub = centrifuge.subscribe(channel, handleMessage)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
                         .on("unsubscribe", handleUnsubscribe)
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
-
-                showPresence(sub);
 
                 // Trigger actual connection establishing with a server.
                 // At this moment actual client work starts - i.e. subscriptions
@@ -100,15 +81,12 @@
 
                 function handleSubscribe(ctx) {
                     drawText('Subscribed on channel ' + ctx.channel);
-                    if (ctx.isResubscribe) {
-                        showPresence(sub);
-                    }
 
-                    var rpcRequest = {"method": "getCurrentYear"}
-                    var binary = new TextEncoder("utf-8").encode(JSON.stringify(rpcRequest)); 
+                    const rpcRequest = {"method": "getCurrentYear"}
+                    const binary = new TextEncoder("utf-8").encode(JSON.stringify(rpcRequest));
 
                     centrifuge.rpc(binary).then(function(result){
-                        var str = new TextDecoder("utf-8").decode(result.data);
+                        const str = new TextDecoder("utf-8").decode(result.data);
                         drawText("RPC response data: " + str);
                     }, function(err) {
                         drawText("RPC error: " + JSON.stringify(err));
@@ -120,16 +98,16 @@
                 }
 
                 function handleMessage(message) {
-                    var str = new TextDecoder("utf-8").decode(message.data);
-                    data = JSON.parse(str);
-                    var clientID;
+                    const str = new TextDecoder("utf-8").decode(message.data);
+                    const data = JSON.parse(str);
+                    let clientID;
                     if (message.info){
                         clientID = message.info.client;
                     } else {
                         clientID = null;
                     }
-                    var inputText = data["input"].toString();
-                    var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                    const inputText = data["input"].toString();
+                    const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
 
@@ -146,20 +124,22 @@
                 }
 
                 function drawText(text) {
-                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
                 }
 
-                $('#form').submit(function(event) {
+                document.getElementById('form').addEventListener('submit', function(event) {
                     event.preventDefault();
-                    var data = {"input": input.val()};
-                    var binaryData = new TextEncoder("utf-8").encode(JSON.stringify(data)); 
+                    const data = {"input": input.value};
+                    const binaryData = new TextEncoder("utf-8").encode(JSON.stringify(data));
                     sub.publish(binaryData).then(function() {
                         console.log('message accepted by server');
                     }, function(err) {
                         drawText("Publish error: " + err.code + ' ' + err.message);
                         console.log('error publishing message', err);
                     });
-                    input.val('');
+                    input.value = '';
                 });
             });
         </script>

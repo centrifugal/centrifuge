@@ -6,8 +6,6 @@
         <style type="text/css">
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-        <script type="text/javascript" src="//cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
         <script type="text/javascript" src="//cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@latest/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
@@ -17,27 +15,12 @@
 
             const channel = "chat:index";
 
-            function getParam(name, url) {
-                if (!url) url = window.location.href;
-                name = name.replace(/[\[\]]/g, '\\$&');
-                const regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
-                    results = regex.exec(url);
-                if (!results) return null;
-                if (!results[2]) return '';
-                return decodeURIComponent(results[2].replace(/\+/g, ' '));
-            }
-
-            $(function () {
-                const container = $('#messages');
+            window.addEventListener('load', function() {
+                const container = document.getElementById('messages');
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
                     timeout: 5000,
                 });
-                // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
-                //     sockjsTransports: [
-                //         "xhr-streaming",
-                //     ]
-                // });
 
                 centrifuge.setConnectData({"user-agent": navigator.userAgent});
 
@@ -114,20 +97,9 @@
                 }
 
                 function drawText(text) {
-                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
-                }
-
-                // For debug purposes only ...
-                if (getParam("disconnect") === "1") {
-                    function reconnect() {
-                        setTimeout(function() {
-                            centrifuge.disconnect();
-                            setTimeout(function(){
-                                reconnect();
-                            }, 11000);
-                        }, 4000);
-                    }
-                    reconnect();
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
                 }
             });
         </script>

@@ -7,27 +7,25 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
         <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
-            var tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            var channel = "chat:index";
+            const channel = "chat:index";
 
-            $(function() {
+            window.addEventListener('load', function() {
+                const input = document.getElementById("input");
+                const container = document.getElementById('messages');
 
-                var input = $("#input");
-                var container = $('#messages');
-
-                var centrifuge = new Centrifuge('ws://localhost:3333');
+                const centrifuge = new Centrifuge('ws://localhost:3333');
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
-                    input.attr("disabled", false);
+                    input.removeAttribute('disabled');
                 });
 
                 centrifuge.on('message', function(data) {
@@ -38,13 +36,13 @@
 
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                    input.attr("disabled", true);
+                    input.setAttribute('disabled', 'true');
                 });
 
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                var sub = centrifuge.subscribe(channel, handleMessage)
+                const sub = centrifuge.subscribe(channel, handleMessage)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
                         .on("unsubscribe", handleUnsubscribe)
@@ -65,14 +63,14 @@
                 }
 
                 function handleMessage(message) {
-                    var clientID;
+                    let clientID;
                     if (message.info){
                         clientID = message.info.client;
                     } else {
                         clientID = null;
                     }
-                    var inputText = message.data["input"].toString();
-                    var text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                    const inputText = message.data["input"].toString();
+                    const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
 
@@ -89,17 +87,19 @@
                 }
 
                 function drawText(text) {
-                    container.prepend($('<li/>').html([(new Date()).toString(), ' ' + text].join(':')));
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
                 }
 
-                $('#form').submit(function(event) {
+                document.getElementById('form').addEventListener('submit', function(event) {
                     event.preventDefault();
-                    sub.publish({"input": input.val()}).then(function() {
+                    sub.publish({"input": input.value}).then(function() {
                         // console.log('message accepted by server');
                     }, function(err) {
                         // console.log('error publishing message', err);
                     });
-                    input.val('');
+                    input.value = '';
                 });
             });
         </script>
