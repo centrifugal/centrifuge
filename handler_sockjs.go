@@ -78,7 +78,7 @@ type SockjsConfig struct {
 	// HandlerPrefix sets prefix for SockJS handler endpoint path.
 	HandlerPrefix string
 
-	// URL is URL address to SockJS client javascript library.
+	// URL is an address to SockJS client javascript library.
 	URL string
 
 	// HeartbeatDelay sets how often to send heartbeat frames to clients.
@@ -89,21 +89,21 @@ type SockjsConfig struct {
 	CheckOrigin func(*http.Request) bool
 
 	// WebsocketCheckOrigin allows to set custom CheckOrigin func for underlying
-	// gorilla Websocket based Upgrader.
+	// Gorilla Websocket based websocket.Upgrader.
 	WebsocketCheckOrigin func(*http.Request) bool
 
-	// WebsocketReadBufferSize is a parameter that is used for raw websocket Upgrader.
+	// WebsocketReadBufferSize is a parameter that is used for raw websocket websocket.Upgrader.
 	// If set to zero reasonable default value will be used.
 	WebsocketReadBufferSize int
 
-	// WebsocketWriteBufferSize is a parameter that is used for raw websocket Upgrader.
+	// WebsocketWriteBufferSize is a parameter that is used for raw websocket websocket.Upgrader.
 	// If set to zero reasonable default value will be used.
 	WebsocketWriteBufferSize int
 
 	// WebsocketUseWriteBufferPool enables using buffer pool for writes in Websocket transport.
 	WebsocketUseWriteBufferPool bool
 
-	// WriteTimeout is maximum time of write message operation.
+	// WebsocketWriteTimeout is maximum time of write message operation.
 	// Slow client will be disconnected.
 	// By default DefaultWebsocketWriteTimeout will be used.
 	WebsocketWriteTimeout time.Duration

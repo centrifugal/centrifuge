@@ -7,31 +7,31 @@ import (
 // Config contains Node configuration options.
 type Config struct {
 	// Version of server – will be sent to a client on connection establishment
-	// phase in response to connect request.
+	// phase in reply to connect command from a client.
 	Version string
-	// Name is a unique name of current server Node. Name used as human readable
+	// Name is a unique name of the current server Node. Name used as human-readable
 	// and meaningful node identifier. If not set then os.Hostname will be used.
 	Name string
-	// LogLevel is a log level to use. By default nothing will be logged.
+	// LogLevel is a log level. By default, nothing will be logged by Centrifuge.
 	LogLevel LogLevel
-	// LogHandler is a handler func node will send logs to.
+	// LogHandler is a handler function Node will send logs to.
 	LogHandler LogHandler
 	// NodeInfoMetricsAggregateInterval sets interval for automatic metrics
 	// aggregation. It's not reasonable to have it less than one second.
 	NodeInfoMetricsAggregateInterval time.Duration
-	// ClientPresenceUpdateInterval is an interval how often connected
-	// clients must update presence information.
+	// ClientPresenceUpdateInterval sets an interval how often connected
+	// clients update presence information.
 	ClientPresenceUpdateInterval time.Duration
 	// ClientPresenceExpireInterval is an interval how long to consider
 	// presence info valid after receiving presence ping.
 	ClientPresenceExpireInterval time.Duration
 	// ClientExpiredCloseDelay is an extra time given to client to refresh
 	// its connection in the end of connection TTL. At moment only used for
-	// client-side refresh workflow.
+	// a client-side refresh workflow.
 	ClientExpiredCloseDelay time.Duration
 	// ClientExpiredSubCloseDelay is an extra time given to client to
 	// refresh its expiring subscription in the end of subscription TTL.
-	// At moment only used for client-side subscription refresh workflow.
+	// At the moment only used for a client-side subscription refresh workflow.
 	ClientExpiredSubCloseDelay time.Duration
 	// ClientStaleCloseDelay is a timeout after which connection will be
 	// closed if still not authenticated (i.e. no valid connect command
@@ -50,19 +50,19 @@ type Config struct {
 	// from user with the same ID. Zero value means unlimited. Anonymous users
 	// can't be tracked.
 	UserConnectionLimit int
-	// ChannelMaxLength is a maximum length of channel name.
+	// ChannelMaxLength is the maximum length of a channel name.
 	ChannelMaxLength int
 	// MetricsNamespace is a Prometheus metrics namespace to use for internal metrics.
-	// If not set then default namespace name `centrifuge` will be used.
+	// If not set then the default namespace name `centrifuge` will be used.
 	MetricsNamespace string
-	// HistoryMaxPublicationLimit allows limiting maximum number of publications to be
+	// HistoryMaxPublicationLimit allows limiting the maximum number of publications to be
 	// asked over client API history call. This is useful when you have large streams and
-	// want to prevent massive number of missed messages to be sent to a client when
+	// want to prevent a massive number of missed messages to be sent to a client when
 	// calling history without any limit explicitly set. By default no limit used.
-	// This option does not affect Node.History method.
+	// This option does not affect Node.History method. See also RecoveryMaxPublicationLimit.
 	HistoryMaxPublicationLimit int
-	// RecoveryMaxPublicationLimit allows limiting number of Publications that could be
-	// restored during automatic recovery process.
+	// RecoveryMaxPublicationLimit allows limiting the number of Publications that could be
+	// restored during the automatic recovery process. See also HistoryMaxPublicationLimit.
 	RecoveryMaxPublicationLimit int
 }
 
