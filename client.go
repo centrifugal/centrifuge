@@ -444,7 +444,7 @@ func (c *Client) updatePresence() {
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channelContext) bool {
-	if !channelHasFlag(chCtx.flags, flagRecover) && !channelHasFlag(chCtx.flags, flagPosition) {
+	if !channelHasFlag(chCtx.flags, flagRecover|flagPosition) {
 		return true
 	}
 	nowUnix := c.node.nowTimeGetter().Unix()
@@ -2237,7 +2237,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 	channelFlags := channelContext.flags
 	c.mu.Unlock()
 
-	if !channelHasFlag(channelFlags, flagRecover) && !channelHasFlag(channelFlags, flagPosition) {
+	if !channelHasFlag(channelFlags, flagRecover|flagPosition) {
 		return c.transportEnqueue(reply)
 	}
 
