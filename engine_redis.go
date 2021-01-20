@@ -1080,7 +1080,10 @@ var (
 )
 
 func (s *shard) handleRedisClientMessage(eventHandler BrokerEventHandler, chID channelID, data []byte) error {
-	pushData, pushType, sp := extractPushData(data)
+	pushData, pushType, sp, ok := extractPushData(data)
+	if !ok {
+		return fmt.Errorf("malformed PUB/SUB data: %s", data)
+	}
 	channel := s.extractChannel(chID)
 	if pushType == pubPushType {
 		var pub protocol.Publication
@@ -1860,34 +1863,47 @@ var (
 )
 
 // See tests for supported format examples.
-func extractPushData(data []byte) ([]byte, pushType, StreamPosition) {
+func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool) {
 	var offset uint64
 	var epoch string
-	if bytes.HasPrefix(data, metaSep) {
-		pos := bytes.Index(data[len(metaSep):], metaSep)
-		if pos > 0 {
-			content := data[len(metaSep) : len(metaSep)+pos]
-			rest := data[len(metaSep)+pos+len(metaSep):]
-			if bytes.Equal(content, []byte("j")) {
-				return rest, joinPushType, StreamPosition{}
-			} else if bytes.Equal(content, []byte("l")) {
-				return rest, leavePushType, StreamPosition{}
-			}
-			stringContent := string(content)
-			if strings.HasPrefix(stringContent, "p") {
-				stringContent = stringContent[3:]
-				epochDelimiterPos := strings.Index(stringContent, contentSep)
-				if epochDelimiterPos > 0 {
-					offset, _ = strconv.ParseUint(stringContent[:epochDelimiterPos], 10, 64)
-					epoch = stringContent[epochDelimiterPos+1:]
-				}
-			} else {
-				offset, _ = strconv.ParseUint(stringContent, 10, 64)
-			}
-			return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}
-		}
+	if !bytes.HasPrefix(data, metaSep) {
+		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, true
 	}
-	return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}
+	nextMetaSepPos := bytes.Index(data[len(metaSep):], metaSep)
+	if nextMetaSepPos <= 0 {
+		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false
+	}
+	content := data[len(metaSep) : len(metaSep)+nextMetaSepPos]
+	contentType := content[0]
+
+	rest := data[len(metaSep)+nextMetaSepPos+len(metaSep):]
+
+	switch contentType {
+	case 'j':
+		return rest, joinPushType, StreamPosition{}, true
+	case 'l':
+		return rest, leavePushType, StreamPosition{}, true
+	}
+
+	stringContent := string(content)
+
+	if contentType == 'p' {
+		// new format p1:offset:epoch
+		stringContent = stringContent[3:] // offset:epoch
+		epochDelimiterPos := strings.Index(stringContent, contentSep)
+		if epochDelimiterPos <= 0 {
+			return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false
+		}
+		var err error
+		offset, err = strconv.ParseUint(stringContent[:epochDelimiterPos], 10, 64)
+		epoch = stringContent[epochDelimiterPos+1:]
+		return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, err == nil
+	}
+
+	// old format with offset only: __offset__
+	var err error
+	offset, err = strconv.ParseUint(stringContent, 10, 64)
+	return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, err == nil
 }
 
 func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
@@ -1952,7 +1968,10 @@ func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
 			return nil, errors.New("error getting Message value")
 		}
 
-		pushData, _, sp := extractPushData(value)
+		pushData, _, sp, ok := extractPushData(value)
+		if !ok {
+			return nil, fmt.Errorf("malformed publication value: %s", value)
+		}
 
 		var pub protocol.Publication
 		err = pub.Unmarshal(pushData)
