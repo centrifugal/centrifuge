@@ -29,10 +29,8 @@ var levelToString = map[LogLevel]string{
 
 // LogLevelToString transforms Level to its string representation.
 func LogLevelToString(l LogLevel) string {
-	if t, ok := levelToString[l]; ok {
-		return t
-	}
-	return ""
+	t, _ := levelToString[l]
+	return t
 }
 
 // LogEntry represents log entry.

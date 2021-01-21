@@ -108,7 +108,7 @@ func TestClientUnsubscribeClosedClient(t *testing.T) {
 	subscribeClient(t, client, "test")
 	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
-	err = client.Unsubscribe("test")
+	err = client.Unsubscribe("test", WithResubscribe(true))
 	require.NoError(t, err)
 }
 
@@ -1346,6 +1346,55 @@ func TestClientPresence(t *testing.T) {
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
+func TestClientPresenceTakeover(t *testing.T) {
+	node := nodeWithMemoryEngineNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+		cb(SubscribeReply{Options: SubscribeOptions{Presence: true}}, nil)
+	})
+
+	client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
+		res, err := node.Presence(e.Channel)
+		require.NoError(t, err)
+		cb(PresenceReply{
+			Result: &res,
+		}, nil)
+	})
+	client.OnPresenceStats(func(e PresenceStatsEvent, cb PresenceStatsCallback) {
+		res, err := node.PresenceStats(e.Channel)
+		require.NoError(t, err)
+		cb(PresenceStatsReply{
+			Result: &res,
+		}, nil)
+	})
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handlePresence(getJSONEncodedParams(t, &protocol.PresenceRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	var result protocol.PresenceResult
+	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(result.Presence))
+
+	rwWrapper = testReplyWriterWrapper()
+	err = client.handlePresenceStats(getJSONEncodedParams(t, &protocol.PresenceStatsRequest{
+		Channel: "test",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+}
+
 func TestClientPresenceError(t *testing.T) {
 	engine := NewTestEngine()
 	engine.errorOnPresence = true
@@ -1555,6 +1604,48 @@ func TestClientHistoryWithSinceAndLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, len(result.Publications))
 	require.Equal(t, uint64(4), result.Publications[1].Offset)
+	require.Equal(t, uint64(10), result.Offset)
+	require.NotZero(t, result.Epoch)
+}
+
+func TestClientHistoryTakeover(t *testing.T) {
+	node := nodeWithMemoryEngine()
+	node.config.HistoryMaxPublicationLimit = 2
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
+		require.Nil(t, e.Filter.Since)
+		require.Equal(t, 2, e.Filter.Limit)
+		// Change limit here, so 3 publications returned.
+		res, err := node.History(e.Channel, WithLimit(e.Filter.Limit+1), Since(e.Filter.Since))
+		require.NoError(t, err)
+		cb(HistoryReply{
+			Result: &res,
+		}, nil)
+	})
+
+	for i := 0; i < 10; i++ {
+		_, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
+	}
+
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
+		Channel:  "test",
+		UseLimit: true,
+		Limit:    3,
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, rwWrapper.replies, 1)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	var result protocol.HistoryResult
+	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	require.NoError(t, err)
+	require.Equal(t, 3, len(result.Publications))
 	require.Equal(t, uint64(10), result.Offset)
 	require.NotZero(t, result.Epoch)
 }
@@ -2671,6 +2762,15 @@ func TestClientCheckPosition(t *testing.T) {
 	require.Contains(t, client.channels, "channel")
 	require.EqualValues(t, 3, client.channels["channel"].positionCheckFailures)
 	require.EqualValues(t, 200, client.channels["channel"].positionCheckTime)
+
+	// valid position resets positionCheckFailures.
+	require.NotZero(t, client.channels["channel"].positionCheckFailures)
+	sp, _ := node.streamTop("channel")
+	got = client.checkPosition(50*time.Second, "channel", channelContext{
+		positionCheckTime: 50, flags: flagRecover, streamPosition: sp,
+	})
+	require.True(t, got)
+	require.Zero(t, client.channels["channel"].positionCheckFailures)
 }
 
 func TestErrLogLevel(t *testing.T) {
