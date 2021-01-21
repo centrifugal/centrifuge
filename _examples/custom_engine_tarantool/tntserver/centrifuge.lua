@@ -238,10 +238,15 @@ function centrifuge.publish(msg_type, channel, data, info, ttl, size, meta_ttl)
         if meta_ttl > 0 then
             meta_exp = now + meta_ttl
         end
-        epoch = tostring(now)
-        box.space.meta:upsert({channel, 1, epoch, meta_exp}, {{'=', 1, channel}, {'+', 2, 1}, {'=', 4, meta_exp}})
         local stream_meta = box.space.meta:get(channel)
-        offset = stream_meta[2]
+        if stream_meta then
+            offset = stream_meta[2] + 1
+            epoch = stream_meta[3]
+        else
+            epoch = tostring(now)
+            offset = 1
+        end
+        box.space.meta:upsert({channel, offset, epoch, meta_exp}, {{'=', 1, channel}, {'+', 2, 1}, {'=', 4, meta_exp}})
         box.space.pubs:auto_increment{channel, offset, clock.realtime() + tonumber(ttl), data, info}
         local max_offset_to_keep = offset - size
         if max_offset_to_keep > 0 then
@@ -250,7 +255,7 @@ function centrifuge.publish(msg_type, channel, data, info, ttl, size, meta_ttl)
             end
         end
     end
-    publish_to_subscribers(channel, {msg_type, channel, offset, data, info})
+    publish_to_subscribers(channel, {msg_type, channel, offset, epoch, data, info})
     wake_up_subscribers(channel)
     box.commit()
     return offset, epoch

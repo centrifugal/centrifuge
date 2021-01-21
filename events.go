@@ -278,6 +278,7 @@ type PresenceStatsHandler func(PresenceStatsEvent, PresenceStatsCallback)
 // HistoryEvent has channel operation called for.
 type HistoryEvent struct {
 	Channel string
+	Filter  HistoryFilter
 }
 
 // HistoryReply contains fields determining the reaction on history request.

@@ -55,18 +55,21 @@ type recoverTest struct {
 	SinceOffset     uint64
 	NumRecovered    int
 	Sleep           int
+	Limit           int
 	Recovered       bool
 }
 
 var recoverTests = []recoverTest{
-	{"empty_stream", 10, 60, 0, 0, 0, 0, true},
-	{"from_position", 10, 60, 10, 8, 2, 0, true},
-	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, false},
-	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, false},
-	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, true},
-	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, true},
-	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, false},
-	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, true},
+	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true},
+	{"from_position", 10, 60, 10, 8, 2, 0, 0, true},
+	{"from_position_limited", 10, 60, 10, 5, 2, 0, 2, false},
+	{"from_position_with_server_limit", 10, 60, 10, 5, 1, 0, 1, false},
+	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, 0, false},
+	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false},
+	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true},
+	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true},
+	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, 0, false},
+	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true},
 }
 
 func TestTarantoolClientSubscribeRecover(t *testing.T) {
@@ -79,6 +82,10 @@ func TestTarantoolClientSubscribeRecover(t *testing.T) {
 
 func nodeWithTarantoolBroker(tb testing.TB) *centrifuge.Node {
 	c := centrifuge.DefaultConfig
+	return nodeWithTarantoolBrokerWithConfig(tb, c)
+}
+
+func nodeWithTarantoolBrokerWithConfig(tb testing.TB, c centrifuge.Config) *centrifuge.Node {
 	n, err := centrifuge.New(c)
 	if err != nil {
 		tb.Fatal(err)
@@ -118,10 +125,21 @@ func isRecovered(historyResult centrifuge.HistoryResult, cmdOffset uint64, cmdEp
 	if len(recoveredPubs) == 0 {
 		recovered = latestOffset == cmdOffset && latestEpoch == cmdEpoch
 	} else {
-		recovered = recoveredPubs[0].Offset == nextOffset && latestEpoch == cmdEpoch
+		recovered = recoveredPubs[0].Offset == nextOffset &&
+			recoveredPubs[len(recoveredPubs)-1].Offset == latestOffset &&
+			latestEpoch == cmdEpoch
 	}
 
 	return recoveredPubs, recovered
+}
+
+// recoverHistory recovers publications since StreamPosition last seen by client.
+func recoverHistory(node *centrifuge.Node, ch string, since centrifuge.StreamPosition, maxPublicationLimit int) (centrifuge.HistoryResult, error) {
+	limit := centrifuge.NoLimit
+	if maxPublicationLimit > 0 {
+		limit = maxPublicationLimit
+	}
+	return node.History(ch, centrifuge.WithLimit(limit), centrifuge.Since(&since))
 }
 
 func testTarantoolClientSubscribeRecover(t *testing.T, tt recoverTest) {
@@ -141,7 +159,7 @@ func testTarantoolClientSubscribeRecover(t *testing.T, tt recoverTest) {
 	require.NoError(t, err)
 	streamTop := res.StreamPosition
 
-	historyResult, err := node.History(channel, centrifuge.WithLimit(centrifuge.NoLimit), centrifuge.Since(centrifuge.StreamPosition{Offset: tt.SinceOffset, Epoch: streamTop.Epoch}))
+	historyResult, err := recoverHistory(node, channel, centrifuge.StreamPosition{Offset: tt.SinceOffset, Epoch: streamTop.Epoch}, tt.Limit)
 	require.NoError(t, err)
 	recoveredPubs, recovered := isRecovered(historyResult, tt.SinceOffset, streamTop.Epoch)
 	require.Equal(t, tt.NumRecovered, len(recoveredPubs))

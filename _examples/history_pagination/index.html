@@ -14,42 +14,82 @@
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
-            const channel = "chat";
+            const channel = "chat:index";
+
+            // Manually keep last seen stream position.
+            let streamPosition = null;
 
             window.addEventListener('load', function() {
-                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
-
-                fetch('http://localhost:8000/token').then((response) => {
-                    return response.json();
-                }).then((data) => {
-                    centrifuge.setToken(data['token']);
-                    centrifuge.connect();
-                });
-
-                const input = document.getElementById("input");
+                const input = document.getElementById('input');
                 const container = document.getElementById('messages');
 
-                // bind listeners on centrifuge object instance events.
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
-                    input.removeAttribute('disabled');
+                    input.removeAttribute("disabled");
                 });
 
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                    input.setAttribute('disabled', 'true');
+                    input.setAttribute("disabled", 'true');
                 });
 
-                // subscribe on channel and bind various event listeners. Actual
-                // subscription request will be sent after client connects to
-                // a server.
                 const sub = centrifuge.subscribe(channel, handleMessage)
                         .on("unsubscribe", handleUnsubscribe)
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
 
-                function handleSubscribe(ctx) {
-                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
+                centrifuge.connect();
+
+                async function restoreMissedPublications() {
+                    let recovered = false;
+                    while (true) {
+                        if (recovered) {
+                            break;
+                        }
+                        let resp;
+                        try {
+                            const limit = 10;
+                            drawText("Since offset " + streamPosition.offset + " with limit " + limit)
+                            resp = await sub.history({since: streamPosition, limit: limit});
+                        } catch (e) {
+                            return false;
+                        }
+                        const pubs = resp.publications;
+                        if (pubs && pubs.length > 0) {
+                            for (let i in pubs) {
+                                if (!pubs.hasOwnProperty(i)) {
+                                    continue
+                                }
+                                handleMessage(pubs[i]);
+                                if (pubs[i].offset === resp.offset) {
+                                    recovered = true;
+                                    break;
+                                }
+                            }
+                        } else {
+                            recovered = true;
+                            break;
+                        }
+                    }
+                    return recovered;
+                }
+
+                async function handleSubscribe(ctx) {
+                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ')');
+                    if (streamPosition == null) {
+                        streamPosition = ctx.streamPosition;
+                    } else {
+                        drawText("Start missed publications recovery")
+                        const ok = await restoreMissedPublications();
+                        if (!ok) {
+                            drawText("Oops, seems like we can't recover");
+                            centrifuge.disconnect();
+                            return;
+                        }
+                        drawText("Successfully recovered")
+                    }
                 }
 
                 function handleSubscribeError(err) {
@@ -57,6 +97,14 @@
                 }
 
                 function handleMessage(message) {
+                    if (message.offset !== streamPosition.offset + 1) {
+                        return;
+                    }
+                    drawMessage(message)
+                    streamPosition.offset = message.offset;
+                }
+
+                function drawMessage(message) {
                     let clientID;
                     if (message.info){
                         clientID = message.info.client;
@@ -81,9 +129,9 @@
                 document.getElementById('form').addEventListener('submit', function(event) {
                     event.preventDefault();
                     sub.publish({"input": input.value}).then(function() {
-                        // console.log('message accepted by server');
+                        drawText("Successfully published to channel");
                     }, function(err) {
-                        // console.log('error publishing message', err);
+                        drawText("Publish error: " + JSON.stringify(err));
                     });
                     input.value = '';
                 });

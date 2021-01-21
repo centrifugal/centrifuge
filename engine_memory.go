@@ -94,9 +94,9 @@ func (e *MemoryEngine) Publish(ch string, data []byte, opts PublishOptions) (Str
 			return StreamPosition{}, err
 		}
 		pub.Offset = streamTop.Offset
-		return streamTop, e.eventHandler.HandlePublication(ch, pub)
+		return streamTop, e.eventHandler.HandlePublication(ch, pub, streamTop)
 	}
-	return StreamPosition{}, e.eventHandler.HandlePublication(ch, pub)
+	return StreamPosition{}, e.eventHandler.HandlePublication(ch, pub, StreamPosition{})
 }
 
 // PublishJoin - see engine interface description.

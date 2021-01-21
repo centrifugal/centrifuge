@@ -558,10 +558,12 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 	node := testNode(t)
 	e := NewTestRedisEngineWithPrefix(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	err := e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication) error {
+	err := e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		require.Equal(t, "test", ch)
+		require.Equal(t, uint64(16901), sp.Offset)
+		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.shards[0].messageChannelID("test"), []byte("__16901__dsdsd"))
+	}}, e.shards[0].messageChannelID("test"), []byte("__p1:16901:xyz__dsdsd"))
 	require.Error(t, err)
 
 	pub := &protocol.Publication{
@@ -570,12 +572,13 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 	data, err := pub.Marshal()
 	require.NoError(t, err)
 	var publicationHandlerCalled bool
-	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication) error {
+	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		publicationHandlerCalled = true
 		require.Equal(t, "test", ch)
-		require.Equal(t, uint64(16901), pub.Offset)
+		require.Equal(t, uint64(16901), sp.Offset)
+		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.shards[0].messageChannelID("test"), []byte("__16901__"+string(data)))
+	}}, e.shards[0].messageChannelID("test"), []byte("__p1:16901:xyz__"+string(data)))
 	require.NoError(t, err)
 	require.True(t, publicationHandlerCalled)
 
@@ -605,34 +608,76 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 	require.True(t, leaveHandlerCalled)
 }
 
+func BenchmarkRedisExtractPushData(b *testing.B) {
+	data := []byte(`__p1:16901:xyz__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, sp, ok := extractPushData(data)
+		if !ok {
+			b.Fatal("wrong data")
+		}
+		if sp.Offset != 16901 {
+			b.Fatal("wrong offset")
+		}
+		if sp.Epoch != "xyz" {
+			b.Fatal("wrong epoch")
+		}
+	}
+}
+
 func TestRedisExtractPushData(t *testing.T) {
-	data := []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset := extractPushData(data)
+	data := []byte(`__p1:16901:xyz.123__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	pushData, pushType, sp, ok := extractPushData(data)
+	require.True(t, ok)
 	require.Equal(t, pubPushType, pushType)
-	require.Equal(t, uint64(16901), offset)
+	require.Equal(t, uint64(16901), sp.Offset)
+	require.Equal(t, "xyz.123", sp.Epoch)
+	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
+
+	data = []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	pushData, pushType, sp, ok = extractPushData(data)
+	require.True(t, ok)
+	require.Equal(t, pubPushType, pushType)
+	require.Equal(t, uint64(16901), sp.Offset)
+	require.Equal(t, "", sp.Epoch)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset = extractPushData(data)
+	pushData, pushType, sp, ok = extractPushData(data)
+	require.True(t, ok)
 	require.Equal(t, pubPushType, pushType)
-	require.Equal(t, uint64(0), offset)
+	require.Equal(t, uint64(0), sp.Offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__4294967337__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset = extractPushData(data)
+	pushData, pushType, sp, ok = extractPushData(data)
+	require.True(t, ok)
 	require.Equal(t, pubPushType, pushType)
-	require.Equal(t, uint64(4294967337), offset)
+	require.Equal(t, uint64(4294967337), sp.Offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__j__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset = extractPushData(data)
+	pushData, pushType, sp, ok = extractPushData(data)
+	require.True(t, ok)
 	require.Equal(t, joinPushType, pushType)
-	require.Equal(t, uint64(0), offset)
+	require.Equal(t, uint64(0), sp.Offset)
+	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__l__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, offset = extractPushData(data)
+	pushData, pushType, sp, ok = extractPushData(data)
+	require.True(t, ok)
 	require.Equal(t, leavePushType, pushType)
-	require.Equal(t, uint64(0), offset)
+	require.Equal(t, uint64(0), sp.Offset)
+	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
+
+	data = []byte(`____\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	_, _, _, ok = extractPushData(data)
+	require.False(t, ok)
+
+	data = []byte(`__a__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
+	_, _, _, ok = extractPushData(data)
+	require.False(t, ok)
 }
 
 func TestNode_OnSurvey_TwoNodes(t *testing.T) {
@@ -701,7 +746,7 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 		HandleControlFunc: func(bytes []byte) error {
 			return nil
 		},
-		HandlePublicationFunc: func(ch string, pub *Publication) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 			close(messageCh)
 			return nil
 		},
@@ -1262,6 +1307,7 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node 
 
 func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bool, useCluster bool) {
 	node := nodeWithRedisEngine(t, useStreams, useCluster)
+	node.config.RecoveryMaxPublicationLimit = tt.Limit
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	channel := "test_recovery_redis_" + tt.Name

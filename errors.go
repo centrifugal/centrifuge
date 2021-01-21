@@ -98,4 +98,11 @@ var (
 		Code:    111,
 		Message: "too many requests",
 	}
+	// ErrorUnrecoverablePosition means that stream does not contain required
+	// range of publications to fulfill a history query. This can be happen to
+	// expiration, size limitation or due to wrong epoch.
+	ErrorUnrecoverablePosition = &Error{
+		Code:    112,
+		Message: "unrecoverable position",
+	}
 )

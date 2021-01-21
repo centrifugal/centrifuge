@@ -594,14 +594,14 @@ func (n *Node) handleControl(data []byte) error {
 // handlePublication handles messages published into channel and
 // coming from engine. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *protocol.Publication) error {
+func (n *Node) handlePublication(ch string, pub *protocol.Publication, sp StreamPosition) error {
 	incMessagesReceived("publication")
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastPublication(ch, pub)
+	return n.hub.broadcastPublication(ch, pub, sp)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -1033,13 +1033,18 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 	}, nil
 }
 
-// recoverHistory recovers publications since last UID seen by client.
+// recoverHistory recovers publications since StreamPosition last seen by client.
 func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
 	incActionCount("history_recover")
-	return n.History(ch, WithLimit(NoLimit), Since(since))
+	limit := NoLimit
+	maxPublicationLimit := n.config.RecoveryMaxPublicationLimit
+	if maxPublicationLimit > 0 {
+		limit = maxPublicationLimit
+	}
+	return n.History(ch, WithLimit(limit), Since(&since))
 }
 
-// streamTop returns current stream top position for channel.
+// streamTop returns current stream top StreamPosition for a channel.
 func (n *Node) streamTop(ch string) (StreamPosition, error) {
 	incActionCount("history_stream_top")
 	historyResult, err := n.History(ch)
@@ -1178,11 +1183,11 @@ type brokerEventHandler struct {
 }
 
 // HandlePublication coming from Engine.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication) error {
+func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
 	if pub == nil {
 		panic("nil Publication received, this should never happen")
 	}
-	return h.node.handlePublication(ch, pubToProto(pub))
+	return h.node.handlePublication(ch, pubToProto(pub), sp)
 }
 
 // HandleJoin coming from Engine.
