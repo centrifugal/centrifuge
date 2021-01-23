@@ -34,7 +34,13 @@ Client libraries:
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 
-See [Documentation](https://pkg.go.dev/github.com/centrifugal/centrifuge) and [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples). You can also consider [Centrifugo server documentation](https://centrifugal.github.io/centrifugo/) as extra doc for this package (because it's built on top of Centrifuge library).
+### Explore Centrifuge
+
+* see Centrifuge [Documentation on pkg.go.dev](https://pkg.go.dev/github.com/centrifugal/centrifuge)
+* check out [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder
+* read [Centrifuge introduction post](https://centrifugal.github.io/centrifugo/blog/intro_centrifuge/) in Centrifugo blog   
+* you can also consider [Centrifugo server documentation](https://centrifugal.github.io/centrifugo/) as extra doc for this package (since Centrifugo is built on top of Centrifuge library)
+* read this README to the end for [installation](#installation) details, [quick example](#quick-example) and [Tips and tricks](#tips-and-tricks) section
 
 ### Installation
 
