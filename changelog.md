@@ -1,3 +1,54 @@
+v0.15.0
+=======
+
+* Add `Node.Survey` method – it allows gathering results from all running nodes, it's possible to define your own survey handlers. See [example](https://github.com/centrifugal/centrifuge/tree/master/_examples/survey). Keep in mind that `Survey` does not scale very well as number of Centrifuge Nodes grows. Though it has reasonably good performance to perform rare tasks even with relatively large number of nodes – see [benchmark in pull request](https://github.com/centrifugal/centrifuge/pull/174). The main motivation of adding survey was attempt to get rid of `Broker.Channels` method – which is not supported by most of existing PUB/SUB brokers and does not work in Redis cluster – it can now be replaced with survey.
+* Improve clustering - node will now send a SHUTDOWN message so other nodes have a chance to realize that node left cluster almost immediately 
+* Signature of `Since` history call option changed – it now accepts a pointer to StreamPosition, this simplifies code to construct history call
+* Added `SubscribeOptions.Position` boolean flag to enable positioning in channel stream. Positioning means that Centrifuge will check that the client did not miss any message from PUB/SUB system, as soon as loss detected client will be disconnected with `Insufficient State` reason. This is very similar to what `Recover: true` option did, but `Position: true` does not enable recovery. As soon as `Position` flag enabled Centrifuge will expose top stream `StreamPosition` information to a client in Subscribe Reply.
+* Added possibility to iterate over a channel history stream from client side. See [an example that demonstrates this](https://github.com/centrifugal/centrifuge/tree/master/_examples/history_pagination)
+* New `Config` options: `HistoryMaxPublicationLimit` and `RecoveryMaxPublicationLimit` to control maximum number of publications to return during history call or recovery process. See Centrifuge documentation for detailed description
+* New example that shows [Centrifuge integration with Tarantool](https://github.com/centrifugal/centrifuge/tree/master/_examples/custom_engine_tarantool). Tarantool engine implementation can outperform Redis (up to 5-10x for presence and history operations), though while example contains a full-featured fast Engine implementation – it's still just an example at the moment and have not been tested in production environment
+* New blog post in Centrifugo blog where we [introduce Centrifuge library](https://centrifugal.github.io/centrifugo/blog/intro_centrifuge/) 
+* All examples now do not use jQuery – mostly vanilla JS. 
+
+```
+$ gorelease -base v0.14.2 -version v0.15.0
+github.com/centrifugal/centrifuge
+---------------------------------
+Incompatible changes:
+- (*MemoryEngine).Channels: removed
+- (*MemoryEngine).PublishControl: changed from func([]byte) error to func([]byte, string) error
+- (*Node).Channels: removed
+- (*RedisEngine).Channels: removed
+- (*RedisEngine).PublishControl: changed from func([]byte) error to func([]byte, string) error
+- Broker.Channels, method set of Engine: removed
+- Broker.Channels: removed
+- Broker.PublishControl: changed from func([]byte) error to func([]byte, string) error
+- BrokerEventHandler.HandlePublication: changed from func(string, *Publication) error to func(string, *Publication, StreamPosition) error
+- Since: changed from func(StreamPosition) HistoryOption to func(*StreamPosition) HistoryOption
+Compatible changes:
+- (*Node).ID: added
+- (*Node).OnSurvey: added
+- (*Node).Survey: added
+- Config.HistoryMaxPublicationLimit: added
+- Config.RecoveryMaxPublicationLimit: added
+- ErrorUnrecoverablePosition: added
+- HistoryEvent.Filter: added
+- SubscribeOptions.Position: added
+- SurveyCallback: added
+- SurveyEvent: added
+- SurveyHandler: added
+- SurveyReply: added
+- SurveyResult: added
+
+v0.15.0 is a valid semantic version for this release.
+```
+
+v0.14.2
+=======
+
+* fix concurrent map access which could result in runtime crash when using presence feature.
+
 v0.14.1
 =======
 
