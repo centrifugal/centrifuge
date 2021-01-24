@@ -5,12 +5,12 @@ v0.15.0
 * The main motivation of adding `Node.Survey` was attempt to remove `Broker.Channels` method – which is not supported by most of existing PUB/SUB brokers and does not work in Redis cluster. `Broker.Channels` now removed, but it can be replaced with survey if needed
 * Improve clustering - node will now send a SHUTDOWN message so other nodes have a chance to realize that node left cluster almost immediately 
 * Signature of `Since` history call option changed – it now accepts a pointer to StreamPosition. This change simplifies a code to construct history call
-* Added `SubscribeOptions.Position` boolean flag to enable positioning in channel stream. Positioning means that Centrifuge will check that the client did not miss any message from PUB/SUB system, as soon as loss detected client will be disconnected with `Insufficient State` reason. This is very similar to what `Recover: true` option did, but `Position: true` does not enable recovery. As soon as `Position` flag enabled Centrifuge will expose top stream `StreamPosition` information to a client in Subscribe Reply.
+* Added `SubscribeOptions.Position` boolean flag to enable positioning in channel stream. Positioning means that Centrifuge will check that the client did not miss any message from PUB/SUB system, as soon as loss detected client will be disconnected with `Insufficient State` reason. This is very similar to what `Recover: true` option did, but `Position: true` does not enable recovery. As soon as `Position` flag enabled Centrifuge will expose top stream `StreamPosition` information to a client in Subscribe Reply
 * Added possibility to iterate over a channel history stream from client side. See [an example that demonstrates this](https://github.com/centrifugal/centrifuge/tree/master/_examples/history_pagination)
 * New `Config` options: `HistoryMaxPublicationLimit` and `RecoveryMaxPublicationLimit` to control maximum number of publications to return during history call or recovery process. See Centrifuge documentation for detailed description
 * New example that shows [Centrifuge integration with Tarantool](https://github.com/centrifugal/centrifuge/tree/master/_examples/custom_engine_tarantool). Tarantool engine implementation can outperform Redis (up to 5-10x for presence and history operations), though while example contains a full-featured fast Engine implementation – it's still just an example at the moment and have not been tested in production environment
 * New blog post in Centrifugo blog where we [introduce Centrifuge library](https://centrifugal.github.io/centrifugo/blog/intro_centrifuge/) 
-* All examples now do not use jQuery – mostly vanilla JS. 
+* Most [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) now do not use jQuery which was replaced by vanilla JS
 
 ```
 $ gorelease -base v0.14.2 -version v0.15.0

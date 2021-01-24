@@ -73,7 +73,8 @@ func TestSockjsHandler(t *testing.T) {
 		Params: params,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
-	_ = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
+	err = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
+	require.NoError(t, err)
 
 	go func() {
 		pos := 0

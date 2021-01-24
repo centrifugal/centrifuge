@@ -103,6 +103,9 @@ func TestWebsocketHandlerPing(t *testing.T) {
 		return nil
 	})
 
+	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"id": 1}`))
+	require.NoError(t, err)
+
 	go func() {
 		for {
 			_, _, err = conn.ReadMessage()
