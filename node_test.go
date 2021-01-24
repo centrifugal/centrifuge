@@ -253,6 +253,17 @@ func TestNode_SetBroker(t *testing.T) {
 	require.Equal(t, n.broker, engine)
 }
 
+func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
+	n, _ := New(DefaultConfig)
+	n.SetPresenceManager(nil)
+	require.NoError(t, n.addPresence("test", "uid", nil))
+	require.NoError(t, n.removePresence("test", "uid"))
+	_, err := n.Presence("test")
+	require.Equal(t, ErrorNotAvailable, err)
+	_, err = n.PresenceStats("test")
+	require.Equal(t, ErrorNotAvailable, err)
+}
+
 func TestNode_LogEnabled(t *testing.T) {
 	c := DefaultConfig
 	c.LogLevel = LogLevelInfo
@@ -335,7 +346,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 
 	client := newTestSubscribedClient(t, n, "42", "test_channel")
 
-	err = n.Unsubscribe("42", "test_channel")
+	err = n.Unsubscribe("42", "test_channel", WithResubscribe(false))
 	require.NoError(t, err)
 	select {
 	case <-done:
@@ -357,13 +368,14 @@ func TestNode_Disconnect(t *testing.T) {
 	n.OnConnect(func(client *Client) {
 		client.OnDisconnect(func(event DisconnectEvent) {
 			require.Equal(t, "42", client.UserID())
+			require.Equal(t, DisconnectBadRequest, event.Disconnect)
 			close(done)
 		})
 	})
 
 	client := newTestConnectedClient(t, n, "42")
 
-	err = n.Disconnect("42")
+	err = n.Disconnect("42", WithDisconnect(DisconnectBadRequest))
 	require.NoError(t, err)
 	select {
 	case <-done:

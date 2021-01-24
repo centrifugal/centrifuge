@@ -406,6 +406,8 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 		return nil, errSurveyHandlerNotRegistered
 	}
 
+	incActionCount("survey")
+
 	if _, ok := ctx.Deadline(); !ok {
 		// If no timeout provided then fallback to defaultSurveyTimeout to avoid endless surveys.
 		var cancel context.CancelFunc
@@ -576,14 +578,14 @@ func (n *Node) handleControl(data []byte) error {
 	case controlpb.MethodTypeSurveyRequest:
 		cmd, err := n.controlDecoder.DecodeSurveyRequest(params)
 		if err != nil {
-			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
+			n.logger.log(newLogEntry(LogLevelError, "error decoding survey request control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.handleSurveyRequest(uid, cmd)
 	case controlpb.MethodTypeSurveyResponse:
 		cmd, err := n.controlDecoder.DecodeSurveyResponse(params)
 		if err != nil {
-			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
+			n.logger.log(newLogEntry(LogLevelError, "error decoding survey response control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.handleSurveyResponse(uid, cmd)
@@ -996,7 +998,7 @@ type PresenceStatsResult struct {
 // PresenceStats returns presence stats from engine.
 func (n *Node) PresenceStats(ch string) (PresenceStatsResult, error) {
 	if n.presenceManager == nil {
-		return PresenceStatsResult{}, nil
+		return PresenceStatsResult{}, ErrorNotAvailable
 	}
 	incActionCount("presence_stats")
 	presenceStats, err := n.presenceManager.PresenceStats(ch)
