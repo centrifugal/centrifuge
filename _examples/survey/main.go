@@ -47,31 +47,48 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
-const surveyInternalError uint32 = 1
-const surveyMethodNotFound uint32 = 2
+const (
+	surveyInternalError  uint32 = 1
+	surveyMethodNotFound uint32 = 2
+)
 
-func surveyChannels(node *centrifuge.Node) (map[string]bool, error) {
+func surveyChannels(node *centrifuge.Node) (map[string]int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	results, err := node.Survey(ctx, "channels", nil)
 	if err != nil {
 		return nil, err
 	}
-	channels := map[string]bool{}
+	channels := map[string]int{}
 	for nodeID, result := range results {
 		if result.Code > 0 {
 			return nil, fmt.Errorf("non-zero code from node %s: %d", nodeID, result.Code)
 		}
-		var nodeChannels []string
+		var nodeChannels map[string]int
 		err := json.Unmarshal(result.Data, &nodeChannels)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error unmarshaling data from node %s: %v", nodeID, err)
 		}
-		for _, channel := range nodeChannels {
-			channels[channel] = true
+		for ch, numSubscribers := range nodeChannels {
+			channels[ch] += numSubscribers
 		}
 	}
 	return channels, nil
+}
+
+func respondChannelsSurvey(node *centrifuge.Node) centrifuge.SurveyReply {
+	channels := node.Hub().Channels()
+	channelsMap := make(map[string]int, len(channels))
+	for _, ch := range channels {
+		if numSubscribers := node.Hub().NumSubscribers(ch); numSubscribers > 0 {
+			channelsMap[ch] = numSubscribers
+		}
+	}
+	data, err := json.Marshal(channelsMap)
+	if err != nil {
+		return centrifuge.SurveyReply{Code: surveyInternalError}
+	}
+	return centrifuge.SurveyReply{Data: data}
 }
 
 func main() {
@@ -86,19 +103,9 @@ func main() {
 	node.OnSurvey(func(event centrifuge.SurveyEvent, cb centrifuge.SurveyCallback) {
 		switch event.Op {
 		case "channels":
-			channels := node.Hub().Channels()
-			data, err := json.Marshal(channels)
-			if err != nil {
-				cb(centrifuge.SurveyReply{Code: surveyInternalError})
-				return
-			}
-			cb(centrifuge.SurveyReply{
-				Data: data,
-			})
+			cb(respondChannelsSurvey(node))
 		default:
-			cb(centrifuge.SurveyReply{
-				Code: surveyMethodNotFound,
-			})
+			cb(centrifuge.SurveyReply{Code: surveyMethodNotFound})
 		}
 	})
 
