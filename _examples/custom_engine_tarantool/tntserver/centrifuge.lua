@@ -14,10 +14,6 @@ centrifuge.init = function(opts)
     if not opts then opts = {} end
     log.info("Centrifuge init with opts: %s", json.encode(opts))
 
-    local P = {}
-    local M = {}
-    local S = {}
-
     local pubs_temporary = opts.pubs_temporary or false
     local meta_temporary = opts.meta_temporary or false
     local presence_temporary = opts.presence_temporary or false
@@ -31,20 +27,16 @@ centrifuge.init = function(opts)
         {name = 'data';    type = 'string'},
         {name = 'info';    type = 'string'},
     });
-    for no,def in pairs(box.space.pubs:format()) do
-        P[no] = def.name
-        P[def.name] = no
-    end
     box.space.pubs:create_index('primary', {
-        parts = {P.id, 'unsigned'};
+        parts = {{field='id', type='unsigned'}};
         if_not_exists = true;
     })
     box.space.pubs:create_index('channel', {
-        parts = {P.channel, 'string', P.offset, 'unsigned'};
+        parts = {{field='channel', type='string'}, {field='offset', type='unsigned'}};
         if_not_exists = true;
     })
     box.space.pubs:create_index('exp', {
-        parts = {P.exp, 'number', P.id, 'unsigned'};
+        parts = {{field='exp', type='number'}, {field='id', type='unsigned'}};
         if_not_exists = true;
     })
 
@@ -55,16 +47,12 @@ centrifuge.init = function(opts)
         {name = 'epoch';   type = 'string'},
         {name = 'exp';     type = 'number'},
     });
-    for no,def in pairs(box.space.meta:format()) do
-        M[no] = def.name
-        M[def.name] = no
-    end
     box.space.meta:create_index('primary', {
-        parts = {M.channel, 'string'};
+        parts = {{field='channel', type='string'}};
         if_not_exists = true;
     })
     box.space.meta:create_index('exp', {
-        parts = {M.exp, 'number', M.channel, 'string'};
+        parts = {{field='exp', type='number'}, {field='channel', type='string'}};
         if_not_exists = true;
     })
 
@@ -77,16 +65,12 @@ centrifuge.init = function(opts)
         {name = 'chan_info'; type = 'string'},
         {name = 'exp';       type = 'number'},
     });
-    for no,def in pairs(box.space.presence:format()) do
-        S[no] = def.name
-        S[def.name] = no
-    end
     box.space.presence:create_index('primary', {
-        parts = {S.channel, 'string', S.client_id, 'string'};
+        parts = {{field='channel', type='string'}, {field='client_id', type='string'}};
         if_not_exists = true;
     })
     box.space.presence:create_index('exp', {
-        parts = {S.exp, 'number'};
+        parts = {{field='exp', type='number'}};
         if_not_exists = true;
     })
 
@@ -246,11 +230,11 @@ function centrifuge.publish(msg_type, channel, data, info, ttl, size, meta_ttl)
             epoch = tostring(now)
             offset = 1
         end
-        box.space.meta:upsert({channel, offset, epoch, meta_exp}, {{'=', 1, channel}, {'+', 2, 1}, {'=', 4, meta_exp}})
+        box.space.meta:upsert({channel, offset, epoch, meta_exp}, {{'=', 'channel', channel}, {'+', 'offset', 1}, {'=', 'exp', meta_exp}})
         box.space.pubs:auto_increment{channel, offset, clock.realtime() + tonumber(ttl), data, info}
         local max_offset_to_keep = offset - size
         if max_offset_to_keep > 0 then
-            for _, v in pairs(box.space.pubs.index.channel:select({channel, max_offset_to_keep}, {iterator = box.index.LE})) do
+            for _, v in box.space.pubs.index.channel:pairs({channel, max_offset_to_keep}, {iterator = box.index.LE}) do
                 box.space.pubs:delete{v.id}
             end
         end
@@ -270,7 +254,7 @@ function centrifuge.history(channel, since_offset, limit, include_pubs, meta_ttl
     end
     local epoch = tostring(now)
     box.begin()
-    box.space.meta:upsert({channel, 0, epoch, meta_exp}, {{'=', 1, channel}, {'=', 4, meta_exp}})
+    box.space.meta:upsert({channel, 0, epoch, meta_exp}, {{'=', 'channel', channel}, {'=', 'meta_exp', meta_exp}})
     local stream_meta = box.space.meta:get(channel)
     if not include_pubs then
         box.commit()
@@ -302,11 +286,11 @@ function centrifuge.add_presence(channel, ttl, client_id, user_id, conn_info, ch
     if not conn_info then conn_info = "" end
     if not chan_info then chan_info = "" end
     local exp = clock.realtime() + ttl
-    box.space.presence:upsert({channel, client_id, user_id, conn_info, chan_info, exp}, {{'=', 1, channel}, {'=', 2, client_id}, {'=', 3, user_id}, {'=', 4, conn_info}, {'=', 5, chan_info}, {'=', 6, exp}})
+    box.space.presence:put({channel, client_id, user_id, conn_info, chan_info, exp})
 end
 
 function centrifuge.remove_presence(channel, client_id)
-    for _, v in pairs(box.space.presence:select({channel, client_id}, {iterator = box.index.EQ})) do
+    for _, v in box.space.presence:pairs({channel, client_id}, {iterator = box.index.EQ}) do
         box.space.presence:delete{channel, client_id}
     end
 end
@@ -319,7 +303,7 @@ function centrifuge.presence_stats(channel)
     local users = {}
     local num_clients = 0
     local num_users = 0
-    for _, v in pairs(box.space.presence:select({channel}, {iterator = box.index.EQ})) do
+    for _, v in box.space.presence:pairs({channel}, {iterator = box.index.EQ}) do
         num_clients = num_clients + 1
         if not users[v.user_id] then
             num_users = num_users + 1
