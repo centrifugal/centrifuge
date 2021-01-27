@@ -254,7 +254,7 @@ function centrifuge.history(channel, since_offset, limit, include_pubs, meta_ttl
     end
     local epoch = tostring(now)
     box.begin()
-    box.space.meta:upsert({channel, 0, epoch, meta_exp}, {{'=', 'channel', channel}, {'=', 'meta_exp', meta_exp}})
+    box.space.meta:upsert({channel, 0, epoch, meta_exp}, {{'=', 'channel', channel}, {'=', 'exp', meta_exp}})
     local stream_meta = box.space.meta:get(channel)
     if not include_pubs then
         box.commit()
