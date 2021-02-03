@@ -897,7 +897,7 @@ func BenchmarkRedisIndex(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPublish_OneChannel(b *testing.B) {
+func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -911,7 +911,7 @@ func BenchmarkRedisPublish_OneChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPublish_OneChannel_Parallel(b *testing.B) {
+func BenchmarkRedisPublish_1Ch_Parallel(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -930,7 +930,7 @@ func BenchmarkRedisPublish_OneChannel_Parallel(b *testing.B) {
 
 const benchmarkNumDifferentChannels = 1000
 
-func BenchmarkRedisPublish_ManyChannels(b *testing.B) {
+func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -947,7 +947,7 @@ func BenchmarkRedisPublish_ManyChannels(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPublish_ManyChannels_Parallel(b *testing.B) {
+func BenchmarkRedisPublish_ManyCh_Parallel(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -967,7 +967,7 @@ func BenchmarkRedisPublish_ManyChannels_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkRedisPublish_History_OneChannel(b *testing.B) {
+func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -990,7 +990,7 @@ func BenchmarkRedisPublish_History_OneChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPublish_History_OneChannel_Parallel(b *testing.B) {
+func BenchmarkRedisPublish_History_1Ch_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -1016,7 +1016,7 @@ func BenchmarkRedisPublish_History_OneChannel_Parallel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPublish_History_ManyChannels(b *testing.B) {
+func BenchmarkRedisPublish_History_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -1042,7 +1042,7 @@ func BenchmarkRedisPublish_History_ManyChannels(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPublish_History_ManyChannels_Parallel(b *testing.B) {
+func BenchmarkRedisPub_History_ManyCh_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -1104,7 +1104,7 @@ func BenchmarkRedisSubscribe_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkRedisAddPresence_OneChannel(b *testing.B) {
+func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1117,7 +1117,7 @@ func BenchmarkRedisAddPresence_OneChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisAddPresence_OneChannel_Parallel(b *testing.B) {
+func BenchmarkRedisAddPresence_1Ch_Parallel(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1133,7 +1133,7 @@ func BenchmarkRedisAddPresence_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkRedisPresence_OneChannel(b *testing.B) {
+func BenchmarkRedisPresence_1Ch(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1147,7 +1147,7 @@ func BenchmarkRedisPresence_OneChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPresence_OneChannel_Parallel(b *testing.B) {
+func BenchmarkRedisPresence_1Ch_Parallel(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1164,7 +1164,7 @@ func BenchmarkRedisPresence_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkRedisPresence_ManyChannels(b *testing.B) {
+func BenchmarkRedisPresence_ManyCh(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1181,7 +1181,7 @@ func BenchmarkRedisPresence_ManyChannels(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPresence_ManyChannels_Parallel(b *testing.B) {
+func BenchmarkRedisPresence_ManyCh_Parallel(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisEngine(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1201,7 +1201,7 @@ func BenchmarkRedisPresence_ManyChannels_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkRedisHistory_OneChannel(b *testing.B) {
+func BenchmarkRedisHistory_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -1224,7 +1224,7 @@ func BenchmarkRedisHistory_OneChannel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisHistory_OneChannel_Parallel(b *testing.B) {
+func BenchmarkRedisHistory_1Ch_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -1250,7 +1250,7 @@ func BenchmarkRedisHistory_OneChannel_Parallel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisRecover_OneChannel_Parallel(b *testing.B) {
+func BenchmarkRedisRecover_1Ch_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)

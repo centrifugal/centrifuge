@@ -529,7 +529,7 @@ func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []b
 	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink)
 }
 
-func BenchmarkBroadcastMemoryEngine(b *testing.B) {
+func BenchmarkBroadcastMemory(b *testing.B) {
 	benchmarks := []struct {
 		name           string
 		getFakeConn    func(b testing.TB, n *Node, channel string, sink chan []byte)
@@ -542,7 +542,7 @@ func BenchmarkBroadcastMemoryEngine(b *testing.B) {
 	}
 
 	for _, bm := range benchmarks {
-		b.Run(fmt.Sprintf("%s_%d_subscribers", bm.name, bm.numSubscribers), func(b *testing.B) {
+		b.Run(fmt.Sprintf("%s_%d_sub", bm.name, bm.numSubscribers), func(b *testing.B) {
 			n := nodeWithMemoryEngine()
 			payload := []byte(`{"input": "test"}`)
 			sink := make(chan []byte, bm.numSubscribers)
