@@ -600,7 +600,7 @@ func (e *RedisEngine) getShard(channel string) *shard {
 	return e.shards[consistentIndex(channel, len(e.shards))]
 }
 
-// Run runs engine after node initialized.
+// Run – see Broker.Run.
 func (e *RedisEngine) Run(h BrokerEventHandler) error {
 	for _, shard := range e.shards {
 		shard.engine = e
@@ -612,67 +612,67 @@ func (e *RedisEngine) Run(h BrokerEventHandler) error {
 	return nil
 }
 
-// Publish - see engine interface description.
+// Publish - see Broker.Publish.
 func (e *RedisEngine) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, error) {
 	return e.getShard(ch).Publish(ch, data, opts)
 }
 
-// PublishJoin - see engine interface description.
+// PublishJoin - see Broker.PublishJoin.
 func (e *RedisEngine) PublishJoin(ch string, info *ClientInfo) error {
 	return e.getShard(ch).PublishJoin(ch, info)
 }
 
-// PublishLeave - see engine interface description.
+// PublishLeave - see Broker.PublishLeave.
 func (e *RedisEngine) PublishLeave(ch string, info *ClientInfo) error {
 	return e.getShard(ch).PublishLeave(ch, info)
 }
 
-// PublishControl - see engine interface description.
+// PublishControl - see Broker.PublishControl.
 func (e *RedisEngine) PublishControl(data []byte, nodeID string) error {
 	currentRound := atomic.AddUint64(&e.controlRound, 1)
 	index := currentRound % uint64(len(e.shards))
 	return e.shards[index].PublishControl(data, nodeID)
 }
 
-// Subscribe - see engine interface description.
+// Subscribe - see Broker.Subscribe.
 func (e *RedisEngine) Subscribe(ch string) error {
 	return e.getShard(ch).Subscribe(ch)
 }
 
-// Unsubscribe - see engine interface description.
+// Unsubscribe - see Broker.Unsubscribe.
 func (e *RedisEngine) Unsubscribe(ch string) error {
 	return e.getShard(ch).Unsubscribe(ch)
 }
 
-// AddPresence - see engine interface description.
+// History - see Broker.History.
+func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+	return e.getShard(ch).History(ch, filter)
+}
+
+// RemoveHistory - see Broker.RemoveHistory.
+func (e *RedisEngine) RemoveHistory(ch string) error {
+	return e.getShard(ch).RemoveHistory(ch)
+}
+
+// AddPresence - see PresenceManager.AddPresence.
 func (e *RedisEngine) AddPresence(ch string, uid string, info *ClientInfo, exp time.Duration) error {
 	expire := int(exp.Seconds())
 	return e.getShard(ch).AddPresence(ch, uid, info, expire)
 }
 
-// RemovePresence - see engine interface description.
+// RemovePresence - see PresenceManager.RemovePresence.
 func (e *RedisEngine) RemovePresence(ch string, uid string) error {
 	return e.getShard(ch).RemovePresence(ch, uid)
 }
 
-// Presence - see engine interface description.
+// Presence - see PresenceManager.Presence.
 func (e *RedisEngine) Presence(ch string) (map[string]*ClientInfo, error) {
 	return e.getShard(ch).Presence(ch)
 }
 
-// PresenceStats - see engine interface description.
+// PresenceStats - see PresenceManager.PresenceStats.
 func (e *RedisEngine) PresenceStats(ch string) (PresenceStats, error) {
 	return e.getShard(ch).PresenceStats(ch)
-}
-
-// History - see engine interface description.
-func (e *RedisEngine) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	return e.getShard(ch).History(ch, filter)
-}
-
-// RemoveHistory - see engine interface description.
-func (e *RedisEngine) RemoveHistory(ch string) error {
-	return e.getShard(ch).RemoveHistory(ch)
 }
 
 // newShard initializes new Redis shard.
@@ -1927,8 +1927,11 @@ func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
 		if err != nil {
 			return nil, err
 		}
-		parts := strings.SplitN(offsetStr, "-", 2)
-		offset, err := strconv.ParseUint(parts[0], 10, 64)
+		hyphenPos := strings.Index(offsetStr, "-") // ex. "4-0", 4 is our offset.
+		if hyphenPos <= 0 {
+			return nil, fmt.Errorf("unexpected offset format: %s", offsetStr)
+		}
+		offset, err := strconv.ParseUint(offsetStr[:hyphenPos], 10, 64)
 		if err != nil {
 			return nil, err
 		}
@@ -1939,15 +1942,19 @@ func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
 			return nil, err
 		}
 
-		pushData, valueOK := payloadElementValues[1].([]byte)
-		if !valueOK {
-			return nil, errors.New("error getting value")
+		if len(payloadElementValues) < 2 {
+			return nil, errors.New("malformed reply: number of payloadElementValues less than 2")
+		}
+
+		pushData, ok := payloadElementValues[1].([]byte)
+		if !ok {
+			return nil, errors.New("error getting []byte push data")
 		}
 
 		var pub protocol.Publication
 		err = pub.Unmarshal(pushData)
 		if err != nil {
-			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
+			return nil, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
 		pub.Offset = offset
 		pubs = append(pubs, pubFromProto(&pub))
