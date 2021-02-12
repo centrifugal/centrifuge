@@ -128,8 +128,8 @@ func main() {
 	for _, address := range shardAddresses {
 		shard, err := tntengine.NewShard(tntengine.ShardConfig{
 			Address:        address,
-			User:           "guest",
-			Password:       "",
+			User:           "admin",
+			Password:       "secret-cluster-cookie",
 			ConnectionMode: mode,
 		})
 		if err != nil {
