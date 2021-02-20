@@ -73,6 +73,14 @@ Go to http://localhost:8000 or http://localhost:8001 – nodes will be connected
 
 ## Tarantool high availability example
 
+Run Tarantool with leader-follower setup with Cartridge (using `127.0.0.1:3301` and `127.0.0.1:3302`). Then start application example:
+
+```
+go run main.go --port 8000 --ha
+```
+
+## Tarantool Raft high availability example
+
 **Requires Tarantool 2.6.1+ since example uses Raft-based replication**.
 
 Create directories for Tarantool files inside `tntserver` folder:
@@ -90,7 +98,7 @@ docker-compose up
 Then start application:
 
 ```
-go run main.go --port 8000 --ha
+go run main.go --port 8000 --ha --raft
 ```
 
 At this moment you can temporary stop/run one of Tarantool instances using:

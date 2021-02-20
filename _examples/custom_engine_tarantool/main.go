@@ -20,7 +20,8 @@ import (
 var (
 	port    = flag.Int("port", 8000, "Port to bind app to")
 	sharded = flag.Bool("sharded", false, "Start sharded example")
-	ha      = flag.Bool("ha", false, "Start ha example")
+	ha      = flag.Bool("ha", false, "Start high availability example")
+	raft    = flag.Bool("raft", false, "Using Raft-based replication")
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -117,8 +118,13 @@ func main() {
 	shardAddresses := []string{"127.0.0.1:3301"}
 	if *ha {
 		// Single Tarantool RS with automatic leader election.
-		shardAddresses = []string{"127.0.0.1:3301,127.0.0.1:3302,127.0.0.1:3303"}
-		mode = tntengine.ConnectionModeLeaderFollower
+		if *raft {
+			shardAddresses = []string{"127.0.0.1:3301,127.0.0.1:3302,127.0.0.1:3303"}
+			mode = tntengine.ConnectionModeLeaderFollowerRaft
+		} else {
+			shardAddresses = []string{"127.0.0.1:3301,127.0.0.1:3302"}
+			mode = tntengine.ConnectionModeLeaderFollower
+		}
 	} else if *sharded {
 		// Client-side sharding between two Tarantool instances.
 		shardAddresses = []string{"127.0.0.1:3301", "127.0.0.1:3302"}
@@ -128,8 +134,8 @@ func main() {
 	for _, address := range shardAddresses {
 		shard, err := tntengine.NewShard(tntengine.ShardConfig{
 			Address:        address,
-			User:           "guest",
-			Password:       "",
+			User:           "admin",
+			Password:       "secret-cluster-cookie",
 			ConnectionMode: mode,
 		})
 		if err != nil {
