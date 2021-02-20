@@ -12,8 +12,9 @@ import (
 type ConnectionMode int
 
 const (
-	ConnectionModeSingleInstance ConnectionMode = 0
-	ConnectionModeLeaderFollower ConnectionMode = 1
+	ConnectionModeSingleInstance     ConnectionMode = 0
+	ConnectionModeLeaderFollower     ConnectionMode = 1
+	ConnectionModeLeaderFollowerRaft ConnectionMode = 2
 )
 
 type MultiConnection struct {
@@ -124,7 +125,11 @@ func (c *MultiConnection) IsLeader(conn *tarantool.Connection) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	resp, err := conn.ExecContext(ctx, tarantool.Eval("return box.info.election.state == 'leader'", []interface{}{}))
+	leaderCheck := "return box.info.ro == false"
+	if c.opts.ConnectionMode == ConnectionModeLeaderFollowerRaft {
+		leaderCheck = "return box.info.election.state == 'leader'"
+	}
+	resp, err := conn.ExecContext(ctx, tarantool.Eval(leaderCheck, []interface{}{}))
 	if err != nil {
 		return false, err
 	}
