@@ -91,7 +91,26 @@ func main() {
 		})
 	})
 
-	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+	redisShardConfigs := []centrifuge.RedisShardConfig{
+		{
+			Host: "localhost",
+			Port: 6379,
+		},
+		//{
+		//	Host: "localhost",
+		//	Port: 6380,
+		//},
+	}
+	var redisShards []*centrifuge.RedisShard
+	for _, redisConf := range redisShardConfigs {
+		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
+		if err != nil {
+			log.Fatal(err)
+		}
+		redisShards = append(redisShards, redisShard)
+	}
+
+	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
 		// We are using Redis streams here for history.
 		UseStreams: true,
 
@@ -102,21 +121,20 @@ func main() {
 		HistoryMetaTTL: 7 * 24 * time.Hour,
 
 		// And configure a couple of shards to use.
-		Shards: []centrifuge.RedisShardConfig{
-			{
-				Host: "localhost",
-				Port: 6379,
-			},
-			{
-				Host: "localhost",
-				Port: 6380,
-			},
-		},
+		Shards: redisShards,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	node.SetEngine(engine)
+	node.SetBroker(broker)
+
+	presenceManager, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
+		Shards: redisShards,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	node.SetPresenceManager(presenceManager)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)

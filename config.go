@@ -22,9 +22,6 @@ type Config struct {
 	// ClientPresenceUpdateInterval sets an interval how often connected
 	// clients update presence information.
 	ClientPresenceUpdateInterval time.Duration
-	// ClientPresenceExpireInterval is an interval how long to consider
-	// presence info valid after receiving presence ping.
-	ClientPresenceExpireInterval time.Duration
 	// ClientExpiredCloseDelay is an extra time given to client to refresh
 	// its connection in the end of connection TTL. At moment only used for
 	// a client-side refresh workflow.
@@ -82,7 +79,6 @@ const (
 var DefaultConfig = Config{
 	NodeInfoMetricsAggregateInterval: 60 * time.Second,
 	ClientPresenceUpdateInterval:     25 * time.Second,
-	ClientPresenceExpireInterval:     60 * time.Second,
 	ClientExpiredCloseDelay:          25 * time.Second,
 	ClientExpiredSubCloseDelay:       25 * time.Second,
 	ClientStaleCloseDelay:            25 * time.Second,

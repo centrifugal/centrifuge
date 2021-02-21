@@ -10,13 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testMemoryEngine() *MemoryEngine {
+func testMemoryBroker() *MemoryBroker {
 	conf := DefaultConfig
 	conf.LogLevel = LogLevelDebug
 	conf.LogHandler = func(entry LogEntry) {}
 	n, _ := New(conf)
-	e, _ := NewMemoryEngine(n, MemoryEngineConfig{})
-	n.SetEngine(e)
+	e, _ := NewMemoryBroker(n, MemoryBrokerConfig{})
+	n.SetBroker(e)
 	err := n.Run()
 	if err != nil {
 		panic(err)
@@ -32,11 +32,10 @@ func testPublicationData() []byte {
 	return []byte("{}")
 }
 
-func TestMemoryEnginePublishHistory(t *testing.T) {
-	e := testMemoryEngine()
+func TestMemoryBrokerPublishHistory(t *testing.T) {
+	e := testMemoryBroker()
 
 	require.NotEqual(t, nil, e.historyHub)
-	require.NotEqual(t, nil, e.presenceHub)
 
 	_, err := e.Publish("channel", testPublicationData(), PublishOptions{})
 	require.NoError(t, err)
@@ -46,12 +45,6 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 
 	err = e.PublishLeave("channel", &ClientInfo{})
 	require.NoError(t, err)
-
-	require.NoError(t, e.AddPresence("channel", "uid", &ClientInfo{}, time.Second))
-	p, err := e.Presence("channel")
-	require.NoError(t, err)
-	require.Equal(t, 1, len(p))
-	require.NoError(t, e.RemovePresence("channel", "uid"))
 
 	pub := newTestPublication()
 
@@ -96,61 +89,9 @@ func TestMemoryEnginePublishHistory(t *testing.T) {
 }
 
 func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	require.NoError(t, e.Subscribe("channel"))
 	require.NoError(t, e.Unsubscribe("channel"))
-}
-
-func TestMemoryPresenceHub(t *testing.T) {
-	h := newPresenceHub()
-	require.Equal(t, 0, len(h.presence))
-
-	testCh1 := "channel1"
-	testCh2 := "channel2"
-	uid := "uid"
-
-	info := &ClientInfo{
-		UserID:   "user",
-		ClientID: "client",
-	}
-
-	_ = h.add(testCh1, uid, info)
-	require.Equal(t, 1, len(h.presence))
-
-	_ = h.add(testCh2, uid, info)
-	require.Equal(t, 2, len(h.presence))
-
-	stats, err := h.getStats(testCh1)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.NumClients)
-	require.Equal(t, 1, stats.NumUsers)
-
-	// stats for unknown channel must not fail.
-	stats, err = h.getStats("unknown_channel")
-	require.NoError(t, err)
-	require.Equal(t, 0, stats.NumClients)
-	require.Equal(t, 0, stats.NumUsers)
-
-	// remove non existing client ID must not fail.
-	err = h.remove(testCh1, "unknown_client_id")
-	require.NoError(t, err)
-
-	// valid remove.
-	err = h.remove(testCh1, uid)
-	require.NoError(t, err)
-
-	// remove non existing channel must not fail.
-	err = h.remove(testCh1, uid)
-	require.NoError(t, err)
-
-	require.Equal(t, 1, len(h.presence))
-	p, err := h.get(testCh1)
-	require.NoError(t, err)
-	require.Equal(t, 0, len(p))
-
-	p, err = h.get(testCh2)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(p))
 }
 
 func TestMemoryHistoryHub(t *testing.T) {
@@ -257,8 +198,8 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	h.RUnlock()
 }
 
-func TestMemoryEngineRecover(t *testing.T) {
-	e := testMemoryEngine()
+func TestMemoryBrokerRecover(t *testing.T) {
+	e := testMemoryBroker()
 
 	for i := 0; i < 5; i++ {
 		_, err := e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
@@ -310,7 +251,7 @@ func TestMemoryEngineRecover(t *testing.T) {
 }
 
 func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	rawData := protocol.Raw(`{"bench": true}`)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -322,7 +263,7 @@ func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
 }
 
 func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	rawData := protocol.Raw(`{"bench": true}`)
 	b.SetParallelism(128)
 	b.ResetTimer()
@@ -337,7 +278,7 @@ func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
 }
 
 func BenchmarkMemoryPublish_History_OneChannel(b *testing.B) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	rawData := protocol.Raw(`{"bench": true}`)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -354,7 +295,7 @@ func BenchmarkMemoryPublish_History_OneChannel(b *testing.B) {
 }
 
 func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	rawData := protocol.Raw(`{"bench": true}`)
 	chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 60 * time.Second}
 	b.SetParallelism(128)
@@ -373,58 +314,8 @@ func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryAddPresence_OneChannel(b *testing.B) {
-	e := testMemoryEngine()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkMemoryAddPresence_OneChannel_Parallel(b *testing.B) {
-	e := testMemoryEngine()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-func BenchmarkMemoryPresence_OneChannel(b *testing.B) {
-	e := testMemoryEngine()
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := e.Presence("channel")
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkMemoryPresence_OneChannel_Parallel(b *testing.B) {
-	e := testMemoryEngine()
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := e.Presence("channel")
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
 func BenchmarkMemoryHistory_OneChannel(b *testing.B) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	rawData := protocol.Raw("{}")
 	for i := 0; i < 4; i++ {
 		_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
@@ -442,7 +333,7 @@ func BenchmarkMemoryHistory_OneChannel(b *testing.B) {
 }
 
 func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	rawData := protocol.Raw("{}")
 	for i := 0; i < 4; i++ {
 		_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
@@ -462,7 +353,7 @@ func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
 }
 
 func BenchmarkMemoryRecover_OneChannel_Parallel(b *testing.B) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	rawData := protocol.Raw("{}")
 	numMessages := 1000
 	numMissing := 5
@@ -635,14 +526,14 @@ func (it *historyIterationTest) testHistoryIteration(t testing.TB, node *Node, s
 }
 
 func TestMemoryEngineHistoryIteration(t *testing.T) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(t, e.node)
 	it.testHistoryIteration(t, e.node, startPosition)
 }
 
 func BenchmarkMemoryEngineHistoryIteration(b *testing.B) {
-	e := testMemoryEngine()
+	e := testMemoryBroker()
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(b, e.node)
 	b.ResetTimer()

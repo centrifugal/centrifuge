@@ -18,10 +18,12 @@ import (
 )
 
 var (
-	port    = flag.Int("port", 8000, "Port to bind app to")
-	sharded = flag.Bool("sharded", false, "Start sharded example")
-	ha      = flag.Bool("ha", false, "Start high availability example")
-	raft    = flag.Bool("raft", false, "Using Raft-based replication")
+	port     = flag.Int("port", 8000, "Port to bind app to")
+	sharded  = flag.Bool("sharded", false, "Start sharded example")
+	ha       = flag.Bool("ha", false, "Start high availability example")
+	raft     = flag.Bool("raft", false, "Using Raft-based replication")
+	user     = flag.String("user", "guest", "Connection user")
+	password = flag.String("password", "", "Connection password")
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -145,8 +147,8 @@ func main() {
 	for _, addresses := range shardAddresses {
 		shard, err := tntengine.NewShard(tntengine.ShardConfig{
 			Addresses:      addresses,
-			User:           "admin",
-			Password:       "secret-cluster-cookie",
+			User:           *user,
+			Password:       *password,
 			ConnectionMode: mode,
 		})
 		if err != nil {
@@ -162,6 +164,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	node.SetBroker(broker)
 
 	presenceManager, err := tntengine.NewPresenceManager(node, tntengine.PresenceManagerConfig{
 		Shards: shards,
@@ -169,8 +172,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	node.SetBroker(broker)
 	node.SetPresenceManager(presenceManager)
 
 	if err := node.Run(); err != nil {

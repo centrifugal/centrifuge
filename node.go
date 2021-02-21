@@ -22,7 +22,9 @@ import (
 
 // Node is a heart of Centrifuge library – it keeps and manages client connections,
 // maintains information about other centrifuge nodes, keeps references to common
-// things like Engine (Broker and PresenceManager), Hub etc.
+// things (like Broker and PresenceManager, Hub) etc.
+// By default Node uses in-memory implementations of Broker and PresenceManager
+// (see Node.SetBroker and Node.SetPresenceManager to set other implementations to use).
 type Node struct {
 	mu sync.RWMutex
 	// unique id for this node.
@@ -59,7 +61,7 @@ type Node struct {
 	metricsExporter *eagle.Eagle
 	metricsSnapshot *eagle.Metrics
 
-	// subDissolver used to reliably clear unused subscriptions in Engine.
+	// subDissolver used to reliably clear unused subscriptions in Broker.
 	subDissolver *dissolve.Dissolver
 
 	// nowTimeGetter provides access to current time.
@@ -114,11 +116,17 @@ func New(c Config) (*Node, error) {
 		n.logger = newLogger(c.LogLevel, c.LogHandler)
 	}
 
-	e, err := NewMemoryEngine(n, MemoryEngineConfig{})
+	b, err := NewMemoryBroker(n, MemoryBrokerConfig{})
 	if err != nil {
 		return nil, err
 	}
-	n.SetEngine(e)
+	n.SetBroker(b)
+
+	m, err := NewMemoryPresenceManager(n, MemoryPresenceManagerConfig{})
+	if err != nil {
+		return nil, err
+	}
+	n.SetPresenceManager(m)
 
 	if err := initMetricsRegistry(prometheus.DefaultRegisterer, c.MetricsNamespace); err != nil {
 		switch err.(type) {
@@ -152,12 +160,6 @@ func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
 }
 
-// SetEngine binds Engine to node.
-func (n *Node) SetEngine(e Engine) {
-	n.broker = e.(Broker)
-	n.presenceManager = e.(PresenceManager)
-}
-
 // SetBroker allows to set Broker implementation to use.
 func (n *Node) SetBroker(b Broker) {
 	n.broker = b
@@ -174,7 +176,7 @@ func (n *Node) Hub() *Hub {
 }
 
 // Run performs node startup actions. At moment must be called once on start
-// after Engine set to Node.
+// after Broker set to Node.
 func (n *Node) Run() error {
 	eventHandler := &brokerEventHandler{n}
 	if err := n.broker.Run(eventHandler); err != nil {
@@ -596,7 +598,7 @@ func (n *Node) handleControl(data []byte) error {
 }
 
 // handlePublication handles messages published into channel and
-// coming from engine. The goal of method is to deliver this message
+// coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
 func (n *Node) handlePublication(ch string, pub *protocol.Publication, sp StreamPosition) error {
 	incMessagesReceived("publication")
@@ -792,7 +794,7 @@ func (n *Node) removeClient(c *Client) error {
 }
 
 // addSubscription registers subscription of connection on channel in both
-// hub and engine.
+// Hub and Broker.
 func (n *Node) addSubscription(ch string, c *Client) error {
 	incActionCount("add_subscription")
 	mu := n.subLock(ch)
@@ -813,7 +815,7 @@ func (n *Node) addSubscription(ch string, c *Client) error {
 }
 
 // removeSubscription removes subscription of connection on channel
-// from hub and engine.
+// from Hub and Broker.
 func (n *Node) removeSubscription(ch string, c *Client) error {
 	incActionCount("remove_subscription")
 	mu := n.subLock(ch)
@@ -895,19 +897,16 @@ func (n *Node) Disconnect(user string, opts ...DisconnectOption) error {
 	return n.pubDisconnect(user, customDisconnect, disconnectOpts.ClientWhitelist)
 }
 
-// addPresence proxies presence adding to engine.
+// addPresence proxies presence adding to PresenceManager.
 func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
 	if n.presenceManager == nil {
 		return nil
 	}
-	n.mu.RLock()
-	expire := n.config.ClientPresenceExpireInterval
-	n.mu.RUnlock()
 	incActionCount("add_presence")
-	return n.presenceManager.AddPresence(ch, uid, info, expire)
+	return n.presenceManager.AddPresence(ch, uid, info)
 }
 
-// removePresence proxies presence removing to engine.
+// removePresence proxies presence removing to PresenceManager.
 func (n *Node) removePresence(ch string, uid string) error {
 	if n.presenceManager == nil {
 		return nil
@@ -995,7 +994,7 @@ type PresenceStatsResult struct {
 	PresenceStats
 }
 
-// PresenceStats returns presence stats from engine.
+// PresenceStats returns presence stats from PresenceManager.
 func (n *Node) PresenceStats(ch string) (PresenceStatsResult, error) {
 	if n.presenceManager == nil {
 		return PresenceStatsResult{}, ErrorNotAvailable
@@ -1186,7 +1185,7 @@ type brokerEventHandler struct {
 	node *Node
 }
 
-// HandlePublication coming from Engine.
+// HandlePublication coming from Broker.
 func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
 	if pub == nil {
 		panic("nil Publication received, this should never happen")
@@ -1194,7 +1193,7 @@ func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp S
 	return h.node.handlePublication(ch, pubToProto(pub), sp)
 }
 
-// HandleJoin coming from Engine.
+// HandleJoin coming from Broker.
 func (h *brokerEventHandler) HandleJoin(ch string, info *ClientInfo) error {
 	if info == nil {
 		panic("nil join info received, this should never happen")
@@ -1202,7 +1201,7 @@ func (h *brokerEventHandler) HandleJoin(ch string, info *ClientInfo) error {
 	return h.node.handleJoin(ch, &protocol.Join{Info: *infoToProto(info)})
 }
 
-// HandleLeave coming from Engine.
+// HandleLeave coming from Broker.
 func (h *brokerEventHandler) HandleLeave(ch string, info *ClientInfo) error {
 	if info == nil {
 		panic("nil leave info received, this should never happen")
@@ -1210,7 +1209,7 @@ func (h *brokerEventHandler) HandleLeave(ch string, info *ClientInfo) error {
 	return h.node.handleLeave(ch, &protocol.Leave{Info: *infoToProto(info)})
 }
 
-// HandleControl coming from Engine.
+// HandleControl coming from Broker.
 func (h *brokerEventHandler) HandleControl(data []byte) error {
 	return h.node.handleControl(data)
 }

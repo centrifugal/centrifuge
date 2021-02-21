@@ -9,20 +9,18 @@ import (
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
-// MemoryEngine is builtin default Engine which allows to run Centrifuge-based
-// server without any external broker or storage. All data managed inside process
-// memory.
+// MemoryBroker is builtin default Broker which allows to run Centrifuge-based
+// server without any external broker. All data managed inside process memory.
 //
-// With this engine you can only run single Centrifuge node. If you need to scale
-// you should consider using another engine implementation instead – for example
-// Redis engine.
+// With this Broker you can only run single Centrifuge node. If you need to scale
+// you should consider using another Broker implementation instead – for example
+// RedisBroker.
 //
 // Running single node can be sufficient for many use cases especially when you
 // need maximum performance and not too many online clients. Consider configuring
 // your load balancer to have one backup Centrifuge node for HA in this case.
-type MemoryEngine struct {
+type MemoryBroker struct {
 	node         *Node
-	presenceHub  *presenceHub
 	historyHub   *historyHub
 	eventHandler BrokerEventHandler
 
@@ -33,10 +31,10 @@ type MemoryEngine struct {
 	pubLocks map[int]*sync.Mutex
 }
 
-var _ Engine = (*MemoryEngine)(nil)
+var _ Broker = (*MemoryBroker)(nil)
 
-// MemoryEngineConfig is a memory engine config.
-type MemoryEngineConfig struct {
+// MemoryBrokerConfig is a memory engine config.
+type MemoryBrokerConfig struct {
 	// HistoryMetaTTL sets a time of inactive stream meta information expiration.
 	// This information contains an epoch and offset of each stream. Having this
 	// meta information helps in message recovery process.
@@ -51,36 +49,35 @@ type MemoryEngineConfig struct {
 
 const numPubLocks = 4096
 
-// NewMemoryEngine initializes Memory Engine.
-func NewMemoryEngine(n *Node, c MemoryEngineConfig) (*MemoryEngine, error) {
+// NewMemoryBroker initializes Memory Engine.
+func NewMemoryBroker(n *Node, c MemoryBrokerConfig) (*MemoryBroker, error) {
 	pubLocks := make(map[int]*sync.Mutex, numPubLocks)
 	for i := 0; i < numPubLocks; i++ {
 		pubLocks[i] = &sync.Mutex{}
 	}
-	e := &MemoryEngine{
-		node:        n,
-		presenceHub: newPresenceHub(),
-		historyHub:  newHistoryHub(c.HistoryMetaTTL),
-		pubLocks:    pubLocks,
+	b := &MemoryBroker{
+		node:       n,
+		historyHub: newHistoryHub(c.HistoryMetaTTL),
+		pubLocks:   pubLocks,
 	}
-	return e, nil
+	return b, nil
 }
 
 // Run runs memory engine.
-func (e *MemoryEngine) Run(h BrokerEventHandler) error {
-	e.eventHandler = h
-	e.historyHub.runCleanups()
+func (b *MemoryBroker) Run(h BrokerEventHandler) error {
+	b.eventHandler = h
+	b.historyHub.runCleanups()
 	return nil
 }
 
-func (e *MemoryEngine) pubLock(ch string) *sync.Mutex {
-	return e.pubLocks[index(ch, numPubLocks)]
+func (b *MemoryBroker) pubLock(ch string) *sync.Mutex {
+	return b.pubLocks[index(ch, numPubLocks)]
 }
 
 // Publish adds message into history hub and calls node method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
-func (e *MemoryEngine) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, error) {
-	mu := e.pubLock(ch)
+func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, error) {
+	mu := b.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -89,158 +86,49 @@ func (e *MemoryEngine) Publish(ch string, data []byte, opts PublishOptions) (Str
 		Info: opts.ClientInfo,
 	}
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {
-		streamTop, err := e.historyHub.add(ch, pub, opts)
+		streamTop, err := b.historyHub.add(ch, pub, opts)
 		if err != nil {
 			return StreamPosition{}, err
 		}
 		pub.Offset = streamTop.Offset
-		return streamTop, e.eventHandler.HandlePublication(ch, pub, streamTop)
+		return streamTop, b.eventHandler.HandlePublication(ch, pub, streamTop)
 	}
-	return StreamPosition{}, e.eventHandler.HandlePublication(ch, pub, StreamPosition{})
+	return StreamPosition{}, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
 }
 
 // PublishJoin - see engine interface description.
-func (e *MemoryEngine) PublishJoin(ch string, info *ClientInfo) error {
-	return e.eventHandler.HandleJoin(ch, info)
+func (b *MemoryBroker) PublishJoin(ch string, info *ClientInfo) error {
+	return b.eventHandler.HandleJoin(ch, info)
 }
 
 // PublishLeave - see engine interface description.
-func (e *MemoryEngine) PublishLeave(ch string, info *ClientInfo) error {
-	return e.eventHandler.HandleLeave(ch, info)
+func (b *MemoryBroker) PublishLeave(ch string, info *ClientInfo) error {
+	return b.eventHandler.HandleLeave(ch, info)
 }
 
 // PublishControl - see Engine interface description.
-func (e *MemoryEngine) PublishControl(data []byte, _ string) error {
-	return e.eventHandler.HandleControl(data)
+func (b *MemoryBroker) PublishControl(data []byte, _ string) error {
+	return b.eventHandler.HandleControl(data)
 }
 
 // Subscribe is noop here.
-func (e *MemoryEngine) Subscribe(_ string) error {
+func (b *MemoryBroker) Subscribe(_ string) error {
 	return nil
 }
 
 // Unsubscribe node from channel.
-func (e *MemoryEngine) Unsubscribe(_ string) error {
+func (b *MemoryBroker) Unsubscribe(_ string) error {
 	return nil
-}
-
-// AddPresence - see engine interface description.
-func (e *MemoryEngine) AddPresence(ch string, uid string, info *ClientInfo, _ time.Duration) error {
-	return e.presenceHub.add(ch, uid, info)
-}
-
-// RemovePresence - see engine interface description.
-func (e *MemoryEngine) RemovePresence(ch string, uid string) error {
-	return e.presenceHub.remove(ch, uid)
-}
-
-// Presence - see engine interface description.
-func (e *MemoryEngine) Presence(ch string) (map[string]*ClientInfo, error) {
-	return e.presenceHub.get(ch)
-}
-
-// PresenceStats - see engine interface description.
-func (e *MemoryEngine) PresenceStats(ch string) (PresenceStats, error) {
-	return e.presenceHub.getStats(ch)
 }
 
 // History - see engine interface description.
-func (e *MemoryEngine) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	return e.historyHub.get(ch, filter)
+func (b *MemoryBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+	return b.historyHub.get(ch, filter)
 }
 
 // RemoveHistory - see engine interface description.
-func (e *MemoryEngine) RemoveHistory(ch string) error {
-	return e.historyHub.remove(ch)
-}
-
-type presenceHub struct {
-	sync.RWMutex
-	presence map[string]map[string]*ClientInfo
-}
-
-func newPresenceHub() *presenceHub {
-	return &presenceHub{
-		presence: make(map[string]map[string]*ClientInfo),
-	}
-}
-
-func (h *presenceHub) add(ch string, uid string, info *ClientInfo) error {
-	h.Lock()
-	defer h.Unlock()
-
-	_, ok := h.presence[ch]
-	if !ok {
-		h.presence[ch] = make(map[string]*ClientInfo)
-	}
-	h.presence[ch][uid] = info
-	return nil
-}
-
-func (h *presenceHub) remove(ch string, uid string) error {
-	h.Lock()
-	defer h.Unlock()
-
-	if _, ok := h.presence[ch]; !ok {
-		return nil
-	}
-	if _, ok := h.presence[ch][uid]; !ok {
-		return nil
-	}
-
-	delete(h.presence[ch], uid)
-
-	// clean up map if needed
-	if len(h.presence[ch]) == 0 {
-		delete(h.presence, ch)
-	}
-
-	return nil
-}
-
-func (h *presenceHub) get(ch string) (map[string]*ClientInfo, error) {
-	h.RLock()
-	defer h.RUnlock()
-
-	presence, ok := h.presence[ch]
-	if !ok {
-		// return empty map
-		return nil, nil
-	}
-
-	data := make(map[string]*ClientInfo, len(presence))
-	for k, v := range presence {
-		data[k] = v
-	}
-	return data, nil
-}
-
-func (h *presenceHub) getStats(ch string) (PresenceStats, error) {
-	h.RLock()
-	defer h.RUnlock()
-
-	presence, ok := h.presence[ch]
-	if !ok {
-		// return empty map
-		return PresenceStats{}, nil
-	}
-
-	numClients := len(presence)
-	numUsers := 0
-	uniqueUsers := map[string]struct{}{}
-
-	for _, info := range presence {
-		userID := info.UserID
-		if _, ok := uniqueUsers[userID]; !ok {
-			uniqueUsers[userID] = struct{}{}
-			numUsers++
-		}
-	}
-
-	return PresenceStats{
-		NumClients: numClients,
-		NumUsers:   numUsers,
-	}, nil
+func (b *MemoryBroker) RemoveHistory(ch string) error {
+	return b.historyHub.remove(ch)
 }
 
 type historyHub struct {

@@ -151,15 +151,8 @@ type PresenceManager interface {
 	// for connection with specified identifier. Engine should have a
 	// property to expire client information that was not updated
 	// (touched) after some configured time interval.
-	AddPresence(ch string, clientID string, info *ClientInfo, expire time.Duration) error
+	AddPresence(ch string, clientID string, info *ClientInfo) error
 	// RemovePresence removes presence information for connection
 	// with specified identifier.
 	RemovePresence(ch string, clientID string) error
-}
-
-// Engine is responsible for PUB/SUB mechanics, channel history and
-// presence information.
-type Engine interface {
-	Broker
-	PresenceManager
 }

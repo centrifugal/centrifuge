@@ -43,7 +43,7 @@ func main() {
 	node, _ := centrifuge.New(cfg)
 
 	if os.Getenv("CENTRIFUGE_ENGINE") == "redis" {
-		engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+		engine, err := centrifuge.NewRedisBroker(node, centrifuge.RedisEngineConfig{
 			HistoryMetaTTL: 7 * 24 * time.Hour,
 			Shards: []centrifuge.RedisShardConfig{
 				{

@@ -95,13 +95,15 @@ func main() {
 	node.SetBroker(broker)
 
 	// Let Redis engine do the presence stuff.
-	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
-		Shards: []centrifuge.RedisShardConfig{
-			{
-				Host: "localhost",
-				Port: 6379,
-			},
-		},
+	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
+		Host: "localhost",
+		Port: 6379,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	engine, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
+		Shards: []*centrifuge.RedisShard{redisShard},
 	})
 	if err != nil {
 		log.Fatal(err)

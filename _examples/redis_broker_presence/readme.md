@@ -1,4 +1,4 @@
-In this example we show how to connect several Centrifuge server nodes with Redis engine.
+In this example we show how to connect several Centrifuge server nodes with Redis.
 
 Start 2 Redis servers locally:
 

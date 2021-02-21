@@ -116,7 +116,7 @@ func main() {
 	})
 
 	// Using Redis engine here to scale nodes.
-	engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+	engine, err := centrifuge.NewRedisBroker(node, centrifuge.RedisEngineConfig{
 		Shards: []centrifuge.RedisShardConfig{
 			{
 				Host: "localhost",
