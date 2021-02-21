@@ -115,25 +115,36 @@ func main() {
 
 	// Single Tarantool.
 	mode := tntengine.ConnectionModeSingleInstance
-	shardAddresses := []string{"127.0.0.1:3301"}
+	shardAddresses := [][]string{
+		{"127.0.0.1:3301"},
+	}
+
 	if *ha {
-		// Single Tarantool RS with automatic leader election.
 		if *raft {
-			shardAddresses = []string{"127.0.0.1:3301,127.0.0.1:3302,127.0.0.1:3303"}
+			// Single Tarantool RS with automatic leader election with Raft (Tarantool >= 2.7.0).
+			shardAddresses = [][]string{
+				{"127.0.0.1:3301", "127.0.0.1:3302", "127.0.0.1:3303"},
+			}
 			mode = tntengine.ConnectionModeLeaderFollowerRaft
 		} else {
-			shardAddresses = []string{"127.0.0.1:3301,127.0.0.1:3302"}
+			// Single Tarantool RS with automatic leader election (ex. in Cartridge).
+			shardAddresses = [][]string{
+				{"127.0.0.1:3301", "127.0.0.1:3302"},
+			}
 			mode = tntengine.ConnectionModeLeaderFollower
 		}
 	} else if *sharded {
-		// Client-side sharding between two Tarantool instances.
-		shardAddresses = []string{"127.0.0.1:3301", "127.0.0.1:3302"}
+		// Client-side sharding between two Tarantool instances (without HA).
+		shardAddresses = [][]string{
+			{"127.0.0.1:3301"},
+			{"127.0.0.1:3302"},
+		}
 	}
 
 	var shards []*tntengine.Shard
-	for _, address := range shardAddresses {
+	for _, addresses := range shardAddresses {
 		shard, err := tntengine.NewShard(tntengine.ShardConfig{
-			Address:        address,
+			Addresses:      addresses,
 			User:           "admin",
 			Password:       "secret-cluster-cookie",
 			ConnectionMode: mode,

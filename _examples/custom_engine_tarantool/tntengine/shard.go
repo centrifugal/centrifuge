@@ -3,7 +3,6 @@ package tntengine
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/FZambia/tarantool"
@@ -26,7 +25,7 @@ type Shard struct {
 // ShardConfig allows providing options to connect to Tarantool.
 type ShardConfig struct {
 	// Addresses of Tarantool instances.
-	Address string
+	Addresses []string
 	// User for auth.
 	User string
 	// Password for auth.
@@ -41,7 +40,7 @@ func NewShard(c ShardConfig) (*Shard, error) {
 		subCh:  make(chan subRequest),
 	}
 
-	mc, err := Connect(strings.Split(c.Address, ","), tarantool.Opts{
+	mc, err := Connect(c.Addresses, tarantool.Opts{
 		ConnectTimeout: defaultConnectTimeout,
 		RequestTimeout: defaultRequestTimeout,
 		ReadTimeout:    defaultReadTimeout,
@@ -54,7 +53,7 @@ func NewShard(c ShardConfig) (*Shard, error) {
 		ConnectionMode: c.ConnectionMode,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("error creating req connection to %s: %w", c.Address, err)
+		return nil, fmt.Errorf("error creating req connection to %#v: %w", c.Addresses, err)
 	}
 	shard.mc = mc
 	return shard, nil
