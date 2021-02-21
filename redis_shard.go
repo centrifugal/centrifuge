@@ -7,8 +7,11 @@ import (
 	"hash/fnv"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/FZambia/sentinel"
 	"github.com/gomodule/redigo/redis"
@@ -39,23 +42,41 @@ type RedisShard struct {
 	pool       redisConnPool
 	subCh      chan subRequest
 	pubCh      chan pubRequest
-	dataCh     chan dataRequest
+	dataCh     chan *dataRequest
 	useCluster bool
+	scriptsMu  sync.RWMutex
+	scripts    []*redis.Script
+	scriptsCh  chan struct{}
 }
 
 // NewRedisShard initializes new Redis shard.
 func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 	shard := &RedisShard{
-		config: conf,
+		config:     conf,
+		scriptsCh:  make(chan struct{}, 1),
+		useCluster: len(conf.ClusterAddrs) > 0,
 	}
 	pool, err := newPool(shard, n, conf)
 	if err != nil {
 		return nil, err
 	}
+	shard.scripts = []*redis.Script{}
 	shard.pool = pool
 	shard.subCh = make(chan subRequest)
 	shard.pubCh = make(chan pubRequest)
-	shard.dataCh = make(chan dataRequest)
+	shard.dataCh = make(chan *dataRequest)
+	if !shard.useCluster {
+		// Only need data pipeline in non-cluster scenario.
+		go func() {
+			for {
+				err := shard.runDataPipeline()
+				if err != nil {
+					n.Log(NewLogEntry(LogLevelError, "data pipeline error", map[string]interface{}{"error": err.Error()}))
+					time.Sleep(300 * time.Millisecond)
+				}
+			}
+		}()
+	}
 	return shard, nil
 }
 
@@ -105,30 +126,33 @@ func (pr *pubRequest) done(err error) {
 	pr.err <- err
 }
 
-type dataOp int
-
-const (
-	dataOpAddPresence dataOp = iota
-	dataOpRemovePresence
-	dataOpPresence
-	dataOpHistory
-	dataOpAddHistory
-	dataOpHistoryRemove
-)
-
 type dataResponse struct {
 	reply interface{}
 	err   error
 }
 
 type dataRequest struct {
-	op   dataOp
-	args []interface{}
-	resp chan *dataResponse
+	command    string
+	script     *redis.Script
+	args       []interface{}
+	resp       chan *dataResponse
+	clusterKey string
 }
 
-func newDataRequest(op dataOp, args []interface{}) dataRequest {
-	return dataRequest{op: op, args: args, resp: make(chan *dataResponse, 1)}
+func (s *RedisShard) newDataRequest(command string, script *redis.Script, clusterKey channelID, args []interface{}) *dataRequest {
+	dr := &dataRequest{command: command, script: script, args: args, resp: make(chan *dataResponse, 1)}
+	if s.useCluster {
+		dr.setClusterKey(string(clusterKey))
+	}
+	return dr
+}
+
+func (s *RedisShard) string() string {
+	return fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
+}
+
+func (dr *dataRequest) setClusterKey(key string) {
+	dr.clusterKey = key
 }
 
 func (dr *dataRequest) done(reply interface{}, err error) {
@@ -144,6 +168,154 @@ func (dr *dataRequest) result() *dataResponse {
 		return &dataResponse{}
 	}
 	return <-dr.resp
+}
+
+func (s *RedisShard) registerScripts(scripts ...*redis.Script) {
+	s.scriptsMu.Lock()
+	defer s.scriptsMu.Unlock()
+	s.scripts = append(s.scripts, scripts...)
+	select {
+	case s.scriptsCh <- struct{}{}:
+		// Trigger script loading.
+	default:
+	}
+}
+
+func (s *RedisShard) getDataResponse(r *dataRequest) *dataResponse {
+	if s.useCluster {
+		reply, err := s.processClusterDataRequest(r)
+		return &dataResponse{
+			reply: reply,
+			err:   err,
+		}
+	}
+	select {
+	case s.dataCh <- r:
+	default:
+		timer := timers.AcquireTimer(s.readTimeout())
+		defer timers.ReleaseTimer(timer)
+		select {
+		case s.dataCh <- r:
+		case <-timer.C:
+			return &dataResponse{nil, errRedisOpTimeout}
+		}
+	}
+	return r.result()
+}
+
+func (s *RedisShard) processClusterDataRequest(dr *dataRequest) (interface{}, error) {
+	conn := s.pool.Get()
+	defer func() { _ = conn.Close() }()
+
+	var err error
+
+	if dr.clusterKey != "" {
+		if c, ok := conn.(*redisc.Conn); ok {
+			err := c.Bind(dr.clusterKey)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Handle redirects automatically.
+	conn, err = redisc.RetryConn(conn, 3, 50*time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+
+	if dr.script != nil {
+		return dr.script.Do(conn, dr.args...)
+	}
+	return conn.Do(dr.command, dr.args...)
+}
+
+func (s *RedisShard) runDataPipeline() error {
+	conn := s.pool.Get()
+	s.scriptsMu.RLock()
+	scripts := make([]*redis.Script, len(s.scripts))
+	copy(scripts, s.scripts)
+	s.scriptsMu.RUnlock()
+	for _, script := range scripts {
+		err := script.Load(conn)
+		if err != nil {
+			// Can not proceed if script has not been loaded.
+			_ = conn.Close()
+			return fmt.Errorf("error loading Lua script: %w", err)
+		}
+	}
+	_ = conn.Close()
+
+	var drs []*dataRequest
+
+	for {
+		select {
+		case <-s.scriptsCh:
+			s.scriptsMu.RLock()
+			if len(s.scripts) == len(scripts) {
+				s.scriptsMu.RUnlock()
+				continue
+			}
+			s.scriptsMu.RUnlock()
+			return nil
+		case dr := <-s.dataCh:
+			drs = append(drs, dr)
+		loop:
+			for len(drs) < redisDataBatchLimit {
+				select {
+				case req := <-s.dataCh:
+					drs = append(drs, req)
+				default:
+					break loop
+				}
+			}
+
+			conn := s.pool.Get()
+
+			for i := range drs {
+				if drs[i].script != nil {
+					_ = drs[i].script.SendHash(conn, drs[i].args...)
+				} else {
+					_ = conn.Send(drs[i].command, drs[i].args...)
+				}
+			}
+
+			err := conn.Flush()
+			if err != nil {
+				for i := range drs {
+					drs[i].done(nil, err)
+				}
+				_ = conn.Close()
+				return fmt.Errorf("error flushing data pipeline: %w", err)
+			}
+			var noScriptError bool
+			for i := range drs {
+				reply, err := conn.Receive()
+				if err != nil {
+					// Check for NOSCRIPT error. In normal circumstances this should never happen.
+					// The only possible situation is when Redis scripts were flushed. In this case
+					// we will return from this func and load publish script from scratch.
+					// Redigo does the same check but for single EVALSHA command: see
+					// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
+					if e, ok := err.(redis.Error); ok && strings.HasPrefix(string(e), "NOSCRIPT ") {
+						noScriptError = true
+					}
+				}
+				drs[i].done(reply, err)
+			}
+			if conn.Err() != nil {
+				_ = conn.Close()
+				return nil
+			}
+			if noScriptError {
+				// Start this func from the beginning and LOAD missing script.
+				_ = conn.Close()
+				return nil
+			}
+			_ = conn.Close()
+			drs = nil
+		}
+	}
 }
 
 // subRequest is an internal request to subscribe or unsubscribe from one or more channels.

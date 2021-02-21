@@ -353,9 +353,9 @@ func TestClientSubscribe(t *testing.T) {
 }
 
 func TestClientSubscribeEngineErrorOnSubscribe(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnSubscribe = true
-	node := nodeWithEngine(engine)
+	broker := NewTestBroker()
+	broker.errorOnSubscribe = true
+	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	done := make(chan struct{})
@@ -387,9 +387,9 @@ func TestClientSubscribeEngineErrorOnSubscribe(t *testing.T) {
 }
 
 func TestClientSubscribeEngineErrorOnStreamTop(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnHistory = true
-	node := nodeWithEngine(engine)
+	broker := NewTestBroker()
+	broker.errorOnHistory = true
+	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	done := make(chan struct{})
@@ -423,9 +423,9 @@ func TestClientSubscribeEngineErrorOnStreamTop(t *testing.T) {
 }
 
 func TestClientSubscribePositionedError(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnHistory = true
-	node := nodeWithEngine(engine)
+	broker := NewTestBroker()
+	broker.errorOnHistory = true
+	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	done := make(chan struct{})
@@ -459,8 +459,7 @@ func TestClientSubscribePositionedError(t *testing.T) {
 }
 
 func TestClientSubscribePositioned(t *testing.T) {
-	engine := NewTestEngine()
-	node := nodeWithEngine(engine)
+	node := nodeWithTestBroker()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -488,9 +487,9 @@ func TestClientSubscribePositioned(t *testing.T) {
 }
 
 func TestClientSubscribeEngineErrorOnRecoverHistory(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnHistory = true
-	node := nodeWithEngine(engine)
+	broker := NewTestBroker()
+	broker.errorOnHistory = true
+	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	done := make(chan struct{})
@@ -523,8 +522,8 @@ func TestClientSubscribeEngineErrorOnRecoverHistory(t *testing.T) {
 }
 
 func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
-	engine := NewTestEngine()
-	node := nodeWithEngine(engine)
+	broker := NewTestBroker()
+	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	done := make(chan struct{})
@@ -1175,7 +1174,7 @@ func TestClientPublishHandler(t *testing.T) {
 	client := newTestClient(t, node, "42")
 	connectClient(t, client)
 
-	node.broker.(*MemoryEngine).eventHandler = &testBrokerEventHandler{
+	node.broker.(*MemoryBroker).eventHandler = &testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 			var msg testClientMessage
 			err := json.Unmarshal(pub.Data, &msg)
@@ -1254,9 +1253,9 @@ func TestClientPublishHandler(t *testing.T) {
 }
 
 func TestClientPublishError(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnPublish = true
-	node := nodeWithEngine(engine)
+	broker := NewTestBroker()
+	broker.errorOnPublish = true
+	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -1396,9 +1395,9 @@ func TestClientPresenceTakeover(t *testing.T) {
 }
 
 func TestClientPresenceError(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnPresence = true
-	node := nodeWithEngine(engine)
+	presenceManager := NewTestPresenceManager()
+	presenceManager.errorOnPresence = true
+	node := nodeWithPresenceManager(presenceManager)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -1467,9 +1466,9 @@ func TestClientPresenceStatsNotAvailable(t *testing.T) {
 }
 
 func TestClientPresenceStatsError(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnPresenceStats = true
-	node := nodeWithEngine(engine)
+	presenceManager := NewTestPresenceManager()
+	presenceManager.errorOnPresenceStats = true
+	node := nodeWithPresenceManager(presenceManager)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -1716,9 +1715,9 @@ func TestClientHistoryUnrecoverablePositionOffset(t *testing.T) {
 }
 
 func TestClientHistoryEngineError(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnHistory = true
-	node := nodeWithEngine(engine)
+	broker := NewTestBroker()
+	broker.errorOnHistory = true
+	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {

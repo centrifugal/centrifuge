@@ -86,6 +86,10 @@ func main() {
 			}, nil)
 		})
 
+		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
+			cb(centrifuge.PresenceReply{}, nil)
+		})
+
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 		})
@@ -96,10 +100,10 @@ func main() {
 			Host: "localhost",
 			Port: 6379,
 		},
-		//{
-		//	Host: "localhost",
-		//	Port: 6380,
-		//},
+		{
+			Host: "localhost",
+			Port: 6380,
+		},
 	}
 	var redisShards []*centrifuge.RedisShard
 	for _, redisConf := range redisShardConfigs {

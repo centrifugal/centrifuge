@@ -3,13 +3,9 @@ package centrifuge
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/timers"
-
 	"github.com/gomodule/redigo/redis"
-	"github.com/mna/redisc"
 )
 
 var _ PresenceManager = (*RedisPresenceManager)(nil)
@@ -104,13 +100,12 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		presenceScript:    redis.NewScript(2, presenceSource),
 	}
 
-	for _, shard := range config.Shards {
-		if !shard.useCluster {
-			// Only need data pipeline in non-cluster scenario.
-			go runForever(func() {
-				m.runDataPipeline(shard)
-			})
-		}
+	for i := range config.Shards {
+		config.Shards[i].registerScripts(
+			m.addPresenceScript,
+			m.remPresenceScript,
+			m.presenceScript,
+		)
 	}
 
 	return m, nil
@@ -121,151 +116,6 @@ func (m *RedisPresenceManager) getShard(channel string) *RedisShard {
 		return m.shards[0]
 	}
 	return m.shards[consistentIndex(channel, len(m.shards))]
-}
-
-func (m *RedisPresenceManager) getDataResponse(s *RedisShard, r dataRequest) *dataResponse {
-	if s.useCluster {
-		reply, err := m.processClusterDataRequest(s, r)
-		return &dataResponse{
-			reply: reply,
-			err:   err,
-		}
-	}
-	select {
-	case s.dataCh <- r:
-	default:
-		timer := timers.AcquireTimer(s.readTimeout())
-		defer timers.ReleaseTimer(timer)
-		select {
-		case s.dataCh <- r:
-		case <-timer.C:
-			return &dataResponse{nil, errRedisOpTimeout}
-		}
-	}
-	return r.result()
-}
-
-func (m *RedisPresenceManager) runDataPipeline(s *RedisShard) {
-	conn := s.pool.Get()
-	scripts := []*redis.Script{
-		m.addPresenceScript,
-		m.remPresenceScript,
-		m.presenceScript,
-	}
-	for _, script := range scripts {
-		err := script.Load(conn)
-		if err != nil {
-			m.node.Log(NewLogEntry(LogLevelError, "error loading Lua script", map[string]interface{}{"error": err.Error()}))
-			// Can not proceed if script has not been loaded.
-			_ = conn.Close()
-			return
-		}
-	}
-	_ = conn.Close()
-
-	var drs []dataRequest
-
-	for dr := range s.dataCh {
-		drs = append(drs, dr)
-	loop:
-		for len(drs) < redisDataBatchLimit {
-			select {
-			case req := <-s.dataCh:
-				drs = append(drs, req)
-			default:
-				break loop
-			}
-		}
-
-		conn := s.pool.Get()
-
-		for i := range drs {
-			switch drs[i].op {
-			case dataOpAddPresence:
-				_ = m.addPresenceScript.SendHash(conn, drs[i].args...)
-			case dataOpRemovePresence:
-				_ = m.remPresenceScript.SendHash(conn, drs[i].args...)
-			case dataOpPresence:
-				_ = m.presenceScript.SendHash(conn, drs[i].args...)
-			}
-		}
-
-		err := conn.Flush()
-		if err != nil {
-			for i := range drs {
-				drs[i].done(nil, err)
-			}
-			m.node.Log(NewLogEntry(LogLevelError, "error flushing data pipeline", map[string]interface{}{"error": err.Error()}))
-			_ = conn.Close()
-			return
-		}
-		var noScriptError bool
-		for i := range drs {
-			reply, err := conn.Receive()
-			if err != nil {
-				// Check for NOSCRIPT error. In normal circumstances this should never happen.
-				// The only possible situation is when Redis scripts were flushed. In this case
-				// we will return from this func and load publish script from scratch.
-				// Redigo does the same check but for single EVALSHA command: see
-				// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
-				if e, ok := err.(redis.Error); ok && strings.HasPrefix(string(e), "NOSCRIPT ") {
-					noScriptError = true
-				}
-			}
-			drs[i].done(reply, err)
-		}
-		if conn.Err() != nil {
-			_ = conn.Close()
-			return
-		}
-		if noScriptError {
-			// Start this func from the beginning and LOAD missing script.
-			_ = conn.Close()
-			return
-		}
-		_ = conn.Close()
-		drs = nil
-	}
-}
-
-func (m *RedisPresenceManager) processClusterDataRequest(s *RedisShard, dr dataRequest) (interface{}, error) {
-	conn := s.pool.Get()
-	defer func() { _ = conn.Close() }()
-
-	var err error
-
-	var key string
-	switch dr.op {
-	case dataOpAddPresence, dataOpRemovePresence, dataOpPresence:
-		key = fmt.Sprintf("%s", dr.args[0])
-	default:
-	}
-	if key != "" {
-		if c, ok := conn.(*redisc.Conn); ok {
-			err := c.Bind(key)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// Handle redirects automatically.
-	conn, err = redisc.RetryConn(conn, 3, 50*time.Millisecond)
-	if err != nil {
-		return nil, err
-	}
-
-	var reply interface{}
-
-	switch dr.op {
-	case dataOpAddPresence:
-		reply, err = m.addPresenceScript.Do(conn, dr.args...)
-	case dataOpRemovePresence:
-		reply, err = m.remPresenceScript.Do(conn, dr.args...)
-	case dataOpPresence:
-		reply, err = m.presenceScript.Do(conn, dr.args...)
-	}
-	return reply, err
 }
 
 // AddPresence - see engine interface description.
@@ -286,8 +136,8 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 	expireAt := time.Now().Unix() + int64(expire)
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
-	dr := newDataRequest(dataOpAddPresence, []interface{}{setKey, hashKey, expire, expireAt, uid, infoJSON})
-	resp := m.getDataResponse(s, dr)
+	dr := s.newDataRequest("", m.addPresenceScript, setKey, []interface{}{setKey, hashKey, expire, expireAt, uid, infoJSON})
+	resp := s.getDataResponse(dr)
 	return resp.err
 }
 
@@ -299,8 +149,8 @@ func (m *RedisPresenceManager) RemovePresence(ch string, uid string) error {
 func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, uid string) error {
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
-	dr := newDataRequest(dataOpRemovePresence, []interface{}{setKey, hashKey, uid})
-	resp := m.getDataResponse(s, dr)
+	dr := s.newDataRequest("", m.remPresenceScript, setKey, []interface{}{setKey, hashKey, uid})
+	resp := s.getDataResponse(dr)
 	return resp.err
 }
 
@@ -314,8 +164,8 @@ func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*C
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
 	now := int(time.Now().Unix())
-	dr := newDataRequest(dataOpPresence, []interface{}{setKey, hashKey, now})
-	resp := m.getDataResponse(s, dr)
+	dr := s.newDataRequest("", m.presenceScript, setKey, []interface{}{setKey, hashKey, now})
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, resp.err
 	}

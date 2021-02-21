@@ -49,10 +49,10 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	engine, _ := centrifuge.NewMemoryEngine(node, centrifuge.MemoryEngineConfig{
+	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{
 		HistoryMetaTTL: 120 * time.Second,
 	})
-	node.SetEngine(engine)
+	node.SetBroker(broker)
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)

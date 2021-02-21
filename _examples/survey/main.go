@@ -115,19 +115,29 @@ func main() {
 		})
 	})
 
-	// Using Redis engine here to scale nodes.
-	engine, err := centrifuge.NewRedisBroker(node, centrifuge.RedisEngineConfig{
-		Shards: []centrifuge.RedisShardConfig{
-			{
-				Host: "localhost",
-				Port: 6379,
-			},
+	redisShardConfigs := []centrifuge.RedisShardConfig{
+		{
+			Host: "localhost",
+			Port: 6379,
 		},
+	}
+	var redisShards []*centrifuge.RedisShard
+	for _, redisConf := range redisShardConfigs {
+		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
+		if err != nil {
+			log.Fatal(err)
+		}
+		redisShards = append(redisShards, redisShard)
+	}
+
+	// Using Redis engine here to scale nodes.
+	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
+		Shards: redisShards,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	node.SetEngine(engine)
+	node.SetBroker(broker)
 
 	if err := node.Run(); err != nil {
 		log.Fatal(err)

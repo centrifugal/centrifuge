@@ -15,7 +15,6 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/gomodule/redigo/redis"
-	"github.com/mna/redisc"
 )
 
 const (
@@ -109,11 +108,11 @@ type RedisBrokerConfig struct {
 // NewRedisBroker initializes Redis Broker.
 func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	if len(config.Shards) == 0 {
-		return nil, errors.New("no Redis shards provided in configuration")
+		return nil, errors.New("broker: no Redis shards provided in configuration")
 	}
 
 	if len(config.Shards) > 1 {
-		n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis sharding enabled: %d shards", len(config.Shards))))
+		n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("broker: Redis sharding enabled: %d shards", len(config.Shards))))
 	}
 
 	if config.Prefix == "" {
@@ -129,6 +128,15 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		addHistoryScript:       redis.NewScript(2, addHistorySource),
 		addHistoryStreamScript: redis.NewScript(2, addHistoryStreamSource),
 		historyStreamScript:    redis.NewScript(2, historyStreamSource),
+	}
+
+	for i := range config.Shards {
+		config.Shards[i].registerScripts(
+			b.historyScript,
+			b.addHistoryScript,
+			b.addHistoryStreamScript,
+			b.historyStreamScript,
+		)
 	}
 
 	b.messagePrefix = config.Prefix + redisClientChannelPrefix
@@ -294,12 +302,6 @@ func (b *RedisBroker) runShard(shard *RedisShard, h BrokerEventHandler) error {
 	go runForever(func() {
 		b.runControlPubSub(shard, h)
 	})
-	if !shard.useCluster {
-		// Only need data pipeline in non-cluster scenario.
-		go runForever(func() {
-			b.runDataPipeline(shard)
-		})
-	}
 	return nil
 }
 
@@ -348,15 +350,18 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 
 	var streamKey channelID
 	var size int
+	var script *redis.Script
 	if b.useStreams {
 		streamKey = b.historyStreamKey(s, ch)
 		size = opts.HistorySize
+		script = b.addHistoryStreamScript
 	} else {
 		streamKey = b.historyListKey(s, ch)
 		size = opts.HistorySize - 1
+		script = b.addHistoryScript
 	}
-	dr := newDataRequest(dataOpAddHistory, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds})
-	resp := b.getDataResponse(s, dr)
+	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds})
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return StreamPosition{}, resp.err
 	}
@@ -530,8 +535,8 @@ func (b *RedisBroker) removeHistory(s *RedisShard, ch string) error {
 	} else {
 		key = b.historyListKey(s, ch)
 	}
-	dr := newDataRequest(dataOpHistoryRemove, []interface{}{key})
-	resp := b.getDataResponse(s, dr)
+	dr := s.newDataRequest("DEL", nil, key, []interface{}{key})
+	resp := s.getDataResponse(dr)
 	return resp.err
 }
 
@@ -573,9 +578,9 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		numWorkers = runtime.NumCPU()
 	}
 
-	b.node.Log(NewLogEntry(LogLevelDebug, fmt.Sprintf("running Redis PUB/SUB, num workers: %d", numWorkers)))
+	b.node.Log(NewLogEntry(LogLevelDebug, fmt.Sprintf("running Redis PUB/SUB, num workers: %d", numWorkers), map[string]interface{}{"shard": s.string()}))
 	defer func() {
-		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis PUB/SUB"))
+		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis PUB/SUB", map[string]interface{}{"shard": s.string()}))
 	}()
 
 	poolConn := s.pool.Get()
@@ -599,9 +604,9 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 
 	// Run subscriber goroutine.
 	go func() {
-		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber"))
+		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
 		defer func() {
-			b.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisBroker Subscriber"))
+			b.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
 		}()
 		for {
 			select {
@@ -764,9 +769,9 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHandler) {
 	numWorkers := runtime.NumCPU()
 
-	b.node.Log(NewLogEntry(LogLevelDebug, fmt.Sprintf("running Redis control PUB/SUB, num workers: %d", numWorkers)))
+	b.node.Log(NewLogEntry(LogLevelDebug, fmt.Sprintf("running Redis control PUB/SUB, num workers: %d", numWorkers), map[string]interface{}{"shard": s.string()}))
 	defer func() {
-		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB"))
+		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", map[string]interface{}{"shard": s.string()}))
 	}()
 
 	poolConn := s.pool.Get()
@@ -943,146 +948,6 @@ func (b *RedisBroker) runPublishPipeline(s *RedisShard) {
 	}
 }
 
-func (b *RedisBroker) processClusterDataRequest(s *RedisShard, dr dataRequest) (interface{}, error) {
-	conn := s.pool.Get()
-	defer func() { _ = conn.Close() }()
-
-	var err error
-
-	var key string
-	switch dr.op {
-	case dataOpHistory, dataOpAddHistory, dataOpHistoryRemove:
-		key = fmt.Sprintf("%s", dr.args[0])
-	default:
-	}
-	if key != "" {
-		if c, ok := conn.(*redisc.Conn); ok {
-			err := c.Bind(key)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// Handle redirects automatically.
-	conn, err = redisc.RetryConn(conn, 3, 50*time.Millisecond)
-	if err != nil {
-		return nil, err
-	}
-
-	var reply interface{}
-
-	switch dr.op {
-	case dataOpHistory:
-		if b.useStreams {
-			reply, err = b.historyStreamScript.Do(conn, dr.args...)
-		} else {
-			reply, err = b.historyScript.Do(conn, dr.args...)
-		}
-	case dataOpAddHistory:
-		if b.useStreams {
-			reply, err = b.addHistoryStreamScript.Do(conn, dr.args...)
-		} else {
-			reply, err = b.addHistoryScript.Do(conn, dr.args...)
-		}
-	case dataOpHistoryRemove:
-		reply, err = conn.Do("DEL", dr.args...)
-	}
-	return reply, err
-}
-
-func (b *RedisBroker) runDataPipeline(s *RedisShard) {
-	conn := s.pool.Get()
-	scripts := []*redis.Script{
-		b.historyScript,
-		b.addHistoryScript,
-		b.addHistoryStreamScript,
-		b.historyStreamScript,
-	}
-	for _, script := range scripts {
-		err := script.Load(conn)
-		if err != nil {
-			b.node.Log(NewLogEntry(LogLevelError, "error loading Lua script", map[string]interface{}{"error": err.Error()}))
-			// Can not proceed if script has not been loaded.
-			_ = conn.Close()
-			return
-		}
-	}
-	_ = conn.Close()
-
-	var drs []dataRequest
-
-	for dr := range s.dataCh {
-		drs = append(drs, dr)
-	loop:
-		for len(drs) < redisDataBatchLimit {
-			select {
-			case req := <-s.dataCh:
-				drs = append(drs, req)
-			default:
-				break loop
-			}
-		}
-
-		conn := s.pool.Get()
-
-		for i := range drs {
-			switch drs[i].op {
-			case dataOpHistory:
-				if b.useStreams {
-					_ = b.historyStreamScript.SendHash(conn, drs[i].args...)
-				} else {
-					_ = b.historyScript.SendHash(conn, drs[i].args...)
-				}
-			case dataOpAddHistory:
-				if b.useStreams {
-					_ = b.addHistoryStreamScript.SendHash(conn, drs[i].args...)
-				} else {
-					_ = b.addHistoryScript.SendHash(conn, drs[i].args...)
-				}
-			case dataOpHistoryRemove:
-				_ = conn.Send("DEL", drs[i].args...)
-			}
-		}
-
-		err := conn.Flush()
-		if err != nil {
-			for i := range drs {
-				drs[i].done(nil, err)
-			}
-			b.node.Log(NewLogEntry(LogLevelError, "error flushing data pipeline", map[string]interface{}{"error": err.Error()}))
-			_ = conn.Close()
-			return
-		}
-		var noScriptError bool
-		for i := range drs {
-			reply, err := conn.Receive()
-			if err != nil {
-				// Check for NOSCRIPT error. In normal circumstances this should never happen.
-				// The only possible situation is when Redis scripts were flushed. In this case
-				// we will return from this func and load publish script from scratch.
-				// Redigo does the same check but for single EVALSHA command: see
-				// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
-				if e, ok := err.(redis.Error); ok && strings.HasPrefix(string(e), "NOSCRIPT ") {
-					noScriptError = true
-				}
-			}
-			drs[i].done(reply, err)
-		}
-		if conn.Err() != nil {
-			_ = conn.Close()
-			return
-		}
-		if noScriptError {
-			// Start this func from the beginning and LOAD missing script.
-			_ = conn.Close()
-			return
-		}
-		_ = conn.Close()
-		drs = nil
-	}
-}
-
 func (s *RedisShard) sendSubscribe(r subRequest) error {
 	select {
 	case s.subCh <- r:
@@ -1093,28 +958,6 @@ func (s *RedisShard) sendSubscribe(r subRequest) error {
 		case s.subCh <- r:
 		case <-timer.C:
 			return errRedisOpTimeout
-		}
-	}
-	return r.result()
-}
-
-func (b *RedisBroker) getDataResponse(s *RedisShard, r dataRequest) *dataResponse {
-	if s.useCluster {
-		reply, err := b.processClusterDataRequest(s, r)
-		return &dataResponse{
-			reply: reply,
-			err:   err,
-		}
-	}
-	select {
-	case s.dataCh <- r:
-	default:
-		timer := timers.AcquireTimer(s.readTimeout())
-		defer timers.ReleaseTimer(timer)
-		select {
-		case s.dataCh <- r:
-		case <-timer.C:
-			return &dataResponse{nil, errRedisOpTimeout}
 		}
 	}
 	return r.result()
@@ -1173,8 +1016,8 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 
 	historyMetaTTLSeconds := int(b.historyMetaTTL.Seconds())
 
-	dr := newDataRequest(dataOpHistory, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, historyMetaTTLSeconds})
-	resp := b.getDataResponse(s, dr)
+	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, historyMetaTTLSeconds})
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
 	}
@@ -1200,8 +1043,8 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 
 	historyMetaTTLSeconds := int(b.historyMetaTTL.Seconds())
 
-	dr := newDataRequest(dataOpHistory, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, historyMetaTTLSeconds})
-	resp := b.getDataResponse(s, dr)
+	dr := s.newDataRequest("", b.historyScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, historyMetaTTLSeconds})
+	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
 	}

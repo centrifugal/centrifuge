@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type TestEngine struct {
+type TestBroker struct {
 	errorOnRun            bool
 	errorOnSubscribe      bool
 	errorOnUnsubscribe    bool
@@ -24,10 +24,6 @@ type TestEngine struct {
 	errorOnPublishJoin    bool
 	errorOnPublishLeave   bool
 	errorOnPublishControl bool
-	errorOnPresence       bool
-	errorOnPresenceStats  bool
-	errorOnAddPresence    bool
-	errorOnRemovePresence bool
 	errorOnHistory        bool
 	errorOnChannels       bool
 	errorOnRemoveHistory  bool
@@ -38,18 +34,18 @@ type TestEngine struct {
 	publishControlCount int32
 }
 
-func NewTestEngine() *TestEngine {
-	return &TestEngine{}
+func NewTestBroker() *TestBroker {
+	return &TestBroker{}
 }
 
-func (e *TestEngine) Run(_ BrokerEventHandler) error {
+func (e *TestBroker) Run(_ BrokerEventHandler) error {
 	if e.errorOnRun {
 		return errors.New("boom")
 	}
 	return nil
 }
 
-func (e *TestEngine) Publish(_ string, _ []byte, _ PublishOptions) (StreamPosition, error) {
+func (e *TestBroker) Publish(_ string, _ []byte, _ PublishOptions) (StreamPosition, error) {
 	atomic.AddInt32(&e.publishCount, 1)
 	if e.errorOnPublish {
 		return StreamPosition{}, errors.New("boom")
@@ -57,7 +53,7 @@ func (e *TestEngine) Publish(_ string, _ []byte, _ PublishOptions) (StreamPositi
 	return StreamPosition{}, nil
 }
 
-func (e *TestEngine) PublishJoin(_ string, _ *ClientInfo) error {
+func (e *TestBroker) PublishJoin(_ string, _ *ClientInfo) error {
 	atomic.AddInt32(&e.publishJoinCount, 1)
 	if e.errorOnPublishJoin {
 		return errors.New("boom")
@@ -65,7 +61,7 @@ func (e *TestEngine) PublishJoin(_ string, _ *ClientInfo) error {
 	return nil
 }
 
-func (e *TestEngine) PublishLeave(_ string, _ *ClientInfo) error {
+func (e *TestBroker) PublishLeave(_ string, _ *ClientInfo) error {
 	atomic.AddInt32(&e.publishLeaveCount, 1)
 	if e.errorOnPublishLeave {
 		return errors.New("boom")
@@ -73,7 +69,7 @@ func (e *TestEngine) PublishLeave(_ string, _ *ClientInfo) error {
 	return nil
 }
 
-func (e *TestEngine) PublishControl(_ []byte, _ string) error {
+func (e *TestBroker) PublishControl(_ []byte, _ string) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
 	if e.errorOnPublishControl {
 		return errors.New("boom")
@@ -81,76 +77,80 @@ func (e *TestEngine) PublishControl(_ []byte, _ string) error {
 	return nil
 }
 
-func (e *TestEngine) Subscribe(_ string) error {
+func (e *TestBroker) Subscribe(_ string) error {
 	if e.errorOnSubscribe {
 		return errors.New("boom")
 	}
 	return nil
 }
 
-func (e *TestEngine) Unsubscribe(_ string) error {
+func (e *TestBroker) Unsubscribe(_ string) error {
 	if e.errorOnUnsubscribe {
 		return errors.New("boom")
 	}
 	return nil
 }
 
-func (e *TestEngine) AddPresence(_ string, _ string, _ *ClientInfo, _ time.Duration) error {
-	if e.errorOnAddPresence {
-		return errors.New("boom")
-	}
-	return nil
-}
-
-func (e *TestEngine) RemovePresence(_ string, _ string) error {
-	if e.errorOnRemovePresence {
-		return errors.New("boom")
-	}
-	return nil
-}
-
-func (e *TestEngine) Presence(_ string) (map[string]*ClientInfo, error) {
-	if e.errorOnPresence {
-		return nil, errors.New("boom")
-	}
-	return map[string]*ClientInfo{}, nil
-}
-
-func (e *TestEngine) PresenceStats(_ string) (PresenceStats, error) {
-	if e.errorOnPresenceStats {
-		return PresenceStats{}, errors.New("boom")
-	}
-	return PresenceStats{}, nil
-}
-
-func (e *TestEngine) History(_ string, _ HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (e *TestBroker) History(_ string, _ HistoryFilter) ([]*Publication, StreamPosition, error) {
 	if e.errorOnHistory {
 		return nil, StreamPosition{}, errors.New("boom")
 	}
 	return nil, StreamPosition{}, nil
 }
 
-func (e *TestEngine) RemoveHistory(_ string) error {
+func (e *TestBroker) RemoveHistory(_ string) error {
 	if e.errorOnRemoveHistory {
 		return errors.New("boom")
 	}
 	return nil
 }
 
-func (e *TestEngine) Channels() ([]string, error) {
-	if e.errorOnChannels {
-		return nil, errors.New("boom")
-	}
-	return []string{}, nil
+type TestPresenceManager struct {
+	errorOnPresence       bool
+	errorOnPresenceStats  bool
+	errorOnAddPresence    bool
+	errorOnRemovePresence bool
 }
 
-func nodeWithEngine(engine Engine) *Node {
+func NewTestPresenceManager() *TestPresenceManager {
+	return &TestPresenceManager{}
+}
+
+func (e *TestPresenceManager) AddPresence(_ string, _ string, _ *ClientInfo) error {
+	if e.errorOnAddPresence {
+		return errors.New("boom")
+	}
+	return nil
+}
+
+func (e *TestPresenceManager) RemovePresence(_ string, _ string) error {
+	if e.errorOnRemovePresence {
+		return errors.New("boom")
+	}
+	return nil
+}
+
+func (e *TestPresenceManager) Presence(_ string) (map[string]*ClientInfo, error) {
+	if e.errorOnPresence {
+		return nil, errors.New("boom")
+	}
+	return map[string]*ClientInfo{}, nil
+}
+
+func (e *TestPresenceManager) PresenceStats(_ string) (PresenceStats, error) {
+	if e.errorOnPresenceStats {
+		return PresenceStats{}, errors.New("boom")
+	}
+	return PresenceStats{}, nil
+}
+
+func nodeWithBroker(broker Broker) *Node {
 	c := DefaultConfig
 	n, err := New(c)
 	if err != nil {
 		panic(err)
 	}
-	n.SetEngine(engine)
+	n.SetBroker(broker)
 	err = n.Run()
 	if err != nil {
 		panic(err)
@@ -158,8 +158,26 @@ func nodeWithEngine(engine Engine) *Node {
 	return n
 }
 
-func nodeWithTestEngine() *Node {
-	return nodeWithEngine(NewTestEngine())
+func nodeWithTestBroker() *Node {
+	return nodeWithBroker(NewTestBroker())
+}
+
+func nodeWithPresenceManager(presenceManager PresenceManager) *Node {
+	c := DefaultConfig
+	n, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	n.SetPresenceManager(presenceManager)
+	err = n.Run()
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func nodeWithTestPresenceManager() *Node {
+	return nodeWithPresenceManager(NewTestPresenceManager())
 }
 
 func nodeWithMemoryEngineNoHandlers() *Node {
@@ -248,9 +266,9 @@ func TestNodeLogHandler(t *testing.T) {
 
 func TestNode_SetBroker(t *testing.T) {
 	n, _ := New(DefaultConfig)
-	engine := testMemoryEngine()
-	n.SetBroker(engine)
-	require.Equal(t, n.broker, engine)
+	broker := testMemoryBroker()
+	n.SetBroker(broker)
+	require.Equal(t, n.broker, broker)
 }
 
 func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
@@ -274,30 +292,30 @@ func TestNode_LogEnabled(t *testing.T) {
 }
 
 func TestNode_RunError(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnRun = true
+	broker := NewTestBroker()
+	broker.errorOnRun = true
 	node, err := New(DefaultConfig)
 	require.NoError(t, err)
-	node.SetEngine(engine)
+	node.SetBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	require.Error(t, node.Run())
 }
 
 func TestNode_RunPubControlError(t *testing.T) {
-	engine := NewTestEngine()
-	engine.errorOnPublishControl = true
+	broker := NewTestBroker()
+	broker.errorOnPublishControl = true
 	node, err := New(DefaultConfig)
 	require.NoError(t, err)
-	node.SetEngine(engine)
+	node.SetBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	require.Error(t, node.Run())
 }
 
 func TestNode_SetPresenceManager(t *testing.T) {
 	n, _ := New(DefaultConfig)
-	engine := testMemoryEngine()
-	n.SetPresenceManager(engine)
-	require.Equal(t, n.presenceManager, engine)
+	presenceManager := testMemoryPresenceManager()
+	n.SetPresenceManager(presenceManager)
+	require.Equal(t, n.presenceManager, presenceManager)
 }
 
 func TestNode_Info(t *testing.T) {
@@ -387,10 +405,10 @@ func TestNode_Disconnect(t *testing.T) {
 }
 
 func TestNode_pubUnsubscribe(t *testing.T) {
-	node := nodeWithTestEngine()
+	node := nodeWithTestBroker()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	testEngine, _ := node.broker.(*TestEngine)
+	testEngine, _ := node.broker.(*TestBroker)
 	require.EqualValues(t, 1, testEngine.publishControlCount)
 
 	err := node.pubUnsubscribe("42", "holypeka")
@@ -399,10 +417,10 @@ func TestNode_pubUnsubscribe(t *testing.T) {
 }
 
 func TestNode_pubDisconnect(t *testing.T) {
-	node := nodeWithTestEngine()
+	node := nodeWithTestBroker()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	testEngine, _ := node.broker.(*TestEngine)
+	testEngine, _ := node.broker.(*TestBroker)
 	require.EqualValues(t, 1, testEngine.publishControlCount)
 
 	err := node.pubDisconnect("42", DisconnectForceNoReconnect, nil)
@@ -411,10 +429,10 @@ func TestNode_pubDisconnect(t *testing.T) {
 }
 
 func TestNode_publishJoin(t *testing.T) {
-	n := nodeWithTestEngine()
+	n := nodeWithTestBroker()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	testEngine, _ := n.broker.(*TestEngine)
+	testEngine, _ := n.broker.(*TestBroker)
 	require.EqualValues(t, 0, testEngine.publishJoinCount)
 
 	// Publish without options.
@@ -429,10 +447,10 @@ func TestNode_publishJoin(t *testing.T) {
 }
 
 func TestNode_publishLeave(t *testing.T) {
-	n := nodeWithTestEngine()
+	n := nodeWithTestBroker()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	testEngine, _ := n.broker.(*TestEngine)
+	testEngine, _ := n.broker.(*TestBroker)
 	require.EqualValues(t, 0, testEngine.publishLeaveCount)
 
 	// Publish without options.
@@ -489,7 +507,7 @@ var testPayload = map[string]interface{}{
 }
 
 func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
-	node := nodeWithTestEngine()
+	node := nodeWithTestBroker()
 
 	payload, err := json.Marshal(testPayload)
 	if err != nil {
@@ -567,13 +585,13 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 }
 
 func BenchmarkHistory(b *testing.B) {
-	e := testMemoryEngine()
+	broker := testMemoryBroker()
 	numMessages := 100
 
 	channel := "test"
 
 	for i := 1; i <= numMessages; i++ {
-		_, err := e.node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Minute))
+		_, err := broker.node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Minute))
 		require.NoError(b, err)
 	}
 
@@ -581,7 +599,7 @@ func BenchmarkHistory(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := e.node.History(channel)
+		_, err := broker.node.History(channel)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -595,7 +613,7 @@ func TestNode_handleControl(t *testing.T) {
 	t.Run("BrokenData", func(t *testing.T) {
 		t.Parallel()
 
-		n := nodeWithTestEngine()
+		n := nodeWithTestBroker()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		err := n.handleControl([]byte("random"))
@@ -605,7 +623,7 @@ func TestNode_handleControl(t *testing.T) {
 	t.Run("Node", func(t *testing.T) {
 		t.Parallel()
 
-		n := nodeWithTestEngine()
+		n := nodeWithTestBroker()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		enc := controlproto.NewProtobufEncoder()
@@ -903,7 +921,7 @@ func TestNode_OnSurvey_Timeout(t *testing.T) {
 func TestErrors(t *testing.T) {
 	err := ErrorUnauthorized
 	protoErr := err.toProto()
-	require.Equal(t, uint32(ErrorUnauthorized.Code), protoErr.Code)
+	require.Equal(t, ErrorUnauthorized.Code, protoErr.Code)
 	err = ErrorUnknownChannel
 	errText := err.Error()
 	require.Equal(t, "102: unknown channel", errText)
