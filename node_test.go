@@ -25,7 +25,6 @@ type TestBroker struct {
 	errorOnPublishLeave   bool
 	errorOnPublishControl bool
 	errorOnHistory        bool
-	errorOnChannels       bool
 	errorOnRemoveHistory  bool
 
 	publishCount        int32
@@ -174,10 +173,6 @@ func nodeWithPresenceManager(presenceManager PresenceManager) *Node {
 		panic(err)
 	}
 	return n
-}
-
-func nodeWithTestPresenceManager() *Node {
-	return nodeWithPresenceManager(NewTestPresenceManager())
 }
 
 func nodeWithMemoryEngineNoHandlers() *Node {
