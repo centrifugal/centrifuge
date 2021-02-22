@@ -482,7 +482,11 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 					}
 				} else {
 					var err error
-					c, err = redis.Dial(s.config.network, serverAddr, dialOpts...)
+					network := s.config.network
+					if network == "" {
+						network = "tcp"
+					}
+					c, err = redis.Dial(network, serverAddr, dialOpts...)
 					if err != nil {
 						n.Log(NewLogEntry(LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error(), "addr": serverAddr}))
 						return nil, err
