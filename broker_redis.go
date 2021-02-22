@@ -27,11 +27,6 @@ const (
 	// redisPublishBatchLimit is a maximum limit of publish requests one batched publish
 	// operation can contain.
 	redisPublishBatchLimit = 512
-	// redisDataBatchLimit is a max amount of data requests in one batch.
-	redisDataBatchLimit = 64
-)
-
-const (
 	// redisControlChannelSuffix is a suffix for control channel.
 	redisControlChannelSuffix = ".control"
 	// redisNodeChannelPrefix is a suffix for node channel.
@@ -115,7 +110,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	}
 
 	if config.Prefix == "" {
-		config.Prefix = defaultPrefix
+		config.Prefix = defaultRedisPrefix
 	}
 
 	b := &RedisBroker{
@@ -985,7 +980,7 @@ func extractHistoryResponse(reply interface{}, useStreams bool, includePubs bool
 		if useStreams {
 			publications, err = sliceOfPubsStream(results[2], nil)
 		} else {
-			publications, err = sliceOfPubs(results[2], nil)
+			publications, err = sliceOfPubsList(results[2], nil)
 		}
 		if err != nil {
 			return StreamPosition{}, nil, err
@@ -1107,31 +1102,6 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 	return publications, latestPosition, nil
 }
 
-func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {
-	values, err := redis.Values(result, err)
-	if err != nil {
-		return nil, err
-	}
-	if len(values)%2 != 0 {
-		return nil, errors.New("mapStringClientInfo expects even number of values result")
-	}
-	m := make(map[string]*ClientInfo, len(values)/2)
-	for i := 0; i < len(values); i += 2 {
-		key, okKey := values[i].([]byte)
-		value, okValue := values[i+1].([]byte)
-		if !okKey || !okValue {
-			return nil, errors.New("scanMap key not a bulk string value")
-		}
-		var f protocol.ClientInfo
-		err = f.Unmarshal(value)
-		if err != nil {
-			return nil, errors.New("can not unmarshal value to ClientInfo")
-		}
-		m[string(key)] = infoFromProto(&f)
-	}
-	return m, nil
-}
-
 type pushType int
 
 const (
@@ -1245,7 +1215,7 @@ func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
 	return pubs, nil
 }
 
-func sliceOfPubs(result interface{}, err error) ([]*Publication, error) {
+func sliceOfPubsList(result interface{}, err error) ([]*Publication, error) {
 	values, err := redis.Values(result, err)
 	if err != nil {
 		return nil, err

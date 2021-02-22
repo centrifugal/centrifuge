@@ -27,11 +27,14 @@ type (
 var errRedisOpTimeout = errors.New("operation timed out")
 
 const (
-	defaultPrefix         = "centrifuge"
-	defaultReadTimeout    = time.Second
-	defaultWriteTimeout   = time.Second
-	defaultConnectTimeout = time.Second
-	defaultPoolSize       = 128
+	defaultRedisPrefix         = "centrifuge"
+	defaultRedisReadTimeout    = time.Second
+	defaultRedisWriteTimeout   = time.Second
+	defaultRedisConnectTimeout = time.Second
+	defaultRedisPoolSize       = 128
+
+	// redisDataBatchLimit is a max amount of data requests in one batch.
+	redisDataBatchLimit = 64
 )
 
 type redisConnPool interface {
@@ -411,7 +414,7 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 	var lastMu sync.Mutex
 	var lastMaster string
 
-	poolSize := defaultPoolSize
+	poolSize := defaultRedisPoolSize
 	maxIdle := poolSize
 
 	var sntnl *sentinel.Sentinel
@@ -484,6 +487,7 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 					var err error
 					network := s.config.network
 					if network == "" {
+						// In case of Redis Cluster network can be empty since we don't set it.
 						network = "tcp"
 					}
 					c, err = redis.Dial(network, serverAddr, dialOpts...)
@@ -533,15 +537,15 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 }
 
 func getDialOpts(conf RedisShardConfig) []redis.DialOption {
-	var readTimeout = defaultReadTimeout
+	var readTimeout = defaultRedisReadTimeout
 	if conf.ReadTimeout != 0 {
 		readTimeout = conf.ReadTimeout
 	}
-	var writeTimeout = defaultWriteTimeout
+	var writeTimeout = defaultRedisWriteTimeout
 	if conf.WriteTimeout != 0 {
 		writeTimeout = conf.WriteTimeout
 	}
-	var connectTimeout = defaultConnectTimeout
+	var connectTimeout = defaultRedisConnectTimeout
 	if conf.ConnectTimeout != 0 {
 		connectTimeout = conf.ConnectTimeout
 	}
@@ -597,7 +601,7 @@ func newPool(s *RedisShard, n *Node, conf RedisShardConfig) (redisConnPool, erro
 }
 
 func (s *RedisShard) readTimeout() time.Duration {
-	var readTimeout = defaultReadTimeout
+	var readTimeout = defaultRedisReadTimeout
 	if s.config.ReadTimeout != 0 {
 		readTimeout = s.config.ReadTimeout
 	}

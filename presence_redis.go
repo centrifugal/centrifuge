@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/centrifugal/protocol"
 	"github.com/gomodule/redigo/redis"
 )
 
@@ -90,7 +91,7 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	}
 
 	if config.Prefix == "" {
-		config.Prefix = defaultPrefix
+		config.Prefix = defaultRedisPrefix
 	}
 
 	m := &RedisPresenceManager{
@@ -173,6 +174,31 @@ func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*C
 		return nil, resp.err
 	}
 	return mapStringClientInfo(resp.reply, nil)
+}
+
+func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {
+	values, err := redis.Values(result, err)
+	if err != nil {
+		return nil, err
+	}
+	if len(values)%2 != 0 {
+		return nil, errors.New("mapStringClientInfo expects even number of values result")
+	}
+	m := make(map[string]*ClientInfo, len(values)/2)
+	for i := 0; i < len(values); i += 2 {
+		key, okKey := values[i].([]byte)
+		value, okValue := values[i+1].([]byte)
+		if !okKey || !okValue {
+			return nil, errors.New("scanMap key not a bulk string value")
+		}
+		var f protocol.ClientInfo
+		err = f.Unmarshal(value)
+		if err != nil {
+			return nil, errors.New("can not unmarshal value to ClientInfo")
+		}
+		m[string(key)] = infoFromProto(&f)
+	}
+	return m, nil
 }
 
 // PresenceStats - see PresenceManager interface description.
