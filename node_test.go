@@ -164,7 +164,7 @@ func nodeWithTestEngine() *Node {
 
 func nodeWithMemoryEngineNoHandlers() *Node {
 	c := DefaultConfig
-	c.LogLevel = LogLevelDebug
+	c.LogLevel = LogLevelTrace
 	c.LogHandler = func(entry LogEntry) {}
 	n, err := New(c)
 	if err != nil {

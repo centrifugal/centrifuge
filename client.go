@@ -324,6 +324,12 @@ func (c *Client) closeUnauthenticated() {
 
 func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	data := reply.Data()
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.mu.RLock()
+		user := c.user
+		c.mu.RUnlock()
+		c.node.logger.log(newLogEntry(LogLevelTrace, "-->", map[string]interface{}{"client": c.uid, "user": user, "data": fmt.Sprintf("%#v", string(data))}))
+	}
 	disconnect := c.messageWriter.enqueue(data)
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
@@ -684,6 +690,13 @@ func (c *Client) Handle(data []byte) bool {
 		return false
 	}
 
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.mu.RLock()
+		user := c.user
+		c.mu.RUnlock()
+		c.node.logger.log(newLogEntry(LogLevelTrace, "<--", map[string]interface{}{"client": c.ID(), "user": user, "data": fmt.Sprintf("%#v", string(data))}))
+	}
+
 	protoType := c.transport.Protocol().toProto()
 	decoder := protocol.GetCommandDecoder(protoType, data)
 	defer protocol.PutCommandDecoder(protoType, decoder)
@@ -779,6 +792,12 @@ func (c *Client) handleCommand(cmd *protocol.Command) *Disconnect {
 	flush := func() error {
 		buf := encoder.Finish()
 		if len(buf) > 0 {
+			if c.node.LogEnabled(LogLevelTrace) {
+				c.mu.RLock()
+				user := c.user
+				c.mu.RUnlock()
+				c.node.logger.log(newLogEntry(LogLevelTrace, "-->", map[string]interface{}{"client": c.uid, "user": user, "data": fmt.Sprintf("%#v", string(buf))}))
+			}
 			disconnect := c.messageWriter.enqueue(buf)
 			if disconnect != nil {
 				if c.node.logger.enabled(LogLevelDebug) {
