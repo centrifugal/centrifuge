@@ -124,6 +124,12 @@ func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
 	return e
 }
 
+func TestRedisBroker_NoShards(t *testing.T) {
+	n, _ := New(Config{})
+	_, err := NewRedisBroker(n, RedisBrokerConfig{})
+	require.Error(t, err)
+}
+
 func TestRedisBrokerSentinel(t *testing.T) {
 	e := NewTestRedisBrokerSentinel(t)
 	_, _, err := e.History("test", HistoryFilter{
@@ -555,6 +561,11 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
 	}}, e.messageChannelID("test"), []byte("__p1:16901:xyz__dsdsd"))
+	require.Error(t, err)
+
+	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		return nil
+	}}, e.messageChannelID("test"), []byte("__p1:16901"))
 	require.Error(t, err)
 
 	pub := &protocol.Publication{

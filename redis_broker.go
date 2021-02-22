@@ -65,7 +65,6 @@ type RedisBroker struct {
 	controlChannel         string
 	nodeChannel            string
 	historyMetaTTL         time.Duration
-	useStreams             bool
 }
 
 type RedisBrokerConfig struct {
@@ -351,7 +350,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 	var streamKey channelID
 	var size int
 	var script *redis.Script
-	if b.useStreams {
+	if b.config.UseStreams {
 		streamKey = b.historyStreamKey(s, ch)
 		size = opts.HistorySize
 		script = b.addHistoryStreamScript
@@ -517,7 +516,7 @@ func (b *RedisBroker) History(ch string, filter HistoryFilter) ([]*Publication, 
 }
 
 func (b *RedisBroker) history(s *RedisShard, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	if b.useStreams {
+	if b.config.UseStreams {
 		return b.historyStream(s, ch, filter)
 	}
 	return b.historyList(s, ch, filter)
@@ -530,7 +529,7 @@ func (b *RedisBroker) RemoveHistory(ch string) error {
 
 func (b *RedisBroker) removeHistory(s *RedisShard, ch string) error {
 	var key channelID
-	if b.useStreams {
+	if b.config.UseStreams {
 		key = b.historyStreamKey(s, ch)
 	} else {
 		key = b.historyListKey(s, ch)
@@ -566,7 +565,7 @@ func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
 		ch = "{" + ch + "}"
 	}
-	if b.useStreams {
+	if b.config.UseStreams {
 		return channelID(b.config.Prefix + ".stream.meta." + ch)
 	}
 	return channelID(b.config.Prefix + ".list.meta." + ch)
@@ -1022,7 +1021,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 		return nil, StreamPosition{}, resp.err
 	}
 
-	latestPosition, publications, err := extractHistoryResponse(resp.reply, b.useStreams, includePubs)
+	latestPosition, publications, err := extractHistoryResponse(resp.reply, b.config.UseStreams, includePubs)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
@@ -1049,7 +1048,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		return nil, StreamPosition{}, resp.err
 	}
 
-	latestPosition, publications, err := extractHistoryResponse(resp.reply, b.useStreams, includePubs)
+	latestPosition, publications, err := extractHistoryResponse(resp.reply, b.config.UseStreams, includePubs)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
