@@ -81,7 +81,7 @@ func (t *testTransport) Close(disconnect *Disconnect) error {
 
 func TestHub(t *testing.T) {
 	h := newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport(func() {}))
+	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	c.user = "test"
 	err = h.remove(c)
@@ -110,7 +110,7 @@ func TestHub(t *testing.T) {
 }
 
 func TestHubUnsubscribe(t *testing.T) {
-	n := nodeWithMemoryEngine()
+	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	client := newTestSubscribedClient(t, n, "42", "test_channel")
@@ -134,7 +134,7 @@ func TestHubUnsubscribe(t *testing.T) {
 }
 
 func TestHubDisconnect(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	n.OnConnect(func(client *Client) {
@@ -198,7 +198,7 @@ func TestHubDisconnect(t *testing.T) {
 }
 
 func TestHubDisconnect_ClientWhitelist(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	n.OnConnect(func(client *Client) {
@@ -258,7 +258,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			n := nodeWithMemoryEngine()
+			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
 			client := newTestSubscribedClient(t, n, "42", "test_channel")
@@ -302,7 +302,7 @@ func TestHubBroadcastJoin(t *testing.T) {
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			n := nodeWithMemoryEngine()
+			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
 			client := newTestSubscribedClient(t, n, "42", "test_channel")
@@ -342,7 +342,7 @@ func TestHubBroadcastLeave(t *testing.T) {
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			n := nodeWithMemoryEngine()
+			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
 			client := newTestSubscribedClient(t, n, "42", "test_channel")
@@ -376,7 +376,7 @@ func TestHubShutdown(t *testing.T) {
 	err := h.shutdown(context.Background())
 	require.NoError(t, err)
 	h = newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport(func() {}))
+	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	_ = h.add(c)
 
@@ -391,7 +391,7 @@ func TestHubShutdown(t *testing.T) {
 
 func TestHubSubscriptions(t *testing.T) {
 	h := newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport(func() {}))
+	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 
 	_, _ = h.addSub("test1", c)
@@ -439,7 +439,7 @@ func TestPreparedReply(t *testing.T) {
 
 func TestUserConnections(t *testing.T) {
 	h := newHub()
-	c, err := newClient(context.Background(), nodeWithMemoryEngine(), newTestTransport(func() {}))
+	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	_ = h.add(c)
 

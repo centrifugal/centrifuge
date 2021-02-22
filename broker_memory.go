@@ -33,7 +33,7 @@ type MemoryBroker struct {
 
 var _ Broker = (*MemoryBroker)(nil)
 
-// MemoryBrokerConfig is a memory engine config.
+// MemoryBrokerConfig is a memory broker config.
 type MemoryBrokerConfig struct {
 	// HistoryMetaTTL sets a time of inactive stream meta information expiration.
 	// This information contains an epoch and offset of each stream. Having this
@@ -49,7 +49,7 @@ type MemoryBrokerConfig struct {
 
 const numPubLocks = 4096
 
-// NewMemoryBroker initializes Memory Engine.
+// NewMemoryBroker initializes MemoryBroker.
 func NewMemoryBroker(n *Node, c MemoryBrokerConfig) (*MemoryBroker, error) {
 	pubLocks := make(map[int]*sync.Mutex, numPubLocks)
 	for i := 0; i < numPubLocks; i++ {
@@ -63,7 +63,7 @@ func NewMemoryBroker(n *Node, c MemoryBrokerConfig) (*MemoryBroker, error) {
 	return b, nil
 }
 
-// Run runs memory engine.
+// Run runs memory broker.
 func (b *MemoryBroker) Run(h BrokerEventHandler) error {
 	b.eventHandler = h
 	b.historyHub.runCleanups()
@@ -96,17 +96,17 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 	return StreamPosition{}, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
 }
 
-// PublishJoin - see engine interface description.
+// PublishJoin - see Broker interface description.
 func (b *MemoryBroker) PublishJoin(ch string, info *ClientInfo) error {
 	return b.eventHandler.HandleJoin(ch, info)
 }
 
-// PublishLeave - see engine interface description.
+// PublishLeave - see Broker interface description.
 func (b *MemoryBroker) PublishLeave(ch string, info *ClientInfo) error {
 	return b.eventHandler.HandleLeave(ch, info)
 }
 
-// PublishControl - see Engine interface description.
+// PublishControl - see Broker interface description.
 func (b *MemoryBroker) PublishControl(data []byte, _ string) error {
 	return b.eventHandler.HandleControl(data)
 }
@@ -116,17 +116,17 @@ func (b *MemoryBroker) Subscribe(_ string) error {
 	return nil
 }
 
-// Unsubscribe node from channel.
+// Unsubscribe node from channel. Noop here.
 func (b *MemoryBroker) Unsubscribe(_ string) error {
 	return nil
 }
 
-// History - see engine interface description.
+// History - see Broker interface description.
 func (b *MemoryBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	return b.historyHub.get(ch, filter)
 }
 
-// RemoveHistory - see engine interface description.
+// RemoveHistory - see Broker interface description.
 func (b *MemoryBroker) RemoveHistory(ch string) error {
 	return b.historyHub.remove(ch)
 }

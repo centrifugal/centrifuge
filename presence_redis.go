@@ -13,7 +13,7 @@ var _ PresenceManager = (*RedisPresenceManager)(nil)
 // DefaultRedisPresenceTTL is a default value for presence TTL in Redis.
 const DefaultRedisPresenceTTL = 60 * time.Second
 
-// RedisPresenceManager ...
+// RedisPresenceManager keeps presence in Redis thus allows scaling nodes.
 type RedisPresenceManager struct {
 	node              *Node
 	sharding          bool
@@ -24,13 +24,15 @@ type RedisPresenceManager struct {
 	presenceScript    *redis.Script
 }
 
+// RedisPresenceManagerConfig is a config for RedisPresenceManager.
 type RedisPresenceManagerConfig struct {
 	// Prefix to use before every channel name and key in Redis.
 	Prefix string
 
 	// PresenceTTL is an interval how long to consider presence info
 	// valid after receiving presence update. This allows to automatically
-	// clean up unnecessary presence entries after TTL passed.
+	// clean up unnecessary presence entries after TTL passed. Zero value
+	// means that DefaultRedisPresenceTTL will be used.
 	PresenceTTL time.Duration
 
 	// Shards is a list of Redis shards to use.
@@ -77,6 +79,7 @@ return redis.call("hgetall", KEYS[2])
 	`
 )
 
+// NewRedisPresenceManager creates new RedisPresenceManager.
 func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*RedisPresenceManager, error) {
 	if len(config.Shards) == 0 {
 		return nil, errors.New("presence: no Redis shards provided in configuration")
@@ -118,7 +121,7 @@ func (m *RedisPresenceManager) getShard(channel string) *RedisShard {
 	return m.shards[consistentIndex(channel, len(m.shards))]
 }
 
-// AddPresence - see engine interface description.
+// AddPresence - see PresenceManager interface description.
 func (m *RedisPresenceManager) AddPresence(ch string, uid string, info *ClientInfo) error {
 	return m.addPresence(m.getShard(ch), ch, uid, info)
 }
@@ -141,7 +144,7 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 	return resp.err
 }
 
-// RemovePresence - see engine interface description.
+// RemovePresence - see PresenceManager interface description.
 func (m *RedisPresenceManager) RemovePresence(ch string, uid string) error {
 	return m.removePresence(m.getShard(ch), ch, uid)
 }
@@ -154,12 +157,12 @@ func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, uid stri
 	return resp.err
 }
 
-// Presence - see engine interface description.
+// Presence - see PresenceManager interface description.
 func (m *RedisPresenceManager) Presence(ch string) (map[string]*ClientInfo, error) {
 	return m.presence(m.getShard(ch), ch)
 }
 
-// Presence - see engine interface description.
+// Presence - see PresenceManager interface description.
 func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*ClientInfo, error) {
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
@@ -172,7 +175,7 @@ func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*C
 	return mapStringClientInfo(resp.reply, nil)
 }
 
-// PresenceStats - see engine interface description.
+// PresenceStats - see PresenceManager interface description.
 func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 	presence, err := m.Presence(ch)
 	if err != nil {

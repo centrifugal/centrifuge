@@ -16,7 +16,7 @@ func newTestTarantoolEngine(tb testing.TB) (*Broker, *PresenceManager) {
 	n, _ := centrifuge.New(centrifuge.DefaultConfig)
 	var shards []*Shard
 	for _, port := range []string{"3301"} {
-		shard, err := NewShard(ShardConfig{Address: "127.0.0.1:" + port})
+		shard, err := NewShard(ShardConfig{Addresses: []string{"127.0.0.1:" + port}})
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -253,7 +253,7 @@ func BenchmarkTarantoolRecover_OneChannel_Parallel(b *testing.B) {
 
 func BenchmarkTarantoolPresence_OneChannel(b *testing.B) {
 	_, pm := newTestTarantoolEngine(b)
-	_ = pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+	_ = pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		p, err := pm.Presence("channel")
@@ -269,7 +269,7 @@ func BenchmarkTarantoolPresence_OneChannel(b *testing.B) {
 func BenchmarkTarantoolPresence_OneChannel_Parallel(b *testing.B) {
 	_, pm := newTestTarantoolEngine(b)
 	b.SetParallelism(128)
-	_ = pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+	_ = pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{})
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -288,7 +288,7 @@ func BenchmarkTarantoolAddPresence_OneChannel(b *testing.B) {
 	_, pm := newTestTarantoolEngine(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+		err := pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -301,7 +301,7 @@ func BenchmarkTarantoolAddPresence_OneChannel_Parallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			err := pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+			err := pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -311,7 +311,7 @@ func BenchmarkTarantoolAddPresence_OneChannel_Parallel(b *testing.B) {
 
 func BenchmarkTarantoolPresenceStats_OneChannel_Parallel(b *testing.B) {
 	_, pm := newTestTarantoolEngine(b)
-	_ = pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{}, 300*time.Second)
+	_ = pm.AddPresence("channel", "uid", &centrifuge.ClientInfo{})
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

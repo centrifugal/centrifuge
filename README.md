@@ -245,9 +245,9 @@ Let's describe some aspects related to connection life cycle and event handling 
 
 #### Channel history stream
 
-Centrifuge Broker interface supports saving Publication to history stream on publish. Depending on broker implementation this feature can be missing though. Builtin Memory and Redis engines support keeping Publication stream.
+Centrifuge `Broker` interface supports saving `Publication` to history stream on publish. Depending on Broker implementation this feature can be missing though. Builtin Memory and Redis brokers support keeping Publication stream.
 
-When using default `MemoryEngine` Publication stream kept in process memory and lost as soon as process restarts. `RedisEngine` keeps Publication stream in Redis LIST or STREAM data structures – reliability inherited from Redis configuration in this case.
+When using default `MemoryBroker` Publication stream kept in process memory and lost as soon as process restarts. `RedisBroker` keeps Publication stream in Redis LIST or STREAM data structures – reliability inherited from Redis configuration in this case.
 
 Centrifuge library publication stream not meant to be used as the only source of missed Publications for a client. It mostly exists to help many clients reconnect at once (load balancer reload, application deploy) without creating a massive spike in load on your main application database. So application database still required in idiomatic use case.
 

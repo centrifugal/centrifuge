@@ -175,7 +175,7 @@ func nodeWithPresenceManager(presenceManager PresenceManager) *Node {
 	return n
 }
 
-func nodeWithMemoryEngineNoHandlers() *Node {
+func defaultNodeNoHandlers() *Node {
 	c := DefaultConfig
 	c.LogLevel = LogLevelDebug
 	c.LogHandler = func(entry LogEntry) {}
@@ -190,8 +190,8 @@ func nodeWithMemoryEngineNoHandlers() *Node {
 	return n
 }
 
-func nodeWithMemoryEngine() *Node {
-	n := nodeWithMemoryEngineNoHandlers()
+func defaultTestNode() *Node {
+	n := defaultNodeNoHandlers()
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{}, nil)
@@ -209,7 +209,7 @@ func TestErrorMessage(t *testing.T) {
 }
 
 func TestNode_Shutdown(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	require.NoError(t, n.Shutdown(context.Background()))
 	require.True(t, n.shutdown)
 	// Test second call does not return error.
@@ -217,7 +217,7 @@ func TestNode_Shutdown(t *testing.T) {
 }
 
 func TestClientEventHub(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	n.OnConnect(func(_ *Client) {})
 	require.NotNil(t, n.clientEvents.connectHandler)
@@ -314,7 +314,7 @@ func TestNode_SetPresenceManager(t *testing.T) {
 }
 
 func TestNode_Info(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	info, err := n.Info()
 	require.NoError(t, err)
@@ -322,7 +322,7 @@ func TestNode_Info(t *testing.T) {
 }
 
 func TestNode_handleJoin(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	err := n.handleJoin("test", &protocol.Join{
 		Info: protocol.ClientInfo{},
@@ -331,7 +331,7 @@ func TestNode_handleJoin(t *testing.T) {
 }
 
 func TestNode_handleLeave(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	err := n.handleLeave("test", &protocol.Leave{
 		Info: protocol.ClientInfo{},
@@ -340,7 +340,7 @@ func TestNode_handleLeave(t *testing.T) {
 }
 
 func TestNode_Unsubscribe(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	err := n.Unsubscribe("42", "test_channel")
@@ -371,7 +371,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 }
 
 func TestNode_Disconnect(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	err := n.Disconnect("42")
@@ -403,64 +403,64 @@ func TestNode_pubUnsubscribe(t *testing.T) {
 	node := nodeWithTestBroker()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	testEngine, _ := node.broker.(*TestBroker)
-	require.EqualValues(t, 1, testEngine.publishControlCount)
+	testBroker, _ := node.broker.(*TestBroker)
+	require.EqualValues(t, 1, testBroker.publishControlCount)
 
 	err := node.pubUnsubscribe("42", "holypeka")
 	require.NoError(t, err)
-	require.EqualValues(t, 2, testEngine.publishControlCount)
+	require.EqualValues(t, 2, testBroker.publishControlCount)
 }
 
 func TestNode_pubDisconnect(t *testing.T) {
 	node := nodeWithTestBroker()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	testEngine, _ := node.broker.(*TestBroker)
-	require.EqualValues(t, 1, testEngine.publishControlCount)
+	testBroker, _ := node.broker.(*TestBroker)
+	require.EqualValues(t, 1, testBroker.publishControlCount)
 
 	err := node.pubDisconnect("42", DisconnectForceNoReconnect, nil)
 	require.NoError(t, err)
-	require.EqualValues(t, 2, testEngine.publishControlCount)
+	require.EqualValues(t, 2, testBroker.publishControlCount)
 }
 
 func TestNode_publishJoin(t *testing.T) {
 	n := nodeWithTestBroker()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	testEngine, _ := n.broker.(*TestBroker)
-	require.EqualValues(t, 0, testEngine.publishJoinCount)
+	testBroker, _ := n.broker.(*TestBroker)
+	require.EqualValues(t, 0, testBroker.publishJoinCount)
 
 	// Publish without options.
 	err := n.publishJoin("test_channel", &ClientInfo{})
 	require.NoError(t, err)
-	require.EqualValues(t, 1, testEngine.publishJoinCount)
+	require.EqualValues(t, 1, testBroker.publishJoinCount)
 
 	// Publish with default/correct options.
 	err = n.publishJoin("test_channel", &ClientInfo{})
 	require.NoError(t, err)
-	require.EqualValues(t, 2, testEngine.publishJoinCount)
+	require.EqualValues(t, 2, testBroker.publishJoinCount)
 }
 
 func TestNode_publishLeave(t *testing.T) {
 	n := nodeWithTestBroker()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	testEngine, _ := n.broker.(*TestBroker)
-	require.EqualValues(t, 0, testEngine.publishLeaveCount)
+	testBroker, _ := n.broker.(*TestBroker)
+	require.EqualValues(t, 0, testBroker.publishLeaveCount)
 
 	// Publish without options.
 	err := n.publishLeave("test_channel", &ClientInfo{})
 	require.NoError(t, err)
-	require.EqualValues(t, 1, testEngine.publishLeaveCount)
+	require.EqualValues(t, 1, testBroker.publishLeaveCount)
 
 	// Publish with default/correct options.
 	err = n.publishLeave("test_channel", &ClientInfo{})
 	require.NoError(t, err)
-	require.EqualValues(t, 2, testEngine.publishLeaveCount)
+	require.EqualValues(t, 2, testBroker.publishLeaveCount)
 }
 
 func TestNode_RemoveHistory(t *testing.T) {
-	n := nodeWithMemoryEngineNoHandlers()
+	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	err := n.RemoveHistory("test_user")
@@ -501,7 +501,7 @@ var testPayload = map[string]interface{}{
 	"favoriteFruit": "apple",
 }
 
-func BenchmarkNodePublishWithNoopEngine(b *testing.B) {
+func BenchmarkNodePublishWithNoopBroker(b *testing.B) {
 	node := nodeWithTestBroker()
 
 	payload, err := json.Marshal(testPayload)
@@ -556,7 +556,7 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 
 	for _, bm := range benchmarks {
 		b.Run(fmt.Sprintf("%s_%d_sub", bm.name, bm.numSubscribers), func(b *testing.B) {
-			n := nodeWithMemoryEngine()
+			n := defaultTestNode()
 			payload := []byte(`{"input": "test"}`)
 			sink := make(chan []byte, bm.numSubscribers)
 			for i := 0; i < bm.numSubscribers; i++ {
@@ -647,7 +647,7 @@ func TestNode_handleControl(t *testing.T) {
 	t.Run("Unsubscribe", func(t *testing.T) {
 		t.Parallel()
 
-		n := nodeWithMemoryEngineNoHandlers()
+		n := defaultNodeNoHandlers()
 		done := make(chan struct{})
 		n.OnConnect(func(client *Client) {
 			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
@@ -696,7 +696,7 @@ func TestNode_handleControl(t *testing.T) {
 	t.Run("Disconnect", func(t *testing.T) {
 		t.Parallel()
 
-		n := nodeWithMemoryEngine()
+		n := defaultTestNode()
 		done := make(chan struct{})
 		n.OnConnect(func(client *Client) {
 			client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
@@ -746,7 +746,7 @@ func TestNode_handleControl(t *testing.T) {
 	t.Run("Unknown", func(t *testing.T) {
 		t.Parallel()
 
-		n := nodeWithMemoryEngine()
+		n := defaultTestNode()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		client := newTestSubscribedClient(t, n, "42", "test_channel")
@@ -853,7 +853,7 @@ func Test_pubFromProto(t *testing.T) {
 }
 
 func TestNode_OnSurvey(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
@@ -877,7 +877,7 @@ func TestNode_OnSurvey(t *testing.T) {
 }
 
 func TestNode_OnSurvey_NoHandler(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	_, err := node.Survey(context.Background(), "test_op", nil)
@@ -886,7 +886,7 @@ func TestNode_OnSurvey_NoHandler(t *testing.T) {
 }
 
 func TestNode_OnSurvey_Timeout(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	done := make(chan struct{})

@@ -17,8 +17,7 @@ import (
 )
 
 const (
-	testRedisHost     = "127.0.0.1"
-	testRedisPort     = 6379
+	testRedisAddress  = "127.0.0.1:6379"
 	testRedisPassword = ""
 	testRedisDB       = 9
 )
@@ -45,8 +44,7 @@ func testNode(tb testing.TB) *Node {
 
 func testRedisConf() RedisShardConfig {
 	return RedisShardConfig{
-		Host:           testRedisHost,
-		Port:           testRedisPort,
+		Address:        testRedisAddress,
 		DB:             testRedisDB,
 		Password:       testRedisPassword,
 		ReadTimeout:    100 * time.Second,
@@ -78,9 +76,9 @@ func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStre
 
 func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
 	redisConf := RedisShardConfig{
-		ClusterAddrs: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
-		Password:     testRedisPassword,
-		ReadTimeout:  100 * time.Second,
+		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		Password:         testRedisPassword,
+		ReadTimeout:      100 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -104,7 +102,7 @@ func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, 
 func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
 	n, _ := New(Config{})
 	redisConf := RedisShardConfig{
-		SentinelAddrs:      []string{"127.0.0.1:26379"},
+		SentinelAddresses:  []string{"127.0.0.1:26379"},
 		SentinelMasterName: "mymaster",
 		ReadTimeout:        100 * time.Second,
 	}
@@ -260,7 +258,7 @@ func TestRedisCurrentPosition(t *testing.T) {
 	}
 }
 
-func TestRedisEngineRecover(t *testing.T) {
+func TestRedisBrokerRecover(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -326,7 +324,7 @@ func pubSubChannels(t *testing.T, e *RedisBroker) ([]string, error) {
 	return redis.Strings(conn.Do("PUBSUB", "channels", e.messagePrefix+"*"))
 }
 
-func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
+func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	// Custom prefix to not collide with other tests.
 	node := testNode(t)
 	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
@@ -551,7 +549,7 @@ func TestRedisConsistentIndex(t *testing.T) {
 	require.True(t, sameFraction > 0.7)
 }
 
-func TestRedisEngineHandlePubSubMessage(t *testing.T) {
+func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	node := testNode(t)
 	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1302,7 +1300,7 @@ func TestRedisClientSubscribeRecoverListsCluster(t *testing.T) {
 	}
 }
 
-func TestRedisEngineHistoryIteration(t *testing.T) {
+func TestRedisHistoryIteration(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
@@ -1315,7 +1313,7 @@ func TestRedisEngineHistoryIteration(t *testing.T) {
 	}
 }
 
-func BenchmarkRedisEngineHistoryIteration(b *testing.B) {
+func BenchmarkRedisHistoryIteration(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)

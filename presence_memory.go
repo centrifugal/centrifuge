@@ -26,7 +26,7 @@ var _ PresenceManager = (*MemoryPresenceManager)(nil)
 // MemoryPresenceManagerConfig is a MemoryPresenceManager config.
 type MemoryPresenceManagerConfig struct{}
 
-// NewMemoryPresenceManager initializes Memory Engine.
+// NewMemoryPresenceManager initializes MemoryPresenceManager.
 func NewMemoryPresenceManager(n *Node, c MemoryPresenceManagerConfig) (*MemoryPresenceManager, error) {
 	return &MemoryPresenceManager{
 		node:        n,
@@ -35,22 +35,22 @@ func NewMemoryPresenceManager(n *Node, c MemoryPresenceManagerConfig) (*MemoryPr
 	}, nil
 }
 
-// AddPresence - see engine interface description.
+// AddPresence - see PresenceManager interface description.
 func (m *MemoryPresenceManager) AddPresence(ch string, uid string, info *ClientInfo) error {
 	return m.presenceHub.add(ch, uid, info)
 }
 
-// RemovePresence - see engine interface description.
+// RemovePresence - see PresenceManager interface description.
 func (m *MemoryPresenceManager) RemovePresence(ch string, uid string) error {
 	return m.presenceHub.remove(ch, uid)
 }
 
-// Presence - see engine interface description.
+// Presence - see PresenceManager interface description.
 func (m *MemoryPresenceManager) Presence(ch string) (map[string]*ClientInfo, error) {
 	return m.presenceHub.get(ch)
 }
 
-// PresenceStats - see engine interface description.
+// PresenceStats - see PresenceManager interface description.
 func (m *MemoryPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 	return m.presenceHub.getStats(ch)
 }

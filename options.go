@@ -93,8 +93,8 @@ type HistoryOptions struct {
 	Since *StreamPosition
 	// Limit number of publications to return.
 	// -1 means no limit - i.e. return all publications currently in stream.
-	// 0 means that caller only interested in current stream top position so Engine
-	// should not return any publications in result.
+	// 0 means that caller only interested in current stream top position so
+	// Broker should not return any publications in result.
 	// Positive integer does what it should.
 	Limit int
 }

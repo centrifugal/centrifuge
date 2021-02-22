@@ -47,7 +47,7 @@ func TestSetCredentials(t *testing.T) {
 }
 
 func TestNewClient(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	transport := newTestTransport(func() {})
 	client, err := newClient(context.Background(), node, transport)
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClientInitialState(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
@@ -69,7 +69,7 @@ func TestClientInitialState(t *testing.T) {
 }
 
 func TestClientClosedState(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
@@ -79,7 +79,7 @@ func TestClientClosedState(t *testing.T) {
 }
 
 func TestClientTimer(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	node.config.ClientStaleCloseDelay = 25 * time.Second
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
@@ -91,7 +91,7 @@ func TestClientTimer(t *testing.T) {
 }
 
 func TestClientOnTimerOpClosedClient(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
 	err := client.close(DisconnectForceNoReconnect)
@@ -101,7 +101,7 @@ func TestClientOnTimerOpClosedClient(t *testing.T) {
 }
 
 func TestClientUnsubscribeClosedClient(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
 	connectClient(t, client)
@@ -113,7 +113,7 @@ func TestClientUnsubscribeClosedClient(t *testing.T) {
 }
 
 func TestClientTimerSchedule(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
@@ -131,7 +131,7 @@ func TestClientTimerSchedule(t *testing.T) {
 }
 
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
@@ -141,7 +141,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 }
 
 func TestClientConnectContextCredentials(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -163,7 +163,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 }
 
 func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -191,7 +191,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 }
 
 func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -221,7 +221,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 }
 
 func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -299,7 +299,7 @@ func subscribeClient(t testing.TB, client *Client, ch string) *protocol.Subscrib
 }
 
 func TestClientSubscribe(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -352,7 +352,7 @@ func TestClientSubscribe(t *testing.T) {
 	require.Equal(t, ErrorAlreadySubscribed, err)
 }
 
-func TestClientSubscribeEngineErrorOnSubscribe(t *testing.T) {
+func TestClientSubscribeBrokerErrorOnSubscribe(t *testing.T) {
 	broker := NewTestBroker()
 	broker.errorOnSubscribe = true
 	node := nodeWithBroker(broker)
@@ -386,7 +386,7 @@ func TestClientSubscribeEngineErrorOnSubscribe(t *testing.T) {
 	}
 }
 
-func TestClientSubscribeEngineErrorOnStreamTop(t *testing.T) {
+func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
 	broker := NewTestBroker()
 	broker.errorOnHistory = true
 	node := nodeWithBroker(broker)
@@ -486,7 +486,7 @@ func TestClientSubscribePositioned(t *testing.T) {
 	require.True(t, result.Positioned)
 }
 
-func TestClientSubscribeEngineErrorOnRecoverHistory(t *testing.T) {
+func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 	broker := NewTestBroker()
 	broker.errorOnHistory = true
 	node := nodeWithBroker(broker)
@@ -578,7 +578,7 @@ func TestClientUnexpectedOffsetEpoch(t *testing.T) {
 }
 
 func TestClientSubscribeValidateErrors(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	node.config.ClientChannelLimit = 1
 	node.config.ChannelMaxLength = 10
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -614,7 +614,7 @@ func TestClientSubscribeValidateErrors(t *testing.T) {
 }
 
 func TestClientSubscribeReceivePublication(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
 	transport.sink = make(chan []byte, 100)
@@ -652,7 +652,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 }
 
 func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -720,7 +720,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 }
 
 func TestUserConnectionLimit(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	node.config.UserConnectionLimit = 1
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -742,7 +742,7 @@ type testContextKey int
 var keyTest testContextKey = 1
 
 func TestConnectingReply(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
@@ -777,7 +777,7 @@ func TestConnectingReply(t *testing.T) {
 }
 
 func TestServerSideSubscriptions(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
@@ -830,7 +830,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 }
 
 func TestClient_IsSubscribed(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -846,7 +846,7 @@ func TestClient_IsSubscribed(t *testing.T) {
 }
 
 func TestClientSubscribeLast(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -888,7 +888,7 @@ func getJSONEncodedParams(t testing.TB, request interface{}) []byte {
 }
 
 func TestClientUnsubscribeClientSide(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -929,7 +929,7 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 }
 
 func TestClientUnsubscribeServerSide(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
 
@@ -962,7 +962,7 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 }
 
 func TestClientAliveHandler(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.config.ClientPresenceUpdateInterval = time.Millisecond
@@ -1033,7 +1033,7 @@ func testReplyWriterWrapper() *sliceReplyWriter {
 }
 
 func TestClientRefreshNotAvailable(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
 	connectClient(t, client)
@@ -1047,7 +1047,7 @@ func TestClientRefreshNotAvailable(t *testing.T) {
 }
 
 func TestClientRefreshEmptyToken(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
@@ -1074,7 +1074,7 @@ func TestClientRefreshEmptyToken(t *testing.T) {
 }
 
 func TestClientRefreshUnexpected(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
@@ -1101,7 +1101,7 @@ func TestClientRefreshUnexpected(t *testing.T) {
 }
 
 func TestClientPublishNotAvailable(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
 	connectClient(t, client)
@@ -1162,7 +1162,7 @@ type testClientMessage struct {
 }
 
 func TestClientPublishHandler(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -1279,7 +1279,7 @@ func TestClientPublishError(t *testing.T) {
 }
 
 func TestClientPing(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
 
@@ -1293,7 +1293,7 @@ func TestClientPing(t *testing.T) {
 }
 
 func TestClientPresence(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1346,7 +1346,7 @@ func TestClientPresence(t *testing.T) {
 }
 
 func TestClientPresenceTakeover(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1419,7 +1419,7 @@ func TestClientPresenceError(t *testing.T) {
 }
 
 func TestClientPresenceNotAvailable(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1435,7 +1435,7 @@ func TestClientPresenceNotAvailable(t *testing.T) {
 }
 
 func TestClientSubscribeNotAvailable(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1450,7 +1450,7 @@ func TestClientSubscribeNotAvailable(t *testing.T) {
 }
 
 func TestClientPresenceStatsNotAvailable(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1490,7 +1490,7 @@ func TestClientPresenceStatsError(t *testing.T) {
 }
 
 func TestClientHistoryNoFilter(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1531,7 +1531,7 @@ func TestClientHistoryNoFilter(t *testing.T) {
 }
 
 func TestClientHistoryWithLimit(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1567,7 +1567,7 @@ func TestClientHistoryWithLimit(t *testing.T) {
 }
 
 func TestClientHistoryWithSinceAndLimit(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1608,7 +1608,7 @@ func TestClientHistoryWithSinceAndLimit(t *testing.T) {
 }
 
 func TestClientHistoryTakeover(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	node.config.HistoryMaxPublicationLimit = 2
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1650,7 +1650,7 @@ func TestClientHistoryTakeover(t *testing.T) {
 }
 
 func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1682,7 +1682,7 @@ func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
 }
 
 func TestClientHistoryUnrecoverablePositionOffset(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1714,7 +1714,7 @@ func TestClientHistoryUnrecoverablePositionOffset(t *testing.T) {
 	require.Equal(t, ErrorUnrecoverablePosition.toProto(), rwWrapper.replies[0].Error)
 }
 
-func TestClientHistoryEngineError(t *testing.T) {
+func TestClientHistoryBrokerError(t *testing.T) {
 	broker := NewTestBroker()
 	broker.errorOnHistory = true
 	node := nodeWithBroker(broker)
@@ -1739,7 +1739,7 @@ func TestClientHistoryEngineError(t *testing.T) {
 }
 
 func TestClientHistoryNotAvailable(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1755,7 +1755,7 @@ func TestClientHistoryNotAvailable(t *testing.T) {
 }
 
 func TestClientCloseUnauthenticated(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.config.ClientStaleCloseDelay = time.Millisecond
@@ -1772,7 +1772,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 }
 
 func TestClientHandleEmptyData(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1790,7 +1790,7 @@ func TestClientHandleEmptyData(t *testing.T) {
 }
 
 func TestClientHandleBrokenData(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1804,7 +1804,7 @@ func TestClientHandleBrokenData(t *testing.T) {
 }
 
 func TestClientHandleCommandNotAuthenticated(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1824,7 +1824,7 @@ func TestClientHandleCommandNotAuthenticated(t *testing.T) {
 }
 
 func TestClientHandleUnknownMethod(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -1837,7 +1837,7 @@ func TestClientHandleUnknownMethod(t *testing.T) {
 }
 
 func TestClientHandleCommandWithBrokenParams(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	var counterMu sync.Mutex
@@ -1958,7 +1958,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 }
 
 func TestClientOnAlive(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	node.config.ClientPresenceUpdateInterval = time.Second
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1984,7 +1984,7 @@ func TestClientOnAlive(t *testing.T) {
 }
 
 func TestClientHandleCommandWithoutID(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2016,7 +2016,7 @@ func TestToClientError(t *testing.T) {
 }
 
 func TestClientAlreadyAuthenticated(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2036,7 +2036,7 @@ func TestClientAlreadyAuthenticated(t *testing.T) {
 }
 
 func TestClientCloseExpired(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	ctx, cancelFn := context.WithCancel(context.Background())
@@ -2059,7 +2059,7 @@ func TestClientCloseExpired(t *testing.T) {
 }
 
 func TestClientConnectExpiredError(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -2074,7 +2074,7 @@ func TestClientConnectExpiredError(t *testing.T) {
 }
 
 func TestClientPresenceUpdate(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
@@ -2100,7 +2100,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 }
 
 func TestClientSubExpired(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.config.ClientExpiredSubCloseDelay = 0
@@ -2137,7 +2137,7 @@ func TestClientSubExpired(t *testing.T) {
 }
 
 func TestClientSend(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2156,7 +2156,7 @@ func TestClientSend(t *testing.T) {
 }
 
 func TestClientClose(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2169,7 +2169,7 @@ func TestClientClose(t *testing.T) {
 }
 
 func TestClientHandleRPCNotAvailable(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2184,7 +2184,7 @@ func TestClientHandleRPCNotAvailable(t *testing.T) {
 }
 
 func TestClientHandleRPC(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2213,7 +2213,7 @@ func TestClientHandleRPC(t *testing.T) {
 }
 
 func TestClientHandleSendNoHandlerSet(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
 	connectClient(t, client)
@@ -2226,7 +2226,7 @@ func TestClientHandleSendNoHandlerSet(t *testing.T) {
 }
 
 func TestClientHandleSend(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2250,7 +2250,7 @@ func TestClientHandleSend(t *testing.T) {
 }
 
 func TestClientHandlePublishNotAllowed(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2274,7 +2274,7 @@ func TestClientHandlePublishNotAllowed(t *testing.T) {
 }
 
 func TestClientHandlePublish(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2307,7 +2307,7 @@ func TestClientHandlePublish(t *testing.T) {
 }
 
 func TestClientSideRefresh(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -2347,7 +2347,7 @@ func TestClientSideRefresh(t *testing.T) {
 }
 
 func TestServerSideRefresh(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	ctx, cancelFn := context.WithCancel(context.Background())
@@ -2395,7 +2395,7 @@ func TestServerSideRefresh(t *testing.T) {
 }
 
 func TestServerSideRefreshDisconnect(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	ctx, cancelFn := context.WithCancel(context.Background())
@@ -2446,7 +2446,7 @@ func TestServerSideRefreshDisconnect(t *testing.T) {
 }
 
 func TestServerSideRefreshCustomError(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	ctx, cancelFn := context.WithCancel(context.Background())
@@ -2497,7 +2497,7 @@ func TestServerSideRefreshCustomError(t *testing.T) {
 }
 
 func TestClientSideSubRefresh(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -2575,7 +2575,7 @@ func TestClientSideSubRefresh(t *testing.T) {
 }
 
 func TestClientSideSubRefreshUnexpected(t *testing.T) {
-	node := nodeWithMemoryEngineNoHandlers()
+	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	transport := newTestTransport(func() {})
@@ -2621,7 +2621,7 @@ func TestClientSideSubRefreshUnexpected(t *testing.T) {
 }
 
 func TestCloseNoRace(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	done := make(chan struct{})
@@ -2645,7 +2645,7 @@ func TestCloseNoRace(t *testing.T) {
 }
 
 func TestClientCheckSubscriptionExpiration(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
@@ -2733,7 +2733,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 }
 
 func TestClientCheckPosition(t *testing.T) {
-	node := nodeWithMemoryEngine()
+	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")

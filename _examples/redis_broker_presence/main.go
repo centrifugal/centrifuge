@@ -96,14 +96,8 @@ func main() {
 	})
 
 	redisShardConfigs := []centrifuge.RedisShardConfig{
-		{
-			Host: "localhost",
-			Port: 6379,
-		},
-		{
-			Host: "localhost",
-			Port: 6380,
-		},
+		{Address: "localhost:6379"},
+		{Address: "localhost:6380"},
 	}
 	var redisShards []*centrifuge.RedisShard
 	for _, redisConf := range redisShardConfigs {

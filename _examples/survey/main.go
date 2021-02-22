@@ -116,10 +116,7 @@ func main() {
 	})
 
 	redisShardConfigs := []centrifuge.RedisShardConfig{
-		{
-			Host: "localhost",
-			Port: 6379,
-		},
+		{Address: "localhost:6379"},
 	}
 	var redisShards []*centrifuge.RedisShard
 	for _, redisConf := range redisShardConfigs {
@@ -130,7 +127,7 @@ func main() {
 		redisShards = append(redisShards, redisShard)
 	}
 
-	// Using Redis engine here to scale nodes.
+	// Using Redis Broker here to scale nodes.
 	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
 		Shards: redisShards,
 	})

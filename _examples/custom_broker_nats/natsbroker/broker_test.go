@@ -22,7 +22,7 @@ func NewTestNatsBrokerWithPrefix(prefix string) *NatsBroker {
 	return b
 }
 
-func BenchmarkNatsEnginePublish(b *testing.B) {
+func BenchmarkNatsBrokerPublish(b *testing.B) {
 	broker := newTestNatsBroker()
 	rawData := []byte(`{"bench": true}`)
 	b.ResetTimer()
@@ -34,7 +34,7 @@ func BenchmarkNatsEnginePublish(b *testing.B) {
 	}
 }
 
-func BenchmarkNatsEnginePublishParallel(b *testing.B) {
+func BenchmarkNatsBrokerPublishParallel(b *testing.B) {
 	broker := newTestNatsBroker()
 	rawData := []byte(`{"bench": true}`)
 	b.SetParallelism(128)
@@ -49,7 +49,7 @@ func BenchmarkNatsEnginePublishParallel(b *testing.B) {
 	})
 }
 
-func BenchmarkNatsEngineSubscribe(b *testing.B) {
+func BenchmarkNatsBrokerSubscribe(b *testing.B) {
 	broker := newTestNatsBroker()
 	j := 0
 	b.ResetTimer()
@@ -62,7 +62,7 @@ func BenchmarkNatsEngineSubscribe(b *testing.B) {
 	}
 }
 
-func BenchmarkNatsEngineSubscribeParallel(b *testing.B) {
+func BenchmarkNatsBrokerSubscribeParallel(b *testing.B) {
 	broker := newTestNatsBroker()
 	i := 0
 	b.SetParallelism(128)

@@ -264,7 +264,7 @@ func testAuthMiddleware(h http.Handler) http.Handler {
 // TestWebsocketHandlerConcurrentConnections allows to catch errors related
 // to invalid buffer pool usages.
 func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
-	n := nodeWithMemoryEngine()
+	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	mux := http.NewServeMux()
@@ -330,7 +330,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 }
 
 func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
-	n := nodeWithMemoryEngine()
+	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	mux := http.NewServeMux()
@@ -401,7 +401,7 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 // in terms of time for operation as network IO involved but useful to look at
 // total allocations and difference between JSON and Protobuf cases using various buffer sizes.
 func BenchmarkWebsocketHandler(b *testing.B) {
-	n := nodeWithMemoryEngine()
+	n := defaultTestNode()
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{

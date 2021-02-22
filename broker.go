@@ -48,7 +48,7 @@ type HistoryFilter struct {
 	// Limit number of publications to return.
 	// -1 means no limit - i.e. return all publications currently in stream.
 	// 0 means that caller only interested in current stream top position so
-	// Engine should not return any publications.
+	// Broker should not return any publications.
 	Limit int
 }
 
@@ -78,7 +78,7 @@ type Closer interface {
 // PublishOptions define some fields to alter behaviour of Publish operation.
 type PublishOptions struct {
 	// HistoryTTL sets history ttl to expire inactive history streams.
-	// Current Engine implementations only work with seconds resolution for TTL.
+	// Current Broker implementations only work with seconds resolution for TTL.
 	HistoryTTL time.Duration
 	// HistorySize sets history size limit to prevent infinite stream growth.
 	HistorySize int

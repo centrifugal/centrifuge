@@ -42,12 +42,9 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	if os.Getenv("CENTRIFUGE_ENGINE") == "redis" {
+	if os.Getenv("CENTRIFUGE_BROKER") == "redis" {
 		redisShardConfigs := []centrifuge.RedisShardConfig{
-			{
-				Host: "localhost",
-				Port: 6379,
-			},
+			{Address: "localhost:6379"},
 		}
 		var redisShards []*centrifuge.RedisShard
 		for _, redisConf := range redisShardConfigs {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,12 +50,57 @@ type RedisShard struct {
 	scriptsCh  chan struct{}
 }
 
+func confFromAddress(address string, conf RedisShardConfig) (RedisShardConfig, error) {
+	if !strings.HasPrefix(address, "tcp://") && !strings.HasPrefix(address, "redis://") && !strings.HasPrefix(address, "unix://") {
+		if host, port, err := net.SplitHostPort(address); err == nil && host != "" && port != "" {
+			conf.network = "tcp"
+			conf.address = address
+			return conf, nil
+		}
+		return conf, errors.New("malformed connection address")
+	}
+	u, err := url.Parse(address)
+	if err != nil {
+		return conf, errors.New("malformed connection address")
+	}
+	switch u.Scheme {
+	case "tcp", "redis":
+		conf.network = "tcp"
+		conf.address = u.Host
+		if u.Path != "" {
+			db, err := strconv.Atoi(strings.TrimPrefix(u.Path, "/"))
+			if err != nil {
+				return conf, fmt.Errorf("can't parse Redis DB number from connection address")
+			}
+			conf.DB = db
+		}
+	case "unix":
+		conf.network = "unix"
+		conf.address = u.Path
+	default:
+		return conf, errors.New("connection address should have tcp://, redis:// or unix:// scheme")
+	}
+	if u.User != nil {
+		if pass, ok := u.User.Password(); ok {
+			conf.Password = pass
+		}
+	}
+	return conf, nil
+}
+
 // NewRedisShard initializes new Redis shard.
 func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
+	var err error
+	if conf.Address != "" {
+		conf, err = confFromAddress(conf.Address, conf)
+		if err != nil {
+			return nil, err
+		}
+	}
 	shard := &RedisShard{
 		config:     conf,
 		scriptsCh:  make(chan struct{}, 1),
-		useCluster: len(conf.ClusterAddrs) > 0,
+		useCluster: len(conf.ClusterAddresses) > 0,
 	}
 	pool, err := newPool(shard, n, conf)
 	if err != nil {
@@ -82,18 +128,28 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 
 // RedisShardConfig contains Redis connection options.
 type RedisShardConfig struct {
-	// Host is Redis server host.
-	Host string
-	// Port is Redis server port.
-	Port int
-	// SentinelAddrs is a slice of Sentinel addresses.
-	SentinelAddrs []string
+	// Address is a Redis server connection address.
+	// This can be:
+	// - host:port
+	// - tcp://[[:password]@]host:port[/db][?option1=value1&optionN=valueN]
+	// - redis://[[:password]@]host:port[/db][?option1=value1&optionN=valueN]
+	// - unix://[[:password]@]path[?option1=value1&optionN=valueN]
+	Address string
+
+	// ClusterAddresses is a slice of seed cluster addrs for this shard.
+	// Each address should be in form of host:port. If ClusterAddresses set then
+	// RedisShardConfig.Address not used.
+	ClusterAddresses []string
+
+	// SentinelAddresses is a slice of Sentinel addresses. Each address should
+	// be in form of host:port. If set then Redis address will be automatically
+	// discovered from Sentinel.
+	SentinelAddresses []string
 	// SentinelMasterName is a name of Redis instance master Sentinel monitors.
 	SentinelMasterName string
 	// SentinelPassword is a password for Sentinel. Works with Sentinel >= 5.0.1.
 	SentinelPassword string
-	// ClusterAddrs is a slice of seed cluster addrs for this shard.
-	ClusterAddrs []string
+
 	// DB is Redis database number. If not set then database 0 used.
 	DB int
 	// Password is password to use when connecting to Redis database. If empty then password not used.
@@ -114,6 +170,9 @@ type RedisShardConfig struct {
 	WriteTimeout time.Duration
 	// ConnectTimeout is a timeout on connect operation.
 	ConnectTimeout time.Duration
+
+	network string
+	address string
 }
 
 type pubRequest struct {
@@ -148,7 +207,7 @@ func (s *RedisShard) newDataRequest(command string, script *redis.Script, cluste
 }
 
 func (s *RedisShard) string() string {
-	return fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
+	return s.config.address
 }
 
 func (dr *dataRequest) setClusterKey(key string) {
@@ -347,7 +406,7 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 	password := conf.Password
 	db := conf.DB
 
-	useSentinel := conf.SentinelMasterName != "" && len(conf.SentinelAddrs) > 0
+	useSentinel := conf.SentinelMasterName != "" && len(conf.SentinelAddresses) > 0
 
 	var lastMu sync.Mutex
 	var lastMaster string
@@ -358,7 +417,7 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 	var sntnl *sentinel.Sentinel
 	if useSentinel {
 		sntnl = &sentinel.Sentinel{
-			Addrs:      conf.SentinelAddrs,
+			Addrs:      conf.SentinelAddresses,
 			MasterName: conf.SentinelMasterName,
 			Dial: func(addr string) (redis.Conn, error) {
 				timeout := 300 * time.Millisecond
@@ -423,7 +482,7 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 					}
 				} else {
 					var err error
-					c, err = redis.Dial("tcp", serverAddr, dialOpts...)
+					c, err = redis.Dial(s.config.network, serverAddr, dialOpts...)
 					if err != nil {
 						n.Log(NewLogEntry(LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error(), "addr": serverAddr}))
 						return nil, err
@@ -501,18 +560,16 @@ func getDialOpts(conf RedisShardConfig) []redis.DialOption {
 }
 
 func newPool(s *RedisShard, n *Node, conf RedisShardConfig) (redisConnPool, error) {
-	host := conf.Host
-	port := conf.Port
 	password := conf.Password
 	db := conf.DB
 
-	useSentinel := conf.SentinelMasterName != "" && len(conf.SentinelAddrs) > 0
+	useSentinel := conf.SentinelMasterName != "" && len(conf.SentinelAddresses) > 0
 	usingPassword := password != ""
 
 	poolFactory := makePoolFactory(s, n, conf)
 
 	if !s.useCluster {
-		serverAddr := net.JoinHostPort(host, strconv.Itoa(port))
+		serverAddr := conf.address
 		if !useSentinel {
 			n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: %s/%d, using password: %v", serverAddr, db, usingPassword)))
 		} else {
@@ -522,10 +579,10 @@ func newPool(s *RedisShard, n *Node, conf RedisShardConfig) (redisConnPool, erro
 		return pool, nil
 	}
 	// OK, we should work with cluster.
-	n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: cluster addrs: %+v, using password: %v", conf.ClusterAddrs, usingPassword)))
+	n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: cluster addrs: %+v, using password: %v", conf.ClusterAddresses, usingPassword)))
 	cluster := &redisc.Cluster{
 		DialOptions:  getDialOpts(conf),
-		StartupNodes: conf.ClusterAddrs,
+		StartupNodes: conf.ClusterAddresses,
 		CreatePool:   poolFactory,
 	}
 	// Initialize cluster mapping.

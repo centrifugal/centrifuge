@@ -45,9 +45,9 @@ const (
 var _ Broker = (*RedisBroker)(nil)
 
 // RedisBroker uses Redis to implement Broker functionality.
-// This engine allows to scale Centrifuge based server to many instances and
+// This broker allows to scale Centrifuge-based server to many instances and
 // load balance client connections between them.
-// Redis engine additionally supports Redis Sentinel, client-side consistent
+// RedisBroker additionally supports Redis Sentinel, client-side consistent
 // sharding and can work with Redis Cluster (including client-side sharding
 // between different Redis Clusters to scale PUB/SUB).
 type RedisBroker struct {
@@ -863,7 +863,7 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 			return err
 		}
 		if pub.Offset == 0 {
-			// When adding to history and publishing happens atomically in Redis Engine
+			// When adding to history and publishing happens atomically in RedisBroker
 			// position info is prepended to Publication payload. In this case we should attach
 			// it to unmarshalled Publication.
 			pub.Offset = sp.Offset

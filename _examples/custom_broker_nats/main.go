@@ -86,7 +86,7 @@ func main() {
 	})
 
 	broker, err := natsbroker.New(node, natsbroker.Config{
-		Prefix: "centrifuge-nats-engine-example",
+		Prefix: "centrifuge-nats-broker-example",
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -94,25 +94,24 @@ func main() {
 
 	node.SetBroker(broker)
 
-	// Let Redis engine do the presence stuff.
+	// Let RedisPresenceManager do the presence stuff.
 	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
-		Host: "localhost",
-		Port: 6379,
+		Address: "localhost:6379",
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	engine, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
+	presenceManager, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
 		Shards: []*centrifuge.RedisShard{redisShard},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	node.SetPresenceManager(engine)
+	node.SetPresenceManager(presenceManager)
 
-	// If you only need unreliable PUB/SUB then you can go without Redis.
-	// Just remove Redis engine initialization above and uncomment
-	// the following two lines of code:
+	// If you don't need presence then you can go without Redis.
+	// Just remove RedisPresenceManager initialization above and uncomment
+	// the following line of code:
 	// node.SetPresenceManager(nil)
 
 	if err := node.Run(); err != nil {

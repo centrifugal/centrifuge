@@ -17,8 +17,8 @@ type PresenceManager interface {
 	// info returned by presence method.
 	PresenceStats(ch string) (PresenceStats, error)
 	// AddPresence sets or updates presence information in channel
-	// for connection with specified identifier. Engine should have a
-	// property to expire client information that was not updated
+	// for connection with specified identifier. PresenceManager should
+	// have a property to expire client information that was not updated
 	// (touched) after some configured time interval.
 	AddPresence(ch string, clientID string, info *ClientInfo) error
 	// RemovePresence removes presence information for connection

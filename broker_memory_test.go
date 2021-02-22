@@ -415,7 +415,7 @@ var recoverTestChannels = []recoverTestChannel{
 func TestMemoryClientSubscribeRecover(t *testing.T) {
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
-			node := nodeWithMemoryEngineNoHandlers()
+			node := defaultNodeNoHandlers()
 			node.config.RecoveryMaxPublicationLimit = tt.Limit
 			node.OnConnect(func(client *Client) {
 				client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
@@ -525,14 +525,14 @@ func (it *historyIterationTest) testHistoryIteration(t testing.TB, node *Node, s
 	}
 }
 
-func TestMemoryEngineHistoryIteration(t *testing.T) {
+func TestMemoryBrokerHistoryIteration(t *testing.T) {
 	e := testMemoryBroker()
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(t, e.node)
 	it.testHistoryIteration(t, e.node, startPosition)
 }
 
-func BenchmarkMemoryEngineHistoryIteration(b *testing.B) {
+func BenchmarkMemoryBrokerHistoryIteration(b *testing.B) {
 	e := testMemoryBroker()
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(b, e.node)
