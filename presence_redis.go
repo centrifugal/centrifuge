@@ -94,6 +94,10 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		config.Prefix = defaultRedisPrefix
 	}
 
+	if config.PresenceTTL == 0 {
+		config.PresenceTTL = DefaultRedisPresenceTTL
+	}
+
 	m := &RedisPresenceManager{
 		node:              n,
 		shards:            config.Shards,
@@ -128,11 +132,7 @@ func (m *RedisPresenceManager) AddPresence(ch string, uid string, info *ClientIn
 }
 
 func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string, info *ClientInfo) error {
-	presenceTTL := m.config.PresenceTTL
-	if presenceTTL == 0 {
-		presenceTTL = DefaultRedisPresenceTTL
-	}
-	expire := int(presenceTTL.Seconds())
+	expire := int(m.config.PresenceTTL.Seconds())
 	infoJSON, err := infoToProto(info).Marshal()
 	if err != nil {
 		return err

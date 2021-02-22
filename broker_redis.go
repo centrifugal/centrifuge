@@ -51,15 +51,14 @@ type RedisBroker struct {
 	sharding               bool
 	config                 RedisBrokerConfig
 	shards                 []*RedisShard
-	historyScript          *redis.Script
-	addHistoryScript       *redis.Script
-	addHistoryStreamScript *redis.Script
+	historyListScript      *redis.Script
 	historyStreamScript    *redis.Script
+	addHistoryListScript   *redis.Script
+	addHistoryStreamScript *redis.Script
 	messagePrefix          string
 	pingChannel            string
 	controlChannel         string
 	nodeChannel            string
-	historyMetaTTL         time.Duration
 }
 
 type RedisBrokerConfig struct {
@@ -118,18 +117,18 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		shards:                 config.Shards,
 		config:                 config,
 		sharding:               len(config.Shards) > 1,
-		historyScript:          redis.NewScript(2, historySource),
-		addHistoryScript:       redis.NewScript(2, addHistorySource),
-		addHistoryStreamScript: redis.NewScript(2, addHistoryStreamSource),
+		historyListScript:      redis.NewScript(2, historySource),
 		historyStreamScript:    redis.NewScript(2, historyStreamSource),
+		addHistoryListScript:   redis.NewScript(2, addHistorySource),
+		addHistoryStreamScript: redis.NewScript(2, addHistoryStreamSource),
 	}
 
 	for i := range config.Shards {
 		config.Shards[i].registerScripts(
-			b.historyScript,
-			b.addHistoryScript,
-			b.addHistoryStreamScript,
+			b.historyListScript,
 			b.historyStreamScript,
+			b.addHistoryListScript,
+			b.addHistoryStreamScript,
 		)
 	}
 
@@ -352,7 +351,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 	} else {
 		streamKey = b.historyListKey(s, ch)
 		size = opts.HistorySize - 1
-		script = b.addHistoryScript
+		script = b.addHistoryListScript
 	}
 	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds})
 	resp := s.getDataResponse(dr)
@@ -1008,7 +1007,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 		limit = filter.Limit
 	}
 
-	historyMetaTTLSeconds := int(b.historyMetaTTL.Seconds())
+	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
 	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, historyMetaTTLSeconds})
 	resp := s.getDataResponse(dr)
@@ -1035,9 +1034,9 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		includePubs = false
 	}
 
-	historyMetaTTLSeconds := int(b.historyMetaTTL.Seconds())
+	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
-	dr := s.newDataRequest("", b.historyScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, historyMetaTTLSeconds})
+	dr := s.newDataRequest("", b.historyListScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, historyMetaTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
