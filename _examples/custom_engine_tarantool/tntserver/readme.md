@@ -1,4 +1,4 @@
-## Tarantool-based Centrifugo/Centrifuge Engine
+## Tarantool-based Centrifugo/Centrifuge Broker and PresenceManager
 
 What's inside:
 

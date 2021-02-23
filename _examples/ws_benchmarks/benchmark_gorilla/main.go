@@ -42,20 +42,26 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
-	if os.Getenv("CENTRIFUGE_ENGINE") == "redis" {
-		engine, err := centrifuge.NewRedisEngine(node, centrifuge.RedisEngineConfig{
+	if os.Getenv("CENTRIFUGE_BROKER") == "redis" {
+		redisShardConfigs := []centrifuge.RedisShardConfig{
+			{Address: "localhost:6379"},
+		}
+		var redisShards []*centrifuge.RedisShard
+		for _, redisConf := range redisShardConfigs {
+			redisShard, err := centrifuge.NewRedisShard(node, redisConf)
+			if err != nil {
+				log.Fatal(err)
+			}
+			redisShards = append(redisShards, redisShard)
+		}
+		broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
 			HistoryMetaTTL: 7 * 24 * time.Hour,
-			Shards: []centrifuge.RedisShardConfig{
-				{
-					Host: "localhost",
-					Port: 6379,
-				},
-			},
+			Shards:         redisShards,
 		})
 		if err != nil {
 			log.Fatal(err)
 		}
-		node.SetEngine(engine)
+		node.SetBroker(broker)
 	}
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {

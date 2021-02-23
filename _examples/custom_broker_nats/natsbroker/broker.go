@@ -47,7 +47,7 @@ func (b *NatsBroker) RemoveHistory(_ string) error {
 	return centrifuge.ErrorNotAvailable
 }
 
-// New creates NatsEngine.
+// New creates NatsBroker.
 func New(n *centrifuge.Node, conf Config) (*NatsBroker, error) {
 	b := &NatsBroker{
 		node:   n,
@@ -73,7 +73,7 @@ func (b *NatsBroker) extractChannel(subject string) string {
 	return strings.TrimPrefix(subject, b.config.Prefix+".client.")
 }
 
-// Run runs engine after node initialized.
+// Run runs broker after node initialized.
 func (b *NatsBroker) Run(h centrifuge.BrokerEventHandler) error {
 	b.eventHandler = h
 	servers := b.config.Servers
@@ -115,7 +115,7 @@ type push struct {
 	Data json.RawMessage `json:"data"`
 }
 
-// Publish - see Engine interface description.
+// Publish - see centrifuge.Broker interface description.
 func (b *NatsBroker) Publish(ch string, data []byte, opts centrifuge.PublishOptions) (centrifuge.StreamPosition, error) {
 	pub := &centrifuge.Publication{
 		Data: data,
@@ -135,7 +135,7 @@ func (b *NatsBroker) Publish(ch string, data []byte, opts centrifuge.PublishOpti
 	return centrifuge.StreamPosition{}, b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
-// PublishJoin - see Engine interface description.
+// PublishJoin - see centrifuge.Broker interface description.
 func (b *NatsBroker) PublishJoin(ch string, info *centrifuge.ClientInfo) error {
 	data, err := json.Marshal(info)
 	if err != nil {
@@ -151,7 +151,7 @@ func (b *NatsBroker) PublishJoin(ch string, info *centrifuge.ClientInfo) error {
 	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
-// PublishLeave - see Engine interface description.
+// PublishLeave - see centrifuge.Broker interface description.
 func (b *NatsBroker) PublishLeave(ch string, info *centrifuge.ClientInfo) error {
 	data, err := json.Marshal(info)
 	if err != nil {
@@ -167,7 +167,7 @@ func (b *NatsBroker) PublishLeave(ch string, info *centrifuge.ClientInfo) error 
 	return b.nc.Publish(string(b.clientChannel(ch)), byteMessage)
 }
 
-// PublishControl - see Engine interface description.
+// PublishControl - see centrifuge.Broker interface description.
 func (b *NatsBroker) PublishControl(data []byte, nodeID string) error {
 	var channelID channelID
 	if nodeID == "" {
@@ -192,7 +192,7 @@ func (b *NatsBroker) handleClientMessage(subject string, data []byte) error {
 		if err != nil {
 			return err
 		}
-		_ = b.eventHandler.HandlePublication(channel, &pub)
+		_ = b.eventHandler.HandlePublication(channel, &pub, centrifuge.StreamPosition{})
 	case joinPushType:
 		var info centrifuge.ClientInfo
 		err := json.Unmarshal(p.Data, &info)
@@ -220,7 +220,7 @@ func (b *NatsBroker) handleControl(m *nats.Msg) {
 	_ = b.eventHandler.HandleControl(m.Data)
 }
 
-// Subscribe - see Engine interface description.
+// Subscribe - see centrifuge.Broker interface description.
 func (b *NatsBroker) Subscribe(ch string) error {
 	if strings.Contains(ch, "*") || strings.Contains(ch, ">") {
 		// Do not support wildcard subscriptions.
@@ -240,7 +240,7 @@ func (b *NatsBroker) Subscribe(ch string) error {
 	return nil
 }
 
-// Unsubscribe - see Engine interface description.
+// Unsubscribe - see centrifuge.Broker interface description.
 func (b *NatsBroker) Unsubscribe(ch string) error {
 	b.subsMu.Lock()
 	defer b.subsMu.Unlock()

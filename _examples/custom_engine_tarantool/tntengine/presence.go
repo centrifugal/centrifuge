@@ -11,8 +11,16 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
+// DefaultPresenceTTL is a default value for presence TTL in Tarantool.
+const DefaultPresenceTTL = 60 * time.Second
+
 // PresenceManagerConfig is a config for Tarantool-based PresenceManager.
 type PresenceManagerConfig struct {
+	// PresenceTTL is an interval how long to consider presence info
+	// valid after receiving presence update. This allows to automatically
+	// clean up unnecessary presence entries after TTL passed.
+	PresenceTTL time.Duration
+
 	// Shards is a list of Tarantool instances to shard data by channel.
 	Shards []*Shard
 }
@@ -144,8 +152,12 @@ type addPresenceRequest struct {
 	ChanInfo string
 }
 
-func (m PresenceManager) AddPresence(ch string, clientID string, info *centrifuge.ClientInfo, ttl time.Duration) error {
+func (m PresenceManager) AddPresence(ch string, clientID string, info *centrifuge.ClientInfo) error {
 	s := consistentShard(ch, m.shards)
+	ttl := DefaultPresenceTTL
+	if m.config.PresenceTTL > 0 {
+		ttl = m.config.PresenceTTL
+	}
 	_, err := s.Exec(tarantool.Call("centrifuge.add_presence", addPresenceRequest{
 		Channel:  ch,
 		TTL:      int(ttl.Seconds()),

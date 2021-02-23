@@ -17,8 +17,7 @@ import (
 )
 
 const (
-	testRedisHost     = "127.0.0.1"
-	testRedisPort     = 6379
+	testRedisAddress  = "127.0.0.1:6379"
 	testRedisPassword = ""
 	testRedisDB       = 9
 )
@@ -27,11 +26,11 @@ func getUniquePrefix() string {
 	return "centrifuge-test-" + randString(3) + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-func newTestRedisEngine(tb testing.TB, n *Node, useStreams bool, useCluster bool) *RedisEngine {
+func newTestRedisBroker(tb testing.TB, n *Node, useStreams bool, useCluster bool) *RedisBroker {
 	if useCluster {
-		return NewTestRedisEngineClusterWithPrefix(tb, n, getUniquePrefix(), useStreams)
+		return NewTestRedisBrokerClusterWithPrefix(tb, n, getUniquePrefix(), useStreams)
 	}
-	return NewTestRedisEngineWithPrefix(tb, n, getUniquePrefix(), useStreams)
+	return NewTestRedisBrokerWithPrefix(tb, n, getUniquePrefix(), useStreams)
 }
 
 func testNode(tb testing.TB) *Node {
@@ -43,30 +42,31 @@ func testNode(tb testing.TB) *Node {
 	return node
 }
 
-func testRedisConf(prefix string) RedisShardConfig {
+func testRedisConf() RedisShardConfig {
 	return RedisShardConfig{
-		Host:           testRedisHost,
-		Port:           testRedisPort,
+		Address:        testRedisAddress,
 		DB:             testRedisDB,
 		Password:       testRedisPassword,
-		Prefix:         prefix,
 		ReadTimeout:    100 * time.Second,
 		ConnectTimeout: 10 * time.Second,
 		WriteTimeout:   10 * time.Second,
 	}
 }
 
-func NewTestRedisEngineWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisEngine {
-	redisConf := testRedisConf(prefix)
-	e, err := NewRedisEngine(n, RedisEngineConfig{
+func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
+	redisConf := testRedisConf()
+	s, err := NewRedisShard(n, redisConf)
+	require.NoError(tb, err)
+	e, err := NewRedisBroker(n, RedisBrokerConfig{
+		Prefix:         prefix,
 		UseStreams:     useStreams,
 		HistoryMetaTTL: 300 * time.Second,
-		Shards:         []RedisShardConfig{redisConf},
+		Shards:         []*RedisShard{s},
 	})
 	if err != nil {
 		tb.Fatal(err)
 	}
-	n.SetEngine(e)
+	n.SetBroker(e)
 	err = n.Run()
 	if err != nil {
 		tb.Fatal(err)
@@ -74,22 +74,24 @@ func NewTestRedisEngineWithPrefix(tb testing.TB, n *Node, prefix string, useStre
 	return e
 }
 
-func NewTestRedisEngineClusterWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisEngine {
+func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
 	redisConf := RedisShardConfig{
-		ClusterAddrs: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
-		Password:     testRedisPassword,
-		Prefix:       prefix,
-		ReadTimeout:  100 * time.Second,
+		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		Password:         testRedisPassword,
+		ReadTimeout:      100 * time.Second,
 	}
-	e, err := NewRedisEngine(n, RedisEngineConfig{
+	s, err := NewRedisShard(n, redisConf)
+	require.NoError(tb, err)
+	e, err := NewRedisBroker(n, RedisBrokerConfig{
+		Prefix:         prefix,
 		UseStreams:     useStreams,
 		HistoryMetaTTL: 300 * time.Second,
-		Shards:         []RedisShardConfig{redisConf},
+		Shards:         []*RedisShard{s},
 	})
 	if err != nil {
 		tb.Fatal(err)
 	}
-	n.SetEngine(e)
+	n.SetBroker(e)
 	err = n.Run()
 	if err != nil {
 		tb.Fatal(err)
@@ -97,20 +99,22 @@ func NewTestRedisEngineClusterWithPrefix(tb testing.TB, n *Node, prefix string, 
 	return e
 }
 
-func NewTestRedisEngineSentinel(tb testing.TB) *RedisEngine {
+func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
 	n, _ := New(Config{})
 	redisConf := RedisShardConfig{
-		SentinelAddrs:      []string{"127.0.0.1:26379"},
+		SentinelAddresses:  []string{"127.0.0.1:26379"},
 		SentinelMasterName: "mymaster",
 		ReadTimeout:        100 * time.Second,
 	}
-	e, err := NewRedisEngine(n, RedisEngineConfig{
-		Shards: []RedisShardConfig{redisConf},
+	s, err := NewRedisShard(n, redisConf)
+	require.NoError(tb, err)
+	e, err := NewRedisBroker(n, RedisBrokerConfig{
+		Shards: []*RedisShard{s},
 	})
 	if err != nil {
 		tb.Fatal(err)
 	}
-	n.SetEngine(e)
+	n.SetBroker(e)
 	err = n.Run()
 	if err != nil {
 		tb.Fatal(err)
@@ -118,8 +122,14 @@ func NewTestRedisEngineSentinel(tb testing.TB) *RedisEngine {
 	return e
 }
 
-func TestRedisEngineSentinel(t *testing.T) {
-	e := NewTestRedisEngineSentinel(t)
+func TestRedisBroker_NoShards(t *testing.T) {
+	n, _ := New(Config{})
+	_, err := NewRedisBroker(n, RedisBrokerConfig{})
+	require.Error(t, err)
+}
+
+func TestRedisBrokerSentinel(t *testing.T) {
+	e := NewTestRedisBrokerSentinel(t)
 	_, _, err := e.History("test", HistoryFilter{
 		Limit: -1,
 	})
@@ -145,11 +155,11 @@ var benchRedisTests = []struct {
 	{"streams", true},
 }
 
-func TestRedisEngine(t *testing.T) {
+func TestRedisBroker(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			e := newTestRedisEngine(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			_, err := e.Publish("channel", testPublicationData(), PublishOptions{})
@@ -158,21 +168,6 @@ func TestRedisEngine(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, e.Subscribe("channel"))
 			require.NoError(t, e.Unsubscribe("channel"))
-
-			// test adding presence
-			require.NoError(t, e.AddPresence("channel", "uid", &ClientInfo{}, 25*time.Second))
-
-			p, err := e.Presence("channel")
-			require.NoError(t, err)
-			require.Equal(t, 1, len(p))
-
-			s, err := e.PresenceStats("channel")
-			require.NoError(t, err)
-			require.Equal(t, 1, s.NumUsers)
-			require.Equal(t, 1, s.NumClients)
-
-			err = e.RemovePresence("channel", "uid")
-			require.NoError(t, err)
 
 			rawData := []byte("{}")
 
@@ -239,7 +234,7 @@ func TestRedisCurrentPosition(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			e := newTestRedisEngine(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			channel := "test-current-position"
@@ -263,11 +258,11 @@ func TestRedisCurrentPosition(t *testing.T) {
 	}
 }
 
-func TestRedisEngineRecover(t *testing.T) {
+func TestRedisBrokerRecover(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			e := newTestRedisEngine(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			rawData := []byte("{}")
@@ -323,19 +318,19 @@ func TestRedisEngineRecover(t *testing.T) {
 	}
 }
 
-func pubSubChannels(t *testing.T, e *RedisEngine) ([]string, error) {
+func pubSubChannels(t *testing.T, e *RedisBroker) ([]string, error) {
 	conn := e.shards[0].pool.Get()
 	defer func() { require.NoError(t, conn.Close()) }()
-	return redis.Strings(conn.Do("PUBSUB", "channels", e.shards[0].messagePrefix+"*"))
+	return redis.Strings(conn.Do("PUBSUB", "channels", e.messagePrefix+"*"))
 }
 
-func TestRedisEngineSubscribeUnsubscribe(t *testing.T) {
+func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	// Custom prefix to not collide with other tests.
 	node := testNode(t)
-	e := NewTestRedisEngineWithPrefix(t, node, getUniquePrefix(), false)
+	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	if e.shards[0].useCluster() {
+	if e.shards[0].useCluster {
 		t.Skip("Channels command is not supported when Redis Cluster is used")
 	}
 
@@ -554,16 +549,21 @@ func TestRedisConsistentIndex(t *testing.T) {
 	require.True(t, sameFraction > 0.7)
 }
 
-func TestRedisEngineHandlePubSubMessage(t *testing.T) {
+func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	node := testNode(t)
-	e := NewTestRedisEngineWithPrefix(t, node, getUniquePrefix(), false)
+	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	err := e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+	err := e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		require.Equal(t, "test", ch)
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.shards[0].messageChannelID("test"), []byte("__p1:16901:xyz__dsdsd"))
+	}}, e.messageChannelID("test"), []byte("__p1:16901:xyz__dsdsd"))
+	require.Error(t, err)
+
+	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		return nil
+	}}, e.messageChannelID("test"), []byte("__p1:16901"))
 	require.Error(t, err)
 
 	pub := &protocol.Publication{
@@ -572,13 +572,13 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 	data, err := pub.Marshal()
 	require.NoError(t, err)
 	var publicationHandlerCalled bool
-	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		publicationHandlerCalled = true
 		require.Equal(t, "test", ch)
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.shards[0].messageChannelID("test"), []byte("__p1:16901:xyz__"+string(data)))
+	}}, e.messageChannelID("test"), []byte("__p1:16901:xyz__"+string(data)))
 	require.NoError(t, err)
 	require.True(t, publicationHandlerCalled)
 
@@ -588,22 +588,22 @@ func TestRedisEngineHandlePubSubMessage(t *testing.T) {
 	data, err = info.Marshal()
 	require.NoError(t, err)
 	var joinHandlerCalled bool
-	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandleJoinFunc: func(ch string, info *ClientInfo) error {
+	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandleJoinFunc: func(ch string, info *ClientInfo) error {
 		joinHandlerCalled = true
 		require.Equal(t, "test", ch)
 		require.Equal(t, "12", info.UserID)
 		return nil
-	}}, e.shards[0].messageChannelID("test"), append(joinTypePrefix, data...))
+	}}, e.messageChannelID("test"), append(joinTypePrefix, data...))
 	require.NoError(t, err)
 	require.True(t, joinHandlerCalled)
 
 	var leaveHandlerCalled bool
-	err = e.shards[0].handleRedisClientMessage(&testBrokerEventHandler{HandleLeaveFunc: func(ch string, info *ClientInfo) error {
+	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandleLeaveFunc: func(ch string, info *ClientInfo) error {
 		leaveHandlerCalled = true
 		require.Equal(t, "test", ch)
 		require.Equal(t, "12", info.UserID)
 		return nil
-	}}, e.shards[0].messageChannelID("test"), append(leaveTypePrefix, data...))
+	}}, e.messageChannelID("test"), append(leaveTypePrefix, data...))
 	require.NoError(t, err)
 	require.True(t, leaveHandlerCalled)
 }
@@ -681,13 +681,20 @@ func TestRedisExtractPushData(t *testing.T) {
 }
 
 func TestNode_OnSurvey_TwoNodes(t *testing.T) {
-	redisConf := testRedisConf(getUniquePrefix())
+	redisConf := testRedisConf()
 
 	node1, _ := New(DefaultConfig)
-	e1, _ := NewRedisEngine(node1, RedisEngineConfig{
-		Shards: []RedisShardConfig{redisConf},
+
+	s, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+
+	prefix := getUniquePrefix()
+
+	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s},
 	})
-	node1.SetEngine(e1)
+	node1.SetBroker(e1)
 	_ = node1.Run()
 	defer func() { _ = node1.Shutdown(context.Background()) }()
 
@@ -701,10 +708,14 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 	})
 
 	node2, _ := New(DefaultConfig)
-	e2, _ := NewRedisEngine(node2, RedisEngineConfig{
-		Shards: []RedisShardConfig{redisConf},
+
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+	e2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s2},
 	})
-	node2.SetEngine(e2)
+	node2.SetBroker(e2)
 	_ = node2.Run()
 	defer func() { _ = node2.Shutdown(context.Background()) }()
 
@@ -733,11 +744,18 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 }
 
 func TestRedisPubSubTwoNodes(t *testing.T) {
-	redisConf := testRedisConf(getUniquePrefix())
+	redisConf := testRedisConf()
 
 	node1, _ := New(DefaultConfig)
-	e1, _ := NewRedisEngine(node1, RedisEngineConfig{
-		Shards: []RedisShardConfig{redisConf},
+
+	s, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+
+	prefix := getUniquePrefix()
+
+	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s},
 	})
 	messageCh := make(chan struct{})
 	joinCh := make(chan struct{})
@@ -763,14 +781,18 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	require.NoError(t, e1.Subscribe("test"))
 
 	node2, _ := New(DefaultConfig)
-	e2, _ := NewRedisEngine(node2, RedisEngineConfig{
-		Shards: []RedisShardConfig{redisConf},
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+
+	e2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s2},
 	})
-	node2.SetEngine(e2)
+	node2.SetBroker(e2)
 	_ = node2.Run()
 	defer func() { _ = node2.Shutdown(context.Background()) }()
 
-	_, err := node2.Publish("test", []byte("123"))
+	_, err = node2.Publish("test", []byte("123"))
 	require.NoError(t, err)
 	err = e2.PublishJoin("test", &ClientInfo{})
 	require.NoError(t, err)
@@ -838,15 +860,21 @@ var benchSurveyTests = []struct {
 func BenchmarkRedisSurvey(b *testing.B) {
 	for _, tt := range benchSurveyTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			redisConf := testRedisConf(getUniquePrefix())
+			prefix := getUniquePrefix()
+			redisConf := testRedisConf()
 			data := make([]byte, tt.DataSize)
 
 			for i := 0; i < tt.NumOtherNodes; i++ {
 				node, _ := New(DefaultConfig)
-				engine, _ := NewRedisEngine(node, RedisEngineConfig{
-					Shards: []RedisShardConfig{redisConf},
+				s, err := NewRedisShard(node, redisConf)
+				if err != nil {
+					b.Fatal(err)
+				}
+				broker, _ := NewRedisBroker(node, RedisBrokerConfig{
+					Prefix: prefix,
+					Shards: []*RedisShard{s},
 				})
-				node.SetEngine(engine)
+				node.SetBroker(broker)
 				_ = node.Run()
 
 				node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
@@ -858,10 +886,15 @@ func BenchmarkRedisSurvey(b *testing.B) {
 			}
 
 			node, _ := New(DefaultConfig)
-			engine, _ := NewRedisEngine(node, RedisEngineConfig{
-				Shards: []RedisShardConfig{redisConf},
+			s, err := NewRedisShard(node, redisConf)
+			if err != nil {
+				b.Fatal(err)
+			}
+			broker, _ := NewRedisBroker(node, RedisBrokerConfig{
+				Prefix: prefix,
+				Shards: []*RedisShard{s},
 			})
-			node.SetEngine(engine)
+			node.SetBroker(broker)
 			_ = node.Run()
 
 			node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
@@ -899,7 +932,7 @@ func BenchmarkRedisIndex(b *testing.B) {
 
 func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
+	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	b.ResetTimer()
@@ -913,7 +946,7 @@ func BenchmarkRedisPublish_1Ch(b *testing.B) {
 
 func BenchmarkRedisPublish_1Ch_Parallel(b *testing.B) {
 	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
+	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	b.SetParallelism(128)
@@ -932,7 +965,7 @@ const benchmarkNumDifferentChannels = 1000
 
 func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
+	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	j := 0
@@ -949,7 +982,7 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 
 func BenchmarkRedisPublish_ManyCh_Parallel(b *testing.B) {
 	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
+	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	b.SetParallelism(128)
@@ -971,7 +1004,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			b.ResetTimer()
@@ -994,7 +1027,7 @@ func BenchmarkRedisPublish_History_1Ch_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
@@ -1020,7 +1053,7 @@ func BenchmarkRedisPublish_History_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			j := 0
@@ -1046,7 +1079,7 @@ func BenchmarkRedisPub_History_ManyCh_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
@@ -1073,7 +1106,7 @@ func BenchmarkRedisPub_History_ManyCh_Parallel(b *testing.B) {
 
 func BenchmarkRedisSubscribe(b *testing.B) {
 	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
+	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	j := 0
 	b.ResetTimer()
@@ -1088,7 +1121,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 
 func BenchmarkRedisSubscribe_Parallel(b *testing.B) {
 	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
+	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	i := 0
 	b.SetParallelism(128)
@@ -1104,108 +1137,11 @@ func BenchmarkRedisSubscribe_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkRedisAddPresence_1Ch_Parallel(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	b.SetParallelism(128)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			err := e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-func BenchmarkRedisPresence_1Ch(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := e.Presence("channel")
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkRedisPresence_1Ch_Parallel(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	b.SetParallelism(128)
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := e.Presence("channel")
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-func BenchmarkRedisPresence_ManyCh(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-	j := 0
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		j++
-		channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
-		_, err := e.Presence(channel)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkRedisPresence_ManyCh_Parallel(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisEngine(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	b.SetParallelism(128)
-	_ = e.AddPresence("channel", "uid", &ClientInfo{}, 300*time.Second)
-	j := 0
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			j++
-			channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
-			_, err := e.Presence(channel)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
 func BenchmarkRedisHistory_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			for i := 0; i < 4; i++ {
@@ -1228,7 +1164,7 @@ func BenchmarkRedisHistory_1Ch_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			for i := 0; i < 4; i++ {
@@ -1254,7 +1190,7 @@ func BenchmarkRedisRecover_1Ch_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			numMessages := 1000
@@ -1282,14 +1218,14 @@ func BenchmarkRedisRecover_1Ch_Parallel(b *testing.B) {
 	}
 }
 
-func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node {
+func nodeWithRedisBroker(tb testing.TB, useStreams bool, useCluster bool) *Node {
 	c := DefaultConfig
 	n, err := New(c)
 	if err != nil {
 		tb.Fatal(err)
 	}
-	e := newTestRedisEngine(tb, n, useStreams, useCluster)
-	n.SetEngine(e)
+	e := newTestRedisBroker(tb, n, useStreams, useCluster)
+	n.SetBroker(e)
 	err = n.Run()
 	if err != nil {
 		tb.Fatal(err)
@@ -1306,7 +1242,7 @@ func nodeWithRedisEngine(tb testing.TB, useStreams bool, useCluster bool) *Node 
 }
 
 func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bool, useCluster bool) {
-	node := nodeWithRedisEngine(t, useStreams, useCluster)
+	node := nodeWithRedisBroker(t, useStreams, useCluster)
 	node.config.RecoveryMaxPublicationLimit = tt.Limit
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1364,11 +1300,11 @@ func TestRedisClientSubscribeRecoverListsCluster(t *testing.T) {
 	}
 }
 
-func TestRedisEngineHistoryIteration(t *testing.T) {
+func TestRedisHistoryIteration(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			e := newTestRedisEngine(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{10000, 100}
 			startPosition := it.prepareHistoryIteration(t, e.node)
@@ -1377,11 +1313,11 @@ func TestRedisEngineHistoryIteration(t *testing.T) {
 	}
 }
 
-func BenchmarkRedisEngineHistoryIteration(b *testing.B) {
+func BenchmarkRedisHistoryIteration(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisEngine(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{10000, 100}
 			startPosition := it.prepareHistoryIteration(b, e.node)

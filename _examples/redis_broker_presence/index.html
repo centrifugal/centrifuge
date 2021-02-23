@@ -50,6 +50,7 @@
 
                 function handleSubscribe(ctx) {
                     drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
+                    showPresence(sub);
                 }
 
                 function handleSubscribeError(err) {
@@ -82,6 +83,18 @@
 
                 function handleUnsubscribe(sub) {
                     drawText('Unsubscribed from channel ' + sub.channel);
+                }
+
+                function showPresence(sub) {
+                    sub.presence().then(function(result) {
+                        let count = 0;
+                        for (let key in result.presence){
+                            count++;
+                        }
+                        drawText('Presence: now in this room – ' + count + ' clients');
+                    }, function(err) {
+                        drawText("Presence error: " + JSON.stringify(err));
+                    });
                 }
 
                 function drawText(text) {

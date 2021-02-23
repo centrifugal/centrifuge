@@ -38,7 +38,7 @@ type Broker struct {
 
 var _ centrifuge.Broker = (*Broker)(nil)
 
-// BrokerConfig is a config for Tarantool Engine.
+// BrokerConfig is a config for Tarantool Broker.
 type BrokerConfig struct {
 	// HistoryMetaTTL sets a time of stream meta key expiration in Tarantool. Stream
 	// meta key is a Tarantool HASH that contains top offset in channel and epoch value.
@@ -52,7 +52,7 @@ type BrokerConfig struct {
 	Shards []*Shard
 }
 
-// NewBroker initializes Tarantool Engine.
+// NewBroker initializes Tarantool Broker.
 func NewBroker(n *centrifuge.Node, config BrokerConfig) (*Broker, error) {
 	if len(config.Shards) == 0 {
 		return nil, errors.New("no Tarantool shards provided in configuration")
@@ -70,7 +70,7 @@ func NewBroker(n *centrifuge.Node, config BrokerConfig) (*Broker, error) {
 	return e, nil
 }
 
-// Run runs engine after node initialized.
+// Run runs broker after node initialized.
 func (b *Broker) Run(h centrifuge.BrokerEventHandler) error {
 	for _, shard := range b.shards {
 		if err := b.runShard(shard, h); err != nil {
@@ -196,7 +196,7 @@ func (b *Broker) clientInfoString(clientInfo *centrifuge.ClientInfo) string {
 	return info
 }
 
-// PublishControl - see engine interface description.
+// PublishControl - see centrifuge.Broker interface description.
 func (b *Broker) PublishControl(data []byte, nodeID string) error {
 	currentRound := atomic.AddUint64(&b.controlRound, 1)
 	index := currentRound % uint64(len(b.shards))
@@ -223,7 +223,7 @@ func nodeChannel(nodeID string) string {
 	return tarantoolNodeChannelPrefix + nodeID
 }
 
-// Subscribe - see engine interface description.
+// Subscribe - see centrifuge.Broker interface description.
 func (b *Broker) Subscribe(ch string) error {
 	if strings.HasPrefix(ch, internalChannelPrefix) {
 		return centrifuge.ErrorBadRequest
@@ -236,7 +236,7 @@ func (b *Broker) Subscribe(ch string) error {
 	return b.sendSubscribe(s, r)
 }
 
-// Unsubscribe - see engine interface description.
+// Unsubscribe - see centrifuge.Broker interface description.
 func (b *Broker) Unsubscribe(ch string) error {
 	if b.node.LogEnabled(centrifuge.LogLevelDebug) {
 		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "unsubscribe node from channel", map[string]interface{}{"channel": ch}))

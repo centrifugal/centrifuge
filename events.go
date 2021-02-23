@@ -145,7 +145,7 @@ type UnsubscribeEvent struct {
 type UnsubscribeHandler func(UnsubscribeEvent)
 
 // PublishEvent contains fields related to publish event. Note that this event
-// called before actual publish to Engine so handler has an option to reject this
+// called before actual publish to Broker so handler has an option to reject this
 // publication returning an error.
 type PublishEvent struct {
 	// Channel client wants to publish data to.
@@ -165,7 +165,7 @@ type PublishReply struct {
 	// channel by handler code. In this case Centrifuge won't try to publish
 	// into channel again after handler returned PublishReply. This can be
 	// useful if you need to know new Publication offset in your code or you
-	// want to make sure message successfully published to Engine on server
+	// want to make sure message successfully published to Broker on server
 	// side (otherwise only client will get an error).
 	Result *PublishResult
 }

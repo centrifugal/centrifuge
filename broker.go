@@ -29,14 +29,6 @@ type ClientInfo struct {
 	ChanInfo []byte
 }
 
-// PresenceStats represents a short presence information for channel.
-type PresenceStats struct {
-	// NumClients is a number of client connections in channel.
-	NumClients int
-	// NumUsers is a number of unique users in channel.
-	NumUsers int
-}
-
 // BrokerEventHandler can handle messages received from PUB/SUB system.
 type BrokerEventHandler interface {
 	// HandlePublication to handle received Publications.
@@ -56,7 +48,7 @@ type HistoryFilter struct {
 	// Limit number of publications to return.
 	// -1 means no limit - i.e. return all publications currently in stream.
 	// 0 means that caller only interested in current stream top position so
-	// Engine should not return any publications.
+	// Broker should not return any publications.
 	Limit int
 }
 
@@ -86,7 +78,7 @@ type Closer interface {
 // PublishOptions define some fields to alter behaviour of Publish operation.
 type PublishOptions struct {
 	// HistoryTTL sets history ttl to expire inactive history streams.
-	// Current Engine implementations only work with seconds resolution for TTL.
+	// Current Broker implementations only work with seconds resolution for TTL.
 	HistoryTTL time.Duration
 	// HistorySize sets history size limit to prevent infinite stream growth.
 	HistorySize int
@@ -137,29 +129,4 @@ type Broker interface {
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.
 	RemoveHistory(ch string) error
-}
-
-// PresenceManager is responsible for channel presence management.
-type PresenceManager interface {
-	// Presence returns actual presence information for channel.
-	Presence(ch string) (map[string]*ClientInfo, error)
-	// PresenceStats returns short stats of current presence data
-	// suitable for scenarios when caller does not need full client
-	// info returned by presence method.
-	PresenceStats(ch string) (PresenceStats, error)
-	// AddPresence sets or updates presence information in channel
-	// for connection with specified identifier. Engine should have a
-	// property to expire client information that was not updated
-	// (touched) after some configured time interval.
-	AddPresence(ch string, clientID string, info *ClientInfo, expire time.Duration) error
-	// RemovePresence removes presence information for connection
-	// with specified identifier.
-	RemovePresence(ch string, clientID string) error
-}
-
-// Engine is responsible for PUB/SUB mechanics, channel history and
-// presence information.
-type Engine interface {
-	Broker
-	PresenceManager
 }

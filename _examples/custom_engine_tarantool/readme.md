@@ -1,12 +1,12 @@
-This example shows how to use custom Engine implementation based on [Tarantool](https://www.tarantool.io/en/).
+This example shows how to use custom engine implementation based on [Tarantool](https://www.tarantool.io/en/): i.e. it provides `Broker` and `PresenceManager`.
 
-This engine implementation provides much faster history and presence operations than Redis (up to 10x), while being on pair in subscribe and publish performance.
+Tarantool provides faster history and presence operations than Redis (up to 10x), while being on pair in subscribe and publish performance.
 
-**Important limitation to know**: Tarantool engine uses channels that start with `__` (two underscores) for internal needs and does not allow subscribing on them from the outside.
+**Important limitation to know**: Tarantool Broker uses channels that start with `__` (two underscores) for internal needs and does not allow subscribing on them from the outside.
 
-Tarantool Engine PUB/SUB can be customized to work over PUSH or POLL.
+Tarantool Broker PUB/SUB can be customized to work over PUSH or POLL.
 
-**Since this is just an example – we do not guarantee any stability here**. This engine implementation have not been tested in production environment.
+**Since this is just an example – we do not guarantee any stability here**. This implementation have not been tested in production environment.
 
 ## Single Tarantool instance example
 
