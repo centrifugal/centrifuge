@@ -27,12 +27,13 @@ type (
 var errRedisOpTimeout = errors.New("operation timed out")
 
 const (
-	defaultRedisPrefix         = "centrifuge"
-	defaultRedisReadTimeout    = time.Second
-	defaultRedisWriteTimeout   = time.Second
-	defaultRedisConnectTimeout = time.Second
-	defaultRedisPoolSize       = 128
+	DefaultRedisReadTimeout    = time.Second
+	DefaultRedisWriteTimeout   = time.Second
+	DefaultRedisConnectTimeout = time.Second
+)
 
+const (
+	defaultRedisPoolSize = 128
 	// redisDataBatchLimit is a max amount of data requests in one batch.
 	redisDataBatchLimit = 64
 )
@@ -155,7 +156,8 @@ type RedisShardConfig struct {
 
 	// DB is Redis database number. If not set then database 0 used.
 	DB int
-	// Password is password to use when connecting to Redis database. If empty then password not used.
+	// Password is password to use when connecting to Redis database.
+	// If zero then password not used.
 	Password string
 	// Whether to use TLS connection or not.
 	UseTLS bool
@@ -164,14 +166,18 @@ type RedisShardConfig struct {
 	// Connection TLS configuration.
 	TLSConfig *tls.Config
 	// IdleTimeout is timeout after which idle connections to Redis will be closed.
+	// If the value is zero, then idle connections are not closed.
 	IdleTimeout time.Duration
 	// ReadTimeout is a timeout on read operations. Note that at moment it should be greater
 	// than node ping publish interval in order to prevent timing out Pub/Sub connection's
 	// Receive call.
+	// By default DefaultRedisReadTimeout used.
 	ReadTimeout time.Duration
 	// WriteTimeout is a timeout on write operations.
+	// By default DefaultRedisWriteTimeout used.
 	WriteTimeout time.Duration
 	// ConnectTimeout is a timeout on connect operation.
+	// By default DefaultRedisConnectTimeout used.
 	ConnectTimeout time.Duration
 
 	network string
@@ -537,15 +543,15 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 }
 
 func getDialOpts(conf RedisShardConfig) []redis.DialOption {
-	var readTimeout = defaultRedisReadTimeout
+	var readTimeout = DefaultRedisReadTimeout
 	if conf.ReadTimeout != 0 {
 		readTimeout = conf.ReadTimeout
 	}
-	var writeTimeout = defaultRedisWriteTimeout
+	var writeTimeout = DefaultRedisWriteTimeout
 	if conf.WriteTimeout != 0 {
 		writeTimeout = conf.WriteTimeout
 	}
-	var connectTimeout = defaultRedisConnectTimeout
+	var connectTimeout = DefaultRedisConnectTimeout
 	if conf.ConnectTimeout != 0 {
 		connectTimeout = conf.ConnectTimeout
 	}
@@ -601,7 +607,7 @@ func newPool(s *RedisShard, n *Node, conf RedisShardConfig) (redisConnPool, erro
 }
 
 func (s *RedisShard) readTimeout() time.Duration {
-	var readTimeout = defaultRedisReadTimeout
+	var readTimeout = DefaultRedisReadTimeout
 	if s.config.ReadTimeout != 0 {
 		readTimeout = s.config.ReadTimeout
 	}

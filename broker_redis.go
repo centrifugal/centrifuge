@@ -61,8 +61,12 @@ type RedisBroker struct {
 	nodeChannel            string
 }
 
+// DefaultRedisBrokerPrefix is a default value for RedisBrokerConfig.Prefix.
+const DefaultRedisBrokerPrefix = "centrifuge"
+
 type RedisBrokerConfig struct {
-	// Prefix to use before every channel name and key in Redis.
+	// Prefix to use before every channel name and key in Redis. By default
+	// DefaultRedisBrokerPrefix will be used.
 	Prefix string
 
 	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
@@ -90,11 +94,11 @@ type RedisBrokerConfig struct {
 	// TODO v1: use by default?
 	UseStreams bool
 
-	// PubSubNumWorkers sets how many PUB/SUB message processing workers will be started.
-	// By default we start runtime.NumCPU() workers.
+	// PubSubNumWorkers sets how many PUB/SUB message processing workers will
+	// be started. By default runtime.NumCPU() workers used.
 	PubSubNumWorkers int
 
-	// Shards is a list of Redis shards to use.
+	// Shards is a list of Redis shards to use. At least one shard must be provided.
 	Shards []*RedisShard
 }
 
@@ -109,7 +113,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	}
 
 	if config.Prefix == "" {
-		config.Prefix = defaultRedisPrefix
+		config.Prefix = DefaultRedisBrokerPrefix
 	}
 
 	b := &RedisBroker{

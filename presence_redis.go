@@ -11,9 +11,6 @@ import (
 
 var _ PresenceManager = (*RedisPresenceManager)(nil)
 
-// DefaultRedisPresenceTTL is a default value for presence TTL in Redis.
-const DefaultRedisPresenceTTL = 60 * time.Second
-
 // RedisPresenceManager keeps presence in Redis thus allows scaling nodes.
 type RedisPresenceManager struct {
 	node              *Node
@@ -25,9 +22,17 @@ type RedisPresenceManager struct {
 	presenceScript    *redis.Script
 }
 
+const (
+	// DefaultRedisPresenceTTL is a default value for presence TTL in Redis.
+	DefaultRedisPresenceTTL = 60 * time.Second
+	// DefaultRedisPresenceManagerPrefix is a default value for RedisPresenceManagerConfig.Prefix.
+	DefaultRedisPresenceManagerPrefix = "centrifuge"
+)
+
 // RedisPresenceManagerConfig is a config for RedisPresenceManager.
 type RedisPresenceManagerConfig struct {
-	// Prefix to use before every channel name and key in Redis.
+	// Prefix to use before every channel name and key in Redis. By default
+	// DefaultRedisPresenceManagerPrefix will be used.
 	Prefix string
 
 	// PresenceTTL is an interval how long to consider presence info
@@ -36,7 +41,7 @@ type RedisPresenceManagerConfig struct {
 	// means that DefaultRedisPresenceTTL will be used.
 	PresenceTTL time.Duration
 
-	// Shards is a list of Redis shards to use.
+	// Shards is a list of Redis shards to use. At least one shard must be provided.
 	Shards []*RedisShard
 }
 
@@ -91,7 +96,7 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	}
 
 	if config.Prefix == "" {
-		config.Prefix = defaultRedisPrefix
+		config.Prefix = DefaultRedisPresenceManagerPrefix
 	}
 
 	if config.PresenceTTL == 0 {
