@@ -391,7 +391,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
-	require.NotContains(t, n.hub.subs, "test_channel")
+	require.Zero(t, n.hub.NumSubscribers("test_channel"))
 	require.NotContains(t, client.channels, "test_channel")
 }
 
@@ -411,7 +411,7 @@ func TestNode_Disconnect(t *testing.T) {
 		})
 	})
 
-	client := newTestConnectedClient(t, n, "42")
+	newTestConnectedClient(t, n, "42")
 
 	err = n.Disconnect("42", WithDisconnect(DisconnectBadRequest))
 	require.NoError(t, err)
@@ -420,8 +420,7 @@ func TestNode_Disconnect(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
-	require.NotContains(t, n.hub.conns, client.uid)
-	require.NotContains(t, n.hub.users, "42")
+	require.True(t, len(n.hub.userConnections("42")) == 0)
 }
 
 func TestNode_pubUnsubscribe(t *testing.T) {
@@ -715,7 +714,7 @@ func TestNode_handleControl(t *testing.T) {
 			require.Fail(t, "timeout")
 		}
 		require.NoError(t, err)
-		require.NotContains(t, n.hub.subs, "test_channel")
+		require.Zero(t, n.hub.NumSubscribers("test_channel"))
 	})
 
 	t.Run("Disconnect", func(t *testing.T) {
@@ -763,9 +762,8 @@ func TestNode_handleControl(t *testing.T) {
 			require.Fail(t, "timeout")
 		}
 		require.NoError(t, err)
-		require.NotContains(t, n.hub.subs, "test_channel")
-		require.NotContains(t, n.hub.users, "42")
-		require.NotContains(t, n.hub.conns, client.uid)
+		require.Zero(t, n.hub.NumSubscribers("test_channel"))
+		require.Zero(t, len(n.hub.userConnections("42")))
 	})
 
 	t.Run("Unknown", func(t *testing.T) {

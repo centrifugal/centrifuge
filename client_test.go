@@ -26,15 +26,14 @@ func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 func newTestConnectedClient(t *testing.T, n *Node, userID string) *Client {
 	client := newTestClient(t, n, userID)
 	connectClient(t, client)
-	require.Contains(t, n.hub.users, userID)
-	require.Contains(t, n.hub.conns, client.uid)
+	require.True(t, len(n.hub.userConnections(userID)) > 0)
 	return client
 }
 
 func newTestSubscribedClient(t *testing.T, n *Node, userID, chanID string) *Client {
 	client := newTestConnectedClient(t, n, userID)
 	subscribeClient(t, client, chanID)
-	require.Contains(t, n.hub.subs, chanID)
+	require.True(t, n.hub.NumSubscribers(chanID) > 0)
 	require.Contains(t, client.channels, chanID)
 	return client
 }
