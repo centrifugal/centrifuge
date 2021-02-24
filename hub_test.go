@@ -483,10 +483,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				err := h.broadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
-				if err != nil {
-					b.Fatal(err)
-				}
+				_ = h.broadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
 			}()
 			_, _ = h.addSub(channels[i%numChannels], clients[i%numClients])
 			wg.Wait()
