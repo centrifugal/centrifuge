@@ -190,6 +190,31 @@ func defaultNodeNoHandlers() *Node {
 	return n
 }
 
+func defaultTestNodeBenchmark(b *testing.B) *Node {
+	c := DefaultConfig
+	c.LogLevel = LogLevelError
+	c.LogHandler = func(entry LogEntry) {
+		b.Fatal(entry.Message, entry.Fields)
+	}
+	n, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
+			cb(PublishReply{}, nil)
+		})
+	})
+	err = n.Run()
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
 func defaultTestNode() *Node {
 	n := defaultNodeNoHandlers()
 	n.OnConnect(func(client *Client) {

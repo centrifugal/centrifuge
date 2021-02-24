@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -445,4 +446,59 @@ func TestUserConnections(t *testing.T) {
 
 	connections := h.userConnections(c.UserID())
 	require.Equal(t, h.conns, connections)
+}
+
+func BenchmarkHub_Contention(b *testing.B) {
+	b.ReportAllocs()
+
+	h := newHub()
+
+	numClients := 10000
+	numChannels := 128
+
+	n := defaultTestNodeBenchmark(b)
+
+	var clients []*Client
+
+	for i := 0; i < numClients; i++ {
+		c, err := newClient(context.Background(), n, newTestTransport(func() {}))
+		require.NoError(b, err)
+		_ = h.add(c)
+		clients = append(clients, c)
+		for j := 0; j < numChannels; j++ {
+			_, _ = h.addSub("ch"+strconv.Itoa(j), c)
+		}
+	}
+
+	pub := &protocol.Publication{
+		Data: []byte(`{"input": "test"}`),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		i := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			i++
+			err := h.broadcastPublication("ch"+strconv.Itoa(i%numChannels), pub, StreamPosition{})
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			i++
+			_, _ = h.addSub("ch"+strconv.Itoa(i), clients[i%1024])
+		}
+	})
 }
