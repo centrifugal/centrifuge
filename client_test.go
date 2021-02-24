@@ -62,7 +62,7 @@ func TestClientInitialState(t *testing.T) {
 	require.NotNil(t, "", client.user)
 	require.Equal(t, 0, len(client.Channels()))
 	require.Equal(t, ProtocolTypeJSON, client.Transport().Protocol())
-	require.Equal(t, "test_transport", client.Transport().Name())
+	require.Equal(t, "websocket", client.Transport().Name())
 	require.True(t, client.status == statusConnecting)
 	require.False(t, client.authenticated)
 }
