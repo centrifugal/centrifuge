@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -441,12 +442,48 @@ func TestUserConnections(t *testing.T) {
 	require.Equal(t, h.connShards[index(c.UserID(), numHubShards)].conns, connections)
 }
 
+func TestHubSharding(t *testing.T) {
+	numUsers := numHubShards * 10
+	numChannels := numHubShards * 10
+
+	channels := make([]string, 0, numChannels)
+	for i := 0; i < numChannels; i++ {
+		channels = append(channels, "ch"+strconv.Itoa(i))
+	}
+
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	for j := 0; j < 2; j++ { // two connections from the same user.
+		for i := 0; i < numUsers; i++ {
+			c, err := newClient(context.Background(), n, newTestTransport(func() {}))
+			require.NoError(t, err)
+			c.user = strconv.Itoa(i)
+			require.NoError(t, err)
+			_ = n.hub.add(c)
+			for _, ch := range channels {
+				_, _ = n.hub.addSub(ch, c)
+			}
+		}
+	}
+
+	for i := range n.hub.connShards {
+		require.NotZero(t, n.hub.connShards[i].NumClients())
+		require.NotZero(t, n.hub.connShards[i].NumUsers())
+	}
+	for i := range n.hub.subShards {
+		require.True(t, len(n.hub.subShards[i].subs) > 0)
+	}
+
+	require.Equal(t, numUsers, n.Hub().NumUsers())
+	require.Equal(t, 2*numUsers, n.Hub().NumClients())
+	require.Equal(t, numChannels, n.Hub().NumChannels())
+}
+
 // This benchmark allows to estimate the benefit from Hub sharding.
 // As we have a broadcasting goroutine here it's not very useful to look at
 // total allocations here - it's better to look at operation time.
 func BenchmarkHub_Contention(b *testing.B) {
-	h := newHub()
-
 	numClients := 100
 	numChannels := 128
 
@@ -462,10 +499,10 @@ func BenchmarkHub_Contention(b *testing.B) {
 	for i := 0; i < numClients; i++ {
 		c, err := newClient(context.Background(), n, newTestTransport(func() {}))
 		require.NoError(b, err)
-		_ = h.add(c)
+		_ = n.hub.add(c)
 		clients = append(clients, c)
 		for _, ch := range channels {
-			_, _ = h.addSub(ch, c)
+			_, _ = n.hub.addSub(ch, c)
 		}
 	}
 
@@ -483,10 +520,72 @@ func BenchmarkHub_Contention(b *testing.B) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_ = h.broadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
+				_ = n.hub.broadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
 			}()
-			_, _ = h.addSub(channels[i%numChannels], clients[i%numClients])
+			_, _ = n.hub.addSub(channels[i%numChannels], clients[i%numClients])
 			wg.Wait()
 		}
 	})
+}
+
+var broadcastBenches = []struct {
+	NumSubscribers int
+}{
+	{1000},
+	{10000},
+	{100000},
+}
+
+// BenchmarkHub_MassiveBroadcast allows estimating time to broadcast
+// a single message to many subscribers inside one channel.
+func BenchmarkHub_MassiveBroadcast(b *testing.B) {
+	pub := &protocol.Publication{Data: []byte(`{"input": "test"}`)}
+	streamPosition := StreamPosition{}
+
+	for _, tt := range broadcastBenches {
+		numSubscribers := tt.NumSubscribers
+		b.Run(fmt.Sprintf("%d", numSubscribers), func(b *testing.B) {
+			b.ReportAllocs()
+			n := defaultTestNodeBenchmark(b)
+
+			numChannels := 64
+			channels := make([]string, 0, numChannels)
+
+			for i := 0; i < numChannels; i++ {
+				channels = append(channels, "broadcast"+strconv.Itoa(i))
+			}
+
+			sink := make(chan []byte, 1024)
+
+			for i := 0; i < numSubscribers; i++ {
+				t := newTestTransport(func() {})
+				t.setSink(sink)
+				c, err := newClient(context.Background(), n, t)
+				require.NoError(b, err)
+				_ = n.hub.add(c)
+				for _, ch := range channels {
+					_, _ = n.hub.addSub(ch, c)
+				}
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					j := 0
+					for {
+						<-sink
+						j++
+						if j == numSubscribers {
+							break
+						}
+					}
+				}()
+				_ = n.hub.broadcastPublication(channels[i%numChannels], pub, streamPosition)
+				wg.Wait()
+			}
+		})
+	}
 }
