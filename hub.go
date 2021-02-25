@@ -11,23 +11,152 @@ import (
 	"github.com/centrifugal/protocol"
 )
 
+const numHubShards = 64
+
 // Hub tracks Client connections on the current Node.
 type Hub struct {
+	connShards [numHubShards]*connShard
+	subShards  [numHubShards]*subShard
+}
+
+// newHub initializes Hub.
+func newHub() *Hub {
+	h := &Hub{}
+	for i := 0; i < numHubShards; i++ {
+		h.connShards[i] = newConnShard()
+		h.subShards[i] = newSubShard()
+	}
+	return h
+}
+
+// shutdown unsubscribes users from all channels and disconnects them.
+func (h *Hub) shutdown(ctx context.Context) error {
+	// Limit concurrency here to prevent resource usage burst on shutdown.
+	sem := make(chan struct{}, hubShutdownSemaphoreSize)
+
+	var errMu sync.Mutex
+	var shutdownErr error
+
+	var wg sync.WaitGroup
+	wg.Add(numHubShards)
+	for i := 0; i < numHubShards; i++ {
+		go func(i int) {
+			defer wg.Done()
+			err := h.connShards[i].shutdown(ctx, sem)
+			if err != nil {
+				errMu.Lock()
+				if shutdownErr == nil {
+					shutdownErr = err
+				}
+				errMu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	return shutdownErr
+}
+
+// add adds connection into clientHub connections registry.
+func (h *Hub) add(c *Client) error {
+	return h.connShards[index(c.UserID(), numHubShards)].add(c)
+}
+
+// Remove removes connection from clientHub connections registry.
+func (h *Hub) remove(c *Client) error {
+	return h.connShards[index(c.UserID(), numHubShards)].remove(c)
+}
+
+// userConnections returns all connections of user with specified UserID.
+func (h *Hub) userConnections(userID string) map[string]*Client {
+	return h.connShards[index(userID, numHubShards)].userConnections(userID)
+}
+
+func (h *Hub) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
+	return h.connShards[index(user, numHubShards)].disconnect(user, disconnect, whitelist)
+}
+
+func (h *Hub) unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
+	return h.connShards[index(user, numHubShards)].unsubscribe(user, ch, opts...)
+}
+
+func (h *Hub) addSub(ch string, c *Client) (bool, error) {
+	return h.subShards[index(ch, numHubShards)].addSub(ch, c)
+}
+
+// removeSub removes connection from clientHub subscriptions registry.
+func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
+	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
+}
+
+// broadcastPublication sends message to all clients subscribed on channel.
+func (h *Hub) broadcastPublication(ch string, pub *protocol.Publication, sp StreamPosition) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pub, sp)
+}
+
+// broadcastJoin sends message to all clients subscribed on channel.
+func (h *Hub) broadcastJoin(ch string, join *protocol.Join) error {
+	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, join)
+}
+
+func (h *Hub) broadcastLeave(ch string, leave *protocol.Leave) error {
+	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, leave)
+}
+
+// NumSubscribers returns number of current subscribers for a given channel.
+func (h *Hub) NumSubscribers(ch string) int {
+	return h.subShards[index(ch, numHubShards)].NumSubscribers(ch)
+}
+
+// Channels returns a slice of all active channels.
+func (h *Hub) Channels() []string {
+	channels := make([]string, 0, h.NumChannels())
+	for i := 0; i < numHubShards; i++ {
+		channels = append(channels, h.subShards[i].Channels()...)
+	}
+	return channels
+}
+
+// NumClients returns total number of client connections.
+func (h *Hub) NumClients() int {
+	var total int
+	for i := 0; i < numHubShards; i++ {
+		total += h.connShards[i].NumClients()
+	}
+	return total
+}
+
+// NumUsers returns a number of unique users connected.
+func (h *Hub) NumUsers() int {
+	var total int
+	for i := 0; i < numHubShards; i++ {
+		// users do not overlap among shards.
+		total += h.connShards[i].NumUsers()
+	}
+	return total
+}
+
+// NumChannels returns a total number of different channels.
+func (h *Hub) NumChannels() int {
+	var total int
+	for i := 0; i < numHubShards; i++ {
+		// channels do not overlap among shards.
+		total += h.subShards[i].NumChannels()
+	}
+	return total
+}
+
+type connShard struct {
 	mu sync.RWMutex
 	// match client ID with actual client connection.
 	conns map[string]*Client
 	// registry to hold active client connections grouped by user.
 	users map[string]map[string]struct{}
-	// registry to hold active subscriptions of clients to channels.
-	subs map[string]map[string]struct{}
 }
 
-// newHub initializes Hub.
-func newHub() *Hub {
-	return &Hub{
+func newConnShard() *connShard {
+	return &connShard{
 		conns: make(map[string]*Client),
 		users: make(map[string]map[string]struct{}),
-		subs:  make(map[string]map[string]struct{}),
 	}
 }
 
@@ -38,11 +167,8 @@ const (
 )
 
 // shutdown unsubscribes users from all channels and disconnects them.
-func (h *Hub) shutdown(ctx context.Context) error {
+func (h *connShard) shutdown(ctx context.Context, sem chan struct{}) error {
 	advice := DisconnectShutdown
-
-	// Limit concurrency here to prevent resource usage burst on shutdown.
-	sem := make(chan struct{}, hubShutdownSemaphoreSize)
 
 	h.mu.RLock()
 	// At this moment node won't accept new client connections so we can
@@ -95,7 +221,7 @@ func stringInSlice(str string, slice []string) bool {
 	return false
 }
 
-func (h *Hub) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
+func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
 	userConnections := h.userConnections(user)
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
@@ -108,7 +234,7 @@ func (h *Hub) disconnect(user string, disconnect *Disconnect, whitelist []string
 	return nil
 }
 
-func (h *Hub) unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
+func (h *connShard) unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
 	userConnections := h.userConnections(user)
 	for _, c := range userConnections {
 		err := c.Unsubscribe(ch, opts...)
@@ -119,8 +245,30 @@ func (h *Hub) unsubscribe(user string, ch string, opts ...UnsubscribeOption) err
 	return nil
 }
 
+// userConnections returns all connections of user with specified UserID.
+func (h *connShard) userConnections(userID string) map[string]*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	userConnections, ok := h.users[userID]
+	if !ok {
+		return map[string]*Client{}
+	}
+
+	conns := make(map[string]*Client, len(userConnections))
+	for uid := range userConnections {
+		c, ok := h.conns[uid]
+		if !ok {
+			continue
+		}
+		conns[uid] = c
+	}
+
+	return conns
+}
+
 // add adds connection into clientHub connections registry.
-func (h *Hub) add(c *Client) error {
+func (h *connShard) add(c *Client) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -137,7 +285,7 @@ func (h *Hub) add(c *Client) error {
 }
 
 // Remove removes connection from clientHub connections registry.
-func (h *Hub) remove(c *Client) error {
+func (h *connShard) remove(c *Client) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -165,42 +313,48 @@ func (h *Hub) remove(c *Client) error {
 	return nil
 }
 
-// userConnections returns all connections of user with specified UserID.
-func (h *Hub) userConnections(userID string) map[string]*Client {
+// NumClients returns total number of client connections.
+func (h *connShard) NumClients() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-
-	userConnections, ok := h.users[userID]
-	if !ok {
-		return map[string]*Client{}
+	total := 0
+	for _, clientConnections := range h.users {
+		total += len(clientConnections)
 	}
+	return total
+}
 
-	conns := make(map[string]*Client, len(userConnections))
-	for uid := range userConnections {
-		c, ok := h.conns[uid]
-		if !ok {
-			continue
-		}
-		conns[uid] = c
+// NumUsers returns a number of unique users connected.
+func (h *connShard) NumUsers() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.users)
+}
+
+type subShard struct {
+	mu sync.RWMutex
+	// registry to hold active subscriptions of clients to channels.
+	subs map[string]map[string]*Client
+}
+
+func newSubShard() *subShard {
+	return &subShard{
+		subs: make(map[string]map[string]*Client),
 	}
-
-	return conns
 }
 
 // addSub adds connection into clientHub subscriptions registry.
-func (h *Hub) addSub(ch string, c *Client) (bool, error) {
+func (h *subShard) addSub(ch string, c *Client) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	uid := c.ID()
 
-	h.conns[uid] = c
-
 	_, ok := h.subs[ch]
 	if !ok {
-		h.subs[ch] = make(map[string]struct{})
+		h.subs[ch] = make(map[string]*Client)
 	}
-	h.subs[ch][uid] = struct{}{}
+	h.subs[ch][uid] = c
 	if !ok {
 		return true, nil
 	}
@@ -208,7 +362,7 @@ func (h *Hub) addSub(ch string, c *Client) (bool, error) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
+func (h *subShard) removeSub(ch string, c *Client) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -235,7 +389,7 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
 }
 
 // broadcastPublication sends message to all clients subscribed on channel.
-func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
+func (h *subShard) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
 	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
 	if useSeqGen {
 		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
@@ -253,11 +407,7 @@ func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication, sp
 	var jsonPublicationReply *prepared.Reply
 	var protobufPublicationReply *prepared.Reply
 	// Iterate over channel subscribers and send message.
-	for uid := range channelSubscriptions {
-		c, ok := h.conns[uid]
-		if !ok {
-			continue
-		}
+	for _, c := range channelSubscriptions {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonPublicationReply == nil {
@@ -315,7 +465,7 @@ func (h *Hub) broadcastPublication(channel string, pub *protocol.Publication, sp
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
-func (h *Hub) broadcastJoin(channel string, join *protocol.Join) error {
+func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -329,11 +479,7 @@ func (h *Hub) broadcastJoin(channel string, join *protocol.Join) error {
 		protobufReply *prepared.Reply
 	)
 
-	for uid := range channelSubscriptions {
-		c, ok := h.conns[uid]
-		if !ok {
-			continue
-		}
+	for _, c := range channelSubscriptions {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonReply == nil {
@@ -373,7 +519,7 @@ func (h *Hub) broadcastJoin(channel string, join *protocol.Join) error {
 }
 
 // broadcastLeave sends message to all clients subscribed on channel.
-func (h *Hub) broadcastLeave(channel string, leave *protocol.Leave) error {
+func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -387,11 +533,7 @@ func (h *Hub) broadcastLeave(channel string, leave *protocol.Leave) error {
 		protobufReply *prepared.Reply
 	)
 
-	for uid := range channelSubscriptions {
-		c, ok := h.conns[uid]
-		if !ok {
-			continue
-		}
+	for _, c := range channelSubscriptions {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonReply == nil {
@@ -430,33 +572,15 @@ func (h *Hub) broadcastLeave(channel string, leave *protocol.Leave) error {
 	return nil
 }
 
-// NumClients returns total number of client connections.
-func (h *Hub) NumClients() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	total := 0
-	for _, clientConnections := range h.users {
-		total += len(clientConnections)
-	}
-	return total
-}
-
-// NumUsers returns a number of unique users connected.
-func (h *Hub) NumUsers() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.users)
-}
-
 // NumChannels returns a total number of different channels.
-func (h *Hub) NumChannels() int {
+func (h *subShard) NumChannels() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.subs)
 }
 
 // Channels returns a slice of all active channels.
-func (h *Hub) Channels() []string {
+func (h *subShard) Channels() []string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	channels := make([]string, len(h.subs))
@@ -469,7 +593,7 @@ func (h *Hub) Channels() []string {
 }
 
 // NumSubscribers returns number of current subscribers for a given channel.
-func (h *Hub) NumSubscribers(ch string) int {
+func (h *subShard) NumSubscribers(ch string) int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	conns, ok := h.subs[ch]

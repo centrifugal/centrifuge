@@ -2,7 +2,9 @@ package centrifuge
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -55,7 +57,7 @@ func (t *testTransport) Write(data []byte) error {
 }
 
 func (t *testTransport) Name() string {
-	return "test_transport"
+	return transportWebsocket
 }
 
 func (t *testTransport) Protocol() ProtocolType {
@@ -88,8 +90,6 @@ func TestHub(t *testing.T) {
 	require.NoError(t, err)
 	err = h.add(c)
 	require.NoError(t, err)
-	require.Equal(t, len(h.users), 1)
-
 	conns := h.userConnections("test")
 	require.Equal(t, 1, len(conns))
 	require.Equal(t, 1, h.NumClients())
@@ -99,14 +99,12 @@ func TestHub(t *testing.T) {
 	c.uid = "invalid"
 	err = h.remove(c)
 	require.NoError(t, err)
-	require.Len(t, h.users, 1)
-	require.Len(t, conns, 1)
+	require.Len(t, h.userConnections("test"), 1)
 
 	c.uid = validUID
 	err = h.remove(c)
 	require.NoError(t, err)
-	require.Equal(t, len(h.users), 0)
-	require.Equal(t, 1, len(conns))
+	require.Len(t, h.userConnections("test"), 0)
 }
 
 func TestHubUnsubscribe(t *testing.T) {
@@ -130,7 +128,7 @@ func TestHubUnsubscribe(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
-	require.NotContains(t, n.hub.subs, "test_channel")
+	require.Zero(t, n.hub.NumSubscribers("test_channel"))
 }
 
 func TestHubDisconnect(t *testing.T) {
@@ -145,9 +143,10 @@ func TestHubDisconnect(t *testing.T) {
 
 	client := newTestSubscribedClient(t, n, "42", "test_channel")
 	clientWithReconnect := newTestSubscribedClient(t, n, "24", "test_channel_reconnect")
-	require.Len(t, n.hub.conns, 2)
-	require.Len(t, n.hub.users, 2)
-	require.Len(t, n.hub.subs, 2)
+	require.Len(t, n.hub.userConnections("42"), 1)
+	require.Len(t, n.hub.userConnections("24"), 1)
+	require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
+	require.Equal(t, 1, n.hub.NumSubscribers("test_channel_reconnect"))
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
@@ -174,9 +173,8 @@ func TestHubDisconnect(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
-	require.NotContains(t, n.hub.conns, client.uid)
-	require.NotContains(t, n.hub.users, "42")
-	require.NotContains(t, n.hub.subs, "test_channel")
+	require.Len(t, n.hub.userConnections("42"), 0)
+	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
 
 	// Disconnect subscribed user with reconnect.
 	err = n.hub.disconnect("24", DisconnectForceReconnect, nil)
@@ -186,15 +184,15 @@ func TestHubDisconnect(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
-	require.NotContains(t, n.hub.conns, clientWithReconnect.uid)
-	require.NotContains(t, n.hub.users, "24")
-	require.NotContains(t, n.hub.subs, "test_channel_reconnect")
+	require.Len(t, n.hub.userConnections("24"), 0)
+	require.Equal(t, 0, n.hub.NumSubscribers("test_channel_reconnect"))
 
 	wg.Wait()
 
-	require.Len(t, n.hub.conns, 0)
-	require.Len(t, n.hub.users, 0)
-	require.Len(t, n.hub.subs, 0)
+	require.Len(t, n.hub.userConnections("24"), 0)
+	require.Len(t, n.hub.userConnections("42"), 0)
+	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
+	require.Equal(t, 0, n.hub.NumSubscribers("test_channel_reconnect"))
 }
 
 func TestHubDisconnect_ClientWhitelist(t *testing.T) {
@@ -210,10 +208,8 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	client := newTestSubscribedClient(t, n, "12", "test_channel")
 	clientToKeep := newTestSubscribedClient(t, n, "12", "test_channel")
 
-	require.Len(t, n.hub.conns, 2)
-	require.Len(t, n.hub.users, 1)
-	require.Len(t, n.hub.subs, 1)
-	require.Len(t, n.hub.subs["test_channel"], 2)
+	require.Len(t, n.hub.userConnections("12"), 2)
+	require.Equal(t, 2, n.hub.NumSubscribers("test_channel"))
 
 	shouldBeClosed := make(chan struct{})
 	shouldNotBeClosed := make(chan struct{})
@@ -238,9 +234,8 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 		case <-shouldNotBeClosed:
 			require.Fail(t, "client should not be disconnected")
 		case <-time.After(time.Second):
-			require.Len(t, n.hub.conns, 1)
-			require.Len(t, n.hub.users, 1)
-			require.Len(t, n.hub.subs["test_channel"], 1)
+			require.Len(t, n.hub.userConnections("12"), 1)
+			require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
 		}
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for channel close")
@@ -444,5 +439,153 @@ func TestUserConnections(t *testing.T) {
 	_ = h.add(c)
 
 	connections := h.userConnections(c.UserID())
-	require.Equal(t, h.conns, connections)
+	require.Equal(t, h.connShards[index(c.UserID(), numHubShards)].conns, connections)
+}
+
+func TestHubSharding(t *testing.T) {
+	numUsers := numHubShards * 10
+	numChannels := numHubShards * 10
+
+	channels := make([]string, 0, numChannels)
+	for i := 0; i < numChannels; i++ {
+		channels = append(channels, "ch"+strconv.Itoa(i))
+	}
+
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	for j := 0; j < 2; j++ { // two connections from the same user.
+		for i := 0; i < numUsers; i++ {
+			c, err := newClient(context.Background(), n, newTestTransport(func() {}))
+			require.NoError(t, err)
+			c.user = strconv.Itoa(i)
+			require.NoError(t, err)
+			_ = n.hub.add(c)
+			for _, ch := range channels {
+				_, _ = n.hub.addSub(ch, c)
+			}
+		}
+	}
+
+	for i := range n.hub.connShards {
+		require.NotZero(t, n.hub.connShards[i].NumClients())
+		require.NotZero(t, n.hub.connShards[i].NumUsers())
+	}
+	for i := range n.hub.subShards {
+		require.True(t, len(n.hub.subShards[i].subs) > 0)
+	}
+
+	require.Equal(t, numUsers, n.Hub().NumUsers())
+	require.Equal(t, 2*numUsers, n.Hub().NumClients())
+	require.Equal(t, numChannels, n.Hub().NumChannels())
+}
+
+// This benchmark allows to estimate the benefit from Hub sharding.
+// As we have a broadcasting goroutine here it's not very useful to look at
+// total allocations here - it's better to look at operation time.
+func BenchmarkHub_Contention(b *testing.B) {
+	numClients := 100
+	numChannels := 128
+
+	n := defaultTestNodeBenchmark(b)
+
+	var clients []*Client
+	var channels []string
+
+	for i := 0; i < numChannels; i++ {
+		channels = append(channels, "ch"+strconv.Itoa(i))
+	}
+
+	for i := 0; i < numClients; i++ {
+		c, err := newClient(context.Background(), n, newTestTransport(func() {}))
+		require.NoError(b, err)
+		_ = n.hub.add(c)
+		clients = append(clients, c)
+		for _, ch := range channels {
+			_, _ = n.hub.addSub(ch, c)
+		}
+	}
+
+	pub := &protocol.Publication{
+		Data: []byte(`{"input": "test"}`),
+	}
+	streamPosition := StreamPosition{}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			i++
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_ = n.hub.broadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
+			}()
+			_, _ = n.hub.addSub(channels[i%numChannels], clients[i%numClients])
+			wg.Wait()
+		}
+	})
+}
+
+var broadcastBenches = []struct {
+	NumSubscribers int
+}{
+	{1000},
+	{10000},
+	{100000},
+}
+
+// BenchmarkHub_MassiveBroadcast allows estimating time to broadcast
+// a single message to many subscribers inside one channel.
+func BenchmarkHub_MassiveBroadcast(b *testing.B) {
+	pub := &protocol.Publication{Data: []byte(`{"input": "test"}`)}
+	streamPosition := StreamPosition{}
+
+	for _, tt := range broadcastBenches {
+		numSubscribers := tt.NumSubscribers
+		b.Run(fmt.Sprintf("%d", numSubscribers), func(b *testing.B) {
+			b.ReportAllocs()
+			n := defaultTestNodeBenchmark(b)
+
+			numChannels := 64
+			channels := make([]string, 0, numChannels)
+
+			for i := 0; i < numChannels; i++ {
+				channels = append(channels, "broadcast"+strconv.Itoa(i))
+			}
+
+			sink := make(chan []byte, 1024)
+
+			for i := 0; i < numSubscribers; i++ {
+				t := newTestTransport(func() {})
+				t.setSink(sink)
+				c, err := newClient(context.Background(), n, t)
+				require.NoError(b, err)
+				_ = n.hub.add(c)
+				for _, ch := range channels {
+					_, _ = n.hub.addSub(ch, c)
+				}
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					j := 0
+					for {
+						<-sink
+						j++
+						if j == numSubscribers {
+							break
+						}
+					}
+				}()
+				_ = n.hub.broadcastPublication(channels[i%numChannels], pub, streamPosition)
+				wg.Wait()
+			}
+		})
+	}
 }
