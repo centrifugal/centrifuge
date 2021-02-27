@@ -3,6 +3,7 @@ package tntengine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -43,6 +44,9 @@ func Connect(addrs []string, opts tarantool.Opts, multiOpts MultiOpts) (*MultiCo
 	}
 	leaderFound := mc.checkLeaderOnce()
 	if !leaderFound {
+		if multiOpts.ConnectionMode == ConnectionModeSingleInstance {
+			return nil, fmt.Errorf("error connecting to ")
+		}
 		return nil, ErrNoLeader
 	}
 	go mc.checkLeader()
@@ -83,12 +87,20 @@ func getConns(addrs []string, opts tarantool.Opts) (map[string]*tarantool.Connec
 	conns := map[string]*tarantool.Connection{}
 	var wg sync.WaitGroup
 	var connsMu sync.Mutex
+	var firstErr error
+	var numErrors int
 	wg.Add(len(addrs))
 	for _, addr := range addrs {
 		go func(addr string) {
 			defer wg.Done()
 			conn, err := tarantool.Connect(addr, opts)
 			if err != nil {
+				connsMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				numErrors++
+				connsMu.Unlock()
 				return
 			}
 			connsMu.Lock()
@@ -98,6 +110,9 @@ func getConns(addrs []string, opts tarantool.Opts) (map[string]*tarantool.Connec
 
 	}
 	wg.Wait()
+	if numErrors == len(addrs) {
+		return nil, firstErr
+	}
 	return conns, nil
 }
 
