@@ -3,7 +3,6 @@ package tntengine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -44,9 +43,6 @@ func Connect(addrs []string, opts tarantool.Opts, multiOpts MultiOpts) (*MultiCo
 	}
 	leaderFound := mc.checkLeaderOnce()
 	if !leaderFound {
-		if multiOpts.ConnectionMode == ConnectionModeSingleInstance {
-			return nil, fmt.Errorf("error connecting to ")
-		}
 		return nil, ErrNoLeader
 	}
 	go mc.checkLeader()
