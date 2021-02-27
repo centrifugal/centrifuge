@@ -364,6 +364,36 @@ func TestNode_handleLeave(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestNode_Subscribe(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+	n.OnConnect(func(client *Client) {
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			require.Equal(t, "42", client.UserID())
+			require.Equal(t, "test_channel", event.Channel)
+			require.True(t, event.ServerSide)
+			close(done)
+		})
+	})
+
+	newTestConnectedClient(t, n, "42")
+
+	err := n.Subscribe("42", "test_channel")
+	require.NoError(t, err)
+	require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
+
+	err = n.Unsubscribe("42", "test_channel")
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+	require.Zero(t, n.hub.NumSubscribers("test_channel"))
+}
+
 func TestNode_Unsubscribe(t *testing.T) {
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -384,7 +414,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 
 	client := newTestSubscribedClient(t, n, "42", "test_channel")
 
-	err = n.Unsubscribe("42", "test_channel", WithResubscribe(false))
+	err = n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
 	select {
 	case <-done:

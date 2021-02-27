@@ -107,7 +107,7 @@ func TestClientUnsubscribeClosedClient(t *testing.T) {
 	subscribeClient(t, client, "test")
 	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
-	err = client.Unsubscribe("test", WithResubscribe(true))
+	err = client.Unsubscribe("test")
 	require.NoError(t, err)
 }
 

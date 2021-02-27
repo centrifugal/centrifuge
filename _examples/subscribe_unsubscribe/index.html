@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title></title>
+        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript">
+            window.addEventListener('load', function() {
+                const container = document.getElementById('messages');
+
+                function drawText(text) {
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
+                }
+
+                const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket');
+
+                // bind listeners on centrifuge object instance events.
+                centrifuge.on('connect', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
+                });
+
+                centrifuge.on('disconnect', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                });
+
+                centrifuge.on('subscribe', function (ctx) {
+                    drawText('subscribed to a channel ' + ctx.channel);
+                })
+
+                centrifuge.on('unsubscribe', function (ctx) {
+                    drawText('unsubscribed from a channel ' + ctx.channel);
+                })
+
+                centrifuge.connect();
+            });
+        </script>
+    </head>
+    <body>
+        <ul id="messages"></ul>
+    </body>
+</html>

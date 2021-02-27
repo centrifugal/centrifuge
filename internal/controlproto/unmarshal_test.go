@@ -59,6 +59,18 @@ func TestDecoder(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, disconnect, decodedDisconnect)
 
+	sub := &controlpb.Subscribe{
+		User:    "test",
+		Channel: "test channel",
+	}
+	d, err = encoder.EncodeSubscribe(sub)
+	require.NoError(t, err)
+	require.NotNil(t, d)
+
+	decodedSubscribe, err := decoder.DecodeSubscribe(d)
+	require.NoError(t, err)
+	require.Equal(t, sub, decodedSubscribe)
+
 	unsub := &controlpb.Unsubscribe{
 		User:    "test",
 		Channel: "test channel",

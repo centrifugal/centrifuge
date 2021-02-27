@@ -540,12 +540,7 @@ func (c *Client) Send(data []byte) error {
 }
 
 // Unsubscribe allows to unsubscribe client from channel.
-func (c *Client) Unsubscribe(ch string, opts ...UnsubscribeOption) error {
-	unsubscribeOpts := &UnsubscribeOptions{}
-	for _, opt := range opts {
-		opt(unsubscribeOpts)
-	}
-
+func (c *Client) Unsubscribe(ch string) error {
 	c.mu.RLock()
 	if c.status == statusClosed {
 		c.mu.RUnlock()
@@ -557,13 +552,13 @@ func (c *Client) Unsubscribe(ch string, opts ...UnsubscribeOption) error {
 	if err != nil {
 		return err
 	}
-	return c.sendUnsub(ch, unsubscribeOpts.Resubscribe)
+	return c.sendUnsub(ch)
 }
 
-func (c *Client) sendUnsub(ch string, resubscribe bool) error {
+func (c *Client) sendUnsub(ch string) error {
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
 
-	data, err := pushEncoder.EncodeUnsub(&protocol.Unsub{Resubscribe: resubscribe})
+	data, err := pushEncoder.EncodeUnsub(&protocol.Unsub{})
 	if err != nil {
 		return err
 	}
@@ -1818,8 +1813,8 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 	return nil
 }
 
-// Subscribe client to channel.
-func (c *Client) Subscribe(channel string) error {
+// Subscribe client to a channel.
+func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	subCmd := &protocol.SubscribeRequest{
 		Channel: channel,
 	}
@@ -1830,7 +1825,20 @@ func (c *Client) Subscribe(channel string) error {
 	if validateDisconnect != nil {
 		return validateDisconnect
 	}
-	subCtx := c.subscribeCmd(subCmd, SubscribeReply{}, nil, true)
+	subscribeOpts := &SubscribeOptions{}
+	for _, opt := range opts {
+		opt(subscribeOpts)
+	}
+	subCtx := c.subscribeCmd(subCmd, SubscribeReply{
+		Options: SubscribeOptions{
+			Presence:    subscribeOpts.Presence,
+			JoinLeave:   subscribeOpts.JoinLeave,
+			ChannelInfo: subscribeOpts.ChannelInfo,
+			ExpireAt:    subscribeOpts.ExpireAt,
+			Position:    subscribeOpts.Position,
+			Recover:     subscribeOpts.Recover,
+		},
+	}, nil, true)
 	if subCtx.err != nil {
 		return subCtx.err
 	}
@@ -1965,8 +1973,12 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	info := &ClientInfo{
 		ClientID: c.uid,
 		UserID:   c.user,
-		ConnInfo: c.info,
-		ChanInfo: reply.Options.ChannelInfo,
+	}
+	if len(c.info) > 0 {
+		info.ConnInfo = c.info
+	}
+	if len(reply.Options.ChannelInfo) > 0 {
+		info.ChanInfo = reply.Options.ChannelInfo
 	}
 
 	if reply.Options.Recover {
@@ -2269,9 +2281,10 @@ func (c *Client) unsubscribe(channel string) error {
 			return err
 		}
 
-		if !serverSide && c.eventHub.unsubscribeHandler != nil {
+		if c.eventHub.unsubscribeHandler != nil {
 			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
-				Channel: channel,
+				Channel:    channel,
+				ServerSide: serverSide,
 			})
 		}
 	}

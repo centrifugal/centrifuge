@@ -45,19 +45,48 @@ type SubscribeOptions struct {
 	Recover bool
 }
 
-// UnsubscribeOptions define some fields to alter behaviour of Unsubscribe operation.
-type UnsubscribeOptions struct {
-	// Resubscribe allows to set resubscribe protocol flag.
-	Resubscribe bool
+// SubscribeOption is a type to represent various Subscribe options.
+type SubscribeOption func(*SubscribeOptions)
+
+// WithExpireAt allows to set ExpireAt field.
+func WithExpireAt(expireAt int64) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.ExpireAt = expireAt
+	}
 }
 
-// UnsubscribeOption is a type to represent various Unsubscribe options.
-type UnsubscribeOption func(*UnsubscribeOptions)
+// WithChannelInfo ...
+func WithChannelInfo(chanInfo []byte) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.ChannelInfo = chanInfo
+	}
+}
 
-// WithResubscribe allows to set Resubscribe flag to true.
-func WithResubscribe(resubscribe bool) UnsubscribeOption {
-	return func(opts *UnsubscribeOptions) {
-		opts.Resubscribe = resubscribe
+// WithPresence ...
+func WithPresence(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Presence = enabled
+	}
+}
+
+// WithJoinLeave ...
+func WithJoinLeave(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.JoinLeave = enabled
+	}
+}
+
+// WithPosition ...
+func WithPosition(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Position = enabled
+	}
+}
+
+// WithRecover ...
+func WithRecover(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Recover = enabled
 	}
 }
 

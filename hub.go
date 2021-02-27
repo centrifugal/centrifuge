@@ -75,8 +75,12 @@ func (h *Hub) disconnect(user string, disconnect *Disconnect, whitelist []string
 	return h.connShards[index(user, numHubShards)].disconnect(user, disconnect, whitelist)
 }
 
-func (h *Hub) unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
-	return h.connShards[index(user, numHubShards)].unsubscribe(user, ch, opts...)
+func (h *Hub) unsubscribe(user string, ch string) error {
+	return h.connShards[index(user, numHubShards)].unsubscribe(user, ch)
+}
+
+func (h *Hub) subscribe(user string, ch string, opts ...SubscribeOption) error {
+	return h.connShards[index(user, numHubShards)].subscribe(user, ch, opts...)
 }
 
 func (h *Hub) addSub(ch string, c *Client) (bool, error) {
@@ -234,10 +238,21 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []
 	return nil
 }
 
-func (h *connShard) unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
+func (h *connShard) unsubscribe(user string, ch string) error {
 	userConnections := h.userConnections(user)
 	for _, c := range userConnections {
-		err := c.Unsubscribe(ch, opts...)
+		err := c.Unsubscribe(ch)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *connShard) subscribe(user string, ch string, opts ...SubscribeOption) error {
+	userConnections := h.userConnections(user)
+	for _, c := range userConnections {
+		err := c.Subscribe(ch, opts...)
 		if err != nil {
 			return err
 		}

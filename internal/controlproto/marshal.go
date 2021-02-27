@@ -6,6 +6,7 @@ import "github.com/centrifugal/centrifuge/internal/controlpb"
 type Encoder interface {
 	EncodeCommand(*controlpb.Command) ([]byte, error)
 	EncodeNode(*controlpb.Node) ([]byte, error)
+	EncodeSubscribe(*controlpb.Subscribe) ([]byte, error)
 	EncodeUnsubscribe(*controlpb.Unsubscribe) ([]byte, error)
 	EncodeDisconnect(*controlpb.Disconnect) ([]byte, error)
 	EncodeSurveyRequest(request *controlpb.SurveyRequest) ([]byte, error)
@@ -29,6 +30,11 @@ func (e *ProtobufEncoder) EncodeCommand(cmd *controlpb.Command) ([]byte, error) 
 
 // EncodeNode ...
 func (e *ProtobufEncoder) EncodeNode(cmd *controlpb.Node) ([]byte, error) {
+	return cmd.Marshal()
+}
+
+// EncodeSubscribe ...
+func (e *ProtobufEncoder) EncodeSubscribe(cmd *controlpb.Subscribe) ([]byte, error) {
 	return cmd.Marshal()
 }
 

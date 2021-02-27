@@ -22,6 +22,7 @@ enum MethodType {
     SHUTDOWN = 3 [(gogoproto.enumvalue_customname) = "MethodTypeShutdown"];
     SURVEY_REQUEST = 4 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyRequest"];
     SURVEY_RESPONSE = 5 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyResponse"];
+    SUBSCRIBE = 6 [(gogoproto.enumvalue_customname) = "MethodTypeSubscribe"];
 }
 
 message Command {
@@ -44,6 +45,17 @@ message Node {
 message Metrics {
     double interval = 1 [(gogoproto.jsontag) = "interval"];
     map<string, double> items = 2 [(gogoproto.jsontag) = "items"];
+}
+
+message Subscribe {
+    string user = 1 [(gogoproto.jsontag) = "user"];
+    string channel = 2 [(gogoproto.jsontag) = "channel"];
+    bool presence = 3 [(gogoproto.jsontag) = "presence"];
+    bool join_leave = 4 [(gogoproto.jsontag) = "join_leave"];
+    int64 expire_at = 5 [(gogoproto.jsontag) = "expire_at"];
+    bool position = 6 [(gogoproto.jsontag) = "position"];
+    bool recover = 7 [(gogoproto.jsontag) = "recover"];
+    bytes channel_info = 8 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "channel_info", (gogoproto.nullable) = false];
 }
 
 message Unsubscribe {
