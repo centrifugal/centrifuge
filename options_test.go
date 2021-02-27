@@ -28,7 +28,7 @@ func TestSubscribeOptions(t *testing.T) {
 	for _, opt := range subscribeOpts {
 		opt(opts)
 	}
-	require.Equal(t, 1, opts.ExpireAt)
+	require.Equal(t, int64(1), opts.ExpireAt)
 	require.True(t, opts.Presence)
 	require.True(t, opts.JoinLeave)
 	require.True(t, opts.Position)

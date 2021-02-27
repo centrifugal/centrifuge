@@ -139,8 +139,6 @@ type SubscribeHandler func(SubscribeEvent, SubscribeCallback)
 type UnsubscribeEvent struct {
 	// Channel client unsubscribed from.
 	Channel string
-	// ServerSide flag set for server-side subscription unsubscribe events.
-	ServerSide bool
 }
 
 // UnsubscribeHandler called when client unsubscribed from channel.
