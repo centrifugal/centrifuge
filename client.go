@@ -2281,9 +2281,10 @@ func (c *Client) unsubscribe(channel string) error {
 			return err
 		}
 
-		if !serverSide && c.eventHub.unsubscribeHandler != nil {
+		if c.eventHub.unsubscribeHandler != nil {
 			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
-				Channel: channel,
+				Channel:    channel,
+				ServerSide: serverSide,
 			})
 		}
 	}
