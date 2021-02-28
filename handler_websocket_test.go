@@ -396,6 +396,65 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 	wg.Wait()
 }
 
+func TestCheckSameHost(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		origin  string
+		url     string
+		success bool
+	}{
+		{
+			name:    "empty_origin",
+			origin:  "",
+			success: true,
+			url:     "https://example.com/websocket/connection",
+		},
+		{
+			name:    "invalid_host",
+			origin:  "invalid",
+			url:     "https://example.com/websocket/connection",
+			success: false,
+		},
+		{
+			name:    "unauthorized",
+			origin:  "https://example.com",
+			url:     "wss://example1.com/websocket/connection",
+			success: false,
+		},
+		{
+			name:    "authorized",
+			origin:  "https://example.com",
+			url:     "wss://example.com/websocket/connection",
+			success: true,
+		},
+		{
+			name:    "authorized_case_insensitive",
+			origin:  "https://examplE.com",
+			url:     "wss://example.com/websocket/connection",
+			success: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := httptest.NewRequest("GET", tc.url, nil)
+			r.Header.Set("Origin", tc.origin)
+
+			err := checkSameHost(r)
+			if tc.success {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
 // BenchmarkWebsocketHandler allows to benchmark full flow with one real
 // Websocket connection subscribed to one channel. This is not very representative
 // in terms of time for operation as network IO involved but useful to look at

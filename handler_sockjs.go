@@ -122,8 +122,19 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	wsUpgrader := &websocket.Upgrader{
 		ReadBufferSize:  c.WebsocketReadBufferSize,
 		WriteBufferSize: c.WebsocketWriteBufferSize,
-		CheckOrigin:     c.WebsocketCheckOrigin,
 		Error:           func(w http.ResponseWriter, r *http.Request, status int, reason error) {},
+	}
+	if c.WebsocketCheckOrigin != nil {
+		wsUpgrader.CheckOrigin = c.WebsocketCheckOrigin
+	} else {
+		wsUpgrader.CheckOrigin = func(r *http.Request) bool {
+			err := checkSameHost(r)
+			if err != nil {
+				n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]interface{}{"error": err.Error()}))
+				return false
+			}
+			return true
+		}
 	}
 	if c.WebsocketUseWriteBufferPool {
 		wsUpgrader.WriteBufferPool = writeBufferPool
@@ -136,7 +147,18 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	// based SockJS transports, otherwise SockJS will raise error
 	// about version mismatch.
 	options.SockJSURL = c.URL
-	options.CheckOrigin = c.CheckOrigin
+	if c.CheckOrigin != nil {
+		options.CheckOrigin = c.CheckOrigin
+	} else {
+		options.CheckOrigin = func(r *http.Request) bool {
+			err := checkSameHost(r)
+			if err != nil {
+				n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]interface{}{"error": err.Error()}))
+				return false
+			}
+			return true
+		}
+	}
 
 	options.HeartbeatDelay = c.HeartbeatDelay
 	wsWriteTimeout := c.WebsocketWriteTimeout
