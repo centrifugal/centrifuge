@@ -698,6 +698,40 @@ func TestNode_handleControl(t *testing.T) {
 		require.NotContains(t, n.nodes.nodes, "new_node")
 	})
 
+	t.Run("Subscribe", func(t *testing.T) {
+		t.Parallel()
+
+		n := defaultNodeNoHandlers()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		client := newTestConnectedClient(t, n, "42")
+
+		enc := controlproto.NewProtobufEncoder()
+		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: controlpb.MethodTypeSubscribe,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		paramsBytes, err := enc.EncodeSubscribe(&controlpb.Subscribe{
+			Channel: "test_channel",
+			User:    "42",
+		})
+		require.NoError(t, err)
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: controlpb.MethodTypeSubscribe,
+			Params: paramsBytes,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+		err = n.handleControl(cmdBytes)
+		require.NoError(t, err)
+		require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
+	})
+
 	t.Run("Unsubscribe", func(t *testing.T) {
 		t.Parallel()
 

@@ -889,7 +889,7 @@ func (n *Node) shutdownCmd(nodeID string) error {
 }
 
 // Subscribe subscribes user to a channel.
-// OnSubscribe event won't be called in this case.
+// Note, that OnSubscribe event won't be called in this case.
 func (n *Node) Subscribe(user string, channel string, opts ...SubscribeOption) error {
 	subscribeOpts := &SubscribeOptions{}
 	for _, opt := range opts {
@@ -900,7 +900,7 @@ func (n *Node) Subscribe(user string, channel string, opts ...SubscribeOption) e
 	if err != nil {
 		return err
 	}
-	// Second send unsubscribe control message to other nodes.
+	// Second send subscribe control message to other nodes.
 	return n.pubSubscribe(user, channel, *subscribeOpts)
 }
 
