@@ -127,14 +127,7 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	if c.WebsocketCheckOrigin != nil {
 		wsUpgrader.CheckOrigin = c.WebsocketCheckOrigin
 	} else {
-		wsUpgrader.CheckOrigin = func(r *http.Request) bool {
-			err := checkSameHost(r)
-			if err != nil {
-				n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]interface{}{"error": err.Error()}))
-				return false
-			}
-			return true
-		}
+		wsUpgrader.CheckOrigin = sameHostOriginCheck(n)
 	}
 	if c.WebsocketUseWriteBufferPool {
 		wsUpgrader.WriteBufferPool = writeBufferPool
@@ -150,14 +143,7 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	if c.CheckOrigin != nil {
 		options.CheckOrigin = c.CheckOrigin
 	} else {
-		options.CheckOrigin = func(r *http.Request) bool {
-			err := checkSameHost(r)
-			if err != nil {
-				n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]interface{}{"error": err.Error()}))
-				return false
-			}
-			return true
-		}
+		options.CheckOrigin = sameHostOriginCheck(n)
 	}
 
 	options.HeartbeatDelay = c.HeartbeatDelay

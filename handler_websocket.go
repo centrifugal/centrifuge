@@ -236,14 +236,7 @@ func NewWebsocketHandler(n *Node, c WebsocketConfig) *WebsocketHandler {
 	if c.CheckOrigin != nil {
 		upgrade.CheckOrigin = c.CheckOrigin
 	} else {
-		upgrade.CheckOrigin = func(r *http.Request) bool {
-			err := checkSameHost(r)
-			if err != nil {
-				n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]interface{}{"error": err.Error()}))
-				return false
-			}
-			return true
-		}
+		upgrade.CheckOrigin = sameHostOriginCheck(n)
 	}
 	return &WebsocketHandler{
 		node:    n,
@@ -365,6 +358,17 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+}
+
+func sameHostOriginCheck(n *Node) func(r *http.Request) bool {
+	return func(r *http.Request) bool {
+		err := checkSameHost(r)
+		if err != nil {
+			n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]interface{}{"error": err.Error()}))
+			return false
+		}
+		return true
+	}
 }
 
 func checkSameHost(r *http.Request) error {

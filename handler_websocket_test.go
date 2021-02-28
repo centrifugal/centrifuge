@@ -396,8 +396,11 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 	wg.Wait()
 }
 
-func TestCheckSameHost(t *testing.T) {
+func TestCheckSameHostOrigin(t *testing.T) {
 	t.Parallel()
+
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	testCases := []struct {
 		name    string
@@ -445,12 +448,7 @@ func TestCheckSameHost(t *testing.T) {
 			r := httptest.NewRequest("GET", tc.url, nil)
 			r.Header.Set("Origin", tc.origin)
 
-			err := checkSameHost(r)
-			if tc.success {
-				require.NoError(t, err)
-			} else {
-				require.Error(t, err)
-			}
+			require.Equal(t, tc.success, sameHostOriginCheck(n)(r))
 		})
 	}
 }
