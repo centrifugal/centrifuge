@@ -1,7 +1,10 @@
 package centrifuge
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -233,10 +236,7 @@ func NewWebsocketHandler(n *Node, c WebsocketConfig) *WebsocketHandler {
 	if c.CheckOrigin != nil {
 		upgrade.CheckOrigin = c.CheckOrigin
 	} else {
-		upgrade.CheckOrigin = func(r *http.Request) bool {
-			// Allow all connections.
-			return true
-		}
+		upgrade.CheckOrigin = sameHostOriginCheck(n)
 	}
 	return &WebsocketHandler{
 		node:    n,
@@ -358,4 +358,30 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+}
+
+func sameHostOriginCheck(n *Node) func(r *http.Request) bool {
+	return func(r *http.Request) bool {
+		err := checkSameHost(r)
+		if err != nil {
+			n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]interface{}{"error": err.Error()}))
+			return false
+		}
+		return true
+	}
+}
+
+func checkSameHost(r *http.Request) error {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return nil
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return fmt.Errorf("failed to parse Origin header %q: %w", origin, err)
+	}
+	if strings.EqualFold(r.Host, u.Host) {
+		return nil
+	}
+	return fmt.Errorf("request Origin %q is not authorized for Host %q", origin, r.Host)
 }

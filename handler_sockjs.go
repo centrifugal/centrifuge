@@ -122,8 +122,12 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	wsUpgrader := &websocket.Upgrader{
 		ReadBufferSize:  c.WebsocketReadBufferSize,
 		WriteBufferSize: c.WebsocketWriteBufferSize,
-		CheckOrigin:     c.WebsocketCheckOrigin,
 		Error:           func(w http.ResponseWriter, r *http.Request, status int, reason error) {},
+	}
+	if c.WebsocketCheckOrigin != nil {
+		wsUpgrader.CheckOrigin = c.WebsocketCheckOrigin
+	} else {
+		wsUpgrader.CheckOrigin = sameHostOriginCheck(n)
 	}
 	if c.WebsocketUseWriteBufferPool {
 		wsUpgrader.WriteBufferPool = writeBufferPool
@@ -136,7 +140,11 @@ func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
 	// based SockJS transports, otherwise SockJS will raise error
 	// about version mismatch.
 	options.SockJSURL = c.URL
-	options.CheckOrigin = c.CheckOrigin
+	if c.CheckOrigin != nil {
+		options.CheckOrigin = c.CheckOrigin
+	} else {
+		options.CheckOrigin = sameHostOriginCheck(n)
+	}
 
 	options.HeartbeatDelay = c.HeartbeatDelay
 	wsWriteTimeout := c.WebsocketWriteTimeout
