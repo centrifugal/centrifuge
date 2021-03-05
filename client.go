@@ -1679,7 +1679,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 
 	c.node.logger.log(newLogEntry(LogLevelDebug, "client authenticated", map[string]interface{}{"client": c.uid, "user": c.user}))
 
-	if userConnectionLimit > 0 && user != "" && len(c.node.hub.userConnections(user)) >= userConnectionLimit {
+	if userConnectionLimit > 0 && user != "" && len(c.node.hub.UserConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": user, "client": c.uid, "limit": userConnectionLimit}))
 		return DisconnectConnectionLimit
 	}
@@ -1830,14 +1830,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		opt(subscribeOpts)
 	}
 	subCtx := c.subscribeCmd(subCmd, SubscribeReply{
-		Options: SubscribeOptions{
-			Presence:    subscribeOpts.Presence,
-			JoinLeave:   subscribeOpts.JoinLeave,
-			ChannelInfo: subscribeOpts.ChannelInfo,
-			ExpireAt:    subscribeOpts.ExpireAt,
-			Position:    subscribeOpts.Position,
-			Recover:     subscribeOpts.Recover,
-		},
+		Options: *subscribeOpts,
 	}, nil, true)
 	if subCtx.err != nil {
 		return subCtx.err
@@ -1887,20 +1880,17 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	}
 
 	c.mu.RLock()
-	numChannels := len(c.channels)
-	c.mu.RUnlock()
-
-	if channelLimit > 0 && numChannels >= channelLimit {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]interface{}{"limit": channelLimit, "user": c.user, "client": c.uid}))
-		return ErrorLimitExceeded, nil
-	}
-
-	c.mu.RLock()
 	_, ok := c.channels[channel]
+	numChannels := len(c.channels)
 	c.mu.RUnlock()
 	if ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		return ErrorAlreadySubscribed, nil
+	}
+
+	if channelLimit > 0 && numChannels >= channelLimit {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]interface{}{"limit": channelLimit, "user": c.user, "client": c.uid}))
+		return ErrorLimitExceeded, nil
 	}
 
 	return nil, nil
@@ -1973,12 +1963,8 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	info := &ClientInfo{
 		ClientID: c.uid,
 		UserID:   c.user,
-	}
-	if len(c.info) > 0 {
-		info.ConnInfo = c.info
-	}
-	if len(reply.Options.ChannelInfo) > 0 {
-		info.ChanInfo = reply.Options.ChannelInfo
+		ConnInfo: c.info,
+		ChanInfo: reply.Options.ChannelInfo,
 	}
 
 	if reply.Options.Recover {

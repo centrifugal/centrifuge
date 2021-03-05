@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"io"
 	"sync"
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
@@ -66,8 +67,8 @@ func (h *Hub) remove(c *Client) error {
 	return h.connShards[index(c.UserID(), numHubShards)].remove(c)
 }
 
-// userConnections returns all connections of user with specified UserID.
-func (h *Hub) userConnections(userID string) map[string]*Client {
+// UserConnections returns all user connections to the current Node.
+func (h *Hub) UserConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
 }
 
@@ -227,37 +228,68 @@ func stringInSlice(str string, slice []string) bool {
 
 func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
 	userConnections := h.userConnections(user)
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
 			continue
 		}
+		wg.Add(1)
 		go func(cc *Client) {
-			_ = cc.close(disconnect)
+			defer wg.Done()
+			err := cc.close(disconnect)
+			errMu.Lock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+			errMu.Unlock()
 		}(c)
 	}
-	return nil
+	wg.Wait()
+	return firstErr
 }
 
 func (h *connShard) unsubscribe(user string, ch string) error {
 	userConnections := h.userConnections(user)
+	var wg sync.WaitGroup
+	wg.Add(len(userConnections))
+	var firstErr error
+	var errMu sync.Mutex
 	for _, c := range userConnections {
-		err := c.Unsubscribe(ch)
-		if err != nil {
-			return err
-		}
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Unsubscribe(ch)
+			errMu.Lock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+			errMu.Unlock()
+		}(c)
 	}
-	return nil
+	wg.Wait()
+	return firstErr
 }
 
 func (h *connShard) subscribe(user string, ch string, opts ...SubscribeOption) error {
 	userConnections := h.userConnections(user)
+	var wg sync.WaitGroup
+	wg.Add(len(userConnections))
+	var firstErr error
+	var errMu sync.Mutex
 	for _, c := range userConnections {
-		err := c.Subscribe(ch, opts...)
-		if err != nil {
-			return err
-		}
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Subscribe(ch, opts...)
+			errMu.Lock()
+			if err != nil && err != io.EOF && err != ErrorAlreadySubscribed && firstErr == nil {
+				firstErr = err
+			}
+			errMu.Unlock()
+		}(c)
 	}
-	return nil
+	wg.Wait()
+	return firstErr
 }
 
 // userConnections returns all connections of user with specified UserID.

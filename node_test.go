@@ -450,7 +450,7 @@ func TestNode_Disconnect(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
-	require.True(t, len(n.hub.userConnections("42")) == 0)
+	require.True(t, len(n.hub.UserConnections("42")) == 0)
 }
 
 func TestNode_pubUnsubscribe(t *testing.T) {
@@ -827,7 +827,7 @@ func TestNode_handleControl(t *testing.T) {
 		}
 		require.NoError(t, err)
 		require.Zero(t, n.hub.NumSubscribers("test_channel"))
-		require.Zero(t, len(n.hub.userConnections("42")))
+		require.Zero(t, len(n.hub.UserConnections("42")))
 	})
 
 	t.Run("Unknown", func(t *testing.T) {

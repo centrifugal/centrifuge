@@ -57,8 +57,8 @@ func main() {
 	node, _ := centrifuge.New(cfg)
 
 	node.OnConnect(func(client *centrifuge.Client) {
-		client.OnSubscribe(func(event centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			cb(centrifuge.SubscribeReply{}, nil)
+		client.OnPresenceStats(func(e centrifuge.PresenceStatsEvent, cb centrifuge.PresenceStatsCallback) {
+			cb(centrifuge.PresenceStatsReply{}, nil)
 		})
 	})
 
@@ -83,6 +83,14 @@ func main() {
 	}
 	node.SetBroker(broker)
 
+	presenceManager, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
+		Shards: redisShards,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	node.SetPresenceManager(presenceManager)
+
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
@@ -90,9 +98,9 @@ func main() {
 	go func() {
 		for {
 			time.Sleep(time.Second)
-			node.Subscribe("42", exampleChannel)
+			_ = node.Subscribe("42", exampleChannel, centrifuge.WithPresence(true))
 			time.Sleep(time.Second)
-			node.Unsubscribe("42", exampleChannel)
+			_ = node.Unsubscribe("42", exampleChannel)
 		}
 	}()
 

@@ -25,13 +25,15 @@
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                 });
 
-                centrifuge.on('subscribe', function (ctx) {
+                centrifuge.on('subscribe', async function (ctx) {
                     drawText('subscribed to a channel ' + ctx.channel);
-                })
+                    const resp = await centrifuge.presenceStats(ctx.channel);
+                    drawText('channel ' + ctx.channel + ' has ' + resp['num_clients'] + ' connections');
+                });
 
                 centrifuge.on('unsubscribe', function (ctx) {
                     drawText('unsubscribed from a channel ' + ctx.channel);
-                })
+                });
 
                 centrifuge.connect();
             });

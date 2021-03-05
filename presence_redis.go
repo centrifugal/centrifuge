@@ -138,14 +138,14 @@ func (m *RedisPresenceManager) AddPresence(ch string, uid string, info *ClientIn
 
 func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string, info *ClientInfo) error {
 	expire := int(m.config.PresenceTTL.Seconds())
-	infoJSON, err := infoToProto(info).Marshal()
+	infoBytes, err := infoToProto(info).Marshal()
 	if err != nil {
 		return err
 	}
 	expireAt := time.Now().Unix() + int64(expire)
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
-	dr := s.newDataRequest("", m.addPresenceScript, setKey, []interface{}{setKey, hashKey, expire, expireAt, uid, infoJSON})
+	dr := s.newDataRequest("", m.addPresenceScript, setKey, []interface{}{setKey, hashKey, expire, expireAt, uid, infoBytes})
 	resp := s.getDataResponse(dr)
 	return resp.err
 }

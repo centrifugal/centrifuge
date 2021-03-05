@@ -889,19 +889,23 @@ func (n *Node) shutdownCmd(nodeID string) error {
 }
 
 // Subscribe subscribes user to a channel.
+// If user already subscribed to a channel then we treat this as a race
+// condition – skipping ErrorAlreadySubscribed internally and do nothing.
+// If you need more control then you may use Node.Survey method for a
+// custom cluster-wide subscribe process.
 // Note, that OnSubscribe event won't be called in this case.
-func (n *Node) Subscribe(user string, channel string, opts ...SubscribeOption) error {
+func (n *Node) Subscribe(userID string, channel string, opts ...SubscribeOption) error {
 	subscribeOpts := &SubscribeOptions{}
 	for _, opt := range opts {
 		opt(subscribeOpts)
 	}
 	// First subscribe on this node.
-	err := n.hub.subscribe(user, channel, opts...)
+	err := n.hub.subscribe(userID, channel, opts...)
 	if err != nil {
 		return err
 	}
 	// Second send subscribe control message to other nodes.
-	return n.pubSubscribe(user, channel, *subscribeOpts)
+	return n.pubSubscribe(userID, channel, *subscribeOpts)
 }
 
 // Unsubscribe unsubscribes user from channel, if channel is equal to empty
