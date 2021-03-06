@@ -1869,7 +1869,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	c.mu.RLock()
 	var numChannels int
 	for _, chCtx := range c.channels {
-		if channelHasFlag(chCtx.flags, flagServerSide) {
+		if !channelHasFlag(chCtx.flags, flagServerSide) {
 			numChannels += 1
 		}
 	}
