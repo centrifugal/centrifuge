@@ -109,7 +109,13 @@ type SockjsConfig struct {
 	WebsocketWriteTimeout time.Duration
 }
 
-// SockjsHandler accepts SockJS connections.
+// SockjsHandler accepts SockJS connections. SockJS has a bunch of fallback
+// transports when WebSocket connection is not supported. It comes with additional
+// costs though: small protocol framing overhead, lack of binary support, more
+// goroutines per connection, and you need to use sticky session mechanism on
+// your load balancer in case you are using HTTP-based SockJS fallbacks and have
+// more than one Centrifuge Node on a backend (so SockJS was able to emulate
+// bidirectional protocol). So if you can afford it - use WebsocketHandler only.
 type SockjsHandler struct {
 	node    *Node
 	config  SockjsConfig

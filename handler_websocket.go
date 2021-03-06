@@ -213,7 +213,9 @@ type WebsocketConfig struct {
 	UseWriteBufferPool bool
 }
 
-// WebsocketHandler handles websocket client connections.
+// WebsocketHandler handles WebSocket client connections. WebSocket protocol
+// is a bidirectional connection between a client an a server for low-latency
+// communication.
 type WebsocketHandler struct {
 	node    *Node
 	upgrade *websocket.Upgrader
