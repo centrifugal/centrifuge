@@ -1638,6 +1638,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 		if len(reply.Subscriptions) > 0 {
 			subscriptions = make(map[string]SubscribeOptions, len(reply.Subscriptions))
 			for ch, opts := range reply.Subscriptions {
+				if ch == "" {
+					continue
+				}
 				subscriptions[ch] = opts
 			}
 		}
@@ -1679,7 +1682,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 
 	c.node.logger.log(newLogEntry(LogLevelDebug, "client authenticated", map[string]interface{}{"client": c.uid, "user": c.user}))
 
-	if userConnectionLimit > 0 && user != "" && len(c.node.hub.UserConnections(user)) >= userConnectionLimit {
+	if userConnectionLimit > 0 && user != "" && len(c.node.hub.userConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": user, "client": c.uid, "limit": userConnectionLimit}))
 		return DisconnectConnectionLimit
 	}
@@ -1746,19 +1749,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 					subCmd.Offset = subReq.Offset
 					subCmd.Epoch = subReq.Epoch
 				}
-
-				var subCtx subscribeContext
-				validateErr, validateDisconnect := c.validateSubscribeRequest(subCmd)
-				if subError != nil || subDisconnect != nil {
-					subCtx = subscribeContext{
-						err:        validateErr,
-						disconnect: validateDisconnect,
-					}
-				} else {
-					subCtx = c.subscribeCmd(subCmd, SubscribeReply{
-						Options: opts,
-					}, rw, true)
-				}
+				subCtx := c.subscribeCmd(subCmd, SubscribeReply{Options: opts}, rw, true)
 				subMu.Lock()
 				subs[ch] = subCtx.result
 				subCtxMap[ch] = subCtx
@@ -1815,15 +1806,11 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 
 // Subscribe client to a channel.
 func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
+	if channel == "" {
+		return fmt.Errorf("channel is empty")
+	}
 	subCmd := &protocol.SubscribeRequest{
 		Channel: channel,
-	}
-	validateErr, validateDisconnect := c.validateSubscribeRequest(subCmd)
-	if validateErr != nil {
-		return validateErr
-	}
-	if validateDisconnect != nil {
-		return validateDisconnect
 	}
 	subscribeOpts := &SubscribeOptions{}
 	for _, opt := range opts {
@@ -1880,8 +1867,13 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	}
 
 	c.mu.RLock()
+	var numChannels int
+	for _, chCtx := range c.channels {
+		if channelHasFlag(chCtx.flags, flagServerSide) {
+			numChannels += 1
+		}
+	}
 	_, ok := c.channels[channel]
-	numChannels := len(c.channels)
 	c.mu.RUnlock()
 	if ok {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))

@@ -19,14 +19,17 @@ require (
 	github.com/gorilla/sessions v1.2.0
 	github.com/klauspost/compress v1.10.8 // indirect
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
-	github.com/nats-io/nats-server/v2 v2.1.4 // indirect
-	github.com/nats-io/nats.go v1.9.1
+	github.com/nats-io/jwt v1.2.2 // indirect
+	github.com/nats-io/nats-server/v2 v2.1.9 // indirect
+	github.com/nats-io/nats.go v1.10.0
 	github.com/prometheus/client_golang v1.6.0
 	github.com/prometheus/common v0.10.0 // indirect
 	github.com/prometheus/procfs v0.1.3 // indirect
 	github.com/stretchr/testify v1.7.0
 	github.com/vmihailenco/msgpack/v5 v5.1.1
+	golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83 // indirect
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
+	golang.org/x/sys v0.0.0-20210305230114-8fe3ee5dd75b // indirect
 	google.golang.org/protobuf v1.24.0 // indirect
 	nhooyr.io/websocket v1.8.6
 )

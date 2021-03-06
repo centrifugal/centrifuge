@@ -889,55 +889,53 @@ func (n *Node) shutdownCmd(nodeID string) error {
 }
 
 // Subscribe subscribes user to a channel.
-// If user already subscribed to a channel then we treat this as a race
-// condition – skipping ErrorAlreadySubscribed internally and do nothing.
-// If you need more control then you may use Node.Survey method for a
-// custom cluster-wide subscribe process.
-// Note, that OnSubscribe event won't be called in this case.
+// Note, that OnSubscribe event won't be called in this case
+// since this is a server-side subscription. If user have been already
+// subscribed to a channel then its subscription will be updated and
+// subscribe notification will be sent to a client-side.
 func (n *Node) Subscribe(userID string, channel string, opts ...SubscribeOption) error {
 	subscribeOpts := &SubscribeOptions{}
 	for _, opt := range opts {
 		opt(subscribeOpts)
 	}
-	// First subscribe on this node.
+	// Subscribe on this node.
 	err := n.hub.subscribe(userID, channel, opts...)
 	if err != nil {
 		return err
 	}
-	// Second send subscribe control message to other nodes.
+	// Send subscribe control message to other nodes.
 	return n.pubSubscribe(userID, channel, *subscribeOpts)
 }
 
-// Unsubscribe unsubscribes user from channel, if channel is equal to empty
-// string then user will be unsubscribed from all channels.
-func (n *Node) Unsubscribe(user string, channel string) error {
-	// First unsubscribe on this node.
-	err := n.hub.unsubscribe(user, channel)
+// Unsubscribe unsubscribes user from a channel.
+// If a channel is empty string then user will be unsubscribed from all channels.
+func (n *Node) Unsubscribe(userID string, channel string) error {
+	// Unsubscribe on this node.
+	err := n.hub.unsubscribe(userID, channel)
 	if err != nil {
 		return err
 	}
-	// Second send unsubscribe control message to other nodes.
-	return n.pubUnsubscribe(user, channel)
+	// Send unsubscribe control message to other nodes.
+	return n.pubUnsubscribe(userID, channel)
 }
 
-// Disconnect allows to close all user connections through all nodes.
-func (n *Node) Disconnect(user string, opts ...DisconnectOption) error {
+// Disconnect allows closing all user connections on all nodes.
+func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 	disconnectOpts := &DisconnectOptions{}
 	for _, opt := range opts {
 		opt(disconnectOpts)
 	}
-	// first disconnect user from this node
+	// Disconnect user from this node
 	customDisconnect := disconnectOpts.Disconnect
 	if customDisconnect == nil {
 		customDisconnect = DisconnectForceNoReconnect
 	}
-
-	err := n.hub.disconnect(user, customDisconnect, disconnectOpts.ClientWhitelist)
+	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.ClientWhitelist)
 	if err != nil {
 		return err
 	}
-	// second send disconnect control message to other nodes
-	return n.pubDisconnect(user, customDisconnect, disconnectOpts.ClientWhitelist)
+	// Send disconnect control message to other nodes
+	return n.pubDisconnect(userID, customDisconnect, disconnectOpts.ClientWhitelist)
 }
 
 // addPresence proxies presence adding to PresenceManager.

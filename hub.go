@@ -67,21 +67,21 @@ func (h *Hub) remove(c *Client) error {
 	return h.connShards[index(c.UserID(), numHubShards)].remove(c)
 }
 
-// UserConnections returns all user connections to the current Node.
-func (h *Hub) UserConnections(userID string) map[string]*Client {
+// userConnections returns all user connections to the current Node.
+func (h *Hub) userConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
 }
 
-func (h *Hub) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
-	return h.connShards[index(user, numHubShards)].disconnect(user, disconnect, whitelist)
+func (h *Hub) disconnect(userID string, disconnect *Disconnect, whitelist []string) error {
+	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, whitelist)
 }
 
-func (h *Hub) unsubscribe(user string, ch string) error {
-	return h.connShards[index(user, numHubShards)].unsubscribe(user, ch)
+func (h *Hub) unsubscribe(userID string, ch string) error {
+	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch)
 }
 
-func (h *Hub) subscribe(user string, ch string, opts ...SubscribeOption) error {
-	return h.connShards[index(user, numHubShards)].subscribe(user, ch, opts...)
+func (h *Hub) subscribe(userID string, ch string, opts ...SubscribeOption) error {
+	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, opts...)
 }
 
 func (h *Hub) addSub(ch string, c *Client) (bool, error) {
@@ -226,11 +226,59 @@ func stringInSlice(str string, slice []string) bool {
 	return false
 }
 
-func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
+func (h *connShard) subscribe(user string, ch string, opts ...SubscribeOption) error {
 	userConnections := h.userConnections(user)
-	var wg sync.WaitGroup
+
 	var firstErr error
 	var errMu sync.Mutex
+
+	var wg sync.WaitGroup
+	wg.Add(len(userConnections))
+	for _, c := range userConnections {
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Subscribe(ch, opts...)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+		}(c)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+func (h *connShard) unsubscribe(user string, ch string) error {
+	userConnections := h.userConnections(user)
+
+	var firstErr error
+	var errMu sync.Mutex
+
+	var wg sync.WaitGroup
+	wg.Add(len(userConnections))
+	for _, c := range userConnections {
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Unsubscribe(ch)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+		}(c)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
+	userConnections := h.userConnections(user)
+
+	var firstErr error
+	var errMu sync.Mutex
+
+	var wg sync.WaitGroup
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
 			continue
@@ -240,52 +288,10 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []
 			defer wg.Done()
 			err := cc.close(disconnect)
 			errMu.Lock()
+			defer errMu.Unlock()
 			if err != nil && err != io.EOF && firstErr == nil {
 				firstErr = err
 			}
-			errMu.Unlock()
-		}(c)
-	}
-	wg.Wait()
-	return firstErr
-}
-
-func (h *connShard) unsubscribe(user string, ch string) error {
-	userConnections := h.userConnections(user)
-	var wg sync.WaitGroup
-	wg.Add(len(userConnections))
-	var firstErr error
-	var errMu sync.Mutex
-	for _, c := range userConnections {
-		go func(c *Client) {
-			defer wg.Done()
-			err := c.Unsubscribe(ch)
-			errMu.Lock()
-			if err != nil && err != io.EOF && firstErr == nil {
-				firstErr = err
-			}
-			errMu.Unlock()
-		}(c)
-	}
-	wg.Wait()
-	return firstErr
-}
-
-func (h *connShard) subscribe(user string, ch string, opts ...SubscribeOption) error {
-	userConnections := h.userConnections(user)
-	var wg sync.WaitGroup
-	wg.Add(len(userConnections))
-	var firstErr error
-	var errMu sync.Mutex
-	for _, c := range userConnections {
-		go func(c *Client) {
-			defer wg.Done()
-			err := c.Subscribe(ch, opts...)
-			errMu.Lock()
-			if err != nil && err != io.EOF && err != ErrorAlreadySubscribed && firstErr == nil {
-				firstErr = err
-			}
-			errMu.Unlock()
 		}(c)
 	}
 	wg.Wait()

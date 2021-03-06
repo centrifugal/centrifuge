@@ -5,13 +5,12 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
-
-	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
 )
@@ -56,9 +55,28 @@ func main() {
 
 	node, _ := centrifuge.New(cfg)
 
+	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		return centrifuge.ConnectReply{
+			Subscriptions: map[string]centrifuge.SubscribeOptions{
+				exampleChannel: {},
+			},
+		}, nil
+	})
+
 	node.OnConnect(func(client *centrifuge.Client) {
-		client.OnPresenceStats(func(e centrifuge.PresenceStatsEvent, cb centrifuge.PresenceStatsCallback) {
-			cb(centrifuge.PresenceStatsReply{}, nil)
+		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
+			go func() {
+				if !client.IsSubscribed("blink182") {
+					// Prevent multiple resubscribe on many quick clicks on a screen in
+					// this example. In real case you most probably don't need this check
+					// since subscribe command should be issued once by your backend logic.
+					return
+				}
+				_ = node.Unsubscribe("42", exampleChannel)
+				time.Sleep(time.Second)
+				_ = node.Subscribe("42", exampleChannel)
+			}()
+			cb(centrifuge.RPCReply{}, nil)
 		})
 	})
 
@@ -94,15 +112,6 @@ func main() {
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
-
-	go func() {
-		for {
-			time.Sleep(time.Second)
-			_ = node.Subscribe("42", exampleChannel, centrifuge.WithPresence(true))
-			time.Sleep(time.Second)
-			_ = node.Unsubscribe("42", exampleChannel)
-		}
-	}()
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/", http.FileServer(http.Dir("./")))

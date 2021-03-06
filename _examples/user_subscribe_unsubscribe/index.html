@@ -1,45 +1,52 @@
 <!DOCTYPE html>
-<html>
-    <head>
-        <meta charset="utf-8">
-        <title></title>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
-        <script type="text/javascript">
-            window.addEventListener('load', function() {
-                const container = document.getElementById('messages');
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title></title>
+    <style type="text/css">
+        input[type="text"] { width: 300px; }
+    </style>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+    <script type="text/javascript">
+        const channel = "blink182";
 
-                function drawText(text) {
-                    let e = document.createElement('li');
-                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
-                    container.insertBefore(e, container.firstChild);
-                }
+        window.addEventListener('load', function() {
+            const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket');
+            const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
-                // bind listeners on centrifuge object instance events.
-                centrifuge.on('connect', function(ctx){
-                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
-                });
-
-                centrifuge.on('disconnect', function(ctx){
-                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                });
-
-                centrifuge.on('subscribe', async function (ctx) {
-                    drawText('subscribed to a channel ' + ctx.channel);
-                    const resp = await centrifuge.presenceStats(ctx.channel);
-                    drawText('channel ' + ctx.channel + ' has ' + resp['num_clients'] + ' connections');
-                });
-
-                centrifuge.on('unsubscribe', function (ctx) {
-                    drawText('unsubscribed from a channel ' + ctx.channel);
-                });
-
-                centrifuge.connect();
+            // bind listeners on centrifuge object instance events.
+            centrifuge.on('connect', function(ctx){
+                drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
             });
-        </script>
-    </head>
-    <body>
-        <ul id="messages"></ul>
-    </body>
+
+            centrifuge.on('subscribe', function(ctx) {
+                drawText('Subscribe to server-side channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
+            });
+
+            centrifuge.on('unsubscribe', function(ctx) {
+                drawText('Unsubscribe from server-side channel ' + ctx.channel);
+            });
+
+            centrifuge.on('disconnect', function(ctx){
+                drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+            });
+
+            centrifuge.connect();
+
+            function drawText(text) {
+                let e = document.createElement('li');
+                e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                container.insertBefore(e, container.firstChild);
+            }
+
+            window.addEventListener('click', function () {
+                centrifuge.namedRPC('trigger_resubscribe', {});
+            });
+        });
+    </script>
+</head>
+<body>
+<ul id="messages"></ul>
+</body>
 </html>

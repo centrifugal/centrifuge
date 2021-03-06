@@ -20,4 +20,4 @@ go run main.go -port 8001
 
 Go to http://localhost:8000 and to http://localhost:8001 in another browser tab.
 
-Server will periodically subscribe and unsubscribe user to/from a channel `blink182`.
+On start user will be subscribed on server-side to a channel `blink182`. After you click on a screen Centrifuge client will issue an RPC call to a server, a server will then unsubscribe user, then subscribe it back (after 1-second delay). Both browser tabs should receive subscribe/unsubscribe events.
