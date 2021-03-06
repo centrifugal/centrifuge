@@ -114,7 +114,7 @@ type SockjsConfig struct {
 // costs though: small protocol framing overhead, lack of binary support, more
 // goroutines per connection, and you need to use sticky session mechanism on
 // your load balancer in case you are using HTTP-based SockJS fallbacks and have
-// more than one Centrifuge Node on a backend (so SockJS was able to emulate
+// more than one Centrifuge Node on a backend (so SockJS to be able to emulate
 // bidirectional protocol). So if you can afford it - use WebsocketHandler only.
 type SockjsHandler struct {
 	node    *Node
