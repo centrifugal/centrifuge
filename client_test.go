@@ -135,7 +135,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Equal(t, DisconnectBadRequest, err)
 }
 
@@ -152,7 +152,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
 	require.Equal(t, false, result.Expires)
@@ -182,7 +182,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	client.triggerConnect()
 	client.expire()
@@ -212,7 +212,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	client.expire()
 	require.False(t, client.status == statusClosed)
@@ -238,13 +238,13 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 }
 
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
@@ -732,7 +732,7 @@ func TestUserConnectionLimit(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	anotherClient, _ := newClient(newCtx, node, transport)
-	err := anotherClient.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := anotherClient.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Equal(t, DisconnectConnectionLimit, err)
 }
 
@@ -2067,7 +2067,7 @@ func TestClientConnectExpiredError(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 	require.False(t, client.authenticated)
 }

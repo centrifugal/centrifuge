@@ -43,7 +43,7 @@ type SubscribeOptions struct {
 	// (like Position option) to prevent occasional message loss. Make sure you are using
 	// Recover in channels that maintain Publication history stream.
 	Recover bool
-
+	// clientID to subscribe.
 	clientID string
 }
 
@@ -92,7 +92,8 @@ func WithRecover(enabled bool) SubscribeOption {
 	}
 }
 
-// WithSubscribeClient ...
+// WithSubscribeClient allows setting client ID that should be subscribed.
+// This option not used when Client.Subscribe called.
 func WithSubscribeClient(clientID string) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.clientID = clientID
@@ -101,13 +102,15 @@ func WithSubscribeClient(clientID string) SubscribeOption {
 
 // UnsubscribeOptions ...
 type UnsubscribeOptions struct {
+	// clientID to unsubscribe.
 	clientID string
 }
 
 // UnsubscribeOption is a type to represent various Unsubscribe options.
 type UnsubscribeOption func(options *UnsubscribeOptions)
 
-// WithUnsubscribeClient ...
+// WithUnsubscribeClient allows setting client ID that should be unsubscribed.
+// This option not used when Client.Unsubscribe called.
 func WithUnsubscribeClient(clientID string) UnsubscribeOption {
 	return func(opts *UnsubscribeOptions) {
 		opts.clientID = clientID

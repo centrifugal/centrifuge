@@ -68,7 +68,7 @@ func (e *TestBroker) PublishLeave(_ string, _ *ClientInfo) error {
 	return nil
 }
 
-func (e *TestBroker) PublishControl(data []byte, nodeID, shardKey string) error {
+func (e *TestBroker) PublishControl(_ []byte, _, _ string) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
 	if e.errorOnPublishControl {
 		return errors.New("boom")
@@ -460,7 +460,7 @@ func TestNode_pubUnsubscribe(t *testing.T) {
 	testBroker, _ := node.broker.(*TestBroker)
 	require.EqualValues(t, 1, testBroker.publishControlCount)
 
-	err := node.pubUnsubscribe("42", "holypeka")
+	err := node.pubUnsubscribe("42", "holypeka", UnsubscribeOptions{})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testBroker.publishControlCount)
 }

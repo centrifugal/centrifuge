@@ -116,11 +116,11 @@ func TestHubUnsubscribe(t *testing.T) {
 	transport.sink = make(chan []byte, 100)
 
 	// Unsubscribe not existed user.
-	err := n.hub.unsubscribe("1", "test_channel")
+	err := n.hub.unsubscribe("1", "test_channel", "")
 	require.NoError(t, err)
 
 	// Unsubscribe subscribed user.
-	err = n.hub.unsubscribe("42", "test_channel")
+	err = n.hub.unsubscribe("42", "test_channel", "")
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
