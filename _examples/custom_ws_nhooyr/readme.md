@@ -1,4 +1,4 @@
-Example demonstrates simple chat with JSON protocol using https://github.com/nhooyr/websocket library.
+Example demonstrates a simple chat with JSON protocol using https://github.com/nhooyr/websocket library.
 
 To start example run the following command from example directory:
 

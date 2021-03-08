@@ -180,16 +180,22 @@ type Client struct {
 	nextExpire        int64
 	eventHub          *clientEventHub
 	timer             *time.Timer
+	opts              ClientOptions
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
 type ClientCloseFunc func() error
 
 // NewClient initializes new Client.
-func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseFunc, error) {
+func NewClient(ctx context.Context, n *Node, t Transport, opts ...ClientOption) (*Client, ClientCloseFunc, error) {
 	uuidObject, err := uuid.NewRandom()
 	if err != nil {
 		return nil, nil, err
+	}
+
+	clientOptions := &ClientOptions{}
+	for _, opt := range opts {
+		opt(clientOptions)
 	}
 
 	c := &Client{
@@ -201,13 +207,19 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		pubSubSync: recovery.NewPubSubSync(),
 		status:     statusConnecting,
 		eventHub:   &clientEventHub{},
+		opts:       *clientOptions,
 	}
 
 	messageWriterConf := writerConfig{
 		MaxQueueSize: n.config.ClientQueueMaxSize,
 		WriteFn: func(data []byte) error {
 			if err := t.Write(data); err != nil {
-				go func() { _ = c.close(DisconnectWriteError) }()
+				switch v := err.(type) {
+				case *Disconnect:
+					go func() { _ = c.close(v) }()
+				default:
+					go func() { _ = c.close(DisconnectWriteError) }()
+				}
 				return err
 			}
 			incTransportMessagesSent(t.Name())
@@ -219,7 +231,12 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 				buf.Write(payload)
 			}
 			if err := t.Write(buf.Bytes()); err != nil {
-				go func() { _ = c.close(DisconnectWriteError) }()
+				switch v := err.(type) {
+				case *Disconnect:
+					go func() { _ = c.close(v) }()
+				default:
+					go func() { _ = c.close(DisconnectWriteError) }()
+				}
 				bufpool.PutBuffer(buf)
 				return err
 			}
@@ -240,7 +257,72 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		c.mu.Unlock()
 	}
 
+	if c.opts.Unidirectional {
+		err := c.unidirectionalConnect()
+		if err != nil {
+			_ = c.close(nil)
+			return nil, nil, err
+		}
+	}
+
 	return c, func() error { return c.close(nil) }, nil
+}
+
+func (c *Client) encodeDisconnect(d *Disconnect) (*prepared.Reply, error) {
+	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
+	data, err := pushEncoder.EncodeDisconnect(&protocol.Disconnect{
+		Code:      d.Code,
+		Reason:    d.Reason,
+		Reconnect: d.Reconnect,
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, err := pushEncoder.Encode(clientproto.NewDisconnectPush(data))
+	if err != nil {
+		return nil, err
+	}
+
+	return prepared.NewReply(&protocol.Reply{
+		Result: result,
+	}, c.transport.Protocol().toProto()), nil
+}
+
+func (c *Client) encodeConn(res *protocol.ConnectResult) (*prepared.Reply, error) {
+	p := &protocol.Conn{
+		Version: res.GetVersion(),
+		Client:  res.GetClient(),
+		Data:    res.Data,
+		Subs:    res.Subs,
+	}
+	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
+	data, err := pushEncoder.EncodeConn(p)
+	if err != nil {
+		return nil, err
+	}
+	result, err := pushEncoder.Encode(clientproto.NewConnPush(data))
+	if err != nil {
+		return nil, err
+	}
+
+	return prepared.NewReply(&protocol.Reply{
+		Result: result,
+	}, c.transport.Protocol().toProto()), nil
+}
+
+func (c *Client) unidirectionalConnect() error {
+	res, err := c.connectCmd(&protocol.ConnectRequest{}, nil)
+	if err != nil {
+		return err
+	}
+	reply, err := c.encodeConn(res)
+	if err != nil {
+		return err
+	}
+	_ = c.transportEnqueue(reply)
+	c.triggerConnect()
+	c.scheduleOnConnectTimers()
+	return nil
 }
 
 func (c *Client) onTimerOp() {
@@ -630,6 +712,12 @@ func (c *Client) close(disconnect *Disconnect) error {
 		}
 	}
 
+	if disconnect != nil && c.opts.SendDisconnect {
+		if reply, err := c.encodeDisconnect(disconnect); err == nil {
+			_ = c.transportEnqueue(reply)
+		}
+	}
+
 	// close writer and send messages remaining in writer queue if any.
 	_ = c.messageWriter.close()
 
@@ -935,7 +1023,7 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) error {
 	if err != nil {
 		return c.logDisconnectBadRequestWithError(err, "error decoding connect")
 	}
-	disconnect := c.connectCmd(cmd, rw)
+	_, disconnect := c.connectCmd(cmd, rw)
 	if disconnect != nil {
 		return disconnect
 	}
@@ -1586,18 +1674,18 @@ func (c *Client) unlockServerSideSubscriptions(subCtxMap map[string]subscribeCon
 
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
-func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error {
+func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*protocol.ConnectResult, error) {
 	c.mu.RLock()
 	authenticated := c.authenticated
 	closed := c.status == statusClosed
 	c.mu.RUnlock()
 
 	if closed {
-		return DisconnectNormal
+		return nil, DisconnectNormal
 	}
 
 	if authenticated {
-		return c.logDisconnectBadRequest("client already authenticated")
+		return nil, c.logDisconnectBadRequest("client already authenticated")
 	}
 
 	config := c.node.config
@@ -1621,7 +1709,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 			Transport: c.transport,
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
@@ -1663,7 +1751,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 	c.mu.Unlock()
 
 	if credentials == nil {
-		return c.logDisconnectBadRequest("client credentials not found")
+		return nil, c.logDisconnectBadRequest("client credentials not found")
 	}
 
 	c.mu.Lock()
@@ -1677,14 +1765,14 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 	c.mu.Unlock()
 
 	if closed {
-		return DisconnectNormal
+		return nil, DisconnectNormal
 	}
 
 	c.node.logger.log(newLogEntry(LogLevelDebug, "client authenticated", map[string]interface{}{"client": c.uid, "user": c.user}))
 
 	if userConnectionLimit > 0 && user != "" && len(c.node.hub.userConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": user, "client": c.uid, "limit": userConnectionLimit}))
-		return DisconnectConnectionLimit
+		return nil, DisconnectConnectionLimit
 	}
 
 	c.mu.RLock()
@@ -1694,7 +1782,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 		if exp < now {
 			c.mu.RUnlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "connection expiration must be greater than now", map[string]interface{}{"client": c.uid, "user": c.UserID()}))
-			return ErrorExpired
+			return nil, ErrorExpired
 		}
 		ttl = uint32(exp - now)
 	}
@@ -1714,7 +1802,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 	err := c.node.addClient(c)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding client", map[string]interface{}{"client": c.uid, "error": err.Error()}))
-		return DisconnectServerError
+		return nil, DisconnectServerError
 	}
 
 	if !clientSideRefresh {
@@ -1767,21 +1855,23 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 		if subDisconnect != nil || subError != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
 			if subDisconnect != nil {
-				return subDisconnect
+				return nil, subDisconnect
 			}
-			return subError
+			return nil, subError
 		}
 		res.Subs = subs
 	}
 
-	replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeConnectResult(res)
-	if err != nil {
-		c.unlockServerSideSubscriptions(subCtxMap)
-		c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
-		return DisconnectServerError
+	if rw != nil {
+		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeConnectResult(res)
+		if err != nil {
+			c.unlockServerSideSubscriptions(subCtxMap)
+			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
+			return nil, DisconnectServerError
+		}
+		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		defer rw.done()
 	}
-	_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
-	defer rw.done()
 
 	c.mu.Lock()
 	for channel, subCtx := range subCtxMap {
@@ -1801,7 +1891,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) error
 		}
 	}
 
-	return nil
+	return res, nil
 }
 
 // Subscribe client to a channel.

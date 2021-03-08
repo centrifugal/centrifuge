@@ -43,6 +43,8 @@ type SubscribeOptions struct {
 	// (like Position option) to prevent occasional message loss. Make sure you are using
 	// Recover in channels that maintain Publication history stream.
 	Recover bool
+
+	clientID string
 }
 
 // SubscribeOption is a type to represent various Subscribe options.
@@ -87,6 +89,28 @@ func WithPosition(enabled bool) SubscribeOption {
 func WithRecover(enabled bool) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.Recover = enabled
+	}
+}
+
+// WithSubscribeClient ...
+func WithSubscribeClient(clientID string) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.clientID = clientID
+	}
+}
+
+// UnsubscribeOptions ...
+type UnsubscribeOptions struct {
+	clientID string
+}
+
+// UnsubscribeOption is a type to represent various Unsubscribe options.
+type UnsubscribeOption func(options *UnsubscribeOptions)
+
+// WithUnsubscribeClient ...
+func WithUnsubscribeClient(clientID string) UnsubscribeOption {
+	return func(opts *UnsubscribeOptions) {
+		opts.clientID = clientID
 	}
 }
 
@@ -145,5 +169,30 @@ func WithLimit(limit int) HistoryOption {
 func Since(sp *StreamPosition) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Since = sp
+	}
+}
+
+// ClientOptions contain available options to configure Client behavior.
+type ClientOptions struct {
+	Unidirectional bool
+	SendDisconnect bool
+}
+
+// ClientOption modifies Client behavior.
+type ClientOption func(*ClientOptions)
+
+// Unidirectional marks client as unidirectional making it connect without waiting for a
+// ConnectRequest from a client.
+func Unidirectional(enabled bool) ClientOption {
+	return func(opts *ClientOptions) {
+		opts.Unidirectional = enabled
+	}
+}
+
+// SendDisconnect allows to force sending Disconnect push. This is an experimental API
+// that is likely to be refactored for Centrifuge v1.
+func SendDisconnect(enabled bool) ClientOption {
+	return func(opts *ClientOptions) {
+		opts.SendDisconnect = enabled
 	}
 }

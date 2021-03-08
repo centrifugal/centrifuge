@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title></title>
+    <style type="text/css">
+        input[type="text"] { width: 300px; }
+    </style>
+    <script type="text/javascript">
+        window.addEventListener('load', function() {
+            const eventSource = new EventSource('http://'+window.location.host+'/connection/eventsource');
+            let clientID;
+            let unsubscribed = false;
+
+            eventSource.onopen = function(e) {
+                console.log("eventsource connection open");
+                console.log(e);
+            };
+
+            eventSource.onerror = function(e) {
+                if (this.readyState === EventSource.CONNECTING) {
+                    drawText("eventsource connection reconnecting");
+                    console.log(e);
+                } else {
+                    drawText("eventsource connection closing");
+                    console.log(e);
+                }
+            };
+
+            eventSource.onmessage = function(e) {
+                console.log("eventsource connection new message");
+                console.log(e);
+                drawText(e.data);
+                const data = JSON.parse(e.data);
+                if (data.result.type === 6) {
+                    clientID = data.result.data.client;
+                }
+            };
+
+            const container = document.getElementById('messages');
+
+            function drawText(text) {
+                let e = document.createElement('li');
+                e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                container.insertBefore(e, container.firstChild);
+            }
+
+            window.addEventListener('click', function () {
+                // Every click changes status of subscription fetching backend endpoints
+                // with current client ID.
+                if (unsubscribed) {
+                    fetch('subscribe?client=' + clientID);
+                } else {
+                    fetch('unsubscribe?client=' + clientID);
+                }
+                unsubscribed = !unsubscribed;
+            });
+        });
+    </script>
+</head>
+<body>
+<ul id="messages"></ul>
+</body>
+</html>

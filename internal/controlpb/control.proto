@@ -56,11 +56,13 @@ message Subscribe {
     bool position = 6 [(gogoproto.jsontag) = "position"];
     bool recover = 7 [(gogoproto.jsontag) = "recover"];
     bytes channel_info = 8 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "channel_info", (gogoproto.nullable) = false];
+    string client = 9 [(gogoproto.jsontag) = "client"];
 }
 
 message Unsubscribe {
     string channel = 1 [(gogoproto.jsontag) = "channel"];
     string user = 2 [(gogoproto.jsontag) = "user"];
+    string client = 3 [(gogoproto.jsontag) = "client"];
 }
 
 message Disconnect {

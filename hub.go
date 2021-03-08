@@ -76,12 +76,12 @@ func (h *Hub) disconnect(userID string, disconnect *Disconnect, whitelist []stri
 	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, whitelist)
 }
 
-func (h *Hub) unsubscribe(userID string, ch string) error {
-	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch)
+func (h *Hub) unsubscribe(userID string, ch string, clientID string) error {
+	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, clientID)
 }
 
-func (h *Hub) subscribe(userID string, ch string, opts ...SubscribeOption) error {
-	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, opts...)
+func (h *Hub) subscribe(userID string, ch string, clientID string, opts ...SubscribeOption) error {
+	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, clientID, opts...)
 }
 
 func (h *Hub) addSub(ch string, c *Client) (bool, error) {
@@ -226,15 +226,18 @@ func stringInSlice(str string, slice []string) bool {
 	return false
 }
 
-func (h *connShard) subscribe(user string, ch string, opts ...SubscribeOption) error {
+func (h *connShard) subscribe(user string, ch string, clientID string, opts ...SubscribeOption) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
 	var errMu sync.Mutex
 
 	var wg sync.WaitGroup
-	wg.Add(len(userConnections))
 	for _, c := range userConnections {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		wg.Add(1)
 		go func(c *Client) {
 			defer wg.Done()
 			err := c.Subscribe(ch, opts...)
@@ -249,17 +252,23 @@ func (h *connShard) subscribe(user string, ch string, opts ...SubscribeOption) e
 	return firstErr
 }
 
-func (h *connShard) unsubscribe(user string, ch string) error {
+func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
 	var errMu sync.Mutex
 
 	var wg sync.WaitGroup
-	wg.Add(len(userConnections))
 	for _, c := range userConnections {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		wg.Add(1)
 		go func(c *Client) {
 			defer wg.Done()
+			if clientID != "" && c.ID() != clientID {
+				return
+			}
 			err := c.Unsubscribe(ch)
 			errMu.Lock()
 			defer errMu.Unlock()

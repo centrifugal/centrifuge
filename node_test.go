@@ -68,7 +68,7 @@ func (e *TestBroker) PublishLeave(_ string, _ *ClientInfo) error {
 	return nil
 }
 
-func (e *TestBroker) PublishControl(_ []byte, _ string) error {
+func (e *TestBroker) PublishControl(data []byte, nodeID, shardKey string) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
 	if e.errorOnPublishControl {
 		return errors.New("boom")
