@@ -794,41 +794,50 @@ func (c *Client) Handle(data []byte) bool {
 			go func() { _ = c.close(DisconnectBadRequest) }()
 			return false
 		}
-
-		if cmd.Method != protocol.MethodTypeConnect && !c.authenticated {
-			// Client must send connect command to authenticate itself first.
-			c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
-			go func() { _ = c.close(DisconnectBadRequest) }()
+		ok := c.handleCommand(cmd)
+		if !ok {
 			return false
 		}
+	}
+	return true
+}
 
-		if cmd.ID == 0 && cmd.Method != protocol.MethodTypeSend {
-			// Only send command from client can be sent without incremental ID.
-			c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-			go func() { _ = c.close(DisconnectBadRequest) }()
-			return false
-		}
+// handleCommand processes a single protocol.Command. Not goroutine-safe, supposed to be
+// called only from a transport reader.
+func (c *Client) handleCommand(cmd *protocol.Command) bool {
+	if cmd.Method != protocol.MethodTypeConnect && !c.authenticated {
+		// Client must send connect command to authenticate itself first.
+		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
+		go func() { _ = c.close(DisconnectBadRequest) }()
+		return false
+	}
 
-		select {
-		case <-c.ctx.Done():
-			return false
-		default:
-		}
+	if cmd.ID == 0 && cmd.Method != protocol.MethodTypeSend {
+		// Only send command from client can be sent without incremental ID.
+		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
+		go func() { _ = c.close(DisconnectBadRequest) }()
+		return false
+	}
 
-		disconnect := c.handleCommand(cmd)
+	select {
+	case <-c.ctx.Done():
+		return false
+	default:
+	}
 
-		select {
-		case <-c.ctx.Done():
-			return false
-		default:
+	disconnect := c.dispatchCommand(cmd)
+
+	select {
+	case <-c.ctx.Done():
+		return false
+	default:
+	}
+	if disconnect != nil {
+		if disconnect != DisconnectNormal {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 		}
-		if disconnect != nil {
-			if disconnect != DisconnectNormal {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-			}
-			go func() { _ = c.close(disconnect) }()
-			return false
-		}
+		go func() { _ = c.close(disconnect) }()
+		return false
 	}
 	return true
 }
@@ -839,8 +848,8 @@ type replyWriter struct {
 	done  func()
 }
 
-// handleCommand dispatches Command into correct command handler.
-func (c *Client) handleCommand(cmd *protocol.Command) *Disconnect {
+// dispatchCommand dispatches Command into correct command handler.
+func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	c.mu.Lock()
 	if c.status == statusClosed {
 		c.mu.Unlock()

@@ -1784,7 +1784,7 @@ func TestClientHandleEmptyData(t *testing.T) {
 	}
 	proceed = client.Handle([]byte("test"))
 	require.False(t, proceed)
-	disconnect := client.handleCommand(&protocol.Command{})
+	disconnect := client.dispatchCommand(&protocol.Command{})
 	require.Nil(t, disconnect)
 }
 
@@ -1831,7 +1831,7 @@ func TestClientHandleUnknownMethod(t *testing.T) {
 		Channel: "test",
 	})
 	cmd := &protocol.Command{ID: 1, Method: 10000, Params: params}
-	disconnect := client.handleCommand(cmd)
+	disconnect := client.dispatchCommand(cmd)
 	require.Nil(t, disconnect)
 }
 
