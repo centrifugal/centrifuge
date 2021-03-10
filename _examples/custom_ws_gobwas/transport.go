@@ -44,6 +44,11 @@ func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
 
+// Unidirectional returns whether transport is unidirectional.
+func (t *customWebsocketTransport) Unidirectional() bool {
+	return false
+}
+
 func (t *customWebsocketTransport) read() ([]byte, bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

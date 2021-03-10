@@ -88,6 +88,11 @@ func (t *websocketTransport) Encoding() EncodingType {
 	return t.opts.encType
 }
 
+// Unidirectional returns whether transport is unidirectional.
+func (t *websocketTransport) Unidirectional() bool {
+	return false
+}
+
 // Write data to transport.
 func (t *websocketTransport) Write(data []byte) error {
 	select {
@@ -323,7 +328,9 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		ctxCh := make(chan struct{})
 		defer close(ctxCh)
 
-		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
+		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport, ClientConfig{
+			DisabledPush: PushFlagDisconnect,
+		})
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
 			return

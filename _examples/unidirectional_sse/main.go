@@ -151,11 +151,7 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 
 		transport := newEventsourceTransport(req)
 
-		_, closeFn, err := centrifuge.NewClient(
-			req.Context(), node, transport,
-			centrifuge.Unidirectional(true),
-			centrifuge.SendDisconnect(true),
-		)
+		_, closeFn, err := centrifuge.NewClient(req.Context(), node, transport, centrifuge.ClientConfig{})
 		if err != nil {
 			return
 		}
@@ -255,6 +251,11 @@ func (t *eventsourceTransport) Protocol() centrifuge.ProtocolType {
 
 func (t *eventsourceTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
+}
+
+// Unidirectional returns whether transport is unidirectional.
+func (t *eventsourceTransport) Unidirectional() bool {
+	return true
 }
 
 func (t *eventsourceTransport) Write(data []byte) error {

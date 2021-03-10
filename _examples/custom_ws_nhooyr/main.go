@@ -206,6 +206,11 @@ func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
 
+// Unidirectional implementation.
+func (t *customWebsocketTransport) Unidirectional() bool {
+	return false
+}
+
 func (t *customWebsocketTransport) Write(data []byte) error {
 	select {
 	case <-t.closeCh:

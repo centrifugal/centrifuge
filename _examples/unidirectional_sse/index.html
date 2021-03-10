@@ -32,8 +32,8 @@
                 console.log(e);
                 drawText(e.data);
                 const data = JSON.parse(e.data);
-                if (data.result.type === 6) {
-                    clientID = data.result.data.client;
+                if (data.type === 6) {
+                    clientID = data.data.client;
                 }
             };
 

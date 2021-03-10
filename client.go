@@ -180,22 +180,32 @@ type Client struct {
 	nextExpire        int64
 	eventHub          *clientEventHub
 	timer             *time.Timer
-	opts              ClientOptions
+	conf              ClientConfig
+}
+
+const (
+	PushFlagConnect uint64 = 1 << iota
+	PushFlagDisconnect
+	PushFlagSubscribe
+	PushFlagJoin
+	PushFlagLeave
+	PushFlagUnsubscribe
+	PushFlagPublication
+	PushFlagMessage
+)
+
+type ClientConfig struct {
+	DisabledPush uint64
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
 type ClientCloseFunc func() error
 
 // NewClient initializes new Client.
-func NewClient(ctx context.Context, n *Node, t Transport, opts ...ClientOption) (*Client, ClientCloseFunc, error) {
+func NewClient(ctx context.Context, n *Node, t Transport, conf ClientConfig) (*Client, ClientCloseFunc, error) {
 	uuidObject, err := uuid.NewRandom()
 	if err != nil {
 		return nil, nil, err
-	}
-
-	clientOptions := &ClientOptions{}
-	for _, opt := range opts {
-		opt(clientOptions)
 	}
 
 	c := &Client{
@@ -207,7 +217,7 @@ func NewClient(ctx context.Context, n *Node, t Transport, opts ...ClientOption) 
 		pubSubSync: recovery.NewPubSubSync(),
 		status:     statusConnecting,
 		eventHub:   &clientEventHub{},
-		opts:       *clientOptions,
+		conf:       conf,
 	}
 
 	messageWriterConf := writerConfig{
@@ -257,7 +267,7 @@ func NewClient(ctx context.Context, n *Node, t Transport, opts ...ClientOption) 
 		c.mu.Unlock()
 	}
 
-	if c.opts.Unidirectional {
+	if t.Unidirectional() {
 		err := c.unidirectionalConnect()
 		if err != nil {
 			_ = c.close(nil)
@@ -315,11 +325,13 @@ func (c *Client) unidirectionalConnect() error {
 	if err != nil {
 		return err
 	}
-	reply, err := c.encodeConn(res)
-	if err != nil {
-		return err
+	if !hasFlag(c.conf.DisabledPush, PushFlagConnect) {
+		reply, err := c.encodeConn(res)
+		if err != nil {
+			return err
+		}
+		_ = c.transportEnqueue(reply)
 	}
-	_ = c.transportEnqueue(reply)
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
 	return nil
@@ -405,7 +417,12 @@ func (c *Client) closeUnauthenticated() {
 }
 
 func (c *Client) transportEnqueue(reply *prepared.Reply) error {
-	data := reply.Data()
+	var data []byte
+	if c.transport.Unidirectional() {
+		data = reply.Reply.Result
+	} else {
+		data = reply.Data()
+	}
 	c.trace("-->", data)
 	disconnect := c.messageWriter.enqueue(data)
 	if disconnect != nil {
@@ -600,6 +617,10 @@ func (c *Client) IsSubscribed(ch string) bool {
 // just written to connection. on client side this message can be handled
 // with Message handler.
 func (c *Client) Send(data []byte) error {
+	if hasFlag(c.conf.DisabledPush, PushFlagMessage) {
+		return nil
+	}
+
 	p := &protocol.Message{
 		Data: data,
 	}
@@ -638,6 +659,9 @@ func (c *Client) Unsubscribe(ch string) error {
 }
 
 func (c *Client) sendUnsub(ch string) error {
+	if hasFlag(c.conf.DisabledPush, PushFlagUnsubscribe) {
+		return nil
+	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
 
 	data, err := pushEncoder.EncodeUnsub(&protocol.Unsub{})
@@ -712,7 +736,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 		}
 	}
 
-	if disconnect != nil && c.opts.SendDisconnect {
+	if disconnect != nil && !hasFlag(c.conf.DisabledPush, PushFlagDisconnect) {
 		if reply, err := c.encodeDisconnect(disconnect); err == nil {
 			_ = c.transportEnqueue(reply)
 		}
@@ -1925,6 +1949,9 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	c.mu.Lock()
 	c.channels[channel] = subCtx.channelContext
 	c.mu.Unlock()
+	if hasFlag(c.conf.DisabledPush, PushFlagSubscribe) {
+		return nil
+	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
 	sub := &protocol.Sub{
 		Offset:      subCtx.result.GetOffset(),
@@ -2293,11 +2320,17 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	channelContext.streamPosition.Offset = pub.Offset
 	c.channels[ch] = channelContext
 	c.mu.Unlock()
+	if hasFlag(c.conf.DisabledPush, PushFlagPublication) {
+		return nil
+	}
 	return c.transportEnqueue(reply)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
 	if pub.Offset == 0 {
+		if hasFlag(c.conf.DisabledPush, PushFlagPublication) {
+			return nil
+		}
 		return c.transportEnqueue(reply)
 	}
 
@@ -2312,6 +2345,9 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 	c.mu.Unlock()
 
 	if !channelHasFlag(channelFlags, flagRecover|flagPosition) {
+		if hasFlag(c.conf.DisabledPush, PushFlagPublication) {
+			return nil
+		}
 		return c.transportEnqueue(reply)
 	}
 
@@ -2322,10 +2358,16 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 }
 
 func (c *Client) writeJoin(_ string, reply *prepared.Reply) error {
+	if hasFlag(c.conf.DisabledPush, PushFlagJoin) {
+		return nil
+	}
 	return c.transportEnqueue(reply)
 }
 
 func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
+	if hasFlag(c.conf.DisabledPush, PushFlagLeave) {
+		return nil
+	}
 	return c.transportEnqueue(reply)
 }
 

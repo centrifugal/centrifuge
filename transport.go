@@ -28,6 +28,20 @@ const (
 	EncodingTypeBinary EncodingType = "binary"
 )
 
+//type WriteType int
+//
+//// Known write types.
+//const (
+//	// WriteTypeEncodedReplyData means protocol.Reply encoded into Centrifuge protocol.
+//	WriteTypeEncodedReplyData WriteType = iota + 1
+//	// WriteTypeEncodedPushData means protocol.Push encoded into Centrifuge protocol.
+//	WriteTypeEncodedPushData
+//	// WriteTypeReply means raw protocol.Reply.
+//	WriteTypeReply
+//	// WriteTypePush means raw protocol.Push
+//	WriteTypePush
+//)
+
 // TransportInfo has read-only transport description methods.
 type TransportInfo interface {
 	// Name returns a name of transport used for client connection.
@@ -39,6 +53,10 @@ type TransportInfo interface {
 	// Encoding returns payload encoding type used by client. By default
 	// server assumes that payload passed as JSON.
 	Encoding() EncodingType
+	// Unidirectional returns whether transport is unidirectional.
+	Unidirectional() bool
+	//// WriteType defines what transport expects as input for writing.
+	//WriteType() WriteType
 }
 
 // Transport abstracts a connection transport between server and client.
@@ -46,8 +64,12 @@ type TransportInfo interface {
 // handler code (for example by WebsocketHandler.ServeHTTP).
 type Transport interface {
 	TransportInfo
-	// Write data encoded using Centrifuge protocol to connection.
+	// Write writes data encoded using Centrifuge protocol to a connection.
 	Write([]byte) error
+	//// WriteReply writes protocol.Reply to a connection.
+	//WriteReply(*protocol.Reply) error
+	//// WritePush writes protocol.Push to a connection.
+	//WritePush(*protocol.Push) error
 	// Close closes transport.
 	Close(*Disconnect) error
 }
