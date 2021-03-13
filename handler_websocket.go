@@ -8,6 +8,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
 	"github.com/centrifugal/centrifuge/internal/timers"
 
+	"github.com/centrifugal/protocol"
 	"github.com/gorilla/websocket"
 )
 
@@ -94,11 +95,18 @@ func (t *websocketTransport) Unidirectional() bool {
 }
 
 // Write data to transport.
-func (t *websocketTransport) Write(data []byte) error {
+func (t *websocketTransport) Write(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
 	default:
+		encoder := protocol.GetDataEncoder(t.Protocol().toProto())
+		for i := range messages {
+			_ = encoder.Encode(messages[i])
+		}
+		data := encoder.Finish()
+		protocol.PutDataEncoder(t.Protocol().toProto(), encoder)
+
 		if t.opts.compressionMinSize > 0 {
 			t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
 		}
@@ -295,14 +303,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	var protocol = ProtocolTypeJSON
+	var protoType = ProtocolTypeJSON
 	if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
-		protocol = ProtocolTypeProtobuf
+		protoType = ProtocolTypeProtobuf
 	}
 
-	var enc = EncodingTypeJSON
+	var encType = EncodingTypeJSON
 	if r.URL.Query().Get("encoding") == "binary" {
-		enc = EncodingTypeBinary
+		encType = EncodingTypeBinary
 	}
 
 	// Separate goroutine for better GC of caller's data.
@@ -311,8 +319,8 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
-			encType:            enc,
-			protoType:          protocol,
+			encType:            encType,
+			protoType:          protoType,
 		}
 
 		graceCh := make(chan struct{})

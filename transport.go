@@ -65,7 +65,7 @@ type TransportInfo interface {
 type Transport interface {
 	TransportInfo
 	// Write writes data encoded using Centrifuge protocol to a connection.
-	Write([]byte) error
+	Write(...[]byte) error
 	//// WriteReply writes protocol.Reply to a connection.
 	//WriteReply(*protocol.Reply) error
 	//// WritePush writes protocol.Push to a connection.

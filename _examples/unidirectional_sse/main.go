@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -51,7 +50,7 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
-var exampleChannel = "eventsource"
+var exampleChannel = "unidirectional"
 
 func main() {
 	flag.Parse()
@@ -108,7 +107,7 @@ func main() {
 			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 		})
 		transport := client.Transport()
-		log.Printf("user %s connected via %s with encoding: %s", client.UserID(), transport.Name(), transport.Encoding())
+		log.Printf("user %s connected via %s", client.UserID(), transport.Name())
 	})
 
 	// Publish to a channel periodically.
@@ -165,25 +164,30 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 		}
 		flusher.Flush()
 
+		pingInterval := 25 * time.Second
+		tick := time.NewTicker(pingInterval)
+		defer tick.Stop()
+
 		for {
 			select {
 			case <-req.Context().Done():
 				return
 			case <-transport.disconnectCh:
 				return
+			case <-tick.C:
+				_, err = w.Write([]byte("event: ping\ndata:\n\n"))
+				if err != nil {
+					return
+				}
+				flusher.Flush()
 			case data, ok := <-transport.messages:
 				if !ok {
 					return
 				}
-				parts := strings.Split(string(data), "\n")
-				for _, part := range parts {
-					if strings.TrimSpace(part) == "" {
-						continue
-					}
-					_, err = w.Write([]byte("data: " + part + "\n\n"))
-					if err != nil {
-						return
-					}
+				tick.Reset(pingInterval)
+				_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
+				if err != nil {
+					return
 				}
 				flusher.Flush()
 			}
@@ -258,18 +262,20 @@ func (t *eventsourceTransport) Unidirectional() bool {
 	return true
 }
 
-func (t *eventsourceTransport) Write(data []byte) error {
+func (t *eventsourceTransport) Write(messages ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return nil
 	}
-	select {
-	case t.messages <- data:
-		return nil
-	default:
-		return centrifuge.DisconnectSlow
+	for i := 0; i < len(messages); i++ {
+		select {
+		case t.messages <- messages[i]:
+		default:
+			return centrifuge.DisconnectSlow
+		}
 	}
+	return nil
 }
 
 func (t *eventsourceTransport) Close(_ *centrifuge.Disconnect) error {

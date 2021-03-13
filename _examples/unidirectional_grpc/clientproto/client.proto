@@ -1,0 +1,116 @@
+syntax = "proto3";
+
+package protocol;
+
+option go_package = ".;clientproto";
+
+message StreamData {
+  bytes data = 1;
+}
+
+service Centrifuge {
+  rpc Consume(ConnectRequest) returns (stream StreamData);
+}
+
+enum PushType {
+  PUBLICATION = 0;
+  JOIN = 1;
+  LEAVE = 2;
+  UNSUB = 3;
+  MESSAGE = 4;
+  SUB = 5;
+  CONN = 6;
+  DISCONNECT = 7;
+}
+
+message Push {
+  PushType type = 1;
+  string channel = 2;
+  bytes data = 3;
+}
+
+message ClientInfo {
+  string user = 1;
+  string client = 2;
+  bytes conn_info = 3;
+  bytes chan_info = 4;
+}
+
+message Publication {
+  uint32 seq = 1;
+  uint32 gen = 2;
+  string uid = 3;
+  bytes data = 4;
+  ClientInfo info = 5;
+  uint64 offset = 6;
+}
+
+message Join {
+  ClientInfo info = 1;
+}
+
+message Leave {
+  ClientInfo info = 1;
+}
+
+message Unsub {
+  bool resubscribe =1;
+}
+
+message Sub {
+  bool recoverable = 1;
+  uint32 seq = 2;
+  uint32 gen = 3;
+  string epoch = 4;
+  uint64 offset = 5;
+  bool positioned = 6;
+}
+
+message Message {
+  bytes data = 1;
+}
+
+message Conn {
+  string client = 1;
+  string version = 2;
+  bytes data = 3;
+  map<string, SubscribeResult> subs = 4;
+}
+
+message Disconnect {
+  uint32 code = 1;
+  string reason = 2;
+  bool reconnect = 3;
+}
+
+message ConnectRequest {
+  string token = 1;
+  bytes data = 2;
+  map<string, SubscribeRequest> subs = 3;
+  string name = 4;
+  string version = 5;
+}
+
+message SubscribeRequest {
+  string channel = 1;
+  string token = 2;
+  bool recover = 3;
+  uint32 seq = 4;
+  uint32 gen = 5;
+  string epoch = 6;
+  uint64 offset = 7;
+}
+
+message SubscribeResult {
+  bool expires = 1;
+  uint32 ttl = 2;
+  bool recoverable = 3;
+  uint32 seq = 4;
+  uint32 gen = 5;
+  string epoch = 6;
+  repeated Publication publications = 7;
+  bool recovered = 8;
+  uint64 offset = 9;
+  bool positioned = 10;
+}
+

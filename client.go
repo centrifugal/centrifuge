@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/bufpool"
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/recovery"
@@ -235,23 +234,17 @@ func NewClient(ctx context.Context, n *Node, t Transport, conf ClientConfig) (*C
 			incTransportMessagesSent(t.Name())
 			return nil
 		},
-		WriteManyFn: func(data ...[]byte) error {
-			buf := bufpool.GetBuffer()
-			for _, payload := range data {
-				buf.Write(payload)
-			}
-			if err := t.Write(buf.Bytes()); err != nil {
+		WriteManyFn: func(messages ...[]byte) error {
+			if err := t.Write(messages...); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
 					go func() { _ = c.close(v) }()
 				default:
 					go func() { _ = c.close(DisconnectWriteError) }()
 				}
-				bufpool.PutBuffer(buf)
 				return err
 			}
-			bufpool.PutBuffer(buf)
-			addTransportMessagesSent(t.Name(), float64(len(data)))
+			addTransportMessagesSent(t.Name(), float64(len(messages)))
 			return nil
 		},
 	}
@@ -885,7 +878,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	params := cmd.Params
 
 	protoType := c.transport.Protocol().toProto()
-	encoder := protocol.GetReplyEncoder(protoType)
+	replyEncoder := protocol.GetReplyEncoder(protoType)
 
 	var encodeErr error
 
@@ -898,33 +891,30 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 			incReplyError(cmd.Method, rep.Error.Code)
 		}
 
-		encodeErr = encoder.Encode(rep)
+		var replyData []byte
+		replyData, encodeErr = replyEncoder.Encode(rep)
 		if encodeErr != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
+			return encodeErr
 		}
-		return encodeErr
+		disconnect := c.messageWriter.enqueue(replyData)
+		if disconnect != nil {
+			if c.node.logger.enabled(LogLevelDebug) {
+				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			}
+			go func() { _ = c.close(disconnect) }()
+		}
+		return disconnect
 	}
 
+	// TODO: remove.
 	flush := func() error {
-		buf := encoder.Finish()
-		if len(buf) > 0 {
-			c.trace("-->", buf)
-			disconnect := c.messageWriter.enqueue(buf)
-			if disconnect != nil {
-				if c.node.logger.enabled(LogLevelDebug) {
-					c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-				}
-				go func() { _ = c.close(disconnect) }()
-				return fmt.Errorf("flush error")
-			}
-		}
-		encoder.Reset()
 		return nil
 	}
 
 	// done should be called after command fully processed.
 	done := func() {
-		protocol.PutReplyEncoder(protoType, encoder)
+		protocol.PutReplyEncoder(protoType, replyEncoder)
 		observeCommandDuration(method, time.Since(started))
 	}
 

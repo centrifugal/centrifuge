@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <title></title>
@@ -13,29 +13,69 @@
             let unsubscribed = false;
 
             eventSource.onopen = function(e) {
-                console.log("eventsource connection open");
+                console.log("eventsource: connection open");
                 console.log(e);
             };
 
             eventSource.onerror = function(e) {
+                console.log(e);
                 if (this.readyState === EventSource.CONNECTING) {
-                    drawText("eventsource connection reconnecting");
-                    console.log(e);
+                    drawText("🙏🏾 eventsource: connection reconnecting");
                 } else {
-                    drawText("eventsource connection closing");
-                    console.log(e);
+                    drawText("✋ eventsource: connection closing");
                 }
             };
 
             eventSource.onmessage = function(e) {
-                console.log("eventsource connection new message");
+                console.log("eventsource: new message");
                 console.log(e);
-                drawText(e.data);
-                const data = JSON.parse(e.data);
-                if (data.type === 6) {
-                    clientID = data.data.client;
-                }
+                processData(e.data);
             };
+
+            eventSource.addEventListener('ping', function () {
+                drawText('--> PING');
+            })
+
+            function processData(rawData) {
+                drawText("--> " + rawData);
+                const data = JSON.parse(rawData);
+                const pushType = data.type || 0;
+                switch (pushType) {
+                    case 0:
+                        drawText("✨ new data from a channel " + data.channel + ": " + JSON.stringify(data.data));
+                        break;
+                    case 6:
+                        clientID = data.data.client;
+                        let subscriptions = [];
+                        const subs = data.data.subs;
+                        if (subs) {
+                            for (const m in subs) {
+                                if (subs.hasOwnProperty(m)) {
+                                    subscriptions.push(m);
+                                }
+                            }
+                        }
+                        drawText("🟢 connected with client ID " + clientID + " and subscriptions: " + JSON.stringify(subscriptions));
+                        break;
+                    case 7:
+                        clientID = null;
+                        if (!data.data.reconnect) {
+                            eventSource.close();
+                            drawText("🔴 disconnected from a server, won't reconnect");
+                        } else {
+                            drawText("🔴 disconnected from a server, will reconnect");
+                        }
+                        break;
+                    case 3:
+                        drawText("🔓 unsubscribed from a channel " + data.channel);
+                        break;
+                    case 5:
+                        drawText("🔒 subscribed to a channel " + data.channel);
+                        break;
+                    default:
+                        drawText("😟 unsupported push type " + data.type);
+                }
+            }
 
             const container = document.getElementById('messages');
 
