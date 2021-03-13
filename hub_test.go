@@ -17,20 +17,22 @@ import (
 )
 
 type testTransport struct {
-	mu         sync.Mutex
-	sink       chan []byte
-	closed     bool
-	closeCh    chan struct{}
-	disconnect *Disconnect
-	protoType  ProtocolType
-	cancelFn   func()
+	mu             sync.Mutex
+	sink           chan []byte
+	closed         bool
+	closeCh        chan struct{}
+	disconnect     *Disconnect
+	protoType      ProtocolType
+	cancelFn       func()
+	unidirectional bool
 }
 
 func newTestTransport(cancelFn func()) *testTransport {
 	return &testTransport{
-		cancelFn:  cancelFn,
-		protoType: ProtocolTypeJSON,
-		closeCh:   make(chan struct{}),
+		cancelFn:       cancelFn,
+		protoType:      ProtocolTypeJSON,
+		closeCh:        make(chan struct{}),
+		unidirectional: false,
 	}
 }
 
@@ -42,16 +44,18 @@ func (t *testTransport) setSink(sink chan []byte) {
 	t.sink = sink
 }
 
-func (t *testTransport) Write(data []byte) error {
+func (t *testTransport) Write(bufs ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return io.EOF
 	}
-	dataCopy := make([]byte, len(data))
-	copy(dataCopy, data)
-	if t.sink != nil {
-		t.sink <- dataCopy
+	for _, buf := range bufs {
+		dataCopy := make([]byte, len(buf))
+		copy(dataCopy, buf)
+		if t.sink != nil {
+			t.sink <- dataCopy
+		}
 	}
 	return nil
 }
@@ -66,6 +70,10 @@ func (t *testTransport) Protocol() ProtocolType {
 
 func (t *testTransport) Encoding() EncodingType {
 	return EncodingTypeJSON
+}
+
+func (t *testTransport) Unidirectional() bool {
+	return t.unidirectional
 }
 
 func (t *testTransport) Close(disconnect *Disconnect) error {
@@ -124,7 +132,7 @@ func TestHubUnsubscribe(t *testing.T) {
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
-		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}\n", string(data))
+		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}", string(data))
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}

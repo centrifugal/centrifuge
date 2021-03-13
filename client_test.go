@@ -16,7 +16,7 @@ import (
 )
 
 func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
-	c, _, err := NewClient(ctx, n, t)
+	c, _, err := NewClient(ctx, n, t, ClientConfig{})
 	if err != nil {
 		return nil, err
 	}
@@ -817,6 +817,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 			}
 			if i == 3 {
 				close(done)
+				return
 			}
 		}
 	}()
