@@ -266,9 +266,6 @@ func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
 		wg.Add(1)
 		go func(c *Client) {
 			defer wg.Done()
-			if clientID != "" && c.ID() != clientID {
-				return
-			}
 			err := c.Unsubscribe(ch)
 			errMu.Lock()
 			defer errMu.Unlock()

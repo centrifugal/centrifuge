@@ -49,11 +49,27 @@ func handlePush(push *clientproto.Push) {
 	}
 }
 
+func handleStream(stream clientproto.Centrifuge_ConsumeClient) {
+	for {
+		streamData, err := stream.Recv()
+		if err != nil {
+			log.Printf("error recv: %v", err)
+			return
+		}
+		var push clientproto.Push
+		err = proto.Unmarshal(streamData.GetData(), &push)
+		if err != nil {
+			log.Printf("error unmarshal push: %v", err)
+			return
+		}
+		handlePush(&push)
+	}
+}
+
 func main() {
 	flag.Parse()
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithInsecure())
-
 	opts = append(opts, grpc.WithBlock())
 	conn, err := grpc.Dial(*serverAddr, opts...)
 	if err != nil {
@@ -68,25 +84,12 @@ func main() {
 		log.Println("establishing a unidirectional stream")
 		stream, err := client.Consume(context.Background(), &clientproto.ConnectRequest{})
 		if err != nil {
-			log.Println(err)
+			log.Printf("error establishing stream: %v", err)
 			numFailureAttempts++
 			continue
 		}
+		log.Println("stream established")
 		numFailureAttempts = 0
-	INNER:
-		for {
-			streamData, err := stream.Recv()
-			if err != nil {
-				log.Println(err)
-				break INNER
-			}
-			var push clientproto.Push
-			err = proto.Unmarshal(streamData.GetData(), &push)
-			if err != nil {
-				log.Println(err)
-				break INNER
-			}
-			handlePush(&push)
-		}
+		handleStream(stream)
 	}
 }
