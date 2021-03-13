@@ -74,7 +74,7 @@ func waitExitSignal(n *centrifuge.Node, server *grpc.Server) {
 	go func() {
 		<-sigCh
 		_ = n.Shutdown(context.Background())
-		server.Stop()
+		server.GracefulStop()
 		done <- true
 	}()
 	<-done
@@ -108,9 +108,7 @@ func (s *grpcClientService) Consume(_ *clientproto.ConnectRequest, stream client
 	streamDataCh := make(chan *clientproto.StreamData)
 	transport := newGRPCTransport(stream, streamDataCh)
 
-	c, closeFn, err := centrifuge.NewClient(stream.Context(), s.node, transport, centrifuge.ClientConfig{
-		DisabledPush: centrifuge.PushFlagDisconnect,
-	})
+	c, closeFn, err := centrifuge.NewClient(stream.Context(), s.node, transport, centrifuge.ClientConfig{})
 	if err != nil {
 		log.Printf("client create error: %v", err)
 		return err
@@ -183,8 +181,8 @@ func (t *grpcTransport) Write(messages ...[]byte) error {
 		case t.streamDataCh <- &clientproto.StreamData{
 			Data: messages[i],
 		}:
-		default:
-			return centrifuge.DisconnectSlow
+		case <-t.closeCh:
+			return nil
 		}
 	}
 	return nil

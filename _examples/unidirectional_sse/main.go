@@ -271,8 +271,8 @@ func (t *eventsourceTransport) Write(messages ...[]byte) error {
 	for i := 0; i < len(messages); i++ {
 		select {
 		case t.messages <- messages[i]:
-		default:
-			return centrifuge.DisconnectSlow
+		case <-t.closedCh:
+			return nil
 		}
 	}
 	return nil
