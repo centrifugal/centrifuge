@@ -238,7 +238,7 @@ type eventsourceTransport struct {
 
 func newEventsourceTransport(req *http.Request) *eventsourceTransport {
 	return &eventsourceTransport{
-		messages:     make(chan []byte, 128),
+		messages:     make(chan []byte),
 		disconnectCh: make(chan *centrifuge.Disconnect),
 		closedCh:     make(chan struct{}),
 		req:          req,
