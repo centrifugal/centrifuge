@@ -78,7 +78,12 @@ func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
 
-func (t *customWebsocketTransport) Write(data []byte) error {
+// Unidirectional returns whether transport is unidirectional.
+func (t *customWebsocketTransport) Unidirectional() bool {
+	return false
+}
+
+func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
@@ -89,9 +94,11 @@ func (t *customWebsocketTransport) Write(data []byte) error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := t.conn.Write(ctx, messageType, data)
-		if err != nil {
-			return err
+		for i := 0; i < len(messages); i++ {
+			err := t.conn.Write(ctx, messageType, messages[i])
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -140,7 +147,9 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	default:
 	}
 
-	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
+	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport, centrifuge.ClientConfig{
+		DisabledPush: centrifuge.PushFlagDisconnect,
+	})
 	if err != nil {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": websocketTransportName}))
 		return
