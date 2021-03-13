@@ -16,6 +16,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/protocol"
 	"nhooyr.io/websocket"
 )
 
@@ -89,18 +90,23 @@ func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 		return nil
 	default:
 		var messageType = websocket.MessageText
+		protoType := protocol.TypeJSON
+
 		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
 			messageType = websocket.MessageBinary
+			protoType = protocol.TypeProtobuf
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		for i := 0; i < len(messages); i++ {
-			err := t.conn.Write(ctx, messageType, messages[i])
-			if err != nil {
-				return err
-			}
+
+		encoder := protocol.GetDataEncoder(protoType)
+		for i := range messages {
+			_ = encoder.Encode(messages[i])
 		}
-		return nil
+		data := encoder.Finish()
+		protocol.PutDataEncoder(protoType, encoder)
+
+		return t.conn.Write(ctx, messageType, data)
 	}
 }
 

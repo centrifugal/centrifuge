@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/protocol"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -75,18 +76,21 @@ func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 		return nil
 	default:
 		messageType := ws.OpText
+		protoType := protocol.TypeJSON
 
 		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
 			messageType = ws.OpBinary
+			protoType = protocol.TypeProtobuf
 		}
 
-		for i := 0; i < len(messages); i++ {
-			if err := wsutil.WriteServerMessage(t.conn, messageType, messages[i]); err != nil {
-				return err
-			}
+		encoder := protocol.GetDataEncoder(protoType)
+		for i := range messages {
+			_ = encoder.Encode(messages[i])
 		}
+		data := encoder.Finish()
+		protocol.PutDataEncoder(protoType, encoder)
 
-		return nil
+		return wsutil.WriteServerMessage(t.conn, messageType, data)
 	}
 }
 
