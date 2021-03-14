@@ -1039,9 +1039,6 @@ func testReplyWriterWrapper() *sliceReplyWriter {
 			wrapper.replies = append(wrapper.replies, rep)
 			return nil
 		},
-		flush: func() error {
-			return nil
-		},
 		done: func() {},
 	}
 	return wrapper
@@ -1784,6 +1781,21 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	client.mu.Lock()
 	require.True(t, client.status == statusClosed)
 	client.mu.Unlock()
+}
+
+func TestClientHandleUnidirectional(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+	client.transport.(*testTransport).unidirectional = true
+	proceed := client.Handle([]byte("test"))
+	require.False(t, proceed)
+	select {
+	case <-client.Context().Done():
+	case <-time.After(time.Second):
+		require.Fail(t, "client not closed")
+	}
 }
 
 func TestClientHandleEmptyData(t *testing.T) {

@@ -828,8 +828,8 @@ func (c *Client) clientInfo(ch string) *ClientInfo {
 	}
 }
 
-// Handle raw data encoded with Centrifuge protocol. Not goroutine-safe, supposed to be
-// called only from transport reader.
+// Handle raw data encoded with Centrifuge protocol.
+// Not goroutine-safe. Supposed to be called only from a transport connection reader.
 func (c *Client) Handle(data []byte) bool {
 	c.mu.Lock()
 	if c.status == statusClosed {
@@ -838,8 +838,14 @@ func (c *Client) Handle(data []byte) bool {
 	}
 	c.mu.Unlock()
 
+	if c.transport.Unidirectional() {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "can't handle data for unidirectional client", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
+		go func() { _ = c.close(DisconnectBadRequest) }()
+		return false
+	}
+
 	if len(data) == 0 {
-		c.node.logger.log(newLogEntry(LogLevelError, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
+		c.node.logger.log(newLogEntry(LogLevelInfo, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
 		go func() { _ = c.close(DisconnectBadRequest) }()
 		return false
 	}
@@ -868,8 +874,7 @@ func (c *Client) Handle(data []byte) bool {
 	return true
 }
 
-// handleCommand processes a single protocol.Command. Not goroutine-safe, supposed to be
-// called only from a transport reader.
+// handleCommand processes a single protocol.Command.
 func (c *Client) handleCommand(cmd *protocol.Command) bool {
 	if cmd.Method != protocol.MethodTypeConnect && !c.authenticated {
 		// Client must send connect command to authenticate itself first.
@@ -910,7 +915,6 @@ func (c *Client) handleCommand(cmd *protocol.Command) bool {
 
 type replyWriter struct {
 	write func(*protocol.Reply) error
-	flush func() error
 	done  func()
 }
 
@@ -956,11 +960,6 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 		return disconnect
 	}
 
-	// TODO: remove.
-	flush := func() error {
-		return nil
-	}
-
 	// done should be called after command fully processed.
 	done := func() {
 		protocol.PutReplyEncoder(protoType, replyEncoder)
@@ -973,7 +972,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	// in the end.
 	// If handler returned nil error then we assume that all
 	// rw operations will be executed inside handler itself.
-	rw := &replyWriter{write, flush, done}
+	rw := &replyWriter{write, done}
 
 	var handleErr error
 
@@ -1014,7 +1013,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 		case *Disconnect:
 			return t
 		default:
-			c.writeErrorFlush(rw, toClientErr(handleErr))
+			c.writeError(rw, toClientErr(handleErr))
 		}
 	}
 	return nil
@@ -1202,7 +1201,7 @@ func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
 				c.addExpireUpdate(duration)
 				c.mu.Unlock()
 			} else {
-				c.writeErrorFlush(rw, ErrorExpired)
+				c.writeError(rw, ErrorExpired)
 				return
 			}
 		}
@@ -1213,7 +1212,7 @@ func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
 			return
 		}
 
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	}
 
 	c.eventHub.refreshHandler(event, cb)
@@ -1261,8 +1260,6 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 			c.writeDisconnectOrErrorFlush(rw, ctx.err)
 			return
 		}
-
-		_ = rw.flush()
 
 		if channelHasFlag(ctx.channelContext.flags, flagJoinLeave) && ctx.clientInfo != nil {
 			go func() { _ = c.node.publishJoin(cmd.Channel, ctx.clientInfo) }()
@@ -1327,7 +1324,7 @@ func (c *Client) handleSubRefresh(params protocol.Raw, rw *replyWriter) error {
 			res.Expires = true
 			now := time.Now().Unix()
 			if reply.ExpireAt < now {
-				c.writeErrorFlush(rw, ErrorExpired)
+				c.writeError(rw, ErrorExpired)
 				return
 			}
 			res.TTL = uint32(reply.ExpireAt - now)
@@ -1347,7 +1344,7 @@ func (c *Client) handleSubRefresh(params protocol.Raw, rw *replyWriter) error {
 			c.logWriteInternalErrorFlush(rw, err, "error encoding sub refresh")
 			return
 		}
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	}
 
 	c.eventHub.subRefreshHandler(event, cb)
@@ -1375,7 +1372,7 @@ func (c *Client) handleUnsubscribe(params protocol.Raw, rw *replyWriter) error {
 		return DisconnectServerError
 	}
 
-	_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+	_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	rw.done()
 	return nil
 }
@@ -1432,7 +1429,7 @@ func (c *Client) handlePublish(params protocol.Raw, rw *replyWriter) error {
 			c.logWriteInternalErrorFlush(rw, err, "error encoding publish")
 			return
 		}
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	}
 
 	c.eventHub.publishHandler(event, cb)
@@ -1489,7 +1486,7 @@ func (c *Client) handlePresence(params protocol.Raw, rw *replyWriter) error {
 			c.logWriteInternalErrorFlush(rw, err, "error encoding presence")
 			return
 		}
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	}
 
 	c.eventHub.presenceHandler(event, cb)
@@ -1542,7 +1539,7 @@ func (c *Client) handlePresenceStats(params protocol.Raw, rw *replyWriter) error
 			c.logWriteInternalErrorFlush(rw, err, "error encoding presence stats")
 			return
 		}
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	}
 
 	c.eventHub.presenceStatsHandler(event, cb)
@@ -1617,7 +1614,7 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 			epochOK := sinceEpoch == "" || sinceEpoch == epoch
 			offsetOK := event.Filter.Limit <= 0 || sinceOffset == offset || (sinceOffset < offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset+1))
 			if !epochOK || !offsetOK {
-				c.writeErrorFlush(rw, ErrorUnrecoverablePosition)
+				c.writeError(rw, ErrorUnrecoverablePosition)
 				return
 			}
 		}
@@ -1640,7 +1637,7 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 			c.logWriteInternalErrorFlush(rw, err, "error encoding history")
 			return
 		}
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	}
 
 	c.eventHub.historyHandler(event, cb)
@@ -1652,14 +1649,13 @@ func (c *Client) handlePing(params protocol.Raw, rw *replyWriter) error {
 	if err != nil {
 		return c.logDisconnectBadRequestWithError(err, "error decoding ping")
 	}
-	_ = writeReplyFlush(rw, &protocol.Reply{})
+	_ = writeReply(rw, &protocol.Reply{})
 	defer rw.done()
 	return nil
 }
 
-func (c *Client) writeErrorFlush(rw *replyWriter, error *Error) {
+func (c *Client) writeError(rw *replyWriter, error *Error) {
 	_ = rw.write(&protocol.Reply{Error: error.toProto()})
-	_ = rw.flush()
 }
 
 func (c *Client) writeDisconnectOrErrorFlush(rw *replyWriter, replyError error) {
@@ -1668,20 +1664,12 @@ func (c *Client) writeDisconnectOrErrorFlush(rw *replyWriter, replyError error) 
 		go func() { _ = c.close(t) }()
 		return
 	default:
-		c.writeErrorFlush(rw, toClientErr(replyError))
+		c.writeError(rw, toClientErr(replyError))
 	}
 }
 
-func writeReplyFlush(rw *replyWriter, reply *protocol.Reply) error {
-	err := rw.write(reply)
-	if err != nil {
-		return err
-	}
-	err = rw.flush()
-	if err != nil {
-		return err
-	}
-	return nil
+func writeReply(rw *replyWriter, reply *protocol.Reply) error {
+	return rw.write(reply)
 }
 
 func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) error {
@@ -1713,7 +1701,7 @@ func (c *Client) handleRPC(params protocol.Raw, rw *replyWriter) error {
 			c.logWriteInternalErrorFlush(rw, err, "error encoding rpc")
 			return
 		}
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	}
 
 	c.eventHub.rpcHandler(event, cb)
@@ -1941,7 +1929,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
 			return nil, DisconnectServerError
 		}
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 		defer rw.done()
 	}
 
@@ -2269,7 +2257,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		// Need to flush data from writer so subscription response is
 		// sent before any subscription publication.
-		_ = writeReplyFlush(rw, &protocol.Reply{Result: replyRes})
+		_ = writeReply(rw, &protocol.Reply{Result: replyRes})
 	}
 
 	var channelFlags uint8
@@ -2464,7 +2452,7 @@ func (c *Client) logDisconnectBadRequestWithError(err error, message string) *Di
 
 func (c *Client) logWriteInternalErrorFlush(rw *replyWriter, err error, message string) {
 	c.node.logger.log(newLogEntry(LogLevelError, message, map[string]interface{}{"error": err.Error()}))
-	c.writeErrorFlush(rw, ErrorInternal)
+	c.writeError(rw, ErrorInternal)
 }
 
 func toClientErr(err error) *Error {
