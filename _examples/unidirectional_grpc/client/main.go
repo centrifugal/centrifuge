@@ -49,7 +49,7 @@ func handlePush(push *clientproto.Push) {
 	}
 }
 
-func handleStream(stream clientproto.Centrifuge_ConsumeClient) {
+func handleStream(stream clientproto.CentrifugeUni_ConsumeClient) {
 	for {
 		streamData, err := stream.Recv()
 		if err != nil {
@@ -76,7 +76,7 @@ func main() {
 		log.Fatalf("fail to dial: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	client := clientproto.NewCentrifugeClient(conn)
+	client := clientproto.NewCentrifugeUniClient(conn)
 
 	numFailureAttempts := 0
 	for {

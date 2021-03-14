@@ -131,7 +131,7 @@ func main() {
 
 		transport := newWebsocketTransport(safeConn, protoType)
 		client, closeFn, err := centrifuge.NewClient(context.Background(), node, transport, centrifuge.ClientConfig{
-			DisabledPush: centrifuge.PushFlagDisconnect,
+			DisabledPushFlags: centrifuge.PushFlagDisconnect,
 		})
 		if err != nil {
 			log.Printf("%s: client create error: %v", nameConn(conn), err)

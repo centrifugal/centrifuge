@@ -337,7 +337,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		defer close(ctxCh)
 
 		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport, ClientConfig{
-			DisabledPush: PushFlagDisconnect,
+			DisabledPushFlags: PushFlagDisconnect,
 		})
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))

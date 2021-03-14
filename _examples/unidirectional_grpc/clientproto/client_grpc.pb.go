@@ -14,27 +14,27 @@ import (
 // Requires gRPC-Go v1.32.0 or later.
 const _ = grpc.SupportPackageIsVersion7
 
-// CentrifugeClient is the client API for Centrifuge service.
+// CentrifugeUniClient is the client API for CentrifugeUni service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type CentrifugeClient interface {
-	Consume(ctx context.Context, in *ConnectRequest, opts ...grpc.CallOption) (Centrifuge_ConsumeClient, error)
+type CentrifugeUniClient interface {
+	Consume(ctx context.Context, in *ConnectRequest, opts ...grpc.CallOption) (CentrifugeUni_ConsumeClient, error)
 }
 
-type centrifugeClient struct {
+type centrifugeUniClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewCentrifugeClient(cc grpc.ClientConnInterface) CentrifugeClient {
-	return &centrifugeClient{cc}
+func NewCentrifugeUniClient(cc grpc.ClientConnInterface) CentrifugeUniClient {
+	return &centrifugeUniClient{cc}
 }
 
-func (c *centrifugeClient) Consume(ctx context.Context, in *ConnectRequest, opts ...grpc.CallOption) (Centrifuge_ConsumeClient, error) {
-	stream, err := c.cc.NewStream(ctx, &Centrifuge_ServiceDesc.Streams[0], "/protocol.Centrifuge/Consume", opts...)
+func (c *centrifugeUniClient) Consume(ctx context.Context, in *ConnectRequest, opts ...grpc.CallOption) (CentrifugeUni_ConsumeClient, error) {
+	stream, err := c.cc.NewStream(ctx, &CentrifugeUni_ServiceDesc.Streams[0], "/protocol.CentrifugeUni/Consume", opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &centrifugeConsumeClient{stream}
+	x := &centrifugeUniConsumeClient{stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -44,16 +44,16 @@ func (c *centrifugeClient) Consume(ctx context.Context, in *ConnectRequest, opts
 	return x, nil
 }
 
-type Centrifuge_ConsumeClient interface {
+type CentrifugeUni_ConsumeClient interface {
 	Recv() (*StreamData, error)
 	grpc.ClientStream
 }
 
-type centrifugeConsumeClient struct {
+type centrifugeUniConsumeClient struct {
 	grpc.ClientStream
 }
 
-func (x *centrifugeConsumeClient) Recv() (*StreamData, error) {
+func (x *centrifugeUniConsumeClient) Recv() (*StreamData, error) {
 	m := new(StreamData)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -61,64 +61,64 @@ func (x *centrifugeConsumeClient) Recv() (*StreamData, error) {
 	return m, nil
 }
 
-// CentrifugeServer is the server API for Centrifuge service.
-// All implementations should embed UnimplementedCentrifugeServer
+// CentrifugeUniServer is the server API for CentrifugeUni service.
+// All implementations should embed UnimplementedCentrifugeUniServer
 // for forward compatibility
-type CentrifugeServer interface {
-	Consume(*ConnectRequest, Centrifuge_ConsumeServer) error
+type CentrifugeUniServer interface {
+	Consume(*ConnectRequest, CentrifugeUni_ConsumeServer) error
 }
 
-// UnimplementedCentrifugeServer should be embedded to have forward compatible implementations.
-type UnimplementedCentrifugeServer struct {
+// UnimplementedCentrifugeUniServer should be embedded to have forward compatible implementations.
+type UnimplementedCentrifugeUniServer struct {
 }
 
-func (UnimplementedCentrifugeServer) Consume(*ConnectRequest, Centrifuge_ConsumeServer) error {
+func (UnimplementedCentrifugeUniServer) Consume(*ConnectRequest, CentrifugeUni_ConsumeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Consume not implemented")
 }
 
-// UnsafeCentrifugeServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to CentrifugeServer will
+// UnsafeCentrifugeUniServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to CentrifugeUniServer will
 // result in compilation errors.
-type UnsafeCentrifugeServer interface {
-	mustEmbedUnimplementedCentrifugeServer()
+type UnsafeCentrifugeUniServer interface {
+	mustEmbedUnimplementedCentrifugeUniServer()
 }
 
-func RegisterCentrifugeServer(s grpc.ServiceRegistrar, srv CentrifugeServer) {
-	s.RegisterService(&Centrifuge_ServiceDesc, srv)
+func RegisterCentrifugeUniServer(s grpc.ServiceRegistrar, srv CentrifugeUniServer) {
+	s.RegisterService(&CentrifugeUni_ServiceDesc, srv)
 }
 
-func _Centrifuge_Consume_Handler(srv interface{}, stream grpc.ServerStream) error {
+func _CentrifugeUni_Consume_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ConnectRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(CentrifugeServer).Consume(m, &centrifugeConsumeServer{stream})
+	return srv.(CentrifugeUniServer).Consume(m, &centrifugeUniConsumeServer{stream})
 }
 
-type Centrifuge_ConsumeServer interface {
+type CentrifugeUni_ConsumeServer interface {
 	Send(*StreamData) error
 	grpc.ServerStream
 }
 
-type centrifugeConsumeServer struct {
+type centrifugeUniConsumeServer struct {
 	grpc.ServerStream
 }
 
-func (x *centrifugeConsumeServer) Send(m *StreamData) error {
+func (x *centrifugeUniConsumeServer) Send(m *StreamData) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-// Centrifuge_ServiceDesc is the grpc.ServiceDesc for Centrifuge service.
+// CentrifugeUni_ServiceDesc is the grpc.ServiceDesc for CentrifugeUni service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var Centrifuge_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "protocol.Centrifuge",
-	HandlerType: (*CentrifugeServer)(nil),
+var CentrifugeUni_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "protocol.CentrifugeUni",
+	HandlerType: (*CentrifugeUniServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Consume",
-			Handler:       _Centrifuge_Consume_Handler,
+			Handler:       _CentrifugeUni_Consume_Handler,
 			ServerStreams: true,
 		},
 	},

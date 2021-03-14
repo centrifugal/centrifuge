@@ -156,6 +156,67 @@ const (
 	statusClosed     status = 3
 )
 
+// ConnectRequest can be used in unidirectional connection case to
+// pass initial information from a client side.
+type ConnectRequest struct {
+	Token   string
+	Data    []byte
+	Name    string
+	Version string
+	Subs    map[string]SubscribeRequest
+}
+
+func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
+	if r == nil {
+		return nil
+	}
+	req := &protocol.ConnectRequest{
+		Token:   r.Token,
+		Data:    r.Data,
+		Name:    r.Name,
+		Version: r.Version,
+	}
+	if len(r.Subs) > 0 {
+		subs := make(map[string]*protocol.SubscribeRequest)
+		for k, v := range r.Subs {
+			subs[k] = &protocol.SubscribeRequest{
+				Recover: v.Recover,
+				Epoch:   v.Epoch,
+				Offset:  v.Offset,
+			}
+		}
+		req.Subs = subs
+	}
+	return req
+}
+
+type SubscribeRequest struct {
+	Recover bool
+	Epoch   string
+	Offset  uint64
+}
+
+// It's possible to disable certain types of pushes to be sent to a client connection
+// by using ClientConfig.DisabledPushFlags.
+const (
+	PushFlagConnect uint64 = 1 << iota
+	PushFlagDisconnect
+	PushFlagSubscribe
+	PushFlagJoin
+	PushFlagLeave
+	PushFlagUnsubscribe
+	PushFlagPublication
+	PushFlagMessage
+)
+
+// ClientConfig allows tweaking Client behavior.
+type ClientConfig struct {
+	// DisabledPushFlags allows disabling sending certain types of Pushes to a client.
+	DisabledPushFlags uint64
+	// ConnectRequest can be used in unidirectional case to pass initial data from a client.
+	ConnectRequest *ConnectRequest
+}
+
 // Client represents client connection to server.
 type Client struct {
 	mu                sync.RWMutex
@@ -179,44 +240,29 @@ type Client struct {
 	nextExpire        int64
 	eventHub          *clientEventHub
 	timer             *time.Timer
-	conf              ClientConfig
-}
-
-const (
-	PushFlagConnect uint64 = 1 << iota
-	PushFlagDisconnect
-	PushFlagSubscribe
-	PushFlagJoin
-	PushFlagLeave
-	PushFlagUnsubscribe
-	PushFlagPublication
-	PushFlagMessage
-)
-
-type ClientConfig struct {
-	DisabledPush uint64
+	disabledPushFlags uint64
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
 type ClientCloseFunc func() error
 
 // NewClient initializes new Client.
-func NewClient(ctx context.Context, n *Node, t Transport, conf ClientConfig) (*Client, ClientCloseFunc, error) {
+func NewClient(ctx context.Context, n *Node, t Transport, cfg ClientConfig) (*Client, ClientCloseFunc, error) {
 	uuidObject, err := uuid.NewRandom()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	c := &Client{
-		ctx:        ctx,
-		uid:        uuidObject.String(),
-		node:       n,
-		transport:  t,
-		channels:   make(map[string]channelContext),
-		pubSubSync: recovery.NewPubSubSync(),
-		status:     statusConnecting,
-		eventHub:   &clientEventHub{},
-		conf:       conf,
+	client := &Client{
+		ctx:               ctx,
+		uid:               uuidObject.String(),
+		node:              n,
+		transport:         t,
+		channels:          make(map[string]channelContext),
+		pubSubSync:        recovery.NewPubSubSync(),
+		status:            statusConnecting,
+		eventHub:          &clientEventHub{},
+		disabledPushFlags: cfg.DisabledPushFlags,
 	}
 
 	messageWriterConf := writerConfig{
@@ -225,9 +271,9 @@ func NewClient(ctx context.Context, n *Node, t Transport, conf ClientConfig) (*C
 			if err := t.Write(data); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
-					go func() { _ = c.close(v) }()
+					go func() { _ = client.close(v) }()
 				default:
-					go func() { _ = c.close(DisconnectWriteError) }()
+					go func() { _ = client.close(DisconnectWriteError) }()
 				}
 				return err
 			}
@@ -238,9 +284,9 @@ func NewClient(ctx context.Context, n *Node, t Transport, conf ClientConfig) (*C
 			if err := t.Write(messages...); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
-					go func() { _ = c.close(v) }()
+					go func() { _ = client.close(v) }()
 				default:
-					go func() { _ = c.close(DisconnectWriteError) }()
+					go func() { _ = client.close(DisconnectWriteError) }()
 				}
 				return err
 			}
@@ -249,26 +295,26 @@ func NewClient(ctx context.Context, n *Node, t Transport, conf ClientConfig) (*C
 		},
 	}
 
-	c.messageWriter = newWriter(messageWriterConf)
-	go c.messageWriter.run()
+	client.messageWriter = newWriter(messageWriterConf)
+	go client.messageWriter.run()
 
 	staleCloseDelay := n.config.ClientStaleCloseDelay
-	if staleCloseDelay > 0 && !c.authenticated {
-		c.mu.Lock()
-		c.timerOp = timerOpStale
-		c.timer = time.AfterFunc(staleCloseDelay, c.onTimerOp)
-		c.mu.Unlock()
+	if staleCloseDelay > 0 && !client.authenticated {
+		client.mu.Lock()
+		client.timerOp = timerOpStale
+		client.timer = time.AfterFunc(staleCloseDelay, client.onTimerOp)
+		client.mu.Unlock()
 	}
 
 	if t.Unidirectional() {
-		err := c.unidirectionalConnect()
+		err := client.unidirectionalConnect(cfg.ConnectRequest)
 		if err != nil {
-			_ = c.close(nil)
+			_ = client.close(nil)
 			return nil, nil, err
 		}
 	}
 
-	return c, func() error { return c.close(nil) }, nil
+	return client, func() error { return client.close(nil) }, nil
 }
 
 func (c *Client) encodeDisconnect(d *Disconnect) (*prepared.Reply, error) {
@@ -313,12 +359,15 @@ func (c *Client) encodeConn(res *protocol.ConnectResult) (*prepared.Reply, error
 	}, c.transport.Protocol().toProto()), nil
 }
 
-func (c *Client) unidirectionalConnect() error {
-	res, err := c.connectCmd(&protocol.ConnectRequest{}, nil)
+func (c *Client) unidirectionalConnect(connectRequest *ConnectRequest) error {
+	if connectRequest == nil {
+		connectRequest = &ConnectRequest{}
+	}
+	res, err := c.connectCmd(connectRequest.toProto(), nil)
 	if err != nil {
 		return err
 	}
-	if !hasFlag(c.conf.DisabledPush, PushFlagConnect) {
+	if !hasFlag(c.disabledPushFlags, PushFlagConnect) {
 		reply, err := c.encodeConn(res)
 		if err != nil {
 			return err
@@ -610,7 +659,7 @@ func (c *Client) IsSubscribed(ch string) bool {
 // just written to connection. on client side this message can be handled
 // with Message handler.
 func (c *Client) Send(data []byte) error {
-	if hasFlag(c.conf.DisabledPush, PushFlagMessage) {
+	if hasFlag(c.disabledPushFlags, PushFlagMessage) {
 		return nil
 	}
 
@@ -652,7 +701,7 @@ func (c *Client) Unsubscribe(ch string) error {
 }
 
 func (c *Client) sendUnsub(ch string) error {
-	if hasFlag(c.conf.DisabledPush, PushFlagUnsubscribe) {
+	if hasFlag(c.disabledPushFlags, PushFlagUnsubscribe) {
 		return nil
 	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
@@ -729,7 +778,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 		}
 	}
 
-	if disconnect != nil && !hasFlag(c.conf.DisabledPush, PushFlagDisconnect) {
+	if disconnect != nil && !hasFlag(c.disabledPushFlags, PushFlagDisconnect) {
 		if reply, err := c.encodeDisconnect(disconnect); err == nil {
 			_ = c.transportEnqueue(reply)
 		}
@@ -1939,7 +1988,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	c.mu.Lock()
 	c.channels[channel] = subCtx.channelContext
 	c.mu.Unlock()
-	if hasFlag(c.conf.DisabledPush, PushFlagSubscribe) {
+	if hasFlag(c.disabledPushFlags, PushFlagSubscribe) {
 		return nil
 	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
@@ -2310,7 +2359,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	channelContext.streamPosition.Offset = pub.Offset
 	c.channels[ch] = channelContext
 	c.mu.Unlock()
-	if hasFlag(c.conf.DisabledPush, PushFlagPublication) {
+	if hasFlag(c.disabledPushFlags, PushFlagPublication) {
 		return nil
 	}
 	return c.transportEnqueue(reply)
@@ -2318,7 +2367,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
 	if pub.Offset == 0 {
-		if hasFlag(c.conf.DisabledPush, PushFlagPublication) {
+		if hasFlag(c.disabledPushFlags, PushFlagPublication) {
 			return nil
 		}
 		return c.transportEnqueue(reply)
@@ -2335,7 +2384,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 	c.mu.Unlock()
 
 	if !channelHasFlag(channelFlags, flagRecover|flagPosition) {
-		if hasFlag(c.conf.DisabledPush, PushFlagPublication) {
+		if hasFlag(c.disabledPushFlags, PushFlagPublication) {
 			return nil
 		}
 		return c.transportEnqueue(reply)
@@ -2348,14 +2397,14 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 }
 
 func (c *Client) writeJoin(_ string, reply *prepared.Reply) error {
-	if hasFlag(c.conf.DisabledPush, PushFlagJoin) {
+	if hasFlag(c.disabledPushFlags, PushFlagJoin) {
 		return nil
 	}
 	return c.transportEnqueue(reply)
 }
 
 func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
-	if hasFlag(c.conf.DisabledPush, PushFlagLeave) {
+	if hasFlag(c.disabledPushFlags, PushFlagLeave) {
 		return nil
 	}
 	return c.transportEnqueue(reply)

@@ -154,7 +154,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	}
 
 	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport, centrifuge.ClientConfig{
-		DisabledPush: centrifuge.PushFlagDisconnect,
+		DisabledPushFlags: centrifuge.PushFlagDisconnect,
 	})
 	if err != nil {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": websocketTransportName}))

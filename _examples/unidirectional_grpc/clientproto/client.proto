@@ -8,8 +8,26 @@ message StreamData {
   bytes data = 1;
 }
 
-service Centrifuge {
+service CentrifugeUni {
   rpc Consume(ConnectRequest) returns (stream StreamData);
+}
+
+message ConnectRequest {
+  string token = 1;
+  bytes data = 2;
+  map<string, SubscribeRequest> subs = 3;
+  string name = 4;
+  string version = 5;
+}
+
+message SubscribeRequest {
+  string channel = 1;
+  string token = 2;
+  bool recover = 3;
+  uint32 seq = 4;
+  uint32 gen = 5;
+  string epoch = 6;
+  uint64 offset = 7;
 }
 
 enum PushType {
@@ -77,30 +95,6 @@ message Conn {
   map<string, SubscribeResult> subs = 4;
 }
 
-message Disconnect {
-  uint32 code = 1;
-  string reason = 2;
-  bool reconnect = 3;
-}
-
-message ConnectRequest {
-  string token = 1;
-  bytes data = 2;
-  map<string, SubscribeRequest> subs = 3;
-  string name = 4;
-  string version = 5;
-}
-
-message SubscribeRequest {
-  string channel = 1;
-  string token = 2;
-  bool recover = 3;
-  uint32 seq = 4;
-  uint32 gen = 5;
-  string epoch = 6;
-  uint64 offset = 7;
-}
-
 message SubscribeResult {
   bool expires = 1;
   uint32 ttl = 2;
@@ -114,3 +108,8 @@ message SubscribeResult {
   bool positioned = 10;
 }
 
+message Disconnect {
+  uint32 code = 1;
+  string reason = 2;
+  bool reconnect = 3;
+}

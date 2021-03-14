@@ -82,7 +82,7 @@ func waitExitSignal(n *centrifuge.Node, server *grpc.Server) {
 
 // RegisterGRPCServerClient ...
 func RegisterGRPCServerClient(n *centrifuge.Node, server *grpc.Server, config GRPCClientServiceConfig) error {
-	clientproto.RegisterCentrifugeServer(server, newGRPCClientService(n, config))
+	clientproto.RegisterCentrifugeUniServer(server, newGRPCClientService(n, config))
 	return nil
 }
 
@@ -104,11 +104,29 @@ func newGRPCClientService(n *centrifuge.Node, c GRPCClientServiceConfig) *grpcCl
 }
 
 // Consume is a unidirectional server->client stream wit real-time data.
-func (s *grpcClientService) Consume(_ *clientproto.ConnectRequest, stream clientproto.Centrifuge_ConsumeServer) error {
+func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clientproto.CentrifugeUni_ConsumeServer) error {
 	streamDataCh := make(chan *clientproto.StreamData)
 	transport := newGRPCTransport(stream, streamDataCh)
 
-	c, closeFn, err := centrifuge.NewClient(stream.Context(), s.node, transport, centrifuge.ClientConfig{})
+	connectRequest := &centrifuge.ConnectRequest{
+		Token:   req.Token,
+		Data:    req.Data,
+		Name:    req.Name,
+		Version: req.Version,
+	}
+	if req.Subs != nil {
+		subs := make(map[string]centrifuge.SubscribeRequest)
+		for k, v := range connectRequest.Subs {
+			subs[k] = centrifuge.SubscribeRequest{
+				Recover: v.Recover,
+				Offset:  v.Offset,
+				Epoch:   v.Epoch,
+			}
+		}
+	}
+	c, closeFn, err := centrifuge.NewClient(stream.Context(), s.node, transport, centrifuge.ClientConfig{
+		ConnectRequest: connectRequest,
+	})
 	if err != nil {
 		log.Printf("client create error: %v", err)
 		return err
@@ -140,12 +158,12 @@ type grpcTransport struct {
 	mu            sync.Mutex
 	closed        bool
 	closeCh       chan struct{}
-	stream        clientproto.Centrifuge_ConsumeServer
+	stream        clientproto.CentrifugeUni_ConsumeServer
 	streamDataCh  chan *clientproto.StreamData
 	repliesClosed bool
 }
 
-func newGRPCTransport(stream clientproto.Centrifuge_ConsumeServer, streamDataCh chan *clientproto.StreamData) *grpcTransport {
+func newGRPCTransport(stream clientproto.CentrifugeUni_ConsumeServer, streamDataCh chan *clientproto.StreamData) *grpcTransport {
 	return &grpcTransport{
 		stream:       stream,
 		streamDataCh: streamDataCh,
