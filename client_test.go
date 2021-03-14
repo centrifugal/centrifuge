@@ -16,7 +16,11 @@ import (
 )
 
 func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
-	c, _, err := NewClient(ctx, n, t, ClientConfig{})
+	return newClientWithConfig(ctx, n, t, ClientConfig{})
+}
+
+func newClientWithConfig(ctx context.Context, n *Node, t Transport, cfg ClientConfig) (*Client, error) {
+	c, _, err := NewClient(ctx, n, t, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -36,6 +40,23 @@ func newTestSubscribedClient(t *testing.T, n *Node, userID, chanID string) *Clie
 	require.True(t, n.hub.NumSubscribers(chanID) > 0)
 	require.Contains(t, client.channels, chanID)
 	return client
+}
+
+func TestConnectRequestToProto(t *testing.T) {
+	r := ConnectRequest{
+		Token: "token",
+		Subs: map[string]SubscribeRequest{
+			"test": {
+				Recover: true,
+				Offset:  1,
+				Epoch:   "epoch",
+			},
+		}}
+	protoReq := r.toProto()
+	require.Equal(t, "token", protoReq.GetToken())
+	require.Equal(t, uint64(1), protoReq.Subs["test"].Offset)
+	require.Equal(t, "epoch", protoReq.Subs["test"].Epoch)
+	require.True(t, protoReq.Subs["test"].Recover)
 }
 
 func TestSetCredentials(t *testing.T) {
@@ -802,7 +823,17 @@ func TestServerSideSubscriptions(t *testing.T) {
 			transport.sink = make(chan []byte, 100)
 			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := newClient(newCtx, node, transport)
+			client, _ := newClientWithConfig(newCtx, node, transport, ClientConfig{
+				ConnectRequest: &ConnectRequest{
+					Subs: map[string]SubscribeRequest{
+						"server-side-1": {
+							Recover: true,
+							Epoch:   "test",
+							Offset:  0,
+						},
+					},
+				},
+			})
 			if !tt.Unidirectional {
 				connectClient(t, client)
 			}
@@ -2802,4 +2833,57 @@ func TestClientCheckPosition(t *testing.T) {
 func TestErrLogLevel(t *testing.T) {
 	require.Equal(t, LogLevelInfo, errLogLevel(ErrorNotAvailable))
 	require.Equal(t, LogLevelError, errLogLevel(errors.New("boom")))
+}
+
+func TestClientTransportWriteError(t *testing.T) {
+	testCases := []struct {
+		Name               string
+		Error              error
+		ExpectedDisconnect *Disconnect
+	}{
+		{"disconnect", DisconnectSlow, DisconnectSlow},
+		{"other", errors.New("boom"), DisconnectWriteError},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := defaultTestNode()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			transport := newTestTransport(func() {})
+			transport.sink = make(chan []byte, 100)
+			transport.writeErr = tt.Error
+
+			done := make(chan *Disconnect)
+
+			node.OnConnect(func(client *Client) {
+				client.OnDisconnect(func(event DisconnectEvent) {
+					done <- event.Disconnect
+				})
+			})
+
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+
+			connectClient(t, client)
+
+			rwWrapper := testReplyWriterWrapper()
+
+			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
+				Channel: "test",
+			}, SubscribeReply{}, rwWrapper.rw, false)
+			require.Nil(t, subCtx.disconnect)
+			require.Nil(t, rwWrapper.replies[0].Error)
+
+			_, err := node.Publish("test", []byte(`{"text": "test message"}`))
+			require.NoError(t, err)
+
+			select {
+			case <-time.After(time.Second):
+				require.Fail(t, "client not closed")
+			case d := <-done:
+				require.Equal(t, tt.ExpectedDisconnect, d)
+			}
+		})
+	}
 }

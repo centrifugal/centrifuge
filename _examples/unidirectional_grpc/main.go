@@ -91,6 +91,7 @@ type GRPCClientServiceConfig struct{}
 
 // GRPCClientService can work with client GRPC connections.
 type grpcClientService struct {
+	clientproto.UnimplementedCentrifugeUniServer
 	config GRPCClientServiceConfig
 	node   *centrifuge.Node
 }

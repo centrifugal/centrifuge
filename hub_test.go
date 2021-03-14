@@ -25,6 +25,7 @@ type testTransport struct {
 	protoType      ProtocolType
 	cancelFn       func()
 	unidirectional bool
+	writeErr       error
 }
 
 func newTestTransport(cancelFn func()) *testTransport {
@@ -48,13 +49,16 @@ func (t *testTransport) setSink(sink chan []byte) {
 	t.sink = sink
 }
 
-func (t *testTransport) Write(bufs ...[]byte) error {
+func (t *testTransport) Write(messages ...[]byte) error {
+	if t.writeErr != nil {
+		return t.writeErr
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return io.EOF
 	}
-	for _, buf := range bufs {
+	for _, buf := range messages {
 		dataCopy := make([]byte, len(buf))
 		copy(dataCopy, buf)
 		if t.sink != nil {

@@ -62,19 +62,21 @@ func (x *centrifugeUniConsumeClient) Recv() (*StreamData, error) {
 }
 
 // CentrifugeUniServer is the server API for CentrifugeUni service.
-// All implementations should embed UnimplementedCentrifugeUniServer
+// All implementations must embed UnimplementedCentrifugeUniServer
 // for forward compatibility
 type CentrifugeUniServer interface {
 	Consume(*ConnectRequest, CentrifugeUni_ConsumeServer) error
+	mustEmbedUnimplementedCentrifugeUniServer()
 }
 
-// UnimplementedCentrifugeUniServer should be embedded to have forward compatible implementations.
+// UnimplementedCentrifugeUniServer must be embedded to have forward compatible implementations.
 type UnimplementedCentrifugeUniServer struct {
 }
 
 func (UnimplementedCentrifugeUniServer) Consume(*ConnectRequest, CentrifugeUni_ConsumeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Consume not implemented")
 }
+func (UnimplementedCentrifugeUniServer) mustEmbedUnimplementedCentrifugeUniServer() {}
 
 // UnsafeCentrifugeUniServer may be embedded to opt out of forward compatibility for this service.
 // Use of this interface is not recommended, as added methods to CentrifugeUniServer will
