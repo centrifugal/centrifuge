@@ -30,15 +30,16 @@ message SubscribeRequest {
   uint64 offset = 7;
 }
 
+
 enum PushType {
-  PUBLICATION = 0;
-  JOIN = 1;
-  LEAVE = 2;
-  UNSUB = 3;
-  MESSAGE = 4;
-  SUB = 5;
-  CONN = 6;
-  DISCONNECT = 7;
+  PUSH_TYPE_PUBLICATION = 0;
+  PUSH_TYPE_JOIN = 1;
+  PUSH_TYPE_LEAVE = 2;
+  PUSH_TYPE_UNSUBSCRIBE = 3;
+  PUSH_TYPE_MESSAGE = 4;
+  PUSH_TYPE_SUBSCRIBE = 5;
+  PUSH_TYPE_CONNECT = 6;
+  PUSH_TYPE_DISCONNECT = 7;
 }
 
 message Push {
@@ -71,11 +72,11 @@ message Leave {
   ClientInfo info = 1;
 }
 
-message Unsub {
+message Unsubscribe {
   bool resubscribe =1;
 }
 
-message Sub {
+message Subscribe {
   bool recoverable = 1;
   uint32 seq = 2;
   uint32 gen = 3;
@@ -86,13 +87,6 @@ message Sub {
 
 message Message {
   bytes data = 1;
-}
-
-message Conn {
-  string client = 1;
-  string version = 2;
-  bytes data = 3;
-  map<string, SubscribeResult> subs = 4;
 }
 
 message SubscribeResult {
@@ -106,6 +100,13 @@ message SubscribeResult {
   bool recovered = 8;
   uint64 offset = 9;
   bool positioned = 10;
+}
+
+message Connect {
+  string client = 1;
+  string version = 2;
+  bytes data = 3;
+  map<string, SubscribeResult> subs = 4;
 }
 
 message Disconnect {

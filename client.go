@@ -338,18 +338,18 @@ func (c *Client) encodeDisconnect(d *Disconnect) (*prepared.Reply, error) {
 }
 
 func (c *Client) encodeConn(res *protocol.ConnectResult) (*prepared.Reply, error) {
-	p := &protocol.Conn{
+	p := &protocol.Connect{
 		Version: res.GetVersion(),
 		Client:  res.GetClient(),
 		Data:    res.Data,
 		Subs:    res.Subs,
 	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
-	data, err := pushEncoder.EncodeConn(p)
+	data, err := pushEncoder.EncodeConnect(p)
 	if err != nil {
 		return nil, err
 	}
-	result, err := pushEncoder.Encode(clientproto.NewConnPush(data))
+	result, err := pushEncoder.Encode(clientproto.NewConnectPush(data))
 	if err != nil {
 		return nil, err
 	}
@@ -706,11 +706,11 @@ func (c *Client) sendUnsub(ch string) error {
 	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
 
-	data, err := pushEncoder.EncodeUnsub(&protocol.Unsub{})
+	data, err := pushEncoder.EncodeUnsubscribe(&protocol.Unsubscribe{})
 	if err != nil {
 		return err
 	}
-	result, err := pushEncoder.Encode(clientproto.NewUnsubPush(ch, data))
+	result, err := pushEncoder.Encode(clientproto.NewUnsubscribePush(ch, data))
 	if err != nil {
 		return err
 	}
@@ -1980,7 +1980,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		return nil
 	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
-	sub := &protocol.Sub{
+	sub := &protocol.Subscribe{
 		Offset:      subCtx.result.GetOffset(),
 		Epoch:       subCtx.result.GetEpoch(),
 		Recoverable: subCtx.result.GetRecoverable(),
@@ -1989,11 +1989,11 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if hasFlag(CompatibilityFlags, UseSeqGen) {
 		sub.Seq, sub.Gen = recovery.UnpackUint64(subCtx.result.GetOffset())
 	}
-	data, err := pushEncoder.EncodeSub(sub)
+	data, err := pushEncoder.EncodeSubscribe(sub)
 	if err != nil {
 		return err
 	}
-	result, err := pushEncoder.Encode(clientproto.NewSubPush(channel, data))
+	result, err := pushEncoder.Encode(clientproto.NewSubscribePush(channel, data))
 	if err != nil {
 		return err
 	}

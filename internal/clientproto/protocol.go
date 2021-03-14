@@ -39,28 +39,28 @@ func NewLeavePush(ch string, data protocol.Raw) *protocol.Push {
 	}
 }
 
-// NewUnsubPush returns initialized async unsubscribe message.
-func NewUnsubPush(ch string, data protocol.Raw) *protocol.Push {
+// NewUnsubscribePush returns initialized async unsubscribe message.
+func NewUnsubscribePush(ch string, data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type:    protocol.PushTypeUnsub,
+		Type:    protocol.PushTypeUnsubscribe,
 		Channel: ch,
 		Data:    data,
 	}
 }
 
-// NewSubPush returns initialized async subscribe message.
-func NewSubPush(ch string, data protocol.Raw) *protocol.Push {
+// NewSubscribePush returns initialized async subscribe message.
+func NewSubscribePush(ch string, data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type:    protocol.PushTypeSub,
+		Type:    protocol.PushTypeSubscribe,
 		Channel: ch,
 		Data:    data,
 	}
 }
 
 // NewConnPush returns initialized async connect message.
-func NewConnPush(data protocol.Raw) *protocol.Push {
+func NewConnectPush(data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type: protocol.PushTypeConn,
+		Type: protocol.PushTypeConnect,
 		Data: data,
 	}
 }
