@@ -67,6 +67,7 @@ func (t *customWebsocketTransport) read() ([]byte, bool, error) {
 	return data, false, nil
 }
 
+// Write ...
 func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
@@ -81,16 +82,15 @@ func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 		}
 
 		encoder := protocol.GetDataEncoder(protoType)
+		defer protocol.PutDataEncoder(protoType, encoder)
 		for i := range messages {
 			_ = encoder.Encode(messages[i])
 		}
-		data := encoder.Finish()
-		protocol.PutDataEncoder(protoType, encoder)
-
-		return wsutil.WriteServerMessage(t.conn, messageType, data)
+		return wsutil.WriteServerMessage(t.conn, messageType, encoder.Finish())
 	}
 }
 
+// Close ...
 func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) error {
 	t.mu.Lock()
 	if t.closed {

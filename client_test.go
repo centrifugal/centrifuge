@@ -776,56 +776,71 @@ func TestConnectingReply(t *testing.T) {
 }
 
 func TestServerSideSubscriptions(t *testing.T) {
-	node := defaultTestNode()
-	defer func() { _ = node.Shutdown(context.Background()) }()
+	testCases := []struct {
+		Name           string
+		Unidirectional bool
+	}{
+		{"bidi", false},
+		{"uni", true},
+	}
 
-	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
-		return ConnectReply{
-			Subscriptions: map[string]SubscribeOptions{
-				"server-side-1":  {},
-				"$server-side-2": {},
-			},
-		}, nil
-	})
-	transport := newTestTransport(func() {})
-	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
-	connectClient(t, client)
+	for _, tt := range testCases {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := defaultTestNode()
+			defer func() { _ = node.Shutdown(context.Background()) }()
 
-	_ = client.Subscribe("server-side-3")
-	_, err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
-	require.NoError(t, err)
-	_, err = node.Publish("$server-side-2", []byte(`{"text": "test message 2"}`))
-	require.NoError(t, err)
-	_, err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
-	require.NoError(t, err)
+			node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+				return ConnectReply{
+					Subscriptions: map[string]SubscribeOptions{
+						"server-side-1":  {},
+						"$server-side-2": {},
+					},
+				}, nil
+			})
+			transport := newTestTransport(func() {})
+			transport.setUnidirectional(tt.Unidirectional)
+			transport.sink = make(chan []byte, 100)
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+			if !tt.Unidirectional {
+				connectClient(t, client)
+			}
 
-	done := make(chan struct{})
-	go func() {
-		var i int
-		for data := range transport.sink {
-			if strings.Contains(string(data), "test message 1") {
-				i++
-			}
-			if strings.Contains(string(data), "test message 2") {
-				i++
-			}
-			if strings.Contains(string(data), "test message 3") {
-				i++
-			}
-			if i == 3 {
-				close(done)
-				return
-			}
-		}
-	}()
+			_ = client.Subscribe("server-side-3")
+			_, err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
+			require.NoError(t, err)
+			_, err = node.Publish("$server-side-2", []byte(`{"text": "test message 2"}`))
+			require.NoError(t, err)
+			_, err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
+			require.NoError(t, err)
 
-	select {
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout receiving publication")
-	case <-done:
+			done := make(chan struct{})
+			go func() {
+				var i int
+				for data := range transport.sink {
+					if strings.Contains(string(data), "test message 1") {
+						i++
+					}
+					if strings.Contains(string(data), "test message 2") {
+						i++
+					}
+					if strings.Contains(string(data), "test message 3") {
+						i++
+					}
+					if i == 3 {
+						close(done)
+						return
+					}
+				}
+			}()
+
+			select {
+			case <-time.After(time.Second):
+				require.Fail(t, "timeout receiving publication")
+			case <-done:
+			}
+		})
 	}
 }
 

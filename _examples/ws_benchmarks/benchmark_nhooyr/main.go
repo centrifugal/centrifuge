@@ -84,6 +84,7 @@ func (t *customWebsocketTransport) Unidirectional() bool {
 	return false
 }
 
+// Write ...
 func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
@@ -100,13 +101,11 @@ func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 		defer cancel()
 
 		encoder := protocol.GetDataEncoder(protoType)
+		defer protocol.PutDataEncoder(protoType, encoder)
 		for i := range messages {
 			_ = encoder.Encode(messages[i])
 		}
-		data := encoder.Finish()
-		protocol.PutDataEncoder(protoType, encoder)
-
-		return t.conn.Write(ctx, messageType, data)
+		return t.conn.Write(ctx, messageType, encoder.Finish())
 	}
 }
 

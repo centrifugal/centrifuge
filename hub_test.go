@@ -40,6 +40,10 @@ func (t *testTransport) setProtocolType(pType ProtocolType) {
 	t.protoType = pType
 }
 
+func (t *testTransport) setUnidirectional(uni bool) {
+	t.unidirectional = uni
+}
+
 func (t *testTransport) setSink(sink chan []byte) {
 	t.sink = sink
 }
