@@ -7,7 +7,7 @@ replace github.com/centrifugal/protocol => ../protocol
 require (
 	github.com/FZambia/eagle v0.0.1
 	github.com/FZambia/sentinel v1.1.0
-	github.com/centrifugal/protocol v0.3.7-0.20210314152451-c263634df252
+	github.com/centrifugal/protocol v0.3.7-0.20210317195250-4154960a313f
 	github.com/gogo/protobuf v1.3.2
 	github.com/gomodule/redigo v1.8.4
 	github.com/google/uuid v1.2.0
