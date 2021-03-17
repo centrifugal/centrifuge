@@ -51,6 +51,14 @@ func (t *sockjsTransport) Unidirectional() bool {
 	return false
 }
 
+// DisabledPushFlags ...
+func (t *sockjsTransport) DisabledPushFlags() uint64 {
+	if !t.Unidirectional() {
+		return PushFlagDisconnect
+	}
+	return 0
+}
+
 // Write data to transport.
 func (t *sockjsTransport) Write(messages ...[]byte) error {
 	select {
@@ -194,9 +202,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 
 		ctxCh := make(chan struct{})
 		defer close(ctxCh)
-		c, closeFn, err := NewClient(cancelctx.New(sess.Request().Context(), ctxCh), s.node, transport, ClientConfig{
-			DisabledPushFlags: PushFlagDisconnect,
-		})
+		c, closeFn, err := NewClient(cancelctx.New(sess.Request().Context(), ctxCh), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportSockJS}))
 			return

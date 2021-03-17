@@ -14,41 +14,47 @@
             let numFailures = 0;
 
             function connect() {
-                reconnect = true;
-                const eventSource = new EventSource('http://' + window.location.host + '/connection/eventsource');
+                const ws = new WebSocket('ws://'+window.location.host+'/connection/websocket');
 
-                eventSource.onopen = function (e) {
+                ws.onopen = function(e) {
                     numFailures = 0;
+                    console.log("websocket: connection open");
                     console.log(e);
+                    // This is required to trigger connect on server side since server expects
+                    // initial connect request from a WebSocket unidirectional client.
+                    ws.send(JSON.stringify({}));
                 };
 
-                eventSource.onerror = function (e) {
-                    numFailures++
+                ws.onerror = function(e) {
+                    numFailures++;
                     console.log(e);
-                    eventSource.close();
+                    drawText("✋ websocket: connection error, see console");
+                };
+
+                ws.onclose = function (e) {
                     if (!reconnect) {
                         return;
                     }
                     setTimeout(function () {
-                        drawText("🙏🏾 eventsource: connection reconnecting");
+                        drawText("🙏🏾 websocket: connection reconnecting");
                         connect();
                     }, Math.min(numFailures * 1000, 20000));
-                };
+                }
 
-                eventSource.onmessage = function (e) {
-                    console.log("eventsource: new message");
+                ws.onmessage = function(e) {
+                    console.log("websocket: new message");
                     console.log(e);
                     processData(e.data);
                 };
-
-                eventSource.addEventListener('ping', function () {
-                    drawText('--> ping');
-                });
             }
 
             connect();
 
             function processData(rawData) {
+                if (rawData.length === 0) {
+                    drawText("--> ping");
+                    return
+                }
                 drawText("--> " + rawData);
                 const data = JSON.parse(rawData);
                 const pushType = data.type || 0;
@@ -73,7 +79,7 @@
                         clientID = null;
                         if (!data.data.reconnect) {
                             reconnect = false;
-                            eventSource.close();
+                            ws.close();
                             drawText("🔴 disconnected from a server, won't reconnect");
                         } else {
                             drawText("🔴 disconnected from a server, will reconnect");

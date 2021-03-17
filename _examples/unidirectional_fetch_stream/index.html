@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title></title>
+    <style type="text/css">
+        input[type="text"] { width: 300px; }
+    </style>
+    <script type="text/javascript">
+        window.addEventListener('load', function() {
+            let clientID;
+            let unsubscribed = false;
+            let reconnect = true;
+            let numFailures = 0;
+
+            function makeWriteableEventStream(eventTarget) {
+                return new WritableStream({
+                    start() {
+                        eventTarget.dispatchEvent(new Event('open'));
+                    },
+                    write(message) {
+                        eventTarget.dispatchEvent(new MessageEvent('message', { data: message }));
+                    },
+                    close() {
+                        eventTarget.dispatchEvent(new CloseEvent('close'));
+                    },
+                    abort(reason) {
+                        eventTarget.dispatchEvent(new CloseEvent('abort', { reason }));
+                    }
+                })
+            }
+
+            function FetchEventTarget(url, options) {
+                const eventTarget = new EventTarget();
+                const jsonDecoder = makeJsonDecoder();
+                const eventStream = makeWriteableEventStream(eventTarget);
+                // fetch with connection timeout maybe? https://github.com/github/fetch/issues/175
+                fetch(url, options)
+                    .then(response => {
+                        response.body
+                            .pipeThrough(new TextDecoderStream())
+                            .pipeThrough(jsonDecoder)
+                            .pipeTo(eventStream).catch(error => {
+                                eventTarget.dispatchEvent(new CustomEvent('error', { detail: error }));
+                        });
+                    })
+                    .catch(error => {
+                        eventTarget.dispatchEvent(new CustomEvent('error', { detail: error }));
+                    })
+                return eventTarget;
+            }
+
+            function makeJsonDecoder() {
+                return new TransformStream({
+                    start(controller) {
+                        controller.buf = ''
+                        controller.pos = 0
+                    },
+                    transform(chunk, controller) {
+                        controller.buf += chunk
+                        while (controller.pos < controller.buf.length) {
+                            if (controller.buf[controller.pos] === '\n') {
+                                const line = controller.buf.substring(0, controller.pos)
+                                controller.enqueue(JSON.parse(line))
+                                controller.buf = controller.buf.substring(controller.pos + 1)
+                                controller.pos = 0
+                            } else {
+                                ++controller.pos
+                            }
+                        }
+                    }
+                })
+            }
+
+            function connect() {
+                reconnect = true;
+                const abortController = new AbortController();
+
+                const eventTarget = new FetchEventTarget(
+                    'http://' + window.location.host + '/connection/stream',
+                    {
+                        method: 'POST',
+                        headers: new Headers({
+                            'accept': 'application/json',
+                            'content-type': 'application/json'
+                        }),
+                        mode: 'same-origin',
+                        signal: abortController.signal,
+                        body: JSON.stringify({})
+                    }
+                );
+
+                eventTarget.addEventListener('open', (e) => {
+                    numFailures = 0;
+                    console.log(e);
+                });
+
+                eventTarget.addEventListener('message', (e) => {
+                    console.log(e);
+                    processData(e.data);
+                });
+
+                function closeTransport() {
+                    numFailures++
+                    abortController.abort();
+                    if (!reconnect) {
+                        return;
+                    }
+                    setTimeout(function () {
+                        drawText("🙏🏾 stream: connection reconnecting");
+                        connect();
+                    }, Math.min(numFailures * 1000, 20000));
+                }
+
+                eventTarget.addEventListener('error', (e) => {
+                    console.log(e);
+                    closeTransport();
+                });
+
+                eventTarget.addEventListener('close', (e) => {
+                    console.log(e);
+                    closeTransport();
+                });
+            }
+
+            connect();
+
+            function processData(data) {
+                if (data === null) {
+                    drawText("--> ping");
+                    return;
+                }
+                drawText("--> " + JSON.stringify(data));
+                const pushType = data.type || 0;
+                switch (pushType) {
+                    case 0:
+                        drawText("✨ new data from a channel " + data.channel + ": " + JSON.stringify(data.data));
+                        break;
+                    case 6:
+                        clientID = data.data.client;
+                        let subscriptions = [];
+                        const subs = data.data.subs;
+                        if (subs) {
+                            for (const m in subs) {
+                                if (subs.hasOwnProperty(m)) {
+                                    subscriptions.push(m);
+                                }
+                            }
+                        }
+                        drawText("🟢 connected with client ID " + clientID + " and subscriptions: " + JSON.stringify(subscriptions));
+                        break;
+                    case 7:
+                        clientID = null;
+                        if (!data.data.reconnect) {
+                            reconnect = false;
+                            eventSource.close();
+                            drawText("🔴 disconnected from a server, won't reconnect");
+                        } else {
+                            drawText("🔴 disconnected from a server, will reconnect");
+                        }
+                        break;
+                    case 3:
+                        drawText("🔓 unsubscribed from a channel " + data.channel);
+                        break;
+                    case 5:
+                        drawText("🔒 subscribed to a channel " + data.channel);
+                        break;
+                    default:
+                        drawText("😟 unsupported push type " + data.type);
+                }
+            }
+
+            const container = document.getElementById('messages');
+
+            function drawText(text) {
+                let e = document.createElement('li');
+                e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                container.insertBefore(e, container.firstChild);
+            }
+
+            window.addEventListener('click', function () {
+                // Every click changes status of subscription fetching backend endpoints
+                // with current client ID.
+                if (unsubscribed) {
+                    fetch('subscribe?client=' + clientID);
+                } else {
+                    fetch('unsubscribe?client=' + clientID);
+                }
+                unsubscribed = !unsubscribed;
+            });
+        });
+    </script>
+</head>
+<body>
+<ul id="messages"></ul>
+</body>
+</html>

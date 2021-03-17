@@ -15,21 +15,16 @@ service CentrifugeUni {
 message ConnectRequest {
   string token = 1;
   bytes data = 2;
-  map<string, SubscribeRequest> subs = 3;
-  string name = 4;
-  string version = 5;
+  string name = 3;
+  string version = 4;
+  map<string, SubscribeRequest> subs = 5;
 }
 
 message SubscribeRequest {
-  string channel = 1;
-  string token = 2;
-  bool recover = 3;
-  uint32 seq = 4;
-  uint32 gen = 5;
-  string epoch = 6;
-  uint64 offset = 7;
+  bool recover = 1;
+  string epoch = 2;
+  uint64 offset = 3;
 }
-
 
 enum PushType {
   PUSH_TYPE_PUBLICATION = 0;

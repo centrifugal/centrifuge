@@ -27,7 +27,6 @@ func (r *Reply) Data() []byte {
 	r.once.Do(func() {
 		encoder := protocol.GetReplyEncoder(r.ProtoType)
 		data, _ := encoder.Encode(r.Reply)
-		protocol.PutReplyEncoder(r.ProtoType, encoder)
 		r.data = data
 	})
 	return r.data

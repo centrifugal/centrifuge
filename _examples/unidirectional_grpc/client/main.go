@@ -57,6 +57,10 @@ func handleStream(stream clientproto.CentrifugeUni_ConsumeClient) {
 			return
 		}
 		var push clientproto.Push
+		if len(streamData.GetData()) == 0 {
+			// Could be ping.
+			continue
+		}
 		err = proto.Unmarshal(streamData.GetData(), &push)
 		if err != nil {
 			log.Printf("error unmarshal push: %v", err)

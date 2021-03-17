@@ -84,6 +84,11 @@ func (t *customWebsocketTransport) Unidirectional() bool {
 	return false
 }
 
+// DisabledPushFlags ...
+func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
+	return centrifuge.PushFlagDisconnect
+}
+
 // Write ...
 func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 	select {
@@ -152,9 +157,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	default:
 	}
 
-	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport, centrifuge.ClientConfig{
-		DisabledPushFlags: centrifuge.PushFlagDisconnect,
-	})
+	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
 	if err != nil {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": websocketTransportName}))
 		return

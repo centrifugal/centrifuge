@@ -401,7 +401,8 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 // in terms of time for operation as network IO involved but useful to look at
 // total allocations and difference between JSON and Protobuf cases using various buffer sizes.
 func BenchmarkWebsocketHandler(b *testing.B) {
-	n := defaultTestNode()
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
@@ -424,6 +425,7 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 	}
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
 			conn := bm.getConn(b, "test", url)
 			defer func() { _ = conn.Close() }()
 			b.ResetTimer()
@@ -437,8 +439,6 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 					panic(err)
 				}
 			}
-			b.ReportAllocs()
 		})
 	}
-	b.ReportAllocs()
 }

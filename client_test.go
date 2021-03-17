@@ -16,11 +16,7 @@ import (
 )
 
 func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
-	return newClientWithConfig(ctx, n, t, ClientConfig{})
-}
-
-func newClientWithConfig(ctx context.Context, n *Node, t Transport, cfg ClientConfig) (*Client, error) {
-	c, _, err := NewClient(ctx, n, t, cfg)
+	c, _, err := NewClient(ctx, n, t)
 	if err != nil {
 		return nil, err
 	}
@@ -823,8 +819,11 @@ func TestServerSideSubscriptions(t *testing.T) {
 			transport.sink = make(chan []byte, 100)
 			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-			client, _ := newClientWithConfig(newCtx, node, transport, ClientConfig{
-				ConnectRequest: &ConnectRequest{
+			client, _ := newClient(newCtx, node, transport)
+			if !tt.Unidirectional {
+				connectClient(t, client)
+			} else {
+				err := client.Connect(ConnectRequest{
 					Subs: map[string]SubscribeRequest{
 						"server-side-1": {
 							Recover: true,
@@ -832,10 +831,8 @@ func TestServerSideSubscriptions(t *testing.T) {
 							Offset:  0,
 						},
 					},
-				},
-			})
-			if !tt.Unidirectional {
-				connectClient(t, client)
+				})
+				require.NoError(t, err)
 			}
 
 			_ = client.Subscribe("server-side-3")

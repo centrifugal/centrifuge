@@ -156,14 +156,29 @@ const (
 	statusClosed     status = 3
 )
 
-// ConnectRequest can be used in unidirectional connection case to
-// pass initial information from a client side.
+// ConnectRequest can be used in a unidirectional connection case to
+// pass initial connection information from a client-side.
 type ConnectRequest struct {
-	Token   string
-	Data    []byte
-	Name    string
+	// Token is an optional token from a client.
+	Token string
+	// Data is an optional custom data from a client.
+	Data []byte
+	// Name of a client.
+	Name string
+	// Version of a client.
 	Version string
-	Subs    map[string]SubscribeRequest
+	// Subs is a map with channel subscription state (for recovery on connect).
+	Subs map[string]SubscribeRequest
+}
+
+// SubscribeRequest contains state of subscription to a channel.
+type SubscribeRequest struct {
+	// Recover enables publication recovery for a channel.
+	Recover bool
+	// Epoch last seen by a client.
+	Epoch string
+	// Offset last seen by a client.
+	Offset uint64
 }
 
 func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
@@ -190,33 +205,6 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 	return req
 }
 
-type SubscribeRequest struct {
-	Recover bool
-	Epoch   string
-	Offset  uint64
-}
-
-// It's possible to disable certain types of pushes to be sent to a client connection
-// by using ClientConfig.DisabledPushFlags.
-const (
-	PushFlagConnect uint64 = 1 << iota
-	PushFlagDisconnect
-	PushFlagSubscribe
-	PushFlagJoin
-	PushFlagLeave
-	PushFlagUnsubscribe
-	PushFlagPublication
-	PushFlagMessage
-)
-
-// ClientConfig allows tweaking Client behavior.
-type ClientConfig struct {
-	// DisabledPushFlags allows disabling sending certain types of Pushes to a client.
-	DisabledPushFlags uint64
-	// ConnectRequest can be used in unidirectional case to pass initial data from a client.
-	ConnectRequest *ConnectRequest
-}
-
 // Client represents client connection to server.
 type Client struct {
 	mu                sync.RWMutex
@@ -240,29 +228,27 @@ type Client struct {
 	nextExpire        int64
 	eventHub          *clientEventHub
 	timer             *time.Timer
-	disabledPushFlags uint64
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
 type ClientCloseFunc func() error
 
 // NewClient initializes new Client.
-func NewClient(ctx context.Context, n *Node, t Transport, cfg ClientConfig) (*Client, ClientCloseFunc, error) {
+func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseFunc, error) {
 	uuidObject, err := uuid.NewRandom()
 	if err != nil {
 		return nil, nil, err
 	}
 
 	client := &Client{
-		ctx:               ctx,
-		uid:               uuidObject.String(),
-		node:              n,
-		transport:         t,
-		channels:          make(map[string]channelContext),
-		pubSubSync:        recovery.NewPubSubSync(),
-		status:            statusConnecting,
-		eventHub:          &clientEventHub{},
-		disabledPushFlags: cfg.DisabledPushFlags,
+		ctx:        ctx,
+		uid:        uuidObject.String(),
+		node:       n,
+		transport:  t,
+		channels:   make(map[string]channelContext),
+		pubSubSync: recovery.NewPubSubSync(),
+		status:     statusConnecting,
+		eventHub:   &clientEventHub{},
 	}
 
 	messageWriterConf := writerConfig{
@@ -305,16 +291,16 @@ func NewClient(ctx context.Context, n *Node, t Transport, cfg ClientConfig) (*Cl
 		client.timer = time.AfterFunc(staleCloseDelay, client.onTimerOp)
 		client.mu.Unlock()
 	}
-
-	if t.Unidirectional() {
-		err := client.unidirectionalConnect(cfg.ConnectRequest)
-		if err != nil {
-			_ = client.close(nil)
-			return nil, nil, err
-		}
-	}
-
 	return client, func() error { return client.close(nil) }, nil
+}
+
+// Connect supposed to be called from unidirectional transport layer to pass
+// initial information about connection and thus initiate Node.OnConnecting
+// event. Bidirectional transport initiate connecting workflow automatically
+// since client passes Connect command upon successful connection establishment
+// with a server.
+func (c *Client) Connect(req ConnectRequest) error {
+	return c.unidirectionalConnect(req.toProto())
 }
 
 func (c *Client) encodeDisconnect(d *Disconnect) (*prepared.Reply, error) {
@@ -359,15 +345,12 @@ func (c *Client) encodeConn(res *protocol.ConnectResult) (*prepared.Reply, error
 	}, c.transport.Protocol().toProto()), nil
 }
 
-func (c *Client) unidirectionalConnect(connectRequest *ConnectRequest) error {
-	if connectRequest == nil {
-		connectRequest = &ConnectRequest{}
-	}
-	res, err := c.connectCmd(connectRequest.toProto(), nil)
+func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) error {
+	res, err := c.connectCmd(connectRequest, nil)
 	if err != nil {
 		return err
 	}
-	if !hasFlag(c.disabledPushFlags, PushFlagConnect) {
+	if !hasFlag(c.transport.DisabledPushFlags(), PushFlagConnect) {
 		reply, err := c.encodeConn(res)
 		if err != nil {
 			return err
@@ -659,7 +642,7 @@ func (c *Client) IsSubscribed(ch string) bool {
 // just written to connection. on client side this message can be handled
 // with Message handler.
 func (c *Client) Send(data []byte) error {
-	if hasFlag(c.disabledPushFlags, PushFlagMessage) {
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagMessage) {
 		return nil
 	}
 
@@ -701,7 +684,7 @@ func (c *Client) Unsubscribe(ch string) error {
 }
 
 func (c *Client) sendUnsub(ch string) error {
-	if hasFlag(c.disabledPushFlags, PushFlagUnsubscribe) {
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagUnsubscribe) {
 		return nil
 	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
@@ -778,7 +761,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 		}
 	}
 
-	if disconnect != nil && !hasFlag(c.disabledPushFlags, PushFlagDisconnect) {
+	if disconnect != nil && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
 		if reply, err := c.encodeDisconnect(disconnect); err == nil {
 			_ = c.transportEnqueue(reply)
 		}
@@ -962,7 +945,6 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 
 	// done should be called after command fully processed.
 	done := func() {
-		protocol.PutReplyEncoder(protoType, replyEncoder)
 		observeCommandDuration(method, time.Since(started))
 	}
 
@@ -1976,7 +1958,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	c.mu.Lock()
 	c.channels[channel] = subCtx.channelContext
 	c.mu.Unlock()
-	if hasFlag(c.disabledPushFlags, PushFlagSubscribe) {
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagSubscribe) {
 		return nil
 	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
@@ -2150,6 +2132,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 
 	if reply.Options.Recover {
 		res.Recoverable = true
+		res.Positioned = true // recoverable subscriptions are automatically positioned.
 		if cmd.Recover {
 			cmdOffset := cmd.Offset
 			if cmd.Seq > 0 || cmd.Gen > 0 {
@@ -2347,7 +2330,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	channelContext.streamPosition.Offset = pub.Offset
 	c.channels[ch] = channelContext
 	c.mu.Unlock()
-	if hasFlag(c.disabledPushFlags, PushFlagPublication) {
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
 	return c.transportEnqueue(reply)
@@ -2355,7 +2338,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
 	if pub.Offset == 0 {
-		if hasFlag(c.disabledPushFlags, PushFlagPublication) {
+		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}
 		return c.transportEnqueue(reply)
@@ -2372,7 +2355,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 	c.mu.Unlock()
 
 	if !channelHasFlag(channelFlags, flagRecover|flagPosition) {
-		if hasFlag(c.disabledPushFlags, PushFlagPublication) {
+		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}
 		return c.transportEnqueue(reply)
@@ -2385,14 +2368,14 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 }
 
 func (c *Client) writeJoin(_ string, reply *prepared.Reply) error {
-	if hasFlag(c.disabledPushFlags, PushFlagJoin) {
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
 	return c.transportEnqueue(reply)
 }
 
 func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
-	if hasFlag(c.disabledPushFlags, PushFlagLeave) {
+	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
 	return c.transportEnqueue(reply)

@@ -20,6 +20,7 @@ const (
 // interface so client will accept it.
 type websocketTransport struct {
 	mu        sync.RWMutex
+	writeMu   sync.Mutex // sync general write with unidirectional ping write.
 	conn      *websocket.Conn
 	closed    bool
 	closeCh   chan struct{}
@@ -34,6 +35,7 @@ type websocketTransportOptions struct {
 	pingInterval       time.Duration
 	writeTimeout       time.Duration
 	compressionMinSize int
+	unidirectional     bool
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}) *websocketTransport {
@@ -54,10 +56,15 @@ func (t *websocketTransport) ping() {
 	case <-t.closeCh:
 		return
 	default:
-		deadline := time.Now().Add(t.opts.pingInterval / 2)
-		err := t.conn.WriteControl(websocket.PingMessage, []byte("ping"), deadline)
+		err := t.writeData([]byte(""))
 		if err != nil {
-			_ = t.Close(DisconnectServerError)
+			_ = t.Close(DisconnectWriteError)
+			return
+		}
+		deadline := time.Now().Add(t.opts.pingInterval / 2)
+		err = t.conn.WriteControl(websocket.PingMessage, nil, deadline)
+		if err != nil {
+			_ = t.Close(DisconnectWriteError)
 			return
 		}
 		t.addPing()
@@ -91,7 +98,41 @@ func (t *websocketTransport) Encoding() EncodingType {
 
 // Unidirectional returns whether transport is unidirectional.
 func (t *websocketTransport) Unidirectional() bool {
-	return false
+	return t.opts.unidirectional
+}
+
+// DisabledPushFlags ...
+func (t *websocketTransport) DisabledPushFlags() uint64 {
+	if !t.Unidirectional() {
+		return PushFlagDisconnect
+	}
+	return 0
+}
+
+func (t *websocketTransport) writeData(data []byte) error {
+	if t.opts.compressionMinSize > 0 {
+		t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
+	}
+	var messageType = websocket.TextMessage
+	if t.Protocol() == ProtocolTypeProtobuf {
+		messageType = websocket.BinaryMessage
+	}
+
+	t.writeMu.Lock()
+	if t.opts.writeTimeout > 0 {
+		_ = t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
+	}
+	err := t.conn.WriteMessage(messageType, data)
+	if err != nil {
+		t.writeMu.Unlock()
+		return err
+	}
+	if t.opts.writeTimeout > 0 {
+		_ = t.conn.SetWriteDeadline(time.Time{})
+	}
+	t.writeMu.Unlock()
+
+	return nil
 }
 
 // Write data to transport.
@@ -100,32 +141,20 @@ func (t *websocketTransport) Write(messages ...[]byte) error {
 	case <-t.closeCh:
 		return nil
 	default:
-		encoder := protocol.GetDataEncoder(t.Protocol().toProto())
-		for i := range messages {
-			_ = encoder.Encode(messages[i])
+		if !t.opts.unidirectional {
+			protoType := t.Protocol().toProto()
+			encoder := protocol.GetDataEncoder(protoType)
+			defer protocol.PutDataEncoder(protoType, encoder)
+			for i := range messages {
+				_ = encoder.Encode(messages[i])
+			}
+			return t.writeData(encoder.Finish())
 		}
-		data := encoder.Finish()
-		protocol.PutDataEncoder(t.Protocol().toProto(), encoder)
-
-		if t.opts.compressionMinSize > 0 {
-			t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
-		}
-		if t.opts.writeTimeout > 0 {
-			_ = t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
-		}
-
-		var messageType = websocket.TextMessage
-		if t.Protocol() == ProtocolTypeProtobuf {
-			messageType = websocket.BinaryMessage
-		}
-
-		err := t.conn.WriteMessage(messageType, data)
-		if err != nil {
-			return err
-		}
-
-		if t.opts.writeTimeout > 0 {
-			_ = t.conn.SetWriteDeadline(time.Time{})
+		for i := 0; i < len(messages); i++ {
+			err := t.writeData(messages[i])
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -221,6 +250,9 @@ type WebsocketConfig struct {
 
 	// UseWriteBufferPool enables using buffer pool for writes.
 	UseWriteBufferPool bool
+
+	// Unidirectional allows enabling unidirectional mode.
+	Unidirectional bool
 }
 
 // WebsocketHandler handles websocket client connections.
@@ -321,6 +353,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			compressionMinSize: compressionMinSize,
 			encType:            encType,
 			protoType:          protoType,
+			unidirectional:     s.config.Unidirectional,
 		}
 
 		graceCh := make(chan struct{})
@@ -336,9 +369,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		ctxCh := make(chan struct{})
 		defer close(ctxCh)
 
-		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport, ClientConfig{
-			DisabledPushFlags: PushFlagDisconnect,
-		})
+		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
 		if err != nil {
 			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
 			return
@@ -350,14 +381,32 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
 		}(time.Now())
 
+		if transport.Unidirectional() {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			decoder := protocol.GetParamsDecoder(transport.Protocol().toProto())
+			req, err := decoder.DecodeConnect(data)
+			if err != nil {
+				return
+			}
+			err = c.unidirectionalConnect(req)
+			if err != nil {
+				return
+			}
+		}
+
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				break
 			}
-			closed := !c.Handle(data)
-			if closed {
-				break
+			if !transport.Unidirectional() {
+				closed := !c.Handle(data)
+				if closed {
+					break
+				}
 			}
 		}
 

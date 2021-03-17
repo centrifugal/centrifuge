@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -129,7 +128,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/eventsource", authMiddleware(handleEventsource(node)))
+	http.Handle("/connection/stream", authMiddleware(handleStream(node)))
 	http.Handle("/subscribe", handleSubscribe(node))
 	http.Handle("/unsubscribe", handleUnsubscribe(node))
 	http.Handle("/", http.FileServer(http.Dir("./")))
@@ -144,14 +143,13 @@ func main() {
 	log.Println("bye!")
 }
 
-func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
+func handleStream(node *centrifuge.Node) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 
-		transport := newEventsourceTransport(req)
+		transport := newStreamTransport(req)
 
 		c, closeFn, err := centrifuge.NewClient(req.Context(), node, transport)
 		if err != nil {
@@ -160,15 +158,12 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 		defer func() { _ = closeFn() }()
 		defer close(transport.closedCh) // need to execute this after client closeFn.
 
-		flusher := w.(http.Flusher)
-		_, err = fmt.Fprintf(w, "\r\n")
+		err = c.Connect(centrifuge.ConnectRequest{})
 		if err != nil {
 			return
 		}
-		flusher.Flush()
-		if err = c.Connect(centrifuge.ConnectRequest{}); err != nil {
-			return
-		}
+
+		flusher := w.(http.Flusher)
 
 		pingInterval := 25 * time.Second
 		tick := time.NewTicker(pingInterval)
@@ -181,7 +176,7 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 			case <-transport.disconnectCh:
 				return
 			case <-tick.C:
-				_, err = w.Write([]byte("event: ping\ndata:\n\n"))
+				_, err = w.Write([]byte("null\n"))
 				if err != nil {
 					return
 				}
@@ -191,7 +186,11 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 					return
 				}
 				tick.Reset(pingInterval)
-				_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
+				_, err = w.Write(data)
+				if err != nil {
+					return
+				}
+				_, err = w.Write([]byte("\n"))
 				if err != nil {
 					return
 				}
@@ -233,7 +232,7 @@ func handleUnsubscribe(node *centrifuge.Node) http.HandlerFunc {
 	}
 }
 
-type eventsourceTransport struct {
+type streamTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
 	messages     chan []byte
@@ -242,8 +241,8 @@ type eventsourceTransport struct {
 	closed       bool
 }
 
-func newEventsourceTransport(req *http.Request) *eventsourceTransport {
-	return &eventsourceTransport{
+func newStreamTransport(req *http.Request) *streamTransport {
+	return &streamTransport{
 		messages:     make(chan []byte),
 		disconnectCh: make(chan *centrifuge.Disconnect),
 		closedCh:     make(chan struct{}),
@@ -251,29 +250,29 @@ func newEventsourceTransport(req *http.Request) *eventsourceTransport {
 	}
 }
 
-func (t *eventsourceTransport) Name() string {
-	return "eventsource"
+func (t *streamTransport) Name() string {
+	return "stream"
 }
 
-func (t *eventsourceTransport) Protocol() centrifuge.ProtocolType {
+func (t *streamTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeJSON
 }
 
-func (t *eventsourceTransport) Encoding() centrifuge.EncodingType {
+func (t *streamTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
 
 // Unidirectional returns whether transport is unidirectional.
-func (t *eventsourceTransport) Unidirectional() bool {
+func (t *streamTransport) Unidirectional() bool {
 	return true
 }
 
 // DisabledPushFlags ...
-func (t *eventsourceTransport) DisabledPushFlags() uint64 {
+func (t *streamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-func (t *eventsourceTransport) Write(messages ...[]byte) error {
+func (t *streamTransport) Write(messages ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -289,7 +288,7 @@ func (t *eventsourceTransport) Write(messages ...[]byte) error {
 	return nil
 }
 
-func (t *eventsourceTransport) Close(_ *centrifuge.Disconnect) error {
+func (t *streamTransport) Close(_ *centrifuge.Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

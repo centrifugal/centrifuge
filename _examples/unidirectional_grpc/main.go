@@ -109,7 +109,7 @@ func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clie
 	streamDataCh := make(chan *clientproto.StreamData)
 	transport := newGRPCTransport(stream, streamDataCh)
 
-	connectRequest := &centrifuge.ConnectRequest{
+	connectRequest := centrifuge.ConnectRequest{
 		Token:   req.Token,
 		Data:    req.Data,
 		Name:    req.Name,
@@ -125,9 +125,7 @@ func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clie
 			}
 		}
 	}
-	c, closeFn, err := centrifuge.NewClient(stream.Context(), s.node, transport, centrifuge.ClientConfig{
-		ConnectRequest: connectRequest,
-	})
+	c, closeFn, err := centrifuge.NewClient(stream.Context(), s.node, transport)
 	if err != nil {
 		log.Printf("client create error: %v", err)
 		return err
@@ -138,6 +136,12 @@ func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clie
 	defer func(started time.Time) {
 		log.Printf("client disconnected (id %s, duration %s)", c.ID(), time.Since(started))
 	}(time.Now())
+
+	err = c.Connect(connectRequest)
+	if err != nil {
+		log.Printf("client connect error: %v", err)
+		return err
+	}
 
 	for {
 		select {
@@ -153,15 +157,13 @@ func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clie
 	}
 }
 
-// grpcTransport represents wrapper over stream to work with it
-// from outside in abstract way.
+// grpcTransport wraps a stream.
 type grpcTransport struct {
-	mu            sync.Mutex
-	closed        bool
-	closeCh       chan struct{}
-	stream        clientproto.CentrifugeUni_ConsumeServer
-	streamDataCh  chan *clientproto.StreamData
-	repliesClosed bool
+	mu           sync.Mutex
+	stream       clientproto.CentrifugeUni_ConsumeServer
+	closed       bool
+	closeCh      chan struct{}
+	streamDataCh chan *clientproto.StreamData
 }
 
 func newGRPCTransport(stream clientproto.CentrifugeUni_ConsumeServer, streamDataCh chan *clientproto.StreamData) *grpcTransport {
@@ -187,6 +189,11 @@ func (t *grpcTransport) Encoding() centrifuge.EncodingType {
 // Unidirectional returns whether transport is unidirectional.
 func (t *grpcTransport) Unidirectional() bool {
 	return true
+}
+
+// DisabledPushFlags ...
+func (t *grpcTransport) DisabledPushFlags() uint64 {
+	return 0
 }
 
 func (t *grpcTransport) Write(messages ...[]byte) error {

@@ -26,6 +26,19 @@ const (
 	EncodingTypeBinary EncodingType = "binary"
 )
 
+// It's possible to disable certain types of pushes to be sent to a client connection
+// by using ClientConfig.DisabledPushFlags.
+const (
+	PushFlagConnect uint64 = 1 << iota
+	PushFlagDisconnect
+	PushFlagSubscribe
+	PushFlagJoin
+	PushFlagLeave
+	PushFlagUnsubscribe
+	PushFlagPublication
+	PushFlagMessage
+)
+
 // TransportInfo has read-only transport description methods.
 type TransportInfo interface {
 	// Name returns a name of transport.
@@ -41,6 +54,8 @@ type TransportInfo interface {
 	// unidirectional transports Centrifuge uses Push protobuf messages
 	// without additional wrapping into Reply protocol message.
 	Unidirectional() bool
+	// DisabledPushFlags returns a disabled push flags for specific transport.
+	DisabledPushFlags() uint64
 }
 
 // Transport abstracts a connection transport between server and client.

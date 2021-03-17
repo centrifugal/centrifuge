@@ -50,6 +50,11 @@ func (t *customWebsocketTransport) Unidirectional() bool {
 	return false
 }
 
+// DisabledPushFlags ...
+func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
+	return centrifuge.PushFlagDisconnect
+}
+
 func (t *customWebsocketTransport) read() ([]byte, bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

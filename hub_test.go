@@ -84,6 +84,10 @@ func (t *testTransport) Unidirectional() bool {
 	return t.unidirectional
 }
 
+func (t *testTransport) DisabledPushFlags() uint64 {
+	return PushFlagDisconnect
+}
+
 func (t *testTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
