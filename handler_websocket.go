@@ -56,13 +56,15 @@ func (t *websocketTransport) ping() {
 	case <-t.closeCh:
 		return
 	default:
-		err := t.writeData([]byte(""))
-		if err != nil {
-			_ = t.Close(DisconnectWriteError)
-			return
+		if t.Unidirectional() {
+			err := t.writeData([]byte(""))
+			if err != nil {
+				_ = t.Close(DisconnectWriteError)
+				return
+			}
 		}
 		deadline := time.Now().Add(t.opts.pingInterval / 2)
-		err = t.conn.WriteControl(websocket.PingMessage, nil, deadline)
+		err := t.conn.WriteControl(websocket.PingMessage, nil, deadline)
 		if err != nil {
 			_ = t.Close(DisconnectWriteError)
 			return
@@ -391,6 +393,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
+
 			err = c.unidirectionalConnect(req)
 			if err != nil {
 				return
