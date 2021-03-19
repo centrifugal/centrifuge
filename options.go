@@ -43,6 +43,8 @@ type SubscribeOptions struct {
 	// (like Position option) to prevent occasional message loss. Make sure you are using
 	// Recover in channels that maintain Publication history stream.
 	Recover bool
+	// Data to send to a client with Subscribe Push.
+	Data []byte
 	// clientID to subscribe.
 	clientID string
 }
@@ -97,6 +99,13 @@ func WithRecover(enabled bool) SubscribeOption {
 func WithSubscribeClient(clientID string) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.clientID = clientID
+	}
+}
+
+// WithSubscribeData allows setting custom data to send with subscribe push.
+func WithSubscribeData(data []byte) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Data = data
 	}
 }
 

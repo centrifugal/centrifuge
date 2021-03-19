@@ -1967,6 +1967,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		Epoch:       subCtx.result.GetEpoch(),
 		Recoverable: subCtx.result.GetRecoverable(),
 		Positioned:  subCtx.result.GetPositioned(),
+		Data:        subCtx.result.Data,
 	}
 	if hasFlag(CompatibilityFlags, UseSeqGen) {
 		sub.Seq, sub.Gen = recovery.UnpackUint64(subCtx.result.GetOffset())
@@ -2083,6 +2084,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 			res.Expires = true
 			res.TTL = uint32(ttl)
 		}
+	}
+
+	if reply.Options.Data != nil {
+		res.Data = reply.Options.Data
 	}
 
 	channel := cmd.Channel

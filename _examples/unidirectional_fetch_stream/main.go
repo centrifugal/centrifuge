@@ -96,6 +96,7 @@ func main() {
 				exampleChannel: {
 					Recover:  true,
 					Position: true,
+					Data:     []byte(`{"message": "welcome to a channel"}`),
 				},
 			},
 		}, nil
@@ -160,6 +161,7 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 
 		err = c.Connect(centrifuge.ConnectRequest{})
 		if err != nil {
+			log.Printf("error connect client: %v", err)
 			return
 		}
 
@@ -207,7 +209,11 @@ func handleSubscribe(node *centrifuge.Node) http.HandlerFunc {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		err := node.Subscribe("42", exampleChannel, centrifuge.WithSubscribeClient(clientID))
+		err := node.Subscribe(
+			"42", exampleChannel,
+			centrifuge.WithSubscribeClient(clientID),
+			centrifuge.WithSubscribeData([]byte(`{"message": "welcome to a channel"}`)),
+		)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return

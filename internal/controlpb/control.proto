@@ -57,6 +57,7 @@ message Subscribe {
     bool recover = 7 [(gogoproto.jsontag) = "recover"];
     bytes channel_info = 8 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "channel_info", (gogoproto.nullable) = false];
     string client = 9 [(gogoproto.jsontag) = "client"];
+    bytes data = 10 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
 }
 
 message Unsubscribe {

@@ -328,6 +328,7 @@ func TestClientSubscribe(t *testing.T) {
 					Recover:     true,
 					ChannelInfo: []byte("{}"),
 					ExpireAt:    time.Now().Unix() + 3600,
+					Data:        []byte("{}"),
 				},
 			}, nil)
 		})
