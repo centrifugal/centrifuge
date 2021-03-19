@@ -78,6 +78,7 @@ message Subscribe {
   string epoch = 4;
   uint64 offset = 5;
   bool positioned = 6;
+  bytes data = 7;
 }
 
 message Message {

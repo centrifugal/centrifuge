@@ -20,8 +20,8 @@ github.com/boj/redistore v0.0.0-20180917114910-cd5dcc76aeff/go.mod h1:+RTT1BOk5P
 github.com/bradfitz/gomemcache v0.0.0-20190329173943-551aad21a668/go.mod h1:H0wQNHz2YrLsuXOZozoeDmnHXkNCRmMW0gwFWDfEZDA=
 github.com/bradleypeabody/gorilla-sessions-memcache v0.0.0-20181103040241-659414f458e1/go.mod h1:dkChI7Tbtx7H1Tj7TqGSZMOeGpMP5gLHtjroHd4agiI=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
-github.com/centrifugal/protocol v0.3.7-0.20210319080604-4d96548a26ab h1:Js04rtZETuDn6AHDNH+dRlNcEwKL5PRQa/TqKnhZmiA=
-github.com/centrifugal/protocol v0.3.7-0.20210319080604-4d96548a26ab/go.mod h1:ru2N4pwiND/jE+XLtiLYbUo3YmgqgniGNW9f9aRgoVI=
+github.com/centrifugal/protocol v0.4.0 h1:gdyU6DzotxKrgpeqIEa3zX9ubPS1+tGEcJbI1SCz9VU=
+github.com/centrifugal/protocol v0.4.0/go.mod h1:ru2N4pwiND/jE+XLtiLYbUo3YmgqgniGNW9f9aRgoVI=
 github.com/cespare/xxhash/v2 v2.1.1 h1:6MnRN8NT7+YBpUIWxHtefFZOKTAPgGjpQSxqLNn0+qY=
 github.com/cespare/xxhash/v2 v2.1.1/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
