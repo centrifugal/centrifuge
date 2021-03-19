@@ -155,6 +155,7 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 
 		c, closeFn, err := centrifuge.NewClient(req.Context(), node, transport)
 		if err != nil {
+			log.Printf("error create client: %v", err)
 			return
 		}
 		defer func() { _ = closeFn() }()
@@ -163,10 +164,12 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 		flusher := w.(http.Flusher)
 		_, err = fmt.Fprintf(w, "\r\n")
 		if err != nil {
+			log.Printf("error write: %v", err)
 			return
 		}
 		flusher.Flush()
 		if err = c.Connect(centrifuge.ConnectRequest{}); err != nil {
+			log.Printf("error connect client: %v", err)
 			return
 		}
 
@@ -183,6 +186,7 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 			case <-tick.C:
 				_, err = w.Write([]byte("event: ping\ndata:\n\n"))
 				if err != nil {
+					log.Printf("error write: %v", err)
 					return
 				}
 				flusher.Flush()
@@ -193,6 +197,7 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 				tick.Reset(pingInterval)
 				_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
 				if err != nil {
+					log.Printf("error write: %v", err)
 					return
 				}
 				flusher.Flush()
