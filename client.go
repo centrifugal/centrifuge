@@ -866,7 +866,7 @@ func (c *Client) handleCommand(cmd *protocol.Command) bool {
 		return false
 	}
 
-	if cmd.ID == 0 && cmd.Method != protocol.MethodType_METHOD_TYPE_SEND {
+	if cmd.Id == 0 && cmd.Method != protocol.MethodType_METHOD_TYPE_SEND {
 		// Only send command from client can be sent without incremental ID.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
 		go func() { _ = c.close(DisconnectBadRequest) }()
@@ -921,7 +921,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	started := time.Now()
 
 	write := func(rep *protocol.Reply) error {
-		rep.ID = cmd.ID
+		rep.Id = cmd.Id
 		if rep.Error != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
 			incReplyError(cmd.Method, rep.Error.Code)
@@ -1167,7 +1167,7 @@ func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
 		ttl := expireAt - time.Now().Unix()
 
 		if ttl > 0 {
-			res.TTL = uint32(ttl)
+			res.Ttl = uint32(ttl)
 		}
 
 		if expireAt > 0 {
@@ -1309,7 +1309,7 @@ func (c *Client) handleSubRefresh(params protocol.Raw, rw *replyWriter) error {
 				c.writeError(rw, ErrorExpired)
 				return
 			}
-			res.TTL = uint32(reply.ExpireAt - now)
+			res.Ttl = uint32(reply.ExpireAt - now)
 		}
 
 		c.mu.Lock()
@@ -1833,7 +1833,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 	res := &protocol.ConnectResult{
 		Version: version,
 		Expires: expires,
-		TTL:     ttl,
+		Ttl:     ttl,
 	}
 
 	// Client successfully connected.
@@ -1850,7 +1850,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 	if !clientSideRefresh {
 		// Server will do refresh itself.
 		res.Expires = false
-		res.TTL = 0
+		res.Ttl = 0
 	}
 
 	res.Client = c.uid
@@ -2082,7 +2082,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		if reply.ClientSideRefresh {
 			res.Expires = true
-			res.TTL = uint32(ttl)
+			res.Ttl = uint32(ttl)
 		}
 	}
 

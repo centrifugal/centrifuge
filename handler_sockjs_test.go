@@ -68,7 +68,7 @@ func TestSockjsHandler(t *testing.T) {
 	}
 	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		ID:     1,
+		Id:     1,
 		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
 		Params: params,
 	}

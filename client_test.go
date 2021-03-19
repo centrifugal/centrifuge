@@ -173,7 +173,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	require.NoError(t, err)
 	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
 	require.Equal(t, false, result.Expires)
-	require.Equal(t, uint32(0), result.TTL)
+	require.Equal(t, uint32(0), result.Ttl)
 	require.True(t, client.authenticated)
 	require.Equal(t, "42", client.UserID())
 }
@@ -1867,7 +1867,7 @@ func TestClientHandleCommandNotAuthenticated(t *testing.T) {
 	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test",
 	})
-	cmd := &protocol.Command{ID: 1, Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE, Params: params}
+	cmd := &protocol.Command{Id: 1, Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE, Params: params}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -1887,7 +1887,7 @@ func TestClientHandleUnknownMethod(t *testing.T) {
 	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test",
 	})
-	cmd := &protocol.Command{ID: 1, Method: 10000, Params: params}
+	cmd := &protocol.Command{Id: 1, Method: 10000, Params: params}
 	disconnect := client.dispatchCommand(cmd)
 	require.Nil(t, disconnect)
 }
@@ -1953,7 +1953,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	data, err := json.Marshal(&protocol.Command{
-		ID: 1, Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: []byte("[]"),
+		Id: 1, Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: []byte("[]"),
 	})
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -1988,7 +1988,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 		client = newTestClient(t, node, "42")
 		connectClient(t, client)
 		data, err := json.Marshal(&protocol.Command{
-			ID: 1, Method: method, Params: []byte("[]"),
+			Id: 1, Method: method, Params: []byte("[]"),
 		})
 		require.NoError(t, err)
 		proceed := client.Handle(data)
@@ -2079,7 +2079,7 @@ func TestClientAlreadyAuthenticated(t *testing.T) {
 	connectClient(t, client)
 
 	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
-	cmd := &protocol.Command{ID: 2, Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: params}
+	cmd := &protocol.Command{Id: 2, Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: params}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := client.Handle(data)

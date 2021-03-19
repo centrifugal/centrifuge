@@ -188,7 +188,7 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	}
 	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		ID:     1,
+		Id:     1,
 		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
 		Params: params,
 	}
@@ -215,7 +215,7 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	connectRequest := &protocol.ConnectRequest{}
 	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		ID:     1,
+		Id:     1,
 		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
 		Params: params,
 	}
@@ -230,7 +230,7 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	}
 	params, _ = json.Marshal(subscribeRequest)
 	cmd = &protocol.Command{
-		ID:     2,
+		Id:     2,
 		Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE,
 		Params: params,
 	}
@@ -249,7 +249,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	connectRequest := &protocol.ConnectRequest{}
 	params, _ := connectRequest.Marshal()
 	cmd := &protocol.Command{
-		ID:     1,
+		Id:     1,
 		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
 		Params: params,
 	}
@@ -271,7 +271,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	}
 	params, _ = subscribeRequest.Marshal()
 	cmd = &protocol.Command{
-		ID:     2,
+		Id:     2,
 		Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE,
 		Params: params,
 	}
