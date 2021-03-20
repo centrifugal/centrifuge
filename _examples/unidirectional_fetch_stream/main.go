@@ -18,8 +18,13 @@ import (
 )
 
 var (
-	port  = flag.Int("port", 8000, "Port to bind app to")
-	redis = flag.Bool("redis", false, "Use Redis")
+	port     = flag.Int("port", 8000, "Port to bind app to")
+	redis    = flag.Bool("redis", false, "Use Redis")
+	tls      = flag.Bool("tls", false, "Use TLS")
+	keyFile  = flag.String("key_file", "server.key", "path to TLS key file")
+	certFile = flag.String("cert_file", "server.crt", "path to TLS crt file")
+	// Was not able to make it with HTTP/3 yet.
+	//useHttp3 = flag.Bool("http3", false, "Use HTTP/3")
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -135,8 +140,20 @@ func main() {
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
-		if err := http.ListenAndServe(":"+strconv.Itoa(*port), nil); err != nil {
-			log.Fatal(err)
+		if *tls {
+			//if *useHttp3 {
+			//	if err := http3.ListenAndServe("0.0.0.0:443", *certFile, *keyFile, nil); err != nil {
+			//		log.Fatal(err)
+			//	}
+			//} else {
+			if err := http.ListenAndServeTLS(":"+strconv.Itoa(*port), *certFile, *keyFile, nil); err != nil {
+				log.Fatal(err)
+			}
+			//}
+		} else {
+			if err := http.ListenAndServe(":"+strconv.Itoa(*port), nil); err != nil {
+				log.Fatal(err)
+			}
 		}
 	}()
 
@@ -166,7 +183,11 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 			return
 		}
 
-		flusher := w.(http.Flusher)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			log.Printf("ResponseWriter does not support Flusher")
+			return
+		}
 
 		pingInterval := 25 * time.Second
 		tick := time.NewTicker(pingInterval)

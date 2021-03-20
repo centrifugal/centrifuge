@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
+    <meta http-equiv="content-type" content="text/html; charset=utf-8" />
     <title></title>
     <style type="text/css">
         input[type="text"] { width: 300px; }
@@ -13,35 +13,49 @@
             let reconnect = true;
             let numFailures = 0;
 
-            function makeWriteableEventStream(eventTarget) {
-                return new WritableStream({
-                    start() {
-                        eventTarget.dispatchEvent(new Event('open'));
-                    },
-                    write(message) {
-                        eventTarget.dispatchEvent(new MessageEvent('message', { data: message }));
-                    },
-                    close() {
-                        eventTarget.dispatchEvent(new CloseEvent('close'));
-                    },
-                    abort(reason) {
-                        eventTarget.dispatchEvent(new CloseEvent('abort', { reason }));
-                    }
-                })
+            const utf8decoder = new TextDecoder();
+
+            function handleErrors(response) {
+                if (!response.ok) throw new Error(response.status);
+                return response;
             }
 
             function FetchEventTarget(url, options) {
                 const eventTarget = new EventTarget();
-                const jsonDecoder = makeJsonDecoder();
-                const eventStream = makeWriteableEventStream(eventTarget);
                 // fetch with connection timeout maybe? https://github.com/github/fetch/issues/175
                 fetch(url, options)
+                    .then(handleErrors)
                     .then(response => {
-                        response.body
-                            .pipeThrough(new TextDecoderStream())
-                            .pipeThrough(jsonDecoder)
-                            .pipeTo(eventStream).catch(error => {
-                                eventTarget.dispatchEvent(new CustomEvent('error', { detail: error }));
+                        eventTarget.dispatchEvent(new Event('open'));
+                        let streamBuf = '';
+                        let streamPos = 0;
+                        const reader = response.body.getReader();
+                        return new ReadableStream({
+                            start(controller) {
+                                return pump();
+                                function pump() {
+                                    return reader.read().then(({ done, value }) => {
+                                        // When no more data needs to be consumed, close the stream
+                                        if (done) {
+                                            eventTarget.dispatchEvent(new CloseEvent('close'));
+                                            controller.close();
+                                            return;
+                                        }
+                                        streamBuf += utf8decoder.decode(value);
+                                        while (streamPos < streamBuf.length) {
+                                            if (streamBuf[streamPos] === '\n') {
+                                                const line = streamBuf.substring(0, streamPos)
+                                                eventTarget.dispatchEvent(new MessageEvent('message', { data: JSON.parse(line) }))
+                                                streamBuf = streamBuf.substring(streamPos + 1)
+                                                streamPos = 0
+                                            } else {
+                                                ++streamPos
+                                            }
+                                        }
+                                        return pump();
+                                    });
+                                }
+                            }
                         });
                     })
                     .catch(error => {
@@ -50,34 +64,12 @@
                 return eventTarget;
             }
 
-            function makeJsonDecoder() {
-                return new TransformStream({
-                    start(controller) {
-                        controller.buf = ''
-                        controller.pos = 0
-                    },
-                    transform(chunk, controller) {
-                        controller.buf += chunk
-                        while (controller.pos < controller.buf.length) {
-                            if (controller.buf[controller.pos] === '\n') {
-                                const line = controller.buf.substring(0, controller.pos)
-                                controller.enqueue(JSON.parse(line))
-                                controller.buf = controller.buf.substring(controller.pos + 1)
-                                controller.pos = 0
-                            } else {
-                                ++controller.pos
-                            }
-                        }
-                    }
-                })
-            }
-
             function connect() {
                 reconnect = true;
                 const abortController = new AbortController();
 
                 const eventTarget = new FetchEventTarget(
-                    'http://' + window.location.host + '/connection/stream',
+                    window.location.protocol + '//' + window.location.host + '/connection/stream',
                     {
                         method: 'POST',
                         headers: new Headers({
@@ -96,6 +88,10 @@
                 });
 
                 eventTarget.addEventListener('message', (e) => {
+                    if (e.data === null) {
+                        drawText("--> ping");
+                        return;
+                    }
                     console.log(e);
                     processData(e.data);
                 });
@@ -126,10 +122,6 @@
             connect();
 
             function processData(data) {
-                if (data === null) {
-                    drawText("--> ping");
-                    return;
-                }
                 drawText("--> " + JSON.stringify(data));
                 const pushType = data.type || 0;
                 switch (pushType) {
@@ -153,7 +145,6 @@
                         clientID = null;
                         if (!data.data.reconnect) {
                             reconnect = false;
-                            eventSource.close();
                             drawText("🔴 disconnected from a server, won't reconnect");
                         } else {
                             drawText("🔴 disconnected from a server, will reconnect");
