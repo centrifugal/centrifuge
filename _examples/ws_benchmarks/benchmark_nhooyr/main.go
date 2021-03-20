@@ -16,6 +16,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/protocol"
 	"nhooyr.io/websocket"
 )
 
@@ -78,22 +79,38 @@ func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
 
-func (t *customWebsocketTransport) Write(data []byte) error {
+// Unidirectional returns whether transport is unidirectional.
+func (t *customWebsocketTransport) Unidirectional() bool {
+	return false
+}
+
+// DisabledPushFlags ...
+func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
+	return centrifuge.PushFlagDisconnect
+}
+
+// Write ...
+func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
 	default:
 		var messageType = websocket.MessageText
+		protoType := protocol.TypeJSON
+
 		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
 			messageType = websocket.MessageBinary
+			protoType = protocol.TypeProtobuf
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := t.conn.Write(ctx, messageType, data)
-		if err != nil {
-			return err
+
+		encoder := protocol.GetDataEncoder(protoType)
+		defer protocol.PutDataEncoder(protoType, encoder)
+		for i := range messages {
+			_ = encoder.Encode(messages[i])
 		}
-		return nil
+		return t.conn.Write(ctx, messageType, encoder.Finish())
 	}
 }
 

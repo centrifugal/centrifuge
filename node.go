@@ -569,7 +569,14 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.unsubscribe(cmd.User, cmd.Channel)
+		return n.hub.unsubscribe(cmd.User, cmd.Channel, cmd.Client)
+	case controlpb.MethodTypeSubscribe:
+		cmd, err := n.controlDecoder.DecodeSubscribe(params)
+		if err != nil {
+			n.logger.log(newLogEntry(LogLevelError, "error decoding subscribe control params", map[string]interface{}{"error": err.Error()}))
+			return err
+		}
+		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithPresence(cmd.Presence), WithJoinLeave(cmd.JoinLeave), WithPosition(cmd.Position), WithRecover(cmd.Recover), WithSubscribeData(cmd.Data))
 	case controlpb.MethodTypeDisconnect:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
@@ -695,7 +702,7 @@ func (n *Node) publishControl(cmd *controlpb.Command, nodeID string) error {
 	if err != nil {
 		return err
 	}
-	return n.broker.PublishControl(data, nodeID)
+	return n.broker.PublishControl(data, nodeID, "")
 }
 
 func (n *Node) getMetrics(metrics eagle.Metrics) *controlpb.Metrics {
@@ -745,12 +752,35 @@ func (n *Node) pubNode(nodeID string) error {
 	return n.publishControl(cmd, nodeID)
 }
 
+func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error {
+	subscribe := &controlpb.Subscribe{
+		User:        user,
+		Channel:     ch,
+		Presence:    opts.Presence,
+		JoinLeave:   opts.JoinLeave,
+		ChannelInfo: opts.ChannelInfo,
+		Position:    opts.Position,
+		Recover:     opts.Recover,
+		ExpireAt:    opts.ExpireAt,
+		Client:      opts.clientID,
+		Data:        opts.Data,
+	}
+	params, _ := n.controlEncoder.EncodeSubscribe(subscribe)
+	cmd := &controlpb.Command{
+		UID:    n.uid,
+		Method: controlpb.MethodTypeSubscribe,
+		Params: params,
+	}
+	return n.publishControl(cmd, "")
+}
+
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
 // nodes could unsubscribe user from channel.
-func (n *Node) pubUnsubscribe(user string, ch string) error {
+func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) error {
 	unsubscribe := &controlpb.Unsubscribe{
 		User:    user,
 		Channel: ch,
+		Client:  opts.clientID,
 	}
 	params, _ := n.controlEncoder.EncodeUnsubscribe(unsubscribe)
 	cmd := &controlpb.Command{
@@ -861,40 +891,58 @@ func (n *Node) shutdownCmd(nodeID string) error {
 	return nil
 }
 
-// Unsubscribe unsubscribes user from channel, if channel is equal to empty
-// string then user will be unsubscribed from all channels.
-func (n *Node) Unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
+// Subscribe subscribes user to a channel.
+// Note, that OnSubscribe event won't be called in this case
+// since this is a server-side subscription. If user have been already
+// subscribed to a channel then its subscription will be updated and
+// subscribe notification will be sent to a client-side.
+func (n *Node) Subscribe(userID string, channel string, opts ...SubscribeOption) error {
+	subscribeOpts := &SubscribeOptions{}
+	for _, opt := range opts {
+		opt(subscribeOpts)
+	}
+	// Subscribe on this node.
+	err := n.hub.subscribe(userID, channel, subscribeOpts.clientID, opts...)
+	if err != nil {
+		return err
+	}
+	// Send subscribe control message to other nodes.
+	return n.pubSubscribe(userID, channel, *subscribeOpts)
+}
+
+// Unsubscribe unsubscribes user from a channel.
+// If a channel is empty string then user will be unsubscribed from all channels.
+func (n *Node) Unsubscribe(userID string, channel string, opts ...UnsubscribeOption) error {
 	unsubscribeOpts := &UnsubscribeOptions{}
 	for _, opt := range opts {
 		opt(unsubscribeOpts)
 	}
-	// First unsubscribe on this node.
-	err := n.hub.unsubscribe(user, ch, opts...)
+	// Unsubscribe on this node.
+	err := n.hub.unsubscribe(userID, channel, unsubscribeOpts.clientID)
 	if err != nil {
 		return err
 	}
-	// Second send unsubscribe control message to other nodes.
-	return n.pubUnsubscribe(user, ch)
+	// Send unsubscribe control message to other nodes.
+	return n.pubUnsubscribe(userID, channel, *unsubscribeOpts)
 }
 
-// Disconnect allows to close all user connections through all nodes.
-func (n *Node) Disconnect(user string, opts ...DisconnectOption) error {
+// Disconnect allows closing all user connections on all nodes.
+func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 	disconnectOpts := &DisconnectOptions{}
 	for _, opt := range opts {
 		opt(disconnectOpts)
 	}
-	// first disconnect user from this node
+	// Disconnect user from this node
 	customDisconnect := disconnectOpts.Disconnect
 	if customDisconnect == nil {
 		customDisconnect = DisconnectForceNoReconnect
 	}
-
-	err := n.hub.disconnect(user, customDisconnect, disconnectOpts.ClientWhitelist)
+	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.ClientWhitelist)
 	if err != nil {
 		return err
 	}
-	// second send disconnect control message to other nodes
-	return n.pubDisconnect(user, customDisconnect, disconnectOpts.ClientWhitelist)
+	// Send disconnect control message to other nodes
+	return n.pubDisconnect(userID, customDisconnect, disconnectOpts.ClientWhitelist)
 }
 
 // addPresence proxies presence adding to PresenceManager.

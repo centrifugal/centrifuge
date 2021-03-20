@@ -46,6 +46,14 @@ func TestEncoder(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, d)
 
+	sub := &controlpb.Subscribe{
+		User:    "test",
+		Channel: "test channel",
+	}
+	d, err = encoder.EncodeSubscribe(sub)
+	require.NoError(t, err)
+	require.NotNil(t, d)
+
 	unsub := &controlpb.Unsubscribe{
 		User:    "test",
 		Channel: "test channel",

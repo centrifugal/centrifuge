@@ -64,13 +64,52 @@ func TestWebsocketHandlerProtobuf(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 }
 
+func TestWebsocketHandlerUnidirectional(t *testing.T) {
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials: &Credentials{UserID: "test"},
+		}, nil
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		Compression:        true,
+		UseWriteBufferPool: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+		Unidirectional: true,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	err = conn.WriteMessage(websocket.TextMessage, []byte("{}"))
+	require.NoError(t, err)
+	_, p, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var push protocol.Push
+	err = json.Unmarshal(p, &push)
+	require.NoError(t, err)
+	require.Equal(t, protocol.PushType_PUSH_TYPE_CONNECT, push.Type)
+}
+
 func TestWebsocketHandlerPing(t *testing.T) {
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
-		PingInterval: time.Second,
+		PingInterval:   time.Second,
+		Unidirectional: true,
 	}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -149,8 +188,8 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	}
 	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		ID:     1,
-		Method: protocol.MethodTypeConnect,
+		Id:     1,
+		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
 		Params: params,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
@@ -176,8 +215,8 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	connectRequest := &protocol.ConnectRequest{}
 	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		ID:     1,
-		Method: protocol.MethodTypeConnect,
+		Id:     1,
+		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
 		Params: params,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
@@ -191,8 +230,8 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	}
 	params, _ = json.Marshal(subscribeRequest)
 	cmd = &protocol.Command{
-		ID:     2,
-		Method: protocol.MethodTypeSubscribe,
+		Id:     2,
+		Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE,
 		Params: params,
 	}
 	cmdBytes, _ = json.Marshal(cmd)
@@ -210,8 +249,8 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	connectRequest := &protocol.ConnectRequest{}
 	params, _ := connectRequest.Marshal()
 	cmd := &protocol.Command{
-		ID:     1,
-		Method: protocol.MethodTypeConnect,
+		Id:     1,
+		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
 		Params: params,
 	}
 
@@ -232,8 +271,8 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	}
 	params, _ = subscribeRequest.Marshal()
 	cmd = &protocol.Command{
-		ID:     2,
-		Method: protocol.MethodTypeSubscribe,
+		Id:     2,
+		Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE,
 		Params: params,
 	}
 	cmdBytes, _ = cmd.Marshal()
@@ -458,7 +497,8 @@ func TestCheckSameHostOrigin(t *testing.T) {
 // in terms of time for operation as network IO involved but useful to look at
 // total allocations and difference between JSON and Protobuf cases using various buffer sizes.
 func BenchmarkWebsocketHandler(b *testing.B) {
-	n := defaultTestNode()
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
@@ -481,6 +521,7 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 	}
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
 			conn := bm.getConn(b, "test", url)
 			defer func() { _ = conn.Close() }()
 			b.ResetTimer()
@@ -494,8 +535,6 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 					panic(err)
 				}
 			}
-			b.ReportAllocs()
 		})
 	}
-	b.ReportAllocs()
 }

@@ -68,7 +68,7 @@ func (e *TestBroker) PublishLeave(_ string, _ *ClientInfo) error {
 	return nil
 }
 
-func (e *TestBroker) PublishControl(_ []byte, _ string) error {
+func (e *TestBroker) PublishControl(_ []byte, _, _ string) error {
 	atomic.AddInt32(&e.publishControlCount, 1)
 	if e.errorOnPublishControl {
 		return errors.New("boom")
@@ -364,6 +364,36 @@ func TestNode_handleLeave(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestNode_Subscribe(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+	n.OnConnect(func(client *Client) {
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			require.Equal(t, "42", client.UserID())
+			require.Equal(t, "test_channel", event.Channel)
+			require.True(t, event.ServerSide)
+			close(done)
+		})
+	})
+
+	newTestConnectedClient(t, n, "42")
+
+	err := n.Subscribe("42", "test_channel")
+	require.NoError(t, err)
+	require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
+
+	err = n.Unsubscribe("42", "test_channel")
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+	require.Zero(t, n.hub.NumSubscribers("test_channel"))
+}
+
 func TestNode_Unsubscribe(t *testing.T) {
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -384,7 +414,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 
 	client := newTestSubscribedClient(t, n, "42", "test_channel")
 
-	err = n.Unsubscribe("42", "test_channel", WithResubscribe(false))
+	err = n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
 	select {
 	case <-done:
@@ -430,7 +460,7 @@ func TestNode_pubUnsubscribe(t *testing.T) {
 	testBroker, _ := node.broker.(*TestBroker)
 	require.EqualValues(t, 1, testBroker.publishControlCount)
 
-	err := node.pubUnsubscribe("42", "holypeka")
+	err := node.pubUnsubscribe("42", "holypeka", UnsubscribeOptions{})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testBroker.publishControlCount)
 }
@@ -666,6 +696,40 @@ func TestNode_handleControl(t *testing.T) {
 		err = n.handleControl(cmdBytes)
 		require.NoError(t, err)
 		require.NotContains(t, n.nodes.nodes, "new_node")
+	})
+
+	t.Run("Subscribe", func(t *testing.T) {
+		t.Parallel()
+
+		n := defaultNodeNoHandlers()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		client := newTestConnectedClient(t, n, "42")
+
+		enc := controlproto.NewProtobufEncoder()
+		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: controlpb.MethodTypeSubscribe,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		paramsBytes, err := enc.EncodeSubscribe(&controlpb.Subscribe{
+			Channel: "test_channel",
+			User:    "42",
+		})
+		require.NoError(t, err)
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			UID:    client.uid,
+			Method: controlpb.MethodTypeSubscribe,
+			Params: paramsBytes,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+		err = n.handleControl(cmdBytes)
+		require.NoError(t, err)
+		require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
 	})
 
 	t.Run("Unsubscribe", func(t *testing.T) {

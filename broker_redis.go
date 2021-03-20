@@ -446,7 +446,7 @@ func (b *RedisBroker) publishLeave(s *RedisShard, ch string, info *ClientInfo) e
 }
 
 // PublishControl - see Broker.PublishControl.
-func (b *RedisBroker) PublishControl(data []byte, nodeID string) error {
+func (b *RedisBroker) PublishControl(data []byte, nodeID, _ string) error {
 	currentRound := atomic.AddUint64(&b.controlRound, 1)
 	index := currentRound % uint64(len(b.shards))
 	s := b.shards[index]

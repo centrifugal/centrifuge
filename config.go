@@ -41,13 +41,16 @@ type Config struct {
 	// ClientQueueMaxSize is a maximum size of client's message queue in bytes.
 	// After this queue size exceeded Centrifuge closes client's connection.
 	ClientQueueMaxSize int
-	// ClientChannelLimit sets upper limit of channels each client can subscribe to.
+	// ClientChannelLimit sets upper limit of client-side channels each client
+	// can subscribe to. Server-side subscription amount should be controlled by
+	// application code.
 	ClientChannelLimit int
 	// UserConnectionLimit limits number of client connections to single Node
 	// from user with the same ID. Zero value means unlimited. Anonymous users
 	// can't be tracked.
 	UserConnectionLimit int
-	// ChannelMaxLength is the maximum length of a channel name.
+	// ChannelMaxLength is the maximum length of a channel name. This is only checked
+	// for client-side subscription requests.
 	ChannelMaxLength int
 	// MetricsNamespace is a Prometheus metrics namespace to use for internal metrics.
 	// If not set then the default namespace name `centrifuge` will be used.

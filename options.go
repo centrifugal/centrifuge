@@ -43,21 +43,86 @@ type SubscribeOptions struct {
 	// (like Position option) to prevent occasional message loss. Make sure you are using
 	// Recover in channels that maintain Publication history stream.
 	Recover bool
+	// Data to send to a client with Subscribe Push.
+	Data []byte
+	// clientID to subscribe.
+	clientID string
 }
 
-// UnsubscribeOptions define some fields to alter behaviour of Unsubscribe operation.
+// SubscribeOption is a type to represent various Subscribe options.
+type SubscribeOption func(*SubscribeOptions)
+
+// WithExpireAt allows to set ExpireAt field.
+func WithExpireAt(expireAt int64) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.ExpireAt = expireAt
+	}
+}
+
+// WithChannelInfo ...
+func WithChannelInfo(chanInfo []byte) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.ChannelInfo = chanInfo
+	}
+}
+
+// WithPresence ...
+func WithPresence(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Presence = enabled
+	}
+}
+
+// WithJoinLeave ...
+func WithJoinLeave(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.JoinLeave = enabled
+	}
+}
+
+// WithPosition ...
+func WithPosition(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Position = enabled
+	}
+}
+
+// WithRecover ...
+func WithRecover(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Recover = enabled
+	}
+}
+
+// WithSubscribeClient allows setting client ID that should be subscribed.
+// This option not used when Client.Subscribe called.
+func WithSubscribeClient(clientID string) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.clientID = clientID
+	}
+}
+
+// WithSubscribeData allows setting custom data to send with subscribe push.
+func WithSubscribeData(data []byte) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Data = data
+	}
+}
+
+// UnsubscribeOptions ...
 type UnsubscribeOptions struct {
-	// Resubscribe allows to set resubscribe protocol flag.
-	Resubscribe bool
+	// clientID to unsubscribe.
+	clientID string
 }
 
 // UnsubscribeOption is a type to represent various Unsubscribe options.
-type UnsubscribeOption func(*UnsubscribeOptions)
+type UnsubscribeOption func(options *UnsubscribeOptions)
 
-// WithResubscribe allows to set Resubscribe flag to true.
-func WithResubscribe(resubscribe bool) UnsubscribeOption {
+// WithUnsubscribeClient allows setting client ID that should be unsubscribed.
+// This option not used when Client.Unsubscribe called.
+func WithUnsubscribeClient(clientID string) UnsubscribeOption {
 	return func(opts *UnsubscribeOptions) {
-		opts.Resubscribe = resubscribe
+		opts.clientID = clientID
 	}
 }
 

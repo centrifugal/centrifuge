@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/protocol"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -44,6 +45,16 @@ func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
 	return centrifuge.EncodingTypeJSON
 }
 
+// Unidirectional returns whether transport is unidirectional.
+func (t *customWebsocketTransport) Unidirectional() bool {
+	return false
+}
+
+// DisabledPushFlags ...
+func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
+	return centrifuge.PushFlagDisconnect
+}
+
 func (t *customWebsocketTransport) read() ([]byte, bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -64,22 +75,25 @@ func (t *customWebsocketTransport) read() ([]byte, bool, error) {
 	return data, false, nil
 }
 
-func (t *customWebsocketTransport) Write(data []byte) error {
+func (t *customWebsocketTransport) Write(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
 	default:
 		messageType := ws.OpText
+		protoType := protocol.TypeJSON
 
 		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
 			messageType = ws.OpBinary
+			protoType = protocol.TypeProtobuf
 		}
 
-		if err := wsutil.WriteServerMessage(t.conn, messageType, data); err != nil {
-			return err
+		encoder := protocol.GetDataEncoder(protoType)
+		defer protocol.PutDataEncoder(protoType, encoder)
+		for i := range messages {
+			_ = encoder.Encode(messages[i])
 		}
-
-		return nil
+		return wsutil.WriteServerMessage(t.conn, messageType, encoder.Finish())
 	}
 }
 

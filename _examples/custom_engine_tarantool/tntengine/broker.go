@@ -197,7 +197,7 @@ func (b *Broker) clientInfoString(clientInfo *centrifuge.ClientInfo) string {
 }
 
 // PublishControl - see centrifuge.Broker interface description.
-func (b *Broker) PublishControl(data []byte, nodeID string) error {
+func (b *Broker) PublishControl(data []byte, nodeID, _ string) error {
 	currentRound := atomic.AddUint64(&b.controlRound, 1)
 	index := currentRound % uint64(len(b.shards))
 	var channel string

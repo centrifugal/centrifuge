@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"io"
 	"sync"
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
@@ -66,17 +67,21 @@ func (h *Hub) remove(c *Client) error {
 	return h.connShards[index(c.UserID(), numHubShards)].remove(c)
 }
 
-// userConnections returns all connections of user with specified UserID.
+// userConnections returns all user connections to the current Node.
 func (h *Hub) userConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
 }
 
-func (h *Hub) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
-	return h.connShards[index(user, numHubShards)].disconnect(user, disconnect, whitelist)
+func (h *Hub) disconnect(userID string, disconnect *Disconnect, whitelist []string) error {
+	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, whitelist)
 }
 
-func (h *Hub) unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
-	return h.connShards[index(user, numHubShards)].unsubscribe(user, ch, opts...)
+func (h *Hub) unsubscribe(userID string, ch string, clientID string) error {
+	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, clientID)
+}
+
+func (h *Hub) subscribe(userID string, ch string, clientID string, opts ...SubscribeOption) error {
+	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, clientID, opts...)
 }
 
 func (h *Hub) addSub(ch string, c *Client) (bool, error) {
@@ -221,28 +226,82 @@ func stringInSlice(str string, slice []string) bool {
 	return false
 }
 
+func (h *connShard) subscribe(user string, ch string, clientID string, opts ...SubscribeOption) error {
+	userConnections := h.userConnections(user)
+
+	var firstErr error
+	var errMu sync.Mutex
+
+	var wg sync.WaitGroup
+	for _, c := range userConnections {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Subscribe(ch, opts...)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+		}(c)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
+	userConnections := h.userConnections(user)
+
+	var firstErr error
+	var errMu sync.Mutex
+
+	var wg sync.WaitGroup
+	for _, c := range userConnections {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Unsubscribe(ch)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+		}(c)
+	}
+	wg.Wait()
+	return firstErr
+}
+
 func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
 	userConnections := h.userConnections(user)
+
+	var firstErr error
+	var errMu sync.Mutex
+
+	var wg sync.WaitGroup
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
 			continue
 		}
+		wg.Add(1)
 		go func(cc *Client) {
-			_ = cc.close(disconnect)
+			defer wg.Done()
+			err := cc.close(disconnect)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
 		}(c)
 	}
-	return nil
-}
-
-func (h *connShard) unsubscribe(user string, ch string, opts ...UnsubscribeOption) error {
-	userConnections := h.userConnections(user)
-	for _, c := range userConnections {
-		err := c.Unsubscribe(ch, opts...)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	wg.Wait()
+	return firstErr
 }
 
 // userConnections returns all connections of user with specified UserID.

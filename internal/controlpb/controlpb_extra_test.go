@@ -13,8 +13,7 @@ func TestCommandProtoExtra(t *testing.T) {
 		Params: Raw("{}"),
 	}
 
-	d, b := msg.Method.EnumDescriptor()
-	require.Equal(t, fileDescriptorControl, d)
+	_, b := msg.Method.EnumDescriptor()
 	require.Equal(t, []int{0}, b)
 
 	require.Equal(t, "test", msg.GetUID())

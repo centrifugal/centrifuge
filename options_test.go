@@ -15,11 +15,25 @@ func TestWithHistory(t *testing.T) {
 	require.Equal(t, time.Second, opts.HistoryTTL)
 }
 
-func TestWithResubscribe(t *testing.T) {
-	opt := WithResubscribe(true)
-	opts := &UnsubscribeOptions{}
-	opt(opts)
-	require.Equal(t, true, opts.Resubscribe)
+func TestSubscribeOptions(t *testing.T) {
+	subscribeOpts := []SubscribeOption{
+		WithExpireAt(1),
+		WithPresence(true),
+		WithJoinLeave(true),
+		WithPosition(true),
+		WithRecover(true),
+		WithChannelInfo([]byte(`test`)),
+	}
+	opts := &SubscribeOptions{}
+	for _, opt := range subscribeOpts {
+		opt(opts)
+	}
+	require.Equal(t, int64(1), opts.ExpireAt)
+	require.True(t, opts.Presence)
+	require.True(t, opts.JoinLeave)
+	require.True(t, opts.Position)
+	require.True(t, opts.Recover)
+	require.Equal(t, []byte(`test`), opts.ChannelInfo)
 }
 
 func TestWithDisconnect(t *testing.T) {
@@ -41,4 +55,25 @@ func TestWithLimit(t *testing.T) {
 	opts := &HistoryOptions{}
 	opt(opts)
 	require.Equal(t, NoLimit, opts.Limit)
+}
+
+func TestWithSubscribeClient(t *testing.T) {
+	opt := WithSubscribeClient("client")
+	opts := &SubscribeOptions{}
+	opt(opts)
+	require.Equal(t, "client", opts.clientID)
+}
+
+func TestWithSubscribeData(t *testing.T) {
+	opt := WithSubscribeData([]byte("test"))
+	opts := &SubscribeOptions{}
+	opt(opts)
+	require.Equal(t, []byte("test"), opts.Data)
+}
+
+func TestWithUnsubscribeClient(t *testing.T) {
+	opt := WithUnsubscribeClient("client")
+	opts := &UnsubscribeOptions{}
+	opt(opts)
+	require.Equal(t, "client", opts.clientID)
 }
