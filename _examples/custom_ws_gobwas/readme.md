@@ -3,7 +3,7 @@ Example demonstrates a simple chat with custom WebSocket transport based on http
 To start example run the following command from example directory:
 
 ```
-go run main.go
+go run *.go
 ```
 
 Then go to http://localhost:8000 to see it in action.

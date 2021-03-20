@@ -107,7 +107,7 @@ func (b *MemoryBroker) PublishLeave(ch string, info *ClientInfo) error {
 }
 
 // PublishControl - see Broker interface description.
-func (b *MemoryBroker) PublishControl(data []byte, _ string) error {
+func (b *MemoryBroker) PublishControl(data []byte, _, _ string) error {
 	return b.eventHandler.HandleControl(data)
 }
 

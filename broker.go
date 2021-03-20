@@ -118,7 +118,7 @@ type Broker interface {
 	// PublishControl allows to send control command data. If nodeID is empty string
 	// then message should be delivered to all running nodes, if nodeID is set then
 	// message should be delivered only to node with specified ID.
-	PublishControl(data []byte, nodeID string) error
+	PublishControl(data []byte, nodeID, shardKey string) error
 
 	// History used to extract Publications from history stream.
 	// Publications returned according to HistoryFilter which allows to set several

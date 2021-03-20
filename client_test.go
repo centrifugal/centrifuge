@@ -38,6 +38,23 @@ func newTestSubscribedClient(t *testing.T, n *Node, userID, chanID string) *Clie
 	return client
 }
 
+func TestConnectRequestToProto(t *testing.T) {
+	r := ConnectRequest{
+		Token: "token",
+		Subs: map[string]SubscribeRequest{
+			"test": {
+				Recover: true,
+				Offset:  1,
+				Epoch:   "epoch",
+			},
+		}}
+	protoReq := r.toProto()
+	require.Equal(t, "token", protoReq.GetToken())
+	require.Equal(t, uint64(1), protoReq.Subs["test"].Offset)
+	require.Equal(t, "epoch", protoReq.Subs["test"].Epoch)
+	require.True(t, protoReq.Subs["test"].Recover)
+}
+
 func TestSetCredentials(t *testing.T) {
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{})
@@ -135,7 +152,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Equal(t, DisconnectBadRequest, err)
 }
 
@@ -152,11 +169,11 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
 	require.Equal(t, false, result.Expires)
-	require.Equal(t, uint32(0), result.TTL)
+	require.Equal(t, uint32(0), result.Ttl)
 	require.True(t, client.authenticated)
 	require.Equal(t, "42", client.UserID())
 }
@@ -182,7 +199,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	client.triggerConnect()
 	client.expire()
@@ -212,7 +229,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	client.expire()
 	require.False(t, client.status == statusClosed)
@@ -238,13 +255,13 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 }
 
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
@@ -311,6 +328,7 @@ func TestClientSubscribe(t *testing.T) {
 					Recover:     true,
 					ChannelInfo: []byte("{}"),
 					ExpireAt:    time.Now().Unix() + 3600,
+					Data:        []byte("{}"),
 				},
 			}, nil)
 		})
@@ -732,7 +750,7 @@ func TestUserConnectionLimit(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	anotherClient, _ := newClient(newCtx, node, transport)
-	err := anotherClient.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := anotherClient.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Equal(t, DisconnectConnectionLimit, err)
 }
 
@@ -776,55 +794,82 @@ func TestConnectingReply(t *testing.T) {
 }
 
 func TestServerSideSubscriptions(t *testing.T) {
-	node := defaultTestNode()
-	defer func() { _ = node.Shutdown(context.Background()) }()
+	testCases := []struct {
+		Name           string
+		Unidirectional bool
+	}{
+		{"bidi", false},
+		{"uni", true},
+	}
 
-	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
-		return ConnectReply{
-			Subscriptions: map[string]SubscribeOptions{
-				"server-side-1":  {},
-				"$server-side-2": {},
-			},
-		}, nil
-	})
-	transport := newTestTransport(func() {})
-	transport.sink = make(chan []byte, 100)
-	ctx := context.Background()
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, _ := newClient(newCtx, node, transport)
-	connectClient(t, client)
+	for _, tt := range testCases {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := defaultTestNode()
+			defer func() { _ = node.Shutdown(context.Background()) }()
 
-	_ = client.Subscribe("server-side-3")
-	_, err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
-	require.NoError(t, err)
-	_, err = node.Publish("$server-side-2", []byte(`{"text": "test message 2"}`))
-	require.NoError(t, err)
-	_, err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
-	require.NoError(t, err)
+			node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+				return ConnectReply{
+					Subscriptions: map[string]SubscribeOptions{
+						"server-side-1":  {},
+						"$server-side-2": {},
+					},
+				}, nil
+			})
+			transport := newTestTransport(func() {})
+			transport.setUnidirectional(tt.Unidirectional)
+			transport.sink = make(chan []byte, 100)
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+			if !tt.Unidirectional {
+				connectClient(t, client)
+			} else {
+				err := client.Connect(ConnectRequest{
+					Subs: map[string]SubscribeRequest{
+						"server-side-1": {
+							Recover: true,
+							Epoch:   "test",
+							Offset:  0,
+						},
+					},
+				})
+				require.NoError(t, err)
+			}
 
-	done := make(chan struct{})
-	go func() {
-		var i int
-		for data := range transport.sink {
-			if strings.Contains(string(data), "test message 1") {
-				i++
-			}
-			if strings.Contains(string(data), "test message 2") {
-				i++
-			}
-			if strings.Contains(string(data), "test message 3") {
-				i++
-			}
-			if i == 3 {
-				close(done)
-			}
-		}
-	}()
+			_ = client.Subscribe("server-side-3")
+			_, err := node.Publish("server-side-1", []byte(`{"text": "test message 1"}`))
+			require.NoError(t, err)
+			_, err = node.Publish("$server-side-2", []byte(`{"text": "test message 2"}`))
+			require.NoError(t, err)
+			_, err = node.Publish("server-side-3", []byte(`{"text": "test message 3"}`))
+			require.NoError(t, err)
 
-	select {
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout receiving publication")
-	case <-done:
+			done := make(chan struct{})
+			go func() {
+				var i int
+				for data := range transport.sink {
+					if strings.Contains(string(data), "test message 1") {
+						i++
+					}
+					if strings.Contains(string(data), "test message 2") {
+						i++
+					}
+					if strings.Contains(string(data), "test message 3") {
+						i++
+					}
+					if i == 3 {
+						close(done)
+						return
+					}
+				}
+			}()
+
+			select {
+			case <-time.After(time.Second):
+				require.Fail(t, "timeout receiving publication")
+			case <-done:
+			}
+		})
 	}
 }
 
@@ -1021,9 +1066,6 @@ func testReplyWriterWrapper() *sliceReplyWriter {
 	wrapper.rw = &replyWriter{
 		write: func(rep *protocol.Reply) error {
 			wrapper.replies = append(wrapper.replies, rep)
-			return nil
-		},
-		flush: func() error {
 			return nil
 		},
 		done: func() {},
@@ -1770,6 +1812,21 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 	client.mu.Unlock()
 }
 
+func TestClientHandleUnidirectional(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+	client.transport.(*testTransport).unidirectional = true
+	proceed := client.Handle([]byte("test"))
+	require.False(t, proceed)
+	select {
+	case <-client.Context().Done():
+	case <-time.After(time.Second):
+		require.Fail(t, "client not closed")
+	}
+}
+
 func TestClientHandleEmptyData(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1784,7 +1841,7 @@ func TestClientHandleEmptyData(t *testing.T) {
 	}
 	proceed = client.Handle([]byte("test"))
 	require.False(t, proceed)
-	disconnect := client.handleCommand(&protocol.Command{})
+	disconnect := client.dispatchCommand(&protocol.Command{})
 	require.Nil(t, disconnect)
 }
 
@@ -1810,7 +1867,7 @@ func TestClientHandleCommandNotAuthenticated(t *testing.T) {
 	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test",
 	})
-	cmd := &protocol.Command{ID: 1, Method: protocol.MethodTypeSubscribe, Params: params}
+	cmd := &protocol.Command{Id: 1, Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE, Params: params}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -1830,8 +1887,8 @@ func TestClientHandleUnknownMethod(t *testing.T) {
 	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test",
 	})
-	cmd := &protocol.Command{ID: 1, Method: 10000, Params: params}
-	disconnect := client.handleCommand(cmd)
+	cmd := &protocol.Command{Id: 1, Method: 10000, Params: params}
+	disconnect := client.dispatchCommand(cmd)
 	require.Nil(t, disconnect)
 }
 
@@ -1896,7 +1953,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	data, err := json.Marshal(&protocol.Command{
-		ID: 1, Method: protocol.MethodTypeConnect, Params: []byte("[]"),
+		Id: 1, Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: []byte("[]"),
 	})
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -1914,24 +1971,24 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 
 	// Now check other methods.
 	methods := []protocol.MethodType{
-		protocol.MethodTypeSubscribe,
-		protocol.MethodTypePing,
-		protocol.MethodTypePublish,
-		protocol.MethodTypeUnsubscribe,
-		protocol.MethodTypePresence,
-		protocol.MethodTypePresenceStats,
-		protocol.MethodTypeHistory,
-		protocol.MethodTypeRefresh,
-		protocol.MethodTypeRPC,
-		protocol.MethodTypeSend,
-		protocol.MethodTypeSubRefresh,
+		protocol.MethodType_METHOD_TYPE_SUBSCRIBE,
+		protocol.MethodType_METHOD_TYPE_PING,
+		protocol.MethodType_METHOD_TYPE_PUBLISH,
+		protocol.MethodType_METHOD_TYPE_UNSUBSCRIBE,
+		protocol.MethodType_METHOD_TYPE_PRESENCE,
+		protocol.MethodType_METHOD_TYPE_PRESENCE_STATS,
+		protocol.MethodType_METHOD_TYPE_HISTORY,
+		protocol.MethodType_METHOD_TYPE_REFRESH,
+		protocol.MethodType_METHOD_TYPE_RPC,
+		protocol.MethodType_METHOD_TYPE_SEND,
+		protocol.MethodType_METHOD_TYPE_SUB_REFRESH,
 	}
 
 	for _, method := range methods {
 		client = newTestClient(t, node, "42")
 		connectClient(t, client)
 		data, err := json.Marshal(&protocol.Command{
-			ID: 1, Method: method, Params: []byte("[]"),
+			Id: 1, Method: method, Params: []byte("[]"),
 		})
 		require.NoError(t, err)
 		proceed := client.Handle(data)
@@ -1988,7 +2045,7 @@ func TestClientHandleCommandWithoutID(t *testing.T) {
 
 	client := newTestClient(t, node, "42")
 	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
-	cmd := &protocol.Command{Method: protocol.MethodTypeConnect, Params: params}
+	cmd := &protocol.Command{Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: params}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -2022,7 +2079,7 @@ func TestClientAlreadyAuthenticated(t *testing.T) {
 	connectClient(t, client)
 
 	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
-	cmd := &protocol.Command{ID: 2, Method: protocol.MethodTypeConnect, Params: params}
+	cmd := &protocol.Command{Id: 2, Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: params}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -2067,7 +2124,7 @@ func TestClientConnectExpiredError(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 	require.False(t, client.authenticated)
 }
@@ -2774,4 +2831,57 @@ func TestClientCheckPosition(t *testing.T) {
 func TestErrLogLevel(t *testing.T) {
 	require.Equal(t, LogLevelInfo, errLogLevel(ErrorNotAvailable))
 	require.Equal(t, LogLevelError, errLogLevel(errors.New("boom")))
+}
+
+func TestClientTransportWriteError(t *testing.T) {
+	testCases := []struct {
+		Name               string
+		Error              error
+		ExpectedDisconnect *Disconnect
+	}{
+		{"disconnect", DisconnectSlow, DisconnectSlow},
+		{"other", errors.New("boom"), DisconnectWriteError},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := defaultTestNode()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			transport := newTestTransport(func() {})
+			transport.sink = make(chan []byte, 100)
+			transport.writeErr = tt.Error
+
+			done := make(chan *Disconnect)
+
+			node.OnConnect(func(client *Client) {
+				client.OnDisconnect(func(event DisconnectEvent) {
+					done <- event.Disconnect
+				})
+			})
+
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+
+			connectClient(t, client)
+
+			rwWrapper := testReplyWriterWrapper()
+
+			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
+				Channel: "test",
+			}, SubscribeReply{}, rwWrapper.rw, false)
+			require.Nil(t, subCtx.disconnect)
+			require.Nil(t, rwWrapper.replies[0].Error)
+
+			_, err := node.Publish("test", []byte(`{"text": "test message"}`))
+			require.NoError(t, err)
+
+			select {
+			case <-time.After(time.Second):
+				require.Fail(t, "client not closed")
+			case d := <-done:
+				require.Equal(t, tt.ExpectedDisconnect, d)
+			}
+		})
+	}
 }

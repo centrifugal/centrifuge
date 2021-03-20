@@ -7,6 +7,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
 
+	"github.com/centrifugal/protocol"
 	"github.com/gorilla/websocket"
 	"github.com/igm/sockjs-go/v3/sockjs"
 )
@@ -45,13 +46,31 @@ func (t *sockjsTransport) Encoding() EncodingType {
 	return EncodingTypeJSON
 }
 
+// Unidirectional returns whether transport is unidirectional.
+func (t *sockjsTransport) Unidirectional() bool {
+	return false
+}
+
+// DisabledPushFlags ...
+func (t *sockjsTransport) DisabledPushFlags() uint64 {
+	if !t.Unidirectional() {
+		return PushFlagDisconnect
+	}
+	return 0
+}
+
 // Write data to transport.
-func (t *sockjsTransport) Write(data []byte) error {
+func (t *sockjsTransport) Write(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
 	default:
-		return t.session.Send(string(data))
+		encoder := protocol.GetDataEncoder(ProtocolTypeJSON.toProto())
+		defer protocol.PutDataEncoder(ProtocolTypeJSON.toProto(), encoder)
+		for i := range messages {
+			_ = encoder.Encode(messages[i])
+		}
+		return t.session.Send(string(encoder.Finish()))
 	}
 }
 

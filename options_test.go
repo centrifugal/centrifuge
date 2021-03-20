@@ -56,3 +56,24 @@ func TestWithLimit(t *testing.T) {
 	opt(opts)
 	require.Equal(t, NoLimit, opts.Limit)
 }
+
+func TestWithSubscribeClient(t *testing.T) {
+	opt := WithSubscribeClient("client")
+	opts := &SubscribeOptions{}
+	opt(opts)
+	require.Equal(t, "client", opts.clientID)
+}
+
+func TestWithSubscribeData(t *testing.T) {
+	opt := WithSubscribeData([]byte("test"))
+	opts := &SubscribeOptions{}
+	opt(opts)
+	require.Equal(t, []byte("test"), opts.Data)
+}
+
+func TestWithUnsubscribeClient(t *testing.T) {
+	opt := WithUnsubscribeClient("client")
+	opts := &UnsubscribeOptions{}
+	opt(opts)
+	require.Equal(t, "client", opts.clientID)
+}

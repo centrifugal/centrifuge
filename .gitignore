@@ -5,3 +5,4 @@ vendor/
 *.snap
 *.xlog
 *.snap.inprogress
+devdata/

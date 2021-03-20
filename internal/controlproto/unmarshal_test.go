@@ -109,3 +109,31 @@ func TestDecoder(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, surveyResponse, decodedSurveyResponse)
 }
+
+func TestDecoderError(t *testing.T) {
+	decoder := NewProtobufDecoder()
+
+	_, err := decoder.DecodeCommand([]byte("-"))
+	require.Error(t, err)
+
+	_, err = decoder.DecodeNode([]byte("-"))
+	require.Error(t, err)
+
+	_, err = decoder.DecodeCommand([]byte("-"))
+	require.Error(t, err)
+
+	_, err = decoder.DecodeDisconnect([]byte("-"))
+	require.Error(t, err)
+
+	_, err = decoder.DecodeSubscribe([]byte("-"))
+	require.Error(t, err)
+
+	_, err = decoder.DecodeUnsubscribe([]byte("-"))
+	require.Error(t, err)
+
+	_, err = decoder.DecodeSurveyRequest([]byte("-"))
+	require.Error(t, err)
+
+	_, err = decoder.DecodeSurveyResponse([]byte("-"))
+	require.Error(t, err)
+}

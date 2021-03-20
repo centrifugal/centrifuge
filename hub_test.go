@@ -17,20 +17,23 @@ import (
 )
 
 type testTransport struct {
-	mu         sync.Mutex
-	sink       chan []byte
-	closed     bool
-	closeCh    chan struct{}
-	disconnect *Disconnect
-	protoType  ProtocolType
-	cancelFn   func()
+	mu             sync.Mutex
+	sink           chan []byte
+	closed         bool
+	closeCh        chan struct{}
+	disconnect     *Disconnect
+	protoType      ProtocolType
+	cancelFn       func()
+	unidirectional bool
+	writeErr       error
 }
 
 func newTestTransport(cancelFn func()) *testTransport {
 	return &testTransport{
-		cancelFn:  cancelFn,
-		protoType: ProtocolTypeJSON,
-		closeCh:   make(chan struct{}),
+		cancelFn:       cancelFn,
+		protoType:      ProtocolTypeJSON,
+		closeCh:        make(chan struct{}),
+		unidirectional: false,
 	}
 }
 
@@ -38,20 +41,29 @@ func (t *testTransport) setProtocolType(pType ProtocolType) {
 	t.protoType = pType
 }
 
+func (t *testTransport) setUnidirectional(uni bool) {
+	t.unidirectional = uni
+}
+
 func (t *testTransport) setSink(sink chan []byte) {
 	t.sink = sink
 }
 
-func (t *testTransport) Write(data []byte) error {
+func (t *testTransport) Write(messages ...[]byte) error {
+	if t.writeErr != nil {
+		return t.writeErr
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return io.EOF
 	}
-	dataCopy := make([]byte, len(data))
-	copy(dataCopy, data)
-	if t.sink != nil {
-		t.sink <- dataCopy
+	for _, buf := range messages {
+		dataCopy := make([]byte, len(buf))
+		copy(dataCopy, buf)
+		if t.sink != nil {
+			t.sink <- dataCopy
+		}
 	}
 	return nil
 }
@@ -66,6 +78,14 @@ func (t *testTransport) Protocol() ProtocolType {
 
 func (t *testTransport) Encoding() EncodingType {
 	return EncodingTypeJSON
+}
+
+func (t *testTransport) Unidirectional() bool {
+	return t.unidirectional
+}
+
+func (t *testTransport) DisabledPushFlags() uint64 {
+	return PushFlagDisconnect
 }
 
 func (t *testTransport) Close(disconnect *Disconnect) error {
@@ -116,15 +136,15 @@ func TestHubUnsubscribe(t *testing.T) {
 	transport.sink = make(chan []byte, 100)
 
 	// Unsubscribe not existed user.
-	err := n.hub.unsubscribe("1", "test_channel")
+	err := n.hub.unsubscribe("1", "test_channel", "")
 	require.NoError(t, err)
 
 	// Unsubscribe subscribed user.
-	err = n.hub.unsubscribe("42", "test_channel")
+	err = n.hub.unsubscribe("42", "test_channel", "")
 	require.NoError(t, err)
 	select {
 	case data := <-transport.sink:
-		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}\n", string(data))
+		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}", string(data))
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}

@@ -168,7 +168,7 @@ func (b *NatsBroker) PublishLeave(ch string, info *centrifuge.ClientInfo) error 
 }
 
 // PublishControl - see centrifuge.Broker interface description.
-func (b *NatsBroker) PublishControl(data []byte, nodeID string) error {
+func (b *NatsBroker) PublishControl(data []byte, nodeID, _ string) error {
 	var channelID channelID
 	if nodeID == "" {
 		channelID = b.controlChannel()
