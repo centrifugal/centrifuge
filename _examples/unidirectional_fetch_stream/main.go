@@ -23,7 +23,7 @@ var (
 	tls      = flag.Bool("tls", false, "Use TLS")
 	keyFile  = flag.String("key_file", "server.key", "path to TLS key file")
 	certFile = flag.String("cert_file", "server.crt", "path to TLS crt file")
-	// Was not able to make it with HTTP/3 yet.
+	// Was not able to make it work with HTTP/3 yet.
 	//useHttp3 = flag.Bool("http3", false, "Use HTTP/3")
 )
 
