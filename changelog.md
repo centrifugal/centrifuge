@@ -1,3 +1,105 @@
+v0.16.0
+=======
+
+This release is huge. The list of changes may look scary - but most changes should be pretty straightforward to adapt.
+
+Highlights:
+
+* Support for unidirectional clients, this opens a road to more adoption of Centrifuge for cases where bidirectional communication is not really needed. **Unidirectional support is still a subject to change in future versions** as soon as we get more feedback – for now Centrifuge has examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws) transports. **The beauty here is that you don't need to use any Centrifuge client library to receive real-time updates** - just use native browser APIs or GRPC generated code with simple decoding step. 
+* The introduction of unidirectional transport required to change `Transport` interface a bit. The important thing is that it's now a responsibility of Transport Write to properly encode data to JSON-streaming or Protobuf length-delimited format
+* New `Subscribe` method of `Node` - to subscribe user to server-side channels cluster-wide - see [example that demonstrates new API](https://github.com/centrifugal/centrifuge/tree/master/_examples/user_subscribe_unsubscribe)
+* Engine interface removed - now Centrifuge only has separate `Broker` and `PresenceManager` entities. This changes how you should set up Redis to scale Nodes - see [updated Redis example](https://github.com/centrifugal/centrifuge/tree/master/_examples/redis_broker_presence) - it's now **required to provide Redis Broker and Redis Presence Manager separately**
+* Trace level logging (to see all protocol frames, obviously mostly suitable for development)
+* `WithResubscribe` option of unsubscribe removed - it never worked properly in client libraries and had no clearly defined semantics
+* It's possible to return custom data in Subscribe result or in Subscribe Push
+* `Broker.PublishControl` method signature changed - it now accepts shardKey string argument, this is not used at the moment but can be used later if we will need an order of control messages
+
+```
+$ gorelease -base v0.15.0 -version v0.16.0
+github.com/centrifugal/centrifuge
+---------------------------------
+Incompatible changes:
+- (*Client).Subscribe: changed from func(string) error to func(string, ...SubscribeOption) error
+- (*Client).Unsubscribe: changed from func(string, ...UnsubscribeOption) error to func(string) error
+- (*Node).SetEngine: removed
+- Broker.PublishControl: changed from func([]byte, string) error to func([]byte, string, string) error
+- Config.ClientPresenceExpireInterval: removed
+- Engine: removed
+- LogLevelDebug: value changed from 1 to 2
+- LogLevelError: value changed from 3 to 4
+- LogLevelInfo: value changed from 2 to 3
+- MemoryEngine: removed
+- MemoryEngineConfig: removed
+- NewMemoryEngine: removed
+- NewRedisEngine: removed
+- PresenceManager.AddPresence: changed from func(string, string, *ClientInfo, time.Duration) error to func(string, string, *ClientInfo) error
+- RedisEngine: removed
+- RedisEngineConfig: removed
+- RedisShardConfig.ClusterAddrs: removed
+- RedisShardConfig.Host: removed
+- RedisShardConfig.Port: removed
+- RedisShardConfig.Prefix: removed
+- RedisShardConfig.PubSubNumWorkers: removed
+- RedisShardConfig.SentinelAddrs: removed
+- Transport.Write: changed from func([]byte) error to func(...[]byte) error
+- TransportInfo.DisabledPushFlags: added
+- TransportInfo.Unidirectional: added
+- UnsubscribeOptions.Resubscribe: removed
+- WithResubscribe: removed
+Compatible changes:
+- (*Client).Connect: added
+- (*Node).Subscribe: added
+- ConnectRequest: added
+- DefaultRedisBrokerPrefix: added
+- DefaultRedisConnectTimeout: added
+- DefaultRedisPresenceManagerPrefix: added
+- DefaultRedisPresenceTTL: added
+- DefaultRedisReadTimeout: added
+- DefaultRedisWriteTimeout: added
+- LogLevelTrace: added
+- MemoryBroker: added
+- MemoryBrokerConfig: added
+- MemoryPresenceManager: added
+- MemoryPresenceManagerConfig: added
+- NewMemoryBroker: added
+- NewMemoryPresenceManager: added
+- NewRedisBroker: added
+- NewRedisPresenceManager: added
+- NewRedisShard: added
+- PushFlagConnect: added
+- PushFlagDisconnect: added
+- PushFlagJoin: added
+- PushFlagLeave: added
+- PushFlagMessage: added
+- PushFlagPublication: added
+- PushFlagSubscribe: added
+- PushFlagUnsubscribe: added
+- RedisBroker: added
+- RedisBrokerConfig: added
+- RedisPresenceManager: added
+- RedisPresenceManagerConfig: added
+- RedisShard: added
+- RedisShardConfig.Address: added
+- RedisShardConfig.ClusterAddresses: added
+- RedisShardConfig.SentinelAddresses: added
+- SubscribeOption: added
+- SubscribeOptions.Data: added
+- SubscribeRequest: added
+- UnsubscribeEvent.ServerSide: added
+- WebsocketConfig.Unidirectional: added
+- WithChannelInfo: added
+- WithExpireAt: added
+- WithJoinLeave: added
+- WithPosition: added
+- WithPresence: added
+- WithRecover: added
+- WithSubscribeClient: added
+- WithSubscribeData: added
+- WithUnsubscribeClient: added
+
+v0.16.0 is a valid semantic version for this release.
+```
+
 v0.15.0
 =======
 
