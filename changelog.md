@@ -16,6 +16,26 @@ Highlights:
 * `PresenceManager.AddPresence` signature changed - now presence expiration time is an option of PresenceManager itself
 * Field `version` of `ConnectResult` is now omitted from JSON if empty
 * Server-side subscriptions now trigger unsubscribe event (with `ServerSide` boolean flag set to `true`)
+* **Centrifuge now uses [same-origin policy](https://en.wikipedia.org/wiki/Same-origin_policy) by default when checking incoming WebSocket or SockJS request due to security considerations**, previously default check allowed all connections. If you want to mimic previous behavior then pass custom check functions to handler configurations:
+
+```go
+wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+	CheckOrigin: func(r *http.Request) bool {
+	    return true	
+    }
+})
+
+sockjsHandler := centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
+    CheckOrigin: func(r *http.Request) bool {
+        return true
+    },
+    WebsocketCheckOrigin: func(r *http.Request) bool {
+        return true
+    },  
+})
+```
+
+All changes:
 
 ```
 $ gorelease -base v0.15.0 -version v0.16.0
