@@ -10,22 +10,23 @@ Centrifuge library is a real-time core of [Centrifugo](https://github.com/centri
 Library highlights:
 
 * Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.github.io/centrifugo/misc/benchmark/)
-* WebSocket with JSON or binary Protobuf protocol
+* Bidirectional WebSocket transport with JSON or binary Protobuf protocol
 * SockJS polyfill library support for browsers where WebSocket not available (JSON only)
+* Possibility to use unidirectional transports without using custom Centrifuge client library: see examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws)  
 * Built-in horizontal scalability with Redis PUB/SUB, consistent Redis sharding, Sentinel and Redis Cluster for HA
-* Possibility to register custom PUB/SUB broker and presence storage implementations
 * Native authentication over HTTP middleware or custom token-based
 * Bidirectional asynchronous message communication and RPC calls
 * Channel concept to broadcast message to all active subscribers
 * Client-side and server-side channel subscriptions
-* Presence information for channels (show all active clients in channel)
-* History information for channels (stream of messages published into channel)
+* Presence information for channels (show all active clients in a channel)
+* History information for channels (stream of messages published into a channel)
 * Join/leave events for channels (aka client goes online/offline)
+* Possibility to register a custom PUB/SUB Broker and Presence Manager implementations
 * Message recovery mechanism for channels to survive PUB/SUB delivery problems, short network disconnects or node restart
 * Prometheus instrumentation
 * Client libraries for main application environments (see below)
 
-Client libraries:
+For bidirectional communication between a client and a Centrifuge-based server we have a bunch of client libraries:
 
 * [centrifuge-js](https://github.com/centrifugal/centrifuge-js) – for a browser, NodeJS and React Native
 * [centrifuge-go](https://github.com/centrifugal/centrifuge-go) - for Go language
@@ -33,6 +34,8 @@ Client libraries:
 * [centrifuge-dart](https://github.com/centrifugal/centrifuge-dart) - for Dart and Flutter
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
+
+If you opt for a unidirectional communication then you may leverage Centrifuge possibilities without any specific client library - simply by using native browser API ([WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream)) or [GRPC-generated](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc) code.
 
 ### Explore Centrifuge
 

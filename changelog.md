@@ -20,9 +20,9 @@ Highlights:
 
 ```go
 wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-	CheckOrigin: func(r *http.Request) bool {
-	    return true	
-    }
+    CheckOrigin: func(r *http.Request) bool {
+        return true
+    },
 })
 
 sockjsHandler := centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
