@@ -7,16 +7,20 @@ Highlights:
 
 * Support for unidirectional clients, this opens a road to more adoption of Centrifuge for cases where bidirectional communication is not really needed. **Unidirectional support is still a subject to change in future versions** as soon as more feedback appears – for now Centrifuge has examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws) transports. **The beauty here is that you don't need to use any Centrifuge client library to receive real-time updates** - just use native browser APIs or GRPC generated code with simple decoding step. 
 * The introduction of unidirectional transport required to change `Transport` interface a bit. The important thing is that it's now a responsibility of `Transport.Write` to properly encode data to JSON-streaming or Protobuf length-delimited format
+* **Centrifuge now uses [same-origin policy](https://en.wikipedia.org/wiki/Same-origin_policy) by default when checking incoming WebSocket or SockJS request due to security considerations** (prevent CSRF attack), previously default check allowed all connections. If you want to mimic previous behavior then pass custom check functions to handler configurations – see example below.
 * New `Subscribe` method of `Node` - to subscribe user to server-side channels cluster-wide - see [example that demonstrates new API](https://github.com/centrifugal/centrifuge/tree/master/_examples/user_subscribe_unsubscribe)
 * Engine interface removed - now Centrifuge only has separate `Broker` and `PresenceManager` entities. This changes how you should set up Redis to scale Nodes - see [updated Redis example](https://github.com/centrifugal/centrifuge/tree/master/_examples/redis_broker_presence) - it's now **required to provide Redis Broker and Redis Presence Manager separately**
 * Trace level logging (to see all protocol frames, obviously mostly suitable for development)
 * `WithResubscribe` option of unsubscribe removed - it never worked properly in client libraries and had no clearly defined semantics
-* It's possible to return custom data in Subscribe result or in Subscribe Push
+* It is now possible to return custom data in Subscribe result or in Subscribe Push
 * `Broker.PublishControl` method signature changed - it now accepts `shardKey` string argument, this is not used at the moment but can be used later if we will need an order of control messages
 * `PresenceManager.AddPresence` signature changed - now presence expiration time is an option of PresenceManager itself
 * Field `version` of `ConnectResult` is now omitted from JSON if empty
 * Server-side subscriptions now trigger unsubscribe event (with `ServerSide` boolean flag set to `true`)
-* **Centrifuge now uses [same-origin policy](https://en.wikipedia.org/wiki/Same-origin_policy) by default when checking incoming WebSocket or SockJS request due to security considerations**, previously default check allowed all connections. If you want to mimic previous behavior then pass custom check functions to handler configurations:
+* Slightly faster Redis history decoding - [commit](https://github.com/centrifugal/centrifuge/commit/fe31f2469e4ab7790ffa48333c0c063a0f9378e8)
+* Various example improvements
+
+That's what you have to do if you want to accept all connections without same-origin check introduced in v0.16.0 (can lead to CSRF vulnerability in some situations):
 
 ```go
 wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
