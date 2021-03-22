@@ -18,6 +18,7 @@ Highlights:
 * Field `version` of `ConnectResult` is now omitted from JSON if empty
 * Server-side subscriptions now trigger unsubscribe event (with `ServerSide` boolean flag set to `true`)
 * Slightly faster Redis history decoding - [commit](https://github.com/centrifugal/centrifuge/commit/fe31f2469e4ab7790ffa48333c0c063a0f9378e8)
+* Hub container now shards connections and subscriptions - this can reduce lock contention significantly in some workloads thus reducing operation latency. See [#184](https://github.com/centrifugal/centrifuge/pull/184)
 * Various example improvements
 
 That's what you have to do if you want to accept all connections without same-origin check introduced in v0.16.0 (can lead to CSRF vulnerability in some situations):
