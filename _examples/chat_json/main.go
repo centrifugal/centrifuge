@@ -130,6 +130,7 @@ func main() {
 					Recover:   true,
 					Presence:  true,
 					JoinLeave: true,
+					Data:      []byte(`{"msg": "welcome"}`),
 				},
 			}, nil)
 		})
