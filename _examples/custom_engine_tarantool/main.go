@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,12 +19,13 @@ import (
 )
 
 var (
-	port     = flag.Int("port", 8000, "Port to bind app to")
-	sharded  = flag.Bool("sharded", false, "Start sharded example")
-	ha       = flag.Bool("ha", false, "Start high availability example")
-	raft     = flag.Bool("raft", false, "Using Raft-based replication")
-	user     = flag.String("user", "guest", "Connection user")
-	password = flag.String("password", "", "Connection password")
+	port      = flag.Int("port", 8000, "Port to bind app to")
+	sharded   = flag.Bool("sharded", false, "Start sharded example")
+	ha        = flag.Bool("ha", false, "Start high availability example")
+	raft      = flag.Bool("raft", false, "Using Raft-based replication")
+	user      = flag.String("user", "guest", "Connection user")
+	password  = flag.String("password", "", "Connection password")
+	addresses = flag.String("addresses", "", "Configure Tarantool addresses (by default we use hardcoded here)")
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -141,6 +143,15 @@ func main() {
 			{"127.0.0.1:3301"},
 			{"127.0.0.1:3302"},
 		}
+	}
+
+	if *addresses != "" {
+		var customShardAddresses [][]string
+		shardParts := strings.Split(*addresses, " ")
+		for _, shardPart := range shardParts {
+			customShardAddresses = append(customShardAddresses, strings.Split(shardPart, ","))
+		}
+		shardAddresses = customShardAddresses
 	}
 
 	var shards []*tntengine.Shard
