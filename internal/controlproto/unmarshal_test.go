@@ -108,6 +108,18 @@ func TestDecoder(t *testing.T) {
 	decodedSurveyResponse, err := decoder.DecodeSurveyResponse(d)
 	require.NoError(t, err)
 	require.Equal(t, surveyResponse, decodedSurveyResponse)
+
+	notification := &controlpb.Notification{
+		Op:   "test",
+		Data: nil,
+	}
+	d, err = encoder.EncodeNotification(notification)
+	require.NoError(t, err)
+	require.NotNil(t, d)
+
+	decodedNotification, err := decoder.DecodeNotification(d)
+	require.NoError(t, err)
+	require.Equal(t, notification, decodedNotification)
 }
 
 func TestDecoderError(t *testing.T) {
@@ -135,5 +147,8 @@ func TestDecoderError(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = decoder.DecodeSurveyResponse([]byte("-"))
+	require.Error(t, err)
+
+	_, err = decoder.DecodeNotification([]byte("-"))
 	require.Error(t, err)
 }

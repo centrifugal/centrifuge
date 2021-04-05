@@ -11,6 +11,7 @@ type Decoder interface {
 	DecodeDisconnect([]byte) (*controlpb.Disconnect, error)
 	DecodeSurveyRequest([]byte) (*controlpb.SurveyRequest, error)
 	DecodeSurveyResponse([]byte) (*controlpb.SurveyResponse, error)
+	DecodeNotification([]byte) (*controlpb.Notification, error)
 }
 
 var _ Decoder = (*ProtobufDecoder)(nil)
@@ -86,6 +87,16 @@ func (e *ProtobufDecoder) DecodeSurveyRequest(data []byte) (*controlpb.SurveyReq
 // DecodeSurveyResponse ...
 func (e *ProtobufDecoder) DecodeSurveyResponse(data []byte) (*controlpb.SurveyResponse, error) {
 	var cmd controlpb.SurveyResponse
+	err := cmd.Unmarshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return &cmd, nil
+}
+
+// DecodeNotification ...
+func (e *ProtobufDecoder) DecodeNotification(data []byte) (*controlpb.Notification, error) {
+	var cmd controlpb.Notification
 	err := cmd.Unmarshal(data)
 	if err != nil {
 		return nil, err

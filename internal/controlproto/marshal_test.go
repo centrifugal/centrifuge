@@ -79,4 +79,12 @@ func TestEncoder(t *testing.T) {
 	d, err = encoder.EncodeSurveyResponse(surveyResponse)
 	require.NoError(t, err)
 	require.NotNil(t, d)
+
+	notification := &controlpb.Notification{
+		Op:   "test",
+		Data: nil,
+	}
+	d, err = encoder.EncodeNotification(notification)
+	require.NoError(t, err)
+	require.NotNil(t, d)
 }

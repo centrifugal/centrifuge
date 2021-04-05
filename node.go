@@ -71,6 +71,8 @@ type Node struct {
 	surveyRegistry map[uint64]chan survey
 	surveyMu       sync.RWMutex
 	surveyID       uint64
+
+	notificationHandler NotificationHandler
 }
 
 const (
@@ -337,6 +339,18 @@ func (n *Node) cleanNodeInfo() {
 	}
 }
 
+func (n *Node) handleNotification(fromNodeID string, req *controlpb.Notification) error {
+	if n.notificationHandler == nil {
+		return nil
+	}
+	n.notificationHandler(NotificationEvent{
+		FromNodeID: fromNodeID,
+		Op:         req.Op,
+		Data:       req.Data,
+	})
+	return nil
+}
+
 func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyRequest) error {
 	if n.surveyHandler == nil {
 		return nil
@@ -598,6 +612,13 @@ func (n *Node) handleControl(data []byte) error {
 			return err
 		}
 		return n.handleSurveyResponse(uid, cmd)
+	case controlpb.MethodTypeNotification:
+		cmd, err := n.controlDecoder.DecodeNotification(params)
+		if err != nil {
+			n.logger.log(newLogEntry(LogLevelError, "error decoding notification control params", map[string]interface{}{"error": err.Error()}))
+			return err
+		}
+		return n.handleNotification(uid, cmd)
 	default:
 		n.logger.log(newLogEntry(LogLevelError, "unknown control message method", map[string]interface{}{"method": method}))
 		return fmt.Errorf("control method not found: %d", method)
@@ -692,6 +713,44 @@ func (n *Node) publishJoin(ch string, info *ClientInfo) error {
 func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 	incMessagesSent("leave")
 	return n.broker.PublishLeave(ch, info)
+}
+
+var errNotificationHandlerNotRegistered = errors.New("notification handler not registered")
+
+// Notify allows to send an asynchronous notification to other nodes.
+// Unlike Survey it does not wait for any response. If toNodeID is not
+// an empty string then a notification will be sent to a concrete node
+// in cluster, otherwise a notification sent to all running nodes.
+func (n *Node) Notify(op string, data []byte, toNodeID string) error {
+	if n.notificationHandler == nil {
+		return errNotificationHandlerNotRegistered
+	}
+	if toNodeID == "" || n.ID() == toNodeID {
+		n.notificationHandler(NotificationEvent{
+			FromNodeID: n.ID(),
+			Op:         op,
+			Data:       data,
+		})
+	}
+	if n.ID() == toNodeID {
+		// Already on this node and called notificationHandler above, no
+		// need to send notification over network.
+		return nil
+	}
+	notification := &controlpb.Notification{
+		Op:   op,
+		Data: data,
+	}
+	params, err := n.controlEncoder.EncodeNotification(notification)
+	if err != nil {
+		return err
+	}
+	cmd := &controlpb.Command{
+		UID:    n.uid,
+		Method: controlpb.MethodTypeNotification,
+		Params: params,
+	}
+	return n.publishControl(cmd, toNodeID)
 }
 
 // publishControl publishes message into control channel so all running
@@ -1204,6 +1263,11 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 // OnSurvey allows to set SurveyHandler. This should be done before Node.Run called.
 func (n *Node) OnSurvey(handler SurveyHandler) {
 	n.surveyHandler = handler
+}
+
+// OnNotification allows to set NotificationHandler. This should be done before Node.Run called.
+func (n *Node) OnNotification(handler NotificationHandler) {
+	n.notificationHandler = handler
 }
 
 // eventHub allows binding client event handlers.
