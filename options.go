@@ -170,15 +170,15 @@ type HistoryOption func(options *HistoryOptions)
 // NoLimit defines that limit should not be applied.
 const NoLimit = -1
 
-// WithLimit allows to set limit.
+// WithLimit allows to set HistoryOptions.Limit.
 func WithLimit(limit int) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Limit = limit
 	}
 }
 
-// Since allows to set Since option.
-func Since(sp *StreamPosition) HistoryOption {
+// WithSince allows to set HistoryOptions.Since option.
+func WithSince(sp *StreamPosition) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Since = sp
 	}

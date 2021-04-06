@@ -457,6 +457,8 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 
 	results := map[string]SurveyResult{}
 
+	// Invoke handler on this node since control message handler
+	// ignores those sent from the current Node.
 	n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
 		surveyChan <- survey{
 			UID:    n.uid,
@@ -717,7 +719,7 @@ func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 
 var errNotificationHandlerNotRegistered = errors.New("notification handler not registered")
 
-// Notify allows to send an asynchronous notification to other nodes.
+// Notify allows sending an asynchronous notification to other nodes.
 // Unlike Survey it does not wait for any response. If toNodeID is not
 // an empty string then a notification will be sent to a concrete node
 // in cluster, otherwise a notification sent to all running nodes.
@@ -726,6 +728,8 @@ func (n *Node) Notify(op string, data []byte, toNodeID string) error {
 		return errNotificationHandlerNotRegistered
 	}
 	if toNodeID == "" || n.ID() == toNodeID {
+		// Invoke handler on this node since control message handler
+		// ignores those sent from the current Node.
 		n.notificationHandler(NotificationEvent{
 			FromNodeID: n.ID(),
 			Op:         op,
@@ -1151,7 +1155,7 @@ func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, e
 	if maxPublicationLimit > 0 {
 		limit = maxPublicationLimit
 	}
-	return n.History(ch, WithLimit(limit), Since(&since))
+	return n.History(ch, WithLimit(limit), WithSince(&since))
 }
 
 // streamTop returns current stream top StreamPosition for a channel.

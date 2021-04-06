@@ -1576,7 +1576,7 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		var offset uint64
 		var epoch string
 		if reply.Result == nil {
-			result, err := c.node.History(event.Channel, WithLimit(event.Filter.Limit), Since(event.Filter.Since))
+			result, err := c.node.History(event.Channel, WithLimit(event.Filter.Limit), WithSince(event.Filter.Since))
 			if err != nil {
 				c.logWriteInternalErrorFlush(rw, err, "error getting history")
 				return
