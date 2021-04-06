@@ -792,6 +792,8 @@ func TestNode_OnNotification_TwoNodes(t *testing.T) {
 		close(ch2)
 	})
 
+	waitAllNodes(t, node1, 2)
+
 	err = node1.Notify("test_op", []byte(`notification`), "")
 	require.NoError(t, err)
 	tm := time.After(5 * time.Second)
@@ -800,10 +802,10 @@ func TestNode_OnNotification_TwoNodes(t *testing.T) {
 		select {
 		case <-ch2:
 		case <-tm:
-			t.Fatal("timeout")
+			t.Fatal("timeout on ch2")
 		}
 	case <-tm:
-		t.Fatal("timeout")
+		t.Fatal("timeout on ch1")
 	}
 }
 
