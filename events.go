@@ -311,3 +311,13 @@ type SurveyCallback func(SurveyReply)
 
 // SurveyHandler allows to set survey handler function.
 type SurveyHandler func(SurveyEvent, SurveyCallback)
+
+// NotificationEvent with Op and Data.
+type NotificationEvent struct {
+	FromNodeID string
+	Op         string
+	Data       []byte
+}
+
+// NotificationHandler allows to set notification handler function.
+type NotificationHandler func(NotificationEvent)

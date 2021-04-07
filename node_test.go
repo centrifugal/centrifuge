@@ -1000,6 +1000,31 @@ func TestNode_OnSurvey_Timeout(t *testing.T) {
 	close(done)
 }
 
+func TestNode_OnNotification(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	handlerCalled := false
+
+	node.OnNotification(func(event NotificationEvent) {
+		require.Equal(t, "notification", event.Op)
+		require.Equal(t, []byte(`notification`), event.Data)
+		require.Equal(t, node.ID(), event.FromNodeID)
+		handlerCalled = true
+	})
+
+	err := node.Notify("notification", []byte(`notification`), "")
+	require.NoError(t, err)
+	require.True(t, handlerCalled)
+}
+
+func TestNode_OnNotification_NoHandler(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	err := node.Notify("notification", []byte(`notification`), "")
+	require.Equal(t, errNotificationHandlerNotRegistered, err)
+}
+
 func TestErrors(t *testing.T) {
 	err := ErrorUnauthorized
 	protoErr := err.toProto()

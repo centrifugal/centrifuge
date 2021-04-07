@@ -1659,7 +1659,7 @@ func TestClientHistoryTakeover(t *testing.T) {
 		require.Nil(t, e.Filter.Since)
 		require.Equal(t, 2, e.Filter.Limit)
 		// Change limit here, so 3 publications returned.
-		res, err := node.History(e.Channel, WithLimit(e.Filter.Limit+1), Since(e.Filter.Since))
+		res, err := node.History(e.Channel, WithLimit(e.Filter.Limit+1), WithSince(e.Filter.Since))
 		require.NoError(t, err)
 		cb(HistoryReply{
 			Result: &res,

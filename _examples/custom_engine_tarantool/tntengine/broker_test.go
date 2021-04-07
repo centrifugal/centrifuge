@@ -139,7 +139,7 @@ func recoverHistory(node *centrifuge.Node, ch string, since centrifuge.StreamPos
 	if maxPublicationLimit > 0 {
 		limit = maxPublicationLimit
 	}
-	return node.History(ch, centrifuge.WithLimit(limit), centrifuge.Since(&since))
+	return node.History(ch, centrifuge.WithLimit(limit), centrifuge.WithSince(&since))
 }
 
 func testTarantoolClientSubscribeRecover(t *testing.T, tt recoverTest) {

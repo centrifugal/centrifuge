@@ -23,6 +23,7 @@ enum MethodType {
     SURVEY_REQUEST = 4 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyRequest"];
     SURVEY_RESPONSE = 5 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyResponse"];
     SUBSCRIBE = 6 [(gogoproto.enumvalue_customname) = "MethodTypeSubscribe"];
+    NOTIFICATION = 7 [(gogoproto.enumvalue_customname) = "MethodTypeNotification"];
 }
 
 message Command {
@@ -84,4 +85,9 @@ message SurveyResponse {
     uint64 id = 1 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id"];
     uint32 code = 3 [(gogoproto.jsontag) = "code"];
     bytes data = 4 [(gogoproto.jsontag) = "data"];
+}
+
+message Notification {
+    string op = 1 [(gogoproto.jsontag) = "op"];
+    bytes data = 2 [(gogoproto.jsontag) = "data"];
 }

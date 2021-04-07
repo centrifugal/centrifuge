@@ -743,6 +743,72 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 	require.Equal(t, []byte("2"), res.Data)
 }
 
+func TestNode_OnNotification_TwoNodes(t *testing.T) {
+	redisConf := testRedisConf()
+
+	node1, _ := New(DefaultConfig)
+
+	s, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+
+	prefix := getUniquePrefix()
+
+	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s},
+	})
+	node1.SetBroker(e1)
+	_ = node1.Run()
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+
+	ch1 := make(chan struct{})
+
+	node1.OnNotification(func(event NotificationEvent) {
+		require.Equal(t, []byte(`notification`), event.Data)
+		require.Equal(t, "test_op", event.Op)
+		require.NotEmpty(t, event.FromNodeID)
+		require.Equal(t, node1.ID(), event.FromNodeID)
+		close(ch1)
+	})
+
+	node2, _ := New(DefaultConfig)
+
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+	e2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s2},
+	})
+	node2.SetBroker(e2)
+	_ = node2.Run()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+
+	ch2 := make(chan struct{})
+
+	node2.OnNotification(func(event NotificationEvent) {
+		require.Equal(t, []byte(`notification`), event.Data)
+		require.Equal(t, "test_op", event.Op)
+		require.NotEqual(t, node2.ID(), event.FromNodeID)
+		close(ch2)
+	})
+
+	waitAllNodes(t, node1, 2)
+
+	err = node1.Notify("test_op", []byte(`notification`), "")
+	require.NoError(t, err)
+	tm := time.After(5 * time.Second)
+	select {
+	case <-ch1:
+		select {
+		case <-ch2:
+		case <-tm:
+			t.Fatal("timeout on ch2")
+		}
+	case <-tm:
+		t.Fatal("timeout on ch1")
+	}
+}
+
 func TestRedisPubSubTwoNodes(t *testing.T) {
 	redisConf := testRedisConf()
 
