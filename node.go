@@ -21,10 +21,12 @@ import (
 )
 
 // Node is a heart of Centrifuge library – it keeps and manages client connections,
-// maintains information about other centrifuge nodes, keeps references to common
-// things (like Broker and PresenceManager, Hub) etc.
-// By default Node uses in-memory implementations of Broker and PresenceManager
-// (see Node.SetBroker and Node.SetPresenceManager to set other implementations to use).
+// maintains information about other Centrifuge nodes in cluster, keeps references
+// to common things (like Broker and PresenceManager, Hub) etc.
+// By default Node uses in-memory implementations of Broker and PresenceManager -
+// MemoryBroker and MemoryPresenceManager which allow running a single Node only.
+// To scale use other implementations of Broker and PresenceManager like builtin
+// RedisBroker and RedisPresenceManager.
 type Node struct {
 	mu sync.RWMutex
 	// unique id for this node.
@@ -719,10 +721,12 @@ func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 
 var errNotificationHandlerNotRegistered = errors.New("notification handler not registered")
 
-// Notify allows sending an asynchronous notification to other nodes.
-// Unlike Survey it does not wait for any response. If toNodeID is not
-// an empty string then a notification will be sent to a concrete node
-// in cluster, otherwise a notification sent to all running nodes.
+// Notify allows sending an asynchronous notification to all other nodes
+// (or to a single specific node). Unlike Survey it does not wait for any
+// response. If toNodeID is not an empty string then a notification will
+// be sent to a concrete node in cluster, otherwise a notification sent to
+// all running nodes. See a corresponding Node.OnNotification method to
+// handle received notifications.
 func (n *Node) Notify(op string, data []byte, toNodeID string) error {
 	if n.notificationHandler == nil {
 		return errNotificationHandlerNotRegistered
@@ -1264,12 +1268,12 @@ func (r *nodeRegistry) clean(delay time.Duration) {
 	r.mu.Unlock()
 }
 
-// OnSurvey allows to set SurveyHandler. This should be done before Node.Run called.
+// OnSurvey allows setting SurveyHandler. This should be done before Node.Run called.
 func (n *Node) OnSurvey(handler SurveyHandler) {
 	n.surveyHandler = handler
 }
 
-// OnNotification allows to set NotificationHandler. This should be done before Node.Run called.
+// OnNotification allows setting NotificationHandler. This should be done before Node.Run called.
 func (n *Node) OnNotification(handler NotificationHandler) {
 	n.notificationHandler = handler
 }

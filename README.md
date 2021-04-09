@@ -40,10 +40,10 @@ If you opt for a unidirectional communication then you may leverage Centrifuge p
 ### Explore Centrifuge
 
 * see Centrifuge [Documentation on pkg.go.dev](https://pkg.go.dev/github.com/centrifugal/centrifuge)
-* check out [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder
 * read [Centrifuge introduction post](https://centrifugal.github.io/centrifugo/blog/intro_centrifuge/) in Centrifugo blog   
-* you can also consider [Centrifugo server documentation](https://centrifugal.github.io/centrifugo/) as extra doc for this package (since Centrifugo is built on top of Centrifuge library)
-* read this README to the end for [installation](#installation) details, [quick example](#quick-example) and [Tips and tricks](#tips-and-tricks) section
+* you can also consider [Centrifugo server documentation](https://centrifugal.github.io/centrifugo/) as extra doc for this package (since Centrifugo is built on top of Centrifuge library, though keep in mind that Centrifugo adds some things on top, Centrifugo source code is also a good place to learn from)
+* read this README to the end for [installation](#installation) details, [quick example](#quick-example) and [tips and tricks](#tips-and-tricks) section
+* check out [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder
 
 ### Installation
 
@@ -57,7 +57,7 @@ go get github.com/centrifugal/centrifuge
 
 ### Quick example
 
-Let's take a look on how to build the simplest real-time chat ever with Centrifuge library. Clients will be able to connect to server over Websocket, send a message into channel and this message will be instantly delivered to all active channel subscribers. On server side we will accept all connections and will work as simple PUB/SUB proxy without worrying too much about permissions. In this example we will use Centrifuge Javascript client on a frontend.
+Let's take a look on how to build the simplest real-time chat with Centrifuge library. Clients will be able to connect to a server over Websocket, send a message into a channel and this message will be instantly delivered to all active channel subscribers. On a server side we will accept all connections and will work as a simple PUB/SUB proxy without worrying too much about permissions. In this example we will use Centrifuge Javascript client on a frontend.
 
 Create file `main.go` with the following code:
 
@@ -226,9 +226,9 @@ go run main.go
 
 Open several browser tabs with http://localhost:8000 and see chat in action.
 
-This example is only the top of an iceberg. Though it should give you an insight on library API.
+While this example is only the top of an iceberg, it should give you a good insight on library API. Check out [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder for more.
 
-Keep in mind that Centrifuge library is not a framework to build chat apps. It's a general purpose real-time transport for your messages with some helpful primitives. You can build many kinds of real-time apps on top of this library including chats but depending on application you may need to write business logic yourself.
+Keep in mind that Centrifuge library is not a framework to build chat applications. It's a **general purpose real-time transport** for your messages with some helpful primitives. You can build many kinds of real-time apps on top of this library including chats but depending on application you may need to write business logic yourself.
 
 ### Tips and tricks
 
