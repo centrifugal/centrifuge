@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package protocol;
 
-option go_package = ".;clientproto";
+option go_package = "./;clientproto";
 
 message StreamData {
   bytes data = 1;
@@ -26,18 +26,17 @@ message SubscribeRequest {
   uint64 offset = 3;
 }
 
-enum PushType {
-  PUSH_TYPE_PUBLICATION = 0;
-  PUSH_TYPE_JOIN = 1;
-  PUSH_TYPE_LEAVE = 2;
-  PUSH_TYPE_UNSUBSCRIBE = 3;
-  PUSH_TYPE_MESSAGE = 4;
-  PUSH_TYPE_SUBSCRIBE = 5;
-  PUSH_TYPE_CONNECT = 6;
-  PUSH_TYPE_DISCONNECT = 7;
-}
-
 message Push {
+  enum PushType {
+    PUBLICATION = 0;
+    JOIN = 1;
+    LEAVE = 2;
+    UNSUBSCRIBE = 3;
+    MESSAGE = 4;
+    SUBSCRIBE = 5;
+    CONNECT = 6;
+    DISCONNECT = 7;
+  }
   PushType type = 1;
   string channel = 2;
   bytes data = 3;

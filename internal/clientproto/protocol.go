@@ -7,7 +7,7 @@ import (
 // NewMessagePush returns initialized async push message.
 func NewMessagePush(data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type: protocol.PushType_PUSH_TYPE_MESSAGE,
+		Type: protocol.Push_MESSAGE,
 		Data: data,
 	}
 }
@@ -15,7 +15,7 @@ func NewMessagePush(data protocol.Raw) *protocol.Push {
 // NewPublicationPush returns initialized async publication message.
 func NewPublicationPush(ch string, data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type:    protocol.PushType_PUSH_TYPE_PUBLICATION,
+		Type:    protocol.Push_PUBLICATION,
 		Channel: ch,
 		Data:    data,
 	}
@@ -24,7 +24,7 @@ func NewPublicationPush(ch string, data protocol.Raw) *protocol.Push {
 // NewJoinPush returns initialized async join message.
 func NewJoinPush(ch string, data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type:    protocol.PushType_PUSH_TYPE_JOIN,
+		Type:    protocol.Push_JOIN,
 		Channel: ch,
 		Data:    data,
 	}
@@ -33,7 +33,7 @@ func NewJoinPush(ch string, data protocol.Raw) *protocol.Push {
 // NewLeavePush returns initialized async leave message.
 func NewLeavePush(ch string, data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type:    protocol.PushType_PUSH_TYPE_LEAVE,
+		Type:    protocol.Push_LEAVE,
 		Channel: ch,
 		Data:    data,
 	}
@@ -42,7 +42,7 @@ func NewLeavePush(ch string, data protocol.Raw) *protocol.Push {
 // NewUnsubscribePush returns initialized async unsubscribe message.
 func NewUnsubscribePush(ch string, data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type:    protocol.PushType_PUSH_TYPE_UNSUBSCRIBE,
+		Type:    protocol.Push_UNSUBSCRIBE,
 		Channel: ch,
 		Data:    data,
 	}
@@ -51,7 +51,7 @@ func NewUnsubscribePush(ch string, data protocol.Raw) *protocol.Push {
 // NewSubscribePush returns initialized async subscribe message.
 func NewSubscribePush(ch string, data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type:    protocol.PushType_PUSH_TYPE_SUBSCRIBE,
+		Type:    protocol.Push_SUBSCRIBE,
 		Channel: ch,
 		Data:    data,
 	}
@@ -60,7 +60,7 @@ func NewSubscribePush(ch string, data protocol.Raw) *protocol.Push {
 // NewConnPush returns initialized async connect message.
 func NewConnectPush(data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type: protocol.PushType_PUSH_TYPE_CONNECT,
+		Type: protocol.Push_CONNECT,
 		Data: data,
 	}
 }
@@ -68,7 +68,7 @@ func NewConnectPush(data protocol.Raw) *protocol.Push {
 // NewDisconnectPush returns initialized async disconnect message.
 func NewDisconnectPush(data protocol.Raw) *protocol.Push {
 	return &protocol.Push{
-		Type: protocol.PushType_PUSH_TYPE_DISCONNECT,
+		Type: protocol.Push_DISCONNECT,
 		Data: data,
 	}
 }

@@ -99,7 +99,7 @@ func TestWebsocketHandlerUnidirectional(t *testing.T) {
 	var push protocol.Push
 	err = json.Unmarshal(p, &push)
 	require.NoError(t, err)
-	require.Equal(t, protocol.PushType_PUSH_TYPE_CONNECT, push.Type)
+	require.Equal(t, protocol.Push_CONNECT, push.Type)
 }
 
 func TestWebsocketHandlerPing(t *testing.T) {
@@ -189,7 +189,7 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
 		Id:     1,
-		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
+		Method: protocol.Command_CONNECT,
 		Params: params,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
@@ -216,7 +216,7 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
 		Id:     1,
-		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
+		Method: protocol.Command_CONNECT,
 		Params: params,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
@@ -231,7 +231,7 @@ func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
 	params, _ = json.Marshal(subscribeRequest)
 	cmd = &protocol.Command{
 		Id:     2,
-		Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE,
+		Method: protocol.Command_SUBSCRIBE,
 		Params: params,
 	}
 	cmdBytes, _ = json.Marshal(cmd)
@@ -250,7 +250,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	params, _ := connectRequest.Marshal()
 	cmd := &protocol.Command{
 		Id:     1,
-		Method: protocol.MethodType_METHOD_TYPE_CONNECT,
+		Method: protocol.Command_CONNECT,
 		Params: params,
 	}
 
@@ -272,7 +272,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	params, _ = subscribeRequest.Marshal()
 	cmd = &protocol.Command{
 		Id:     2,
-		Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE,
+		Method: protocol.Command_SUBSCRIBE,
 		Params: params,
 	}
 	cmdBytes, _ = cmd.Marshal()

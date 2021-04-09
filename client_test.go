@@ -1867,7 +1867,7 @@ func TestClientHandleCommandNotAuthenticated(t *testing.T) {
 	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test",
 	})
-	cmd := &protocol.Command{Id: 1, Method: protocol.MethodType_METHOD_TYPE_SUBSCRIBE, Params: params}
+	cmd := &protocol.Command{Id: 1, Method: protocol.Command_SUBSCRIBE, Params: params}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -1953,7 +1953,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	data, err := json.Marshal(&protocol.Command{
-		Id: 1, Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: []byte("[]"),
+		Id: 1, Method: protocol.Command_CONNECT, Params: []byte("[]"),
 	})
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -1970,18 +1970,18 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 	counterMu.Unlock()
 
 	// Now check other methods.
-	methods := []protocol.MethodType{
-		protocol.MethodType_METHOD_TYPE_SUBSCRIBE,
-		protocol.MethodType_METHOD_TYPE_PING,
-		protocol.MethodType_METHOD_TYPE_PUBLISH,
-		protocol.MethodType_METHOD_TYPE_UNSUBSCRIBE,
-		protocol.MethodType_METHOD_TYPE_PRESENCE,
-		protocol.MethodType_METHOD_TYPE_PRESENCE_STATS,
-		protocol.MethodType_METHOD_TYPE_HISTORY,
-		protocol.MethodType_METHOD_TYPE_REFRESH,
-		protocol.MethodType_METHOD_TYPE_RPC,
-		protocol.MethodType_METHOD_TYPE_SEND,
-		protocol.MethodType_METHOD_TYPE_SUB_REFRESH,
+	methods := []protocol.Command_MethodType{
+		protocol.Command_SUBSCRIBE,
+		protocol.Command_PING,
+		protocol.Command_PUBLISH,
+		protocol.Command_UNSUBSCRIBE,
+		protocol.Command_PRESENCE,
+		protocol.Command_PRESENCE_STATS,
+		protocol.Command_HISTORY,
+		protocol.Command_REFRESH,
+		protocol.Command_RPC,
+		protocol.Command_SEND,
+		protocol.Command_SUB_REFRESH,
 	}
 
 	for _, method := range methods {
@@ -2045,7 +2045,7 @@ func TestClientHandleCommandWithoutID(t *testing.T) {
 
 	client := newTestClient(t, node, "42")
 	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
-	cmd := &protocol.Command{Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: params}
+	cmd := &protocol.Command{Method: protocol.Command_CONNECT, Params: params}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := client.Handle(data)
@@ -2079,7 +2079,7 @@ func TestClientAlreadyAuthenticated(t *testing.T) {
 	connectClient(t, client)
 
 	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
-	cmd := &protocol.Command{Id: 2, Method: protocol.MethodType_METHOD_TYPE_CONNECT, Params: params}
+	cmd := &protocol.Command{Id: 2, Method: protocol.Command_CONNECT, Params: params}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := client.Handle(data)

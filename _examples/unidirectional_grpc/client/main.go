@@ -20,7 +20,7 @@ var (
 func handlePush(push *clientproto.Push) {
 	log.Printf("push received (type %d, channel %s, data %s", push.Type, push.Channel, fmt.Sprintf("%#v", string(push.Data)))
 	switch push.Type {
-	case clientproto.PushType_PUSH_TYPE_CONNECT:
+	case clientproto.Push_CONNECT:
 		var connectPush clientproto.Connect
 		err := proto.Unmarshal(push.Data, &connectPush)
 		if err != nil {
@@ -28,7 +28,7 @@ func handlePush(push *clientproto.Push) {
 			return
 		}
 		log.Printf("connected to a server with ID: %s", connectPush.Client)
-	case clientproto.PushType_PUSH_TYPE_PUBLICATION:
+	case clientproto.Push_PUBLICATION:
 		var publicationPush clientproto.Publication
 		err := proto.Unmarshal(push.Data, &publicationPush)
 		if err != nil {
@@ -36,7 +36,7 @@ func handlePush(push *clientproto.Push) {
 			return
 		}
 		log.Printf("new publication from channel %s: %s", push.Channel, fmt.Sprintf("%#v", string(publicationPush.Data)))
-	case clientproto.PushType_PUSH_TYPE_DISCONNECT:
+	case clientproto.Push_DISCONNECT:
 		var disconnectPush clientproto.Disconnect
 		err := proto.Unmarshal(push.Data, &disconnectPush)
 		if err != nil {

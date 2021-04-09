@@ -859,14 +859,14 @@ func (c *Client) Handle(data []byte) bool {
 
 // handleCommand processes a single protocol.Command.
 func (c *Client) handleCommand(cmd *protocol.Command) bool {
-	if cmd.Method != protocol.MethodType_METHOD_TYPE_CONNECT && !c.authenticated {
+	if cmd.Method != protocol.Command_CONNECT && !c.authenticated {
 		// Client must send connect command to authenticate itself first.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
 		go func() { _ = c.close(DisconnectBadRequest) }()
 		return false
 	}
 
-	if cmd.Id == 0 && cmd.Method != protocol.MethodType_METHOD_TYPE_SEND {
+	if cmd.Id == 0 && cmd.Method != protocol.Command_SEND {
 		// Only send command from client can be sent without incremental ID.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
 		go func() { _ = c.close(DisconnectBadRequest) }()
@@ -959,29 +959,29 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	var handleErr error
 
 	switch method {
-	case protocol.MethodType_METHOD_TYPE_CONNECT:
+	case protocol.Command_CONNECT:
 		handleErr = c.handleConnect(params, rw)
-	case protocol.MethodType_METHOD_TYPE_PING:
+	case protocol.Command_PING:
 		handleErr = c.handlePing(params, rw)
-	case protocol.MethodType_METHOD_TYPE_SUBSCRIBE:
+	case protocol.Command_SUBSCRIBE:
 		handleErr = c.handleSubscribe(params, rw)
-	case protocol.MethodType_METHOD_TYPE_UNSUBSCRIBE:
+	case protocol.Command_UNSUBSCRIBE:
 		handleErr = c.handleUnsubscribe(params, rw)
-	case protocol.MethodType_METHOD_TYPE_PUBLISH:
+	case protocol.Command_PUBLISH:
 		handleErr = c.handlePublish(params, rw)
-	case protocol.MethodType_METHOD_TYPE_PRESENCE:
+	case protocol.Command_PRESENCE:
 		handleErr = c.handlePresence(params, rw)
-	case protocol.MethodType_METHOD_TYPE_PRESENCE_STATS:
+	case protocol.Command_PRESENCE_STATS:
 		handleErr = c.handlePresenceStats(params, rw)
-	case protocol.MethodType_METHOD_TYPE_HISTORY:
+	case protocol.Command_HISTORY:
 		handleErr = c.handleHistory(params, rw)
-	case protocol.MethodType_METHOD_TYPE_RPC:
+	case protocol.Command_RPC:
 		handleErr = c.handleRPC(params, rw)
-	case protocol.MethodType_METHOD_TYPE_SEND:
+	case protocol.Command_SEND:
 		handleErr = c.handleSend(params, rw)
-	case protocol.MethodType_METHOD_TYPE_REFRESH:
+	case protocol.Command_REFRESH:
 		handleErr = c.handleRefresh(params, rw)
-	case protocol.MethodType_METHOD_TYPE_SUB_REFRESH:
+	case protocol.Command_SUB_REFRESH:
 		handleErr = c.handleSubRefresh(params, rw)
 	default:
 		handleErr = ErrorMethodNotFound
