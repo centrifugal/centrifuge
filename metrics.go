@@ -55,6 +55,7 @@ var (
 	actionCountHistoryStreamTop prometheus.Counter
 	actionCountHistoryRemove    prometheus.Counter
 	actionCountSurvey           prometheus.Counter
+	actionCountNotify           prometheus.Counter
 
 	recoverCountYes prometheus.Counter
 	recoverCountNo  prometheus.Counter
@@ -286,6 +287,8 @@ func incActionCount(action string) {
 		actionCountHistoryRemove.Inc()
 	case "survey":
 		actionCountSurvey.Inc()
+	case "notify":
+		actionCountNotify.Inc()
 	}
 }
 
@@ -422,6 +425,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	actionCountHistoryStreamTop = actionCount.WithLabelValues("history_stream_top")
 	actionCountHistoryRemove = actionCount.WithLabelValues("history_remove")
 	actionCountSurvey = actionCount.WithLabelValues("survey")
+	actionCountNotify = actionCount.WithLabelValues("notify")
 
 	recoverCountYes = recoverCount.WithLabelValues("yes")
 	recoverCountNo = recoverCount.WithLabelValues("no")

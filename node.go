@@ -731,6 +731,9 @@ func (n *Node) Notify(op string, data []byte, toNodeID string) error {
 	if n.notificationHandler == nil {
 		return errNotificationHandlerNotRegistered
 	}
+
+	incActionCount("notify")
+
 	if toNodeID == "" || n.ID() == toNodeID {
 		// Invoke handler on this node since control message handler
 		// ignores those sent from the current Node.

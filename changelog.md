@@ -1,3 +1,25 @@
+v0.17.0
+=======
+
+* Remove unidirectional WebSocket support from builtin WebSocket transport. This was done to not force transport implementation details and to reduce code in a library core. It's still possible to build unidirectional WebSocket transport - just not with a builtin `WebsocketHandler`, see [example](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws).
+* Introduce `node.Notify` method. `Notify` allows sending an asynchronous notification to all other node (or to a single specific node). Unlike `Survey` it does not wait for any response
+* `Since` option of history call renamed to `WithSince` for consistency with other option names
+
+```
+gorelease -base v0.16.0 -version v0.17.0
+github.com/centrifugal/centrifuge
+---------------------------------
+Incompatible changes:
+- Since: removed
+- WebsocketConfig.Unidirectional: removed
+Compatible changes:
+- (*Node).Notify: added
+- (*Node).OnNotification: added
+- NotificationEvent: added
+- NotificationHandler: added
+- WithSince: added
+```
+
 v0.16.0
 =======
 
