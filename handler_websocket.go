@@ -23,7 +23,6 @@ const (
 // interface so client will accept it.
 type websocketTransport struct {
 	mu        sync.RWMutex
-	writeMu   sync.Mutex // sync general write with unidirectional ping write.
 	conn      *websocket.Conn
 	closed    bool
 	closeCh   chan struct{}
@@ -38,7 +37,6 @@ type websocketTransportOptions struct {
 	pingInterval       time.Duration
 	writeTimeout       time.Duration
 	compressionMinSize int
-	unidirectional     bool
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}) *websocketTransport {
@@ -59,13 +57,6 @@ func (t *websocketTransport) ping() {
 	case <-t.closeCh:
 		return
 	default:
-		if t.Unidirectional() {
-			err := t.writeData([]byte(""))
-			if err != nil {
-				_ = t.Close(DisconnectWriteError)
-				return
-			}
-		}
 		deadline := time.Now().Add(t.opts.pingInterval / 2)
 		err := t.conn.WriteControl(websocket.PingMessage, nil, deadline)
 		if err != nil {
@@ -103,15 +94,12 @@ func (t *websocketTransport) Encoding() EncodingType {
 
 // Unidirectional returns whether transport is unidirectional.
 func (t *websocketTransport) Unidirectional() bool {
-	return t.opts.unidirectional
+	return false
 }
 
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
-	if !t.Unidirectional() {
-		return PushFlagDisconnect
-	}
-	return 0
+	return PushFlagDisconnect
 }
 
 func (t *websocketTransport) writeData(data []byte) error {
@@ -122,21 +110,16 @@ func (t *websocketTransport) writeData(data []byte) error {
 	if t.Protocol() == ProtocolTypeProtobuf {
 		messageType = websocket.BinaryMessage
 	}
-
-	t.writeMu.Lock()
 	if t.opts.writeTimeout > 0 {
 		_ = t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
 	}
 	err := t.conn.WriteMessage(messageType, data)
 	if err != nil {
-		t.writeMu.Unlock()
 		return err
 	}
 	if t.opts.writeTimeout > 0 {
 		_ = t.conn.SetWriteDeadline(time.Time{})
 	}
-	t.writeMu.Unlock()
-
 	return nil
 }
 
@@ -146,22 +129,13 @@ func (t *websocketTransport) Write(messages ...[]byte) error {
 	case <-t.closeCh:
 		return nil
 	default:
-		if !t.opts.unidirectional {
-			protoType := t.Protocol().toProto()
-			encoder := protocol.GetDataEncoder(protoType)
-			defer protocol.PutDataEncoder(protoType, encoder)
-			for i := range messages {
-				_ = encoder.Encode(messages[i])
-			}
-			return t.writeData(encoder.Finish())
+		protoType := t.Protocol().toProto()
+		encoder := protocol.GetDataEncoder(protoType)
+		defer protocol.PutDataEncoder(protoType, encoder)
+		for i := range messages {
+			_ = encoder.Encode(messages[i])
 		}
-		for i := 0; i < len(messages); i++ {
-			err := t.writeData(messages[i])
-			if err != nil {
-				return err
-			}
-		}
-		return nil
+		return t.writeData(encoder.Finish())
 	}
 }
 
@@ -181,7 +155,7 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 	close(t.closeCh)
 	t.mu.Unlock()
 
-	if disconnect != nil && !t.Unidirectional() {
+	if disconnect != nil {
 		msg := websocket.FormatCloseMessage(int(disconnect.Code), disconnect.CloseText())
 		err := t.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
 		if err != nil {
@@ -255,9 +229,6 @@ type WebsocketConfig struct {
 
 	// UseWriteBufferPool enables using buffer pool for writes.
 	UseWriteBufferPool bool
-
-	// Unidirectional allows enabling unidirectional mode.
-	Unidirectional bool
 }
 
 // WebsocketHandler handles WebSocket client connections. WebSocket protocol
@@ -357,7 +328,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			compressionMinSize: compressionMinSize,
 			encType:            encType,
 			protoType:          protoType,
-			unidirectional:     s.config.Unidirectional,
 		}
 
 		graceCh := make(chan struct{})
@@ -385,33 +355,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
 		}(time.Now())
 
-		if transport.Unidirectional() {
-			_, data, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-			decoder := protocol.GetParamsDecoder(transport.Protocol().toProto())
-			req, err := decoder.DecodeConnect(data)
-			if err != nil {
-				return
-			}
-
-			err = c.unidirectionalConnect(req)
-			if err != nil {
-				return
-			}
-		}
-
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				break
 			}
-			if !transport.Unidirectional() {
-				closed := !c.Handle(data)
-				if closed {
-					break
-				}
+			closed := !c.Handle(data)
+			if closed {
+				break
 			}
 		}
 

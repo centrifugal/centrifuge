@@ -64,52 +64,13 @@ func TestWebsocketHandlerProtobuf(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 }
 
-func TestWebsocketHandlerUnidirectional(t *testing.T) {
-	n, _ := New(Config{})
-	require.NoError(t, n.Run())
-	defer func() { _ = n.Shutdown(context.Background()) }()
-	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
-		return ConnectReply{
-			Credentials: &Credentials{UserID: "test"},
-		}, nil
-	})
-	mux := http.NewServeMux()
-	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
-		Compression:        true,
-		UseWriteBufferPool: true,
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-		Unidirectional: true,
-	}))
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	url := "ws" + server.URL[4:]
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
-	require.NoError(t, err)
-	defer func() { _ = conn.Close() }()
-	defer func() { _ = resp.Body.Close() }()
-	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
-	require.NotNil(t, conn)
-	err = conn.WriteMessage(websocket.TextMessage, []byte("{}"))
-	require.NoError(t, err)
-	_, p, err := conn.ReadMessage()
-	require.NoError(t, err)
-	var push protocol.Push
-	err = json.Unmarshal(p, &push)
-	require.NoError(t, err)
-	require.Equal(t, protocol.Push_CONNECT, push.Type)
-}
-
 func TestWebsocketHandlerPing(t *testing.T) {
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
-		PingInterval:   time.Second,
-		Unidirectional: true,
+		PingInterval: time.Second,
 	}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
