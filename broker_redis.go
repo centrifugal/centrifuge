@@ -296,7 +296,7 @@ func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 	}
 	// Check whether Redis Streams supported.
 	dr := shard.newDataRequest("XINFO", nil, "", []interface{}{"HELP"})
-	resp := b.shards[0].getDataResponse(dr)
+	resp := shard.getDataResponse(dr)
 	if resp.err != nil {
 		if strings.Contains(resp.err.Error(), "ERR unknown command") {
 			return errors.New("STREAM only available since Redis >= 5, consider upgrading Redis or using LIST structure for history")
