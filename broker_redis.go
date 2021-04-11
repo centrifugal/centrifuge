@@ -87,7 +87,7 @@ type RedisBrokerConfig struct {
 	// least.
 	HistoryMetaTTL time.Duration
 
-	// UseStreams allow enabling usage of Redis streams instead of list data
+	// UseStreams allows enabling usage of Redis streams instead of list data
 	// structure to keep history. Redis streams are more effective in terms of
 	// missed publication recovery and history pagination since we don't need
 	// to load an entire structure to process in memory (as we do in case of
