@@ -87,10 +87,11 @@ type RedisBrokerConfig struct {
 	// least.
 	HistoryMetaTTL time.Duration
 
-	// UseStreams allows to enable usage of Redis streams instead of list data
+	// UseStreams allows enabling usage of Redis streams instead of list data
 	// structure to keep history. Redis streams are more effective in terms of
 	// missed publication recovery and history pagination since we don't need
-	// to load entire structure to process memory (as we do in case of Redis Lists).
+	// to load an entire structure to process in memory (as we do in case of
+	// Redis Lists). Minimal Redis version required is 5.
 	// TODO v1: use by default?
 	UseStreams bool
 
@@ -282,6 +283,25 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 		if err != nil {
 			return err
 		}
+		if err := b.checkCapabilities(shard); err != nil {
+			return fmt.Errorf("capability error on %s: %v", shard.string(), err)
+		}
+	}
+	return nil
+}
+
+func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
+	if !b.config.UseStreams {
+		return nil
+	}
+	// Check whether Redis Streams supported.
+	dr := shard.newDataRequest("XINFO", nil, "", []interface{}{"HELP"})
+	resp := b.shards[0].getDataResponse(dr)
+	if resp.err != nil {
+		if strings.Contains(resp.err.Error(), "ERR unknown command") {
+			return errors.New("STREAM only available since Redis >= 5, consider upgrading Redis or using LIST structure for history")
+		}
+		return resp.err
 	}
 	return nil
 }
