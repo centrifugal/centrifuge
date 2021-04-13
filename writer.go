@@ -7,8 +7,8 @@ import (
 )
 
 type writerConfig struct {
-	WriteManyFn        func(...[]byte) error
-	WriteFn            func([]byte) error
+	WriteManyFn        func(...queue.Item) error
+	WriteFn            func(item queue.Item) error
 	MaxQueueSize       int
 	MaxMessagesInFrame int
 }
@@ -62,7 +62,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 			messagesCap = maxMessagesInFrame
 		}
 
-		messages := make([][]byte, 0, messagesCap)
+		messages := make([]queue.Item, 0, messagesCap)
 		messages = append(messages, msg)
 
 		for messageCount > 0 {
@@ -114,8 +114,8 @@ func (w *writer) run() {
 	}
 }
 
-func (w *writer) enqueue(data []byte) *Disconnect {
-	ok := w.messages.Add(data)
+func (w *writer) enqueue(item queue.Item) *Disconnect {
+	ok := w.messages.Add(item)
 	if !ok {
 		return DisconnectNormal
 	}

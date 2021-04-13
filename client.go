@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/queue"
+
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/recovery"
@@ -253,8 +255,8 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 
 	messageWriterConf := writerConfig{
 		MaxQueueSize: n.config.ClientQueueMaxSize,
-		WriteFn: func(data []byte) error {
-			if err := t.Write(data); err != nil {
+		WriteFn: func(item queue.Item) error {
+			if err := t.Write(item.Data); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
 					go func() { _ = client.close(v) }()
@@ -266,7 +268,11 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 			incTransportMessagesSent(t.Name())
 			return nil
 		},
-		WriteManyFn: func(messages ...[]byte) error {
+		WriteManyFn: func(items ...queue.Item) error {
+			messages := make([][]byte, len(items))
+			for i := 0; i < len(items); i++ {
+				messages[i] = items[i].Data
+			}
 			if err := t.Write(messages...); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
@@ -276,7 +282,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 				}
 				return err
 			}
-			addTransportMessagesSent(t.Name(), float64(len(messages)))
+			addTransportMessagesSent(t.Name(), float64(len(items)))
 			return nil
 		},
 	}
@@ -449,7 +455,11 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 		data = reply.Data()
 	}
 	c.trace("-->", data)
-	disconnect := c.messageWriter.enqueue(data)
+	disconnect := c.messageWriter.enqueue(queue.Item{
+		Data:     data,
+		IsPush:   reply.Reply.Id == 0,
+		PushType: 0,
+	})
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
 		go func() { _ = c.close(disconnect) }()
@@ -933,7 +943,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
 			return encodeErr
 		}
-		disconnect := c.messageWriter.enqueue(replyData)
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData, IsPush: false})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))

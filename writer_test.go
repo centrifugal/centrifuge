@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/queue"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,7 +48,11 @@ func (t *benchmarkTransport) inc(num int) {
 	}
 }
 
-func (t *benchmarkTransport) writeCombined(bufs ...[]byte) error {
+func (t *benchmarkTransport) writeCombined(items ...queue.Item) error {
+	bufs := make([][]byte, len(items))
+	for i := 0; i < len(items); i++ {
+		bufs[i] = items[i].Data
+	}
 	_, err := t.f.Write(bytes.Join(bufs, []byte("\n")))
 	if err != nil {
 		panic(err)
@@ -55,8 +61,8 @@ func (t *benchmarkTransport) writeCombined(bufs ...[]byte) error {
 	return nil
 }
 
-func (t *benchmarkTransport) writeSingle(data []byte) error {
-	_, err := t.f.Write(data)
+func (t *benchmarkTransport) writeSingle(item queue.Item) error {
+	_, err := t.f.Write(item.Data)
 	if err != nil {
 		panic(err)
 	}
@@ -71,7 +77,7 @@ func (t *benchmarkTransport) close() error {
 func runWrite(w *writer, t *benchmarkTransport) {
 	go func() {
 		for j := 0; j < numQueueMessages; j++ {
-			w.messages.Add(t.buf)
+			w.messages.Add(queue.Item{Data: t.buf})
 		}
 	}()
 	<-t.ch
@@ -130,9 +136,9 @@ func newFakeTransport(writeError error) *fakeTransport {
 	}
 }
 
-func (t *fakeTransport) writeMany(bufs ...[]byte) error {
+func (t *fakeTransport) writeMany(items ...queue.Item) error {
 	t.writeManyCalls++
-	for range bufs {
+	for range items {
 		t.count++
 		t.ch <- struct{}{}
 	}
@@ -142,7 +148,7 @@ func (t *fakeTransport) writeMany(bufs ...[]byte) error {
 	return nil
 }
 
-func (t *fakeTransport) write(_ []byte) error {
+func (t *fakeTransport) write(_ queue.Item) error {
 	t.writeCalls++
 	t.count++
 	t.ch <- struct{}{}
@@ -161,7 +167,7 @@ func TestWriter(t *testing.T) {
 	})
 	go w.run()
 
-	disconnect := w.enqueue([]byte("test"))
+	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.Nil(t, disconnect)
 	<-transport.ch
 	require.Equal(t, transport.count, 1)
@@ -185,7 +191,7 @@ func TestWriterWriteMany(t *testing.T) {
 
 	numMessages := 4 * w.config.MaxMessagesInFrame
 	for i := 0; i < numMessages; i++ {
-		disconnect := w.enqueue([]byte("test"))
+		disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 		require.Nil(t, disconnect)
 	}
 
@@ -224,7 +230,7 @@ func TestWriterWriteRemaining(t *testing.T) {
 
 	numMessages := 4 * w.config.MaxMessagesInFrame
 	for i := 0; i < numMessages; i++ {
-		disconnect := w.enqueue([]byte("test"))
+		disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 		require.Nil(t, disconnect)
 	}
 
@@ -251,7 +257,7 @@ func TestWriterDisconnectSlow(t *testing.T) {
 	})
 	defer func() { _ = w.close() }()
 
-	disconnect := w.enqueue([]byte("test"))
+	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.Equal(t, DisconnectSlow, disconnect)
 }
 
@@ -266,7 +272,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 	go w.run()
 	_ = w.close()
 
-	disconnect := w.enqueue([]byte("test"))
+	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.Equal(t, DisconnectNormal, disconnect)
 }
 
@@ -289,7 +295,7 @@ func TestWriterWriteError(t *testing.T) {
 
 	defer func() { _ = w.close() }()
 
-	disconnect := w.enqueue([]byte("test"))
+	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.NotNil(t, disconnect)
 
 	go func() {
