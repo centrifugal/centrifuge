@@ -610,7 +610,7 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 
 	for _, bm := range benchmarks {
 		b.Run(fmt.Sprintf("%s_%d_sub", bm.name, bm.numSubscribers), func(b *testing.B) {
-			n := defaultTestNode()
+			n := defaultTestNodeBenchmark(b)
 			payload := []byte(`{"input": "test"}`)
 			sink := make(chan []byte, bm.numSubscribers)
 			for i := 0; i < bm.numSubscribers; i++ {
