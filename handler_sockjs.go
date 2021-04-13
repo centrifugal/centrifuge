@@ -60,7 +60,19 @@ func (t *sockjsTransport) DisabledPushFlags() uint64 {
 }
 
 // Write data to transport.
-func (t *sockjsTransport) Write(messages ...[]byte) error {
+func (t *sockjsTransport) Write(message []byte) error {
+	select {
+	case <-t.closeCh:
+		return nil
+	default:
+		// No need to use protocol encoders here since
+		// SockJS only supports JSON.
+		return t.session.Send(string(message))
+	}
+}
+
+// Write data to transport.
+func (t *sockjsTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil

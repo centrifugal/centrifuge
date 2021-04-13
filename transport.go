@@ -66,7 +66,11 @@ type Transport interface {
 	// Write should write data into a connection. Every byte slice here is a
 	// single Reply (or Push for unidirectional transport) encoded according
 	// transport ProtocolType.
-	Write(...[]byte) error
+	Write([]byte) error
+	// Write should write data into a connection. Every byte slice here is a
+	// single Reply (or Push for unidirectional transport) encoded according
+	// transport ProtocolType.
+	WriteMany(...[]byte) error
 	// Close must close a transport. Transport implementation can optionally
 	// handle Disconnect passed here. For example builtin WebSocket transport
 	// sends Disconnect as part of websocket.CloseMessage.

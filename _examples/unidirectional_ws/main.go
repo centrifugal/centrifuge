@@ -298,8 +298,12 @@ func (t *websocketTransport) writeData(data []byte) error {
 	return nil
 }
 
+func (t *websocketTransport) Write(message []byte) error {
+	return t.WriteMany(message)
+}
+
 // Write data to transport.
-func (t *websocketTransport) Write(messages ...[]byte) error {
+func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil

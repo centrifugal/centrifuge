@@ -303,7 +303,11 @@ func (t *streamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-func (t *streamTransport) Write(messages ...[]byte) error {
+func (t *streamTransport) Write(message []byte) error {
+	return t.WriteMany(message)
+}
+
+func (t *streamTransport) WriteMany(messages ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

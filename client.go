@@ -273,7 +273,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 			for i := 0; i < len(items); i++ {
 				messages[i] = items[i].Data
 			}
-			if err := t.Write(messages...); err != nil {
+			if err := t.WriteMany(messages...); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
 					go func() { _ = client.close(v) }()
@@ -2242,7 +2242,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	}
 
 	if !serverSide {
-		// Write subscription reply only if initiated by client.
+		// WriteMany subscription reply only if initiated by client.
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeSubscribeResult(res)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))

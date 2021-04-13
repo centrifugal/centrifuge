@@ -80,7 +80,7 @@ func New() Queue {
 	return sq
 }
 
-// Write mutex must be held when calling
+// WriteMany mutex must be held when calling
 func (q *byteQueue) resize(n int) {
 	nodes := make([]Item, n)
 	if q.head < q.tail {

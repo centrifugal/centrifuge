@@ -124,7 +124,25 @@ func (t *websocketTransport) writeData(data []byte) error {
 }
 
 // Write data to transport.
-func (t *websocketTransport) Write(messages ...[]byte) error {
+func (t *websocketTransport) Write(message []byte) error {
+	select {
+	case <-t.closeCh:
+		return nil
+	default:
+		protoType := t.Protocol().toProto()
+		if protoType == protocol.TypeJSON {
+			// Fast path for one JSON message.
+			return t.writeData(message)
+		}
+		encoder := protocol.GetDataEncoder(protoType)
+		defer protocol.PutDataEncoder(protoType, encoder)
+		_ = encoder.Encode(message)
+		return t.writeData(encoder.Finish())
+	}
+}
+
+// WriteMany data to transport.
+func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil

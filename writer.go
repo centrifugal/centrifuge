@@ -88,11 +88,11 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 			}
 		}
 	} else {
-		// Write single message without allocating new [][]byte slice.
+		// WriteMany single message without allocating new [][]byte slice.
 		writeErr = w.config.WriteFn(msg)
 	}
 	if writeErr != nil {
-		// Write failed, transport must close itself, here we just return from routine.
+		// WriteMany failed, transport must close itself, here we just return from routine.
 		return false
 	}
 	return true

@@ -196,7 +196,11 @@ func (t *grpcTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-func (t *grpcTransport) Write(messages ...[]byte) error {
+func (t *grpcTransport) Write(message []byte) error {
+	return t.WriteMany(message)
+}
+
+func (t *grpcTransport) WriteMany(messages ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

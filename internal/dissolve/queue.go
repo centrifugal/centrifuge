@@ -62,7 +62,7 @@ func newQueue() queue {
 	return sq
 }
 
-// Write mutex must be held when calling
+// WriteMany mutex must be held when calling
 func (q *queueImpl) resize(n int) {
 	nodes := make([]Job, n)
 	if q.head < q.tail {

@@ -278,7 +278,11 @@ func (t *eventsourceTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-func (t *eventsourceTransport) Write(messages ...[]byte) error {
+func (t *eventsourceTransport) Write(message []byte) error {
+	return t.WriteMany(message)
+}
+
+func (t *eventsourceTransport) WriteMany(messages ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
