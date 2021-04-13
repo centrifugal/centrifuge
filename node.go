@@ -74,7 +74,8 @@ type Node struct {
 	surveyMu       sync.RWMutex
 	surveyID       uint64
 
-	notificationHandler NotificationHandler
+	notificationHandler   NotificationHandler
+	transportWriteHandler TransportWriteHandler
 }
 
 const (
@@ -1279,6 +1280,11 @@ func (n *Node) OnSurvey(handler SurveyHandler) {
 // OnNotification allows setting NotificationHandler. This should be done before Node.Run called.
 func (n *Node) OnNotification(handler NotificationHandler) {
 	n.notificationHandler = handler
+}
+
+// OnTransportWrite allows setting TransportWriteHandler. This should be done before Node.Run called.
+func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
+	n.transportWriteHandler = handler
 }
 
 // eventHub allows binding client event handlers.

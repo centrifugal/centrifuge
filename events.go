@@ -319,5 +319,17 @@ type NotificationEvent struct {
 	Data       []byte
 }
 
-// NotificationHandler allows to set notification handler function.
+// NotificationHandler allows handling notifications.
 type NotificationHandler func(NotificationEvent)
+
+// TransportWriteEvent with encoded Data and IsPush flag.
+type TransportWriteEvent struct {
+	Data   []byte
+	IsPush bool
+}
+
+// TransportWriteHandler called just before writing data to Transport.
+// At this moment application can skip sending data to a client returning
+// false from a handler. The main purpose of this handler is not a message
+// filtering based on data content but rather tracing and throttling stuff.
+type TransportWriteHandler func(*Client, TransportWriteEvent) bool

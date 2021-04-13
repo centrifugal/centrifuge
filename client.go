@@ -256,6 +256,12 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	messageWriterConf := writerConfig{
 		MaxQueueSize: n.config.ClientQueueMaxSize,
 		WriteFn: func(item queue.Item) error {
+			if client.node.transportWriteHandler != nil {
+				pass := client.node.transportWriteHandler(client, TransportWriteEvent(item))
+				if !pass {
+					return nil
+				}
+			}
 			if err := t.Write(item.Data); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
@@ -269,9 +275,15 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 			return nil
 		},
 		WriteManyFn: func(items ...queue.Item) error {
-			messages := make([][]byte, len(items))
+			messages := make([][]byte, 0, len(items))
 			for i := 0; i < len(items); i++ {
-				messages[i] = items[i].Data
+				if client.node.transportWriteHandler != nil {
+					pass := client.node.transportWriteHandler(client, TransportWriteEvent(items[i]))
+					if !pass {
+						continue
+					}
+				}
+				messages = append(messages, items[i].Data)
 			}
 			if err := t.WriteMany(messages...); err != nil {
 				switch v := err.(type) {
@@ -456,9 +468,8 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	}
 	c.trace("-->", data)
 	disconnect := c.messageWriter.enqueue(queue.Item{
-		Data:     data,
-		IsPush:   reply.Reply.Id == 0,
-		PushType: 0,
+		Data:   data,
+		IsPush: reply.Reply.Id == 0,
 	})
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
