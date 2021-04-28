@@ -1237,12 +1237,11 @@ func BenchmarkRedisHistory_1Ch_Parallel(b *testing.B) {
 				_, err := e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
 			}
+			b.SetParallelism(128)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					_, _, err := e.History("channel", HistoryFilter{
-						Limit: -1,
-					})
+					_, err := e.node.History("channel", WithLimit(-1), WithSince(nil))
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -1265,6 +1264,7 @@ func BenchmarkRedisRecover_1Ch_Parallel(b *testing.B) {
 				_, err := e.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
 			}
+			b.SetParallelism(128)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {

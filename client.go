@@ -363,6 +363,10 @@ func (c *Client) encodeConn(res *protocol.ConnectResult) (*prepared.Reply, error
 	}, c.transport.Protocol().toProto()), nil
 }
 
+func hasFlag(flags, flag uint64) bool {
+	return flags&flag != 0
+}
+
 func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) error {
 	res, err := c.connectCmd(connectRequest, nil)
 	if err != nil {
@@ -862,17 +866,19 @@ func (c *Client) Handle(data []byte) bool {
 
 	for {
 		cmd, err := decoder.Decode()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
+		if err != nil && err != io.EOF {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
 			go func() { _ = c.close(DisconnectBadRequest) }()
 			return false
 		}
-		ok := c.handleCommand(cmd)
-		if !ok {
-			return false
+		if cmd != nil {
+			ok := c.handleCommand(cmd)
+			if !ok {
+				return false
+			}
+		}
+		if err == io.EOF {
+			break
 		}
 	}
 	return true
@@ -1565,17 +1571,14 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 	}
 
 	var filter HistoryFilter
-	if cmd.UseSince {
+	if cmd.Since != nil {
 		filter.Since = &StreamPosition{
-			Offset: cmd.Offset,
-			Epoch:  cmd.Epoch,
+			Offset: cmd.Since.Offset,
+			Epoch:  cmd.Since.Epoch,
 		}
 	}
-	if cmd.UseLimit {
-		filter.Limit = int(cmd.Limit)
-	} else {
-		filter.Limit = NoLimit
-	}
+	filter.Limit = int(cmd.Limit)
+
 	maxPublicationLimit := c.node.config.HistoryMaxPublicationLimit
 	if maxPublicationLimit > 0 && (filter.Limit < 0 || filter.Limit > maxPublicationLimit) {
 		filter.Limit = maxPublicationLimit
@@ -1625,9 +1628,6 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		protoPubs := make([]*protocol.Publication, 0, len(pubs))
 		for _, pub := range pubs {
 			protoPub := pubToProto(pub)
-			if hasFlag(CompatibilityFlags, UseSeqGen) {
-				protoPub.Seq, protoPub.Gen = recovery.UnpackUint64(protoPub.Offset)
-			}
 			protoPubs = append(protoPubs, protoPub)
 		}
 
@@ -1990,9 +1990,6 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		Positioned:  subCtx.result.GetPositioned(),
 		Data:        subCtx.result.Data,
 	}
-	if hasFlag(CompatibilityFlags, UseSeqGen) {
-		sub.Seq, sub.Gen = recovery.UnpackUint64(subCtx.result.GetOffset())
-	}
 	data, err := pushEncoder.EncodeSubscribe(sub)
 	if err != nil {
 		return err
@@ -2154,8 +2151,6 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 		recoveredPubs []*protocol.Publication
 	)
 
-	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
-
 	if reply.Options.Recover {
 		res.Recoverable = true
 		res.Positioned = true // recoverable subscriptions are automatically positioned.
@@ -2200,17 +2195,12 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 		}
 
 		res.Epoch = latestEpoch
-
-		if useSeqGen {
-			res.Seq, res.Gen = recovery.UnpackUint64(latestOffset)
-		} else {
-			res.Offset = latestOffset
-		}
+		res.Offset = latestOffset
 
 		c.pubSubSync.LockBuffer(channel)
 		bufferedPubs := c.pubSubSync.ReadBuffered(channel)
 		var okMerge bool
-		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs, useSeqGen)
+		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
 			ctx.disconnect = DisconnectServerError
@@ -2236,21 +2226,10 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	}
 
 	if len(recoveredPubs) > 0 {
-		if useSeqGen {
-			// recoveredPubs are in descending order.
-			latestOffset = recoveredPubs[0].Offset
-		} else {
-			latestOffset = recoveredPubs[len(recoveredPubs)-1].Offset
-		}
+		latestOffset = recoveredPubs[len(recoveredPubs)-1].Offset
 	}
 
 	res.Publications = recoveredPubs
-	if useSeqGen && len(res.Publications) > 0 {
-		for i := range res.Publications {
-			res.Publications[i].Seq, res.Publications[i].Gen = recovery.UnpackUint64(res.Publications[i].Offset)
-			res.Publications[i].Offset = 0
-		}
-	}
 
 	if !serverSide {
 		// WriteMany subscription reply only if initiated by client.

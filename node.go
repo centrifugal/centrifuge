@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/singleflight"
 )
 
 // Node is a heart of Centrifuge library – it keeps and manages client connections,
@@ -1034,9 +1037,25 @@ func (n *Node) removePresence(ch string, uid string) error {
 	return n.presenceManager.RemovePresence(ch, uid)
 }
 
+const useSingleFlight = false
+
+var (
+	presenceGroup      singleflight.Group
+	presenceStatsGroup singleflight.Group
+	historyGroup       singleflight.Group
+)
+
 // PresenceResult wraps presence.
 type PresenceResult struct {
 	Presence map[string]*ClientInfo
+}
+
+func (n *Node) presence(ch string) (PresenceResult, error) {
+	presence, err := n.presenceManager.Presence(ch)
+	if err != nil {
+		return PresenceResult{}, err
+	}
+	return PresenceResult{Presence: presence}, nil
 }
 
 // Presence returns a map with information about active clients in channel.
@@ -1045,11 +1064,13 @@ func (n *Node) Presence(ch string) (PresenceResult, error) {
 		return PresenceResult{}, ErrorNotAvailable
 	}
 	incActionCount("presence")
-	presence, err := n.presenceManager.Presence(ch)
-	if err != nil {
-		return PresenceResult{}, err
+	if useSingleFlight {
+		result, err, _ := presenceGroup.Do(ch, func() (interface{}, error) {
+			return n.presence(ch)
+		})
+		return result.(PresenceResult), err
 	}
-	return PresenceResult{Presence: presence}, nil
+	return n.presence(ch)
 }
 
 func infoFromProto(v *protocol.ClientInfo) *ClientInfo {
@@ -1113,17 +1134,27 @@ type PresenceStatsResult struct {
 	PresenceStats
 }
 
+func (n *Node) presenceStats(ch string) (PresenceStatsResult, error) {
+	presenceStats, err := n.presenceManager.PresenceStats(ch)
+	if err != nil {
+		return PresenceStatsResult{}, err
+	}
+	return PresenceStatsResult{PresenceStats: presenceStats}, nil
+}
+
 // PresenceStats returns presence stats from PresenceManager.
 func (n *Node) PresenceStats(ch string) (PresenceStatsResult, error) {
 	if n.presenceManager == nil {
 		return PresenceStatsResult{}, ErrorNotAvailable
 	}
 	incActionCount("presence_stats")
-	presenceStats, err := n.presenceManager.PresenceStats(ch)
-	if err != nil {
-		return PresenceStatsResult{}, err
+	if useSingleFlight {
+		result, err, _ := presenceStatsGroup.Do(ch, func() (interface{}, error) {
+			return n.presenceStats(ch)
+		})
+		return result.(PresenceStatsResult), err
 	}
-	return PresenceStatsResult{PresenceStats: presenceStats}, nil
+	return n.presenceStats(ch)
 }
 
 // HistoryResult contains Publications and current stream top StreamPosition.
@@ -1134,17 +1165,10 @@ type HistoryResult struct {
 	Publications []*Publication
 }
 
-// History allows to extract Publications in channel.
-// The channel must belong to namespace where history is on.
-func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
-	incActionCount("history")
-	historyOpts := &HistoryOptions{}
-	for _, opt := range opts {
-		opt(historyOpts)
-	}
+func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 	pubs, streamTop, err := n.broker.History(ch, HistoryFilter{
-		Limit: historyOpts.Limit,
-		Since: historyOpts.Since,
+		Limit: opts.Limit,
+		Since: opts.Since,
 	})
 	if err != nil {
 		return HistoryResult{}, err
@@ -1153,6 +1177,36 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 		StreamPosition: streamTop,
 		Publications:   pubs,
 	}, nil
+}
+
+// History allows to extract Publications in channel.
+// The channel must belong to namespace where history is on.
+func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
+	incActionCount("history")
+	historyOpts := &HistoryOptions{}
+	for _, opt := range opts {
+		opt(historyOpts)
+	}
+	if useSingleFlight {
+		var builder strings.Builder
+		builder.WriteString("channel:")
+		builder.WriteString(ch)
+		if historyOpts.Since != nil {
+			builder.WriteString(",offset:")
+			builder.WriteString(strconv.FormatUint(historyOpts.Since.Offset, 10))
+			builder.WriteString(",epoch:")
+			builder.WriteString(historyOpts.Since.Epoch)
+		}
+		builder.WriteString(",limit:")
+		builder.WriteString(strconv.Itoa(historyOpts.Limit))
+		key := builder.String()
+
+		result, err, _ := historyGroup.Do(key, func() (interface{}, error) {
+			return n.history(ch, historyOpts)
+		})
+		return result.(HistoryResult), err
+	}
+	return n.history(ch, historyOpts)
 }
 
 // recoverHistory recovers publications since StreamPosition last seen by client.

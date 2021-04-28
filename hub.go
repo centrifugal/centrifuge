@@ -7,7 +7,6 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
-	"github.com/centrifugal/centrifuge/internal/recovery"
 
 	"github.com/centrifugal/protocol"
 )
@@ -449,11 +448,6 @@ func (h *subShard) removeSub(ch string, c *Client) (bool, error) {
 
 // broadcastPublication sends message to all clients subscribed on channel.
 func (h *subShard) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
-	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
-	if useSeqGen {
-		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
-	}
-
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -470,18 +464,9 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonPublicationReply == nil {
-				// Do not send offset to clients for now.
-				var offset uint64
-				if useSeqGen {
-					offset = pub.Offset
-					pub.Offset = 0
-				}
 				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
 				if err != nil {
 					return err
-				}
-				if useSeqGen {
-					pub.Offset = offset
 				}
 				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
 				if err != nil {
@@ -495,18 +480,9 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 			_ = c.writePublication(channel, pub, jsonPublicationReply, sp)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufPublicationReply == nil {
-				// Do not send offset to clients for now.
-				var offset uint64
-				if useSeqGen {
-					offset = pub.Offset
-					pub.Offset = 0
-				}
 				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
 				if err != nil {
 					return err
-				}
-				if useSeqGen {
-					pub.Offset = offset
 				}
 				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
 				if err != nil {

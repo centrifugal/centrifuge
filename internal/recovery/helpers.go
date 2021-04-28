@@ -24,19 +24,13 @@ func uniquePublications(s []*protocol.Publication) []*protocol.Publication {
 // MergePublications allows to merge recovered pubs with buffered pubs
 // collected during extracting recovered so result is ordered and with
 // duplicates removed.
-func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*protocol.Publication, isLegacyOrder bool) ([]*protocol.Publication, bool) {
+func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*protocol.Publication) ([]*protocol.Publication, bool) {
 	if len(bufferedPubs) > 0 {
 		recoveredPubs = append(recoveredPubs, bufferedPubs...)
 	}
-	if isLegacyOrder {
-		sort.Slice(recoveredPubs, func(i, j int) bool {
-			return recoveredPubs[i].Offset > recoveredPubs[j].Offset
-		})
-	} else {
-		sort.Slice(recoveredPubs, func(i, j int) bool {
-			return recoveredPubs[i].Offset < recoveredPubs[j].Offset
-		})
-	}
+	sort.Slice(recoveredPubs, func(i, j int) bool {
+		return recoveredPubs[i].Offset < recoveredPubs[j].Offset
+	})
 	if len(bufferedPubs) > 0 {
 		if len(recoveredPubs) > 1 {
 			recoveredPubs = uniquePublications(recoveredPubs)
@@ -44,12 +38,7 @@ func MergePublications(recoveredPubs []*protocol.Publication, bufferedPubs []*pr
 		prevOffset := recoveredPubs[0].Offset
 		for _, p := range recoveredPubs[1:] {
 			pubOffset := p.Offset
-			var isWrongOffset bool
-			if isLegacyOrder {
-				isWrongOffset = pubOffset != prevOffset-1
-			} else {
-				isWrongOffset = pubOffset != prevOffset+1
-			}
+			isWrongOffset := pubOffset != prevOffset+1
 			if isWrongOffset {
 				return nil, false
 			}

@@ -328,11 +328,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Extract protocol type and encoding type from URL query params. This is
+	// theoretically possible to utilize WebSocket sub-protocol feature to
+	// communicate these options. Maybe over bit mask to not deal with option
+	// ordering and difficult parsing.
 	var protoType = ProtocolTypeJSON
 	if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
 		protoType = ProtocolTypeProtobuf
 	}
-
 	var encType = EncodingTypeJSON
 	if r.URL.Query().Get("encoding") == "binary" {
 		encType = EncodingTypeBinary
