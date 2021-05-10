@@ -4,6 +4,8 @@ go 1.14
 
 replace github.com/centrifugal/centrifuge => ../
 
+replace github.com/centrifugal/protocol => ../../protocol
+
 require (
 	github.com/FZambia/tarantool v0.1.0
 	github.com/centrifugal/centrifuge v0.8.2
@@ -17,6 +19,7 @@ require (
 	github.com/google/uuid v1.2.0
 	github.com/gorilla/mux v1.7.4
 	github.com/gorilla/sessions v1.2.0
+	github.com/gorilla/websocket v1.4.2
 	github.com/klauspost/compress v1.10.8 // indirect
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
 	github.com/nats-io/jwt v1.2.2 // indirect

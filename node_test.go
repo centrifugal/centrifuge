@@ -250,13 +250,13 @@ func TestClientEventHub(t *testing.T) {
 
 func TestNodeRegistry(t *testing.T) {
 	registry := newNodeRegistry("node1")
-	nodeInfo1 := controlpb.Node{UID: "node1"}
-	nodeInfo2 := controlpb.Node{UID: "node2"}
+	nodeInfo1 := controlpb.Node{Uid: "node1"}
+	nodeInfo2 := controlpb.Node{Uid: "node2"}
 	registry.add(&nodeInfo1)
 	registry.add(&nodeInfo2)
 	require.Equal(t, 2, len(registry.list()))
 	info := registry.get("node1")
-	require.Equal(t, "node1", info.UID)
+	require.Equal(t, "node1", info.Uid)
 	registry.clean(10 * time.Second)
 	time.Sleep(2 * time.Second)
 	registry.clean(time.Second)
@@ -708,7 +708,7 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
+			Uid:    client.uid,
 			Method: controlpb.MethodTypeSubscribe,
 			Params: []byte("random"),
 		})
@@ -719,7 +719,7 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
+			Uid:    client.uid,
 			Method: controlpb.MethodTypeSubscribe,
 			Params: paramsBytes,
 		})
@@ -752,7 +752,7 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
+			Uid:    client.uid,
 			Method: controlpb.MethodTypeUnsubscribe,
 			Params: []byte("random"),
 		})
@@ -763,7 +763,7 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
+			Uid:    client.uid,
 			Method: controlpb.MethodTypeUnsubscribe,
 			Params: paramsBytes,
 		})
@@ -801,7 +801,7 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
+			Uid:    client.uid,
 			Method: controlpb.MethodTypeDisconnect,
 			Params: []byte("random"),
 		})
@@ -811,7 +811,7 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
+			Uid:    client.uid,
 			Method: controlpb.MethodTypeDisconnect,
 			Params: paramsBytes,
 		})
@@ -840,7 +840,7 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
+			Uid:    client.uid,
 			Method: -1,
 			Params: nil,
 		})

@@ -16,16 +16,6 @@ const (
 	ProtocolTypeProtobuf ProtocolType = "protobuf"
 )
 
-// EncodingType represents client payload encoding format.
-type EncodingType string
-
-const (
-	// EncodingTypeJSON means JSON payload.
-	EncodingTypeJSON EncodingType = "json"
-	// EncodingTypeBinary means binary payload.
-	EncodingTypeBinary EncodingType = "binary"
-)
-
 // It's possible to disable certain types of pushes to be sent to a client connection
 // by using ClientConfig.DisabledPushFlags.
 const (
@@ -46,15 +36,14 @@ type TransportInfo interface {
 	// Protocol returns an underlying transport protocol type used.
 	// JSON or Protobuf types are supported.
 	Protocol() ProtocolType
-	// Encoding returns payload encoding type used by client. By default
-	// server assumes that payloads passed in JSON format. But it's possible
-	// to give a tip to Centrifuge that payload is binary.
-	Encoding() EncodingType
 	// Unidirectional returns whether transport is unidirectional. For
 	// unidirectional transports Centrifuge uses Push protobuf messages
 	// without additional wrapping into Reply protocol message.
 	Unidirectional() bool
 	// DisabledPushFlags returns a disabled push flags for specific transport.
+	// For example this allows to disable sending Disconnect push in case of
+	// bidirectional WebSocket implementation since disconnect data sent inside
+	// Close frame.
 	DisabledPushFlags() uint64
 }
 
@@ -63,13 +52,15 @@ type TransportInfo interface {
 // handler code (for example by WebsocketHandler.ServeHTTP).
 type Transport interface {
 	TransportInfo
-	// Write should write data into a connection. Every byte slice here is a
-	// single Reply (or Push for unidirectional transport) encoded according
-	// transport ProtocolType.
+	// Write should write single push data into a connection. Every byte slice
+	// here is a single Reply (or Push for unidirectional transport) encoded
+	// according transport ProtocolType.
 	Write([]byte) error
-	// Write should write data into a connection. Every byte slice here is a
+	// WriteMany should write data into a connection. Every byte slice here is a
 	// single Reply (or Push for unidirectional transport) encoded according
-	// transport ProtocolType.
+	// transport ProtocolType. The reason why we have both Write and WriteMany
+	// here is to have a path without any additional allocations for massive
+	// broadcasts (since variadic args cause allocation).
 	WriteMany(...[]byte) error
 	// Close must close a transport. Transport implementation can optionally
 	// handle Disconnect passed here. For example builtin WebSocket transport

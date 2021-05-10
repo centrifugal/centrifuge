@@ -378,15 +378,15 @@ func BenchmarkMemoryRecover_OneChannel_Parallel(b *testing.B) {
 }
 
 type recoverTest struct {
-	Name            string
-	HistorySize     int
-	HistoryLifetime int
-	NumPublications int
-	SinceOffset     uint64
-	NumRecovered    int
-	Sleep           int
-	Limit           int
-	Recovered       bool
+	Name              string
+	HistorySize       int
+	HistoryTTLSeconds int
+	NumPublications   int
+	SinceOffset       uint64
+	NumRecovered      int
+	Sleep             int
+	Limit             int
+	Recovered         bool
 }
 
 var recoverTests = []recoverTest{
@@ -430,7 +430,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 				client := newTestClient(t, node, "42")
 
 				for i := 1; i <= tt.NumPublications; i++ {
-					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(tt.HistorySize, time.Duration(tt.HistoryLifetime)*time.Second))
+					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(tt.HistorySize, time.Duration(tt.HistoryTTLSeconds)*time.Second))
 				}
 
 				time.Sleep(time.Duration(tt.Sleep) * time.Second)

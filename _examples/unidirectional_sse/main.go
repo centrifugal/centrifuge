@@ -264,10 +264,6 @@ func (t *eventsourceTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeJSON
 }
 
-func (t *eventsourceTransport) Encoding() centrifuge.EncodingType {
-	return centrifuge.EncodingTypeJSON
-}
-
 // Unidirectional returns whether transport is unidirectional.
 func (t *eventsourceTransport) Unidirectional() bool {
 	return true

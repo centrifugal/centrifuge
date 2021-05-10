@@ -1538,7 +1538,7 @@ func TestClientHistoryNoFilter(t *testing.T) {
 
 	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
 		require.Nil(t, e.Filter.Since)
-		require.Equal(t, NoLimit, e.Filter.Limit)
+		require.Equal(t, 0, e.Filter.Limit)
 		cb(HistoryReply{}, nil)
 	})
 
@@ -1565,8 +1565,7 @@ func TestClientHistoryNoFilter(t *testing.T) {
 	var result protocol.HistoryResult
 	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
 	require.NoError(t, err)
-	require.Equal(t, 10, len(result.Publications))
-	require.Equal(t, uint64(10), result.Publications[9].Offset)
+	require.Equal(t, 0, len(result.Publications))
 	require.Equal(t, uint64(10), result.Offset)
 	require.NotZero(t, result.Epoch)
 }
@@ -1592,9 +1591,8 @@ func TestClientHistoryWithLimit(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
-		Channel:  "test",
-		UseLimit: true,
-		Limit:    3,
+		Channel: "test",
+		Limit:   3,
 	}), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
@@ -1629,12 +1627,12 @@ func TestClientHistoryWithSinceAndLimit(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
-		Channel:  "test",
-		UseLimit: true,
-		Limit:    2,
-		UseSince: true,
-		Offset:   2,
-		Epoch:    pubRes.Epoch,
+		Channel: "test",
+		Limit:   2,
+		Since: &protocol.StreamPosition{
+			Offset: 2,
+			Epoch:  pubRes.Epoch,
+		},
 	}), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
@@ -1675,9 +1673,8 @@ func TestClientHistoryTakeover(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
-		Channel:  "test",
-		UseLimit: true,
-		Limit:    3,
+		Channel: "test",
+		Limit:   3,
 	}), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
@@ -1711,12 +1708,12 @@ func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
-		Channel:  "test",
-		UseLimit: true,
-		Limit:    2,
-		UseSince: true,
-		Offset:   2,
-		Epoch:    "wrong_one",
+		Channel: "test",
+		Limit:   2,
+		Since: &protocol.StreamPosition{
+			Offset: 2,
+			Epoch:  "wrong_one",
+		},
 	}), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Equal(t, ErrorUnrecoverablePosition.toProto(), rwWrapper.replies[0].Error)
@@ -1744,12 +1741,12 @@ func TestClientHistoryUnrecoverablePositionOffset(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(getJSONEncodedParams(t, &protocol.HistoryRequest{
-		Channel:  "test",
-		UseLimit: true,
-		Limit:    2,
-		UseSince: true,
-		Offset:   2,
-		Epoch:    pubRes.Epoch,
+		Channel: "test",
+		Limit:   2,
+		Since: &protocol.StreamPosition{
+			Offset: 2,
+			Epoch:  pubRes.Epoch,
+		},
 	}), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Equal(t, ErrorUnrecoverablePosition.toProto(), rwWrapper.replies[0].Error)
@@ -2884,4 +2881,14 @@ func TestClientTransportWriteError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFlagExists(t *testing.T) {
+	flags := PushFlagDisconnect
+	require.True(t, hasFlag(flags, PushFlagDisconnect))
+}
+
+func TestFlagNotExists(t *testing.T) {
+	var flags uint64
+	require.False(t, hasFlag(flags, PushFlagDisconnect))
 }

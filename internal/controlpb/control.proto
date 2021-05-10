@@ -27,67 +27,73 @@ enum MethodType {
 }
 
 message Command {
-    string uid = 1 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid"];
-    MethodType method = 2 [(gogoproto.jsontag) = "method"];
-    bytes params = 3 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "params", (gogoproto.nullable) = false];
+    string uid = 1;
+    MethodType method = 2;
+    bytes params = 3;
 }
 
 message Node {
-    string uid = 1 [(gogoproto.customname) = "UID", (gogoproto.jsontag) = "uid"];
-    string name = 2 [(gogoproto.jsontag) = "name"];
-    string version = 3 [(gogoproto.jsontag) = "version"];
-    uint32 num_clients = 4 [(gogoproto.jsontag) = "num_clients"];
-    uint32 num_users = 5 [(gogoproto.jsontag) = "num_users"];
-    uint32 num_channels = 6 [(gogoproto.jsontag) = "num_channels"];
-    uint32 uptime = 7 [(gogoproto.jsontag) = "uptime"];
-    Metrics metrics = 8 [(gogoproto.jsontag) = "metrics"];
+    string uid = 1;
+    string name = 2;
+    string version = 3;
+    uint32 num_clients = 4;
+    uint32 num_users = 5;
+    uint32 num_channels = 6;
+    uint32 uptime = 7;
+    Metrics metrics = 8;
 }
 
 message Metrics {
-    double interval = 1 [(gogoproto.jsontag) = "interval"];
-    map<string, double> items = 2 [(gogoproto.jsontag) = "items"];
+    double interval = 1;
+    map<string, double> items = 2;
 }
 
 message Subscribe {
-    string user = 1 [(gogoproto.jsontag) = "user"];
-    string channel = 2 [(gogoproto.jsontag) = "channel"];
-    bool presence = 3 [(gogoproto.jsontag) = "presence"];
-    bool join_leave = 4 [(gogoproto.jsontag) = "join_leave"];
-    int64 expire_at = 5 [(gogoproto.jsontag) = "expire_at"];
-    bool position = 6 [(gogoproto.jsontag) = "position"];
-    bool recover = 7 [(gogoproto.jsontag) = "recover"];
-    bytes channel_info = 8 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "channel_info", (gogoproto.nullable) = false];
-    string client = 9 [(gogoproto.jsontag) = "client"];
-    bytes data = 10 [(gogoproto.customtype) = "Raw", (gogoproto.jsontag) = "data", (gogoproto.nullable) = false];
+    string user = 1;
+    string channel = 2;
+    bool presence = 3;
+    bool join_leave = 4;
+    int64 expire_at = 5;
+    bool position = 6;
+    bool recover = 7;
+    bytes channel_info = 8;
+    string client = 9;
+    bytes data = 10;
+    StreamPosition recover_since = 11;
+}
+
+message StreamPosition {
+    uint64 offset = 1;
+    string epoch = 2;
 }
 
 message Unsubscribe {
-    string channel = 1 [(gogoproto.jsontag) = "channel"];
-    string user = 2 [(gogoproto.jsontag) = "user"];
-    string client = 3 [(gogoproto.jsontag) = "client"];
+    string channel = 1;
+    string user = 2;
+    string client = 3;
 }
 
 message Disconnect {
-    string user = 1 [(gogoproto.jsontag) = "user"];
-    repeated string whitelist = 2 [(gogoproto.jsontag) = "whitelist"];
-    uint32 code = 3 [(gogoproto.jsontag) = "code"];
-    string reason = 4 [(gogoproto.jsontag) = "reason"];
-    bool reconnect = 5 [(gogoproto.jsontag) = "reconnect"];
+    string user = 1;
+    repeated string whitelist = 2;
+    uint32 code = 3;
+    string reason = 4;
+    bool reconnect = 5;
 }
 
 message SurveyRequest {
-    uint64 id = 1 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id"];
-    string op = 2 [(gogoproto.jsontag) = "op"];
-    bytes data = 3 [(gogoproto.jsontag) = "data"];
+    uint64 id = 1;
+    string op = 2;
+    bytes data = 3;
 }
 
 message SurveyResponse {
-    uint64 id = 1 [(gogoproto.customname) = "ID", (gogoproto.jsontag) = "id"];
-    uint32 code = 3 [(gogoproto.jsontag) = "code"];
-    bytes data = 4 [(gogoproto.jsontag) = "data"];
+    uint64 id = 1;
+    uint32 code = 2;
+    bytes data = 3;
 }
 
 message Notification {
-    string op = 1 [(gogoproto.jsontag) = "op"];
-    bytes data = 2 [(gogoproto.jsontag) = "data"];
+    string op = 1;
+    bytes data = 2;
 }

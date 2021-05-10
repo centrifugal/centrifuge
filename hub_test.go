@@ -89,10 +89,6 @@ func (t *testTransport) Protocol() ProtocolType {
 	return t.protoType
 }
 
-func (t *testTransport) Encoding() EncodingType {
-	return EncodingTypeJSON
-}
-
 func (t *testTransport) Unidirectional() bool {
 	return t.unidirectional
 }

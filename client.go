@@ -7,10 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/queue"
-
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
+	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 
 	"github.com/centrifugal/protocol"
@@ -1968,6 +1967,11 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	subscribeOpts := &SubscribeOptions{}
 	for _, opt := range opts {
 		opt(subscribeOpts)
+	}
+	if subscribeOpts.RecoverSince != nil {
+		subCmd.Recover = true
+		subCmd.Offset = subscribeOpts.RecoverSince.Offset
+		subCmd.Epoch = subscribeOpts.RecoverSince.Epoch
 	}
 	subCtx := c.subscribeCmd(subCmd, SubscribeReply{
 		Options: *subscribeOpts,

@@ -197,7 +197,6 @@ type websocketTransport struct {
 }
 
 type websocketTransportOptions struct {
-	encType            centrifuge.EncodingType
 	protoType          centrifuge.ProtocolType
 	pingInterval       time.Duration
 	writeTimeout       time.Duration
@@ -255,11 +254,6 @@ func (t *websocketTransport) Name() string {
 // Protocol returns transport protocol.
 func (t *websocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.opts.protoType
-}
-
-// Encoding returns transport encoding.
-func (t *websocketTransport) Encoding() centrifuge.EncodingType {
-	return t.opts.encType
 }
 
 // Unidirectional returns whether transport is unidirectional.
@@ -487,7 +481,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
-			encType:            centrifuge.EncodingTypeJSON,
 			protoType:          centrifuge.ProtocolTypeJSON,
 		}
 

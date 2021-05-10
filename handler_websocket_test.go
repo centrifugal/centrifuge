@@ -76,7 +76,6 @@ func TestWebsocketHandlerPing(t *testing.T) {
 	defer server.Close()
 
 	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
-		require.Equal(t, EncodingTypeJSON, event.Transport.Encoding())
 		return ConnectReply{
 			Credentials: &Credentials{
 				UserID: "test",

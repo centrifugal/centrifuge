@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -106,7 +108,7 @@ func newGRPCClientService(n *centrifuge.Node, c GRPCClientServiceConfig) *grpcCl
 
 // Consume is a unidirectional server->client stream wit real-time data.
 func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clientproto.CentrifugeUni_ConsumeServer) error {
-	streamDataCh := make(chan *clientproto.StreamData)
+	streamDataCh := make(chan []byte)
 	transport := newGRPCTransport(stream, streamDataCh)
 
 	connectRequest := centrifuge.ConnectRequest{
@@ -146,7 +148,7 @@ func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clie
 	for {
 		select {
 		case streamData := <-streamDataCh:
-			err := stream.Send(streamData)
+			err := stream.SendMsg(rawFrame(streamData))
 			if err != nil {
 				log.Printf("stream send error: %v", err)
 				return err
@@ -159,14 +161,14 @@ func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clie
 
 // grpcTransport wraps a stream.
 type grpcTransport struct {
-	mu           sync.Mutex
+	mu           sync.RWMutex
 	stream       clientproto.CentrifugeUni_ConsumeServer
 	closed       bool
 	closeCh      chan struct{}
-	streamDataCh chan *clientproto.StreamData
+	streamDataCh chan []byte
 }
 
-func newGRPCTransport(stream clientproto.CentrifugeUni_ConsumeServer, streamDataCh chan *clientproto.StreamData) *grpcTransport {
+func newGRPCTransport(stream clientproto.CentrifugeUni_ConsumeServer, streamDataCh chan []byte) *grpcTransport {
 	return &grpcTransport{
 		stream:       stream,
 		streamDataCh: streamDataCh,
@@ -180,10 +182,6 @@ func (t *grpcTransport) Name() string {
 
 func (t *grpcTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeProtobuf
-}
-
-func (t *grpcTransport) Encoding() centrifuge.EncodingType {
-	return centrifuge.EncodingTypeBinary
 }
 
 // Unidirectional returns whether transport is unidirectional.
@@ -201,16 +199,15 @@ func (t *grpcTransport) Write(message []byte) error {
 }
 
 func (t *grpcTransport) WriteMany(messages ...[]byte) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.mu.RLock()
 	if t.closed {
+		t.mu.RUnlock()
 		return nil
 	}
+	t.mu.RUnlock()
 	for i := 0; i < len(messages); i++ {
 		select {
-		case t.streamDataCh <- &clientproto.StreamData{
-			Data: messages[i],
-		}:
+		case t.streamDataCh <- messages[i]:
 		case <-t.closeCh:
 			return nil
 		}
@@ -311,6 +308,7 @@ func main() {
 
 	grpcServer := grpc.NewServer(
 		grpc.StreamInterceptor(grpcAuthInterceptor),
+		grpc.CustomCodec(&rawCodec{}),
 	)
 	err := RegisterGRPCServerClient(node, grpcServer, GRPCClientServiceConfig{})
 	if err != nil {
@@ -335,4 +333,32 @@ func main() {
 
 	waitExitSignal(node, grpcServer)
 	log.Println("bye!")
+}
+
+type rawFrame []byte
+
+type rawCodec struct{}
+
+func (c *rawCodec) Marshal(v interface{}) ([]byte, error) {
+	out, ok := v.(rawFrame)
+	if !ok {
+		vv, ok := v.(proto.Message)
+		if !ok {
+			return nil, fmt.Errorf("failed to marshal, message is %T, want proto.Message", v)
+		}
+		return proto.Marshal(vv)
+	}
+	return out, nil
+}
+
+func (c *rawCodec) Unmarshal(data []byte, v interface{}) error {
+	vv, ok := v.(proto.Message)
+	if !ok {
+		return fmt.Errorf("failed to unmarshal, message is %T, want proto.Message", v)
+	}
+	return proto.Unmarshal(data, vv)
+}
+
+func (c *rawCodec) String() string {
+	return "proto"
 }

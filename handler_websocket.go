@@ -32,7 +32,6 @@ type websocketTransport struct {
 }
 
 type websocketTransportOptions struct {
-	encType            EncodingType
 	protoType          ProtocolType
 	pingInterval       time.Duration
 	writeTimeout       time.Duration
@@ -85,11 +84,6 @@ func (t *websocketTransport) Name() string {
 // Protocol returns transport protocol.
 func (t *websocketTransport) Protocol() ProtocolType {
 	return t.opts.protoType
-}
-
-// Encoding returns transport encoding.
-func (t *websocketTransport) Encoding() EncodingType {
-	return t.opts.encType
 }
 
 // Unidirectional returns whether transport is unidirectional.
@@ -265,6 +259,7 @@ func NewWebsocketHandler(n *Node, c WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
 		ReadBufferSize:    c.ReadBufferSize,
 		EnableCompression: c.Compression,
+		Subprotocols:      []string{"centrifuge-json", "centrifuge-protobuf"},
 	}
 	if c.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool
@@ -328,17 +323,18 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Extract protocol type and encoding type from URL query params. This is
-	// theoretically possible to utilize WebSocket sub-protocol feature to
-	// communicate these options. Maybe over bit mask to not deal with option
-	// ordering and difficult parsing.
 	var protoType = ProtocolTypeJSON
-	if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
-		protoType = ProtocolTypeProtobuf
-	}
-	var encType = EncodingTypeJSON
-	if r.URL.Query().Get("encoding") == "binary" {
-		encType = EncodingTypeBinary
+
+	subProtocol := conn.Subprotocol()
+	if subProtocol != "" {
+		if subProtocol == "centrifuge-protobuf" {
+			protoType = ProtocolTypeProtobuf
+		}
+	} else {
+		// This is deprecated way to get a protocol type.
+		if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
+			protoType = ProtocolTypeProtobuf
+		}
 	}
 
 	// Separate goroutine for better GC of caller's data.
@@ -347,7 +343,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
-			encType:            encType,
 			protoType:          protoType,
 		}
 

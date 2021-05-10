@@ -39,12 +39,13 @@ const (
 
 var _ Broker = (*RedisBroker)(nil)
 
-// RedisBroker uses Redis to implement Broker functionality.
-// This broker allows to scale Centrifuge-based server to many instances and
-// load balance client connections between them.
-// RedisBroker additionally supports Redis Sentinel, client-side consistent
-// sharding and can work with Redis Cluster (including client-side sharding
-// between different Redis Clusters to scale PUB/SUB).
+// RedisBroker uses Redis to implement Broker functionality. This broker allows
+// scaling Centrifuge-based server to many instances and load balance client
+// connections between them.
+// RedisBroker additionally supports Redis Sentinel, client-side consistent sharding
+// and can work with Redis Cluster (including client-side sharding between different
+// Redis Clusters to scale PUB/SUB).
+// By default Redis >= 5 required (due to the fact RedisBroker uses STREAM data structure).
 type RedisBroker struct {
 	controlRound           uint64 // Keep atomic on struct top for 32-bit architectures.
 	node                   *Node
@@ -87,13 +88,12 @@ type RedisBrokerConfig struct {
 	// least.
 	HistoryMetaTTL time.Duration
 
-	// UseStreams allows enabling usage of Redis streams instead of list data
-	// structure to keep history. Redis streams are more effective in terms of
-	// missed publication recovery and history pagination since we don't need
-	// to load an entire structure to process in memory (as we do in case of
-	// Redis Lists). Minimal Redis version required is 5.
-	// TODO v1: use by default?
-	UseStreams bool
+	// UseLists allows enabling usage of Redis LIST instead of STREAM data
+	// structure to keep history. LIST support exist mostly for backward
+	// compatibility since STREAM seems superior. If you have a use case
+	// where you need to turn on this option in new setup - please share,
+	// otherwise LIST support can be removed at some point in the future.
+	UseLists bool
 
 	// PubSubNumWorkers sets how many PUB/SUB message processing workers will
 	// be started. By default runtime.NumCPU() workers used.
@@ -291,7 +291,7 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 }
 
 func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
-	if !b.config.UseStreams {
+	if b.config.UseLists {
 		return nil
 	}
 	// Check whether Redis Streams supported.
@@ -368,7 +368,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 	var streamKey channelID
 	var size int
 	var script *redis.Script
-	if b.config.UseStreams {
+	if !b.config.UseLists {
 		streamKey = b.historyStreamKey(s, ch)
 		size = opts.HistorySize
 		script = b.addHistoryStreamScript
@@ -534,7 +534,7 @@ func (b *RedisBroker) History(ch string, filter HistoryFilter) ([]*Publication, 
 }
 
 func (b *RedisBroker) history(s *RedisShard, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	if b.config.UseStreams {
+	if !b.config.UseLists {
 		return b.historyStream(s, ch, filter)
 	}
 	return b.historyList(s, ch, filter)
@@ -547,7 +547,7 @@ func (b *RedisBroker) RemoveHistory(ch string) error {
 
 func (b *RedisBroker) removeHistory(s *RedisShard, ch string) error {
 	var key channelID
-	if b.config.UseStreams {
+	if !b.config.UseLists {
 		key = b.historyStreamKey(s, ch)
 	} else {
 		key = b.historyListKey(s, ch)
@@ -583,7 +583,7 @@ func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
 		ch = "{" + ch + "}"
 	}
-	if b.config.UseStreams {
+	if !b.config.UseLists {
 		return channelID(b.config.Prefix + ".stream.meta." + ch)
 	}
 	return channelID(b.config.Prefix + ".list.meta." + ch)
@@ -1039,7 +1039,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 		return nil, StreamPosition{}, resp.err
 	}
 
-	latestPosition, publications, err := extractHistoryResponse(resp.reply, b.config.UseStreams, includePubs)
+	latestPosition, publications, err := extractHistoryResponse(resp.reply, !b.config.UseLists, includePubs)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
@@ -1066,7 +1066,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		return nil, StreamPosition{}, resp.err
 	}
 
-	latestPosition, publications, err := extractHistoryResponse(resp.reply, b.config.UseStreams, includePubs)
+	latestPosition, publications, err := extractHistoryResponse(resp.reply, !b.config.UseLists, includePubs)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}

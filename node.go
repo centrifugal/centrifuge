@@ -228,7 +228,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	close(n.shutdownCh)
 	n.mu.Unlock()
 	cmd := &controlpb.Command{
-		UID:    n.uid,
+		Uid:    n.uid,
 		Method: controlpb.MethodTypeShutdown,
 	}
 	_ = n.publishControl(cmd, "")
@@ -363,14 +363,14 @@ func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyReque
 	}
 	cb := func(reply SurveyReply) {
 		surveyResponse := &controlpb.SurveyResponse{
-			ID:   req.ID,
+			Id:   req.Id,
 			Code: reply.Code,
 			Data: reply.Data,
 		}
 		params, _ := n.controlEncoder.EncodeSurveyResponse(surveyResponse)
 
 		cmd := &controlpb.Command{
-			UID:    n.uid,
+			Uid:    n.uid,
 			Method: controlpb.MethodTypeSurveyResponse,
 			Params: params,
 		}
@@ -383,7 +383,7 @@ func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyReque
 func (n *Node) handleSurveyResponse(uid string, resp *controlpb.SurveyResponse) error {
 	n.surveyMu.RLock()
 	defer n.surveyMu.RUnlock()
-	if ch, ok := n.surveyRegistry[resp.ID]; ok {
+	if ch, ok := n.surveyRegistry[resp.Id]; ok {
 		select {
 		case ch <- survey{
 			UID: uid,
@@ -442,7 +442,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 	n.surveyMu.Lock()
 	n.surveyID++
 	surveyRequest := &controlpb.SurveyRequest{
-		ID:   n.surveyID,
+		Id:   n.surveyID,
 		Op:   op,
 		Data: data,
 	}
@@ -452,13 +452,13 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 		return nil, err
 	}
 	surveyChan := make(chan survey, numNodes)
-	n.surveyRegistry[surveyRequest.ID] = surveyChan
+	n.surveyRegistry[surveyRequest.Id] = surveyChan
 	n.surveyMu.Unlock()
 
 	defer func() {
 		n.surveyMu.Lock()
 		defer n.surveyMu.Unlock()
-		delete(n.surveyRegistry, surveyRequest.ID)
+		delete(n.surveyRegistry, surveyRequest.Id)
 	}()
 
 	results := map[string]SurveyResult{}
@@ -491,7 +491,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 	}()
 
 	cmd := &controlpb.Command{
-		UID:    n.uid,
+		Uid:    n.uid,
 		Method: controlpb.MethodTypeSurveyRequest,
 		Params: params,
 	}
@@ -533,7 +533,7 @@ func (n *Node) Info() (Info, error) {
 	nodeResults := make([]NodeInfo, len(nodes))
 	for i, nd := range nodes {
 		info := NodeInfo{
-			UID:         nd.UID,
+			UID:         nd.Uid,
 			Name:        nd.Name,
 			Version:     nd.Version,
 			NumClients:  nd.NumClients,
@@ -566,12 +566,12 @@ func (n *Node) handleControl(data []byte) error {
 		return err
 	}
 
-	if cmd.UID == n.uid {
+	if cmd.Uid == n.uid {
 		// Sent by this node.
 		return nil
 	}
 
-	uid := cmd.UID
+	uid := cmd.Uid
 	method := cmd.Method
 	params := cmd.Params
 
@@ -598,7 +598,11 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding subscribe control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithPresence(cmd.Presence), WithJoinLeave(cmd.JoinLeave), WithPosition(cmd.Position), WithRecover(cmd.Recover), WithSubscribeData(cmd.Data))
+		var recoverSince *StreamPosition
+		if cmd.RecoverSince != nil {
+			recoverSince = &StreamPosition{Offset: cmd.RecoverSince.Offset, Epoch: cmd.RecoverSince.Epoch}
+		}
+		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithPresence(cmd.Presence), WithJoinLeave(cmd.JoinLeave), WithPosition(cmd.Position), WithRecover(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince))
 	case controlpb.MethodTypeDisconnect:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
@@ -761,7 +765,7 @@ func (n *Node) Notify(op string, data []byte, toNodeID string) error {
 		return err
 	}
 	cmd := &controlpb.Command{
-		UID:    n.uid,
+		Uid:    n.uid,
 		Method: controlpb.MethodTypeNotification,
 		Params: params,
 	}
@@ -791,7 +795,7 @@ func (n *Node) getMetrics(metrics eagle.Metrics) *controlpb.Metrics {
 func (n *Node) pubNode(nodeID string) error {
 	n.mu.RLock()
 	node := &controlpb.Node{
-		UID:         n.uid,
+		Uid:         n.uid,
 		Name:        n.config.Name,
 		Version:     n.config.Version,
 		NumClients:  uint32(n.hub.NumClients()),
@@ -813,7 +817,7 @@ func (n *Node) pubNode(nodeID string) error {
 	params, _ := n.controlEncoder.EncodeNode(node)
 
 	cmd := &controlpb.Command{
-		UID:    n.uid,
+		Uid:    n.uid,
 		Method: controlpb.MethodTypeNode,
 		Params: params,
 	}
@@ -839,9 +843,15 @@ func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error
 		Client:      opts.clientID,
 		Data:        opts.Data,
 	}
+	if opts.RecoverSince != nil {
+		subscribe.RecoverSince = &controlpb.StreamPosition{
+			Offset: opts.RecoverSince.Offset,
+			Epoch:  opts.RecoverSince.Epoch,
+		}
+	}
 	params, _ := n.controlEncoder.EncodeSubscribe(subscribe)
 	cmd := &controlpb.Command{
-		UID:    n.uid,
+		Uid:    n.uid,
 		Method: controlpb.MethodTypeSubscribe,
 		Params: params,
 	}
@@ -858,7 +868,7 @@ func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) e
 	}
 	params, _ := n.controlEncoder.EncodeUnsubscribe(unsubscribe)
 	cmd := &controlpb.Command{
-		UID:    n.uid,
+		Uid:    n.uid,
 		Method: controlpb.MethodTypeUnsubscribe,
 		Params: params,
 	}
@@ -877,7 +887,7 @@ func (n *Node) pubDisconnect(user string, disconnect *Disconnect, whitelist []st
 	}
 	params, _ := n.controlEncoder.EncodeDisconnect(protoDisconnect)
 	cmd := &controlpb.Command{
-		UID:    n.uid,
+		Uid:    n.uid,
 		Method: controlpb.MethodTypeDisconnect,
 		Params: params,
 	}
@@ -952,9 +962,9 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 // nodeCmd handles node control command i.e. updates information about known nodes.
 func (n *Node) nodeCmd(node *controlpb.Node) error {
 	isNewNode := n.nodes.add(node)
-	if isNewNode && node.UID != n.uid {
+	if isNewNode && node.Uid != n.uid {
 		// New Node in cluster
-		_ = n.pubNode(node.UID)
+		_ = n.pubNode(node.Uid)
 	}
 	return nil
 }
@@ -1277,22 +1287,22 @@ func (r *nodeRegistry) get(uid string) controlpb.Node {
 func (r *nodeRegistry) add(info *controlpb.Node) bool {
 	var isNewNode bool
 	r.mu.Lock()
-	if node, ok := r.nodes[info.UID]; ok {
+	if node, ok := r.nodes[info.Uid]; ok {
 		if info.Metrics != nil {
-			r.nodes[info.UID] = *info
+			r.nodes[info.Uid] = *info
 		} else {
 			node.Version = info.Version
 			node.NumChannels = info.NumChannels
 			node.NumClients = info.NumClients
 			node.NumUsers = info.NumUsers
 			node.Uptime = info.Uptime
-			r.nodes[info.UID] = node
+			r.nodes[info.Uid] = node
 		}
 	} else {
-		r.nodes[info.UID] = *info
+		r.nodes[info.Uid] = *info
 		isNewNode = true
 	}
-	r.updates[info.UID] = time.Now().Unix()
+	r.updates[info.Uid] = time.Now().Unix()
 	r.mu.Unlock()
 	return isNewNode
 }

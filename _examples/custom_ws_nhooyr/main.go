@@ -202,11 +202,6 @@ func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.protoType
 }
 
-// Encoding implementation.
-func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
-	return centrifuge.EncodingTypeJSON
-}
-
 // Unidirectional implementation.
 func (t *customWebsocketTransport) Unidirectional() bool {
 	return false

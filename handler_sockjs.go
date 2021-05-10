@@ -41,11 +41,6 @@ func (t *sockjsTransport) Protocol() ProtocolType {
 	return ProtocolTypeJSON
 }
 
-// Encoding returns transport encoding.
-func (t *sockjsTransport) Encoding() EncodingType {
-	return EncodingTypeJSON
-}
-
 // Unidirectional returns whether transport is unidirectional.
 func (t *sockjsTransport) Unidirectional() bool {
 	return false

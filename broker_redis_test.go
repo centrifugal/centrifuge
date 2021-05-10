@@ -59,7 +59,7 @@ func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStre
 	require.NoError(tb, err)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
 		Prefix:         prefix,
-		UseStreams:     useStreams,
+		UseLists:       !useStreams,
 		HistoryMetaTTL: 300 * time.Second,
 		Shards:         []*RedisShard{s},
 	})
@@ -84,7 +84,7 @@ func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, 
 	require.NoError(tb, err)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
 		Prefix:         prefix,
-		UseStreams:     useStreams,
+		UseLists:       !useStreams,
 		HistoryMetaTTL: 300 * time.Second,
 		Shards:         []*RedisShard{s},
 	})
@@ -1315,7 +1315,7 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 	channel := "test_recovery_redis_" + tt.Name
 
 	for i := 1; i <= tt.NumPublications; i++ {
-		_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(tt.HistorySize, time.Duration(tt.HistoryLifetime)*time.Second))
+		_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(tt.HistorySize, time.Duration(tt.HistoryTTLSeconds)*time.Second))
 		require.NoError(t, err)
 	}
 

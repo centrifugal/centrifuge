@@ -45,6 +45,8 @@ type SubscribeOptions struct {
 	Recover bool
 	// Data to send to a client with Subscribe Push.
 	Data []byte
+	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
+	RecoverSince *StreamPosition
 	// clientID to subscribe.
 	clientID string
 }
@@ -106,6 +108,13 @@ func WithSubscribeClient(clientID string) SubscribeOption {
 func WithSubscribeData(data []byte) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.Data = data
+	}
+}
+
+// WithRecoverSince allows setting SubscribeOptions.RecoverFrom.
+func WithRecoverSince(since *StreamPosition) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.RecoverSince = since
 	}
 }
 
