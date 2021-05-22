@@ -6,6 +6,8 @@ replace github.com/centrifugal/centrifuge => ../
 
 replace github.com/centrifugal/protocol => ../../protocol
 
+replace github.com/FZambia/tarantool => ../../../FZambia/tarantool
+
 require (
 	github.com/FZambia/tarantool v0.1.0
 	github.com/centrifugal/centrifuge v0.8.2
@@ -29,7 +31,7 @@ require (
 	github.com/prometheus/common v0.10.0 // indirect
 	github.com/prometheus/procfs v0.1.3 // indirect
 	github.com/stretchr/testify v1.7.0
-	github.com/vmihailenco/msgpack/v5 v5.1.1
+	github.com/vmihailenco/msgpack/v5 v5.3.1
 	golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83 // indirect
 	golang.org/x/oauth2 v0.0.0-20200107190931-bf48bf16ab8d
 	golang.org/x/sys v0.0.0-20210305230114-8fe3ee5dd75b // indirect

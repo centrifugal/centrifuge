@@ -1001,20 +1001,6 @@ func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := e.Publish("channel", rawData, PublishOptions{})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkRedisPublish_1Ch_Parallel(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisBroker(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	rawData := []byte(`{"bench": true}`)
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -1030,23 +1016,6 @@ func BenchmarkRedisPublish_1Ch_Parallel(b *testing.B) {
 const benchmarkNumDifferentChannels = 1000
 
 func BenchmarkRedisPublish_ManyCh(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisBroker(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	rawData := []byte(`{"bench": true}`)
-	j := 0
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
-		j++
-		_, err := e.Publish(channel, rawData, PublishOptions{})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkRedisPublish_ManyCh_Parallel(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1073,29 +1042,6 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 			e := newTestRedisBroker(b, node, tt.UseStreams, false)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
-				var err error
-				pos, err := e.Publish("channel", rawData, chOpts)
-				if err != nil {
-					b.Fatal(err)
-				}
-				if pos.Offset == 0 {
-					b.Fail()
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkRedisPublish_History_1Ch_Parallel(b *testing.B) {
-	for _, tt := range benchRedisTests {
-		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, false)
-			defer func() { _ = node.Shutdown(context.Background()) }()
-			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
 			b.SetParallelism(128)
 			b.ResetTimer()
@@ -1115,33 +1061,7 @@ func BenchmarkRedisPublish_History_1Ch_Parallel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisPublish_History_ManyCh(b *testing.B) {
-	for _, tt := range benchRedisTests {
-		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, false)
-			defer func() { _ = node.Shutdown(context.Background()) }()
-			rawData := []byte(`{"bench": true}`)
-			j := 0
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				j++
-				channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
-				chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
-				var err error
-				pos, err := e.Publish(channel, rawData, chOpts)
-				if err != nil {
-					b.Fatal(err)
-				}
-				if pos.Offset == 0 {
-					b.Fail()
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkRedisPub_History_ManyCh_Parallel(b *testing.B) {
+func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -1174,21 +1094,6 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	j := 0
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		j++
-		err := e.Subscribe("subscribe" + strconv.Itoa(j))
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkRedisSubscribe_Parallel(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisBroker(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
 	i := 0
 	b.SetParallelism(128)
 	b.ResetTimer()
@@ -1204,29 +1109,6 @@ func BenchmarkRedisSubscribe_Parallel(b *testing.B) {
 }
 
 func BenchmarkRedisHistory_1Ch(b *testing.B) {
-	for _, tt := range benchRedisTests {
-		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, false)
-			defer func() { _ = node.Shutdown(context.Background()) }()
-			rawData := []byte("{}")
-			for i := 0; i < 4; i++ {
-				_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
-			}
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_, _, err := e.History("channel", HistoryFilter{
-					Limit: -1,
-				})
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkRedisHistory_1Ch_Parallel(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -1251,7 +1133,7 @@ func BenchmarkRedisHistory_1Ch_Parallel(b *testing.B) {
 	}
 }
 
-func BenchmarkRedisRecover_1Ch_Parallel(b *testing.B) {
+func BenchmarkRedisRecover_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)

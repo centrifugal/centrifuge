@@ -250,19 +250,7 @@ func TestMemoryBrokerRecover(t *testing.T) {
 	require.Equal(t, 0, len(pubs))
 }
 
-func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
-	e := testMemoryBroker()
-	rawData := protocol.Raw(`{"bench": true}`)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := e.Publish("channel", rawData, PublishOptions{})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryPublish_1Ch(b *testing.B) {
 	e := testMemoryBroker()
 	rawData := protocol.Raw(`{"bench": true}`)
 	b.SetParallelism(128)
@@ -277,24 +265,7 @@ func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryPublish_History_OneChannel(b *testing.B) {
-	e := testMemoryBroker()
-	rawData := protocol.Raw(`{"bench": true}`)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 60 * time.Second}
-		var err error
-		streamTop, err := e.Publish("channel", rawData, chOpts)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if streamTop.Offset == 0 {
-			b.Fatal("zero offset")
-		}
-	}
-}
-
-func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryPublish_History_1Ch(b *testing.B) {
 	e := testMemoryBroker()
 	rawData := protocol.Raw(`{"bench": true}`)
 	chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 60 * time.Second}
@@ -314,25 +285,7 @@ func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryHistory_OneChannel(b *testing.B) {
-	e := testMemoryBroker()
-	rawData := protocol.Raw("{}")
-	for i := 0; i < 4; i++ {
-		_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _, err := e.History("channel", HistoryFilter{
-			Limit: -1,
-			Since: nil,
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryHistory_1Ch(b *testing.B) {
 	e := testMemoryBroker()
 	rawData := protocol.Raw("{}")
 	for i := 0; i < 4; i++ {
@@ -352,7 +305,7 @@ func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryRecover_OneChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryRecover_1Ch(b *testing.B) {
 	e := testMemoryBroker()
 	rawData := protocol.Raw("{}")
 	numMessages := 1000
