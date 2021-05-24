@@ -26,7 +26,7 @@ func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 func newTestConnectedClient(t *testing.T, n *Node, userID string) *Client {
 	client := newTestClient(t, n, userID)
 	connectClient(t, client)
-	require.True(t, len(n.hub.userConnections(userID)) > 0)
+	require.True(t, len(n.hub.UserConnections(userID)) > 0)
 	return client
 }
 
