@@ -472,7 +472,7 @@ func TestNode_pubDisconnect(t *testing.T) {
 	testBroker, _ := node.broker.(*TestBroker)
 	require.EqualValues(t, 1, testBroker.publishControlCount)
 
-	err := node.pubDisconnect("42", DisconnectForceNoReconnect, nil)
+	err := node.pubDisconnect("42", DisconnectForceNoReconnect, "", nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testBroker.publishControlCount)
 }

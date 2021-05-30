@@ -32,7 +32,7 @@ type subscribeState struct {
 // SyncPublication ...
 func (c *PubSubSync) SyncPublication(channel string, pub *protocol.Publication, syncedFn func()) {
 	if c.isInSubscribe(channel) {
-		// Client currently in process of subscribing to this channel. In this case we keep
+		// clientID currently in process of subscribing to this channel. In this case we keep
 		// publications in slice buffer. Publications from this temporary buffer will be sent in
 		// subscribe reply.
 		c.LockBuffer(channel)

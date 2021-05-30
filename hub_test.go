@@ -191,11 +191,11 @@ func TestHubDisconnect(t *testing.T) {
 	}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("1", DisconnectForceNoReconnect, nil)
+	err := n.hub.disconnect("1", DisconnectForceNoReconnect, "", nil)
 	require.NoError(t, err)
 
 	// Disconnect subscribed user.
-	err = n.hub.disconnect("42", DisconnectForceNoReconnect, nil)
+	err = n.hub.disconnect("42", DisconnectForceNoReconnect, "", nil)
 	require.NoError(t, err)
 	select {
 	case <-client.transport.(*testTransport).closeCh:
@@ -206,7 +206,7 @@ func TestHubDisconnect(t *testing.T) {
 	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
 
 	// Disconnect subscribed user with reconnect.
-	err = n.hub.disconnect("24", DisconnectForceReconnect, nil)
+	err = n.hub.disconnect("24", DisconnectForceReconnect, "", nil)
 	require.NoError(t, err)
 	select {
 	case <-clientWithReconnect.transport.(*testTransport).closeCh:
@@ -254,7 +254,54 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	whitelist := []string{clientToKeep.ID()}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("12", DisconnectConnectionLimit, whitelist)
+	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", whitelist)
+	require.NoError(t, err)
+
+	select {
+	case <-shouldBeClosed:
+		select {
+		case <-shouldNotBeClosed:
+			require.Fail(t, "client should not be disconnected")
+		case <-time.After(time.Second):
+			require.Len(t, n.hub.UserConnections("12"), 1)
+			require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
+		}
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	}
+}
+
+func TestHubDisconnect_ClientID(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+
+	client := newTestSubscribedClient(t, n, "12", "test_channel")
+	clientToKeep := newTestSubscribedClient(t, n, "12", "test_channel")
+
+	require.Len(t, n.hub.UserConnections("12"), 2)
+	require.Equal(t, 2, n.hub.NumSubscribers("test_channel"))
+
+	shouldBeClosed := make(chan struct{})
+	shouldNotBeClosed := make(chan struct{})
+
+	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		close(shouldBeClosed)
+	}
+
+	clientToKeep.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		close(shouldNotBeClosed)
+	}
+
+	clientToDisconnect := client.ID()
+
+	// Disconnect not existed user.
+	err := n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, nil)
 	require.NoError(t, err)
 
 	select {

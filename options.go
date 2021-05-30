@@ -142,6 +142,8 @@ type DisconnectOptions struct {
 	Disconnect *Disconnect
 	// ClientWhitelist contains client IDs to keep.
 	ClientWhitelist []string
+	// clientID to disconnect.
+	clientID string
 }
 
 // DisconnectOption is a type to represent various Disconnect options.
@@ -154,8 +156,15 @@ func WithDisconnect(disconnect *Disconnect) DisconnectOption {
 	}
 }
 
-// WithClientWhitelist allows to set ClientWhitelist.
-func WithClientWhitelist(whitelist []string) DisconnectOption {
+// WithDisconnectClient allows to set Client.
+func WithDisconnectClient(clientID string) DisconnectOption {
+	return func(opts *DisconnectOptions) {
+		opts.clientID = clientID
+	}
+}
+
+// WithDisconnectClientWhitelist allows to set ClientWhitelist.
+func WithDisconnectClientWhitelist(whitelist []string) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.ClientWhitelist = whitelist
 	}

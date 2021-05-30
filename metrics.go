@@ -378,7 +378,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Subsystem:  "client",
 		Name:       "command_duration_seconds",
 		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-		Help:       "Client command duration summary.",
+		Help:       "clientID command duration summary.",
 	}, []string{"method"})
 
 	recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{

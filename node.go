@@ -609,7 +609,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Whitelist)
+		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Whitelist)
 	case controlpb.MethodTypeSurveyRequest:
 		cmd, err := n.controlDecoder.DecodeSurveyRequest(params)
 		if err != nil {
@@ -877,13 +877,14 @@ func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) e
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from server.
-func (n *Node) pubDisconnect(user string, disconnect *Disconnect, whitelist []string) error {
+func (n *Node) pubDisconnect(user string, disconnect *Disconnect, clientID string, whitelist []string) error {
 	protoDisconnect := &controlpb.Disconnect{
 		User:      user,
 		Whitelist: whitelist,
 		Code:      disconnect.Code,
 		Reason:    disconnect.Reason,
 		Reconnect: disconnect.Reconnect,
+		Client:    clientID,
 	}
 	params, _ := n.controlEncoder.EncodeDisconnect(protoDisconnect)
 	cmd := &controlpb.Command{
@@ -1021,12 +1022,12 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 	if customDisconnect == nil {
 		customDisconnect = DisconnectForceNoReconnect
 	}
-	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.ClientWhitelist)
+	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.ClientWhitelist)
 	if err != nil {
 		return err
 	}
 	// Send disconnect control message to other nodes
-	return n.pubDisconnect(userID, customDisconnect, disconnectOpts.ClientWhitelist)
+	return n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.ClientWhitelist)
 }
 
 // addPresence proxies presence adding to PresenceManager.

@@ -44,7 +44,7 @@ func TestWithDisconnect(t *testing.T) {
 }
 
 func TestWithClientWhitelist(t *testing.T) {
-	opt := WithClientWhitelist([]string{"client"})
+	opt := WithDisconnectClientWhitelist([]string{"client"})
 	opts := &DisconnectOptions{}
 	opt(opts)
 	require.Equal(t, []string{"client"}, opts.ClientWhitelist)
@@ -74,6 +74,13 @@ func TestWithSubscribeData(t *testing.T) {
 func TestWithUnsubscribeClient(t *testing.T) {
 	opt := WithUnsubscribeClient("client")
 	opts := &UnsubscribeOptions{}
+	opt(opts)
+	require.Equal(t, "client", opts.clientID)
+}
+
+func TestWithDisconnectClient(t *testing.T) {
+	opt := WithDisconnectClient("client")
+	opts := &DisconnectOptions{}
 	opt(opts)
 	require.Equal(t, "client", opts.clientID)
 }

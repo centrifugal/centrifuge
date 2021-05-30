@@ -79,6 +79,7 @@ message Disconnect {
     uint32 code = 3;
     string reason = 4;
     bool reconnect = 5;
+    string client = 6;
 }
 
 message SurveyRequest {

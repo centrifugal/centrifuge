@@ -71,8 +71,8 @@ func (h *Hub) UserConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
 }
 
-func (h *Hub) disconnect(userID string, disconnect *Disconnect, whitelist []string) error {
-	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, whitelist)
+func (h *Hub) disconnect(userID string, disconnect *Disconnect, clientID string, whitelist []string) error {
+	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, whitelist)
 }
 
 func (h *Hub) unsubscribe(userID string, ch string, clientID string) error {
@@ -277,7 +277,7 @@ func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
 	return firstErr
 }
 
-func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
+func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID string, whitelist []string) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -286,6 +286,9 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []
 	var wg sync.WaitGroup
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
+			continue
+		}
+		if clientID != "" && c.ID() != clientID {
 			continue
 		}
 		wg.Add(1)

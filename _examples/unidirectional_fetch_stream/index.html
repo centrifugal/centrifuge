@@ -32,7 +32,6 @@
                         const reader = response.body.getReader();
                         return new ReadableStream({
                             start(controller) {
-                                return pump();
                                 function pump() {
                                     return reader.read().then(({ done, value }) => {
                                         // When no more data needs to be consumed, close the stream
@@ -52,9 +51,10 @@
                                                 ++streamPos
                                             }
                                         }
-                                        return pump();
+                                        pump();
                                     });
                                 }
+                                return pump();
                             }
                         });
                     })
