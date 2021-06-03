@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"sync"
 )
 
@@ -53,6 +54,11 @@ func (m *MemoryPresenceManager) Presence(ch string) (map[string]*ClientInfo, err
 // PresenceStats - see PresenceManager interface description.
 func (m *MemoryPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 	return m.presenceHub.getStats(ch)
+}
+
+// Close is noop for now.
+func (m *MemoryPresenceManager) Close(_ context.Context) error {
+	return nil
 }
 
 type presenceHub struct {

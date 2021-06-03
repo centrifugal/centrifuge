@@ -663,6 +663,32 @@ func TestNode_handleControl(t *testing.T) {
 
 		err := n.handleControl([]byte("random"))
 		require.EqualError(t, err, "unexpected EOF")
+
+		enc := controlproto.NewProtobufEncoder()
+
+		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Method: controlpb.MethodTypeSurveyRequest,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+
+		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
+			Method: controlpb.MethodTypeSurveyResponse,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+
+		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
+			Method: controlpb.MethodTypeNotification,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
 	})
 
 	t.Run("Node", func(t *testing.T) {
@@ -1021,6 +1047,20 @@ func TestNode_OnNotification_NoHandler(t *testing.T) {
 	require.Equal(t, errNotificationHandlerNotRegistered, err)
 }
 
+func TestNode_handleNotification_NoHandler(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	err := node.handleNotification("test", &controlpb.Notification{})
+	require.NoError(t, err)
+}
+
+func TestNode_handleSurveyRequest_NoHandler(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	err := node.handleSurveyRequest("test", &controlpb.SurveyRequest{})
+	require.NoError(t, err)
+}
+
 func TestErrors(t *testing.T) {
 	err := ErrorUnauthorized
 	protoErr := err.toProto()
@@ -1028,4 +1068,19 @@ func TestErrors(t *testing.T) {
 	err = ErrorUnknownChannel
 	errText := err.Error()
 	require.Equal(t, "102: unknown channel", errText)
+}
+
+func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	handler := &brokerEventHandler{node: node}
+	require.Panics(t, func() {
+		_ = handler.HandlePublication("test", nil, StreamPosition{})
+	})
+	require.Panics(t, func() {
+		_ = handler.HandleJoin("test", nil)
+	})
+	require.Panics(t, func() {
+		_ = handler.HandleLeave("test", nil)
+	})
 }
