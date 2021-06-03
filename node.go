@@ -1048,8 +1048,6 @@ func (n *Node) removePresence(ch string, uid string) error {
 	return n.presenceManager.RemovePresence(ch, uid)
 }
 
-const useSingleFlight = false
-
 var (
 	presenceGroup      singleflight.Group
 	presenceStatsGroup singleflight.Group
@@ -1075,7 +1073,7 @@ func (n *Node) Presence(ch string) (PresenceResult, error) {
 		return PresenceResult{}, ErrorNotAvailable
 	}
 	incActionCount("presence")
-	if useSingleFlight {
+	if n.config.UseSingleFlight {
 		result, err, _ := presenceGroup.Do(ch, func() (interface{}, error) {
 			return n.presence(ch)
 		})
@@ -1159,7 +1157,7 @@ func (n *Node) PresenceStats(ch string) (PresenceStatsResult, error) {
 		return PresenceStatsResult{}, ErrorNotAvailable
 	}
 	incActionCount("presence_stats")
-	if useSingleFlight {
+	if n.config.UseSingleFlight {
 		result, err, _ := presenceStatsGroup.Do(ch, func() (interface{}, error) {
 			return n.presenceStats(ch)
 		})
@@ -1198,7 +1196,7 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 	for _, opt := range opts {
 		opt(historyOpts)
 	}
-	if useSingleFlight {
+	if n.config.UseSingleFlight {
 		var builder strings.Builder
 		builder.WriteString("channel:")
 		builder.WriteString(ch)
