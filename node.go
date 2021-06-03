@@ -75,8 +75,6 @@ type Node struct {
 	surveyID       uint64
 
 	notificationHandler NotificationHandler
-
-	brokerEventHandler *brokerEventHandler
 }
 
 const (
@@ -144,8 +142,6 @@ func New(c Config) (*Node, error) {
 		}
 	}
 
-	n.brokerEventHandler = &brokerEventHandler{n}
-
 	return n, nil
 }
 
@@ -186,7 +182,7 @@ func (n *Node) Hub() *Hub {
 // Run performs node startup actions. At moment must be called once on start
 // after Broker set to Node.
 func (n *Node) Run() error {
-	if err := n.broker.Run(n.brokerEventHandler); err != nil {
+	if err := n.broker.Run(&brokerEventHandler{n}); err != nil {
 		return err
 	}
 	err := n.initMetrics()
@@ -642,7 +638,7 @@ func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition)
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastPublication(ch, pubToProto(pub), sp)
+	return n.hub.BroadcastPublication(ch, pub, sp)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -653,7 +649,7 @@ func (n *Node) handleJoin(ch string, info *ClientInfo) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastJoin(ch, &protocol.Join{Info: *infoToProto(info)})
+	return n.hub.broadcastJoin(ch, info)
 }
 
 // handleLeave handles leave messages - i.e. broadcasts it to
@@ -664,7 +660,7 @@ func (n *Node) handleLeave(ch string, info *ClientInfo) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastLeave(ch, &protocol.Leave{Info: *infoToProto(info)})
+	return n.hub.broadcastLeave(ch, info)
 }
 
 func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishResult, error) {
@@ -1305,15 +1301,6 @@ func (n *Node) OnConnecting(handler ConnectingHandler) {
 // application can start communicating with client.
 func (n *Node) OnConnect(handler ConnectHandler) {
 	n.clientEvents.connectHandler = handler
-}
-
-// BypassBroker allows bypassing publishing messages to Broker. Usually this is
-// not what you need since Broker delivers messages to all Nodes in a cluster and
-// maintains publication history in a channel with incremental offset. By calling
-// methods of BrokerEventHandler messages will only be sent to the current node
-// subscribers.
-func (n *Node) BypassBroker() BrokerEventHandler {
-	return n.brokerEventHandler
 }
 
 type brokerEventHandler struct {

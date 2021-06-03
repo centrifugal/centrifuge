@@ -1021,13 +1021,6 @@ func TestNode_OnNotification_NoHandler(t *testing.T) {
 	require.Equal(t, errNotificationHandlerNotRegistered, err)
 }
 
-func TestNode_BypassBroker(t *testing.T) {
-	node := defaultNodeNoHandlers()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	err := node.BypassBroker().HandlePublication("test", &Publication{}, StreamPosition{})
-	require.NoError(t, err)
-}
-
 func TestErrors(t *testing.T) {
 	err := ErrorUnauthorized
 	protoErr := err.toProto()
