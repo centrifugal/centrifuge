@@ -349,18 +349,14 @@ func TestNode_Info(t *testing.T) {
 func TestNode_handleJoin(t *testing.T) {
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
-	err := n.handleJoin("test", &protocol.Join{
-		Info: protocol.ClientInfo{},
-	})
+	err := n.handleJoin("test", &ClientInfo{})
 	require.NoError(t, err)
 }
 
 func TestNode_handleLeave(t *testing.T) {
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
-	err := n.handleLeave("test", &protocol.Leave{
-		Info: protocol.ClientInfo{},
-	})
+	err := n.handleLeave("test", &ClientInfo{})
 	require.NoError(t, err)
 }
 
@@ -1023,6 +1019,13 @@ func TestNode_OnNotification_NoHandler(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.Notify("notification", []byte(`notification`), "")
 	require.Equal(t, errNotificationHandlerNotRegistered, err)
+}
+
+func TestNode_BypassBroker(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	err := node.BypassBroker().HandlePublication("test", &Publication{}, StreamPosition{})
+	require.NoError(t, err)
 }
 
 func TestErrors(t *testing.T) {
