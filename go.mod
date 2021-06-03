@@ -2,7 +2,7 @@ module github.com/centrifugal/centrifuge
 
 go 1.12
 
-replace github.com/centrifugal/protocol => ../protocol
+replace github.com/centrifugal/protocol => ../fastprotocol
 
 require (
 	github.com/FZambia/eagle v0.0.1
@@ -16,5 +16,5 @@ require (
 	github.com/mna/redisc v1.1.7
 	github.com/prometheus/client_golang v1.6.0
 	github.com/stretchr/testify v1.7.0
-	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
+	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 )
