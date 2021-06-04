@@ -2160,10 +2160,6 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 		res.Positioned = true // recoverable subscriptions are automatically positioned.
 		if cmd.Recover {
 			cmdOffset := cmd.Offset
-			if cmd.Seq > 0 || cmd.Gen > 0 {
-				// Fallback to deprecated fields.
-				cmdOffset = recovery.PackUint64(cmd.Seq, cmd.Gen)
-			}
 
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
