@@ -8,7 +8,7 @@ import (
 
 func TestCommandProtoExtra(t *testing.T) {
 	msg := &Command{
-		UID:    "test",
+		Uid:    "test",
 		Method: MethodTypeDisconnect,
 		Params: Raw("{}"),
 	}
@@ -16,14 +16,14 @@ func TestCommandProtoExtra(t *testing.T) {
 	_, b := msg.Method.EnumDescriptor()
 	require.Equal(t, []int{0}, b)
 
-	require.Equal(t, "test", msg.GetUID())
+	require.Equal(t, "test", msg.GetUid())
 	require.Equal(t, MethodTypeDisconnect, msg.GetMethod())
 	require.NotZero(t, msg.String())
 }
 
 func TestNodeProtoExtra(t *testing.T) {
 	msg := &Node{
-		UID:         "test",
+		Uid:         "test",
 		Name:        "test name",
 		Version:     "v1.0.0",
 		NumChannels: 2,
@@ -37,7 +37,7 @@ func TestNodeProtoExtra(t *testing.T) {
 			},
 		},
 	}
-	require.Equal(t, "test", msg.GetUID())
+	require.Equal(t, "test", msg.GetUid())
 	require.Equal(t, "test name", msg.GetName())
 	require.Equal(t, "v1.0.0", msg.GetVersion())
 	require.Equal(t, uint32(2), msg.GetNumChannels())

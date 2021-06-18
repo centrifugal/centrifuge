@@ -13,7 +13,7 @@ func TestDecoder(t *testing.T) {
 	decoder := NewProtobufDecoder()
 
 	cmd := &controlpb.Command{
-		UID:    "test",
+		Uid:    "test",
 		Method: controlpb.MethodTypeDisconnect,
 		Params: controlpb.Raw("{}"),
 	}
@@ -26,7 +26,7 @@ func TestDecoder(t *testing.T) {
 	require.Equal(t, cmd, decodedCmd)
 
 	node := &controlpb.Node{
-		UID:         "test",
+		Uid:         "test",
 		Name:        "test name",
 		Version:     "v1.0.0",
 		NumChannels: 2,
@@ -84,7 +84,7 @@ func TestDecoder(t *testing.T) {
 	require.Equal(t, unsub, decodedUnsubscribe)
 
 	surveyRequest := &controlpb.SurveyRequest{
-		ID:   1,
+		Id:   1,
 		Op:   "test",
 		Data: nil,
 	}
@@ -97,7 +97,7 @@ func TestDecoder(t *testing.T) {
 	require.Equal(t, surveyRequest, decodedSurveyRequest)
 
 	surveyResponse := &controlpb.SurveyResponse{
-		ID:   1,
+		Id:   1,
 		Code: 1,
 		Data: nil,
 	}

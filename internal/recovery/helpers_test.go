@@ -40,7 +40,7 @@ func TestMergePublicationsNoBuffered(t *testing.T) {
 		{Offset: 1},
 		{Offset: 2},
 	}
-	pubs, ok := MergePublications(recoveredPubs, nil, false)
+	pubs, ok := MergePublications(recoveredPubs, nil)
 	require.True(t, ok)
 	require.Len(t, pubs, 2)
 }
@@ -53,28 +53,9 @@ func TestMergePublicationsBuffered(t *testing.T) {
 	bufferedPubs := []*protocol.Publication{
 		{Offset: 3},
 	}
-	pubs, ok := MergePublications(recoveredPubs, bufferedPubs, false)
+	pubs, ok := MergePublications(recoveredPubs, bufferedPubs)
 	require.True(t, ok)
 	require.Len(t, pubs, 3)
-}
-
-func TestMergePublicationsOrder(t *testing.T) {
-	recoveredPubs := []*protocol.Publication{
-		{Offset: 1},
-		{Offset: 2},
-	}
-	bufferedPubs := []*protocol.Publication{
-		{Offset: 3},
-	}
-	pubs, ok := MergePublications(recoveredPubs, bufferedPubs, true)
-	require.True(t, ok)
-	require.Len(t, pubs, 3)
-	require.True(t, pubs[0].Offset > pubs[1].Offset)
-
-	pubs, ok = MergePublications(recoveredPubs, bufferedPubs, false)
-	require.True(t, ok)
-	require.Len(t, pubs, 3)
-	require.True(t, pubs[0].Offset < pubs[1].Offset)
 }
 
 func TestUnpackUint64(t *testing.T) {

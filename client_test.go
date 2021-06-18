@@ -348,7 +348,7 @@ func TestClientSubscribe(t *testing.T) {
 	require.Equal(t, 1, len(rwWrapper.replies))
 	require.Nil(t, rwWrapper.replies[0].Error)
 	res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
-	require.Empty(t, res.Seq)
+	require.Empty(t, res.Offset)
 	require.False(t, res.Recovered)
 	require.Empty(t, res.Publications)
 	require.Equal(t, 1, len(client.Channels()))
@@ -903,7 +903,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	connectClient(t, client)
 
 	result := subscribeClient(t, client, "test")
-	require.Equal(t, uint32(0), result.Seq)
+	require.Equal(t, uint32(0), result.Offset)
 
 	for i := 0; i < 10; i++ {
 		_, _ = node.Publish("test", []byte("{}"), WithHistory(10, time.Minute))

@@ -357,12 +357,10 @@ var recoverTests = []recoverTest{
 
 type recoverTestChannel struct {
 	ChannelPrefix string
-	IsSeq         bool
 }
 
 var recoverTestChannels = []recoverTestChannel{
-	{"test_recovery_memory_offset_", false},
-	{"test_recovery_memory_seq_", true},
+	{"test_recovery_memory_offset_"},
 }
 
 func TestMemoryClientSubscribeRecover(t *testing.T) {
@@ -400,11 +398,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 					Channel: channel,
 					Recover: true,
 					Epoch:   streamTop.Epoch,
-				}
-				if recoverTestChannel.IsSeq {
-					subscribeCmd.Seq = uint32(tt.SinceOffset)
-				} else {
-					subscribeCmd.Offset = tt.SinceOffset
+					Offset:  tt.SinceOffset,
 				}
 
 				rwWrapper := testReplyWriterWrapper()
