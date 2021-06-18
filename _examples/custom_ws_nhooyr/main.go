@@ -235,7 +235,7 @@ func (t *customWebsocketTransport) Write(message []byte) error {
 	}
 }
 
-// Write ...
+// WriteMany ...
 func (t *customWebsocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:

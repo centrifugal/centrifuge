@@ -71,7 +71,6 @@ func (t *customWebsocketTransport) read() ([]byte, bool, error) {
 }
 
 // Write ...
-// Write ...
 func (t *customWebsocketTransport) Write(message []byte) error {
 	select {
 	case <-t.closeCh:
@@ -92,6 +91,7 @@ func (t *customWebsocketTransport) Write(message []byte) error {
 	}
 }
 
+// WriteMany ...
 func (t *customWebsocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
