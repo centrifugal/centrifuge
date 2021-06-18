@@ -903,7 +903,7 @@ func TestClientSubscribeLast(t *testing.T) {
 	connectClient(t, client)
 
 	result := subscribeClient(t, client, "test")
-	require.Equal(t, uint32(0), result.Offset)
+	require.Equal(t, uint64(0), result.Offset)
 
 	for i := 0; i < 10; i++ {
 		_, _ = node.Publish("test", []byte("{}"), WithHistory(10, time.Minute))
