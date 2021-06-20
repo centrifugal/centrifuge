@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/centrifugal/protocol"
 
@@ -104,9 +103,5 @@ func TestSockjsHandler(t *testing.T) {
 		}
 	}()
 
-	select {
-	case <-doneCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for closing done channel")
-	}
+	waitWithTimeout(t, doneCh)
 }

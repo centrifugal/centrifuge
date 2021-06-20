@@ -1025,6 +1025,30 @@ func TestNode_OnNotification_NoHandler(t *testing.T) {
 	require.Equal(t, errNotificationHandlerNotRegistered, err)
 }
 
+func TestNode_OnTransportWrite(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnTransportWrite(func(client *Client, event TransportWriteEvent) bool {
+		if event.IsPush {
+			close(done)
+		}
+		return false
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
 func TestErrors(t *testing.T) {
 	err := ErrorUnauthorized
 	protoErr := err.toProto()
@@ -1032,4 +1056,56 @@ func TestErrors(t *testing.T) {
 	err = ErrorUnknownChannel
 	errText := err.Error()
 	require.Equal(t, "102: unknown channel", errText)
+}
+
+func TestSingleFlightHistory(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	node.config.UseSingleFlight = true
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	result, err := node.History("test", WithLimit(1), WithSince(&StreamPosition{
+		Offset: 0,
+		Epoch:  "",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 0)
+	_, _ = node.Publish("test", []byte("{}"), WithHistory(10, 60*time.Second))
+	result, err = node.History("test", WithLimit(1), WithSince(&StreamPosition{
+		Offset: 0,
+		Epoch:  "",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+}
+
+func TestSingleFlightPresence(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	node.config.UseSingleFlight = true
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{
+					Presence: true,
+				},
+			}, nil)
+		})
+	})
+
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	result, err := node.Presence("test")
+	require.NoError(t, err)
+	require.Len(t, result.Presence, 0)
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	result, err = node.Presence("test")
+	require.NoError(t, err)
+	require.Len(t, result.Presence, 1)
+
+	stats, err := node.PresenceStats("test")
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumClients)
+	require.Equal(t, 1, stats.NumUsers)
 }

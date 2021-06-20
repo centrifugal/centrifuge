@@ -326,12 +326,10 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	var protoType = ProtocolTypeJSON
 
 	subProtocol := conn.Subprotocol()
-	if subProtocol != "" {
-		if subProtocol == "centrifuge-protobuf" {
-			protoType = ProtocolTypeProtobuf
-		}
+	if subProtocol == "centrifuge-protobuf" {
+		protoType = ProtocolTypeProtobuf
 	} else {
-		// This is deprecated way to get a protocol type.
+		// This is a deprecated way to get a protocol type.
 		if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
 			protoType = ProtocolTypeProtobuf
 		}

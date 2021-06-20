@@ -41,6 +41,61 @@ func TestWebsocketHandler(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 }
 
+func TestWebsocketHandlerSubprotocol(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, event.Transport.Protocol(), ProtocolTypeProtobuf)
+		close(done)
+		return ConnectReply{}, nil
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(node, WebsocketConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	dialer := websocket.DefaultDialer
+	dialer.Subprotocols = []string{"centrifuge-protobuf"}
+	conn, resp, err := dialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	err = conn.WriteMessage(websocket.BinaryMessage, getConnectCommandProtobuf(t))
+	require.NoError(t, err)
+	waitWithTimeout(t, done)
+}
+
+func getConnectCommandProtobuf(t *testing.T) []byte {
+	connectRequest := &protocol.ConnectRequest{}
+	paramsEncoder := protocol.NewProtobufParamsEncoder()
+	rawConnect, err := paramsEncoder.Encode(connectRequest)
+	require.NoError(t, err)
+	encoder := protocol.NewProtobufCommandEncoder()
+	cmd, err := encoder.Encode(&protocol.Command{
+		Id:     1,
+		Method: protocol.Command_CONNECT,
+		Params: rawConnect,
+	})
+	require.NoError(t, err)
+	return cmd
+}
+
+func waitWithTimeout(t *testing.T, ch chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(3 * time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
 func TestWebsocketHandlerProtobuf(t *testing.T) {
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
@@ -56,7 +111,7 @@ func TestWebsocketHandlerProtobuf(t *testing.T) {
 	defer server.Close()
 
 	url := "ws" + server.URL[4:]
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf&encoding=binary", nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
