@@ -59,7 +59,10 @@ func TestWebsocketHandlerSubprotocol(t *testing.T) {
 	defer server.Close()
 
 	url := "ws" + server.URL[4:]
-	dialer := websocket.DefaultDialer
+	dialer := &websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: 45 * time.Second,
+	}
 	dialer.Subprotocols = []string{"centrifuge-protobuf"}
 	conn, resp, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
