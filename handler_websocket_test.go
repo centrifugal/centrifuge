@@ -75,6 +75,100 @@ func TestWebsocketHandlerSubprotocol(t *testing.T) {
 	waitWithTimeout(t, done)
 }
 
+func TestWebsocketTransportWrite(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, event.Transport.Protocol(), ProtocolTypeProtobuf)
+		return ConnectReply{
+			Credentials: &Credentials{UserID: "test"},
+		}, nil
+	})
+
+	node.OnConnect(func(client *Client) {
+		require.NoError(t, client.transport.Write([]byte("1")))
+		close(done)
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(node, WebsocketConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	dialer := &websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: 45 * time.Second,
+	}
+	dialer.Subprotocols = []string{"centrifuge-protobuf"}
+	conn, resp, err := dialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	err = conn.WriteMessage(websocket.BinaryMessage, getConnectCommandProtobuf(t))
+	require.NoError(t, err)
+	waitWithTimeout(t, done)
+
+	msgType, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, msgType)
+	l, _ := binary.Uvarint(msg[0:])
+	require.Equal(t, uint64(1), l)
+}
+
+func TestWebsocketTransportWriteMany(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, event.Transport.Protocol(), ProtocolTypeProtobuf)
+		return ConnectReply{
+			Credentials: &Credentials{UserID: "test"},
+		}, nil
+	})
+
+	node.OnConnect(func(client *Client) {
+		require.NoError(t, client.transport.WriteMany([]byte("11"), []byte("2")))
+		close(done)
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(node, WebsocketConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	dialer := &websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: 45 * time.Second,
+	}
+	dialer.Subprotocols = []string{"centrifuge-protobuf"}
+	conn, resp, err := dialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	err = conn.WriteMessage(websocket.BinaryMessage, getConnectCommandProtobuf(t))
+	require.NoError(t, err)
+	waitWithTimeout(t, done)
+
+	msgType, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, msgType)
+	l1, n := binary.Uvarint(msg[0:])
+	require.Equal(t, uint64(2), l1)
+	l2, _ := binary.Uvarint(msg[n+int(l1):])
+	require.Equal(t, uint64(1), l2)
+}
+
 func getConnectCommandProtobuf(t *testing.T) []byte {
 	connectRequest := &protocol.ConnectRequest{}
 	paramsEncoder := protocol.NewProtobufParamsEncoder()
