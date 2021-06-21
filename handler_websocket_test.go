@@ -79,18 +79,13 @@ func TestWebsocketTransportWrite(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	done := make(chan struct{})
-
 	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		require.Equal(t, event.Transport.Protocol(), ProtocolTypeProtobuf)
-		return ConnectReply{
-			Credentials: &Credentials{UserID: "test"},
-		}, nil
-	})
-
-	node.OnConnect(func(client *Client) {
-		require.NoError(t, client.transport.Write([]byte("1")))
-		close(done)
+		transport := event.Transport.(Transport)
+		// Write to transport directly - this is only valid for tests, in normal situation
+		// we write over client methods.
+		require.NoError(t, transport.Write([]byte("hello")))
+		return ConnectReply{}, DisconnectForceNoReconnect
 	})
 
 	mux := http.NewServeMux()
@@ -112,31 +107,25 @@ func TestWebsocketTransportWrite(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	err = conn.WriteMessage(websocket.BinaryMessage, getConnectCommandProtobuf(t))
 	require.NoError(t, err)
-	waitWithTimeout(t, done)
 
 	msgType, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, websocket.BinaryMessage, msgType)
 	l, _ := binary.Uvarint(msg[0:])
-	require.Equal(t, uint64(1), l)
+	require.Equal(t, uint64(5), l)
 }
 
 func TestWebsocketTransportWriteMany(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	done := make(chan struct{})
-
 	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		require.Equal(t, event.Transport.Protocol(), ProtocolTypeProtobuf)
-		return ConnectReply{
-			Credentials: &Credentials{UserID: "test"},
-		}, nil
-	})
-
-	node.OnConnect(func(client *Client) {
-		require.NoError(t, client.transport.WriteMany([]byte("11"), []byte("2")))
-		close(done)
+		transport := event.Transport.(Transport)
+		// Write to transport directly - this is only valid for tests, in normal situation
+		// we write over client methods.
+		require.NoError(t, transport.WriteMany([]byte("11"), []byte("2")))
+		return ConnectReply{}, DisconnectForceNoReconnect
 	})
 
 	mux := http.NewServeMux()
@@ -158,7 +147,6 @@ func TestWebsocketTransportWriteMany(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	err = conn.WriteMessage(websocket.BinaryMessage, getConnectCommandProtobuf(t))
 	require.NoError(t, err)
-	waitWithTimeout(t, done)
 
 	msgType, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
