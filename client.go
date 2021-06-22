@@ -704,10 +704,10 @@ func (c *Client) Unsubscribe(ch string) error {
 	if err != nil {
 		return err
 	}
-	return c.sendUnsub(ch)
+	return c.sendUnsubscribe(ch)
 }
 
-func (c *Client) sendUnsub(ch string) error {
+func (c *Client) sendUnsubscribe(ch string) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagUnsubscribe) {
 		return nil
 	}
@@ -2232,7 +2232,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	res.Publications = recoveredPubs
 
 	if !serverSide {
-		// WriteMany subscription reply only if initiated by client.
+		// Write subscription reply only if initiated by client.
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeSubscribeResult(res)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))
