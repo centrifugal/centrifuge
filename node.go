@@ -182,8 +182,7 @@ func (n *Node) Hub() *Hub {
 // Run performs node startup actions. At moment must be called once on start
 // after Broker set to Node.
 func (n *Node) Run() error {
-	eventHandler := &brokerEventHandler{n}
-	if err := n.broker.Run(eventHandler); err != nil {
+	if err := n.broker.Run(&brokerEventHandler{n}); err != nil {
 		return err
 	}
 	err := n.initMetrics()
@@ -632,36 +631,36 @@ func (n *Node) handleControl(data []byte) error {
 // handlePublication handles messages published into channel and
 // coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *protocol.Publication, sp StreamPosition) error {
+func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition) error {
 	incMessagesReceived("publication")
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastPublication(ch, pub, sp)
+	return n.hub.BroadcastPublication(ch, pub, sp)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleJoin(ch string, join *protocol.Join) error {
+func (n *Node) handleJoin(ch string, info *ClientInfo) error {
 	incMessagesReceived("join")
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastJoin(ch, join)
+	return n.hub.broadcastJoin(ch, info)
 }
 
 // handleLeave handles leave messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
-func (n *Node) handleLeave(ch string, leave *protocol.Leave) error {
+func (n *Node) handleLeave(ch string, info *ClientInfo) error {
 	incMessagesReceived("leave")
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.broadcastLeave(ch, leave)
+	return n.hub.broadcastLeave(ch, info)
 }
 
 func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishResult, error) {
@@ -1311,25 +1310,25 @@ type brokerEventHandler struct {
 // HandlePublication coming from Broker.
 func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
 	if pub == nil {
-		panic("nil Publication received, this should never happen")
+		panic("nil Publication received, this must never happen")
 	}
-	return h.node.handlePublication(ch, pubToProto(pub), sp)
+	return h.node.handlePublication(ch, pub, sp)
 }
 
 // HandleJoin coming from Broker.
 func (h *brokerEventHandler) HandleJoin(ch string, info *ClientInfo) error {
 	if info == nil {
-		panic("nil join info received, this should never happen")
+		panic("nil join ClientInfo received, this must never happen")
 	}
-	return h.node.handleJoin(ch, &protocol.Join{Info: *infoToProto(info)})
+	return h.node.handleJoin(ch, info)
 }
 
 // HandleLeave coming from Broker.
 func (h *brokerEventHandler) HandleLeave(ch string, info *ClientInfo) error {
 	if info == nil {
-		panic("nil leave info received, this should never happen")
+		panic("nil leave ClientInfo received, this must never happen")
 	}
-	return h.node.handleLeave(ch, &protocol.Leave{Info: *infoToProto(info)})
+	return h.node.handleLeave(ch, info)
 }
 
 // HandleControl coming from Broker.

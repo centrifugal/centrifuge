@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"container/heap"
+	"context"
 	"sync"
 	"time"
 
@@ -67,6 +68,11 @@ func NewMemoryBroker(n *Node, c MemoryBrokerConfig) (*MemoryBroker, error) {
 func (b *MemoryBroker) Run(h BrokerEventHandler) error {
 	b.eventHandler = h
 	b.historyHub.runCleanups()
+	return nil
+}
+
+// Close is noop for now.
+func (b *MemoryBroker) Close(_ context.Context) error {
 	return nil
 }
 

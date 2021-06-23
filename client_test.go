@@ -565,7 +565,7 @@ func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
 	}), rwWrapper.rw)
 	require.NoError(t, err)
 
-	err = node.handlePublication("test", &protocol.Publication{
+	err = node.handlePublication("test", &Publication{
 		Offset: offset,
 	}, StreamPosition{offset, epoch})
 	require.NoError(t, err)
