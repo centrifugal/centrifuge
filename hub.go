@@ -92,18 +92,22 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
 	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
 }
 
-// broadcastPublication sends message to all clients subscribed on channel.
-func (h *Hub) broadcastPublication(ch string, pub *protocol.Publication, sp StreamPosition) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pub, sp)
+// BroadcastPublication sends message to all clients subscribed on a channel on the current Node.
+// Usually this is NOT what you need since in most cases you should use Node.Publish method which
+// uses a Broker to deliver publications to all Nodes in a cluster and maintains publication history
+// in a channel with incremental offset. By calling BroadcastPublication messages will only be sent
+// to the current node subscribers without any defined offset semantics.
+func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pubToProto(pub), sp)
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
-func (h *Hub) broadcastJoin(ch string, join *protocol.Join) error {
-	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, join)
+func (h *Hub) broadcastJoin(ch string, info *ClientInfo) error {
+	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: *infoToProto(info)})
 }
 
-func (h *Hub) broadcastLeave(ch string, leave *protocol.Leave) error {
-	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, leave)
+func (h *Hub) broadcastLeave(ch string, info *ClientInfo) error {
+	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: *infoToProto(info)})
 }
 
 // NumSubscribers returns number of current subscribers for a given channel.

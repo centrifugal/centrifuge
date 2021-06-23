@@ -338,17 +338,17 @@ func TestHubBroadcastPublication(t *testing.T) {
 			transport.protoType = tc.protocolType
 
 			// Broadcast to not existed channel.
-			err := n.hub.broadcastPublication(
+			err := n.hub.BroadcastPublication(
 				"not_test_channel",
-				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
 				StreamPosition{},
 			)
 			require.NoError(t, err)
 
 			// Broadcast to existed channel.
-			err = n.hub.broadcastPublication(
+			err = n.hub.BroadcastPublication(
 				"test_channel",
-				&protocol.Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
 				StreamPosition{},
 			)
 			require.NoError(t, err)
@@ -382,15 +382,11 @@ func TestHubBroadcastJoin(t *testing.T) {
 			transport.protoType = tc.protocolType
 
 			// Broadcast to not existed channel.
-			err := n.hub.broadcastJoin("not_test_channel", &protocol.Join{
-				Info: protocol.ClientInfo{Client: "broadcast_client"},
-			})
+			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
 
 			// Broadcast to existed channel.
-			err = n.hub.broadcastJoin("test_channel", &protocol.Join{
-				Info: protocol.ClientInfo{Client: "broadcast_client"},
-			})
+			err = n.hub.broadcastJoin("test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
 			select {
 			case data := <-transport.sink:
@@ -422,15 +418,11 @@ func TestHubBroadcastLeave(t *testing.T) {
 			transport.protoType = tc.protocolType
 
 			// Broadcast to not existed channel.
-			err := n.hub.broadcastLeave("not_test_channel", &protocol.Leave{
-				Info: protocol.ClientInfo{Client: "broadcast_client"},
-			})
+			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
 
 			// Broadcast to existed channel.
-			err = n.hub.broadcastLeave("test_channel", &protocol.Leave{
-				Info: protocol.ClientInfo{Client: "broadcast_client"},
-			})
+			err = n.hub.broadcastLeave("test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
 			select {
 			case data := <-transport.sink:
@@ -582,7 +574,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 		}
 	}
 
-	pub := &protocol.Publication{
+	pub := &Publication{
 		Data: []byte(`{"input": "test"}`),
 	}
 	streamPosition := StreamPosition{}
@@ -596,7 +588,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_ = n.hub.broadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
+				_ = n.hub.BroadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
 			}()
 			_, _ = n.hub.addSub(channels[i%numChannels], clients[i%numClients])
 			wg.Wait()
@@ -615,7 +607,7 @@ var broadcastBenches = []struct {
 // BenchmarkHub_MassiveBroadcast allows estimating time to broadcast
 // a single message to many subscribers inside one channel.
 func BenchmarkHub_MassiveBroadcast(b *testing.B) {
-	pub := &protocol.Publication{Data: []byte(`{"input": "test"}`)}
+	pub := &Publication{Data: []byte(`{"input": "test"}`)}
 	streamPosition := StreamPosition{}
 
 	for _, tt := range broadcastBenches {
@@ -659,7 +651,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 						}
 					}
 				}()
-				_ = n.hub.broadcastPublication(channels[i%numChannels], pub, streamPosition)
+				_ = n.hub.BroadcastPublication(channels[i%numChannels], pub, streamPosition)
 				wg.Wait()
 			}
 		})
