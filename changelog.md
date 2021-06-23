@@ -1,3 +1,9 @@
+v0.17.1
+=======
+
+* Possibility to bypass broker when publishing - see [#198](https://github.com/centrifugal/centrifuge/pull/198)
+* Added more tests
+
 v0.17.0
 =======
 
