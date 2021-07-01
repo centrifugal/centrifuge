@@ -1168,9 +1168,11 @@ func TestNode_OnNodeInfoSend(t *testing.T) {
 	}
 	done := make(chan struct{})
 
-	n.OnNodeInfoSend(func() []byte {
+	n.OnNodeInfoSend(func() NodeInfoSendReply {
 		close(done)
-		return []byte("{}")
+		return NodeInfoSendReply{
+			Data: []byte("{}"),
+		}
 	})
 
 	err = n.Run()
