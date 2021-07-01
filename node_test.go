@@ -1160,3 +1160,29 @@ func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 		_ = handler.HandleLeave("test", nil)
 	})
 }
+
+func TestNode_OnNodeInfoSend(t *testing.T) {
+	n, err := New(DefaultConfig)
+	if err != nil {
+		panic(err)
+	}
+	done := make(chan struct{})
+
+	n.OnNodeInfoSend(func() []byte {
+		close(done)
+		return []byte("{}")
+	})
+
+	err = n.Run()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+
+	result, err := n.Info()
+	require.NoError(t, err)
+	require.Equal(t, []byte("{}"), result.Nodes[0].Data)
+}

@@ -333,3 +333,17 @@ type TransportWriteEvent struct {
 // false from a handler. The main purpose of this handler is not a message
 // filtering based on data content but rather tracing and throttling stuff.
 type TransportWriteHandler func(*Client, TransportWriteEvent) bool
+
+// NodeInfoSendReply can modify sending Node control frame in some ways.
+type NodeInfoSendReply struct {
+	// Data allows setting an arbitrary data to the control node frame which is
+	// published by each Node periodically so it will be available in the
+	// result of Node.Info call for the current Node description. Keep this
+	// data reasonably small in size.
+	Data []byte
+}
+
+// NodeInfoSendHandler called every time the control node frame is published
+// and allows modifying Node control frame sending. Currently attaching an
+// arbitrary data to it. See NodeInfoSendReply.
+type NodeInfoSendHandler func() NodeInfoSendReply

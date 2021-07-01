@@ -949,7 +949,9 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	write := func(rep *protocol.Reply) error {
 		rep.Id = cmd.Id
 		if rep.Error != nil {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
+			if c.node.LogEnabled(LogLevelInfo) {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
+			}
 			incReplyError(cmd.Method, rep.Error.Code)
 		}
 

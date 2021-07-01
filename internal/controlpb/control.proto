@@ -41,6 +41,7 @@ message Node {
     uint32 num_channels = 6;
     uint32 uptime = 7;
     Metrics metrics = 8;
+    bytes data = 9;
 }
 
 message Metrics {

@@ -79,6 +79,7 @@ type Node struct {
 
 	notificationHandler   NotificationHandler
 	transportWriteHandler TransportWriteHandler
+	nodeInfoSendHandler   NodeInfoSendHandler
 }
 
 const (
@@ -524,6 +525,7 @@ type NodeInfo struct {
 	NumChannels uint32
 	Uptime      uint32
 	Metrics     *Metrics
+	Data        []byte
 }
 
 // Info returns aggregated stats from all nodes.
@@ -539,6 +541,7 @@ func (n *Node) Info() (Info, error) {
 			NumUsers:    nd.NumUsers,
 			NumChannels: nd.NumChannels,
 			Uptime:      nd.Uptime,
+			Data:        nd.Data,
 		}
 		if nd.Metrics != nil {
 			info.Metrics = &Metrics{
@@ -792,6 +795,11 @@ func (n *Node) getMetrics(metrics eagle.Metrics) *controlpb.Metrics {
 // pubNode sends control message to all nodes - this message
 // contains information about current node.
 func (n *Node) pubNode(nodeID string) error {
+	var data []byte
+	if n.nodeInfoSendHandler != nil {
+		reply := n.nodeInfoSendHandler()
+		data = reply.Data
+	}
 	n.mu.RLock()
 	node := &controlpb.Node{
 		Uid:         n.uid,
@@ -801,6 +809,7 @@ func (n *Node) pubNode(nodeID string) error {
 		NumUsers:    uint32(n.hub.NumUsers()),
 		NumChannels: uint32(n.hub.NumChannels()),
 		Uptime:      uint32(time.Now().Unix() - n.startedAt),
+		Data:        data,
 	}
 
 	n.metricsMu.Lock()
@@ -1294,6 +1303,7 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 			node.NumClients = info.NumClients
 			node.NumUsers = info.NumUsers
 			node.Uptime = info.Uptime
+			node.Data = info.Data
 			r.nodes[info.Uid] = node
 		}
 	} else {
@@ -1347,6 +1357,11 @@ func (n *Node) OnNotification(handler NotificationHandler) {
 // OnTransportWrite allows setting TransportWriteHandler. This should be done before Node.Run called.
 func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
 	n.transportWriteHandler = handler
+}
+
+// OnNodeInfoSend allows setting NodeInfoSendHandler. This should be done before Node.Run called.
+func (n *Node) OnNodeInfoSend(handler NodeInfoSendHandler) {
+	n.nodeInfoSendHandler = handler
 }
 
 // eventHub allows binding client event handlers.
