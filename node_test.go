@@ -1176,6 +1176,7 @@ func TestNode_OnNodeInfoSend(t *testing.T) {
 	})
 
 	err = n.Run()
+	require.NoError(t, err)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
 	select {
