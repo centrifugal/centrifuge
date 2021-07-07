@@ -961,6 +961,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
 			return encodeErr
 		}
+		c.trace("-->", replyData)
 		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData, IsPush: false})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
