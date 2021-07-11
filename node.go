@@ -1184,8 +1184,9 @@ type HistoryResult struct {
 
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 	pubs, streamTop, err := n.broker.History(ch, HistoryFilter{
-		Limit: opts.Limit,
-		Since: opts.Since,
+		Limit:   opts.Limit,
+		Since:   opts.Since,
+		Reverse: opts.Reverse,
 	})
 	if err != nil {
 		return HistoryResult{}, err
@@ -1216,6 +1217,8 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 		}
 		builder.WriteString(",limit:")
 		builder.WriteString(strconv.Itoa(historyOpts.Limit))
+		builder.WriteString(",reverse:")
+		builder.WriteString(strconv.FormatBool(historyOpts.Reverse))
 		key := builder.String()
 
 		result, err, _ := historyGroup.Do(key, func() (interface{}, error) {

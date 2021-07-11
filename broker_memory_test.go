@@ -123,11 +123,11 @@ func TestMemoryHistoryHub(t *testing.T) {
 	// test that stream data cleaned up by periodic task
 	h.RLock()
 	require.Equal(t, 2, len(h.streams))
-	items, top, err := h.streams[ch1].Get(0, -1)
+	items, top, err := h.streams[ch1].Get(0, -1, false)
 	require.NoError(t, err)
 	require.Nil(t, items)
 	require.NotZero(t, top)
-	items, top, err = h.streams[ch2].Get(0, -1)
+	items, top, err = h.streams[ch2].Get(0, -1, false)
 	require.NoError(t, err)
 	require.Nil(t, items)
 	require.NotZero(t, top)
@@ -435,7 +435,7 @@ func (it *historyIterationTest) prepareHistoryIteration(t testing.TB, node *Node
 	startPosition := historyResult.StreamPosition
 
 	for i := 1; i <= numMessages; i++ {
-		_, err := node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Minute))
+		_, err := node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Hour))
 		require.NoError(t, err)
 	}
 
@@ -468,7 +468,55 @@ func (it *historyIterationTest) testHistoryIteration(t testing.TB, node *Node, s
 		n += len(res.Publications)
 	}
 	if n != it.NumMessages {
-		t.Fail()
+		t.Fatal("num messages mismatch")
+	}
+}
+
+func (it *historyIterationTest) testHistoryIterationReverse(t testing.TB, node *Node, startPosition StreamPosition) {
+	var (
+		n         int
+		offset    = startPosition.Offset
+		epoch     = startPosition.Epoch
+		iterateBy = it.IterateBy
+	)
+	var since *StreamPosition
+outer:
+	for {
+		res, err := node.History(
+			historyIterationChannel,
+			WithSince(since),
+			WithLimit(iterateBy),
+			WithReverse(true),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Publications) == 0 {
+			break
+		}
+		var checkOffset uint64
+	loop:
+		for _, pub := range res.Publications {
+			n += 1
+			println(pub.Offset)
+			if pub.Offset == startPosition.Offset+1 {
+				break outer
+			}
+			if checkOffset == 0 {
+				checkOffset = pub.Offset
+				continue loop
+			}
+			if pub.Offset > checkOffset {
+				t.Fatal("incorrect order")
+			}
+			checkOffset = pub.Offset
+		}
+		earliestPub := res.Publications[len(res.Publications)-1]
+		offset = earliestPub.Offset
+		since = &StreamPosition{Offset: offset, Epoch: epoch}
+	}
+	if n != it.NumMessages {
+		t.Fatalf("num messages mismatch, expected %d, got %d", it.NumMessages, n)
 	}
 }
 
@@ -477,6 +525,13 @@ func TestMemoryBrokerHistoryIteration(t *testing.T) {
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(t, e.node)
 	it.testHistoryIteration(t, e.node, startPosition)
+}
+
+func TestMemoryBrokerHistoryIterationReverse(t *testing.T) {
+	e := testMemoryBroker()
+	it := historyIterationTest{10000, 100}
+	startPosition := it.prepareHistoryIteration(t, e.node)
+	it.testHistoryIterationReverse(t, e.node, startPosition)
 }
 
 func BenchmarkMemoryBrokerHistoryIteration(b *testing.B) {

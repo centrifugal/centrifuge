@@ -60,7 +60,7 @@ func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStre
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
 		Prefix:         prefix,
 		UseLists:       !useStreams,
-		HistoryMetaTTL: 300 * time.Second,
+		HistoryMetaTTL: 3600 * time.Second,
 		Shards:         []*RedisShard{s},
 	})
 	if err != nil {
@@ -1257,6 +1257,22 @@ func TestRedisHistoryIteration(t *testing.T) {
 			it := historyIterationTest{10000, 100}
 			startPosition := it.prepareHistoryIteration(t, e.node)
 			it.testHistoryIteration(t, e.node, startPosition)
+		})
+	}
+}
+
+func TestRedisHistoryIterationReverse(t *testing.T) {
+	for _, tt := range redisTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			if !tt.UseStreams || tt.UseCluster {
+				t.Skip()
+			}
+			node := testNode(t)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			it := historyIterationTest{10000, 100}
+			startPosition := it.prepareHistoryIteration(t, e.node)
+			it.testHistoryIterationReverse(t, e.node, startPosition)
 		})
 	}
 }
