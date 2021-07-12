@@ -475,7 +475,6 @@ func (it *historyIterationTest) testHistoryIteration(t testing.TB, node *Node, s
 func (it *historyIterationTest) testHistoryIterationReverse(t testing.TB, node *Node, startPosition StreamPosition) {
 	var (
 		n         int
-		offset    = startPosition.Offset
 		epoch     = startPosition.Epoch
 		iterateBy = it.IterateBy
 	)
@@ -511,8 +510,7 @@ outer:
 			checkOffset = pub.Offset
 		}
 		earliestPub := res.Publications[len(res.Publications)-1]
-		offset = earliestPub.Offset
-		since = &StreamPosition{Offset: offset, Epoch: epoch}
+		since = &StreamPosition{Offset: earliestPub.Offset, Epoch: epoch}
 	}
 	if n != it.NumMessages {
 		t.Fatalf("num messages mismatch, expected %d, got %d", it.NumMessages, n)
