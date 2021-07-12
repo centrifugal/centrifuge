@@ -93,6 +93,7 @@ type RedisBrokerConfig struct {
 	// compatibility since STREAM seems superior. If you have a use case
 	// where you need to turn on this option in new setup - please share,
 	// otherwise LIST support can be removed at some point in the future.
+	// Iteration over history in reversed order not supported with lists.
 	UseLists bool
 
 	// PubSubNumWorkers sets how many PUB/SUB message processing workers will

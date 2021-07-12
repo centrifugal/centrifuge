@@ -498,7 +498,6 @@ outer:
 	loop:
 		for _, pub := range res.Publications {
 			n += 1
-			println(pub.Offset)
 			if pub.Offset == startPosition.Offset+1 {
 				break outer
 			}

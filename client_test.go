@@ -1696,7 +1696,12 @@ func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
 	client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
 		require.NotNil(t, e.Filter.Since)
 		require.Equal(t, 2, e.Filter.Limit)
-		cb(HistoryReply{}, nil)
+		result, err := node.History(e.Channel, WithLimit(e.Filter.Limit), WithSince(e.Filter.Since), WithReverse(e.Filter.Reverse))
+		if err != nil {
+			cb(HistoryReply{}, err)
+			return
+		}
+		cb(HistoryReply{Result: &result}, nil)
 	})
 
 	for i := 0; i < 10; i++ {
@@ -2109,6 +2114,18 @@ func TestClientCloseExpired(t *testing.T) {
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 	require.True(t, client.status == statusClosed)
+}
+
+func TestClientInfo(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", Info: []byte("info")})
+	client, _ := newClient(newCtx, node, transport)
+	connectClient(t, client)
+	require.Equal(t, []byte("info"), client.Info())
 }
 
 func TestClientConnectExpiredError(t *testing.T) {

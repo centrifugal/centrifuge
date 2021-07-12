@@ -114,7 +114,7 @@ func (s *Stream) Get(offset uint64, limit int, reverse bool) ([]Item, uint64, er
 		}
 	}
 
-	if el == nil {
+	if el == nil || limit == 0 {
 		return nil, s.top, nil
 	}
 

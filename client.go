@@ -638,6 +638,15 @@ func (c *Client) UserID() string {
 	return c.user
 }
 
+// Info returns connection info.
+func (c *Client) Info() []byte {
+	c.mu.Lock()
+	info := make([]byte, len(c.info))
+	copy(info, c.info)
+	c.mu.Unlock()
+	return info
+}
+
 // Transport returns client connection transport information.
 func (c *Client) Transport() TransportInfo {
 	return c.transport
@@ -1602,7 +1611,7 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		var offset uint64
 		var epoch string
 		if reply.Result == nil {
-			result, err := c.node.History(event.Channel, WithLimit(event.Filter.Limit), WithSince(event.Filter.Since))
+			result, err := c.node.History(event.Channel, WithLimit(event.Filter.Limit), WithSince(event.Filter.Since), WithReverse(event.Filter.Reverse))
 			if err != nil {
 				c.logWriteInternalErrorFlush(rw, err, "error getting history")
 				return
@@ -1614,17 +1623,6 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 			pubs = reply.Result.Publications
 			offset = reply.Result.Offset
 			epoch = reply.Result.Epoch
-		}
-
-		if event.Filter.Since != nil {
-			sinceEpoch := event.Filter.Since.Epoch
-			sinceOffset := event.Filter.Since.Offset
-			epochOK := sinceEpoch == "" || sinceEpoch == epoch
-			offsetOK := event.Filter.Limit <= 0 || sinceOffset == offset || (sinceOffset < offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset+1))
-			if !epochOK || !offsetOK {
-				c.writeError(rw, ErrorUnrecoverablePosition)
-				return
-			}
 		}
 
 		protoPubs := make([]*protocol.Publication, 0, len(pubs))
@@ -2442,6 +2440,10 @@ func (c *Client) logDisconnectBadRequestWithError(err error, message string) *Di
 }
 
 func (c *Client) logWriteInternalErrorFlush(rw *replyWriter, err error, message string) {
+	if clientErr, ok := err.(*Error); ok {
+		c.writeError(rw, clientErr)
+		return
+	}
 	c.node.logger.log(newLogEntry(LogLevelError, message, map[string]interface{}{"error": err.Error()}))
 	c.writeError(rw, ErrorInternal)
 }
