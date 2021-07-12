@@ -93,6 +93,7 @@ type RedisBrokerConfig struct {
 	// compatibility since STREAM seems superior. If you have a use case
 	// where you need to turn on this option in new setup - please share,
 	// otherwise LIST support can be removed at some point in the future.
+	// Iteration over history in reversed order not supported with lists.
 	UseLists bool
 
 	// PubSubNumWorkers sets how many PUB/SUB message processing workers will
@@ -122,7 +123,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		shards:                 config.Shards,
 		config:                 config,
 		sharding:               len(config.Shards) > 1,
-		historyListScript:      redis.NewScript(2, historySource),
+		historyListScript:      redis.NewScript(2, historyListSource),
 		historyStreamScript:    redis.NewScript(2, historyStreamSource),
 		addHistoryListScript:   redis.NewScript(2, addHistorySource),
 		addHistoryStreamScript: redis.NewScript(2, addHistoryStreamSource),
@@ -215,7 +216,7 @@ return {offset, epoch}
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
 	// ARGV[3] - list meta hash key expiration time
-	historySource = `
+	historyListSource = `
 redis.replicate_commands()
 local offset = redis.call("hget", KEYS[2], "s")
 local epoch
@@ -242,7 +243,8 @@ return {offset, epoch, pubs}
 	// ARGV[1] - include publications into response
 	// ARGV[2] - offset
 	// ARGV[3] - limit
-	// ARGV[4] - stream meta hash key expiration time
+	// ARGV[4] - reverse
+	// ARGV[5] - stream meta hash key expiration time
 	historyStreamSource = `
 redis.replicate_commands()
 local offset = redis.call("hget", KEYS[2], "s")
@@ -254,15 +256,31 @@ if epoch == false or epoch == nil then
   epoch = redis.call('time')[1]
   redis.call("hset", KEYS[2], "e", epoch)
 end
-if ARGV[4] ~= '0' then
-	redis.call("expire", KEYS[2], ARGV[4])
+if ARGV[5] ~= '0' then
+	redis.call("expire", KEYS[2], ARGV[5])
 end
 local pubs = nil
 if ARGV[1] ~= "0" then
   if ARGV[3] ~= "0" then
-    pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
+	if ARGV[4] == '0' then
+    	pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
+	else
+		local getOffset = offset
+		if tonumber(ARGV[2]) ~= 0 then
+			getOffset = tonumber(ARGV[2])
+		end
+		pubs = redis.call("xrevrange", KEYS[1], getOffset, "-", "COUNT", ARGV[3])
+	end
   else
-	pubs = redis.call("xrange", KEYS[1], ARGV[2], "+")
+	if ARGV[4] == '0' then
+		pubs = redis.call("xrange", KEYS[1], ARGV[2], "+")
+	else
+		local getOffset = offset
+		if tonumber(ARGV[2]) ~= 0 then
+			getOffset = tonumber(ARGV[2])
+		end
+		pubs = redis.call("xrevrange", KEYS[1], getOffset, "-")
+	end
   end
 end
 return {offset, epoch, pubs}
@@ -1021,7 +1039,11 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 	var includePubs = true
 	var offset uint64
 	if filter.Since != nil {
-		offset = filter.Since.Offset + 1
+		if filter.Reverse {
+			offset = filter.Since.Offset - 1
+		} else {
+			offset = filter.Since.Offset + 1
+		}
 	}
 	var limit int
 	if filter.Limit == 0 {
@@ -1033,7 +1055,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 
 	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
-	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, historyMetaTTLSeconds})
+	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, filter.Reverse, historyMetaTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err

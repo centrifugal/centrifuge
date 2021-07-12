@@ -1183,12 +1183,30 @@ type HistoryResult struct {
 }
 
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
+	if opts.Reverse && opts.Since != nil && opts.Since.Offset == 0 {
+		return HistoryResult{}, ErrorUnrecoverablePosition
+	}
 	pubs, streamTop, err := n.broker.History(ch, HistoryFilter{
-		Limit: opts.Limit,
-		Since: opts.Since,
+		Limit:   opts.Limit,
+		Since:   opts.Since,
+		Reverse: opts.Reverse,
 	})
 	if err != nil {
 		return HistoryResult{}, err
+	}
+	if opts.Since != nil {
+		sinceEpoch := opts.Since.Epoch
+		sinceOffset := opts.Since.Offset
+		epochOK := sinceEpoch == "" || sinceEpoch == streamTop.Epoch
+		var offsetOK bool
+		if !opts.Reverse {
+			offsetOK = opts.Limit <= 0 || sinceOffset == streamTop.Offset || (sinceOffset < streamTop.Offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset+1))
+		} else {
+			offsetOK = opts.Limit <= 0 || sinceOffset == streamTop.Offset || (sinceOffset < streamTop.Offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset-1))
+		}
+		if !epochOK || !offsetOK {
+			return HistoryResult{}, ErrorUnrecoverablePosition
+		}
 	}
 	return HistoryResult{
 		StreamPosition: streamTop,
@@ -1216,6 +1234,8 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 		}
 		builder.WriteString(",limit:")
 		builder.WriteString(strconv.Itoa(historyOpts.Limit))
+		builder.WriteString(",reverse:")
+		builder.WriteString(strconv.FormatBool(historyOpts.Reverse))
 		key := builder.String()
 
 		result, err, _ := historyGroup.Do(key, func() (interface{}, error) {

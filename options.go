@@ -180,6 +180,8 @@ type HistoryOptions struct {
 	// Broker should not return any publications in result.
 	// Positive integer does what it should.
 	Limit int
+	// Reverse direction
+	Reverse bool
 }
 
 // HistoryOption is a type to represent various History options.
@@ -199,5 +201,12 @@ func WithLimit(limit int) HistoryOption {
 func WithSince(sp *StreamPosition) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Since = sp
+	}
+}
+
+// WithSince allows to set HistoryOptions.Since option.
+func WithReverse(reverse bool) HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.Reverse = reverse
 	}
 }

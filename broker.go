@@ -50,6 +50,8 @@ type HistoryFilter struct {
 	// 0 means that caller only interested in current stream top position so
 	// Broker should not return any publications.
 	Limit int
+	// Reverse direction.
+	Reverse bool
 }
 
 // StreamPosition contains fields to describe position in stream.
