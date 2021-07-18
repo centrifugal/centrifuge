@@ -149,3 +149,27 @@ func TestStreamOffset(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), items[0].Offset)
 }
+
+func TestStreamOffsetReverseNonExistingOffset(t *testing.T) {
+	s := New()
+	const streamSize = 2
+	for i := 0; i < 10; i++ {
+		_, err := s.Add([]byte("elem"), streamSize)
+		require.NoError(t, err)
+	}
+	items, _, err := s.Get(4, true, 1, true)
+	require.NoError(t, err)
+	require.Len(t, items, 0)
+}
+
+func TestStreamNoLimitWithMiddle(t *testing.T) {
+	s := New()
+	const streamSize = 10
+	for i := 0; i < streamSize; i++ {
+		_, err := s.Add([]byte("elem"), streamSize)
+		require.NoError(t, err)
+	}
+	items, _, err := s.Get(5, true, -1, false)
+	require.NoError(t, err)
+	require.Len(t, items, 6)
+}

@@ -97,17 +97,9 @@ func (s *Stream) Get(offset uint64, useOffset bool, limit int, reverse bool) ([]
 
 	var el *list.Element
 	if useOffset {
-		if offset > 0 {
-			var ok bool
-			el, ok = s.index[offset]
-			if !ok {
-				if reverse {
-					el = nil
-				} else {
-					el = s.list.Front()
-				}
-			}
-		} else {
+		var ok bool
+		el, ok = s.index[offset]
+		if !ok {
 			if reverse {
 				el = nil
 			} else {
