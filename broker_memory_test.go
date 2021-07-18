@@ -123,11 +123,11 @@ func TestMemoryHistoryHub(t *testing.T) {
 	// test that stream data cleaned up by periodic task
 	h.RLock()
 	require.Equal(t, 2, len(h.streams))
-	items, top, err := h.streams[ch1].Get(0, -1, false)
+	items, top, err := h.streams[ch1].Get(0, false, -1, false)
 	require.NoError(t, err)
 	require.Nil(t, items)
 	require.NotZero(t, top)
-	items, top, err = h.streams[ch2].Get(0, -1, false)
+	items, top, err = h.streams[ch2].Get(0, false, -1, false)
 	require.NoError(t, err)
 	require.Nil(t, items)
 	require.NotZero(t, top)
@@ -490,9 +490,6 @@ outer:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(res.Publications) == 0 {
-			break
-		}
 		var checkOffset uint64
 	loop:
 		for _, pub := range res.Publications {
@@ -508,6 +505,9 @@ outer:
 				t.Fatal("incorrect order")
 			}
 			checkOffset = pub.Offset
+		}
+		if len(res.Publications) == 0 || len(res.Publications) < iterateBy {
+			break
 		}
 		earliestPub := res.Publications[len(res.Publications)-1]
 		since = &StreamPosition{Offset: earliestPub.Offset, Epoch: epoch}

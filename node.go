@@ -1196,15 +1196,8 @@ func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 	}
 	if opts.Since != nil {
 		sinceEpoch := opts.Since.Epoch
-		sinceOffset := opts.Since.Offset
 		epochOK := sinceEpoch == "" || sinceEpoch == streamTop.Epoch
-		var offsetOK bool
-		if !opts.Reverse {
-			offsetOK = opts.Limit <= 0 || sinceOffset == streamTop.Offset || (sinceOffset < streamTop.Offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset+1))
-		} else {
-			offsetOK = opts.Limit <= 0 || sinceOffset == streamTop.Offset || (sinceOffset < streamTop.Offset && (len(pubs) > 0 && pubs[0].Offset == sinceOffset-1))
-		}
-		if !epochOK || !offsetOK {
+		if !epochOK {
 			return HistoryResult{}, ErrorUnrecoverablePosition
 		}
 	}

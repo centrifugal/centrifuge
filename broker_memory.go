@@ -321,7 +321,7 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 		if filter.Limit == 0 {
 			return nil, getPosition(stream), nil
 		}
-		items, _, err := stream.Get(0, filter.Limit, filter.Reverse)
+		items, _, err := stream.Get(0, false, filter.Limit, filter.Reverse)
 		if err != nil {
 			return nil, StreamPosition{}, err
 		}
@@ -348,7 +348,7 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 		streamOffset = since.Offset - 1
 	}
 
-	items, _, err := stream.Get(streamOffset, filter.Limit, filter.Reverse)
+	items, _, err := stream.Get(streamOffset, true, filter.Limit, filter.Reverse)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}

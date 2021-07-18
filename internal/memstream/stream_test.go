@@ -21,38 +21,38 @@ func TestStream(t *testing.T) {
 	require.Equal(t, 5, s.list.Len())
 	require.Equal(t, 5, len(s.index))
 
-	items, streamTop, err := s.Get(5, 3, false)
+	items, streamTop, err := s.Get(5, true, 3, false)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(5))
 	require.Equal(t, []Item{{5, []byte("5")}}, items)
 
-	items, streamTop, err = s.Get(5, 2, true)
+	items, streamTop, err = s.Get(5, true, 2, true)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(5))
 	require.Equal(t, []Item{{5, []byte("5")}, {4, []byte("4")}}, items)
 
-	items, streamTop, err = s.Get(5, 0, false)
+	items, streamTop, err = s.Get(5, true, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(5))
 	require.Nil(t, items)
 
-	items, streamTop, err = s.Get(5, 0, true)
+	items, streamTop, err = s.Get(5, true, 0, true)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(5))
 	require.Nil(t, items)
 
-	items, streamTop, err = s.Get(6, 2, false)
+	items, streamTop, err = s.Get(6, true, 2, false)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(5))
 	require.Nil(t, items)
 
-	items, streamTop, err = s.Get(0, 2, true)
+	items, streamTop, err = s.Get(0, false, 2, true)
 	// Returns all items.
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(5))
 	require.Len(t, items, 2)
 
-	items, streamTop, err = s.Get(1, 2, false)
+	items, streamTop, err = s.Get(1, true, 2, false)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(5))
 	require.Equal(t, []Item{{1, []byte("1")}, {2, []byte("2")}}, items)
@@ -60,29 +60,29 @@ func TestStream(t *testing.T) {
 	_, err = s.Add([]byte("6"), streamSize)
 	require.NoError(t, err)
 
-	items, streamTop, err = s.Get(1, 2, false)
+	items, streamTop, err = s.Get(1, true, 2, false)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(6))
 	require.Equal(t, []Item{{2, []byte("2")}, {3, []byte("3")}}, items)
 
-	items, streamTop, err = s.Get(2, 2, false)
+	items, streamTop, err = s.Get(2, true, 2, false)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(6))
 	require.Equal(t, []Item{{2, []byte("2")}, {3, []byte("3")}}, items)
 
-	items, streamTop, err = s.Get(5, 2, false)
+	items, streamTop, err = s.Get(5, true, 2, false)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(6))
 	require.Equal(t, []Item{{5, []byte("5")}, {6, []byte("6")}}, items)
 
-	items, streamTop, err = s.Get(5, 2, true)
+	items, streamTop, err = s.Get(5, true, 2, true)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(6))
 	require.Equal(t, []Item{{5, []byte("5")}, {4, []byte("4")}}, items)
 
 	_, err = s.Add([]byte("7"), streamSize)
 	require.NoError(t, err)
-	_, streamTop, err = s.Get(5, 2, false)
+	_, streamTop, err = s.Get(5, true, 2, false)
 	require.NoError(t, err)
 	require.Equal(t, streamTop, uint64(7))
 	require.Equal(t, 5, len(s.index))
@@ -97,13 +97,13 @@ func TestStream(t *testing.T) {
 
 func TestStreamGetAll(t *testing.T) {
 	s := New()
-	items, streamTop, err := s.Get(0, 0, false)
+	items, streamTop, err := s.Get(0, false, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), streamTop)
 	require.Nil(t, items)
 	_, err = s.Add([]byte("1"), 2)
 	require.NoError(t, err)
-	items, _, err = s.Get(0, 200, false)
+	items, _, err = s.Get(0, false, 200, false)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 }
@@ -139,13 +139,13 @@ func TestStreamOffset(t *testing.T) {
 		_, err := s.Add([]byte("elem"), streamSize)
 		require.NoError(t, err)
 	}
-	items, _, err := s.Get(0, 1, false)
+	items, _, err := s.Get(0, true, 1, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), items[0].Offset)
-	items, _, err = s.Get(1, 1, false)
+	items, _, err = s.Get(1, true, 1, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), items[0].Offset)
-	items, _, err = s.Get(2, 1, false)
+	items, _, err = s.Get(2, true, 1, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), items[0].Offset)
 }

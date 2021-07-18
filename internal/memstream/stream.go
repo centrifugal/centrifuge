@@ -90,18 +90,26 @@ func (s *Stream) Clear() {
 
 // Get items since provided position.
 // If seq is zero then elements since current first element in stream will be returned.
-func (s *Stream) Get(offset uint64, limit int, reverse bool) ([]Item, uint64, error) {
-	if offset >= s.top+1 {
+func (s *Stream) Get(offset uint64, useOffset bool, limit int, reverse bool) ([]Item, uint64, error) {
+	if useOffset && offset >= s.top+1 {
 		return nil, s.top, nil
 	}
 
 	var el *list.Element
-	if offset > 0 {
-		var ok bool
-		el, ok = s.index[offset]
-		if !ok {
+	if useOffset {
+		if offset > 0 {
+			var ok bool
+			el, ok = s.index[offset]
+			if !ok {
+				if reverse {
+					el = nil
+				} else {
+					el = s.list.Front()
+				}
+			}
+		} else {
 			if reverse {
-				el = s.list.Back()
+				el = nil
 			} else {
 				el = s.list.Front()
 			}
