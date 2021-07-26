@@ -340,7 +340,7 @@ func (c *Client) encodeDisconnect(d *Disconnect) (*prepared.Reply, error) {
 	}, c.transport.Protocol().toProto()), nil
 }
 
-func (c *Client) encodeConn(res *protocol.ConnectResult) (*prepared.Reply, error) {
+func (c *Client) encodeConnectPush(res *protocol.ConnectResult) ([]byte, error) {
 	p := &protocol.Connect{
 		Version: res.GetVersion(),
 		Client:  res.GetClient(),
@@ -352,14 +352,7 @@ func (c *Client) encodeConn(res *protocol.ConnectResult) (*prepared.Reply, error
 	if err != nil {
 		return nil, err
 	}
-	result, err := pushEncoder.Encode(clientproto.NewConnectPush(data))
-	if err != nil {
-		return nil, err
-	}
-
-	return prepared.NewReply(&protocol.Reply{
-		Result: result,
-	}, c.transport.Protocol().toProto()), nil
+	return pushEncoder.Encode(clientproto.NewConnectPush(data))
 }
 
 func hasFlag(flags, flag uint64) bool {
@@ -367,16 +360,26 @@ func hasFlag(flags, flag uint64) bool {
 }
 
 func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) error {
-	res, err := c.connectCmd(connectRequest, nil)
+	write := func(rep *protocol.Reply) error {
+		if hasFlag(c.transport.DisabledPushFlags(), PushFlagConnect) {
+			return nil
+		}
+		c.trace("-->", rep.Result)
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: rep.Result, IsPush: false})
+		if disconnect != nil {
+			if c.node.logger.enabled(LogLevelDebug) {
+				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after connect push", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			}
+			go func() { _ = c.close(disconnect) }()
+		}
+		return disconnect
+	}
+
+	rw := &replyWriter{write, func() {}}
+
+	_, err := c.connectCmd(connectRequest, rw)
 	if err != nil {
 		return err
-	}
-	if !hasFlag(c.transport.DisabledPushFlags(), PushFlagConnect) {
-		reply, err := c.encodeConn(res)
-		if err != nil {
-			return err
-		}
-		_ = c.transportEnqueue(reply)
 	}
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
@@ -1925,7 +1928,16 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 		res.Subs = subs
 	}
 
-	if rw != nil {
+	if c.transport.Unidirectional() {
+		connectPushBytes, err := c.encodeConnectPush(res)
+		if err != nil {
+			c.unlockServerSideSubscriptions(subCtxMap)
+			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
+			return nil, DisconnectServerError
+		}
+		_ = writeReply(rw, &protocol.Reply{Result: connectPushBytes})
+		defer rw.done()
+	} else {
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeConnectResult(res)
 		if err != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
