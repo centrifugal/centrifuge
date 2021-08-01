@@ -143,6 +143,16 @@ func (h *Hub) NumUsers() int {
 	return total
 }
 
+// NumSubscriptions returns a total number of subscriptions.
+func (h *Hub) NumSubscriptions() int {
+	var total int
+	for i := 0; i < numHubShards; i++ {
+		// users do not overlap among shards.
+		total += h.subShards[i].NumSubscriptions()
+	}
+	return total
+}
+
 // NumChannels returns a total number of different channels.
 func (h *Hub) NumChannels() int {
 	var total int
@@ -619,6 +629,17 @@ func (h *subShard) NumChannels() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.subs)
+}
+
+// NumSubscriptions returns total number of subscriptions.
+func (h *subShard) NumSubscriptions() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	total := 0
+	for _, subscriptions := range h.subs {
+		total += len(subscriptions)
+	}
+	return total
 }
 
 // Channels returns a slice of all active channels.

@@ -262,6 +262,7 @@ func (n *Node) NotifyShutdown() chan struct{} {
 func (n *Node) updateGauges() {
 	setNumClients(float64(n.hub.NumClients()))
 	setNumUsers(float64(n.hub.NumUsers()))
+	setNumSubscriptions(float64(n.hub.NumSubscriptions()))
 	setNumChannels(float64(n.hub.NumChannels()))
 	setNumNodes(float64(len(n.nodes.list())))
 	version := n.config.Version
@@ -522,6 +523,7 @@ type NodeInfo struct {
 	Version     string
 	NumClients  uint32
 	NumUsers    uint32
+	NumSubs     uint32
 	NumChannels uint32
 	Uptime      uint32
 	Metrics     *Metrics
@@ -539,6 +541,7 @@ func (n *Node) Info() (Info, error) {
 			Version:     nd.Version,
 			NumClients:  nd.NumClients,
 			NumUsers:    nd.NumUsers,
+			NumSubs:     nd.NumSubs,
 			NumChannels: nd.NumChannels,
 			Uptime:      nd.Uptime,
 			Data:        nd.Data,
@@ -808,6 +811,7 @@ func (n *Node) pubNode(nodeID string) error {
 		NumClients:  uint32(n.hub.NumClients()),
 		NumUsers:    uint32(n.hub.NumUsers()),
 		NumChannels: uint32(n.hub.NumChannels()),
+		NumSubs:     uint32(n.hub.NumSubscriptions()),
 		Uptime:      uint32(time.Now().Unix() - n.startedAt),
 		Data:        data,
 	}
@@ -1315,6 +1319,7 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 			node.NumChannels = info.NumChannels
 			node.NumClients = info.NumClients
 			node.NumUsers = info.NumUsers
+			node.NumSubs = info.NumSubs
 			node.Uptime = info.Uptime
 			node.Data = info.Data
 			r.nodes[info.Uid] = node
