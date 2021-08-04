@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -92,13 +93,19 @@ func main() {
 	}
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		return centrifuge.ConnectReply{
-			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				exampleChannel: {
-					Recover:  true,
-					Position: true,
-				},
+		subs := map[string]centrifuge.SubscribeOptions{
+			exampleChannel: {
+				Recover:  true,
+				Position: true,
 			},
+		}
+		for _, ch := range e.Channels {
+			if ch == "test1" || ch == "test2" {
+				subs[ch] = centrifuge.SubscribeOptions{}
+			}
+		}
+		return centrifuge.ConnectReply{
+			Subscriptions: subs,
 		}, nil
 	})
 
@@ -168,7 +175,20 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 			return
 		}
 		flusher.Flush()
-		if err = c.Connect(centrifuge.ConnectRequest{}); err != nil {
+
+		var channels []string
+		channelsParam := req.URL.Query().Get("channels")
+		if channelsParam != "" {
+			err := json.Unmarshal([]byte(channelsParam), &channels)
+			if err != nil {
+				log.Printf("channels param error: %v", err)
+				return
+			}
+		}
+
+		if err = c.Connect(centrifuge.ConnectRequest{
+			Channels: channels,
+		}); err != nil {
 			log.Printf("error connect client: %v", err)
 			return
 		}

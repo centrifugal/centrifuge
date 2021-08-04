@@ -15,7 +15,11 @@
 
             function connect() {
                 reconnect = true;
-                const eventSource = new EventSource('http://' + window.location.host + '/connection/eventsource');
+
+                let url = new URL('http://localhost:8000/connection/eventsource');
+                url.searchParams.append("channels", JSON.stringify(['test1', 'test2']));
+
+                const eventSource = new EventSource(url);
 
                 eventSource.onopen = function (e) {
                     numFailures = 0;
