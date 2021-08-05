@@ -1798,7 +1798,6 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 			Token:     cmd.Token,
 			Name:      cmd.Name,
 			Version:   cmd.Version,
-			Channels:  cmd.Channels,
 			Transport: c.transport,
 		}
 		if len(cmd.Subs) > 0 {
