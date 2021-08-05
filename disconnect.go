@@ -154,4 +154,11 @@ var (
 		Reason:    "connection limit",
 		Reconnect: false,
 	}
+	// DisconnectChannelLimit can be sent when client connection exceeds a
+	// configured channel limit.
+	DisconnectChannelLimit = &Disconnect{
+		Code:      3013,
+		Reason:    "channel limit",
+		Reconnect: false,
+	}
 )

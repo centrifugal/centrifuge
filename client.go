@@ -193,7 +193,7 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 		Version: r.Version,
 	}
 	if len(r.Subs) > 0 {
-		subs := make(map[string]*protocol.SubscribeRequest)
+		subs := make(map[string]*protocol.SubscribeRequest, len(r.Subs))
 		for k, v := range r.Subs {
 			subs[k] = &protocol.SubscribeRequest{
 				Recover: v.Recover,
@@ -311,13 +311,38 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	return client, func() error { return client.close(nil) }, nil
 }
 
+func extractUnidirectionalDisconnect(err error) *Disconnect {
+	if err == nil {
+		return nil
+	}
+	var d *Disconnect
+	switch t := err.(type) {
+	case *Disconnect:
+		d = t
+	case *Error:
+		switch t.Code {
+		case ErrorExpired.Code:
+			d = DisconnectExpired
+		default:
+			d = DisconnectServerError
+		}
+	default:
+		d = DisconnectServerError
+	}
+	return d
+}
+
 // Connect supposed to be called from unidirectional transport layer to pass
 // initial information about connection and thus initiate Node.OnConnecting
 // event. Bidirectional transport initiate connecting workflow automatically
 // since client passes Connect command upon successful connection establishment
 // with a server.
-func (c *Client) Connect(req ConnectRequest) error {
-	return c.unidirectionalConnect(req.toProto())
+func (c *Client) Connect(req ConnectRequest) {
+	err := c.unidirectionalConnect(req.toProto())
+	if err != nil {
+		d := extractUnidirectionalDisconnect(err)
+		go func() { _ = c.close(d) }()
+	}
 }
 
 func (c *Client) encodeDisconnect(d *Disconnect) (*prepared.Reply, error) {
@@ -1757,6 +1782,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 	config := c.node.config
 	version := config.Version
 	userConnectionLimit := config.UserConnectionLimit
+	channelLimit := config.ClientChannelLimit
 
 	var (
 		credentials       *Credentials
@@ -1807,6 +1833,10 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 				subscriptions[ch] = opts
 			}
 		}
+	}
+
+	if channelLimit > 0 && len(subscriptions) > channelLimit {
+		return nil, DisconnectChannelLimit
 	}
 
 	if credentials == nil {
@@ -1983,6 +2013,15 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if channel == "" {
 		return fmt.Errorf("channel is empty")
 	}
+	channelLimit := c.node.config.ClientChannelLimit
+	c.mu.RLock()
+	numChannels := len(c.channels)
+	c.mu.RUnlock()
+	if channelLimit > 0 && numChannels >= channelLimit {
+		go func() { _ = c.close(DisconnectChannelLimit) }()
+		return nil
+	}
+
 	subCmd := &protocol.SubscribeRequest{
 		Channel: channel,
 	}
@@ -2043,16 +2082,11 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 
 	if channelMaxLength > 0 && len(channel) > channelMaxLength {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long", map[string]interface{}{"max": channelMaxLength, "channel": channel, "user": c.user, "client": c.uid}))
-		return ErrorLimitExceeded, nil
+		return ErrorBadRequest, nil
 	}
 
 	c.mu.RLock()
-	var numChannels int
-	for _, chCtx := range c.channels {
-		if !channelHasFlag(chCtx.flags, flagServerSide) {
-			numChannels += 1
-		}
-	}
+	numChannels := len(c.channels)
 	_, ok := c.channels[channel]
 	c.mu.RUnlock()
 	if ok {

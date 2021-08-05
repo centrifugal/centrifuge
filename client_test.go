@@ -613,7 +613,7 @@ func TestClientSubscribeValidateErrors(t *testing.T) {
 	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test2_very_long_channel_name",
 	}), rwWrapper.rw)
-	require.Equal(t, ErrorLimitExceeded, err)
+	require.Equal(t, ErrorBadRequest, err)
 
 	subscribeClient(t, client, "test1")
 
@@ -824,7 +824,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 			if !tt.Unidirectional {
 				connectClient(t, client)
 			} else {
-				err := client.Connect(ConnectRequest{
+				client.Connect(ConnectRequest{
 					Subs: map[string]SubscribeRequest{
 						"server-side-1": {
 							Recover: true,
@@ -833,7 +833,6 @@ func TestServerSideSubscriptions(t *testing.T) {
 						},
 					},
 				})
-				require.NoError(t, err)
 			}
 
 			_ = client.Subscribe("server-side-3")
@@ -1794,6 +1793,21 @@ func TestClientHandleUnidirectional(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "client not closed")
 	}
+}
+
+func TestExtractUnidirectionalDisconnect(t *testing.T) {
+	d := extractUnidirectionalDisconnect(nil)
+	require.Nil(t, d)
+	d = extractUnidirectionalDisconnect(errors.New("test"))
+	require.Equal(t, DisconnectServerError, d)
+	d = extractUnidirectionalDisconnect(ErrorLimitExceeded)
+	require.Equal(t, DisconnectServerError, d)
+	d = extractUnidirectionalDisconnect(DisconnectChannelLimit)
+	require.Equal(t, DisconnectChannelLimit, d)
+	d = extractUnidirectionalDisconnect(DisconnectServerError)
+	require.Equal(t, DisconnectServerError, d)
+	d = extractUnidirectionalDisconnect(ErrorExpired)
+	require.Equal(t, DisconnectExpired, d)
 }
 
 func TestClientHandleEmptyData(t *testing.T) {

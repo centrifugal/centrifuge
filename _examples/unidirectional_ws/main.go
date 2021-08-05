@@ -537,10 +537,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		err = c.Connect(connectRequest)
-		if err != nil {
-			return
-		}
+		c.Connect(connectRequest)
 
 		for {
 			_, _, err := conn.ReadMessage()

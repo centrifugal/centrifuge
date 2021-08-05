@@ -175,10 +175,7 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 		}
 		flusher.Flush()
 
-		if err = c.Connect(centrifuge.ConnectRequest{}); err != nil {
-			log.Printf("error connect client: %v", err)
-			return
-		}
+		c.Connect(centrifuge.ConnectRequest{})
 
 		pingInterval := 25 * time.Second
 		tick := time.NewTicker(pingInterval)

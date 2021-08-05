@@ -177,11 +177,7 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 		defer func() { _ = closeFn() }()
 		defer close(transport.closedCh) // need to execute this after client closeFn.
 
-		err = c.Connect(centrifuge.ConnectRequest{})
-		if err != nil {
-			log.Printf("error connect client: %v", err)
-			return
-		}
+		c.Connect(centrifuge.ConnectRequest{})
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {

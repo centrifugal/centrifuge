@@ -139,11 +139,7 @@ func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clie
 		log.Printf("client disconnected (id %s, duration %s)", c.ID(), time.Since(started))
 	}(time.Now())
 
-	err = c.Connect(connectRequest)
-	if err != nil {
-		log.Printf("client connect error: %v", err)
-		return err
-	}
+	c.Connect(connectRequest)
 
 	for {
 		select {
