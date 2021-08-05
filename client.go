@@ -168,12 +168,6 @@ type ConnectRequest struct {
 	Name string
 	// Version of a client.
 	Version string
-	// Channels is a list of initial server-side channels client wants to
-	// subscribe to. The server then should then decide on permissions and
-	// return ConnectReply.Subscriptions to a library. The final list of
-	// subscriptions can differ from this Channels list (with some channels
-	// missing or added).
-	Channels []string
 	// Subs is a map with channel subscription state (for recovery on connect).
 	Subs map[string]SubscribeRequest
 }
@@ -193,11 +187,10 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 		return nil
 	}
 	req := &protocol.ConnectRequest{
-		Token:    r.Token,
-		Data:     r.Data,
-		Name:     r.Name,
-		Version:  r.Version,
-		Channels: r.Channels,
+		Token:   r.Token,
+		Data:    r.Data,
+		Name:    r.Name,
+		Version: r.Version,
 	}
 	if len(r.Subs) > 0 {
 		subs := make(map[string]*protocol.SubscribeRequest)
@@ -1773,7 +1766,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 	)
 
 	if c.node.clientEvents.connectingHandler != nil {
-		reply, err := c.node.clientEvents.connectingHandler(c.ctx, ConnectEvent{
+		e := ConnectEvent{
 			ClientID:  c.ID(),
 			Data:      cmd.Data,
 			Token:     cmd.Token,
@@ -1781,7 +1774,15 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 			Version:   cmd.Version,
 			Channels:  cmd.Channels,
 			Transport: c.transport,
-		})
+		}
+		if len(cmd.Subs) > 0 {
+			channels := make([]string, 0, len(cmd.Subs))
+			for ch := range cmd.Subs {
+				channels = append(channels, ch)
+			}
+			e.Channels = channels
+		}
+		reply, err := c.node.clientEvents.connectingHandler(c.ctx, e)
 		if err != nil {
 			return nil, err
 		}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -176,19 +175,7 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 		}
 		flusher.Flush()
 
-		var channels []string
-		channelsParam := req.URL.Query().Get("channels")
-		if channelsParam != "" {
-			err := json.Unmarshal([]byte(channelsParam), &channels)
-			if err != nil {
-				log.Printf("channels param error: %v", err)
-				return
-			}
-		}
-
-		if err = c.Connect(centrifuge.ConnectRequest{
-			Channels: channels,
-		}); err != nil {
+		if err = c.Connect(centrifuge.ConnectRequest{}); err != nil {
 			log.Printf("error connect client: %v", err)
 			return
 		}
