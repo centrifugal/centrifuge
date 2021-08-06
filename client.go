@@ -371,6 +371,8 @@ func (c *Client) encodeConnectPush(res *protocol.ConnectResult) ([]byte, error) 
 		Client:  res.GetClient(),
 		Data:    res.Data,
 		Subs:    res.Subs,
+		Expires: res.Expires,
+		Ttl:     res.Ttl,
 	}
 	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
 	data, err := pushEncoder.EncodeConnect(p)
