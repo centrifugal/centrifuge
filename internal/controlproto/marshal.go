@@ -12,6 +12,7 @@ type Encoder interface {
 	EncodeSurveyRequest(request *controlpb.SurveyRequest) ([]byte, error)
 	EncodeSurveyResponse(request *controlpb.SurveyResponse) ([]byte, error)
 	EncodeNotification(request *controlpb.Notification) ([]byte, error)
+	EncodeRefresh(refresh *controlpb.Refresh) ([]byte, error)
 }
 
 var _ Encoder = (*ProtobufEncoder)(nil)
@@ -61,5 +62,10 @@ func (e *ProtobufEncoder) EncodeSurveyResponse(cmd *controlpb.SurveyResponse) ([
 
 // EncodeNotification ...
 func (e *ProtobufEncoder) EncodeNotification(cmd *controlpb.Notification) ([]byte, error) {
+	return cmd.Marshal()
+}
+
+// EncodeRefresh ...
+func (e *ProtobufEncoder) EncodeRefresh(cmd *controlpb.Refresh) ([]byte, error) {
 	return cmd.Marshal()
 }

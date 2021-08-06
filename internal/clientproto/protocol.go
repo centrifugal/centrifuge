@@ -72,3 +72,11 @@ func NewDisconnectPush(data protocol.Raw) *protocol.Push {
 		Data: data,
 	}
 }
+
+// NewRefreshPush returns initialized async refresh message.
+func NewRefreshPush(data protocol.Raw) *protocol.Push {
+	return &protocol.Push{
+		Type: protocol.Push_REFRESH,
+		Data: data,
+	}
+}

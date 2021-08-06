@@ -94,6 +94,9 @@ func (t *testTransport) Unidirectional() bool {
 }
 
 func (t *testTransport) DisabledPushFlags() uint64 {
+	if t.Unidirectional() {
+		return 0
+	}
 	return PushFlagDisconnect
 }
 

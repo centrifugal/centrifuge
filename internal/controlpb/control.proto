@@ -24,6 +24,7 @@ enum MethodType {
     SURVEY_RESPONSE = 5 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyResponse"];
     SUBSCRIBE = 6 [(gogoproto.enumvalue_customname) = "MethodTypeSubscribe"];
     NOTIFICATION = 7 [(gogoproto.enumvalue_customname) = "MethodTypeNotification"];
+    REFRESH = 8 [(gogoproto.enumvalue_customname) = "MethodTypeRefresh"];
 }
 
 message Command {
@@ -99,4 +100,12 @@ message SurveyResponse {
 message Notification {
     string op = 1;
     bytes data = 2;
+}
+
+message Refresh {
+    string user = 1;
+    string client = 2;
+    bool expired = 3;
+    int64 expire_at = 4;
+    bytes info = 5;
 }

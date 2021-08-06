@@ -1103,8 +1103,9 @@ func (c *Client) expire() {
 	c.mu.RLock()
 	closed := c.status == statusClosed
 	clientSideRefresh := c.clientSideRefresh
+	exp := c.exp
 	c.mu.RUnlock()
-	if closed {
+	if closed || exp == 0 {
 		return
 	}
 	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
@@ -1180,6 +1181,67 @@ func (c *Client) scheduleOnConnectTimers() {
 		c.addExpireUpdate(expireAfter)
 	}
 	c.mu.Unlock()
+}
+
+func (c *Client) Refresh(opts ...RefreshOption) error {
+	refreshOptions := &RefreshOptions{}
+	for _, opt := range opts {
+		opt(refreshOptions)
+	}
+	if refreshOptions.Expired {
+		go func() { _ = c.close(DisconnectExpired) }()
+		return nil
+	}
+
+	expireAt := refreshOptions.ExpireAt
+	info := refreshOptions.Info
+
+	res := &protocol.Refresh{
+		Expires: expireAt > 0,
+	}
+
+	ttl := expireAt - time.Now().Unix()
+
+	if ttl > 0 {
+		res.Ttl = uint32(ttl)
+	}
+
+	if expireAt > 0 {
+		// connection check enabled
+		if ttl > 0 {
+			// connection refreshed, update client timestamp and set new expiration timeout
+			c.mu.Lock()
+			c.exp = expireAt
+			if len(info) > 0 {
+				c.info = info
+			}
+			duration := time.Duration(ttl)*time.Second + c.node.config.ClientExpiredCloseDelay
+			c.addExpireUpdate(duration)
+			c.mu.Unlock()
+		} else {
+			go func() { _ = c.close(DisconnectExpired) }()
+			return nil
+		}
+	} else {
+		c.mu.Lock()
+		c.exp = 0
+		c.mu.Unlock()
+	}
+
+	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
+	data, err := pushEncoder.EncodeRefresh(res)
+	if err != nil {
+		return err
+	}
+	result, err := pushEncoder.Encode(clientproto.NewRefreshPush(data))
+	if err != nil {
+		return err
+	}
+	reply := prepared.NewReply(&protocol.Reply{
+		Result: result,
+	}, c.transport.Protocol().toProto())
+
+	return c.transportEnqueue(reply)
 }
 
 func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {

@@ -118,6 +118,51 @@ func WithRecoverSince(since *StreamPosition) SubscribeOption {
 	}
 }
 
+// RefreshOptions ...
+type RefreshOptions struct {
+	// Expired can close connection with expired reason.
+	Expired bool
+	// ExpireAt defines time in future when subscription should expire,
+	// zero value means no expiration.
+	ExpireAt int64
+	// Info defines custom channel information, zero value means no channel information.
+	Info []byte
+	// clientID to refresh.
+	clientID string
+}
+
+// RefreshOption is a type to represent various Refresh options.
+type RefreshOption func(options *RefreshOptions)
+
+// WithRefreshClient to limit refresh only for specified client ID.
+func WithRefreshClient(clientID string) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.clientID = clientID
+	}
+}
+
+// WithRefreshExpired to set expired flag - connection will be closed with DisconnectExpired.
+func WithRefreshExpired(expired bool) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.Expired = expired
+	}
+}
+
+// WithRefreshExpireAt to set unix seconds in the future when connection should expire.
+// Zero value means no expiration.
+func WithRefreshExpireAt(expireAt int64) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.ExpireAt = expireAt
+	}
+}
+
+// WithRefreshInfo to override connection info.
+func WithRefreshInfo(info []byte) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.Info = info
+	}
+}
+
 // UnsubscribeOptions ...
 type UnsubscribeOptions struct {
 	// clientID to unsubscribe.

@@ -5,7 +5,7 @@ go 1.12
 require (
 	github.com/FZambia/eagle v0.0.1
 	github.com/FZambia/sentinel v1.1.0
-	github.com/centrifugal/protocol v0.5.1-0.20210805220013-a7f184721012
+	github.com/centrifugal/protocol v0.5.1-0.20210806171840-92c9258495e6
 	github.com/gogo/protobuf v1.3.2
 	github.com/gomodule/redigo v1.8.4
 	github.com/google/uuid v1.2.0

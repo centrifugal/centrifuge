@@ -12,6 +12,7 @@ type Decoder interface {
 	DecodeSurveyRequest([]byte) (*controlpb.SurveyRequest, error)
 	DecodeSurveyResponse([]byte) (*controlpb.SurveyResponse, error)
 	DecodeNotification([]byte) (*controlpb.Notification, error)
+	DecodeRefresh([]byte) (*controlpb.Refresh, error)
 }
 
 var _ Decoder = (*ProtobufDecoder)(nil)
@@ -97,6 +98,16 @@ func (e *ProtobufDecoder) DecodeSurveyResponse(data []byte) (*controlpb.SurveyRe
 // DecodeNotification ...
 func (e *ProtobufDecoder) DecodeNotification(data []byte) (*controlpb.Notification, error) {
 	var cmd controlpb.Notification
+	err := cmd.Unmarshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return &cmd, nil
+}
+
+// DecodeRefresh ...
+func (e *ProtobufDecoder) DecodeRefresh(data []byte) (*controlpb.Refresh, error) {
+	var cmd controlpb.Refresh
 	err := cmd.Unmarshal(data)
 	if err != nil {
 		return nil, err

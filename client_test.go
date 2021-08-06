@@ -872,6 +872,150 @@ func TestServerSideSubscriptions(t *testing.T) {
 	}
 }
 
+func TestClientRefresh(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	transport := newTestTransport(func() {})
+	transport.setUnidirectional(true)
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+
+	expireAt1 := time.Now().Unix() + 100
+	expireAt2 := time.Now().Unix() + 200
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", ExpireAt: expireAt1})
+	client, _ := newClient(newCtx, node, transport)
+
+	client.Connect(ConnectRequest{})
+
+	require.Equal(t, expireAt1, client.exp)
+	err := client.Refresh()
+	require.NoError(t, err)
+	require.Zero(t, client.exp)
+
+	done := make(chan struct{})
+	go func() {
+		for data := range transport.sink {
+			if strings.Contains(string(data), `"type":8`) {
+				close(done)
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for done channel closed")
+	case <-done:
+	}
+
+	done = make(chan struct{})
+	go func() {
+		for data := range transport.sink {
+			if strings.Contains(string(data), `"type":8`) && strings.Contains(string(data), `"ttl":`) && strings.Contains(string(data), `"expires":true`) {
+				close(done)
+				return
+			}
+		}
+	}()
+
+	err = client.Refresh(WithRefreshExpireAt(expireAt2), WithRefreshInfo([]byte("info")))
+	require.NoError(t, err)
+	require.Equal(t, expireAt2, client.exp)
+	require.Equal(t, []byte("info"), client.info)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for done channel closed")
+	case <-done:
+	}
+
+	done = make(chan struct{})
+	go func() {
+		for data := range transport.sink {
+			if strings.Contains(string(data), `"type":8`) && strings.Contains(string(data), `"ttl":`) && strings.Contains(string(data), `"expires":true`) {
+				close(done)
+				return
+			}
+		}
+	}()
+
+	err = node.Refresh("42", WithRefreshExpireAt(expireAt2), WithRefreshInfo([]byte("info")))
+	require.NoError(t, err)
+	require.Equal(t, expireAt2, client.exp)
+	require.Equal(t, []byte("info"), client.info)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for done channel closed")
+	case <-done:
+	}
+
+	done = make(chan struct{})
+	go func() {
+		for data := range transport.sink {
+			if strings.Contains(string(data), `"code":3005`) {
+				// DisconnectExpired sent.
+				close(done)
+				return
+			}
+		}
+	}()
+
+	err = client.Refresh(WithRefreshExpired(true))
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for done channel closed")
+	case <-done:
+	}
+}
+
+func TestClientRefreshExpireAtInThePast(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{}, nil
+	})
+	transport := newTestTransport(func() {})
+	transport.setUnidirectional(true)
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+
+	expireAt1 := time.Now().Unix() + 100
+	expireAt2 := time.Now().Unix() - 200
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", ExpireAt: expireAt1})
+	client, _ := newClient(newCtx, node, transport)
+
+	client.Connect(ConnectRequest{})
+
+	require.Equal(t, expireAt1, client.exp)
+
+	done := make(chan struct{})
+	go func() {
+		for data := range transport.sink {
+			if strings.Contains(string(data), `"code":3005`) {
+				close(done)
+				return
+			}
+		}
+	}()
+
+	err := client.Refresh(WithRefreshExpireAt(expireAt2))
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for done channel closed")
+	case <-done:
+	}
+}
+
 func TestClient_IsSubscribed(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()

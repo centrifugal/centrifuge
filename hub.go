@@ -75,6 +75,10 @@ func (h *Hub) disconnect(userID string, disconnect *Disconnect, clientID string,
 	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, whitelist)
 }
 
+func (h *Hub) refresh(userID string, clientID string, opts ...RefreshOption) error {
+	return h.connShards[index(userID, numHubShards)].refresh(userID, clientID, opts...)
+}
+
 func (h *Hub) unsubscribe(userID string, ch string, clientID string) error {
 	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, clientID)
 }
@@ -280,6 +284,32 @@ func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
 		go func(c *Client) {
 			defer wg.Done()
 			err := c.Unsubscribe(ch)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+		}(c)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+func (h *connShard) refresh(user string, clientID string, opts ...RefreshOption) error {
+	userConnections := h.userConnections(user)
+
+	var firstErr error
+	var errMu sync.Mutex
+
+	var wg sync.WaitGroup
+	for _, c := range userConnections {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Refresh(opts...)
 			errMu.Lock()
 			defer errMu.Unlock()
 			if err != nil && err != io.EOF && firstErr == nil {

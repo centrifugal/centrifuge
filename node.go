@@ -636,6 +636,13 @@ func (n *Node) handleControl(data []byte) error {
 			return err
 		}
 		return n.handleNotification(uid, cmd)
+	case controlpb.MethodTypeRefresh:
+		cmd, err := n.controlDecoder.DecodeRefresh(params)
+		if err != nil {
+			n.logger.log(newLogEntry(LogLevelError, "error decoding refresh control params", map[string]interface{}{"error": err.Error()}))
+			return err
+		}
+		return n.hub.refresh(cmd.User, cmd.Client, WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info))
 	default:
 		n.logger.log(newLogEntry(LogLevelError, "unknown control message method", map[string]interface{}{"method": method}))
 		return fmt.Errorf("control method not found: %d", method)
@@ -870,6 +877,23 @@ func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error
 	return n.publishControl(cmd, "")
 }
 
+func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
+	refresh := &controlpb.Refresh{
+		User:     user,
+		Expired:  opts.Expired,
+		ExpireAt: opts.ExpireAt,
+		Client:   opts.clientID,
+		Info:     opts.Info,
+	}
+	params, _ := n.controlEncoder.EncodeRefresh(refresh)
+	cmd := &controlpb.Command{
+		Uid:    n.uid,
+		Method: controlpb.MethodTypeRefresh,
+		Params: params,
+	}
+	return n.publishControl(cmd, "")
+}
+
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
 // nodes could unsubscribe user from channel.
 func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) error {
@@ -1040,6 +1064,24 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 	}
 	// Send disconnect control message to other nodes
 	return n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.ClientWhitelist)
+}
+
+// Refresh user connection.
+// Without any options will make user connections non-expiring.
+// Note, that OnRefresh event won't be called in this case
+// since this is a server-side refresh.
+func (n *Node) Refresh(userID string, opts ...RefreshOption) error {
+	refreshOpts := &RefreshOptions{}
+	for _, opt := range opts {
+		opt(refreshOpts)
+	}
+	// Refresh on this node.
+	err := n.hub.refresh(userID, refreshOpts.clientID, opts...)
+	if err != nil {
+		return err
+	}
+	// Send refresh control message to other nodes.
+	return n.pubRefresh(userID, *refreshOpts)
 }
 
 // addPresence proxies presence adding to PresenceManager.
