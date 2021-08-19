@@ -1230,7 +1230,7 @@ type HistoryResult struct {
 
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 	if opts.Reverse && opts.Since != nil && opts.Since.Offset == 0 {
-		return HistoryResult{}, ErrorUnrecoverablePosition
+		return HistoryResult{}, ErrorBadRequest
 	}
 	pubs, streamTop, err := n.broker.History(ch, HistoryFilter{
 		Limit:   opts.Limit,
@@ -1244,7 +1244,10 @@ func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 		sinceEpoch := opts.Since.Epoch
 		epochOK := sinceEpoch == "" || sinceEpoch == streamTop.Epoch
 		if !epochOK {
-			return HistoryResult{}, ErrorUnrecoverablePosition
+			return HistoryResult{
+				StreamPosition: streamTop,
+				Publications:   pubs,
+			}, ErrorUnrecoverablePosition
 		}
 	}
 	return HistoryResult{

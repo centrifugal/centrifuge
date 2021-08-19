@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -322,6 +323,8 @@ func extractUnidirectionalDisconnect(err error) *Disconnect {
 	case *Error:
 		switch t.Code {
 		case ErrorExpired.Code:
+			d = DisconnectExpired
+		case ErrorTokenExpired.Code:
 			d = DisconnectExpired
 		default:
 			d = DisconnectServerError
@@ -2284,20 +2287,30 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 			// publications automatically from history (we suppose here that history configured wisely).
 			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmdOffset, cmd.Epoch})
 			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				c.pubSubSync.StopBuffering(channel)
-				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
-					return errorDisconnectContext(clientErr, nil)
+				if errors.Is(err, ErrorUnrecoverablePosition) {
+					// Result contains stream position in case of ErrorUnrecoverablePosition
+					// during recovery.
+					latestOffset = historyResult.Offset
+					latestEpoch = historyResult.Epoch
+					res.Recovered = false
+					incRecover(res.Recovered)
+				} else {
+					c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+					c.pubSubSync.StopBuffering(channel)
+					if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
+						return errorDisconnectContext(clientErr, nil)
+					}
+					ctx.disconnect = DisconnectServerError
+					return ctx
 				}
-				ctx.disconnect = DisconnectServerError
-				return ctx
+			} else {
+				latestOffset = historyResult.Offset
+				latestEpoch = historyResult.Epoch
+				var recovered bool
+				recoveredPubs, recovered = isRecovered(historyResult, cmdOffset, cmd.Epoch)
+				res.Recovered = recovered
+				incRecover(res.Recovered)
 			}
-			latestOffset = historyResult.Offset
-			latestEpoch = historyResult.Epoch
-			var recovered bool
-			recoveredPubs, recovered = isRecovered(historyResult, cmdOffset, cmd.Epoch)
-			res.Recovered = recovered
-			incRecover(res.Recovered)
 		} else {
 			streamTop, err := c.node.streamTop(channel)
 			if err != nil {
