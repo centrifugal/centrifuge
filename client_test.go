@@ -439,6 +439,38 @@ func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
 	}
 }
 
+func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
+	broker := NewTestBroker()
+	node := nodeWithBroker(broker)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{Recover: true},
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+		Recover: true,
+		Epoch:   "xxx",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(rwWrapper.replies))
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
+	require.Empty(t, res.Offset)
+	require.Empty(t, res.Epoch)
+	require.False(t, res.Recovered)
+	require.Empty(t, res.Publications)
+}
+
 func TestClientSubscribePositionedError(t *testing.T) {
 	broker := NewTestBroker()
 	broker.errorOnHistory = true
