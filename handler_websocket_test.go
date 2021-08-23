@@ -347,14 +347,14 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	defer func() { _ = resp.Body.Close() }()
 
 	connectRequest := &protocol.ConnectRequest{}
-	params, _ := connectRequest.Marshal()
+	params, _ := connectRequest.MarshalVT()
 	cmd := &protocol.Command{
 		Id:     1,
 		Method: protocol.Command_CONNECT,
 		Params: params,
 	}
 
-	cmdBytes, _ := cmd.Marshal()
+	cmdBytes, _ := cmd.MarshalVT()
 
 	var buf bytes.Buffer
 	bs := make([]byte, 8)
@@ -369,13 +369,13 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	subscribeRequest := &protocol.SubscribeRequest{
 		Channel: channel,
 	}
-	params, _ = subscribeRequest.Marshal()
+	params, _ = subscribeRequest.MarshalVT()
 	cmd = &protocol.Command{
 		Id:     2,
 		Method: protocol.Command_SUBSCRIBE,
 		Params: params,
 	}
-	cmdBytes, _ = cmd.Marshal()
+	cmdBytes, _ = cmd.MarshalVT()
 
 	buf.Reset()
 	bs = make([]byte, 8)

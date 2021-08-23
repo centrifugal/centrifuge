@@ -107,11 +107,11 @@ func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPositio
 
 // broadcastJoin sends message to all clients subscribed on channel.
 func (h *Hub) broadcastJoin(ch string, info *ClientInfo) error {
-	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: *infoToProto(info)})
+	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: infoToProto(info)})
 }
 
 func (h *Hub) broadcastLeave(ch string, info *ClientInfo) error {
-	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: *infoToProto(info)})
+	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: infoToProto(info)})
 }
 
 // NumSubscribers returns number of current subscribers for a given channel.

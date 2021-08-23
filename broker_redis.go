@@ -350,7 +350,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 		Data: data,
 		Info: infoToProto(opts.ClientInfo),
 	}
-	byteMessage, err := protoPub.Marshal()
+	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {
 		return StreamPosition{}, err
 	}
@@ -423,7 +423,7 @@ func (b *RedisBroker) PublishJoin(ch string, info *ClientInfo) error {
 func (b *RedisBroker) publishJoin(s *RedisShard, ch string, info *ClientInfo) error {
 	eChan := make(chan error, 1)
 
-	byteMessage, err := infoToProto(info).Marshal()
+	byteMessage, err := infoToProto(info).MarshalVT()
 	if err != nil {
 		return err
 	}
@@ -457,7 +457,7 @@ func (b *RedisBroker) PublishLeave(ch string, info *ClientInfo) error {
 func (b *RedisBroker) publishLeave(s *RedisShard, ch string, info *ClientInfo) error {
 	eChan := make(chan error, 1)
 
-	byteMessage, err := infoToProto(info).Marshal()
+	byteMessage, err := infoToProto(info).MarshalVT()
 	if err != nil {
 		return err
 	}
@@ -894,7 +894,7 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 	channel := b.extractChannel(chID)
 	if pushType == pubPushType {
 		var pub protocol.Publication
-		err := pub.Unmarshal(pushData)
+		err := pub.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
@@ -907,14 +907,14 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp)
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo
-		err := info.Unmarshal(pushData)
+		err := info.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
 		_ = eventHandler.HandleJoin(channel, infoFromProto(&info))
 	} else if pushType == leavePushType {
 		var info protocol.ClientInfo
-		err := info.Unmarshal(pushData)
+		err := info.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
@@ -1253,7 +1253,7 @@ func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
 		}
 
 		var pub protocol.Publication
-		err = pub.Unmarshal(pushData)
+		err = pub.UnmarshalVT(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
@@ -1282,7 +1282,7 @@ func sliceOfPubsList(result interface{}, err error) ([]*Publication, error) {
 		}
 
 		var pub protocol.Publication
-		err = pub.Unmarshal(pushData)
+		err = pub.UnmarshalVT(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}

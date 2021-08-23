@@ -138,7 +138,7 @@ func (m *RedisPresenceManager) AddPresence(ch string, uid string, info *ClientIn
 
 func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string, info *ClientInfo) error {
 	expire := int(m.config.PresenceTTL.Seconds())
-	infoBytes, err := infoToProto(info).Marshal()
+	infoBytes, err := infoToProto(info).MarshalVT()
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo,
 			return nil, errors.New("scanMap key not a bulk string value")
 		}
 		var f protocol.ClientInfo
-		err = f.Unmarshal(value)
+		err = f.UnmarshalVT(value)
 		if err != nil {
 			return nil, errors.New("can not unmarshal value to ClientInfo")
 		}
