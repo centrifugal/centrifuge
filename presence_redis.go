@@ -218,7 +218,7 @@ func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 	uniqueUsers := map[string]struct{}{}
 
 	for _, info := range presence {
-		userID := info.User
+		userID := info.UserID
 		if _, ok := uniqueUsers[userID]; !ok {
 			uniqueUsers[userID] = struct{}{}
 			numUsers++

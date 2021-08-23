@@ -591,7 +591,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandleJoinFunc: func(ch string, info *ClientInfo) error {
 		joinHandlerCalled = true
 		require.Equal(t, "test", ch)
-		require.Equal(t, "12", info.User)
+		require.Equal(t, "12", info.UserID)
 		return nil
 	}}, e.messageChannelID("test"), append(joinTypePrefix, data...))
 	require.NoError(t, err)
@@ -601,7 +601,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandleLeaveFunc: func(ch string, info *ClientInfo) error {
 		leaveHandlerCalled = true
 		require.Equal(t, "test", ch)
-		require.Equal(t, "12", info.User)
+		require.Equal(t, "12", info.UserID)
 		return nil
 	}}, e.messageChannelID("test"), append(leaveTypePrefix, data...))
 	require.NoError(t, err)

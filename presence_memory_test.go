@@ -37,8 +37,8 @@ func TestMemoryPresenceHub(t *testing.T) {
 	uid := "uid"
 
 	info := &ClientInfo{
-		User:   "user",
-		Client: "client",
+		UserID:   "user",
+		ClientID: "client",
 	}
 
 	_ = h.add(testCh1, uid, info)

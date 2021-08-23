@@ -385,11 +385,11 @@ func TestHubBroadcastJoin(t *testing.T) {
 			transport.protoType = tc.protocolType
 
 			// Broadcast to not existed channel.
-			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{Client: "broadcast_client"})
+			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
 
 			// Broadcast to existed channel.
-			err = n.hub.broadcastJoin("test_channel", &ClientInfo{Client: "broadcast_client"})
+			err = n.hub.broadcastJoin("test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
 			select {
 			case data := <-transport.sink:
@@ -421,11 +421,11 @@ func TestHubBroadcastLeave(t *testing.T) {
 			transport.protoType = tc.protocolType
 
 			// Broadcast to not existed channel.
-			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{Client: "broadcast_client"})
+			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
 
 			// Broadcast to existed channel.
-			err = n.hub.broadcastLeave("test_channel", &ClientInfo{Client: "broadcast_client"})
+			err = n.hub.broadcastLeave("test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
 			select {
 			case data := <-transport.sink:

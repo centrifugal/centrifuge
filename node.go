@@ -1141,8 +1141,8 @@ func infoFromProto(v *protocol.ClientInfo) *ClientInfo {
 		return nil
 	}
 	info := &ClientInfo{
-		Client: v.GetClient(),
-		User:   v.GetUser(),
+		ClientID: v.GetClient(),
+		UserID:   v.GetUser(),
 	}
 	if len(v.ConnInfo) > 0 {
 		info.ConnInfo = v.ConnInfo
@@ -1158,8 +1158,8 @@ func infoToProto(v *ClientInfo) *protocol.ClientInfo {
 		return nil
 	}
 	info := &protocol.ClientInfo{
-		Client: v.Client,
-		User:   v.User,
+		Client: v.ClientID,
+		User:   v.UserID,
 	}
 	if len(v.ConnInfo) > 0 {
 		info.ConnInfo = v.ConnInfo

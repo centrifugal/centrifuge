@@ -53,8 +53,8 @@ func infoToProto(v *centrifuge.ClientInfo) *protocol.ClientInfo {
 		return nil
 	}
 	info := &protocol.ClientInfo{
-		Client: v.Client,
-		User:   v.User,
+		Client: v.ClientID,
+		User:   v.UserID,
 	}
 	if len(v.ConnInfo) > 0 {
 		info.ConnInfo = v.ConnInfo
@@ -70,8 +70,8 @@ func infoFromProto(v *protocol.ClientInfo) *centrifuge.ClientInfo {
 		return nil
 	}
 	info := &centrifuge.ClientInfo{
-		Client: v.GetClient(),
-		User:   v.GetUser(),
+		ClientID: v.GetClient(),
+		UserID:   v.GetUser(),
 	}
 	if len(v.ConnInfo) > 0 {
 		info.ConnInfo = v.ConnInfo

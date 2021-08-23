@@ -522,8 +522,8 @@ func (c *Client) updateChannelPresence(ch string, chCtx channelContext) error {
 		return nil
 	}
 	return c.node.addPresence(ch, c.uid, &ClientInfo{
-		User:     c.user,
-		Client:   c.uid,
+		ClientID: c.uid,
+		UserID:   c.user,
 		ConnInfo: c.info,
 		ChanInfo: chCtx.Info,
 	})
@@ -870,8 +870,8 @@ func (c *Client) clientInfo(ch string) *ClientInfo {
 		channelInfo = channelContext.Info
 	}
 	return &ClientInfo{
-		User:     c.user,
-		Client:   c.uid,
+		ClientID: c.uid,
+		UserID:   c.user,
 		ConnInfo: c.info,
 		ChanInfo: channelInfo,
 	}
@@ -2237,8 +2237,8 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	channel := cmd.Channel
 
 	info := &ClientInfo{
-		Client:   c.uid,
-		User:     c.user,
+		ClientID: c.uid,
+		UserID:   c.user,
 		ConnInfo: c.info,
 		ChanInfo: reply.Options.ChannelInfo,
 	}

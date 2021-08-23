@@ -92,8 +92,8 @@ func (m PresenceManager) Presence(ch string) (map[string]*centrifuge.ClientInfo,
 			return nil, errors.New("malformed presence format: string chan info expected")
 		}
 		ci := &centrifuge.ClientInfo{
-			Client: clientID,
-			User:   userID,
+			ClientID: clientID,
+			UserID:   userID,
 		}
 		if len(connInfo) > 0 {
 			ci.ConnInfo = []byte(connInfo)
@@ -162,7 +162,7 @@ func (m PresenceManager) AddPresence(ch string, clientID string, info *centrifug
 		Channel:  ch,
 		TTL:      int(ttl.Seconds()),
 		ClientID: clientID,
-		UserID:   info.User,
+		UserID:   info.UserID,
 		ConnInfo: string(info.ConnInfo),
 		ChanInfo: string(info.ChanInfo),
 	}))

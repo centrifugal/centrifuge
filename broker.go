@@ -18,10 +18,10 @@ type Publication struct {
 
 // ClientInfo contains information about client connection.
 type ClientInfo struct {
-	// Client is a client unique id.
-	Client string
-	// User is an ID of authenticated user. Zero value means anonymous user.
-	User string
+	// ClientID is a client unique id.
+	ClientID string
+	// UserID is an ID of authenticated user. Zero value means anonymous user.
+	UserID string
 	// ConnInfo is an additional information about connection.
 	ConnInfo []byte
 	// ChanInfo is an additional information about connection in context of
