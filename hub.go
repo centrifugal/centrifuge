@@ -350,7 +350,7 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID str
 	return firstErr
 }
 
-// userConnections returns all connections of user with specified UserID.
+// userConnections returns all connections of user with specified User.
 func (h *connShard) userConnections(userID string) map[string]*Client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

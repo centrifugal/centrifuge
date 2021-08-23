@@ -882,8 +882,8 @@ func Test_infoFromProto(t *testing.T) {
 		Client: "client",
 	})
 	require.NotNil(t, info)
-	require.Equal(t, info.UserID, "user")
-	require.Equal(t, info.ClientID, "client")
+	require.Equal(t, info.User, "user")
+	require.Equal(t, info.Client, "client")
 	require.Nil(t, info.ConnInfo)
 	require.Nil(t, info.ChanInfo)
 
@@ -894,8 +894,8 @@ func Test_infoFromProto(t *testing.T) {
 		ChanInfo: []byte("chan_info"),
 	})
 	require.NotNil(t, info)
-	require.Equal(t, info.UserID, "user")
-	require.Equal(t, info.ClientID, "client")
+	require.Equal(t, info.User, "user")
+	require.Equal(t, info.Client, "client")
 	require.Equal(t, info.ConnInfo, []byte("conn_info"))
 	require.Equal(t, info.ChanInfo, []byte("chan_info"))
 }
@@ -905,8 +905,8 @@ func Test_infoToProto(t *testing.T) {
 	require.Nil(t, info)
 
 	info = infoToProto(&ClientInfo{
-		UserID:   "user",
-		ClientID: "client",
+		User:   "user",
+		Client: "client",
 	})
 	require.NotNil(t, info)
 	require.Equal(t, info.User, "user")
@@ -915,8 +915,8 @@ func Test_infoToProto(t *testing.T) {
 	require.Nil(t, info.ChanInfo)
 
 	info = infoToProto(&ClientInfo{
-		UserID:   "user",
-		ClientID: "client",
+		User:     "user",
+		Client:   "client",
 		ConnInfo: []byte("conn_info"),
 		ChanInfo: []byte("chan_info"),
 	})
@@ -935,7 +935,7 @@ func Test_pubToProto(t *testing.T) {
 		Offset: 42,
 		Data:   []byte("data"),
 		Info: &ClientInfo{
-			ClientID: "client_id",
+			Client: "client_id",
 		},
 	})
 	require.Equal(t, uint64(42), pub.Offset)
@@ -958,7 +958,7 @@ func Test_pubFromProto(t *testing.T) {
 	require.Equal(t, uint64(42), pub.Offset)
 	require.Equal(t, []byte("data"), pub.Data)
 	require.NotNil(t, pub.Info)
-	require.Equal(t, pub.Info.ClientID, "client_id")
+	require.Equal(t, pub.Info.Client, "client_id")
 }
 
 func TestNode_OnSurvey(t *testing.T) {

@@ -569,7 +569,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	pub := &protocol.Publication{
 		Data: []byte("{}"),
 	}
-	data, err := pub.Marshal()
+	data, err := pub.MarshalVT()
 	require.NoError(t, err)
 	var publicationHandlerCalled bool
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
@@ -585,13 +585,13 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	info := &protocol.ClientInfo{
 		User: "12",
 	}
-	data, err = info.Marshal()
+	data, err = info.MarshalVT()
 	require.NoError(t, err)
 	var joinHandlerCalled bool
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandleJoinFunc: func(ch string, info *ClientInfo) error {
 		joinHandlerCalled = true
 		require.Equal(t, "test", ch)
-		require.Equal(t, "12", info.UserID)
+		require.Equal(t, "12", info.User)
 		return nil
 	}}, e.messageChannelID("test"), append(joinTypePrefix, data...))
 	require.NoError(t, err)
@@ -601,7 +601,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandleLeaveFunc: func(ch string, info *ClientInfo) error {
 		leaveHandlerCalled = true
 		require.Equal(t, "test", ch)
-		require.Equal(t, "12", info.UserID)
+		require.Equal(t, "12", info.User)
 		return nil
 	}}, e.messageChannelID("test"), append(leaveTypePrefix, data...))
 	require.NoError(t, err)
