@@ -107,11 +107,11 @@ func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPositio
 
 // broadcastJoin sends message to all clients subscribed on channel.
 func (h *Hub) broadcastJoin(ch string, info *ClientInfo) error {
-	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: *infoToProto(info)})
+	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: infoToProto(info)})
 }
 
 func (h *Hub) broadcastLeave(ch string, info *ClientInfo) error {
-	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: *infoToProto(info)})
+	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: infoToProto(info)})
 }
 
 // NumSubscribers returns number of current subscribers for a given channel.
@@ -350,7 +350,7 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID str
 	return firstErr
 }
 
-// userConnections returns all connections of user with specified UserID.
+// userConnections returns all connections of user with specified User.
 func (h *connShard) userConnections(userID string) map[string]*Client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

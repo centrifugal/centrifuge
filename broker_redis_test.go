@@ -569,7 +569,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	pub := &protocol.Publication{
 		Data: []byte("{}"),
 	}
-	data, err := pub.Marshal()
+	data, err := pub.MarshalVT()
 	require.NoError(t, err)
 	var publicationHandlerCalled bool
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
@@ -585,7 +585,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	info := &protocol.ClientInfo{
 		User: "12",
 	}
-	data, err = info.Marshal()
+	data, err = info.MarshalVT()
 	require.NoError(t, err)
 	var joinHandlerCalled bool
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandleJoinFunc: func(ch string, info *ClientInfo) error {

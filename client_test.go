@@ -280,7 +280,7 @@ func extractSubscribeResult(replies []*protocol.Reply, protoType ProtocolType) *
 			panic(err)
 		}
 	} else {
-		err := res.Unmarshal(replies[0].Result)
+		err := res.UnmarshalVT(replies[0].Result)
 		if err != nil {
 			panic(err)
 		}
@@ -296,7 +296,7 @@ func extractConnectReply(replies []*protocol.Reply, protoType ProtocolType) *pro
 			panic(err)
 		}
 	} else {
-		err := res.Unmarshal(replies[0].Result)
+		err := res.UnmarshalVT(replies[0].Result)
 		if err != nil {
 			panic(err)
 		}

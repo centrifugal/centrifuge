@@ -7,28 +7,21 @@ syntax = "proto3";
 
 package controlpb;
 
-import "github.com/gogo/protobuf/gogoproto/gogo.proto";
-
-option (gogoproto.equal_all) = true;
-option (gogoproto.populate_all) = true;
-option (gogoproto.testgen_all) = true;
-
-enum MethodType {
-    option (gogoproto.goproto_enum_prefix) = false;
-
-    NODE = 0 [(gogoproto.enumvalue_customname) = "MethodTypeNode"];
-    UNSUBSCRIBE = 1 [(gogoproto.enumvalue_customname) = "MethodTypeUnsubscribe"];
-    DISCONNECT = 2 [(gogoproto.enumvalue_customname) = "MethodTypeDisconnect"];
-    SHUTDOWN = 3 [(gogoproto.enumvalue_customname) = "MethodTypeShutdown"];
-    SURVEY_REQUEST = 4 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyRequest"];
-    SURVEY_RESPONSE = 5 [(gogoproto.enumvalue_customname) = "MethodTypeSurveyResponse"];
-    SUBSCRIBE = 6 [(gogoproto.enumvalue_customname) = "MethodTypeSubscribe"];
-    NOTIFICATION = 7 [(gogoproto.enumvalue_customname) = "MethodTypeNotification"];
-    REFRESH = 8 [(gogoproto.enumvalue_customname) = "MethodTypeRefresh"];
-}
+option go_package = "./;controlpb";
 
 message Command {
     string uid = 1;
+    enum MethodType {
+        NODE = 0;
+        UNSUBSCRIBE = 1;
+        DISCONNECT = 2;
+        SHUTDOWN = 3;
+        SURVEY_REQUEST = 4;
+        SURVEY_RESPONSE = 5;
+        SUBSCRIBE = 6;
+        NOTIFICATION = 7;
+        REFRESH = 8;
+    }
     MethodType method = 2;
     bytes params = 3;
 }

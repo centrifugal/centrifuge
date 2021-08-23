@@ -522,8 +522,8 @@ func (c *Client) updateChannelPresence(ch string, chCtx channelContext) error {
 		return nil
 	}
 	return c.node.addPresence(ch, c.uid, &ClientInfo{
-		UserID:   c.user,
 		ClientID: c.uid,
+		UserID:   c.user,
 		ConnInfo: c.info,
 		ChanInfo: chCtx.Info,
 	})
@@ -870,8 +870,8 @@ func (c *Client) clientInfo(ch string) *ClientInfo {
 		channelInfo = channelContext.Info
 	}
 	return &ClientInfo{
-		UserID:   c.user,
 		ClientID: c.uid,
+		UserID:   c.user,
 		ConnInfo: c.info,
 		ChanInfo: channelInfo,
 	}

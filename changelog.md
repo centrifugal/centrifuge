@@ -10,8 +10,9 @@ This release has **several backward incompatible changes**. Changes should affec
 * **Breaking change**. Remove deprecated seq/gen fields - see [#197](https://github.com/centrifugal/centrifuge/issues/197). Those were deprecated for a long time.
 * **Breaking change**. `Client.Connect` now does not return an error – this allows Centrifuge to automatically send a proper Disconnect push towards the connection.
 * **Breaking change**. `WithClientWhitelist` renamed to `WithDisconnectClientWhitelist`.
-* Much faster JSON client protocol. Expect at least 4x speedup for small messages encoding/decoding and can be up to 30x better for large messages. This is possible due to using code generation for encoding and a faster library for JSON decoding in `centrifugal/protocol` package. See [centrifugal/protocol#8](https://github.com/centrifugal/protocol/pull/8).
+* Much faster JSON client protocol. Expect at least 4x speedup for small messages JSON encoding/decoding. For large messages the difference can be even bigger. This is possible due to using code generation for encoding and a faster library for JSON decoding in `centrifugal/protocol` package. See [centrifugal/protocol#8](https://github.com/centrifugal/protocol/pull/8).
 * Message broadcast allocates less - see [#193](https://github.com/centrifugal/centrifuge/issues/193). Can be noticeable when broadcasting messages to large number of active subscribers. The side effect of this change is that Transport implementations should now have `Write` and `WriteMany` methods.
+* Centrifuge now uses official Protobuf library for Go with [planetscale/vtprotobuf](https://github.com/planetscale/vtprotobuf) code generator instead of [gogo/protobuf](https://github.com/gogo/protobuf) library which is not maintained these days anymore. The performance of Protobuf marshaling/unmarshaling is comparable.
 * New `Config.UseSingleFlight` option added. The option can help to reduce the load on Broker and Presence manager during massive reconnect and history synchronization scenarios.
 * WebSocket subprotocol is now can be used for switching to Protobuf protocol ([#194](https://github.com/centrifugal/centrifuge/issues/194)). This will help to avoid adding `?format=protobuf` in WebSocket connection URL.
 * `OnTransportWrite` callback added to inject custom logic before actual write to a client connection.
@@ -96,6 +97,8 @@ Compatible changes:
 - WithRefreshExpired: added
 - WithRefreshInfo: added
 - WithReverse: added
+
+v0.18.0 is a valid semantic version for this release.
 ```
 
 v0.17.1

@@ -27,45 +27,45 @@ func NewProtobufEncoder() *ProtobufEncoder {
 
 // EncodeCommand ...
 func (e *ProtobufEncoder) EncodeCommand(cmd *controlpb.Command) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
 
 // EncodeNode ...
 func (e *ProtobufEncoder) EncodeNode(cmd *controlpb.Node) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
 
 // EncodeSubscribe ...
 func (e *ProtobufEncoder) EncodeSubscribe(cmd *controlpb.Subscribe) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
 
 // EncodeUnsubscribe ...
 func (e *ProtobufEncoder) EncodeUnsubscribe(cmd *controlpb.Unsubscribe) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
 
 // EncodeDisconnect ...
 func (e *ProtobufEncoder) EncodeDisconnect(cmd *controlpb.Disconnect) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
 
 // EncodeSurveyRequest ...
 func (e *ProtobufEncoder) EncodeSurveyRequest(cmd *controlpb.SurveyRequest) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
 
 // EncodeSurveyRequest ...
 func (e *ProtobufEncoder) EncodeSurveyResponse(cmd *controlpb.SurveyResponse) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
 
 // EncodeNotification ...
 func (e *ProtobufEncoder) EncodeNotification(cmd *controlpb.Notification) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
 
 // EncodeRefresh ...
 func (e *ProtobufEncoder) EncodeRefresh(cmd *controlpb.Refresh) ([]byte, error) {
-	return cmd.Marshal()
+	return cmd.MarshalVT()
 }
