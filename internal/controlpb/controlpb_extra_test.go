@@ -6,21 +6,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCommandProtoExtra(t *testing.T) {
-	msg := &Command{
-		Uid:    "test",
-		Method: MethodTypeDisconnect,
-		Params: Raw("{}"),
-	}
-
-	_, b := msg.Method.EnumDescriptor()
-	require.Equal(t, []int{0}, b)
-
-	require.Equal(t, "test", msg.GetUid())
-	require.Equal(t, MethodTypeDisconnect, msg.GetMethod())
-	require.NotZero(t, msg.String())
-}
-
 func TestNodeProtoExtra(t *testing.T) {
 	msg := &Node{
 		Uid:         "test",

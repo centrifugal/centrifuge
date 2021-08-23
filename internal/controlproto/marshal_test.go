@@ -13,8 +13,8 @@ func TestEncoder(t *testing.T) {
 
 	cmd := &controlpb.Command{
 		Uid:    "test",
-		Method: controlpb.MethodTypeDisconnect,
-		Params: controlpb.Raw("{}"),
+		Method: controlpb.Command_DISCONNECT,
+		Params: []byte("{}"),
 	}
 	d, err := encoder.EncodeCommand(cmd)
 	require.NoError(t, err)

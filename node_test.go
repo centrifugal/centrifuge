@@ -667,7 +667,7 @@ func TestNode_handleControl(t *testing.T) {
 		enc := controlproto.NewProtobufEncoder()
 
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeSurveyRequest,
+			Method: controlpb.Command_SURVEY_REQUEST,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -675,7 +675,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.EqualError(t, err, "unexpected EOF")
 
 		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeSurveyResponse,
+			Method: controlpb.Command_SURVEY_RESPONSE,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -683,7 +683,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.EqualError(t, err, "unexpected EOF")
 
 		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeNotification,
+			Method: controlpb.Command_NOTIFICATION,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -699,7 +699,7 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeNode,
+			Method: controlpb.Command_NODE,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -708,7 +708,7 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeNode,
+			Method: controlpb.Command_NODE,
 			Params: paramsBytes,
 		})
 		require.NoError(t, err)
@@ -731,7 +731,7 @@ func TestNode_handleControl(t *testing.T) {
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
 			Uid:    client.uid,
-			Method: controlpb.MethodTypeSubscribe,
+			Method: controlpb.Command_SUBSCRIBE,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -742,7 +742,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
 			Uid:    client.uid,
-			Method: controlpb.MethodTypeSubscribe,
+			Method: controlpb.Command_SUBSCRIBE,
 			Params: paramsBytes,
 		})
 		require.NoError(t, err)
@@ -775,7 +775,7 @@ func TestNode_handleControl(t *testing.T) {
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
 			Uid:    client.uid,
-			Method: controlpb.MethodTypeUnsubscribe,
+			Method: controlpb.Command_UNSUBSCRIBE,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -786,7 +786,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
 			Uid:    client.uid,
-			Method: controlpb.MethodTypeUnsubscribe,
+			Method: controlpb.Command_UNSUBSCRIBE,
 			Params: paramsBytes,
 		})
 		require.NoError(t, err)
@@ -824,7 +824,7 @@ func TestNode_handleControl(t *testing.T) {
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
 			Uid:    client.uid,
-			Method: controlpb.MethodTypeDisconnect,
+			Method: controlpb.Command_DISCONNECT,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -834,7 +834,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
 			Uid:    client.uid,
-			Method: controlpb.MethodTypeDisconnect,
+			Method: controlpb.Command_DISCONNECT,
 			Params: paramsBytes,
 		})
 		require.NoError(t, err)

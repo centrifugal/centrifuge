@@ -229,7 +229,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	n.mu.Unlock()
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
-		Method: controlpb.MethodTypeShutdown,
+		Method: controlpb.Command_SHUTDOWN,
 	}
 	_ = n.publishControl(cmd, "")
 	if closer, ok := n.broker.(Closer); ok {
@@ -372,7 +372,7 @@ func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyReque
 
 		cmd := &controlpb.Command{
 			Uid:    n.uid,
-			Method: controlpb.MethodTypeSurveyResponse,
+			Method: controlpb.Command_SURVEY_RESPONSE,
 			Params: params,
 		}
 		_ = n.publishControl(cmd, fromNodeID)
@@ -493,7 +493,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
-		Method: controlpb.MethodTypeSurveyRequest,
+		Method: controlpb.Command_SURVEY_REQUEST,
 		Params: params,
 	}
 	err = n.publishControl(cmd, "")
@@ -581,23 +581,23 @@ func (n *Node) handleControl(data []byte) error {
 	params := cmd.Params
 
 	switch method {
-	case controlpb.MethodTypeNode:
+	case controlpb.Command_NODE:
 		cmd, err := n.controlDecoder.DecodeNode(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding node control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.nodeCmd(cmd)
-	case controlpb.MethodTypeShutdown:
+	case controlpb.Command_SHUTDOWN:
 		return n.shutdownCmd(uid)
-	case controlpb.MethodTypeUnsubscribe:
+	case controlpb.Command_UNSUBSCRIBE:
 		cmd, err := n.controlDecoder.DecodeUnsubscribe(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.hub.unsubscribe(cmd.User, cmd.Channel, cmd.Client)
-	case controlpb.MethodTypeSubscribe:
+	case controlpb.Command_SUBSCRIBE:
 		cmd, err := n.controlDecoder.DecodeSubscribe(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding subscribe control params", map[string]interface{}{"error": err.Error()}))
@@ -608,35 +608,35 @@ func (n *Node) handleControl(data []byte) error {
 			recoverSince = &StreamPosition{Offset: cmd.RecoverSince.Offset, Epoch: cmd.RecoverSince.Epoch}
 		}
 		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithPresence(cmd.Presence), WithJoinLeave(cmd.JoinLeave), WithPosition(cmd.Position), WithRecover(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince))
-	case controlpb.MethodTypeDisconnect:
+	case controlpb.Command_DISCONNECT:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Whitelist)
-	case controlpb.MethodTypeSurveyRequest:
+	case controlpb.Command_SURVEY_REQUEST:
 		cmd, err := n.controlDecoder.DecodeSurveyRequest(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding survey request control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.handleSurveyRequest(uid, cmd)
-	case controlpb.MethodTypeSurveyResponse:
+	case controlpb.Command_SURVEY_RESPONSE:
 		cmd, err := n.controlDecoder.DecodeSurveyResponse(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding survey response control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.handleSurveyResponse(uid, cmd)
-	case controlpb.MethodTypeNotification:
+	case controlpb.Command_NOTIFICATION:
 		cmd, err := n.controlDecoder.DecodeNotification(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding notification control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
 		return n.handleNotification(uid, cmd)
-	case controlpb.MethodTypeRefresh:
+	case controlpb.Command_REFRESH:
 		cmd, err := n.controlDecoder.DecodeRefresh(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding refresh control params", map[string]interface{}{"error": err.Error()}))
@@ -778,7 +778,7 @@ func (n *Node) Notify(op string, data []byte, toNodeID string) error {
 	}
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
-		Method: controlpb.MethodTypeNotification,
+		Method: controlpb.Command_NOTIFICATION,
 		Params: params,
 	}
 	return n.publishControl(cmd, toNodeID)
@@ -837,7 +837,7 @@ func (n *Node) pubNode(nodeID string) error {
 
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
-		Method: controlpb.MethodTypeNode,
+		Method: controlpb.Command_NODE,
 		Params: params,
 	}
 
@@ -871,7 +871,7 @@ func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error
 	params, _ := n.controlEncoder.EncodeSubscribe(subscribe)
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
-		Method: controlpb.MethodTypeSubscribe,
+		Method: controlpb.Command_SUBSCRIBE,
 		Params: params,
 	}
 	return n.publishControl(cmd, "")
@@ -888,7 +888,7 @@ func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
 	params, _ := n.controlEncoder.EncodeRefresh(refresh)
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
-		Method: controlpb.MethodTypeRefresh,
+		Method: controlpb.Command_REFRESH,
 		Params: params,
 	}
 	return n.publishControl(cmd, "")
@@ -905,7 +905,7 @@ func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) e
 	params, _ := n.controlEncoder.EncodeUnsubscribe(unsubscribe)
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
-		Method: controlpb.MethodTypeUnsubscribe,
+		Method: controlpb.Command_UNSUBSCRIBE,
 		Params: params,
 	}
 	return n.publishControl(cmd, "")
@@ -925,7 +925,7 @@ func (n *Node) pubDisconnect(user string, disconnect *Disconnect, clientID strin
 	params, _ := n.controlEncoder.EncodeDisconnect(protoDisconnect)
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
-		Method: controlpb.MethodTypeDisconnect,
+		Method: controlpb.Command_DISCONNECT,
 		Params: params,
 	}
 	return n.publishControl(cmd, "")
@@ -1321,7 +1321,7 @@ type nodeRegistry struct {
 	// currentUID keeps uid of current node
 	currentUID string
 	// nodes is a map with information about known nodes.
-	nodes map[string]controlpb.Node
+	nodes map[string]*controlpb.Node
 	// updates track time we last received ping from node. Used to clean up nodes map.
 	updates map[string]int64
 }
@@ -1329,14 +1329,14 @@ type nodeRegistry struct {
 func newNodeRegistry(currentUID string) *nodeRegistry {
 	return &nodeRegistry{
 		currentUID: currentUID,
-		nodes:      make(map[string]controlpb.Node),
+		nodes:      make(map[string]*controlpb.Node),
 		updates:    make(map[string]int64),
 	}
 }
 
-func (r *nodeRegistry) list() []controlpb.Node {
+func (r *nodeRegistry) list() []*controlpb.Node {
 	r.mu.RLock()
-	nodes := make([]controlpb.Node, len(r.nodes))
+	nodes := make([]*controlpb.Node, len(r.nodes))
 	i := 0
 	for _, info := range r.nodes {
 		nodes[i] = info
@@ -1346,7 +1346,7 @@ func (r *nodeRegistry) list() []controlpb.Node {
 	return nodes
 }
 
-func (r *nodeRegistry) get(uid string) controlpb.Node {
+func (r *nodeRegistry) get(uid string) *controlpb.Node {
 	r.mu.RLock()
 	info := r.nodes[uid]
 	r.mu.RUnlock()
@@ -1358,7 +1358,7 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 	r.mu.Lock()
 	if node, ok := r.nodes[info.Uid]; ok {
 		if info.Metrics != nil {
-			r.nodes[info.Uid] = *info
+			r.nodes[info.Uid] = info
 		} else {
 			node.Version = info.Version
 			node.NumChannels = info.NumChannels
@@ -1370,7 +1370,7 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 			r.nodes[info.Uid] = node
 		}
 	} else {
-		r.nodes[info.Uid] = *info
+		r.nodes[info.Uid] = info
 		isNewNode = true
 	}
 	r.updates[info.Uid] = time.Now().Unix()
