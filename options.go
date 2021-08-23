@@ -45,6 +45,8 @@ type SubscribeOptions struct {
 	Recover bool
 	// Data to send to a client with Subscribe Push.
 	Data []byte
+	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
+	RecoverSince *StreamPosition
 	// clientID to subscribe.
 	clientID string
 }
@@ -109,6 +111,58 @@ func WithSubscribeData(data []byte) SubscribeOption {
 	}
 }
 
+// WithRecoverSince allows setting SubscribeOptions.RecoverFrom.
+func WithRecoverSince(since *StreamPosition) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.RecoverSince = since
+	}
+}
+
+// RefreshOptions ...
+type RefreshOptions struct {
+	// Expired can close connection with expired reason.
+	Expired bool
+	// ExpireAt defines time in future when subscription should expire,
+	// zero value means no expiration.
+	ExpireAt int64
+	// Info defines custom channel information, zero value means no channel information.
+	Info []byte
+	// clientID to refresh.
+	clientID string
+}
+
+// RefreshOption is a type to represent various Refresh options.
+type RefreshOption func(options *RefreshOptions)
+
+// WithRefreshClient to limit refresh only for specified client ID.
+func WithRefreshClient(clientID string) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.clientID = clientID
+	}
+}
+
+// WithRefreshExpired to set expired flag - connection will be closed with DisconnectExpired.
+func WithRefreshExpired(expired bool) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.Expired = expired
+	}
+}
+
+// WithRefreshExpireAt to set unix seconds in the future when connection should expire.
+// Zero value means no expiration.
+func WithRefreshExpireAt(expireAt int64) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.ExpireAt = expireAt
+	}
+}
+
+// WithRefreshInfo to override connection info.
+func WithRefreshInfo(info []byte) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.Info = info
+	}
+}
+
 // UnsubscribeOptions ...
 type UnsubscribeOptions struct {
 	// clientID to unsubscribe.
@@ -133,6 +187,8 @@ type DisconnectOptions struct {
 	Disconnect *Disconnect
 	// ClientWhitelist contains client IDs to keep.
 	ClientWhitelist []string
+	// clientID to disconnect.
+	clientID string
 }
 
 // DisconnectOption is a type to represent various Disconnect options.
@@ -145,8 +201,15 @@ func WithDisconnect(disconnect *Disconnect) DisconnectOption {
 	}
 }
 
-// WithClientWhitelist allows to set ClientWhitelist.
-func WithClientWhitelist(whitelist []string) DisconnectOption {
+// WithDisconnectClient allows to set Client.
+func WithDisconnectClient(clientID string) DisconnectOption {
+	return func(opts *DisconnectOptions) {
+		opts.clientID = clientID
+	}
+}
+
+// WithDisconnectClientWhitelist allows to set ClientWhitelist.
+func WithDisconnectClientWhitelist(whitelist []string) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.ClientWhitelist = whitelist
 	}
@@ -162,6 +225,8 @@ type HistoryOptions struct {
 	// Broker should not return any publications in result.
 	// Positive integer does what it should.
 	Limit int
+	// Reverse direction
+	Reverse bool
 }
 
 // HistoryOption is a type to represent various History options.
@@ -181,5 +246,12 @@ func WithLimit(limit int) HistoryOption {
 func WithSince(sp *StreamPosition) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Since = sp
+	}
+}
+
+// WithSince allows to set HistoryOptions.Since option.
+func WithReverse(reverse bool) HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.Reverse = reverse
 	}
 }

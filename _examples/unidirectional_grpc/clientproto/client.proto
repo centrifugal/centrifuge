@@ -4,12 +4,8 @@ package protocol;
 
 option go_package = "./;clientproto";
 
-message StreamData {
-  bytes data = 1;
-}
-
 service CentrifugeUni {
-  rpc Consume(ConnectRequest) returns (stream StreamData);
+  rpc Consume(ConnectRequest) returns (stream Push);
 }
 
 message ConnectRequest {

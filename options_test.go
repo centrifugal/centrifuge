@@ -44,7 +44,7 @@ func TestWithDisconnect(t *testing.T) {
 }
 
 func TestWithClientWhitelist(t *testing.T) {
-	opt := WithClientWhitelist([]string{"client"})
+	opt := WithDisconnectClientWhitelist([]string{"client"})
 	opts := &DisconnectOptions{}
 	opt(opts)
 	require.Equal(t, []string{"client"}, opts.ClientWhitelist)
@@ -76,4 +76,28 @@ func TestWithUnsubscribeClient(t *testing.T) {
 	opts := &UnsubscribeOptions{}
 	opt(opts)
 	require.Equal(t, "client", opts.clientID)
+}
+
+func TestWithDisconnectClient(t *testing.T) {
+	opt := WithDisconnectClient("client")
+	opts := &DisconnectOptions{}
+	opt(opts)
+	require.Equal(t, "client", opts.clientID)
+}
+
+func TestRefreshOptions(t *testing.T) {
+	refreshOpts := []RefreshOption{
+		WithRefreshClient("client"),
+		WithRefreshExpireAt(12),
+		WithRefreshExpired(true),
+		WithRefreshInfo([]byte(`test`)),
+	}
+	opts := &RefreshOptions{}
+	for _, opt := range refreshOpts {
+		opt(opts)
+	}
+	require.Equal(t, int64(12), opts.ExpireAt)
+	require.True(t, opts.Expired)
+	require.Equal(t, "client", opts.clientID)
+	require.Equal(t, []byte(`test`), opts.Info)
 }

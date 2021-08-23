@@ -1,3 +1,106 @@
+v0.18.0
+=======
+
+This release has **several backward incompatible changes**. Changes should affect the small number of Centrifuge library users, and it should be possible to adapt only by slightly modifying server-side code. Follow release notes carefully.
+
+* **Breaking change**. Client history API behavior changed. Now history call does not return all publications by default ([#196](https://github.com/centrifugal/centrifuge/issues/196)). See an advice how you can handle this change in a backwards compatible way below.
+* **Breaking change**. Redis STREAM data structure now used by default to keep a publication history in Redis Engine ([#195](https://github.com/centrifugal/centrifuge/issues/195)). Previously Centrifuge Redis Engine used LIST data structure by default. See `RedisBrokerConfig.UseLists` option to turn on previous behavior. Redis streams is a recommended way though, support for LIST data structure may be eventually removed.
+* **Breaking change**. `Transport.Encoding` removed. It turns out that this option is not really useful for the Centrifuge library and can only cause confusion.
+* **Breaking change**. Change `Node.History` behavior – Unrecoverable Position error now returned based on the wrong epoch only.
+* **Breaking change**. Remove deprecated seq/gen fields - see [#197](https://github.com/centrifugal/centrifuge/issues/197). Those were deprecated for a long time.
+* **Breaking change**. `Client.Connect` now does not return an error – this allows Centrifuge to automatically send a proper Disconnect push towards the connection.
+* **Breaking change**. `WithClientWhitelist` renamed to `WithDisconnectClientWhitelist`.
+* Much faster JSON client protocol. Expect at least 4x speedup for small messages JSON encoding/decoding. For large messages the difference can be even bigger. This is possible due to using code generation for encoding and a faster library for JSON decoding in `centrifugal/protocol` package. See [centrifugal/protocol#8](https://github.com/centrifugal/protocol/pull/8).
+* Message broadcast allocates less - see [#193](https://github.com/centrifugal/centrifuge/issues/193). Can be noticeable when broadcasting messages to large number of active subscribers. The side effect of this change is that Transport implementations should now have `Write` and `WriteMany` methods.
+* Centrifuge now uses official Protobuf library for Go with [planetscale/vtprotobuf](https://github.com/planetscale/vtprotobuf) code generator instead of [gogo/protobuf](https://github.com/gogo/protobuf) library which is not maintained these days anymore. The performance of Protobuf marshaling/unmarshaling is comparable.
+* New `Config.UseSingleFlight` option added. The option can help to reduce the load on Broker and Presence manager during massive reconnect and history synchronization scenarios.
+* WebSocket subprotocol is now can be used for switching to Protobuf protocol ([#194](https://github.com/centrifugal/centrifuge/issues/194)). This will help to avoid adding `?format=protobuf` in WebSocket connection URL.
+* `OnTransportWrite` callback added to inject custom logic before actual write to a client connection.
+* `OnNodeInfoSend` callback added to attach custom data to Node control frame.
+* `Client.Info` method which returns a copy of the connection info (set by `Credentials`).
+* `Node.History` now supports iteration in reversed order ([#201](https://github.com/centrifugal/centrifuge/issues/201)).
+* `Client.Refresh` and `Node.Refresh` methods added to prolong/expire connections (useful for unidirectional transports).
+* GRPC unidirectional transport example improvements
+
+Regarding client history API change. So previously when a client called history it received all publications in a stream by default. In Centrifuge v0.18.0 it will only receive current stream top position (`offset` and `epoch`) without any publications.
+
+To mimic previous behavior you can use code like this:
+
+```go
+node.OnConnect(func(client *centrifuge.Client) {
+    client.OnHistory(func(e centrifuge.HistoryEvent, cb centrifuge.HistoryCallback) {
+        if e.Filter.Limit == 0 {
+            result, err := node.History(e.Channel,
+                centrifuge.WithSince(e.Filter.Since),
+                centrifuge.WithLimit(centrifuge.NoLimit),
+            )
+            if err != nil {
+                cb(centrifuge.HistoryReply{}, err)
+                return
+            }
+            cb(centrifuge.HistoryReply{Result: &result}, nil)
+            return
+        }
+        cb(centrifuge.HistoryReply{}, nil)
+    })
+})
+```
+
+I.e. explicitly handle zero limit and return all publications in response (using `centrifuge.NoLimit`). Then upgrade clients to use recent Centrifuge clients (will be released soon after Centrifuge v0.18.0) which allow setting limit explicitly and remove this custom logic eventually from the server code.
+
+```
+gorelease -base v0.17.1 -version v0.18.0
+github.com/centrifugal/centrifuge
+---------------------------------
+Incompatible changes:
+- (*Client).Connect: changed from func(ConnectRequest) error to func(ConnectRequest)
+- CompatibilityFlags: removed
+- EncodingType: removed
+- EncodingTypeBinary: removed
+- EncodingTypeJSON: removed
+- NodeInfo: old is comparable, new is not
+- RedisBrokerConfig.UseStreams: removed
+- Transport.Write: changed from func(...[]byte) error to func([]byte) error
+- Transport.WriteMany: added
+- TransportInfo.Encoding, method set of Transport: removed
+- TransportInfo.Encoding: removed
+- UseSeqGen: removed
+- WithClientWhitelist: removed
+Compatible changes:
+- (*Client).Info: added
+- (*Client).Refresh: added
+- (*Hub).NumSubscriptions: added
+- (*Hub).UserConnections: added
+- (*Node).OnNodeInfoSend: added
+- (*Node).OnTransportWrite: added
+- (*Node).Refresh: added
+- Config.UseSingleFlight: added
+- ConnectEvent.Channels: added
+- DisconnectChannelLimit: added
+- HistoryFilter.Reverse: added
+- HistoryOptions.Reverse: added
+- NodeInfo.Data: added
+- NodeInfo.NumSubs: added
+- NodeInfoSendHandler: added
+- NodeInfoSendReply: added
+- RedisBrokerConfig.UseLists: added
+- RefreshOption: added
+- RefreshOptions: added
+- SubscribeOptions.RecoverSince: added
+- TransportWriteEvent: added
+- TransportWriteHandler: added
+- WithDisconnectClient: added
+- WithDisconnectClientWhitelist: added
+- WithRecoverSince: added
+- WithRefreshClient: added
+- WithRefreshExpireAt: added
+- WithRefreshExpired: added
+- WithRefreshInfo: added
+- WithReverse: added
+
+v0.18.0 is a valid semantic version for this release.
+```
+
 v0.17.1
 =======
 

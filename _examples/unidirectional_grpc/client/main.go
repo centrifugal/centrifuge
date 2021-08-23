@@ -51,22 +51,12 @@ func handlePush(push *clientproto.Push) {
 
 func handleStream(stream clientproto.CentrifugeUni_ConsumeClient) {
 	for {
-		streamData, err := stream.Recv()
+		push, err := stream.Recv()
 		if err != nil {
 			log.Printf("error recv: %v", err)
 			return
 		}
-		var push clientproto.Push
-		if len(streamData.GetData()) == 0 {
-			// Could be ping.
-			continue
-		}
-		err = proto.Unmarshal(streamData.GetData(), &push)
-		if err != nil {
-			log.Printf("error unmarshal push: %v", err)
-			return
-		}
-		handlePush(&push)
+		handlePush(push)
 	}
 }
 

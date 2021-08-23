@@ -32,7 +32,6 @@ type websocketTransport struct {
 }
 
 type websocketTransportOptions struct {
-	encType            EncodingType
 	protoType          ProtocolType
 	pingInterval       time.Duration
 	writeTimeout       time.Duration
@@ -87,11 +86,6 @@ func (t *websocketTransport) Protocol() ProtocolType {
 	return t.opts.protoType
 }
 
-// Encoding returns transport encoding.
-func (t *websocketTransport) Encoding() EncodingType {
-	return t.opts.encType
-}
-
 // Unidirectional returns whether transport is unidirectional.
 func (t *websocketTransport) Unidirectional() bool {
 	return false
@@ -124,7 +118,25 @@ func (t *websocketTransport) writeData(data []byte) error {
 }
 
 // Write data to transport.
-func (t *websocketTransport) Write(messages ...[]byte) error {
+func (t *websocketTransport) Write(message []byte) error {
+	select {
+	case <-t.closeCh:
+		return nil
+	default:
+		protoType := t.Protocol().toProto()
+		if protoType == protocol.TypeJSON {
+			// Fast path for one JSON message.
+			return t.writeData(message)
+		}
+		encoder := protocol.GetDataEncoder(protoType)
+		defer protocol.PutDataEncoder(protoType, encoder)
+		_ = encoder.Encode(message)
+		return t.writeData(encoder.Finish())
+	}
+}
+
+// WriteMany data to transport.
+func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
@@ -247,6 +259,7 @@ func NewWebsocketHandler(n *Node, c WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
 		ReadBufferSize:    c.ReadBufferSize,
 		EnableCompression: c.Compression,
+		Subprotocols:      []string{"centrifuge-protobuf"},
 	}
 	if c.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool
@@ -311,13 +324,15 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	var protoType = ProtocolTypeJSON
-	if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
-		protoType = ProtocolTypeProtobuf
-	}
 
-	var encType = EncodingTypeJSON
-	if r.URL.Query().Get("encoding") == "binary" {
-		encType = EncodingTypeBinary
+	subProtocol := conn.Subprotocol()
+	if subProtocol == "centrifuge-protobuf" {
+		protoType = ProtocolTypeProtobuf
+	} else {
+		// This is a deprecated way to get a protocol type.
+		if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
+			protoType = ProtocolTypeProtobuf
+		}
 	}
 
 	// Separate goroutine for better GC of caller's data.
@@ -326,7 +341,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
-			encType:            encType,
 			protoType:          protoType,
 		}
 

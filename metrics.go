@@ -23,6 +23,7 @@ var (
 	buildInfoGauge         *prometheus.GaugeVec
 	numClientsGauge        prometheus.Gauge
 	numUsersGauge          prometheus.Gauge
+	numSubsGauge           prometheus.Gauge
 	numChannelsGauge       prometheus.Gauge
 	numNodesGauge          prometheus.Gauge
 	replyErrorCount        *prometheus.CounterVec
@@ -137,6 +138,13 @@ func setNumUsers(n float64) {
 	defer registryMu.RUnlock()
 
 	numUsersGauge.Set(n)
+}
+
+func setNumSubscriptions(n float64) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
+	numSubsGauge.Set(n)
 }
 
 func setNumChannels(n float64) {
@@ -338,6 +346,13 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Number of unique users connected.",
 	})
 
+	numSubsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "num_subscriptions",
+		Help:      "Number of subscriptions.",
+	})
+
 	numNodesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
@@ -378,7 +393,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Subsystem:  "client",
 		Name:       "command_duration_seconds",
 		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-		Help:       "Client command duration summary.",
+		Help:       "clientID command duration summary.",
 	}, []string{"method"})
 
 	recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -467,6 +482,9 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		return err
 	}
 	if err := registry.Register(numUsersGauge); err != nil {
+		return err
+	}
+	if err := registry.Register(numSubsGauge); err != nil {
 		return err
 	}
 	if err := registry.Register(numChannelsGauge); err != nil {

@@ -42,8 +42,9 @@ type Config struct {
 	// After this queue size exceeded Centrifuge closes client's connection.
 	ClientQueueMaxSize int
 	// ClientChannelLimit sets upper limit of client-side channels each client
-	// can subscribe to. Server-side subscription amount should be controlled by
-	// application code.
+	// can subscribe to. Client-side subscriptions attempts will get an ErrorLimitExceeded
+	// in subscribe reply. Server-side subscriptions above limit will result into
+	// DisconnectChannelLimit.
 	ClientChannelLimit int
 	// UserConnectionLimit limits number of client connections to single Node
 	// from user with the same ID. Zero value means unlimited. Anonymous users
@@ -64,6 +65,9 @@ type Config struct {
 	// RecoveryMaxPublicationLimit allows limiting the number of Publications that could be
 	// restored during the automatic recovery process. See also HistoryMaxPublicationLimit.
 	RecoveryMaxPublicationLimit int
+	// UseSingleFlight allows turning on mode where singleflight will be automatically used for
+	// Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
+	UseSingleFlight bool
 }
 
 const (

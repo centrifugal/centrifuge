@@ -68,7 +68,7 @@ func main() {
 			err = node.Disconnect(
 				client.UserID(),
 				centrifuge.WithDisconnect(centrifuge.DisconnectConnectionLimit),
-				centrifuge.WithClientWhitelist([]string{client.ID()}),
+				centrifuge.WithDisconnectClientWhitelist([]string{client.ID()}),
 			)
 			if err != nil {
 				client.Disconnect(centrifuge.DisconnectServerError)

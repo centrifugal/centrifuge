@@ -38,10 +38,6 @@ func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.protoType
 }
 
-func (t *customWebsocketTransport) Encoding() centrifuge.EncodingType {
-	return centrifuge.EncodingTypeJSON
-}
-
 // Unidirectional returns whether transport is unidirectional.
 func (t *customWebsocketTransport) Unidirectional() bool {
 	return false
@@ -73,7 +69,28 @@ func (t *customWebsocketTransport) read() ([]byte, bool, error) {
 }
 
 // Write ...
-func (t *customWebsocketTransport) Write(messages ...[]byte) error {
+func (t *customWebsocketTransport) Write(message []byte) error {
+	select {
+	case <-t.closeCh:
+		return nil
+	default:
+		messageType := ws.OpText
+		protoType := protocol.TypeJSON
+
+		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
+			messageType = ws.OpBinary
+			protoType = protocol.TypeProtobuf
+		}
+
+		encoder := protocol.GetDataEncoder(protoType)
+		defer protocol.PutDataEncoder(protoType, encoder)
+		_ = encoder.Encode(message)
+		return wsutil.WriteServerMessage(t.conn, messageType, encoder.Finish())
+	}
+}
+
+// WriteMany ...
+func (t *customWebsocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil

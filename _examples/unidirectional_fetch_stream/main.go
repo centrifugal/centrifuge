@@ -177,11 +177,7 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 		defer func() { _ = closeFn() }()
 		defer close(transport.closedCh) // need to execute this after client closeFn.
 
-		err = c.Connect(centrifuge.ConnectRequest{})
-		if err != nil {
-			log.Printf("error connect client: %v", err)
-			return
-		}
+		c.Connect(centrifuge.ConnectRequest{})
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -289,10 +285,6 @@ func (t *streamTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeJSON
 }
 
-func (t *streamTransport) Encoding() centrifuge.EncodingType {
-	return centrifuge.EncodingTypeJSON
-}
-
 // Unidirectional returns whether transport is unidirectional.
 func (t *streamTransport) Unidirectional() bool {
 	return true
@@ -303,7 +295,11 @@ func (t *streamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-func (t *streamTransport) Write(messages ...[]byte) error {
+func (t *streamTransport) Write(message []byte) error {
+	return t.WriteMany(message)
+}
+
+func (t *streamTransport) WriteMany(messages ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

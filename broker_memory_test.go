@@ -123,11 +123,11 @@ func TestMemoryHistoryHub(t *testing.T) {
 	// test that stream data cleaned up by periodic task
 	h.RLock()
 	require.Equal(t, 2, len(h.streams))
-	items, top, err := h.streams[ch1].Get(0, -1)
+	items, top, err := h.streams[ch1].Get(0, false, -1, false)
 	require.NoError(t, err)
 	require.Nil(t, items)
 	require.NotZero(t, top)
-	items, top, err = h.streams[ch2].Get(0, -1)
+	items, top, err = h.streams[ch2].Get(0, false, -1, false)
 	require.NoError(t, err)
 	require.Nil(t, items)
 	require.NotZero(t, top)
@@ -250,19 +250,7 @@ func TestMemoryBrokerRecover(t *testing.T) {
 	require.Equal(t, 0, len(pubs))
 }
 
-func BenchmarkMemoryPublish_OneChannel(b *testing.B) {
-	e := testMemoryBroker()
-	rawData := protocol.Raw(`{"bench": true}`)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := e.Publish("channel", rawData, PublishOptions{})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryPublish_1Ch(b *testing.B) {
 	e := testMemoryBroker()
 	rawData := protocol.Raw(`{"bench": true}`)
 	b.SetParallelism(128)
@@ -277,24 +265,7 @@ func BenchmarkMemoryPublish_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryPublish_History_OneChannel(b *testing.B) {
-	e := testMemoryBroker()
-	rawData := protocol.Raw(`{"bench": true}`)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 60 * time.Second}
-		var err error
-		streamTop, err := e.Publish("channel", rawData, chOpts)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if streamTop.Offset == 0 {
-			b.Fatal("zero offset")
-		}
-	}
-}
-
-func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryPublish_History_1Ch(b *testing.B) {
 	e := testMemoryBroker()
 	rawData := protocol.Raw(`{"bench": true}`)
 	chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 60 * time.Second}
@@ -314,25 +285,7 @@ func BenchmarkMemoryPublish_History_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryHistory_OneChannel(b *testing.B) {
-	e := testMemoryBroker()
-	rawData := protocol.Raw("{}")
-	for i := 0; i < 4; i++ {
-		_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _, err := e.History("channel", HistoryFilter{
-			Limit: -1,
-			Since: nil,
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryHistory_1Ch(b *testing.B) {
 	e := testMemoryBroker()
 	rawData := protocol.Raw("{}")
 	for i := 0; i < 4; i++ {
@@ -352,7 +305,7 @@ func BenchmarkMemoryHistory_OneChannel_Parallel(b *testing.B) {
 	})
 }
 
-func BenchmarkMemoryRecover_OneChannel_Parallel(b *testing.B) {
+func BenchmarkMemoryRecover_1Ch(b *testing.B) {
 	e := testMemoryBroker()
 	rawData := protocol.Raw("{}")
 	numMessages := 1000
@@ -378,15 +331,15 @@ func BenchmarkMemoryRecover_OneChannel_Parallel(b *testing.B) {
 }
 
 type recoverTest struct {
-	Name            string
-	HistorySize     int
-	HistoryLifetime int
-	NumPublications int
-	SinceOffset     uint64
-	NumRecovered    int
-	Sleep           int
-	Limit           int
-	Recovered       bool
+	Name              string
+	HistorySize       int
+	HistoryTTLSeconds int
+	NumPublications   int
+	SinceOffset       uint64
+	NumRecovered      int
+	Sleep             int
+	Limit             int
+	Recovered         bool
 }
 
 var recoverTests = []recoverTest{
@@ -404,12 +357,10 @@ var recoverTests = []recoverTest{
 
 type recoverTestChannel struct {
 	ChannelPrefix string
-	IsSeq         bool
 }
 
 var recoverTestChannels = []recoverTestChannel{
-	{"test_recovery_memory_offset_", false},
-	{"test_recovery_memory_seq_", true},
+	{"test_recovery_memory_offset_"},
 }
 
 func TestMemoryClientSubscribeRecover(t *testing.T) {
@@ -430,7 +381,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 				client := newTestClient(t, node, "42")
 
 				for i := 1; i <= tt.NumPublications; i++ {
-					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(tt.HistorySize, time.Duration(tt.HistoryLifetime)*time.Second))
+					_, _ = node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(tt.HistorySize, time.Duration(tt.HistoryTTLSeconds)*time.Second))
 				}
 
 				time.Sleep(time.Duration(tt.Sleep) * time.Second)
@@ -447,11 +398,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 					Channel: channel,
 					Recover: true,
 					Epoch:   streamTop.Epoch,
-				}
-				if recoverTestChannel.IsSeq {
-					subscribeCmd.Seq = uint32(tt.SinceOffset)
-				} else {
-					subscribeCmd.Offset = tt.SinceOffset
+					Offset:  tt.SinceOffset,
 				}
 
 				rwWrapper := testReplyWriterWrapper()
@@ -488,7 +435,7 @@ func (it *historyIterationTest) prepareHistoryIteration(t testing.TB, node *Node
 	startPosition := historyResult.StreamPosition
 
 	for i := 1; i <= numMessages; i++ {
-		_, err := node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Minute))
+		_, err := node.Publish(channel, []byte(`{}`), WithHistory(numMessages, time.Hour))
 		require.NoError(t, err)
 	}
 
@@ -521,7 +468,52 @@ func (it *historyIterationTest) testHistoryIteration(t testing.TB, node *Node, s
 		n += len(res.Publications)
 	}
 	if n != it.NumMessages {
-		t.Fail()
+		t.Fatal("num messages mismatch")
+	}
+}
+
+func (it *historyIterationTest) testHistoryIterationReverse(t testing.TB, node *Node, startPosition StreamPosition) {
+	var (
+		n         int
+		epoch     = startPosition.Epoch
+		iterateBy = it.IterateBy
+	)
+	var since *StreamPosition
+outer:
+	for {
+		res, err := node.History(
+			historyIterationChannel,
+			WithSince(since),
+			WithLimit(iterateBy),
+			WithReverse(true),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var checkOffset uint64
+	loop:
+		for _, pub := range res.Publications {
+			n += 1
+			if pub.Offset == startPosition.Offset+1 {
+				break outer
+			}
+			if checkOffset == 0 {
+				checkOffset = pub.Offset
+				continue loop
+			}
+			if pub.Offset > checkOffset {
+				t.Fatal("incorrect order")
+			}
+			checkOffset = pub.Offset
+		}
+		if len(res.Publications) == 0 || len(res.Publications) < iterateBy {
+			break
+		}
+		earliestPub := res.Publications[len(res.Publications)-1]
+		since = &StreamPosition{Offset: earliestPub.Offset, Epoch: epoch}
+	}
+	if n != it.NumMessages {
+		t.Fatalf("num messages mismatch, expected %d, got %d", it.NumMessages, n)
 	}
 }
 
@@ -530,6 +522,13 @@ func TestMemoryBrokerHistoryIteration(t *testing.T) {
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(t, e.node)
 	it.testHistoryIteration(t, e.node, startPosition)
+}
+
+func TestMemoryBrokerHistoryIterationReverse(t *testing.T) {
+	e := testMemoryBroker()
+	it := historyIterationTest{10000, 100}
+	startPosition := it.prepareHistoryIteration(t, e.node)
+	it.testHistoryIterationReverse(t, e.node, startPosition)
 }
 
 func BenchmarkMemoryBrokerHistoryIteration(b *testing.B) {

@@ -7,7 +7,6 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
-	"github.com/centrifugal/centrifuge/internal/recovery"
 
 	"github.com/centrifugal/protocol"
 )
@@ -67,13 +66,17 @@ func (h *Hub) remove(c *Client) error {
 	return h.connShards[index(c.UserID(), numHubShards)].remove(c)
 }
 
-// userConnections returns all user connections to the current Node.
-func (h *Hub) userConnections(userID string) map[string]*Client {
+// UserConnections returns all user connections to the current Node.
+func (h *Hub) UserConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
 }
 
-func (h *Hub) disconnect(userID string, disconnect *Disconnect, whitelist []string) error {
-	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, whitelist)
+func (h *Hub) disconnect(userID string, disconnect *Disconnect, clientID string, whitelist []string) error {
+	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, whitelist)
+}
+
+func (h *Hub) refresh(userID string, clientID string, opts ...RefreshOption) error {
+	return h.connShards[index(userID, numHubShards)].refresh(userID, clientID, opts...)
 }
 
 func (h *Hub) unsubscribe(userID string, ch string, clientID string) error {
@@ -104,11 +107,11 @@ func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPositio
 
 // broadcastJoin sends message to all clients subscribed on channel.
 func (h *Hub) broadcastJoin(ch string, info *ClientInfo) error {
-	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: *infoToProto(info)})
+	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: infoToProto(info)})
 }
 
 func (h *Hub) broadcastLeave(ch string, info *ClientInfo) error {
-	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: *infoToProto(info)})
+	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: infoToProto(info)})
 }
 
 // NumSubscribers returns number of current subscribers for a given channel.
@@ -140,6 +143,16 @@ func (h *Hub) NumUsers() int {
 	for i := 0; i < numHubShards; i++ {
 		// users do not overlap among shards.
 		total += h.connShards[i].NumUsers()
+	}
+	return total
+}
+
+// NumSubscriptions returns a total number of subscriptions.
+func (h *Hub) NumSubscriptions() int {
+	var total int
+	for i := 0; i < numHubShards; i++ {
+		// users do not overlap among shards.
+		total += h.subShards[i].NumSubscriptions()
 	}
 	return total
 }
@@ -282,7 +295,33 @@ func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
 	return firstErr
 }
 
-func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []string) error {
+func (h *connShard) refresh(user string, clientID string, opts ...RefreshOption) error {
+	userConnections := h.userConnections(user)
+
+	var firstErr error
+	var errMu sync.Mutex
+
+	var wg sync.WaitGroup
+	for _, c := range userConnections {
+		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			err := c.Refresh(opts...)
+			errMu.Lock()
+			defer errMu.Unlock()
+			if err != nil && err != io.EOF && firstErr == nil {
+				firstErr = err
+			}
+		}(c)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID string, whitelist []string) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -291,6 +330,9 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []
 	var wg sync.WaitGroup
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
+			continue
+		}
+		if clientID != "" && c.ID() != clientID {
 			continue
 		}
 		wg.Add(1)
@@ -308,7 +350,7 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, whitelist []
 	return firstErr
 }
 
-// userConnections returns all connections of user with specified UserID.
+// userConnections returns all connections of user with specified User.
 func (h *connShard) userConnections(userID string) map[string]*Client {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -453,11 +495,6 @@ func (h *subShard) removeSub(ch string, c *Client) (bool, error) {
 
 // broadcastPublication sends message to all clients subscribed on channel.
 func (h *subShard) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
-	useSeqGen := hasFlag(CompatibilityFlags, UseSeqGen)
-	if useSeqGen {
-		pub.Seq, pub.Gen = recovery.UnpackUint64(pub.Offset)
-	}
-
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -474,18 +511,9 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonPublicationReply == nil {
-				// Do not send offset to clients for now.
-				var offset uint64
-				if useSeqGen {
-					offset = pub.Offset
-					pub.Offset = 0
-				}
 				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
 				if err != nil {
 					return err
-				}
-				if useSeqGen {
-					pub.Offset = offset
 				}
 				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
 				if err != nil {
@@ -499,18 +527,9 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 			_ = c.writePublication(channel, pub, jsonPublicationReply, sp)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufPublicationReply == nil {
-				// Do not send offset to clients for now.
-				var offset uint64
-				if useSeqGen {
-					offset = pub.Offset
-					pub.Offset = 0
-				}
 				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
 				if err != nil {
 					return err
-				}
-				if useSeqGen {
-					pub.Offset = offset
 				}
 				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
 				if err != nil {
@@ -640,6 +659,17 @@ func (h *subShard) NumChannels() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.subs)
+}
+
+// NumSubscriptions returns total number of subscriptions.
+func (h *subShard) NumSubscriptions() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	total := 0
+	for _, subscriptions := range h.subs {
+		total += len(subscriptions)
+	}
+	return total
 }
 
 // Channels returns a slice of all active channels.

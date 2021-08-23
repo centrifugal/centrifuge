@@ -41,11 +41,6 @@ func (t *sockjsTransport) Protocol() ProtocolType {
 	return ProtocolTypeJSON
 }
 
-// Encoding returns transport encoding.
-func (t *sockjsTransport) Encoding() EncodingType {
-	return EncodingTypeJSON
-}
-
 // Unidirectional returns whether transport is unidirectional.
 func (t *sockjsTransport) Unidirectional() bool {
 	return false
@@ -60,7 +55,19 @@ func (t *sockjsTransport) DisabledPushFlags() uint64 {
 }
 
 // Write data to transport.
-func (t *sockjsTransport) Write(messages ...[]byte) error {
+func (t *sockjsTransport) Write(message []byte) error {
+	select {
+	case <-t.closeCh:
+		return nil
+	default:
+		// No need to use protocol encoders here since
+		// SockJS only supports JSON.
+		return t.session.Send(string(message))
+	}
+}
+
+// Write data to transport.
+func (t *sockjsTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil

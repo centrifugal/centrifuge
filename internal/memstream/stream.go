@@ -90,23 +90,31 @@ func (s *Stream) Clear() {
 
 // Get items since provided position.
 // If seq is zero then elements since current first element in stream will be returned.
-func (s *Stream) Get(offset uint64, limit int) ([]Item, uint64, error) {
-	if offset >= s.top+1 {
+func (s *Stream) Get(offset uint64, useOffset bool, limit int, reverse bool) ([]Item, uint64, error) {
+	if useOffset && offset >= s.top+1 {
 		return nil, s.top, nil
 	}
 
 	var el *list.Element
-	if offset > 0 {
+	if useOffset {
 		var ok bool
 		el, ok = s.index[offset]
 		if !ok {
-			el = s.list.Front()
+			if reverse {
+				el = nil
+			} else {
+				el = s.list.Front()
+			}
 		}
 	} else {
-		el = s.list.Front()
+		if reverse {
+			el = s.list.Back()
+		} else {
+			el = s.list.Front()
+		}
 	}
 
-	if el == nil {
+	if el == nil || limit == 0 {
 		return nil, s.top, nil
 	}
 
@@ -122,16 +130,30 @@ func (s *Stream) Get(offset uint64, limit int) ([]Item, uint64, error) {
 
 	result := make([]Item, 0, resultCap)
 
-	item := el.Value.(Item)
-	result = append(result, item)
-	i := 1
-	for e := el.Next(); e != nil; e = e.Next() {
-		if limit >= 0 && i >= limit {
-			break
-		}
-		i++
-		item := e.Value.(Item)
+	if reverse {
+		item := el.Value.(Item)
 		result = append(result, item)
+		i := 1
+		for e := el.Prev(); e != nil; e = e.Prev() {
+			if limit >= 0 && i >= limit {
+				break
+			}
+			i++
+			item := e.Value.(Item)
+			result = append(result, item)
+		}
+	} else {
+		item := el.Value.(Item)
+		result = append(result, item)
+		i := 1
+		for e := el.Next(); e != nil; e = e.Next() {
+			if limit >= 0 && i >= limit {
+				break
+			}
+			i++
+			item := e.Value.(Item)
+			result = append(result, item)
+		}
 	}
 	return result, s.top, nil
 }

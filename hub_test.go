@@ -49,7 +49,22 @@ func (t *testTransport) setSink(sink chan []byte) {
 	t.sink = sink
 }
 
-func (t *testTransport) Write(messages ...[]byte) error {
+func (t *testTransport) Write(message []byte) error {
+	if t.writeErr != nil {
+		return t.writeErr
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return io.EOF
+	}
+	if t.sink != nil {
+		t.sink <- message
+	}
+	return nil
+}
+
+func (t *testTransport) WriteMany(messages ...[]byte) error {
 	if t.writeErr != nil {
 		return t.writeErr
 	}
@@ -59,10 +74,8 @@ func (t *testTransport) Write(messages ...[]byte) error {
 		return io.EOF
 	}
 	for _, buf := range messages {
-		dataCopy := make([]byte, len(buf))
-		copy(dataCopy, buf)
 		if t.sink != nil {
-			t.sink <- dataCopy
+			t.sink <- buf
 		}
 	}
 	return nil
@@ -76,15 +89,14 @@ func (t *testTransport) Protocol() ProtocolType {
 	return t.protoType
 }
 
-func (t *testTransport) Encoding() EncodingType {
-	return EncodingTypeJSON
-}
-
 func (t *testTransport) Unidirectional() bool {
 	return t.unidirectional
 }
 
 func (t *testTransport) DisabledPushFlags() uint64 {
+	if t.Unidirectional() {
+		return 0
+	}
 	return PushFlagDisconnect
 }
 
@@ -110,7 +122,7 @@ func TestHub(t *testing.T) {
 	require.NoError(t, err)
 	err = h.add(c)
 	require.NoError(t, err)
-	conns := h.userConnections("test")
+	conns := h.UserConnections("test")
 	require.Equal(t, 1, len(conns))
 	require.Equal(t, 1, h.NumClients())
 	require.Equal(t, 1, h.NumUsers())
@@ -119,12 +131,12 @@ func TestHub(t *testing.T) {
 	c.uid = "invalid"
 	err = h.remove(c)
 	require.NoError(t, err)
-	require.Len(t, h.userConnections("test"), 1)
+	require.Len(t, h.UserConnections("test"), 1)
 
 	c.uid = validUID
 	err = h.remove(c)
 	require.NoError(t, err)
-	require.Len(t, h.userConnections("test"), 0)
+	require.Len(t, h.UserConnections("test"), 0)
 }
 
 func TestHubUnsubscribe(t *testing.T) {
@@ -163,8 +175,8 @@ func TestHubDisconnect(t *testing.T) {
 
 	client := newTestSubscribedClient(t, n, "42", "test_channel")
 	clientWithReconnect := newTestSubscribedClient(t, n, "24", "test_channel_reconnect")
-	require.Len(t, n.hub.userConnections("42"), 1)
-	require.Len(t, n.hub.userConnections("24"), 1)
+	require.Len(t, n.hub.UserConnections("42"), 1)
+	require.Len(t, n.hub.UserConnections("24"), 1)
 	require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
 	require.Equal(t, 1, n.hub.NumSubscribers("test_channel_reconnect"))
 
@@ -182,35 +194,35 @@ func TestHubDisconnect(t *testing.T) {
 	}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("1", DisconnectForceNoReconnect, nil)
+	err := n.hub.disconnect("1", DisconnectForceNoReconnect, "", nil)
 	require.NoError(t, err)
 
 	// Disconnect subscribed user.
-	err = n.hub.disconnect("42", DisconnectForceNoReconnect, nil)
+	err = n.hub.disconnect("42", DisconnectForceNoReconnect, "", nil)
 	require.NoError(t, err)
 	select {
 	case <-client.transport.(*testTransport).closeCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
-	require.Len(t, n.hub.userConnections("42"), 0)
+	require.Len(t, n.hub.UserConnections("42"), 0)
 	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
 
 	// Disconnect subscribed user with reconnect.
-	err = n.hub.disconnect("24", DisconnectForceReconnect, nil)
+	err = n.hub.disconnect("24", DisconnectForceReconnect, "", nil)
 	require.NoError(t, err)
 	select {
 	case <-clientWithReconnect.transport.(*testTransport).closeCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("no data in sink")
 	}
-	require.Len(t, n.hub.userConnections("24"), 0)
+	require.Len(t, n.hub.UserConnections("24"), 0)
 	require.Equal(t, 0, n.hub.NumSubscribers("test_channel_reconnect"))
 
 	wg.Wait()
 
-	require.Len(t, n.hub.userConnections("24"), 0)
-	require.Len(t, n.hub.userConnections("42"), 0)
+	require.Len(t, n.hub.UserConnections("24"), 0)
+	require.Len(t, n.hub.UserConnections("42"), 0)
 	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
 	require.Equal(t, 0, n.hub.NumSubscribers("test_channel_reconnect"))
 }
@@ -228,7 +240,7 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	client := newTestSubscribedClient(t, n, "12", "test_channel")
 	clientToKeep := newTestSubscribedClient(t, n, "12", "test_channel")
 
-	require.Len(t, n.hub.userConnections("12"), 2)
+	require.Len(t, n.hub.UserConnections("12"), 2)
 	require.Equal(t, 2, n.hub.NumSubscribers("test_channel"))
 
 	shouldBeClosed := make(chan struct{})
@@ -245,7 +257,7 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	whitelist := []string{clientToKeep.ID()}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("12", DisconnectConnectionLimit, whitelist)
+	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", whitelist)
 	require.NoError(t, err)
 
 	select {
@@ -254,7 +266,54 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 		case <-shouldNotBeClosed:
 			require.Fail(t, "client should not be disconnected")
 		case <-time.After(time.Second):
-			require.Len(t, n.hub.userConnections("12"), 1)
+			require.Len(t, n.hub.UserConnections("12"), 1)
+			require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
+		}
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	}
+}
+
+func TestHubDisconnect_ClientID(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+
+	client := newTestSubscribedClient(t, n, "12", "test_channel")
+	clientToKeep := newTestSubscribedClient(t, n, "12", "test_channel")
+
+	require.Len(t, n.hub.UserConnections("12"), 2)
+	require.Equal(t, 2, n.hub.NumSubscribers("test_channel"))
+
+	shouldBeClosed := make(chan struct{})
+	shouldNotBeClosed := make(chan struct{})
+
+	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		close(shouldBeClosed)
+	}
+
+	clientToKeep.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		close(shouldNotBeClosed)
+	}
+
+	clientToDisconnect := client.ID()
+
+	// Disconnect not existed user.
+	err := n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, nil)
+	require.NoError(t, err)
+
+	select {
+	case <-shouldBeClosed:
+		select {
+		case <-shouldNotBeClosed:
+			require.Fail(t, "client should not be disconnected")
+		case <-time.After(time.Second):
+			require.Len(t, n.hub.UserConnections("12"), 1)
 			require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
 		}
 	case <-time.After(time.Second):
@@ -450,7 +509,7 @@ func TestUserConnections(t *testing.T) {
 	require.NoError(t, err)
 	_ = h.add(c)
 
-	connections := h.userConnections(c.UserID())
+	connections := h.UserConnections(c.UserID())
 	require.Equal(t, h.connShards[index(c.UserID(), numHubShards)].conns, connections)
 }
 

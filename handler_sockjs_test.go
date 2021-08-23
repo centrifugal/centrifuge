@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/centrifugal/protocol"
 
@@ -30,7 +29,6 @@ func TestSockjsHandler(t *testing.T) {
 	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		require.Equal(t, transportSockJS, event.Transport.Name())
 		require.Equal(t, ProtocolTypeJSON, event.Transport.Protocol())
-		require.Equal(t, EncodingTypeJSON, event.Transport.Encoding())
 		return ConnectReply{
 			Credentials: &Credentials{UserID: "user"},
 			Data:        []byte(`{"SockJS connect response": 1}`),
@@ -105,9 +103,105 @@ func TestSockjsHandler(t *testing.T) {
 		}
 	}()
 
-	select {
-	case <-doneCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for closing done channel")
+	waitWithTimeout(t, doneCh)
+}
+
+func TestSockjsTransportWrite(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, event.Transport.Protocol(), ProtocolTypeJSON)
+		transport := event.Transport.(Transport)
+		// Write to transport directly - this is only valid for tests, in normal situation
+		// we write over client methods.
+		require.NoError(t, transport.Write([]byte("hello")))
+		return ConnectReply{}, DisconnectForceNoReconnect
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/sockjs/", NewSockjsHandler(node, SockjsConfig{
+		HandlerPrefix: "/connection/sockjs",
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	_, p, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, "o", string(p)) // open frame of SockJS protocol.
+
+	connectRequest := &protocol.ConnectRequest{
+		Token: "boom",
 	}
+	params, _ := json.Marshal(connectRequest)
+	cmd := &protocol.Command{
+		Id:     1,
+		Method: protocol.Command_CONNECT,
+		Params: params,
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	err = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
+	require.NoError(t, err)
+
+	_, p, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, "a[\"hello\"]", string(p))
+}
+
+func TestSockjsTransportWriteMany(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, event.Transport.Protocol(), ProtocolTypeJSON)
+		transport := event.Transport.(Transport)
+		// Write to transport directly - this is only valid for tests, in normal situation
+		// we write over client methods.
+		require.NoError(t, transport.WriteMany([]byte("1"), []byte("22")))
+		return ConnectReply{}, DisconnectForceNoReconnect
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/sockjs/", NewSockjsHandler(node, SockjsConfig{
+		HandlerPrefix: "/connection/sockjs",
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	_, p, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, "o", string(p)) // open frame of SockJS protocol.
+
+	connectRequest := &protocol.ConnectRequest{
+		Token: "boom",
+	}
+	params, _ := json.Marshal(connectRequest)
+	cmd := &protocol.Command{
+		Id:     1,
+		Method: protocol.Command_CONNECT,
+		Params: params,
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	err = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
+	require.NoError(t, err)
+
+	_, p, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, "a[\"1\\n22\"]", string(p))
 }

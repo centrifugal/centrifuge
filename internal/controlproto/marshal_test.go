@@ -12,16 +12,16 @@ func TestEncoder(t *testing.T) {
 	encoder := NewProtobufEncoder()
 
 	cmd := &controlpb.Command{
-		UID:    "test",
-		Method: controlpb.MethodTypeDisconnect,
-		Params: controlpb.Raw("{}"),
+		Uid:    "test",
+		Method: controlpb.Command_DISCONNECT,
+		Params: []byte("{}"),
 	}
 	d, err := encoder.EncodeCommand(cmd)
 	require.NoError(t, err)
 	require.NotNil(t, d)
 
 	node := &controlpb.Node{
-		UID:         "test",
+		Uid:         "test",
 		Name:        "test name",
 		Version:     "v1.0.0",
 		NumChannels: 2,
@@ -63,7 +63,7 @@ func TestEncoder(t *testing.T) {
 	require.NotNil(t, d)
 
 	surveyRequest := &controlpb.SurveyRequest{
-		ID:   1,
+		Id:   1,
 		Op:   "test",
 		Data: nil,
 	}
@@ -72,7 +72,7 @@ func TestEncoder(t *testing.T) {
 	require.NotNil(t, d)
 
 	surveyResponse := &controlpb.SurveyResponse{
-		ID:   1,
+		Id:   1,
 		Code: 1,
 		Data: nil,
 	}

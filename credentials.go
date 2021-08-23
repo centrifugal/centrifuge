@@ -2,7 +2,7 @@ package centrifuge
 
 import "context"
 
-// Credentials allows to authenticate connection when set into context.
+// Credentials allow authenticating connection when set into context.
 type Credentials struct {
 	// UserID tells library an ID of current user. Leave this empty string
 	// if you need access from anonymous user.
@@ -26,7 +26,7 @@ type credentialsContextKeyType int
 // credentialsContextKey allows Go code to set Credentials into context.
 var credentialsContextKey credentialsContextKeyType
 
-// SetCredentials allows to set connection Credentials to Context. Credentials set
+// SetCredentials allows setting connection Credentials to Context. Credentials set
 // to Context in authentication middleware will be used by Centrifuge library to
 // authenticate user.
 func SetCredentials(ctx context.Context, cred *Credentials) context.Context {
@@ -34,7 +34,7 @@ func SetCredentials(ctx context.Context, cred *Credentials) context.Context {
 	return ctx
 }
 
-// GetCredentials allows to extract Credentials from Context (if set previously).
+// GetCredentials allows extracting Credentials from Context (if set previously).
 func GetCredentials(ctx context.Context) (*Credentials, bool) {
 	if val := ctx.Value(credentialsContextKey); val != nil {
 		cred, ok := val.(*Credentials)

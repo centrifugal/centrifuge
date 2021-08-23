@@ -6,3 +6,4 @@ vendor/
 *.xlog
 *.snap.inprogress
 devdata/
+.orig

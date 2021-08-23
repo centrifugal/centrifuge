@@ -187,7 +187,7 @@ func (b *Broker) PublishLeave(ch string, info *centrifuge.ClientInfo) error {
 func (b *Broker) clientInfoString(clientInfo *centrifuge.ClientInfo) string {
 	var info string
 	if clientInfo != nil {
-		byteMessage, err := infoToProto(clientInfo).Marshal()
+		byteMessage, err := infoToProto(clientInfo).MarshalVT()
 		if err != nil {
 			return info
 		}
@@ -267,6 +267,7 @@ type historyRequest struct {
 	Channel        string
 	Offset         uint64
 	Limit          int
+	Reverse        bool
 	IncludePubs    bool
 	HistoryMetaTTL int
 }
@@ -334,7 +335,7 @@ func (m *historyResponse) DecodeMsgpack(d *msgpack.Decoder) error {
 		} else {
 			if len(info) > 0 {
 				var i protocol.ClientInfo
-				if err = i.Unmarshal([]byte(info)); err != nil {
+				if err = i.UnmarshalVT([]byte(info)); err != nil {
 					return err
 				}
 				pub.Info = infoFromProto(&i)
@@ -351,7 +352,11 @@ func (b *Broker) History(ch string, filter centrifuge.HistoryFilter) ([]*centrif
 	var includePubs = true
 	var offset uint64
 	if filter.Since != nil {
-		offset = filter.Since.Offset + 1
+		if filter.Reverse {
+			offset = filter.Since.Offset - 1
+		} else {
+			offset = filter.Since.Offset + 1
+		}
 	}
 	var limit int
 	if filter.Limit == 0 {
@@ -366,6 +371,7 @@ func (b *Broker) History(ch string, filter centrifuge.HistoryFilter) ([]*centrif
 		Channel:        ch,
 		Offset:         offset,
 		Limit:          limit,
+		Reverse:        filter.Reverse,
 		IncludePubs:    includePubs,
 		HistoryMetaTTL: historyMetaTTLSeconds,
 	}
@@ -708,7 +714,7 @@ func (b *Broker) handleMessage(eventHandler centrifuge.BrokerEventHandler, msg p
 		}
 		if len(msg.Info) > 0 {
 			var info protocol.ClientInfo
-			err := info.Unmarshal(msg.Info)
+			err := info.UnmarshalVT(msg.Info)
 			if err == nil {
 				pub.Info = infoFromProto(&info)
 			}
@@ -716,13 +722,13 @@ func (b *Broker) handleMessage(eventHandler centrifuge.BrokerEventHandler, msg p
 		_ = eventHandler.HandlePublication(msg.Channel, pub, centrifuge.StreamPosition{Offset: msg.Offset, Epoch: msg.Epoch})
 	case "j":
 		var info protocol.ClientInfo
-		err := info.Unmarshal(msg.Info)
+		err := info.UnmarshalVT(msg.Info)
 		if err == nil {
 			_ = eventHandler.HandleJoin(msg.Channel, infoFromProto(&info))
 		}
 	case "l":
 		var info protocol.ClientInfo
-		err := info.Unmarshal(msg.Info)
+		err := info.UnmarshalVT(msg.Info)
 		if err == nil {
 			_ = eventHandler.HandleLeave(msg.Channel, infoFromProto(&info))
 		}

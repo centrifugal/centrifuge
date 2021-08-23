@@ -45,7 +45,7 @@ func (c *centrifugeUniClient) Consume(ctx context.Context, in *ConnectRequest, o
 }
 
 type CentrifugeUni_ConsumeClient interface {
-	Recv() (*StreamData, error)
+	Recv() (*Push, error)
 	grpc.ClientStream
 }
 
@@ -53,8 +53,8 @@ type centrifugeUniConsumeClient struct {
 	grpc.ClientStream
 }
 
-func (x *centrifugeUniConsumeClient) Recv() (*StreamData, error) {
-	m := new(StreamData)
+func (x *centrifugeUniConsumeClient) Recv() (*Push, error) {
+	m := new(Push)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ func _CentrifugeUni_Consume_Handler(srv interface{}, stream grpc.ServerStream) e
 }
 
 type CentrifugeUni_ConsumeServer interface {
-	Send(*StreamData) error
+	Send(*Push) error
 	grpc.ServerStream
 }
 
@@ -106,7 +106,7 @@ type centrifugeUniConsumeServer struct {
 	grpc.ServerStream
 }
 
-func (x *centrifugeUniConsumeServer) Send(m *StreamData) error {
+func (x *centrifugeUniConsumeServer) Send(m *Push) error {
 	return x.ServerStream.SendMsg(m)
 }
 

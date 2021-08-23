@@ -92,13 +92,19 @@ func main() {
 	}
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		return centrifuge.ConnectReply{
-			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				exampleChannel: {
-					Recover:  true,
-					Position: true,
-				},
+		subs := map[string]centrifuge.SubscribeOptions{
+			exampleChannel: {
+				Recover:  true,
+				Position: true,
 			},
+		}
+		for _, ch := range e.Channels {
+			if ch == "test1" || ch == "test2" {
+				subs[ch] = centrifuge.SubscribeOptions{}
+			}
+		}
+		return centrifuge.ConnectReply{
+			Subscriptions: subs,
 		}, nil
 	})
 
@@ -168,10 +174,8 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 			return
 		}
 		flusher.Flush()
-		if err = c.Connect(centrifuge.ConnectRequest{}); err != nil {
-			log.Printf("error connect client: %v", err)
-			return
-		}
+
+		c.Connect(centrifuge.ConnectRequest{})
 
 		pingInterval := 25 * time.Second
 		tick := time.NewTicker(pingInterval)
@@ -264,10 +268,6 @@ func (t *eventsourceTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeJSON
 }
 
-func (t *eventsourceTransport) Encoding() centrifuge.EncodingType {
-	return centrifuge.EncodingTypeJSON
-}
-
 // Unidirectional returns whether transport is unidirectional.
 func (t *eventsourceTransport) Unidirectional() bool {
 	return true
@@ -278,7 +278,11 @@ func (t *eventsourceTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-func (t *eventsourceTransport) Write(messages ...[]byte) error {
+func (t *eventsourceTransport) Write(message []byte) error {
+	return t.WriteMany(message)
+}
+
+func (t *eventsourceTransport) WriteMany(messages ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

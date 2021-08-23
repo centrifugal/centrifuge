@@ -197,7 +197,6 @@ type websocketTransport struct {
 }
 
 type websocketTransportOptions struct {
-	encType            centrifuge.EncodingType
 	protoType          centrifuge.ProtocolType
 	pingInterval       time.Duration
 	writeTimeout       time.Duration
@@ -257,11 +256,6 @@ func (t *websocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.opts.protoType
 }
 
-// Encoding returns transport encoding.
-func (t *websocketTransport) Encoding() centrifuge.EncodingType {
-	return t.opts.encType
-}
-
 // Unidirectional returns whether transport is unidirectional.
 func (t *websocketTransport) Unidirectional() bool {
 	return true
@@ -298,8 +292,12 @@ func (t *websocketTransport) writeData(data []byte) error {
 	return nil
 }
 
+func (t *websocketTransport) Write(message []byte) error {
+	return t.WriteMany(message)
+}
+
 // Write data to transport.
-func (t *websocketTransport) Write(messages ...[]byte) error {
+func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
@@ -483,7 +481,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
-			encType:            centrifuge.EncodingTypeJSON,
 			protoType:          centrifuge.ProtocolTypeJSON,
 		}
 
@@ -540,10 +537,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		err = c.Connect(connectRequest)
-		if err != nil {
-			return
-		}
+		c.Connect(connectRequest)
 
 		for {
 			_, _, err := conn.ReadMessage()

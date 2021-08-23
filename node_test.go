@@ -250,13 +250,13 @@ func TestClientEventHub(t *testing.T) {
 
 func TestNodeRegistry(t *testing.T) {
 	registry := newNodeRegistry("node1")
-	nodeInfo1 := controlpb.Node{UID: "node1"}
-	nodeInfo2 := controlpb.Node{UID: "node2"}
+	nodeInfo1 := controlpb.Node{Uid: "node1"}
+	nodeInfo2 := controlpb.Node{Uid: "node2"}
 	registry.add(&nodeInfo1)
 	registry.add(&nodeInfo2)
 	require.Equal(t, 2, len(registry.list()))
 	info := registry.get("node1")
-	require.Equal(t, "node1", info.UID)
+	require.Equal(t, "node1", info.Uid)
 	registry.clean(10 * time.Second)
 	time.Sleep(2 * time.Second)
 	registry.clean(time.Second)
@@ -446,7 +446,7 @@ func TestNode_Disconnect(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
-	require.True(t, len(n.hub.userConnections("42")) == 0)
+	require.True(t, len(n.hub.UserConnections("42")) == 0)
 }
 
 func TestNode_pubUnsubscribe(t *testing.T) {
@@ -468,7 +468,7 @@ func TestNode_pubDisconnect(t *testing.T) {
 	testBroker, _ := node.broker.(*TestBroker)
 	require.EqualValues(t, 1, testBroker.publishControlCount)
 
-	err := node.pubDisconnect("42", DisconnectForceNoReconnect, nil)
+	err := node.pubDisconnect("42", DisconnectForceNoReconnect, "", nil)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testBroker.publishControlCount)
 }
@@ -667,7 +667,7 @@ func TestNode_handleControl(t *testing.T) {
 		enc := controlproto.NewProtobufEncoder()
 
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeSurveyRequest,
+			Method: controlpb.Command_SURVEY_REQUEST,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -675,7 +675,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.EqualError(t, err, "unexpected EOF")
 
 		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeSurveyResponse,
+			Method: controlpb.Command_SURVEY_RESPONSE,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -683,7 +683,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.EqualError(t, err, "unexpected EOF")
 
 		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeNotification,
+			Method: controlpb.Command_NOTIFICATION,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -699,7 +699,7 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeNode,
+			Method: controlpb.Command_NODE,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -708,7 +708,7 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.MethodTypeNode,
+			Method: controlpb.Command_NODE,
 			Params: paramsBytes,
 		})
 		require.NoError(t, err)
@@ -730,8 +730,8 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
-			Method: controlpb.MethodTypeSubscribe,
+			Uid:    client.uid,
+			Method: controlpb.Command_SUBSCRIBE,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -741,8 +741,8 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
-			Method: controlpb.MethodTypeSubscribe,
+			Uid:    client.uid,
+			Method: controlpb.Command_SUBSCRIBE,
 			Params: paramsBytes,
 		})
 		require.NoError(t, err)
@@ -774,8 +774,8 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
-			Method: controlpb.MethodTypeUnsubscribe,
+			Uid:    client.uid,
+			Method: controlpb.Command_UNSUBSCRIBE,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -785,8 +785,8 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
-			Method: controlpb.MethodTypeUnsubscribe,
+			Uid:    client.uid,
+			Method: controlpb.Command_UNSUBSCRIBE,
 			Params: paramsBytes,
 		})
 		require.NoError(t, err)
@@ -823,8 +823,8 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
-			Method: controlpb.MethodTypeDisconnect,
+			Uid:    client.uid,
+			Method: controlpb.Command_DISCONNECT,
 			Params: []byte("random"),
 		})
 		require.NoError(t, err)
@@ -833,8 +833,8 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
-			Method: controlpb.MethodTypeDisconnect,
+			Uid:    client.uid,
+			Method: controlpb.Command_DISCONNECT,
 			Params: paramsBytes,
 		})
 		require.NoError(t, err)
@@ -849,7 +849,7 @@ func TestNode_handleControl(t *testing.T) {
 		}
 		require.NoError(t, err)
 		require.Zero(t, n.hub.NumSubscribers("test_channel"))
-		require.Zero(t, len(n.hub.userConnections("42")))
+		require.Zero(t, len(n.hub.UserConnections("42")))
 	})
 
 	t.Run("Unknown", func(t *testing.T) {
@@ -862,7 +862,7 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			UID:    client.uid,
+			Uid:    client.uid,
 			Method: -1,
 			Params: nil,
 		})
@@ -1047,6 +1047,30 @@ func TestNode_OnNotification_NoHandler(t *testing.T) {
 	require.Equal(t, errNotificationHandlerNotRegistered, err)
 }
 
+func TestNode_OnTransportWrite(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnTransportWrite(func(client *Client, event TransportWriteEvent) bool {
+		if event.IsPush {
+			close(done)
+		}
+		return false
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
 func TestNode_handleNotification_NoHandler(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1070,6 +1094,58 @@ func TestErrors(t *testing.T) {
 	require.Equal(t, "102: unknown channel", errText)
 }
 
+func TestSingleFlightHistory(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	node.config.UseSingleFlight = true
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	result, err := node.History("test", WithLimit(1), WithSince(&StreamPosition{
+		Offset: 0,
+		Epoch:  "",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 0)
+	_, _ = node.Publish("test", []byte("{}"), WithHistory(10, 60*time.Second))
+	result, err = node.History("test", WithLimit(1), WithSince(&StreamPosition{
+		Offset: 0,
+		Epoch:  "",
+	}))
+	require.NoError(t, err)
+	require.Len(t, result.Publications, 1)
+}
+
+func TestSingleFlightPresence(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	node.config.UseSingleFlight = true
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{
+					Presence: true,
+				},
+			}, nil)
+		})
+	})
+
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	result, err := node.Presence("test")
+	require.NoError(t, err)
+	require.Len(t, result.Presence, 0)
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	subscribeClient(t, client, "test")
+
+	result, err = node.Presence("test")
+	require.NoError(t, err)
+	require.Len(t, result.Presence, 1)
+
+	stats, err := node.PresenceStats("test")
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumClients)
+	require.Equal(t, 1, stats.NumUsers)
+}
+
 func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -1083,4 +1159,33 @@ func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 	require.Panics(t, func() {
 		_ = handler.HandleLeave("test", nil)
 	})
+}
+
+func TestNode_OnNodeInfoSend(t *testing.T) {
+	n, err := New(DefaultConfig)
+	if err != nil {
+		panic(err)
+	}
+	done := make(chan struct{})
+
+	n.OnNodeInfoSend(func() NodeInfoSendReply {
+		close(done)
+		return NodeInfoSendReply{
+			Data: []byte("{}"),
+		}
+	})
+
+	err = n.Run()
+	require.NoError(t, err)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+
+	result, err := n.Info()
+	require.NoError(t, err)
+	require.Equal(t, []byte("{}"), result.Nodes[0].Data)
 }

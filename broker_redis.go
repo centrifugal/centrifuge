@@ -39,12 +39,13 @@ const (
 
 var _ Broker = (*RedisBroker)(nil)
 
-// RedisBroker uses Redis to implement Broker functionality.
-// This broker allows to scale Centrifuge-based server to many instances and
-// load balance client connections between them.
-// RedisBroker additionally supports Redis Sentinel, client-side consistent
-// sharding and can work with Redis Cluster (including client-side sharding
-// between different Redis Clusters to scale PUB/SUB).
+// RedisBroker uses Redis to implement Broker functionality. This broker allows
+// scaling Centrifuge-based server to many instances and load balance client
+// connections between them.
+// RedisBroker additionally supports Redis Sentinel, client-side consistent sharding
+// and can work with Redis Cluster (including client-side sharding between different
+// Redis Clusters to scale PUB/SUB).
+// By default Redis >= 5 required (due to the fact RedisBroker uses STREAM data structure).
 type RedisBroker struct {
 	controlRound           uint64 // Keep atomic on struct top for 32-bit architectures.
 	node                   *Node
@@ -87,13 +88,13 @@ type RedisBrokerConfig struct {
 	// least.
 	HistoryMetaTTL time.Duration
 
-	// UseStreams allows enabling usage of Redis streams instead of list data
-	// structure to keep history. Redis streams are more effective in terms of
-	// missed publication recovery and history pagination since we don't need
-	// to load an entire structure to process in memory (as we do in case of
-	// Redis Lists). Minimal Redis version required is 5.
-	// TODO v1: use by default?
-	UseStreams bool
+	// UseLists allows enabling usage of Redis LIST instead of STREAM data
+	// structure to keep history. LIST support exist mostly for backward
+	// compatibility since STREAM seems superior. If you have a use case
+	// where you need to turn on this option in new setup - please share,
+	// otherwise LIST support can be removed at some point in the future.
+	// Iteration over history in reversed order not supported with lists.
+	UseLists bool
 
 	// PubSubNumWorkers sets how many PUB/SUB message processing workers will
 	// be started. By default runtime.NumCPU() workers used.
@@ -122,7 +123,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		shards:                 config.Shards,
 		config:                 config,
 		sharding:               len(config.Shards) > 1,
-		historyListScript:      redis.NewScript(2, historySource),
+		historyListScript:      redis.NewScript(2, historyListSource),
 		historyStreamScript:    redis.NewScript(2, historyStreamSource),
 		addHistoryListScript:   redis.NewScript(2, addHistorySource),
 		addHistoryStreamScript: redis.NewScript(2, addHistoryStreamSource),
@@ -215,7 +216,7 @@ return {offset, epoch}
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
 	// ARGV[3] - list meta hash key expiration time
-	historySource = `
+	historyListSource = `
 redis.replicate_commands()
 local offset = redis.call("hget", KEYS[2], "s")
 local epoch
@@ -242,7 +243,8 @@ return {offset, epoch, pubs}
 	// ARGV[1] - include publications into response
 	// ARGV[2] - offset
 	// ARGV[3] - limit
-	// ARGV[4] - stream meta hash key expiration time
+	// ARGV[4] - reverse
+	// ARGV[5] - stream meta hash key expiration time
 	historyStreamSource = `
 redis.replicate_commands()
 local offset = redis.call("hget", KEYS[2], "s")
@@ -254,15 +256,31 @@ if epoch == false or epoch == nil then
   epoch = redis.call('time')[1]
   redis.call("hset", KEYS[2], "e", epoch)
 end
-if ARGV[4] ~= '0' then
-	redis.call("expire", KEYS[2], ARGV[4])
+if ARGV[5] ~= '0' then
+	redis.call("expire", KEYS[2], ARGV[5])
 end
 local pubs = nil
 if ARGV[1] ~= "0" then
   if ARGV[3] ~= "0" then
-    pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
+	if ARGV[4] == '0' then
+    	pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
+	else
+		local getOffset = offset
+		if tonumber(ARGV[2]) ~= 0 then
+			getOffset = tonumber(ARGV[2])
+		end
+		pubs = redis.call("xrevrange", KEYS[1], getOffset, "-", "COUNT", ARGV[3])
+	end
   else
-	pubs = redis.call("xrange", KEYS[1], ARGV[2], "+")
+	if ARGV[4] == '0' then
+		pubs = redis.call("xrange", KEYS[1], ARGV[2], "+")
+	else
+		local getOffset = offset
+		if tonumber(ARGV[2]) ~= 0 then
+			getOffset = tonumber(ARGV[2])
+		end
+		pubs = redis.call("xrevrange", KEYS[1], getOffset, "-")
+	end
   end
 end
 return {offset, epoch, pubs}
@@ -291,7 +309,7 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 }
 
 func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
-	if !b.config.UseStreams {
+	if b.config.UseLists {
 		return nil
 	}
 	// Check whether Redis Streams supported.
@@ -332,7 +350,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 		Data: data,
 		Info: infoToProto(opts.ClientInfo),
 	}
-	byteMessage, err := protoPub.Marshal()
+	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {
 		return StreamPosition{}, err
 	}
@@ -368,7 +386,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 	var streamKey channelID
 	var size int
 	var script *redis.Script
-	if b.config.UseStreams {
+	if !b.config.UseLists {
 		streamKey = b.historyStreamKey(s, ch)
 		size = opts.HistorySize
 		script = b.addHistoryStreamScript
@@ -405,7 +423,7 @@ func (b *RedisBroker) PublishJoin(ch string, info *ClientInfo) error {
 func (b *RedisBroker) publishJoin(s *RedisShard, ch string, info *ClientInfo) error {
 	eChan := make(chan error, 1)
 
-	byteMessage, err := infoToProto(info).Marshal()
+	byteMessage, err := infoToProto(info).MarshalVT()
 	if err != nil {
 		return err
 	}
@@ -439,7 +457,7 @@ func (b *RedisBroker) PublishLeave(ch string, info *ClientInfo) error {
 func (b *RedisBroker) publishLeave(s *RedisShard, ch string, info *ClientInfo) error {
 	eChan := make(chan error, 1)
 
-	byteMessage, err := infoToProto(info).Marshal()
+	byteMessage, err := infoToProto(info).MarshalVT()
 	if err != nil {
 		return err
 	}
@@ -534,7 +552,7 @@ func (b *RedisBroker) History(ch string, filter HistoryFilter) ([]*Publication, 
 }
 
 func (b *RedisBroker) history(s *RedisShard, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	if b.config.UseStreams {
+	if !b.config.UseLists {
 		return b.historyStream(s, ch, filter)
 	}
 	return b.historyList(s, ch, filter)
@@ -547,7 +565,7 @@ func (b *RedisBroker) RemoveHistory(ch string) error {
 
 func (b *RedisBroker) removeHistory(s *RedisShard, ch string) error {
 	var key channelID
-	if b.config.UseStreams {
+	if !b.config.UseLists {
 		key = b.historyStreamKey(s, ch)
 	} else {
 		key = b.historyListKey(s, ch)
@@ -583,7 +601,7 @@ func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
 		ch = "{" + ch + "}"
 	}
-	if b.config.UseStreams {
+	if !b.config.UseLists {
 		return channelID(b.config.Prefix + ".stream.meta." + ch)
 	}
 	return channelID(b.config.Prefix + ".list.meta." + ch)
@@ -876,7 +894,7 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 	channel := b.extractChannel(chID)
 	if pushType == pubPushType {
 		var pub protocol.Publication
-		err := pub.Unmarshal(pushData)
+		err := pub.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
@@ -889,14 +907,14 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp)
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo
-		err := info.Unmarshal(pushData)
+		err := info.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
 		_ = eventHandler.HandleJoin(channel, infoFromProto(&info))
 	} else if pushType == leavePushType {
 		var info protocol.ClientInfo
-		err := info.Unmarshal(pushData)
+		err := info.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
@@ -1021,7 +1039,14 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 	var includePubs = true
 	var offset uint64
 	if filter.Since != nil {
-		offset = filter.Since.Offset + 1
+		if filter.Reverse {
+			offset = filter.Since.Offset - 1
+			if offset == 0 {
+				includePubs = false
+			}
+		} else {
+			offset = filter.Since.Offset + 1
+		}
 	}
 	var limit int
 	if filter.Limit == 0 {
@@ -1033,13 +1058,13 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 
 	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
-	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, historyMetaTTLSeconds})
+	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, filter.Reverse, historyMetaTTLSeconds})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
 	}
 
-	latestPosition, publications, err := extractHistoryResponse(resp.reply, b.config.UseStreams, includePubs)
+	latestPosition, publications, err := extractHistoryResponse(resp.reply, !b.config.UseLists, includePubs)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
@@ -1066,7 +1091,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		return nil, StreamPosition{}, resp.err
 	}
 
-	latestPosition, publications, err := extractHistoryResponse(resp.reply, b.config.UseStreams, includePubs)
+	latestPosition, publications, err := extractHistoryResponse(resp.reply, !b.config.UseLists, includePubs)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
@@ -1228,7 +1253,7 @@ func sliceOfPubsStream(result interface{}, err error) ([]*Publication, error) {
 		}
 
 		var pub protocol.Publication
-		err = pub.Unmarshal(pushData)
+		err = pub.UnmarshalVT(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
@@ -1257,7 +1282,7 @@ func sliceOfPubsList(result interface{}, err error) ([]*Publication, error) {
 		}
 
 		var pub protocol.Publication
-		err = pub.Unmarshal(pushData)
+		err = pub.UnmarshalVT(pushData)
 		if err != nil {
 			return nil, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
