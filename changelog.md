@@ -1,3 +1,8 @@
+v0.18.1
+=======
+
+* Add `reverse` field to client protocol and handle it.
+
 v0.18.0
 =======
 

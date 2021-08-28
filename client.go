@@ -1690,6 +1690,8 @@ func (c *Client) handleHistory(params protocol.Raw, rw *replyWriter) error {
 		filter.Limit = maxPublicationLimit
 	}
 
+	filter.Reverse = cmd.Reverse
+
 	event := HistoryEvent{
 		Channel: channel,
 		Filter:  filter,
