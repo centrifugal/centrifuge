@@ -43,15 +43,16 @@ type redisConnPool interface {
 }
 
 type RedisShard struct {
-	config     RedisShardConfig
-	pool       redisConnPool
-	subCh      chan subRequest
-	pubCh      chan pubRequest
-	dataCh     chan *dataRequest
-	useCluster bool
-	scriptsMu  sync.RWMutex
-	scripts    []*redis.Script
-	scriptsCh  chan struct{}
+	config           RedisShardConfig
+	pool             redisConnPool
+	subCh            chan subRequest
+	pubCh            chan pubRequest
+	dataCh           chan *dataRequest
+	useCluster       bool
+	scriptsMu        sync.RWMutex
+	scripts          []*redis.Script
+	scriptsCh        chan struct{}
+	reloadPipelineCh chan struct{}
 }
 
 func confFromAddress(address string, conf RedisShardConfig) (RedisShardConfig, error) {
@@ -102,9 +103,10 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 		}
 	}
 	shard := &RedisShard{
-		config:     conf,
-		scriptsCh:  make(chan struct{}, 1),
-		useCluster: len(conf.ClusterAddresses) > 0,
+		config:           conf,
+		scriptsCh:        make(chan struct{}, 1),
+		useCluster:       len(conf.ClusterAddresses) > 0,
+		reloadPipelineCh: make(chan struct{}),
 	}
 	pool, err := newPool(shard, n, conf)
 	if err != nil {
@@ -249,6 +251,16 @@ func (s *RedisShard) registerScripts(scripts ...*redis.Script) {
 	}
 }
 
+// Best effort to process a signal for reloading data pipeline if we know
+// that connection should be re-established. If the signal can't be processed
+// then pipeline will be automatically reload upon first error from Redis.
+func (s *RedisShard) reloadPipeline() {
+	select {
+	case s.reloadPipelineCh <- struct{}{}:
+	default:
+	}
+}
+
 func (s *RedisShard) getDataResponse(r *dataRequest) *dataResponse {
 	if s.useCluster {
 		reply, err := s.processClusterDataRequest(r)
@@ -318,6 +330,8 @@ func (s *RedisShard) runDataPipeline() error {
 
 	for {
 		select {
+		case <-s.reloadPipelineCh:
+			return nil
 		case <-s.scriptsCh:
 			s.scriptsMu.RLock()
 			if len(s.scripts) == len(scripts) {

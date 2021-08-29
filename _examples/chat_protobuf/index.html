@@ -22,7 +22,7 @@
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket?format=protobuf', {
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
                     protocol: 'protobuf' // Note we are setting protobuf protocol here!
                 });
 

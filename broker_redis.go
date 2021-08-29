@@ -796,6 +796,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		case redis.Subscription:
 		case error:
 			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
+			s.reloadPipeline()
 			return
 		}
 	}
