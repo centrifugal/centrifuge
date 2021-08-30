@@ -253,7 +253,7 @@ func (s *RedisShard) registerScripts(scripts ...*redis.Script) {
 
 // Best effort to process a signal for reloading data pipeline if we know
 // that connection should be re-established. If the signal can't be processed
-// then pipeline will be automatically reload upon first error from Redis.
+// then pipeline will be automatically reloaded upon first error from Redis.
 func (s *RedisShard) reloadPipeline() {
 	select {
 	case s.reloadPipelineCh <- struct{}{}:

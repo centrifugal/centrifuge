@@ -1,3 +1,8 @@
+v0.18.2
+=======
+
+* Redis: reload data pipeline immediately upon reconnect, this should help to avoid one additional error after reconnecting to Redis
+
 v0.18.1
 =======
 
