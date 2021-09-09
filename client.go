@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
@@ -349,22 +348,17 @@ func (c *Client) Connect(req ConnectRequest) {
 }
 
 func (c *Client) encodeDisconnect(d *Disconnect) (*prepared.Reply, error) {
-	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
-	data, err := pushEncoder.EncodeDisconnect(&protocol.Disconnect{
+	disconnect := &protocol.Disconnect{
 		Code:      d.Code,
 		Reason:    d.Reason,
 		Reconnect: d.Reconnect,
-	})
+	}
+	pushBytes, err := protocol.EncodeDisconnectPush(c.transport.Protocol().toProto(), disconnect)
 	if err != nil {
 		return nil, err
 	}
-	result, err := pushEncoder.Encode(clientproto.NewDisconnectPush(data))
-	if err != nil {
-		return nil, err
-	}
-
 	return prepared.NewReply(&protocol.Reply{
-		Result: result,
+		Result: pushBytes,
 	}, c.transport.Protocol().toProto()), nil
 }
 
@@ -377,12 +371,7 @@ func (c *Client) encodeConnectPush(res *protocol.ConnectResult) ([]byte, error) 
 		Expires: res.Expires,
 		Ttl:     res.Ttl,
 	}
-	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
-	data, err := pushEncoder.EncodeConnect(p)
-	if err != nil {
-		return nil, err
-	}
-	return pushEncoder.Encode(clientproto.NewConnectPush(data))
+	return protocol.EncodeConnectPush(c.transport.Protocol().toProto(), p)
 }
 
 func hasFlag(flags, flag uint64) bool {
@@ -711,25 +700,16 @@ func (c *Client) Send(data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagMessage) {
 		return nil
 	}
-
 	p := &protocol.Message{
 		Data: data,
 	}
-
-	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
-	data, err := pushEncoder.EncodeMessage(p)
+	pushBytes, err := protocol.EncodeMessagePush(c.transport.Protocol().toProto(), p)
 	if err != nil {
 		return err
 	}
-	result, err := pushEncoder.Encode(clientproto.NewMessagePush(data))
-	if err != nil {
-		return err
-	}
-
 	reply := prepared.NewReply(&protocol.Reply{
-		Result: result,
+		Result: pushBytes,
 	}, c.transport.Protocol().toProto())
-
 	return c.transportEnqueue(reply)
 }
 
@@ -753,23 +733,15 @@ func (c *Client) sendUnsubscribe(ch string) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagUnsubscribe) {
 		return nil
 	}
-	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
-
-	data, err := pushEncoder.EncodeUnsubscribe(&protocol.Unsubscribe{})
+	pushBytes, err := protocol.EncodeUnsubscribePush(c.transport.Protocol().toProto(), ch, &protocol.Unsubscribe{})
 	if err != nil {
 		return err
 	}
-	result, err := pushEncoder.Encode(clientproto.NewUnsubscribePush(ch, data))
-	if err != nil {
-		return err
-	}
-
 	reply := prepared.NewReply(&protocol.Reply{
-		Result: result,
+		Result: pushBytes,
 	}, c.transport.Protocol().toProto())
 
 	_ = c.transportEnqueue(reply)
-
 	return nil
 }
 
@@ -1231,17 +1203,12 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 		c.mu.Unlock()
 	}
 
-	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
-	data, err := pushEncoder.EncodeRefresh(res)
-	if err != nil {
-		return err
-	}
-	result, err := pushEncoder.Encode(clientproto.NewRefreshPush(data))
+	pushBytes, err := protocol.EncodeRefreshPush(c.transport.Protocol().toProto(), res)
 	if err != nil {
 		return err
 	}
 	reply := prepared.NewReply(&protocol.Reply{
-		Result: result,
+		Result: pushBytes,
 	}, c.transport.Protocol().toProto())
 
 	return c.transportEnqueue(reply)
@@ -2115,7 +2082,6 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagSubscribe) {
 		return nil
 	}
-	pushEncoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
 	sub := &protocol.Subscribe{
 		Offset:      subCtx.result.GetOffset(),
 		Epoch:       subCtx.result.GetEpoch(),
@@ -2123,16 +2089,12 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		Positioned:  subCtx.result.GetPositioned(),
 		Data:        subCtx.result.Data,
 	}
-	data, err := pushEncoder.EncodeSubscribe(sub)
-	if err != nil {
-		return err
-	}
-	result, err := pushEncoder.Encode(clientproto.NewSubscribePush(channel, data))
+	pushBytes, err := protocol.EncodeSubscribePush(c.transport.Protocol().toProto(), channel, sub)
 	if err != nil {
 		return err
 	}
 	reply := prepared.NewReply(&protocol.Reply{
-		Result: result,
+		Result: pushBytes,
 	}, c.transport.Protocol().toProto())
 	return c.transportEnqueue(reply)
 }
