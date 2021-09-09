@@ -1,3 +1,8 @@
+v0.18.3
+=======
+
+* Fix `unexpected end of JSON input` errors in Javascript client with Centrifuge >= v0.18.0 when publishing formatted JSON (with new lines). See [centrifugal/protocol#10](https://github.com/centrifugal/protocol/pull/10). Pull request also removes one extra allocation (data copy) during JSON and Protobuf protocol Push message encoding. As the result JSON without new lines will be encoded even faster, Protobuf messages will be encoded faster regardless new lines in payloads. JSON encoding of payload with new lines will require additional allocation since we are stripping new lines now. The penalty is not critical though - see benchmarks in mentioned pull request.   
+
 v0.18.2
 =======
 
