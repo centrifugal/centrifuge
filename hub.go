@@ -5,7 +5,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/centrifugal/centrifuge/internal/clientproto"
 	"github.com/centrifugal/centrifuge/internal/prepared"
 
 	"github.com/centrifugal/protocol"
@@ -511,32 +510,24 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonPublicationReply == nil {
-				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
-				if err != nil {
-					return err
-				}
-				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
+				pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
 				if err != nil {
 					return err
 				}
 				reply := &protocol.Reply{
-					Result: messageBytes,
+					Result: pushBytes,
 				}
 				jsonPublicationReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
 			_ = c.writePublication(channel, pub, jsonPublicationReply, sp)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufPublicationReply == nil {
-				data, err := protocol.GetPushEncoder(protoType).EncodePublication(pub)
-				if err != nil {
-					return err
-				}
-				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewPublicationPush(channel, data))
+				pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
 				if err != nil {
 					return err
 				}
 				reply := &protocol.Reply{
-					Result: messageBytes,
+					Result: pushBytes,
 				}
 				protobufPublicationReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
@@ -565,32 +556,24 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonReply == nil {
-				data, err := protocol.GetPushEncoder(protoType).EncodeJoin(join)
-				if err != nil {
-					return err
-				}
-				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewJoinPush(channel, data))
+				pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
 				if err != nil {
 					return err
 				}
 				reply := &protocol.Reply{
-					Result: messageBytes,
+					Result: pushBytes,
 				}
 				jsonReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
 			_ = c.writeJoin(channel, jsonReply)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufReply == nil {
-				data, err := protocol.GetPushEncoder(protoType).EncodeJoin(join)
-				if err != nil {
-					return err
-				}
-				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewJoinPush(channel, data))
+				pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
 				if err != nil {
 					return err
 				}
 				reply := &protocol.Reply{
-					Result: messageBytes,
+					Result: pushBytes,
 				}
 				protobufReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
@@ -619,32 +602,24 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonReply == nil {
-				data, err := protocol.GetPushEncoder(protoType).EncodeLeave(leave)
-				if err != nil {
-					return err
-				}
-				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewLeavePush(channel, data))
+				pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
 				if err != nil {
 					return err
 				}
 				reply := &protocol.Reply{
-					Result: messageBytes,
+					Result: pushBytes,
 				}
 				jsonReply = prepared.NewReply(reply, protocol.TypeJSON)
 			}
 			_ = c.writeLeave(channel, jsonReply)
 		} else if protoType == protocol.TypeProtobuf {
 			if protobufReply == nil {
-				data, err := protocol.GetPushEncoder(protoType).EncodeLeave(leave)
-				if err != nil {
-					return err
-				}
-				messageBytes, err := protocol.GetPushEncoder(protoType).Encode(clientproto.NewLeavePush(channel, data))
+				pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
 				if err != nil {
 					return err
 				}
 				reply := &protocol.Reply{
-					Result: messageBytes,
+					Result: pushBytes,
 				}
 				protobufReply = prepared.NewReply(reply, protocol.TypeProtobuf)
 			}
