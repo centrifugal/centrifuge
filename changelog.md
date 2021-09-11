@@ -1,3 +1,8 @@
+v0.18.4
+=======
+
+* Fix `bufio: buffer full` error when unmarshalling large messages. 
+
 v0.18.3
 =======
 
