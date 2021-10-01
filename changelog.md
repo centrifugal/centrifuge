@@ -1,3 +1,8 @@
+v0.18.5
+=======
+
+* Update `sockjs-go` dependency (contains fix for [sockjs-go#100](https://github.com/igm/sockjs-go/issues/100)).
+
 v0.18.4
 =======
 

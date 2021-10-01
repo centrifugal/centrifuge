@@ -9,7 +9,7 @@ require (
 	github.com/gomodule/redigo v1.8.5
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/websocket v1.4.2
-	github.com/igm/sockjs-go/v3 v3.0.0
+	github.com/igm/sockjs-go/v3 v3.0.1
 	github.com/mna/redisc v1.2.1
 	github.com/prometheus/client_golang v1.6.0
 	github.com/stretchr/testify v1.7.0
