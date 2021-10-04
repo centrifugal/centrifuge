@@ -70,9 +70,7 @@ func BenchmarkPubSubSync(b *testing.B) {
 					close(wait)
 				}()
 				<-wait
-				psSync.LockBuffer(channel)
-				_ = psSync.ReadBuffered(channel)
-				psSync.StopBuffering(channel)
+				_ = psSync.LockBufferAndReadBuffered(channel)
 			}(channel)
 		}
 		wg.Wait()

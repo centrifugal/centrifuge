@@ -2332,8 +2332,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 		res.Epoch = latestEpoch
 		res.Offset = latestOffset
 
-		c.pubSubSync.LockBuffer(channel)
-		bufferedPubs := c.pubSubSync.ReadBuffered(channel)
+		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
 		var okMerge bool
 		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {

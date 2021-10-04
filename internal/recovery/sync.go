@@ -129,14 +129,3 @@ func (c *PubSubSync) appendPubToBuffer(channel string, pub *protocol.Publication
 	s := c.subSync[channel]
 	s.pubBuffer = append(s.pubBuffer, pub)
 }
-
-// ReadBuffered ...
-func (c *PubSubSync) ReadBuffered(channel string) []*protocol.Publication {
-	c.subSyncMu.RLock()
-	defer c.subSyncMu.RUnlock()
-	s := c.subSync[channel]
-	pubs := make([]*protocol.Publication, len(s.pubBuffer))
-	copy(pubs, s.pubBuffer)
-	s.pubBuffer = nil
-	return pubs
-}
