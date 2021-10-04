@@ -118,7 +118,11 @@ const maxCheckPositionFailures uint8 = 2
 
 // Note: up to 8 possible flags here.
 const (
-	flagPresence uint8 = 1 << iota
+	// flagSubscribed will be set upon successful Subscription to a channel.
+	// Until that moment channel exists in client Channels map only to track
+	// duplicate subscription requests.
+	flagSubscribed uint8 = 1 << iota
+	flagPresence
 	flagJoinLeave
 	flagPosition
 	flagRecover
@@ -577,6 +581,9 @@ func (c *Client) updatePresence() {
 	}
 	channels := make(map[string]channelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
+		if !channelHasFlag(channelContext.flags, flagSubscribed) {
+			continue
+		}
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
@@ -679,7 +686,10 @@ func (c *Client) Channels() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	channels := make([]string, 0, len(c.channels))
-	for ch := range c.channels {
+	for ch, ctx := range c.channels {
+		if !channelHasFlag(ctx.flags, flagSubscribed) {
+			continue
+		}
 		channels = append(channels, ch)
 	}
 	return channels
@@ -689,8 +699,8 @@ func (c *Client) Channels() []string {
 func (c *Client) IsSubscribed(ch string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	_, ok := c.channels[ch]
-	return ok
+	ctx, ok := c.channels[ch]
+	return ok && channelHasFlag(ctx.flags, flagSubscribed)
 }
 
 // Send data to client. This sends an asynchronous message – data will be
@@ -774,6 +784,9 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 	channels := make(map[string]channelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
+		if !channelHasFlag(channelContext.flags, flagSubscribed) {
+			continue
+		}
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
@@ -838,7 +851,7 @@ func (c *Client) trace(msg string, data []byte) {
 func (c *Client) clientInfo(ch string) *ClientInfo {
 	var channelInfo protocol.Raw
 	channelContext, ok := c.channels[ch]
-	if ok {
+	if ok && channelHasFlag(channelContext.flags, flagSubscribed) {
 		channelInfo = channelContext.Info
 	}
 	return &ClientInfo{
@@ -1301,6 +1314,14 @@ func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
 	return nil
 }
 
+// onSubscribeError cleans up a channel from client channels if an error during subscribe happened.
+// Channel kept in a map during subscribe request to check for duplicate subscription attempts.
+func (c *Client) onSubscribeError(channel string) {
+	c.mu.Lock()
+	delete(c.channels, channel)
+	c.mu.Unlock()
+}
+
 func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 	if c.eventHub.subscribeHandler == nil {
 		return ErrorNotAvailable
@@ -1328,6 +1349,7 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 		defer rw.done()
 
 		if err != nil {
+			c.onSubscribeError(cmd.Channel)
 			c.writeDisconnectOrErrorFlush(rw, err)
 			return
 		}
@@ -1335,10 +1357,12 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 		ctx := c.subscribeCmd(cmd, reply, rw, false)
 
 		if ctx.disconnect != nil {
+			c.onSubscribeError(cmd.Channel)
 			c.Disconnect(ctx.disconnect)
 			return
 		}
 		if ctx.err != nil {
+			c.onSubscribeError(cmd.Channel)
 			c.writeDisconnectOrErrorFlush(rw, ctx.err)
 			return
 		}
@@ -1349,6 +1373,19 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 	}
 	c.eventHub.subscribeHandler(event, cb)
 	return nil
+}
+
+func (c *Client) getSubscribedChannelContext(channel string) (channelContext, bool) {
+	c.mu.RLock()
+	ctx, okChannel := c.channels[channel]
+	c.mu.RUnlock()
+	if !okChannel {
+		return channelContext{}, false
+	}
+	if !channelHasFlag(ctx.flags, flagSubscribed) {
+		return channelContext{}, false
+	}
+	return ctx, true
 }
 
 func (c *Client) handleSubRefresh(params protocol.Raw, rw *replyWriter) error {
@@ -1366,15 +1403,13 @@ func (c *Client) handleSubRefresh(params protocol.Raw, rw *replyWriter) error {
 		return c.logDisconnectBadRequest("channel required for sub refresh")
 	}
 
-	c.mu.RLock()
-	ctx, okChannel := c.channels[channel]
-	clientSideRefresh := channelHasFlag(ctx.flags, flagClientSideRefresh)
-	c.mu.RUnlock()
+	ctx, okChannel := c.getSubscribedChannelContext(channel)
 	if !okChannel {
 		// Must be subscribed to refresh subscription.
 		return ErrorPermissionDenied
 	}
 
+	clientSideRefresh := channelHasFlag(ctx.flags, flagClientSideRefresh)
 	if !clientSideRefresh {
 		// Client not supposed to send sub refresh command in case of server-side
 		// subscription refresh mechanism.
@@ -1414,11 +1449,11 @@ func (c *Client) handleSubRefresh(params protocol.Raw, rw *replyWriter) error {
 
 		c.mu.Lock()
 		channelContext, okChan := c.channels[channel]
-		if okChan {
+		if okChan && channelHasFlag(channelContext.flags, flagSubscribed) {
 			channelContext.Info = reply.Info
 			channelContext.expireAt = reply.ExpireAt
+			c.channels[channel] = channelContext
 		}
-		c.channels[channel] = channelContext
 		c.mu.Unlock()
 
 		replyRes, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeSubRefreshResult(res)
@@ -2115,19 +2150,23 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 		return ErrorBadRequest, nil
 	}
 
-	c.mu.RLock()
+	c.mu.Lock()
 	numChannels := len(c.channels)
 	_, ok := c.channels[channel]
-	c.mu.RUnlock()
 	if ok {
+		c.mu.Unlock()
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 		return ErrorAlreadySubscribed, nil
 	}
-
 	if channelLimit > 0 && numChannels >= channelLimit {
+		c.mu.Unlock()
 		c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]interface{}{"limit": channelLimit, "user": c.user, "client": c.uid}))
 		return ErrorLimitExceeded, nil
 	}
+	// Put channel to a map to track duplicate subscriptions. This channel should
+	// be removed from a map upon an error during subscribe.
+	c.channels[channel] = channelContext{}
+	c.mu.Unlock()
 
 	return nil, nil
 }
@@ -2163,11 +2202,11 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 	nextOffset := cmdOffset + 1
 	var recovered bool
 	if len(recoveredPubs) == 0 {
-		recovered = latestOffset == cmdOffset && latestEpoch == cmdEpoch
+		recovered = latestOffset == cmdOffset && (cmdEpoch == "" || latestEpoch == cmdEpoch)
 	} else {
 		recovered = recoveredPubs[0].Offset == nextOffset &&
 			recoveredPubs[len(recoveredPubs)-1].Offset == latestOffset &&
-			latestEpoch == cmdEpoch
+			(cmdEpoch == "" || latestEpoch == cmdEpoch)
 	}
 
 	return recoveredPubs, recovered
@@ -2345,6 +2384,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	}
 
 	var channelFlags uint8
+	channelFlags |= flagSubscribed
 	if serverSide {
 		channelFlags |= flagServerSide
 	}
@@ -2404,6 +2444,18 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return nil
 	}
+	if !channelHasFlag(channelContext.flags, flagSubscribed) {
+		c.mu.Unlock()
+		return nil
+	}
+	if !channelHasFlag(channelContext.flags, flagRecover|flagPosition) {
+		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
+			c.mu.Unlock()
+			return nil
+		}
+		c.mu.Unlock()
+		return c.transportEnqueue(reply)
+	}
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
@@ -2444,24 +2496,6 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 		}
 		return c.transportEnqueue(reply)
 	}
-
-	// This locking should be fast.
-	c.mu.Lock()
-	channelContext, ok := c.channels[ch]
-	if !ok {
-		c.mu.Unlock()
-		return nil
-	}
-	channelFlags := channelContext.flags
-	c.mu.Unlock()
-
-	if !channelHasFlag(channelFlags, flagRecover|flagPosition) {
-		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
-			return nil
-		}
-		return c.transportEnqueue(reply)
-	}
-
 	c.pubSubSync.SyncPublication(ch, pub, func() {
 		_ = c.writePublicationUpdatePosition(ch, pub, reply, sp)
 	})
@@ -2490,7 +2524,7 @@ func (c *Client) unsubscribe(channel string) error {
 	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
 	c.mu.RUnlock()
 
-	if ok {
+	if ok && channelHasFlag(chCtx.flags, flagSubscribed) {
 		c.mu.Lock()
 		delete(c.channels, channel)
 		c.mu.Unlock()

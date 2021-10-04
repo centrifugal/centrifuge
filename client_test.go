@@ -3066,3 +3066,130 @@ func TestFlagNotExists(t *testing.T) {
 	var flags uint64
 	require.False(t, hasFlag(flags, PushFlagDisconnect))
 }
+
+func TestConcurrentSameChannelSubscribe(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	var wg sync.WaitGroup
+	concurrency := 10
+	wg.Add(concurrency)
+
+	onSubscribe := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			go func() {
+				cb(SubscribeReply{
+					Options: SubscribeOptions{
+						Recover: true,
+					},
+				}, nil)
+				close(onSubscribe)
+			}()
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	var subscribeErrors []string
+	var mu sync.Mutex
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			defer wg.Done()
+			rwWrapper := testReplyWriterWrapper()
+			err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+				Channel: "test1",
+				Recover: true,
+				Offset:  0,
+			}), rwWrapper.rw)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				subscribeErrors = append(subscribeErrors, err.Error())
+			} else {
+				subscribeErrors = append(subscribeErrors, "nil")
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	<-onSubscribe
+
+	var n int
+	for _, e := range subscribeErrors {
+		if e == "105: already subscribed" {
+			n++
+		}
+	}
+	require.Equal(t, concurrency-1, n)
+}
+
+type slowHistoryBroker struct {
+	startPublishingCh chan struct{}
+	stopPublishingCh  chan struct{}
+	*MemoryBroker
+}
+
+func (b *slowHistoryBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+	close(b.startPublishingCh)
+	<-b.stopPublishingCh
+	return b.MemoryBroker.History(ch, filter)
+}
+
+func TestSubscribeWithBufferedPublications(t *testing.T) {
+	c := DefaultConfig
+	c.LogLevel = LogLevelTrace
+	c.LogHandler = func(entry LogEntry) {}
+	node, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	startPublishingCh := make(chan struct{})
+	stopPublishingCh := make(chan struct{})
+	broker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	node.SetBroker(&slowHistoryBroker{startPublishingCh: startPublishingCh, stopPublishingCh: stopPublishingCh, MemoryBroker: broker})
+	err = node.Run()
+	require.NoError(t, err)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Recover: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	go func() {
+		<-startPublishingCh
+		for i := 0; i < 5; i++ {
+			_, err := node.Publish("test1", []byte(`{}`), WithHistory(100, 60*time.Second))
+			require.NoError(t, err)
+		}
+		close(stopPublishingCh)
+	}()
+	err = client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+		Recover: true,
+		Offset:  0,
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(rwWrapper.replies))
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
+	require.Equal(t, uint64(5), res.Offset)
+	require.True(t, res.Recovered)
+	require.Len(t, res.Publications, 5)
+	require.Equal(t, 1, len(client.Channels()))
+}
