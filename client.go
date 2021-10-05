@@ -2361,6 +2361,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 
 	if len(recoveredPubs) > 0 {
 		latestOffset = recoveredPubs[len(recoveredPubs)-1].Offset
+		res.Offset = latestOffset
 	}
 
 	res.Publications = recoveredPubs

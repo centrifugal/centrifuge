@@ -3136,8 +3136,9 @@ type slowHistoryBroker struct {
 
 func (b *slowHistoryBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	close(b.startPublishingCh)
+	res, sp, err := b.MemoryBroker.History(ch, filter)
 	<-b.stopPublishingCh
-	return b.MemoryBroker.History(ch, filter)
+	return res, sp, err
 }
 
 func TestSubscribeWithBufferedPublications(t *testing.T) {
