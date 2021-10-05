@@ -2337,7 +2337,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
-			ctx.disconnect = DisconnectServerError
+			ctx.disconnect = DisconnectInsufficientState
 			return ctx
 		}
 	} else if reply.Options.Position {
@@ -2360,8 +2360,14 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 	}
 
 	if len(recoveredPubs) > 0 {
-		latestOffset = recoveredPubs[len(recoveredPubs)-1].Offset
-		res.Offset = latestOffset
+		lastPubOffset := recoveredPubs[len(recoveredPubs)-1].Offset
+		if lastPubOffset > res.Offset {
+			// There can be a case when recovery returned a limited set of publications
+			// thus last publication offset will be smaller than history current offset.
+			// In this case res.Recovered will be false. So we take a maximum here.
+			latestOffset = recoveredPubs[len(recoveredPubs)-1].Offset
+			res.Offset = latestOffset
+		}
 	}
 
 	res.Publications = recoveredPubs
