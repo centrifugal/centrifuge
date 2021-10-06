@@ -1,3 +1,8 @@
+v0.18.6
+=======
+
+* Fix panic on concurrent subscribe to the same channel with recovery on ([#207](https://github.com/centrifugal/centrifuge/pull/207)).
+
 v0.18.5
 =======
 
