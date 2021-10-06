@@ -95,6 +95,21 @@ func (c *PubSubSync) LockBuffer(channel string) {
 	s.pubBufferMu.Lock()
 }
 
+func (c *PubSubSync) LockBufferAndReadBuffered(channel string) []*protocol.Publication {
+	c.subSyncMu.Lock()
+	defer c.subSyncMu.Unlock()
+	s, ok := c.subSync[channel]
+	if !ok {
+		return nil
+	}
+	s.pubBufferLocked = true
+	s.pubBufferMu.Lock()
+	pubs := make([]*protocol.Publication, len(s.pubBuffer))
+	copy(pubs, s.pubBuffer)
+	s.pubBuffer = nil
+	return pubs
+}
+
 // UnlockBuffer ...
 func (c *PubSubSync) unlockBuffer(channel string) {
 	c.subSyncMu.Lock()
@@ -113,15 +128,4 @@ func (c *PubSubSync) appendPubToBuffer(channel string, pub *protocol.Publication
 	defer c.subSyncMu.RUnlock()
 	s := c.subSync[channel]
 	s.pubBuffer = append(s.pubBuffer, pub)
-}
-
-// ReadBuffered ...
-func (c *PubSubSync) ReadBuffered(channel string) []*protocol.Publication {
-	c.subSyncMu.RLock()
-	defer c.subSyncMu.RUnlock()
-	s := c.subSync[channel]
-	pubs := make([]*protocol.Publication, len(s.pubBuffer))
-	copy(pubs, s.pubBuffer)
-	s.pubBuffer = nil
-	return pubs
 }

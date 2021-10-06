@@ -33,8 +33,7 @@ func TestPubSubSync(t *testing.T) {
 			}()
 			go func() {
 				<-wait
-				psSync.LockBuffer(channel)
-				pubs := psSync.ReadBuffered(channel)
+				pubs := psSync.LockBufferAndReadBuffered(channel)
 				require.Equal(t, 10, len(pubs))
 				psSync.StopBuffering(channel)
 				close(done)
@@ -71,8 +70,7 @@ func BenchmarkPubSubSync(b *testing.B) {
 					close(wait)
 				}()
 				<-wait
-				psSync.LockBuffer(channel)
-				_ = psSync.ReadBuffered(channel)
+				_ = psSync.LockBufferAndReadBuffered(channel)
 				psSync.StopBuffering(channel)
 			}(channel)
 		}
