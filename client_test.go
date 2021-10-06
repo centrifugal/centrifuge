@@ -3194,3 +3194,79 @@ func TestSubscribeWithBufferedPublications(t *testing.T) {
 	require.Len(t, res.Publications, 5)
 	require.Equal(t, 1, len(client.Channels()))
 }
+
+func TestClientChannelsWhileSubscribing(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	waitCh := make(chan struct{})
+	doneCh := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			go func() {
+				<-waitCh
+				cb(SubscribeReply{
+					Options: SubscribeOptions{},
+				}, nil)
+				close(doneCh)
+			}()
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(client.Channels()))
+	require.False(t, client.IsSubscribed("test1"))
+	close(waitCh)
+	<-doneCh
+	require.Equal(t, 1, len(client.Channels()))
+}
+
+func TestClientChannelsCleanupOnSubscribeError(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, ErrorInternal)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, client.channels, 0)
+}
+
+func TestClientChannelsCleanupOnSubscribeDisconnect(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, DisconnectChannelLimit)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, client.channels, 0)
+}

@@ -1379,10 +1379,7 @@ func (c *Client) getSubscribedChannelContext(channel string) (channelContext, bo
 	c.mu.RLock()
 	ctx, okChannel := c.channels[channel]
 	c.mu.RUnlock()
-	if !okChannel {
-		return channelContext{}, false
-	}
-	if !channelHasFlag(ctx.flags, flagSubscribed) {
+	if !okChannel || !channelHasFlag(ctx.flags, flagSubscribed) {
 		return channelContext{}, false
 	}
 	return ctx, true
@@ -2446,11 +2443,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
-	if !ok {
-		c.mu.Unlock()
-		return nil
-	}
-	if !channelHasFlag(channelContext.flags, flagSubscribed) {
+	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
 		c.mu.Unlock()
 		return nil
 	}
