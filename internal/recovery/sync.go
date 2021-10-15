@@ -31,19 +31,28 @@ type subscribeState struct {
 
 // SyncPublication ...
 func (c *PubSubSync) SyncPublication(channel string, pub *protocol.Publication, syncedFn func()) {
-	if c.isInSubscribe(channel) {
+	c.subSyncMu.Lock()
+	s, ok := c.subSync[channel]
+	if !ok {
+		c.subSyncMu.Unlock()
+		syncedFn()
+		return
+	}
+	c.subSyncMu.Unlock()
+
+	if atomic.LoadUint32(&s.inSubscribe) == 1 {
 		// client currently in process of subscribing to the channel. In this case we keep
 		// publications in a slice buffer. Publications from this temporary buffer will be sent in
 		// subscribe reply.
-		c.LockBuffer(channel)
-		if c.isInSubscribe(channel) {
+		s.pubBufferMu.Lock()
+		if atomic.LoadUint32(&s.inSubscribe) == 1 {
 			// Sync point not reached yet - put Publication to tmp slice.
-			c.appendPubToBuffer(channel, pub)
-			c.unlockBuffer(channel)
+			s.pubBuffer = append(s.pubBuffer, pub)
+			s.pubBufferMu.Unlock()
 			return
 		}
 		// Sync point already passed - send Publication into connection.
-		c.unlockBuffer(channel)
+		s.pubBufferMu.Unlock()
 	}
 	syncedFn()
 }
@@ -72,60 +81,18 @@ func (c *PubSubSync) StopBuffering(channel string) {
 	delete(c.subSync, channel)
 }
 
-func (c *PubSubSync) isInSubscribe(channel string) bool {
-	c.subSyncMu.RLock()
-	defer c.subSyncMu.RUnlock()
-	s, ok := c.subSync[channel]
-	if !ok {
-		return false
-	}
-	return atomic.LoadUint32(&s.inSubscribe) == 1
-}
-
-// LockBuffer ...
-func (c *PubSubSync) LockBuffer(channel string) {
+func (c *PubSubSync) LockBufferAndReadBuffered(channel string) []*protocol.Publication {
 	c.subSyncMu.Lock()
 	s, ok := c.subSync[channel]
 	if !ok {
 		c.subSyncMu.Unlock()
-		return
-	}
-	s.pubBufferLocked = true
-	c.subSyncMu.Unlock()
-	s.pubBufferMu.Lock()
-}
-
-func (c *PubSubSync) LockBufferAndReadBuffered(channel string) []*protocol.Publication {
-	c.subSyncMu.Lock()
-	defer c.subSyncMu.Unlock()
-	s, ok := c.subSync[channel]
-	if !ok {
 		return nil
 	}
 	s.pubBufferLocked = true
-	s.pubBufferMu.Lock()
+	c.subSyncMu.Unlock()
+	s.pubBufferMu.Lock() // Since this point and until StopBuffering pubBufferMu will be locked so that SyncPublication waits till pubBufferMu unlocking.
 	pubs := make([]*protocol.Publication, len(s.pubBuffer))
 	copy(pubs, s.pubBuffer)
 	s.pubBuffer = nil
 	return pubs
-}
-
-// UnlockBuffer ...
-func (c *PubSubSync) unlockBuffer(channel string) {
-	c.subSyncMu.Lock()
-	defer c.subSyncMu.Unlock()
-	s, ok := c.subSync[channel]
-	if !ok {
-		return
-	}
-	if s.pubBufferLocked {
-		s.pubBufferMu.Unlock()
-	}
-}
-
-func (c *PubSubSync) appendPubToBuffer(channel string, pub *protocol.Publication) {
-	c.subSyncMu.RLock()
-	defer c.subSyncMu.RUnlock()
-	s := c.subSync[channel]
-	s.pubBuffer = append(s.pubBuffer, pub)
 }
