@@ -1,3 +1,8 @@
+v0.18.7
+=======
+
+* Fix deadlock during PUB/SUB sync in channels with recovery. See [original report](https://github.com/centrifugal/centrifugo/issues/486) and [pr with a fix](https://github.com/centrifugal/centrifuge/pull/208).
+
 v0.18.6
 =======
 
