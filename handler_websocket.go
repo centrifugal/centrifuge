@@ -221,7 +221,8 @@ type WebsocketConfig struct {
 	MessageSizeLimit int
 
 	// CheckOrigin func to provide custom origin check logic.
-	// nil means is sameHostOriginCheck.
+	// nil means that sameHostOriginCheck function will be used which
+	// expects Origin host to match request Host.
 	CheckOrigin func(r *http.Request) bool
 
 	// PingInterval sets interval server will send ping messages to clients.
