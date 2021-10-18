@@ -1,3 +1,8 @@
+v0.18.8
+=======
+
+* Fix subscription cleanup on client close. [Pull request with a fix](https://github.com/centrifugal/centrifuge/pull/209).
+
 v0.18.7
 =======
 
