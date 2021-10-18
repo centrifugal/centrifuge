@@ -3270,3 +3270,54 @@ func TestClientChannelsCleanupOnSubscribeDisconnect(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, client.channels, 0)
 }
+
+func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
+	c := DefaultConfig
+	c.LogLevel = LogLevelTrace
+	c.LogHandler = func(entry LogEntry) {}
+	node, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	startPublishingCh := make(chan struct{})
+	stopPublishingCh := make(chan struct{})
+	disconnectedCh := make(chan struct{})
+	broker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	node.SetBroker(&slowHistoryBroker{startPublishingCh: startPublishingCh, stopPublishingCh: stopPublishingCh, MemoryBroker: broker})
+	err = node.Run()
+	require.NoError(t, err)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			go func() {
+				cb(SubscribeReply{
+					Options: SubscribeOptions{
+						Recover: true,
+					},
+				}, nil)
+			}()
+		})
+
+		client.OnDisconnect(func(event DisconnectEvent) {
+			close(disconnectedCh)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+
+	<-startPublishingCh
+	close(stopPublishingCh)
+	client.Disconnect(DisconnectNormal)
+	<-disconnectedCh
+	//time.Sleep(5 * time.Second)
+	require.Len(t, node.Hub().Channels(), 0, node.Hub().Channels())
+}

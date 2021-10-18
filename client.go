@@ -784,9 +784,6 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 	channels := make(map[string]channelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
-		if !channelHasFlag(channelContext.flags, flagSubscribed) {
-			continue
-		}
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
@@ -2523,19 +2520,19 @@ func (c *Client) unsubscribe(channel string) error {
 	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
 	c.mu.RUnlock()
 
-	if ok && channelHasFlag(chCtx.flags, flagSubscribed) {
+	if ok {
 		c.mu.Lock()
 		delete(c.channels, channel)
 		c.mu.Unlock()
 
-		if channelHasFlag(chCtx.flags, flagPresence) {
+		if channelHasFlag(chCtx.flags, flagPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
 			err := c.node.removePresence(channel, c.uid)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error removing channel presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
 		}
 
-		if channelHasFlag(chCtx.flags, flagJoinLeave) {
+		if channelHasFlag(chCtx.flags, flagJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
 			_ = c.node.publishLeave(channel, info)
 		}
 
@@ -2544,11 +2541,13 @@ func (c *Client) unsubscribe(channel string) error {
 			return err
 		}
 
-		if c.eventHub.unsubscribeHandler != nil {
-			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
-				Channel:    channel,
-				ServerSide: serverSide,
-			})
+		if channelHasFlag(chCtx.flags, flagSubscribed) {
+			if c.eventHub.unsubscribeHandler != nil {
+				c.eventHub.unsubscribeHandler(UnsubscribeEvent{
+					Channel:    channel,
+					ServerSide: serverSide,
+				})
+			}
 		}
 	}
 	if c.node.logger.enabled(LogLevelDebug) {
