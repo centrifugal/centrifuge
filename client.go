@@ -784,9 +784,6 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 	channels := make(map[string]channelContext, len(c.channels))
 	for channel, channelContext := range c.channels {
-		if !channelHasFlag(channelContext.flags, flagSubscribed) {
-			continue
-		}
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
@@ -1318,8 +1315,12 @@ func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
 // Channel kept in a map during subscribe request to check for duplicate subscription attempts.
 func (c *Client) onSubscribeError(channel string) {
 	c.mu.Lock()
+	_, ok := c.channels[channel]
 	delete(c.channels, channel)
 	c.mu.Unlock()
+	if ok {
+		_ = c.node.removeSubscription(channel, c)
+	}
 }
 
 func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
@@ -2026,6 +2027,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 
 		if subDisconnect != nil || subError != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
+			for channel := range subCtxMap {
+				c.onSubscribeError(channel)
+			}
 			if subDisconnect != nil {
 				return nil, subDisconnect
 			}
@@ -2105,6 +2109,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		Options: *subscribeOpts,
 	}, nil, true)
 	if subCtx.err != nil {
+		c.onSubscribeError(subCmd.Channel)
 		return subCtx.err
 	}
 	defer c.pubSubSync.StopBuffering(channel)
@@ -2523,19 +2528,19 @@ func (c *Client) unsubscribe(channel string) error {
 	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
 	c.mu.RUnlock()
 
-	if ok && channelHasFlag(chCtx.flags, flagSubscribed) {
+	if ok {
 		c.mu.Lock()
 		delete(c.channels, channel)
 		c.mu.Unlock()
 
-		if channelHasFlag(chCtx.flags, flagPresence) {
+		if channelHasFlag(chCtx.flags, flagPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
 			err := c.node.removePresence(channel, c.uid)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error removing channel presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
 		}
 
-		if channelHasFlag(chCtx.flags, flagJoinLeave) {
+		if channelHasFlag(chCtx.flags, flagJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
 			_ = c.node.publishLeave(channel, info)
 		}
 
@@ -2544,11 +2549,13 @@ func (c *Client) unsubscribe(channel string) error {
 			return err
 		}
 
-		if c.eventHub.unsubscribeHandler != nil {
-			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
-				Channel:    channel,
-				ServerSide: serverSide,
-			})
+		if channelHasFlag(chCtx.flags, flagSubscribed) {
+			if c.eventHub.unsubscribeHandler != nil {
+				c.eventHub.unsubscribeHandler(UnsubscribeEvent{
+					Channel:    channel,
+					ServerSide: serverSide,
+				})
+			}
 		}
 	}
 	if c.node.logger.enabled(LogLevelDebug) {

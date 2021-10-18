@@ -3132,12 +3132,20 @@ type slowHistoryBroker struct {
 	startPublishingCh chan struct{}
 	stopPublishingCh  chan struct{}
 	*MemoryBroker
+	err error
+}
+
+func (b *slowHistoryBroker) setError(err error) {
+	b.err = err
 }
 
 func (b *slowHistoryBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	close(b.startPublishingCh)
 	res, sp, err := b.MemoryBroker.History(ch, filter)
 	<-b.stopPublishingCh
+	if b.err != nil {
+		return nil, StreamPosition{}, b.err
+	}
 	return res, sp, err
 }
 
@@ -3269,4 +3277,96 @@ func TestClientChannelsCleanupOnSubscribeDisconnect(t *testing.T) {
 	}), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Len(t, client.channels, 0)
+}
+
+func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
+	c := DefaultConfig
+	c.LogLevel = LogLevelTrace
+	c.LogHandler = func(entry LogEntry) {}
+	node, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	startPublishingCh := make(chan struct{})
+	stopPublishingCh := make(chan struct{})
+	disconnectedCh := make(chan struct{})
+	broker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	node.SetBroker(&slowHistoryBroker{startPublishingCh: startPublishingCh, stopPublishingCh: stopPublishingCh, MemoryBroker: broker})
+	err = node.Run()
+	require.NoError(t, err)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			go func() {
+				cb(SubscribeReply{
+					Options: SubscribeOptions{
+						Recover: true,
+					},
+				}, nil)
+			}()
+		})
+
+		client.OnDisconnect(func(event DisconnectEvent) {
+			close(disconnectedCh)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+
+	<-startPublishingCh
+	close(stopPublishingCh)
+	client.Disconnect(DisconnectNormal)
+	<-disconnectedCh
+	require.Len(t, node.Hub().Channels(), 0, node.Hub().Channels())
+}
+
+func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
+	c := DefaultConfig
+	c.LogLevel = LogLevelTrace
+	c.LogHandler = func(entry LogEntry) {}
+	node, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	startPublishingCh := make(chan struct{})
+	stopPublishingCh := make(chan struct{})
+	broker, err := NewMemoryBroker(node, MemoryBrokerConfig{})
+	require.NoError(t, err)
+	slowBroker := &slowHistoryBroker{startPublishingCh: startPublishingCh, stopPublishingCh: stopPublishingCh, MemoryBroker: broker}
+	slowBroker.setError(ErrorNotAvailable)
+	node.SetBroker(slowBroker)
+	err = node.Run()
+	require.NoError(t, err)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					Recover: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	close(stopPublishingCh)
+
+	rwWrapper := testReplyWriterWrapper()
+	err = client.handleSubscribe(getJSONEncodedParams(t, &protocol.SubscribeRequest{
+		Channel: "test1",
+	}), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Len(t, node.Hub().Channels(), 0, node.Hub().Channels())
 }
