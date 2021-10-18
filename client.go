@@ -1315,8 +1315,12 @@ func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
 // Channel kept in a map during subscribe request to check for duplicate subscription attempts.
 func (c *Client) onSubscribeError(channel string) {
 	c.mu.Lock()
+	_, ok := c.channels[channel]
 	delete(c.channels, channel)
 	c.mu.Unlock()
+	if ok {
+		_ = c.node.removeSubscription(channel, c)
+	}
 }
 
 func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
@@ -2023,6 +2027,9 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 
 		if subDisconnect != nil || subError != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
+			for channel := range subCtxMap {
+				c.onSubscribeError(channel)
+			}
 			if subDisconnect != nil {
 				return nil, subDisconnect
 			}
@@ -2102,6 +2109,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		Options: *subscribeOpts,
 	}, nil, true)
 	if subCtx.err != nil {
+		c.onSubscribeError(subCmd.Channel)
 		return subCtx.err
 	}
 	defer c.pubSubSync.StopBuffering(channel)
