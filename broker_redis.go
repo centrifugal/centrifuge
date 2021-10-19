@@ -266,8 +266,9 @@ if ARGV[1] ~= "0" then
     	pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
 	else
 		local getOffset = offset
-		if tonumber(ARGV[2]) ~= 0 then
-			getOffset = tonumber(ARGV[2])
+		local incomingOffset = tonumber(ARGV[2])
+		if incomingOffset ~= 0 then
+			getOffset = incomingOffset
 		end
 		pubs = redis.call("xrevrange", KEYS[1], getOffset, "-", "COUNT", ARGV[3])
 	end
@@ -276,8 +277,9 @@ if ARGV[1] ~= "0" then
 		pubs = redis.call("xrange", KEYS[1], ARGV[2], "+")
 	else
 		local getOffset = offset
-		if tonumber(ARGV[2]) ~= 0 then
-			getOffset = tonumber(ARGV[2])
+		local incomingOffset = tonumber(ARGV[2])
+		if incomingOffset ~= 0 then
+			getOffset = incomingOffset
 		end
 		pubs = redis.call("xrevrange", KEYS[1], getOffset, "-")
 	end
