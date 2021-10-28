@@ -80,7 +80,7 @@ func TestClientInitialState(t *testing.T) {
 	require.Equal(t, 0, len(client.Channels()))
 	require.Equal(t, ProtocolTypeJSON, client.Transport().Protocol())
 	require.Equal(t, "websocket", client.Transport().Name())
-	require.True(t, client.status == statusConnecting)
+	require.True(t, client.status == StatusConnecting)
 	require.False(t, client.authenticated)
 }
 
@@ -91,7 +91,7 @@ func TestClientClosedState(t *testing.T) {
 	client, _ := newClient(context.Background(), node, transport)
 	err := client.close(nil)
 	require.NoError(t, err)
-	require.True(t, client.status == statusClosed)
+	require.True(t, client.status == StatusClosed)
 }
 
 func TestClientTimer(t *testing.T) {
@@ -203,7 +203,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	require.NoError(t, err)
 	client.triggerConnect()
 	client.expire()
-	require.True(t, client.status == statusClosed)
+	require.True(t, client.status == StatusClosed)
 }
 
 func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
@@ -232,7 +232,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	_, err := client.connectCmd(&protocol.ConnectRequest{}, rwWrapper.rw)
 	require.NoError(t, err)
 	client.expire()
-	require.False(t, client.status == statusClosed)
+	require.False(t, client.status == StatusClosed)
 	require.Equal(t, expireAt, client.exp)
 }
 
@@ -1952,7 +1952,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 		require.Fail(t, "client not closed")
 	}
 	client.mu.Lock()
-	require.True(t, client.status == statusClosed)
+	require.True(t, client.status == StatusClosed)
 	client.mu.Unlock()
 }
 
@@ -2261,7 +2261,7 @@ func TestClientCloseExpired(t *testing.T) {
 	connectClient(t, client)
 	client.scheduleOnConnectTimers()
 	client.mu.RLock()
-	require.False(t, client.status == statusClosed)
+	require.False(t, client.status == StatusClosed)
 	client.mu.RUnlock()
 	select {
 	case <-client.Context().Done():
@@ -2270,7 +2270,7 @@ func TestClientCloseExpired(t *testing.T) {
 	}
 	client.mu.RLock()
 	defer client.mu.RUnlock()
-	require.True(t, client.status == statusClosed)
+	require.True(t, client.status == StatusClosed)
 }
 
 func TestClientInfo(t *testing.T) {

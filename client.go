@@ -153,12 +153,12 @@ const (
 	timerOpExpire   timerOp = 3
 )
 
-type status uint8
+type Status uint8
 
 const (
-	statusConnecting status = 1
-	statusConnected  status = 2
-	statusClosed     status = 3
+	StatusConnecting Status = 1
+	StatusConnected  Status = 2
+	StatusClosed     Status = 3
 )
 
 // ConnectRequest can be used in a unidirectional connection case to
@@ -227,7 +227,7 @@ type Client struct {
 	info              []byte
 	authenticated     bool
 	clientSideRefresh bool
-	status            status
+	status            Status
 	timerOp           timerOp
 	nextPresence      int64
 	nextExpire        int64
@@ -252,7 +252,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		transport:  t,
 		channels:   make(map[string]channelContext),
 		pubSubSync: recovery.NewPubSubSync(),
-		status:     statusConnecting,
+		status:     StatusConnecting,
 		eventHub:   &clientEventHub{},
 	}
 
@@ -411,7 +411,7 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 
 func (c *Client) onTimerOp() {
 	c.mu.Lock()
-	if c.status == statusClosed {
+	if c.status == StatusClosed {
 		c.mu.Unlock()
 		return
 	}
@@ -429,7 +429,7 @@ func (c *Client) onTimerOp() {
 
 // Lock must be held outside.
 func (c *Client) scheduleNextTimer() {
-	if c.status == statusClosed {
+	if c.status == StatusClosed {
 		return
 	}
 	c.stopTimer()
@@ -481,7 +481,7 @@ func (c *Client) addExpireUpdate(after time.Duration) {
 func (c *Client) closeUnauthenticated() {
 	c.mu.RLock()
 	authenticated := c.authenticated
-	closed := c.status == statusClosed
+	closed := c.status == StatusClosed
 	c.mu.RUnlock()
 	if !authenticated && !closed {
 		_ = c.close(DisconnectStale)
@@ -575,7 +575,7 @@ func (c *Client) updatePresence() {
 	defer c.presenceMu.Unlock()
 	config := c.node.config
 	c.mu.Lock()
-	if c.status == statusClosed {
+	if c.status == StatusClosed {
 		c.mu.Unlock()
 		return
 	}
@@ -681,6 +681,12 @@ func (c *Client) Transport() TransportInfo {
 	return c.transport
 }
 
+func (c *Client) Status() Status {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.status
+}
+
 // Channels returns a slice of channels client connection currently subscribed to.
 func (c *Client) Channels() []string {
 	c.mu.RLock()
@@ -726,7 +732,7 @@ func (c *Client) Send(data []byte) error {
 // Unsubscribe allows to unsubscribe client from channel.
 func (c *Client) Unsubscribe(ch string) error {
 	c.mu.RLock()
-	if c.status == statusClosed {
+	if c.status == StatusClosed {
 		c.mu.RUnlock()
 		return nil
 	}
@@ -762,24 +768,38 @@ func (c *Client) sendUnsubscribe(ch string) error {
 // already closed. As this method runs a separate goroutine client
 // connection will be closed eventually (i.e. not immediately).
 func (c *Client) Disconnect(disconnect *Disconnect) {
+	c.mu.Lock()
+	prevStatus := c.status
+	if prevStatus == StatusClosed {
+		c.mu.Unlock()
+		return
+	}
+	c.status = StatusClosed
+	c.mu.Unlock()
 	go func() {
-		_ = c.close(disconnect)
+		_ = c.closeWithPrevStatus(disconnect, prevStatus)
 	}()
 }
 
 func (c *Client) close(disconnect *Disconnect) error {
+	c.mu.Lock()
+	prevStatus := c.status
+	if prevStatus == StatusClosed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.status = StatusClosed
+	c.mu.Unlock()
+	return c.closeWithPrevStatus(disconnect, prevStatus)
+}
+
+func (c *Client) closeWithPrevStatus(disconnect *Disconnect, prevStatus Status) error {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
-	c.mu.Lock()
-	if c.status == statusClosed {
-		c.mu.Unlock()
-		return nil
-	}
-	prevStatus := c.status
-	c.status = statusClosed
 
+	c.mu.Lock()
 	c.stopTimer()
 
 	channels := make(map[string]channelContext, len(c.channels))
@@ -826,7 +846,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 	if disconnect != nil {
 		incServerDisconnect(disconnect.Code)
 	}
-	if c.eventHub.disconnectHandler != nil && prevStatus == statusConnected {
+	if c.eventHub.disconnectHandler != nil && prevStatus == StatusConnected {
 		c.eventHub.disconnectHandler(DisconnectEvent{
 			Disconnect: disconnect,
 		})
@@ -863,7 +883,7 @@ func (c *Client) clientInfo(ch string) *ClientInfo {
 // Not goroutine-safe. Supposed to be called only from a transport connection reader.
 func (c *Client) Handle(data []byte) bool {
 	c.mu.Lock()
-	if c.status == statusClosed {
+	if c.status == StatusClosed {
 		c.mu.Unlock()
 		return false
 	}
@@ -954,7 +974,7 @@ type replyWriter struct {
 // dispatchCommand dispatches Command into correct command handler.
 func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	c.mu.Lock()
-	if c.status == statusClosed {
+	if c.status == StatusClosed {
 		c.mu.Unlock()
 		return nil
 	}
@@ -1056,7 +1076,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 
 func (c *Client) checkExpired() {
 	c.mu.RLock()
-	closed := c.status == statusClosed
+	closed := c.status == StatusClosed
 	clientSideRefresh := c.clientSideRefresh
 	exp := c.exp
 	c.mu.RUnlock()
@@ -1069,7 +1089,7 @@ func (c *Client) checkExpired() {
 	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
 		if ttl > 0 {
 			c.mu.Lock()
-			if c.status != statusClosed {
+			if c.status != StatusClosed {
 				c.addExpireUpdate(time.Duration(ttl) * time.Second)
 			}
 			c.mu.Unlock()
@@ -1086,7 +1106,7 @@ func (c *Client) checkExpired() {
 
 func (c *Client) expire() {
 	c.mu.RLock()
-	closed := c.status == statusClosed
+	closed := c.status == StatusClosed
 	clientSideRefresh := c.clientSideRefresh
 	exp := c.exp
 	c.mu.RUnlock()
@@ -1142,15 +1162,15 @@ func (c *Client) handleConnect(params protocol.Raw, rw *replyWriter) error {
 func (c *Client) triggerConnect() {
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
-	if c.status != statusConnecting {
+	if c.status != StatusConnecting {
 		return
 	}
 	if c.node.clientEvents.connectHandler == nil {
-		c.status = statusConnected
+		c.status = StatusConnected
 		return
 	}
+	c.status = StatusConnected
 	c.node.clientEvents.connectHandler(c)
-	c.status = statusConnected
 }
 
 func (c *Client) scheduleOnConnectTimers() {
@@ -1837,7 +1857,7 @@ func (c *Client) unlockServerSideSubscriptions(subCtxMap map[string]subscribeCon
 func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*protocol.ConnectResult, error) {
 	c.mu.RLock()
 	authenticated := c.authenticated
-	closed := c.status == statusClosed
+	closed := c.status == StatusClosed
 	c.mu.RUnlock()
 
 	if closed {
@@ -1934,7 +1954,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 
 	user := c.user
 	exp := c.exp
-	closed = c.status == statusClosed
+	closed = c.status == StatusClosed
 	c.mu.Unlock()
 
 	if closed {
