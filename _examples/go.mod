@@ -2,7 +2,10 @@ module github.com/centrifugal/centrifuge/_examples
 
 go 1.14
 
-replace github.com/centrifugal/centrifuge => ../
+replace (
+	github.com/centrifugal/centrifuge => ../
+	github.com/lucas-clemente/quic-go v0.24.0 => github.com/alta/quic-go v0.0.0-20210923171602-7151b11990d2
+)
 
 require (
 	github.com/FZambia/tarantool v0.2.2
@@ -13,14 +16,17 @@ require (
 	github.com/gin-contrib/sessions v0.0.3
 	github.com/gin-gonic/gin v1.7.3
 	github.com/gobwas/ws v1.0.3
-	github.com/golang/protobuf v1.5.0
+	github.com/golang/protobuf v1.5.2
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/mux v1.7.4
 	github.com/gorilla/sessions v1.2.0
 	github.com/gorilla/websocket v1.4.2
+	github.com/lucas-clemente/quic-go v0.24.0
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
 	github.com/nats-io/nats-server/v2 v2.2.0 // indirect
 	github.com/nats-io/nats.go v1.12.3
+	github.com/onsi/ginkgo v1.16.4
+	github.com/onsi/gomega v1.13.0
 	github.com/prometheus/client_golang v1.6.0
 	github.com/prometheus/common v0.10.0 // indirect
 	github.com/prometheus/procfs v0.1.3 // indirect
