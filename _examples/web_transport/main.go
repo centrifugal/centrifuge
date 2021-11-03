@@ -24,7 +24,7 @@ type clientMessage struct {
 }
 
 func handleLog(e centrifuge.LogEntry) {
-	log.Printf("%s: %v", e.Message, e.Fields)
+	log.Printf("%s: %#v", e.Message, e.Fields)
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -111,11 +111,10 @@ func main() {
 
 	server := &http3.Server{
 		Server: &http.Server{
-			Handler:   newQUICHandler(node),
+			Handler:   newWebtransportHandler(node),
 			TLSConfig: generateTLSConfig(),
 		},
-		QuicConfig: &quic.Config{},
-		//EnableDatagrams:    true,
+		QuicConfig:         &quic.Config{},
 		EnableWebTransport: true,
 	}
 

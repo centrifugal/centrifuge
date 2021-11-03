@@ -7,3 +7,6 @@ vendor/
 *.snap.inprogress
 devdata/
 .orig
+*.crt
+*.key
+*.csr

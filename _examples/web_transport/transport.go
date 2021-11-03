@@ -6,35 +6,32 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lucas-clemente/quic-go"
-
-	"github.com/centrifugal/protocol"
-
-	"github.com/lucas-clemente/quic-go/http3"
-
 	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/protocol"
+	"github.com/lucas-clemente/quic-go"
+	"github.com/lucas-clemente/quic-go/http3"
 )
 
-type quicHandler struct {
+type webtransportHandler struct {
 	node *centrifuge.Node
 }
 
-func newQUICHandler(node *centrifuge.Node) http.Handler {
-	return &quicHandler{node}
+func newWebtransportHandler(node *centrifuge.Node) *webtransportHandler {
+	return &webtransportHandler{node}
 }
 
-const transportName = "quic"
+const transportName = "webtransport"
 
-type customQUICTransport struct {
+type webtransportTransport struct {
 	mu        sync.RWMutex
 	closed    bool
 	closeCh   chan struct{}
 	protoType centrifuge.ProtocolType
-	stream    *quic.Stream
+	stream    quic.Stream
 }
 
-func newQUICTransport(protoType centrifuge.ProtocolType, stream *quic.Stream) *customQUICTransport {
-	return &customQUICTransport{
+func newWebtransportTransport(protoType centrifuge.ProtocolType, stream quic.Stream) *webtransportTransport {
+	return &webtransportTransport{
 		protoType: protoType,
 		closeCh:   make(chan struct{}),
 		stream:    stream,
@@ -42,27 +39,27 @@ func newQUICTransport(protoType centrifuge.ProtocolType, stream *quic.Stream) *c
 }
 
 // Name implementation.
-func (t *customQUICTransport) Name() string {
+func (t *webtransportTransport) Name() string {
 	return transportName
 }
 
 // Protocol implementation.
-func (t *customQUICTransport) Protocol() centrifuge.ProtocolType {
+func (t *webtransportTransport) Protocol() centrifuge.ProtocolType {
 	return t.protoType
 }
 
 // Unidirectional implementation.
-func (t *customQUICTransport) Unidirectional() bool {
+func (t *webtransportTransport) Unidirectional() bool {
 	return false
 }
 
 // DisabledPushFlags ...
-func (t *customQUICTransport) DisabledPushFlags() uint64 {
-	return centrifuge.PushFlagDisconnect
+func (t *webtransportTransport) DisabledPushFlags() uint64 {
+	return 0
 }
 
 // Write ...
-func (t *customQUICTransport) Write(message []byte) error {
+func (t *webtransportTransport) Write(message []byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
@@ -76,14 +73,14 @@ func (t *customQUICTransport) Write(message []byte) error {
 			return err
 		}
 
-		_, err = (*t.stream).Write(append(encoder.Finish(), '\n'))
+		_, err = t.stream.Write(append(encoder.Finish(), '\n'))
 
 		return err
 	}
 }
 
 // WriteMany ...
-func (t *customQUICTransport) WriteMany(messages ...[]byte) error {
+func (t *webtransportTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
 		return nil
@@ -99,14 +96,14 @@ func (t *customQUICTransport) WriteMany(messages ...[]byte) error {
 			}
 		}
 
-		_, err := (*t.stream).Write(append(encoder.Finish(), '\n'))
+		_, err := t.stream.Write(append(encoder.Finish(), '\n'))
 
 		return err
 	}
 }
 
 // Close ...
-func (t *customQUICTransport) Close(disconnect *centrifuge.Disconnect) error {
+func (t *webtransportTransport) Close(disconnect *centrifuge.Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -117,13 +114,13 @@ func (t *customQUICTransport) Close(disconnect *centrifuge.Disconnect) error {
 	t.mu.Unlock()
 
 	if disconnect != nil {
-		return (*t.stream).Close()
+		return t.stream.Close()
 	}
 
-	return (*t.stream).Close()
+	return t.stream.Close()
 }
 
-func (s *quicHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+func (s *webtransportHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	var protoType = centrifuge.ProtocolTypeJSON
 	ctx := req.Context()
 
@@ -148,7 +145,7 @@ func (s *quicHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	//log.Println("initiated by ", stream.StreamID().InitiatedBy())
 
-	transport := newQUICTransport(protoType, &stream)
+	transport := newWebtransportTransport(protoType, stream)
 	c, closeFn, err := centrifuge.NewClient(req.Context(), s.node, transport)
 	if err != nil {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": transportName}))
@@ -184,5 +181,4 @@ func (s *quicHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-
 }
