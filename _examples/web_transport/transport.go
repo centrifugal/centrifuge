@@ -233,7 +233,7 @@ func (s *webtransportHandler) ServeHTTP(rw http.ResponseWriter, req *http.Reques
 			msgLengthBytes := make([]byte, binary.MaxVarintLen64)
 			bytesNum := binary.PutUvarint(msgLengthBytes, msgLength)
 
-			data := make([]byte, r.Buffered())
+			data := make([]byte, msgLength)
 			_, err = r.Read(data)
 			if err != nil {
 				log.Println("error on read bytes from stream buffer: ", err)
