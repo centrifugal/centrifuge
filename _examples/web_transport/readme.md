@@ -11,8 +11,13 @@ openssl req -new -key server.key -out server.csr
 openssl x509 -req -sha256 -days 365 -in server.csr -signkey server.key -out server.crt
 ```
 
-2) To start example run the following command from this directory:
+2) To start example run the following command from this directory:  
+With json messages format
 ```
 go run *.go
 ```
 
+With protobuf messages format
+```
+go run *.go -format=protobuf
+```
