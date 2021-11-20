@@ -732,7 +732,7 @@ func (c *Client) Unsubscribe(ch string) error {
 	}
 	c.mu.RUnlock()
 
-	err := c.unsubscribe(ch)
+	err := c.unsubscribe(ch, UnsubscribeReasonServer, nil)
 	if err != nil {
 		return err
 	}
@@ -791,7 +791,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 	if len(channels) > 0 {
 		// Unsubscribe from all channels.
 		for channel := range channels {
-			err := c.unsubscribe(channel)
+			err := c.unsubscribe(channel, UnsubscribeReasonDisconnect, disconnect)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
@@ -1477,7 +1477,7 @@ func (c *Client) handleUnsubscribe(params protocol.Raw, rw *replyWriter) error {
 		return c.logDisconnectBadRequest("channel required for unsubscribe")
 	}
 
-	if err := c.unsubscribe(channel); err != nil {
+	if err := c.unsubscribe(channel, UnsubscribeReasonClient, nil); err != nil {
 		return err
 	}
 
@@ -2521,7 +2521,7 @@ func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
 }
 
 // Lock must be held outside.
-func (c *Client) unsubscribe(channel string) error {
+func (c *Client) unsubscribe(channel string, reason UnsubscribeReason, disconnect *Disconnect) error {
 	c.mu.RLock()
 	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]
@@ -2554,6 +2554,8 @@ func (c *Client) unsubscribe(channel string) error {
 				c.eventHub.unsubscribeHandler(UnsubscribeEvent{
 					Channel:    channel,
 					ServerSide: serverSide,
+					Reason:     reason,
+					Disconnect: disconnect,
 				})
 			}
 		}

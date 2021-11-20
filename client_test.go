@@ -1118,7 +1118,9 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{}, nil)
 		})
-		client.OnUnsubscribe(func(_ UnsubscribeEvent) {
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			require.Equal(t, UnsubscribeReasonClient, e.Reason)
+			require.Nil(t, e.Disconnect)
 			close(unsubscribed)
 		})
 	})
@@ -1158,7 +1160,9 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{}, nil)
 		})
-		client.OnUnsubscribe(func(_ UnsubscribeEvent) {
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			require.Equal(t, UnsubscribeReasonServer, e.Reason)
+			require.Nil(t, e.Disconnect)
 			close(unsubscribed)
 		})
 	})
@@ -3022,11 +3026,19 @@ func TestClientTransportWriteError(t *testing.T) {
 			transport.sink = make(chan []byte, 100)
 			transport.writeErr = tt.Error
 
-			done := make(chan *Disconnect)
+			doneUnsubscribe := make(chan struct{})
+			doneDisconnect := make(chan struct{})
 
 			node.OnConnect(func(client *Client) {
+				client.OnUnsubscribe(func(event UnsubscribeEvent) {
+					require.Equal(t, UnsubscribeReasonDisconnect, event.Reason)
+					require.Equal(t, tt.ExpectedDisconnect, event.Disconnect)
+					close(doneUnsubscribe)
+				})
+
 				client.OnDisconnect(func(event DisconnectEvent) {
-					done <- event.Disconnect
+					require.Equal(t, tt.ExpectedDisconnect, event.Disconnect)
+					close(doneDisconnect)
 				})
 			})
 
@@ -3049,9 +3061,13 @@ func TestClientTransportWriteError(t *testing.T) {
 
 			select {
 			case <-time.After(time.Second):
-				require.Fail(t, "client not closed")
-			case d := <-done:
-				require.Equal(t, tt.ExpectedDisconnect, d)
+				require.Fail(t, "client not unsubscribed")
+			case <-doneUnsubscribe:
+				select {
+				case <-time.After(time.Second):
+					require.Fail(t, "client not closed")
+				case <-doneDisconnect:
+				}
 			}
 		})
 	}
