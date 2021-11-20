@@ -146,8 +146,11 @@ type UnsubscribeReason int
 
 // Known unsubscribe reasons.
 const (
-	UnsubscribeReasonClient     UnsubscribeReason = 1
-	UnsubscribeReasonServer     UnsubscribeReason = 2
+	// Unsubscribe was initiated by a client-side unsubscribe call.
+	UnsubscribeReasonClient UnsubscribeReason = 1
+	// Unsubscribe was initiated by a server-side unsubscribe call.
+	UnsubscribeReasonServer UnsubscribeReason = 2
+	// Unsubscribe was initiated by a client disconnect process.
 	UnsubscribeReasonDisconnect UnsubscribeReason = 3
 )
 
