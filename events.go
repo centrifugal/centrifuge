@@ -99,11 +99,10 @@ type AliveHandler func()
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
-	// Disconnect can optionally contain a custom disconnect object that
-	// was sent from server to client with closing handshake. If this field
-	// exists then client connection was closed from server. If this field
-	// is nil then this means that client disconnected normally and connection
-	// closing was initiated by client side.
+	// Disconnect can optionally contain a Disconnect object that was sent from
+	// a server to a client with closing handshake. If this field exists then client
+	// connection was closed by a server. This field is nil then client disconnected
+	// normally from the client-side or connection with a client has been lost.
 	Disconnect *Disconnect
 }
 
@@ -141,12 +140,32 @@ type SubscribeReply struct {
 // SubscribeHandler called when client wants to subscribe on channel.
 type SubscribeHandler func(SubscribeEvent, SubscribeCallback)
 
+// UnsubscribeReason is a type that describes the reason why client
+// unsubscribed from a channel.
+type UnsubscribeReason int
+
+// Known unsubscribe reasons.
+const (
+	// Unsubscribe was initiated by a client-side unsubscribe call.
+	UnsubscribeReasonClient UnsubscribeReason = 1
+	// Unsubscribe was initiated by a server-side unsubscribe call.
+	UnsubscribeReasonServer UnsubscribeReason = 2
+	// Unsubscribe was initiated by a client disconnect process.
+	UnsubscribeReasonDisconnect UnsubscribeReason = 3
+)
+
 // UnsubscribeEvent contains fields related to unsubscribe event.
 type UnsubscribeEvent struct {
 	// Channel client unsubscribed from.
 	Channel string
 	// ServerSide set to true for server-side subscription unsubscribe events.
 	ServerSide bool
+	// Reason can help determining the reason of UnsubscribeEvent.
+	Reason UnsubscribeReason
+	// Disconnect can be additionally set when Reason is UnsubscribeReasonDisconnect.
+	// If connection close was initiated by a server it will contain Disconnect object,
+	// if client connection lost or closed normally from a client side Disconnect is nil.
+	Disconnect *Disconnect
 }
 
 // UnsubscribeHandler called when client unsubscribed from channel.
