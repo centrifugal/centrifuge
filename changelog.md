@@ -1,3 +1,23 @@
+v0.18.9
+=======
+
+* Add unsubscribe Reason and optional `Disconnect` to `UnsubscribeEvent`. See issue [#211](https://github.com/centrifugal/centrifuge/issues/211) and pr [#213](https://github.com/centrifugal/centrifuge/pull/213).
+
+```
+gorelease -base v0.18.8 -version v0.18.9
+# github.com/centrifugal/centrifuge
+## compatible changes
+UnsubscribeEvent.Disconnect: added
+UnsubscribeEvent.Reason: added
+UnsubscribeReason: added
+UnsubscribeReasonClient: added
+UnsubscribeReasonDisconnect: added
+UnsubscribeReasonServer: added
+
+# summary
+v0.18.9 is a valid semantic version for this release.
+```
+
 v0.18.8
 =======
 
