@@ -111,7 +111,7 @@ func main() {
 
 	server := &http3.Server{
 		Server: &http.Server{
-			Handler:   newWebtransportHandler(node),
+			Handler:   NewWebtransportHandler(node, WebtransportConfig{}),
 			TLSConfig: generateTLSConfig(),
 		},
 		QuicConfig:         &quic.Config{},

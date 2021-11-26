@@ -910,6 +910,16 @@ func (c *Client) Handle(data []byte) bool {
 	return true
 }
 
+func (c *Client) HandleCommand(cmd *protocol.Command) bool {
+	c.mu.Lock()
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		return false
+	}
+	c.mu.Unlock()
+	return c.handleCommand(cmd)
+}
+
 // handleCommand processes a single protocol.Command.
 func (c *Client) handleCommand(cmd *protocol.Command) bool {
 	if cmd.Method != protocol.Command_CONNECT && !c.authenticated {

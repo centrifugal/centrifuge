@@ -1,11 +1,7 @@
 package main
 
 import (
-	"bufio"
-	"encoding/binary"
-	"flag"
 	"io"
-	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -16,12 +12,15 @@ import (
 	"github.com/lucas-clemente/quic-go/http3"
 )
 
-type webtransportHandler struct {
-	node *centrifuge.Node
+type WebtransportConfig struct{}
+
+type WebtransportHandler struct {
+	node   *centrifuge.Node
+	config WebtransportConfig
 }
 
-func newWebtransportHandler(node *centrifuge.Node) *webtransportHandler {
-	return &webtransportHandler{node}
+func NewWebtransportHandler(node *centrifuge.Node, c WebtransportConfig) *WebtransportHandler {
+	return &WebtransportHandler{node: node, config: c}
 }
 
 const transportName = "webtransport"
@@ -72,26 +71,14 @@ func (t *webtransportTransport) Write(message []byte) error {
 	case <-t.closeCh:
 		return nil
 	default:
-		var err error
 		protoType := protocol.TypeJSON
-		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
+		if t.protoType == centrifuge.ProtocolTypeProtobuf {
 			protoType = protocol.TypeProtobuf
 		}
-
 		encoder := protocol.GetDataEncoder(protoType)
 		defer protocol.PutDataEncoder(protoType, encoder)
-
-		err = encoder.Encode(message)
-		if err != nil {
-			return err
-		}
-
-		if protoType == protocol.TypeJSON {
-			_, err = t.stream.Write(append(encoder.Finish(), '\n'))
-		} else if protoType == protocol.TypeProtobuf {
-			_, err = t.stream.Write(encoder.Finish())
-		}
-
+		_ = encoder.Encode(message)
+		_, err := t.stream.Write(encoder.Finish())
 		return err
 	}
 }
@@ -102,28 +89,20 @@ func (t *webtransportTransport) WriteMany(messages ...[]byte) error {
 	case <-t.closeCh:
 		return nil
 	default:
-		var err error
 		protoType := protocol.TypeJSON
-		if t.Protocol() == centrifuge.ProtocolTypeProtobuf {
+		if t.protoType == centrifuge.ProtocolTypeProtobuf {
 			protoType = protocol.TypeProtobuf
 		}
-
 		encoder := protocol.GetDataEncoder(protoType)
 		defer protocol.PutDataEncoder(protoType, encoder)
 
 		for i := range messages {
-			err = encoder.Encode(messages[i])
+			err := encoder.Encode(messages[i])
 			if err != nil {
 				return err
 			}
 		}
-
-		if protoType == protocol.TypeJSON {
-			_, err = t.stream.Write(append(encoder.Finish(), '\n'))
-		} else if protoType == protocol.TypeProtobuf {
-			_, err = t.stream.Write(encoder.Finish())
-		}
-
+		_, err := t.stream.Write(encoder.Finish())
 		return err
 	}
 }
@@ -140,10 +119,7 @@ func (t *webtransportTransport) Close(disconnect *centrifuge.Disconnect) error {
 	t.mu.Unlock()
 
 	defer func() {
-		err := t.webTransport.Close()
-		if err != nil {
-			log.Println("error on web transport closing: ", err)
-		}
+		_ = t.webTransport.Close()
 	}()
 
 	if disconnect != nil {
@@ -153,14 +129,9 @@ func (t *webtransportTransport) Close(disconnect *centrifuge.Disconnect) error {
 	return t.stream.Close()
 }
 
-func (s *webtransportHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	if format == "" {
-		msgFormat := flag.String("format", "json", "help message for flag n")
-		flag.Parse()
-		format = *msgFormat
-	}
-
+func (s *WebtransportHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	protoType := centrifuge.ProtocolTypeJSON
+	format := req.URL.Query().Get("format")
 	if format == "protobuf" {
 		protoType = centrifuge.ProtocolTypeProtobuf
 	}
@@ -180,12 +151,10 @@ func (s *webtransportHandler) ServeHTTP(rw http.ResponseWriter, req *http.Reques
 	ctx := req.Context()
 	stream, err := wt.AcceptStream(ctx)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating stream", map[string]interface{}{"error": err}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error accepting stream", map[string]interface{}{"error": err}))
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	//log.Println("initiated by ", stream.StreamID().InitiatedBy())
 
 	transport := newWebtransportTransport(protoType, wt, stream)
 	c, closeFn, err := centrifuge.NewClient(req.Context(), s.node, transport)
@@ -193,59 +162,34 @@ func (s *webtransportHandler) ServeHTTP(rw http.ResponseWriter, req *http.Reques
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": transportName}))
 		return
 	}
-
 	defer func() { _ = closeFn() }()
-	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportName}))
-	defer func(started time.Time) {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportName, "duration": time.Since(started)}))
-	}(time.Now())
 
-	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "Stream params",
-		map[string]interface{}{
-			"ID":  stream.StreamID(),
-			"Num": stream.StreamID().StreamNum(),
-		}))
+	if s.node.LogEnabled(centrifuge.LogLevelDebug) {
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportName}))
+		defer func(started time.Time) {
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportName, "duration": time.Since(started)}))
+		}(time.Now())
+	}
 
-	r := bufio.NewReader(stream)
+	var commandDecoder protocol.StreamCommandDecoder
+	if protoType == centrifuge.ProtocolTypeJSON {
+		commandDecoder = protocol.NewJSONStreamCommandDecoder(stream)
+	} else {
+		commandDecoder = protocol.NewProtobufStreamCommandDecoder(stream)
+	}
 	for {
-		var reply []byte
-		if protoType == centrifuge.ProtocolTypeJSON {
-			reply, err = r.ReadBytes('\n')
-			if err != nil {
-				log.Println("error on read bytes stream: ", err)
-				return
-			}
-
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "Stream message",
-				map[string]interface{}{
-					"message": string(reply),
-				}))
-		} else if protoType == centrifuge.ProtocolTypeProtobuf {
-			msgLength, err := binary.ReadUvarint(r)
-			if err != nil {
-				if err != io.EOF {
-					log.Println("error on read message length: ", err)
-				}
-
-				return
-			}
-
-			msgLengthBytes := make([]byte, binary.MaxVarintLen64)
-			bytesNum := binary.PutUvarint(msgLengthBytes, msgLength)
-
-			data := make([]byte, msgLength)
-			_, err = r.Read(data)
-			if err != nil {
-				log.Println("error on read bytes from stream buffer: ", err)
-
-				return
-			}
-
-			reply = append(msgLengthBytes[:bytesNum], data...)
+		cmd, err := commandDecoder.Decode()
+		if err != nil && err != io.EOF {
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelInfo, "error decoding command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "transport": transportName, "error": err.Error()}))
+			c.Disconnect(centrifuge.DisconnectBadRequest)
+			// Do we need read further here till EOF to process close handshake properly?
+			return
 		}
-
-		ok := c.Handle(reply)
+		ok := c.HandleCommand(cmd)
 		if !ok {
+			return
+		}
+		if err == io.EOF {
 			return
 		}
 	}

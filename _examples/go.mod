@@ -9,8 +9,8 @@ replace (
 
 require (
 	github.com/FZambia/tarantool v0.2.2
-	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/protocol v0.7.3
+	github.com/centrifugal/centrifuge v0.18.9
+	github.com/centrifugal/protocol v0.7.4-0.20211126085642-1eca1794242d
 	github.com/cristalhq/jwt/v3 v3.0.0
 	github.com/dchest/uniuri v0.0.0-20200228104902-7aecb25e1fe5
 	github.com/gin-contrib/sessions v0.0.3
