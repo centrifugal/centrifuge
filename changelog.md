@@ -1,7 +1,20 @@
 v0.19.0
 =======
 
-* JSON protocol performance improvements. See [#215](https://github.com/centrifugal/centrifuge/pull/215) for details. New minor release instead of v0.18.10 since we are now more strict in parsing multiple command frames. In multiple command JSON frame individual `Command`s must be separated by exactly one new line symbol and have an optional new line after the last command. This was always this way and current client connectors work according to these requirements – but since the parser becoming more strict this can theoretically cause some problems with third-party connector implementations.
+* JSON protocol performance improvements. See [#215](https://github.com/centrifugal/centrifuge/pull/215) for details. We are now more strict in parsing multiple command frames: in a multiple command JSON frame individual `Command`s must be separated by exactly one new line symbol and have an optional new line after the last command. This was always this way and current client connectors work according to these requirements – but since the parser becoming more strict this can theoretically cause some problems with third-party connector implementations.
+* Support custom `data` from a client passed in a subscribe command, this data is then available in `SubscribeEvent`.
+
+```
+gorelease -base v0.18.9 -version v0.19.0
+# github.com/centrifugal/centrifuge
+## incompatible changes
+SubscribeEvent: old is comparable, new is not
+## compatible changes
+SubscribeEvent.Data: added
+
+# summary
+v0.19.0 is a valid semantic version for this release.
+```
 
 v0.18.9
 =======
