@@ -1344,6 +1344,7 @@ func (c *Client) handleSubscribe(params protocol.Raw, rw *replyWriter) error {
 	event := SubscribeEvent{
 		Channel: cmd.Channel,
 		Token:   cmd.Token,
+		Data:    cmd.Data,
 	}
 
 	cb := func(reply SubscribeReply, err error) {

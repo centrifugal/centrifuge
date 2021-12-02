@@ -120,6 +120,8 @@ type SubscribeEvent struct {
 	// Token will only be set for token channels. This is a task of application
 	// to check that subscription to a channel has valid token.
 	Token string
+	// Data received from client as part of Subscribe Command.
+	Data []byte
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do
