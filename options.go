@@ -20,6 +20,13 @@ func WithClientInfo(info *ClientInfo) PublishOption {
 	}
 }
 
+// WithMeta allows setting Publication.Meta.
+func WithMeta(meta map[string]string) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.Meta = meta
+	}
+}
+
 // SubscribeOptions define per-subscription options.
 type SubscribeOptions struct {
 	// ExpireAt defines time in future when subscription should expire,

@@ -20,18 +20,24 @@ import (
 // All its methods are not goroutine-safe and supposed to be called
 // once inside Node ConnectHandler.
 type clientEventHub struct {
-	aliveHandler         AliveHandler
-	disconnectHandler    DisconnectHandler
-	subscribeHandler     SubscribeHandler
-	unsubscribeHandler   UnsubscribeHandler
-	publishHandler       PublishHandler
-	refreshHandler       RefreshHandler
-	subRefreshHandler    SubRefreshHandler
-	rpcHandler           RPCHandler
-	messageHandler       MessageHandler
-	presenceHandler      PresenceHandler
-	presenceStatsHandler PresenceStatsHandler
-	historyHandler       HistoryHandler
+	aliveHandler          AliveHandler
+	disconnectHandler     DisconnectHandler
+	subscribeHandler      SubscribeHandler
+	unsubscribeHandler    UnsubscribeHandler
+	publishHandler        PublishHandler
+	refreshHandler        RefreshHandler
+	subRefreshHandler     SubRefreshHandler
+	rpcHandler            RPCHandler
+	messageHandler        MessageHandler
+	presenceHandler       PresenceHandler
+	presenceStatsHandler  PresenceStatsHandler
+	historyHandler        HistoryHandler
+	transportWriteHandler TransportWriteHandler
+}
+
+// OnTransportWrite allows setting TransportWriteHandler.
+func (c *Client) OnTransportWrite(h TransportWriteHandler) {
+	c.eventHub.transportWriteHandler = h
 }
 
 // OnAlive allows setting AliveHandler.
@@ -259,8 +265,8 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	messageWriterConf := writerConfig{
 		MaxQueueSize: n.config.ClientQueueMaxSize,
 		WriteFn: func(item queue.Item) error {
-			if client.node.transportWriteHandler != nil {
-				pass := client.node.transportWriteHandler(client, TransportWriteEvent(item))
+			if client.eventHub.transportWriteHandler != nil {
+				pass := client.eventHub.transportWriteHandler(TransportWriteEvent(item))
 				if !pass {
 					return nil
 				}
@@ -280,8 +286,8 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		WriteManyFn: func(items ...queue.Item) error {
 			messages := make([][]byte, 0, len(items))
 			for i := 0; i < len(items); i++ {
-				if client.node.transportWriteHandler != nil {
-					pass := client.node.transportWriteHandler(client, TransportWriteEvent(items[i]))
+				if client.eventHub.transportWriteHandler != nil {
+					pass := client.eventHub.transportWriteHandler(TransportWriteEvent(items[i]))
 					if !pass {
 						continue
 					}
@@ -388,7 +394,7 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 			return nil
 		}
 		c.trace("-->", rep.Result)
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: rep.Result, IsPush: false})
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: rep.Result, Channel: "", Publication: nil})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after connect push", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -488,7 +494,7 @@ func (c *Client) closeUnauthenticated() {
 	}
 }
 
-func (c *Client) transportEnqueue(reply *prepared.Reply) error {
+func (c *Client) transportEnqueue(reply *prepared.Reply, channel string, pub *protocol.Publication) error {
 	var data []byte
 	if c.transport.Unidirectional() {
 		data = reply.Reply.Result
@@ -497,8 +503,9 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	}
 	c.trace("-->", data)
 	disconnect := c.messageWriter.enqueue(queue.Item{
-		Data:   data,
-		IsPush: reply.Reply.Id == 0,
+		Data:        data,
+		Channel:     channel,
+		Publication: pub,
 	})
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
@@ -720,7 +727,7 @@ func (c *Client) Send(data []byte) error {
 	reply := prepared.NewReply(&protocol.Reply{
 		Result: pushBytes,
 	}, c.transport.Protocol().toProto())
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(reply, "", nil)
 }
 
 // Unsubscribe allows to unsubscribe client from channel.
@@ -751,7 +758,7 @@ func (c *Client) sendUnsubscribe(ch string) error {
 		Result: pushBytes,
 	}, c.transport.Protocol().toProto())
 
-	_ = c.transportEnqueue(reply)
+	_ = c.transportEnqueue(reply, ch, nil)
 	return nil
 }
 
@@ -811,7 +818,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 	if disconnect != nil && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
 		if reply, err := c.encodeDisconnect(disconnect); err == nil {
-			_ = c.transportEnqueue(reply)
+			_ = c.transportEnqueue(reply, "", nil)
 		}
 	}
 
@@ -986,7 +993,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 			return encodeErr
 		}
 		c.trace("-->", replyData)
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData, IsPush: false})
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -1221,7 +1228,7 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 		Result: pushBytes,
 	}, c.transport.Protocol().toProto())
 
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(reply, "", nil)
 }
 
 func (c *Client) handleRefresh(params protocol.Raw, rw *replyWriter) error {
@@ -2134,7 +2141,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	reply := prepared.NewReply(&protocol.Reply{
 		Result: pushBytes,
 	}, c.transport.Protocol().toProto())
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(reply, channel, nil)
 }
 
 func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Error, *Disconnect) {
@@ -2459,7 +2466,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 			return nil
 		}
 		c.mu.Unlock()
-		return c.transportEnqueue(reply)
+		return c.transportEnqueue(reply, ch, pub)
 	}
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
@@ -2491,7 +2498,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(reply, ch, pub)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
@@ -2499,7 +2506,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}
-		return c.transportEnqueue(reply)
+		return c.transportEnqueue(reply, ch, pub)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
 		_ = c.writePublicationUpdatePosition(ch, pub, reply, sp)
@@ -2507,18 +2514,18 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 	return nil
 }
 
-func (c *Client) writeJoin(_ string, reply *prepared.Reply) error {
+func (c *Client) writeJoin(ch string, reply *prepared.Reply) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(reply, ch, nil)
 }
 
-func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
+func (c *Client) writeLeave(ch string, reply *prepared.Reply) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(reply, ch, nil)
 }
 
 // Lock must be held outside.

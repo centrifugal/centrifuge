@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"context"
+
+	"github.com/centrifugal/protocol"
 )
 
 // ConnectEvent contains fields related to connecting event (when a server
@@ -50,6 +52,18 @@ type ConnectingHandler func(context.Context, ConnectEvent) (ConnectReply, error)
 
 // ConnectHandler called when client connected to server and ready to communicate.
 type ConnectHandler func(*Client)
+
+// TransportWriteEvent with encoded Data, optional channel for push types and Publication.
+type TransportWriteEvent struct {
+	Data        []byte
+	Channel     string
+	Publication *protocol.Publication
+}
+
+// TransportWriteHandler called just before writing data to Transport.
+// At this moment application can skip sending data to a client returning
+// false from a handler.
+type TransportWriteHandler func(TransportWriteEvent) bool
 
 // RefreshEvent contains fields related to refresh event.
 type RefreshEvent struct {
@@ -348,18 +362,6 @@ type NotificationEvent struct {
 
 // NotificationHandler allows handling notifications.
 type NotificationHandler func(NotificationEvent)
-
-// TransportWriteEvent with encoded Data and IsPush flag.
-type TransportWriteEvent struct {
-	Data   []byte
-	IsPush bool
-}
-
-// TransportWriteHandler called just before writing data to Transport.
-// At this moment application can skip sending data to a client returning
-// false from a handler. The main purpose of this handler is not a message
-// filtering based on data content but rather tracing and throttling stuff.
-type TransportWriteHandler func(*Client, TransportWriteEvent) bool
 
 // NodeInfoSendReply can modify sending Node control frame in some ways.
 type NodeInfoSendReply struct {

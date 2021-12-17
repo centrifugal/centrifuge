@@ -2,11 +2,14 @@ package queue
 
 import (
 	"sync"
+
+	"github.com/centrifugal/protocol"
 )
 
 type Item struct {
-	Data   []byte
-	IsPush bool
+	Data        []byte
+	Channel     string
+	Publication *protocol.Publication
 }
 
 // Queue is an unbounded queue of Item.

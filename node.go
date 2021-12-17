@@ -77,9 +77,8 @@ type Node struct {
 	surveyMu       sync.RWMutex
 	surveyID       uint64
 
-	notificationHandler   NotificationHandler
-	transportWriteHandler TransportWriteHandler
-	nodeInfoSendHandler   NodeInfoSendHandler
+	notificationHandler NotificationHandler
+	nodeInfoSendHandler NodeInfoSendHandler
 }
 
 const (
@@ -1178,6 +1177,7 @@ func pubToProto(pub *Publication) *protocol.Publication {
 		Offset: pub.Offset,
 		Data:   pub.Data,
 		Info:   infoToProto(pub.Info),
+		Meta:   pub.Meta,
 	}
 }
 
@@ -1189,6 +1189,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		Offset: pub.GetOffset(),
 		Data:   pub.Data,
 		Info:   infoFromProto(pub.GetInfo()),
+		Meta:   pub.GetMeta(),
 	}
 }
 
@@ -1415,11 +1416,6 @@ func (n *Node) OnSurvey(handler SurveyHandler) {
 // OnNotification allows setting NotificationHandler. This should be done before Node.Run called.
 func (n *Node) OnNotification(handler NotificationHandler) {
 	n.notificationHandler = handler
-}
-
-// OnTransportWrite allows setting TransportWriteHandler. This should be done before Node.Run called.
-func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
-	n.transportWriteHandler = handler
 }
 
 // OnNodeInfoSend allows setting NodeInfoSendHandler. This should be done before Node.Run called.
