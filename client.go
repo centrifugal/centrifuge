@@ -386,8 +386,15 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagConnect) {
 			return nil
 		}
-		c.trace("-->", rep.Result)
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: rep.Result, Reply: rep})
+		var data []byte
+		if c.transport.Version() == ProtocolVersion1 {
+			data = rep.Result
+			c.trace("-->", data)
+		} else {
+			data = prepared.NewReply(rep, c.transport.Protocol().toProto()).PushData()
+			c.trace("-->", data)
+		}
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: data, Reply: rep})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after connect push", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -490,7 +497,11 @@ func (c *Client) closeUnauthenticated() {
 func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	var data []byte
 	if c.transport.Unidirectional() {
-		data = reply.Reply.Result
+		if c.transport.Version() == ProtocolVersion1 {
+			data = reply.Reply.Result
+		} else {
+			data = reply.PushData()
+		}
 	} else {
 		data = reply.Data()
 	}

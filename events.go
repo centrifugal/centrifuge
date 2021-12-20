@@ -53,15 +53,18 @@ type ConnectingHandler func(context.Context, ConnectEvent) (ConnectReply, error)
 // ConnectHandler called when client connected to server and ready to communicate.
 type ConnectHandler func(*Client)
 
-// TransportWriteEvent with encoded Data, optional channel for push types and Publication.
+// TransportWriteEvent called just before sending data into the client connection. The
+// event is triggered from inside each client's message queue consumer – so it should
+// not directly affect Hub broadcast latencies.
 type TransportWriteEvent struct {
-	Data  []byte
+	// Data is what we are going to send into the connection.
+	Data []byte
+	// Reply allows introspecting the contents of the data without need to deserialize it.
 	Reply *protocol.Reply
 }
 
-// TransportWriteHandler called just before writing data to Transport.
-// At this moment application can skip sending data to a client returning
-// false from a handler.
+// TransportWriteHandler called just before writing data to the Transport.
+// Application can skip sending data to a client returning false from a handler.
 type TransportWriteHandler func(TransportWriteEvent) bool
 
 // RefreshEvent contains fields related to refresh event.

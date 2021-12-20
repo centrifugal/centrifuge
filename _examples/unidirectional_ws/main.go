@@ -261,6 +261,11 @@ func (t *websocketTransport) Unidirectional() bool {
 	return true
 }
 
+// Version of protocol.
+func (t *websocketTransport) Version() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return 0

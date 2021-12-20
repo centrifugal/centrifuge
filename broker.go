@@ -14,7 +14,7 @@ type Publication struct {
 	Data []byte
 	// Info is an optional information about client connection published this data.
 	Info *ClientInfo
-	// Meta ...
+	// Meta is a map with custom key-values attached to Publication.
 	Meta map[string]string
 }
 

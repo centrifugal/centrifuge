@@ -295,6 +295,11 @@ func (t *streamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
+// Version of protocol.
+func (t *streamTransport) Version() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 func (t *streamTransport) Write(message []byte) error {
 	return t.WriteMany(message)
 }

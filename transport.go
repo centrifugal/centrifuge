@@ -32,8 +32,11 @@ const (
 type ProtocolVersion uint8
 
 const (
-	// ProtocolVersion1 is DEPRECATED and will be removed in the future.
+	// ProtocolVersion1 is the current stable client protocol.
 	ProtocolVersion1 ProtocolVersion = 1
+	// ProtocolVersion2 is currently EXPERIMENTAL. There could be still some
+	// backwards incompatible adjustments in it. But the plan is to make it
+	// default in the future.
 	ProtocolVersion2 ProtocolVersion = 2
 )
 
@@ -44,6 +47,8 @@ type TransportInfo interface {
 	// Protocol returns an underlying transport protocol type used.
 	// JSON or Protobuf types are supported.
 	Protocol() ProtocolType
+	// Version returns client protocol version.
+	Version() ProtocolVersion
 	// Unidirectional returns whether transport is unidirectional. For
 	// unidirectional transports Centrifuge uses Push protobuf messages
 	// without additional wrapping into Reply protocol message.
@@ -53,8 +58,6 @@ type TransportInfo interface {
 	// bidirectional WebSocket implementation since disconnect data sent inside
 	// Close frame.
 	DisabledPushFlags() uint64
-	// Version returns client protocol version.
-	Version() ProtocolVersion
 }
 
 // Transport abstracts a connection transport between server and client.

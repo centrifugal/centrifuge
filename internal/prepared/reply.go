@@ -11,7 +11,9 @@ type Reply struct {
 	ProtoType protocol.Type
 	Reply     *protocol.Reply
 	data      []byte
+	pushData  []byte
 	once      sync.Once
+	pushOnce  sync.Once
 }
 
 // NewReply initializes Reply.
@@ -30,4 +32,14 @@ func (r *Reply) Data() []byte {
 		r.data = data
 	})
 	return r.data
+}
+
+// Data returns data associated with reply which is only calculated once.
+func (r *Reply) PushData() []byte {
+	r.pushOnce.Do(func() {
+		encoder := protocol.GetPushEncoder(r.ProtoType)
+		pushData, _ := encoder.Encode(r.Reply.Push)
+		r.pushData = pushData
+	})
+	return r.pushData
 }

@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -90,28 +88,29 @@ func main() {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
-		// Event handler should not block, so start separate goroutine to
-		// periodically send messages to client.
-		go func() {
-			for {
-				select {
-				case <-client.Context().Done():
-					return
-				case <-time.After(5000 * time.Second):
-					err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-					if err != nil {
-						if err == io.EOF {
-							return
-						}
-						log.Printf("error sending message: %s", err)
-					}
-				}
-			}
-		}()
+		//// Event handler should not block, so start separate goroutine to
+		//// periodically send messages to client.
+		//go func() {
+		//	for {
+		//		select {
+		//		case <-client.Context().Done():
+		//			return
+		//		case <-time.After(5000 * time.Second):
+		//			err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+		//			if err != nil {
+		//				if err == io.EOF {
+		//					return
+		//				}
+		//				log.Printf("error sending message: %s", err)
+		//			}
+		//		}
+		//	}
+		//}()
 
 		client.OnTransportWrite(func(event centrifuge.TransportWriteEvent) bool {
 			if event.Reply != nil && event.Reply.Push != nil && event.Reply.Push.Pub != nil {
 				if strings.Contains(string(event.Reply.Push.Pub.Data), "hello") {
+					client.Disconnect(centrifuge.DisconnectForceNoReconnect)
 					return false
 				}
 			}
@@ -203,41 +202,41 @@ func main() {
 		log.Fatal(err)
 	}
 
-	go func() {
-		// Publish personal notifications for user 42 periodically.
-		i := 1
-		for {
-			_, err := node.Publish(
-				"#42",
-				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute),
-				centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
-			)
-			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
-			}
-			i++
-			time.Sleep(5000 * time.Millisecond)
-		}
-	}()
-
-	go func() {
-		// Publish to channel periodically.
-		i := 1
-		for {
-			_, err := node.Publish(
-				"chat:index",
-				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute),
-				centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
-			)
-			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
-			}
-			i++
-			time.Sleep(10000 * time.Millisecond)
-		}
-	}()
+	//go func() {
+	//	// Publish personal notifications for user 42 periodically.
+	//	i := 1
+	//	for {
+	//		_, err := node.Publish(
+	//			"#42",
+	//			[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
+	//			centrifuge.WithHistory(300, time.Minute),
+	//			centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
+	//		)
+	//		if err != nil {
+	//			log.Printf("error publishing to personal channel: %s", err)
+	//		}
+	//		i++
+	//		time.Sleep(5000 * time.Millisecond)
+	//	}
+	//}()
+	//
+	//go func() {
+	//	// Publish to channel periodically.
+	//	i := 1
+	//	for {
+	//		_, err := node.Publish(
+	//			"chat:index",
+	//			[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
+	//			centrifuge.WithHistory(300, time.Minute),
+	//			centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
+	//		)
+	//		if err != nil {
+	//			log.Printf("error publishing to personal channel: %s", err)
+	//		}
+	//		i++
+	//		time.Sleep(10000 * time.Millisecond)
+	//	}
+	//}()
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ProtocolVersion:    centrifuge.ProtocolVersion2,

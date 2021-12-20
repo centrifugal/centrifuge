@@ -278,6 +278,11 @@ func (t *eventsourceTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
+// Version of protocol.
+func (t *eventsourceTransport) Version() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 func (t *eventsourceTransport) Write(message []byte) error {
 	return t.WriteMany(message)
 }

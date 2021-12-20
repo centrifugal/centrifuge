@@ -212,6 +212,11 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
 }
 
+// Version of protocol.
+func (t *customWebsocketTransport) Version() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 // Write ...
 func (t *customWebsocketTransport) Write(message []byte) error {
 	select {
