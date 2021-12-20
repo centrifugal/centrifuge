@@ -108,6 +108,10 @@ func main() {
 			}
 		}()
 
+		client.OnTransportWrite(func(event centrifuge.TransportWriteEvent) bool {
+			return event.Channel != "#42"
+		})
+
 		client.OnAlive(func() {
 			log.Printf("user %s connection is still active", client.UserID())
 		})
@@ -193,31 +197,41 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//go func() {
-	//	// Publish personal notifications for user 42 periodically.
-	//	i := 1
-	//	for {
-	//		_, err := node.Publish("#42", []byte(`{"personal": "`+strconv.Itoa(i)+`"}`), centrifuge.WithHistory(300, time.Minute))
-	//		if err != nil {
-	//			log.Printf("error publishing to personal channel: %s", err)
-	//		}
-	//		i++
-	//		time.Sleep(5000 * time.Millisecond)
-	//	}
-	//}()
-	//
-	//go func() {
-	//	// Publish to channel periodically.
-	//	i := 1
-	//	for {
-	//		_, err := node.Publish("chat:index", []byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`), centrifuge.WithHistory(300, time.Minute))
-	//		if err != nil {
-	//			log.Printf("error publishing to personal channel: %s", err)
-	//		}
-	//		i++
-	//		time.Sleep(10000 * time.Millisecond)
-	//	}
-	//}()
+	go func() {
+		// Publish personal notifications for user 42 periodically.
+		i := 1
+		for {
+			_, err := node.Publish(
+				"#42",
+				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
+			)
+			if err != nil {
+				log.Printf("error publishing to personal channel: %s", err)
+			}
+			i++
+			time.Sleep(5000 * time.Millisecond)
+		}
+	}()
+
+	go func() {
+		// Publish to channel periodically.
+		i := 1
+		for {
+			_, err := node.Publish(
+				"chat:index",
+				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
+			)
+			if err != nil {
+				log.Printf("error publishing to personal channel: %s", err)
+			}
+			i++
+			time.Sleep(10000 * time.Millisecond)
+		}
+	}()
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ProtocolVersion:    centrifuge.ProtocolVersion2,

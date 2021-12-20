@@ -14,6 +14,8 @@ type Publication struct {
 	Data []byte
 	// Info is an optional information about client connection published this data.
 	Info *ClientInfo
+	// Meta ...
+	Meta map[string]string
 }
 
 // ClientInfo contains information about client connection.
@@ -86,6 +88,8 @@ type PublishOptions struct {
 	HistorySize int
 	// ClientInfo to include into Publication. By default no ClientInfo will be appended.
 	ClientInfo *ClientInfo
+	// Meta is a custom meta information for the Publication.
+	Meta map[string]string
 }
 
 // Broker is responsible for PUB/SUB mechanics.
