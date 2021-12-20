@@ -351,8 +351,7 @@ type NotificationHandler func(NotificationEvent)
 
 // TransportWriteEvent with encoded Data and IsPush flag.
 type TransportWriteEvent struct {
-	Data   []byte
-	IsPush bool
+	Data []byte
 }
 
 // TransportWriteHandler called just before writing data to Transport.

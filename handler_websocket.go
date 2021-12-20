@@ -15,6 +15,223 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Defaults.
+const (
+	DefaultWebsocketPingInterval     = 25 * time.Second
+	DefaultWebsocketWriteTimeout     = 1 * time.Second
+	DefaultWebsocketMessageSizeLimit = 65536 // 64KB
+)
+
+// WebsocketConfig represents config for WebsocketHandler.
+type WebsocketConfig struct {
+	// ProtocolVersion this handler will use. If not set we are using ProtocolVersion1.
+	// ProtocolVersion2 is more optimized for the message introspection but not supported
+	// by all clients in the ecosystem yet.
+	ProtocolVersion ProtocolVersion
+
+	// CompressionLevel sets a level for websocket compression.
+	// See possible value description at https://golang.org/pkg/compress/flate/#NewWriter
+	CompressionLevel int
+
+	// CompressionMinSize allows to set minimal limit in bytes for
+	// message to use compression when writing it into client connection.
+	// By default it's 0 - i.e. all messages will be compressed when
+	// WebsocketCompression enabled and compression negotiated with client.
+	CompressionMinSize int
+
+	// ReadBufferSize is a parameter that is used for raw websocket Upgrader.
+	// If set to zero reasonable default value will be used.
+	ReadBufferSize int
+
+	// WriteBufferSize is a parameter that is used for raw websocket Upgrader.
+	// If set to zero reasonable default value will be used.
+	WriteBufferSize int
+
+	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
+	// By default DefaultWebsocketMaxMessageSize will be used.
+	MessageSizeLimit int
+
+	// CheckOrigin func to provide custom origin check logic.
+	// nil means that sameHostOriginCheck function will be used which
+	// expects Origin host to match request Host.
+	CheckOrigin func(r *http.Request) bool
+
+	// PingInterval sets interval server will send ping messages to clients.
+	// By default DefaultPingInterval will be used.
+	PingInterval time.Duration
+
+	// WriteTimeout is maximum time of write message operation.
+	// Slow client will be disconnected.
+	// By default DefaultWebsocketWriteTimeout will be used.
+	WriteTimeout time.Duration
+
+	// Compression allows to enable websocket permessage-deflate
+	// compression support for raw websocket connections. It does
+	// not guarantee that compression will be used - i.e. it only
+	// says that server will try to negotiate it with client.
+	Compression bool
+
+	// UseWriteBufferPool enables using buffer pool for writes.
+	UseWriteBufferPool bool
+}
+
+// WebsocketHandler handles WebSocket client connections. WebSocket protocol
+// is a bidirectional connection between a client an a server for low-latency
+// communication.
+type WebsocketHandler struct {
+	node    *Node
+	upgrade *websocket.Upgrader
+	config  WebsocketConfig
+	version ProtocolVersion
+}
+
+var writeBufferPool = &sync.Pool{}
+
+// NewWebsocketHandler creates new WebsocketHandler.
+func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
+	upgrade := &websocket.Upgrader{
+		ReadBufferSize:    config.ReadBufferSize,
+		EnableCompression: config.Compression,
+		Subprotocols:      []string{"centrifuge-protobuf"},
+	}
+	if config.UseWriteBufferPool {
+		upgrade.WriteBufferPool = writeBufferPool
+	} else {
+		upgrade.WriteBufferSize = config.WriteBufferSize
+	}
+	if config.CheckOrigin != nil {
+		upgrade.CheckOrigin = config.CheckOrigin
+	} else {
+		upgrade.CheckOrigin = sameHostOriginCheck(node)
+	}
+	if config.ProtocolVersion == 0 {
+		config.ProtocolVersion = ProtocolVersion1
+	}
+	return &WebsocketHandler{
+		node:    node,
+		config:  config,
+		upgrade: upgrade,
+		version: config.ProtocolVersion,
+	}
+}
+
+func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	incTransportConnect(transportWebsocket)
+
+	compression := s.config.Compression
+	compressionLevel := s.config.CompressionLevel
+	compressionMinSize := s.config.CompressionMinSize
+
+	conn, err := s.upgrade.Upgrade(rw, r, nil)
+	if err != nil {
+		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]interface{}{"error": err.Error()}))
+		return
+	}
+
+	if compression {
+		err := conn.SetCompressionLevel(compressionLevel)
+		if err != nil {
+			s.node.logger.log(newLogEntry(LogLevelError, "websocket error setting compression level", map[string]interface{}{"error": err.Error()}))
+		}
+	}
+
+	pingInterval := s.config.PingInterval
+	if pingInterval == 0 {
+		pingInterval = DefaultWebsocketPingInterval
+	}
+	writeTimeout := s.config.WriteTimeout
+	if writeTimeout == 0 {
+		writeTimeout = DefaultWebsocketWriteTimeout
+	}
+	messageSizeLimit := s.config.MessageSizeLimit
+	if messageSizeLimit == 0 {
+		messageSizeLimit = DefaultWebsocketMessageSizeLimit
+	}
+
+	if messageSizeLimit > 0 {
+		conn.SetReadLimit(int64(messageSizeLimit))
+	}
+	if pingInterval > 0 {
+		pongWait := pingInterval * 10 / 9
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+		conn.SetPongHandler(func(string) error {
+			_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+			return nil
+		})
+	}
+
+	var protoType = ProtocolTypeJSON
+
+	subProtocol := conn.Subprotocol()
+	if subProtocol == "centrifuge-protobuf" {
+		protoType = ProtocolTypeProtobuf
+	} else {
+		// This is a deprecated way to get a protocol type.
+		if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
+			protoType = ProtocolTypeProtobuf
+		}
+	}
+
+	// Separate goroutine for better GC of caller's data.
+	go func() {
+		opts := websocketTransportOptions{
+			pingInterval:       pingInterval,
+			writeTimeout:       writeTimeout,
+			compressionMinSize: compressionMinSize,
+			protoType:          protoType,
+			protoVersion:       s.version,
+		}
+
+		graceCh := make(chan struct{})
+		transport := newWebsocketTransport(conn, opts, graceCh)
+
+		select {
+		case <-s.node.NotifyShutdown():
+			_ = transport.Close(DisconnectShutdown)
+			return
+		default:
+		}
+
+		ctxCh := make(chan struct{})
+		defer close(ctxCh)
+
+		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
+		if err != nil {
+			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
+			return
+		}
+		defer func() { _ = closeFn() }()
+
+		s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket}))
+		defer func(started time.Time) {
+			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
+		}(time.Now())
+
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			closed := !c.Handle(data)
+			if closed {
+				break
+			}
+		}
+
+		// https://github.com/gorilla/websocket/issues/448
+		conn.SetPingHandler(nil)
+		conn.SetPongHandler(nil)
+		conn.SetCloseHandler(nil)
+		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				close(graceCh)
+				break
+			}
+		}
+	}()
+}
+
 const (
 	transportWebsocket = "websocket"
 )
@@ -36,6 +253,7 @@ type websocketTransportOptions struct {
 	pingInterval       time.Duration
 	writeTimeout       time.Duration
 	compressionMinSize int
+	protoVersion       ProtocolVersion
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}) *websocketTransport {
@@ -94,6 +312,11 @@ func (t *websocketTransport) Unidirectional() bool {
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return PushFlagDisconnect
+}
+
+// Version ...
+func (t *websocketTransport) Version() ProtocolVersion {
+	return t.opts.protoVersion
 }
 
 func (t *websocketTransport) writeData(data []byte) error {
@@ -187,212 +410,6 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 		return t.conn.Close()
 	}
 	return t.conn.Close()
-}
-
-// Defaults.
-const (
-	DefaultWebsocketPingInterval     = 25 * time.Second
-	DefaultWebsocketWriteTimeout     = 1 * time.Second
-	DefaultWebsocketMessageSizeLimit = 65536 // 64KB
-)
-
-// WebsocketConfig represents config for WebsocketHandler.
-type WebsocketConfig struct {
-	// CompressionLevel sets a level for websocket compression.
-	// See possible value description at https://golang.org/pkg/compress/flate/#NewWriter
-	CompressionLevel int
-
-	// CompressionMinSize allows to set minimal limit in bytes for
-	// message to use compression when writing it into client connection.
-	// By default it's 0 - i.e. all messages will be compressed when
-	// WebsocketCompression enabled and compression negotiated with client.
-	CompressionMinSize int
-
-	// ReadBufferSize is a parameter that is used for raw websocket Upgrader.
-	// If set to zero reasonable default value will be used.
-	ReadBufferSize int
-
-	// WriteBufferSize is a parameter that is used for raw websocket Upgrader.
-	// If set to zero reasonable default value will be used.
-	WriteBufferSize int
-
-	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
-	// By default DefaultWebsocketMaxMessageSize will be used.
-	MessageSizeLimit int
-
-	// CheckOrigin func to provide custom origin check logic.
-	// nil means that sameHostOriginCheck function will be used which
-	// expects Origin host to match request Host.
-	CheckOrigin func(r *http.Request) bool
-
-	// PingInterval sets interval server will send ping messages to clients.
-	// By default DefaultPingInterval will be used.
-	PingInterval time.Duration
-
-	// WriteTimeout is maximum time of write message operation.
-	// Slow client will be disconnected.
-	// By default DefaultWebsocketWriteTimeout will be used.
-	WriteTimeout time.Duration
-
-	// Compression allows to enable websocket permessage-deflate
-	// compression support for raw websocket connections. It does
-	// not guarantee that compression will be used - i.e. it only
-	// says that server will try to negotiate it with client.
-	Compression bool
-
-	// UseWriteBufferPool enables using buffer pool for writes.
-	UseWriteBufferPool bool
-}
-
-// WebsocketHandler handles WebSocket client connections. WebSocket protocol
-// is a bidirectional connection between a client an a server for low-latency
-// communication.
-type WebsocketHandler struct {
-	node    *Node
-	upgrade *websocket.Upgrader
-	config  WebsocketConfig
-}
-
-var writeBufferPool = &sync.Pool{}
-
-// NewWebsocketHandler creates new WebsocketHandler.
-func NewWebsocketHandler(n *Node, c WebsocketConfig) *WebsocketHandler {
-	upgrade := &websocket.Upgrader{
-		ReadBufferSize:    c.ReadBufferSize,
-		EnableCompression: c.Compression,
-		Subprotocols:      []string{"centrifuge-protobuf"},
-	}
-	if c.UseWriteBufferPool {
-		upgrade.WriteBufferPool = writeBufferPool
-	} else {
-		upgrade.WriteBufferSize = c.WriteBufferSize
-	}
-	if c.CheckOrigin != nil {
-		upgrade.CheckOrigin = c.CheckOrigin
-	} else {
-		upgrade.CheckOrigin = sameHostOriginCheck(n)
-	}
-	return &WebsocketHandler{
-		node:    n,
-		config:  c,
-		upgrade: upgrade,
-	}
-}
-
-func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	incTransportConnect(transportWebsocket)
-
-	compression := s.config.Compression
-	compressionLevel := s.config.CompressionLevel
-	compressionMinSize := s.config.CompressionMinSize
-
-	conn, err := s.upgrade.Upgrade(rw, r, nil)
-	if err != nil {
-		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]interface{}{"error": err.Error()}))
-		return
-	}
-
-	if compression {
-		err := conn.SetCompressionLevel(compressionLevel)
-		if err != nil {
-			s.node.logger.log(newLogEntry(LogLevelError, "websocket error setting compression level", map[string]interface{}{"error": err.Error()}))
-		}
-	}
-
-	pingInterval := s.config.PingInterval
-	if pingInterval == 0 {
-		pingInterval = DefaultWebsocketPingInterval
-	}
-	writeTimeout := s.config.WriteTimeout
-	if writeTimeout == 0 {
-		writeTimeout = DefaultWebsocketWriteTimeout
-	}
-	messageSizeLimit := s.config.MessageSizeLimit
-	if messageSizeLimit == 0 {
-		messageSizeLimit = DefaultWebsocketMessageSizeLimit
-	}
-
-	if messageSizeLimit > 0 {
-		conn.SetReadLimit(int64(messageSizeLimit))
-	}
-	if pingInterval > 0 {
-		pongWait := pingInterval * 10 / 9
-		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
-		conn.SetPongHandler(func(string) error {
-			_ = conn.SetReadDeadline(time.Now().Add(pongWait))
-			return nil
-		})
-	}
-
-	var protoType = ProtocolTypeJSON
-
-	subProtocol := conn.Subprotocol()
-	if subProtocol == "centrifuge-protobuf" {
-		protoType = ProtocolTypeProtobuf
-	} else {
-		// This is a deprecated way to get a protocol type.
-		if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
-			protoType = ProtocolTypeProtobuf
-		}
-	}
-
-	// Separate goroutine for better GC of caller's data.
-	go func() {
-		opts := websocketTransportOptions{
-			pingInterval:       pingInterval,
-			writeTimeout:       writeTimeout,
-			compressionMinSize: compressionMinSize,
-			protoType:          protoType,
-		}
-
-		graceCh := make(chan struct{})
-		transport := newWebsocketTransport(conn, opts, graceCh)
-
-		select {
-		case <-s.node.NotifyShutdown():
-			_ = transport.Close(DisconnectShutdown)
-			return
-		default:
-		}
-
-		ctxCh := make(chan struct{})
-		defer close(ctxCh)
-
-		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
-		if err != nil {
-			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
-			return
-		}
-		defer func() { _ = closeFn() }()
-
-		s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket}))
-		defer func(started time.Time) {
-			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
-		}(time.Now())
-
-		for {
-			_, data, err := conn.ReadMessage()
-			if err != nil {
-				break
-			}
-			closed := !c.Handle(data)
-			if closed {
-				break
-			}
-		}
-
-		// https://github.com/gorilla/websocket/issues/448
-		conn.SetPingHandler(nil)
-		conn.SetPongHandler(nil)
-		conn.SetCloseHandler(nil)
-		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
-		for {
-			if _, _, err := conn.NextReader(); err != nil {
-				close(graceCh)
-				break
-			}
-		}
-	}()
 }
 
 func sameHostOriginCheck(n *Node) func(r *http.Request) bool {

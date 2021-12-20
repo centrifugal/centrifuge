@@ -12,95 +12,13 @@ import (
 	"github.com/igm/sockjs-go/v3/sockjs"
 )
 
-const (
-	transportSockJS = "sockjs"
-)
-
-type sockjsTransport struct {
-	mu      sync.RWMutex
-	closed  bool
-	closeCh chan struct{}
-	session sockjs.Session
-}
-
-func newSockjsTransport(s sockjs.Session) *sockjsTransport {
-	t := &sockjsTransport{
-		session: s,
-		closeCh: make(chan struct{}),
-	}
-	return t
-}
-
-// Name returns name of transport.
-func (t *sockjsTransport) Name() string {
-	return transportSockJS
-}
-
-// Protocol returns transport protocol.
-func (t *sockjsTransport) Protocol() ProtocolType {
-	return ProtocolTypeJSON
-}
-
-// Unidirectional returns whether transport is unidirectional.
-func (t *sockjsTransport) Unidirectional() bool {
-	return false
-}
-
-// DisabledPushFlags ...
-func (t *sockjsTransport) DisabledPushFlags() uint64 {
-	if !t.Unidirectional() {
-		return PushFlagDisconnect
-	}
-	return 0
-}
-
-// Write data to transport.
-func (t *sockjsTransport) Write(message []byte) error {
-	select {
-	case <-t.closeCh:
-		return nil
-	default:
-		// No need to use protocol encoders here since
-		// SockJS only supports JSON.
-		return t.session.Send(string(message))
-	}
-}
-
-// Write data to transport.
-func (t *sockjsTransport) WriteMany(messages ...[]byte) error {
-	select {
-	case <-t.closeCh:
-		return nil
-	default:
-		encoder := protocol.GetDataEncoder(ProtocolTypeJSON.toProto())
-		defer protocol.PutDataEncoder(ProtocolTypeJSON.toProto(), encoder)
-		for i := range messages {
-			_ = encoder.Encode(messages[i])
-		}
-		return t.session.Send(string(encoder.Finish()))
-	}
-}
-
-// Close closes transport.
-func (t *sockjsTransport) Close(disconnect *Disconnect) error {
-	t.mu.Lock()
-	if t.closed {
-		// Already closed, noop.
-		t.mu.Unlock()
-		return nil
-	}
-	t.closed = true
-	close(t.closeCh)
-	t.mu.Unlock()
-
-	if disconnect == nil {
-		disconnect = DisconnectNormal
-	}
-	return t.session.Close(disconnect.Code, disconnect.CloseText())
-}
-
 // SockjsConfig represents config for SockJS handler.
 type SockjsConfig struct {
+	// ProtocolVersion this handler will use. If not set we are using ProtocolVersion1.
+	// ProtocolVersion2 is more optimized for the message introspection but not supported
+	// by all clients in the ecosystem yet.
+	ProtocolVersion ProtocolVersion
+
 	// HandlerPrefix sets prefix for SockJS handler endpoint path.
 	HandlerPrefix string
 
@@ -143,54 +61,60 @@ type SockjsConfig struct {
 // more than one Centrifuge Node on a backend (so SockJS to be able to emulate
 // bidirectional protocol). So if you can afford it - use WebsocketHandler only.
 type SockjsHandler struct {
-	node    *Node
-	config  SockjsConfig
-	handler http.Handler
+	node            *Node
+	config          SockjsConfig
+	handler         http.Handler
+	protocolVersion ProtocolVersion
 }
 
 // NewSockjsHandler creates new SockjsHandler.
-func NewSockjsHandler(n *Node, c SockjsConfig) *SockjsHandler {
+func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 	options := sockjs.DefaultOptions
 	wsUpgrader := &websocket.Upgrader{
-		ReadBufferSize:  c.WebsocketReadBufferSize,
-		WriteBufferSize: c.WebsocketWriteBufferSize,
+		ReadBufferSize:  config.WebsocketReadBufferSize,
+		WriteBufferSize: config.WebsocketWriteBufferSize,
 		Error:           func(w http.ResponseWriter, r *http.Request, status int, reason error) {},
 	}
-	if c.WebsocketCheckOrigin != nil {
-		wsUpgrader.CheckOrigin = c.WebsocketCheckOrigin
+	if config.WebsocketCheckOrigin != nil {
+		wsUpgrader.CheckOrigin = config.WebsocketCheckOrigin
 	} else {
-		wsUpgrader.CheckOrigin = sameHostOriginCheck(n)
+		wsUpgrader.CheckOrigin = sameHostOriginCheck(node)
 	}
-	if c.WebsocketUseWriteBufferPool {
+	if config.WebsocketUseWriteBufferPool {
 		wsUpgrader.WriteBufferPool = writeBufferPool
 	} else {
-		wsUpgrader.WriteBufferSize = c.WebsocketWriteBufferSize
+		wsUpgrader.WriteBufferSize = config.WebsocketWriteBufferSize
 	}
 	options.WebsocketUpgrader = wsUpgrader
 	// Override sockjs url. It's important to use the same SockJS
 	// library version on client and server sides when using iframe
 	// based SockJS transports, otherwise SockJS will raise error
 	// about version mismatch.
-	options.SockJSURL = c.URL
-	if c.CheckOrigin != nil {
-		options.CheckOrigin = c.CheckOrigin
+	options.SockJSURL = config.URL
+	if config.CheckOrigin != nil {
+		options.CheckOrigin = config.CheckOrigin
 	} else {
-		options.CheckOrigin = sameHostOriginCheck(n)
+		options.CheckOrigin = sameHostOriginCheck(node)
 	}
 
-	options.HeartbeatDelay = c.HeartbeatDelay
-	wsWriteTimeout := c.WebsocketWriteTimeout
+	options.HeartbeatDelay = config.HeartbeatDelay
+	wsWriteTimeout := config.WebsocketWriteTimeout
 	if wsWriteTimeout == 0 {
 		wsWriteTimeout = DefaultWebsocketWriteTimeout
 	}
 	options.WebsocketWriteTimeout = wsWriteTimeout
 
-	s := &SockjsHandler{
-		node:   n,
-		config: c,
+	if config.ProtocolVersion == 0 {
+		config.ProtocolVersion = ProtocolVersion1
 	}
 
-	handler := newSockJSHandler(s, c.HandlerPrefix, options)
+	s := &SockjsHandler{
+		node:            node,
+		config:          config,
+		protocolVersion: config.ProtocolVersion,
+	}
+
+	handler := newSockJSHandler(s, config.HandlerPrefix, options)
 	s.handler = handler
 	return s
 }
@@ -212,7 +136,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
-		transport := newSockjsTransport(sess)
+		transport := newSockjsTransport(sess, s.protocolVersion)
 
 		select {
 		case <-s.node.NotifyShutdown():
@@ -259,4 +183,98 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 			}
 		}
 	}()
+}
+
+const (
+	transportSockJS = "sockjs"
+)
+
+type sockjsTransport struct {
+	mu              sync.RWMutex
+	closed          bool
+	closeCh         chan struct{}
+	session         sockjs.Session
+	protocolVersion ProtocolVersion
+}
+
+func newSockjsTransport(s sockjs.Session, v ProtocolVersion) *sockjsTransport {
+	t := &sockjsTransport{
+		session:         s,
+		closeCh:         make(chan struct{}),
+		protocolVersion: v,
+	}
+	return t
+}
+
+// Name returns name of transport.
+func (t *sockjsTransport) Name() string {
+	return transportSockJS
+}
+
+// Protocol returns transport protocol.
+func (t *sockjsTransport) Protocol() ProtocolType {
+	return ProtocolTypeJSON
+}
+
+// Unidirectional returns whether transport is unidirectional.
+func (t *sockjsTransport) Unidirectional() bool {
+	return false
+}
+
+// DisabledPushFlags ...
+func (t *sockjsTransport) DisabledPushFlags() uint64 {
+	if !t.Unidirectional() {
+		return PushFlagDisconnect
+	}
+	return 0
+}
+
+// Version ...
+func (t *sockjsTransport) Version() ProtocolVersion {
+	return t.protocolVersion
+}
+
+// Write data to transport.
+func (t *sockjsTransport) Write(message []byte) error {
+	select {
+	case <-t.closeCh:
+		return nil
+	default:
+		// No need to use protocol encoders here since
+		// SockJS only supports JSON.
+		return t.session.Send(string(message))
+	}
+}
+
+// Write data to transport.
+func (t *sockjsTransport) WriteMany(messages ...[]byte) error {
+	select {
+	case <-t.closeCh:
+		return nil
+	default:
+		encoder := protocol.GetDataEncoder(ProtocolTypeJSON.toProto())
+		defer protocol.PutDataEncoder(ProtocolTypeJSON.toProto(), encoder)
+		for i := range messages {
+			_ = encoder.Encode(messages[i])
+		}
+		return t.session.Send(string(encoder.Finish()))
+	}
+}
+
+// Close closes transport.
+func (t *sockjsTransport) Close(disconnect *Disconnect) error {
+	t.mu.Lock()
+	if t.closed {
+		// Already closed, noop.
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
+	close(t.closeCh)
+	t.mu.Unlock()
+
+	if disconnect == nil {
+		disconnect = DisconnectNormal
+	}
+	return t.session.Close(disconnect.Code, disconnect.CloseText())
 }

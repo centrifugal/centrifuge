@@ -503,35 +503,62 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 		return nil
 	}
 
-	var jsonPublicationReply *prepared.Reply
-	var protobufPublicationReply *prepared.Reply
+	var jsonPublicationReplyV1 *prepared.Reply
+	var protobufPublicationReplyV1 *prepared.Reply
+	var jsonPublicationReplyV2 *prepared.Reply
+	var protobufPublicationReplyV2 *prepared.Reply
+
 	// Iterate over channel subscribers and send message.
 	for _, c := range channelSubscriptions {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
-			if jsonPublicationReply == nil {
-				pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
-				if err != nil {
-					return err
+			if c.transport.Version() == ProtocolVersion1 {
+				if jsonPublicationReplyV1 == nil {
+					pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
+					if err != nil {
+						return err
+					}
+					reply := &protocol.Reply{
+						Result: pushBytes,
+					}
+					jsonPublicationReplyV1 = prepared.NewReply(reply, protocol.TypeJSON)
 				}
-				reply := &protocol.Reply{
-					Result: pushBytes,
+				_ = c.writePublication(channel, pub, jsonPublicationReplyV1, sp)
+			} else {
+				if jsonPublicationReplyV2 == nil {
+					jsonPublicationReplyV2 = prepared.NewReply(&protocol.Reply{
+						Push: &protocol.Push{
+							Channel: channel,
+							Pub:     pub,
+						},
+					}, protocol.TypeJSON)
 				}
-				jsonPublicationReply = prepared.NewReply(reply, protocol.TypeJSON)
+				_ = c.writePublication(channel, pub, jsonPublicationReplyV2, sp)
 			}
-			_ = c.writePublication(channel, pub, jsonPublicationReply, sp)
 		} else if protoType == protocol.TypeProtobuf {
-			if protobufPublicationReply == nil {
-				pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
-				if err != nil {
-					return err
+			if c.transport.Version() == ProtocolVersion1 {
+				if protobufPublicationReplyV1 == nil {
+					pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
+					if err != nil {
+						return err
+					}
+					reply := &protocol.Reply{
+						Result: pushBytes,
+					}
+					protobufPublicationReplyV1 = prepared.NewReply(reply, protocol.TypeProtobuf)
 				}
-				reply := &protocol.Reply{
-					Result: pushBytes,
+				_ = c.writePublication(channel, pub, protobufPublicationReplyV1, sp)
+			} else {
+				if protobufPublicationReplyV2 == nil {
+					protobufPublicationReplyV2 = prepared.NewReply(&protocol.Reply{
+						Push: &protocol.Push{
+							Channel: channel,
+							Pub:     pub,
+						},
+					}, protocol.TypeProtobuf)
 				}
-				protobufPublicationReply = prepared.NewReply(reply, protocol.TypeProtobuf)
+				_ = c.writePublication(channel, pub, protobufPublicationReplyV2, sp)
 			}
-			_ = c.writePublication(channel, pub, protobufPublicationReply, sp)
 		}
 	}
 	return nil
@@ -548,36 +575,62 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 	}
 
 	var (
-		jsonReply     *prepared.Reply
-		protobufReply *prepared.Reply
+		jsonReplyV1     *prepared.Reply
+		protobufReplyV1 *prepared.Reply
+		jsonReplyV2     *prepared.Reply
+		protobufReplyV2 *prepared.Reply
 	)
 
 	for _, c := range channelSubscriptions {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
-			if jsonReply == nil {
-				pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
-				if err != nil {
-					return err
+			if c.transport.Version() == ProtocolVersion1 {
+				if jsonReplyV1 == nil {
+					pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
+					if err != nil {
+						return err
+					}
+					reply := &protocol.Reply{
+						Result: pushBytes,
+					}
+					jsonReplyV1 = prepared.NewReply(reply, protocol.TypeJSON)
 				}
-				reply := &protocol.Reply{
-					Result: pushBytes,
+				_ = c.writeJoin(channel, jsonReplyV1)
+			} else {
+				if jsonReplyV2 == nil {
+					jsonReplyV2 = prepared.NewReply(&protocol.Reply{
+						Push: &protocol.Push{
+							Channel: channel,
+							Join:    join,
+						},
+					}, protocol.TypeJSON)
 				}
-				jsonReply = prepared.NewReply(reply, protocol.TypeJSON)
+				_ = c.writeJoin(channel, jsonReplyV2)
 			}
-			_ = c.writeJoin(channel, jsonReply)
 		} else if protoType == protocol.TypeProtobuf {
-			if protobufReply == nil {
-				pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
-				if err != nil {
-					return err
+			if c.transport.Version() == ProtocolVersion1 {
+				if protobufReplyV1 == nil {
+					pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
+					if err != nil {
+						return err
+					}
+					reply := &protocol.Reply{
+						Result: pushBytes,
+					}
+					protobufReplyV1 = prepared.NewReply(reply, protocol.TypeProtobuf)
 				}
-				reply := &protocol.Reply{
-					Result: pushBytes,
+				_ = c.writeJoin(channel, protobufReplyV1)
+			} else {
+				if protobufReplyV2 == nil {
+					protobufReplyV2 = prepared.NewReply(&protocol.Reply{
+						Push: &protocol.Push{
+							Channel: channel,
+							Join:    join,
+						},
+					}, protocol.TypeProtobuf)
 				}
-				protobufReply = prepared.NewReply(reply, protocol.TypeProtobuf)
+				_ = c.writeJoin(channel, protobufReplyV2)
 			}
-			_ = c.writeJoin(channel, protobufReply)
 		}
 	}
 	return nil
@@ -594,36 +647,62 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 	}
 
 	var (
-		jsonReply     *prepared.Reply
-		protobufReply *prepared.Reply
+		jsonReplyV1     *prepared.Reply
+		protobufReplyV1 *prepared.Reply
+		jsonReplyV2     *prepared.Reply
+		protobufReplyV2 *prepared.Reply
 	)
 
 	for _, c := range channelSubscriptions {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
-			if jsonReply == nil {
-				pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
-				if err != nil {
-					return err
+			if c.transport.Version() == ProtocolVersion1 {
+				if jsonReplyV1 == nil {
+					pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
+					if err != nil {
+						return err
+					}
+					reply := &protocol.Reply{
+						Result: pushBytes,
+					}
+					jsonReplyV1 = prepared.NewReply(reply, protocol.TypeJSON)
 				}
-				reply := &protocol.Reply{
-					Result: pushBytes,
+				_ = c.writeLeave(channel, jsonReplyV1)
+			} else {
+				if jsonReplyV2 == nil {
+					jsonReplyV2 = prepared.NewReply(&protocol.Reply{
+						Push: &protocol.Push{
+							Channel: channel,
+							Leave:   leave,
+						},
+					}, protocol.TypeJSON)
 				}
-				jsonReply = prepared.NewReply(reply, protocol.TypeJSON)
+				_ = c.writeLeave(channel, jsonReplyV2)
 			}
-			_ = c.writeLeave(channel, jsonReply)
 		} else if protoType == protocol.TypeProtobuf {
-			if protobufReply == nil {
-				pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
-				if err != nil {
-					return err
+			if c.transport.Version() == ProtocolVersion1 {
+				if protobufReplyV1 == nil {
+					pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
+					if err != nil {
+						return err
+					}
+					reply := &protocol.Reply{
+						Result: pushBytes,
+					}
+					protobufReplyV1 = prepared.NewReply(reply, protocol.TypeProtobuf)
 				}
-				reply := &protocol.Reply{
-					Result: pushBytes,
+				_ = c.writeLeave(channel, protobufReplyV1)
+			} else {
+				if protobufReplyV2 == nil {
+					protobufReplyV2 = prepared.NewReply(&protocol.Reply{
+						Push: &protocol.Push{
+							Channel: channel,
+							Leave:   leave,
+						},
+					}, protocol.TypeProtobuf)
 				}
-				protobufReply = prepared.NewReply(reply, protocol.TypeProtobuf)
+				_ = c.writeLeave(channel, protobufReplyV2)
 			}
-			_ = c.writeLeave(channel, protobufReply)
 		}
 	}
 	return nil

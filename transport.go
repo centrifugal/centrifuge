@@ -29,6 +29,14 @@ const (
 	PushFlagMessage
 )
 
+type ProtocolVersion uint8
+
+const (
+	// ProtocolVersion1 is DEPRECATED and will be removed in the future.
+	ProtocolVersion1 ProtocolVersion = 1
+	ProtocolVersion2 ProtocolVersion = 2
+)
+
 // TransportInfo has read-only transport description methods.
 type TransportInfo interface {
 	// Name returns a name of transport.
@@ -45,6 +53,8 @@ type TransportInfo interface {
 	// bidirectional WebSocket implementation since disconnect data sent inside
 	// Close frame.
 	DisabledPushFlags() uint64
+	// Version returns client protocol version.
+	Version() ProtocolVersion
 }
 
 // Transport abstracts a connection transport between server and client.
