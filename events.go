@@ -55,9 +55,8 @@ type ConnectHandler func(*Client)
 
 // TransportWriteEvent with encoded Data, optional channel for push types and Publication.
 type TransportWriteEvent struct {
-	Data        []byte
-	Channel     string
-	Publication *protocol.Publication
+	Data  []byte
+	Reply *protocol.Reply
 }
 
 // TransportWriteHandler called just before writing data to Transport.

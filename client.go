@@ -387,7 +387,7 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 			return nil
 		}
 		c.trace("-->", rep.Result)
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: rep.Result})
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: rep.Result, Reply: rep})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after connect push", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -487,7 +487,7 @@ func (c *Client) closeUnauthenticated() {
 	}
 }
 
-func (c *Client) transportEnqueue(reply *prepared.Reply, channel string, pub *protocol.Publication) error {
+func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	var data []byte
 	if c.transport.Unidirectional() {
 		data = reply.Reply.Result
@@ -496,7 +496,8 @@ func (c *Client) transportEnqueue(reply *prepared.Reply, channel string, pub *pr
 	}
 	c.trace("-->", data)
 	disconnect := c.messageWriter.enqueue(queue.Item{
-		Data: data,
+		Data:  data,
+		Reply: reply.Reply,
 	})
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
@@ -1016,7 +1017,7 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 			return encodeErr
 		}
 		c.trace("-->", replyData)
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData, Reply: rep})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -1123,7 +1124,7 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 			return encodeErr
 		}
 		c.trace("-->", replyData)
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData, Reply: rep})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -2798,7 +2799,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 			return nil
 		}
 		c.mu.Unlock()
-		return c.transportEnqueue(reply, ch, pub)
+		return c.transportEnqueue(reply)
 	}
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
@@ -2830,7 +2831,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	return c.transportEnqueue(reply, ch, pub)
+	return c.transportEnqueue(reply)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
@@ -2838,7 +2839,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}
-		return c.transportEnqueue(reply, ch, pub)
+		return c.transportEnqueue(reply)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
 		_ = c.writePublicationUpdatePosition(ch, pub, reply, sp)
@@ -2846,18 +2847,18 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *p
 	return nil
 }
 
-func (c *Client) writeJoin(ch string, reply *prepared.Reply) error {
+func (c *Client) writeJoin(_ string, reply *prepared.Reply) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
-	return c.transportEnqueue(reply, ch, nil)
+	return c.transportEnqueue(reply)
 }
 
-func (c *Client) writeLeave(ch string, reply *prepared.Reply) error {
+func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
-	return c.transportEnqueue(reply, ch, nil)
+	return c.transportEnqueue(reply)
 }
 
 // Lock must be held outside.

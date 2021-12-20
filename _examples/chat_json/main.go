@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -109,7 +110,12 @@ func main() {
 		}()
 
 		client.OnTransportWrite(func(event centrifuge.TransportWriteEvent) bool {
-			return event.Channel != "#42"
+			if event.Reply != nil && event.Reply.Push != nil && event.Reply.Push.Pub != nil {
+				if strings.Contains(string(event.Reply.Push.Pub.Data), "hello") {
+					return false
+				}
+			}
+			return true
 		})
 
 		client.OnAlive(func() {
