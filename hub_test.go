@@ -17,28 +17,34 @@ import (
 )
 
 type testTransport struct {
-	mu             sync.Mutex
-	sink           chan []byte
-	closed         bool
-	closeCh        chan struct{}
-	disconnect     *Disconnect
-	protoType      ProtocolType
-	cancelFn       func()
-	unidirectional bool
-	writeErr       error
+	mu              sync.Mutex
+	sink            chan []byte
+	closed          bool
+	closeCh         chan struct{}
+	disconnect      *Disconnect
+	protoType       ProtocolType
+	cancelFn        func()
+	unidirectional  bool
+	protocolVersion ProtocolVersion
+	writeErr        error
 }
 
 func newTestTransport(cancelFn func()) *testTransport {
 	return &testTransport{
-		cancelFn:       cancelFn,
-		protoType:      ProtocolTypeJSON,
-		closeCh:        make(chan struct{}),
-		unidirectional: false,
+		cancelFn:        cancelFn,
+		protoType:       ProtocolTypeJSON,
+		closeCh:         make(chan struct{}),
+		unidirectional:  false,
+		protocolVersion: ProtocolVersion1,
 	}
 }
 
 func (t *testTransport) setProtocolType(pType ProtocolType) {
 	t.protoType = pType
+}
+
+func (t *testTransport) setProtocolVersion(v ProtocolVersion) {
+	t.protocolVersion = v
 }
 
 func (t *testTransport) setUnidirectional(uni bool) {
@@ -91,6 +97,10 @@ func (t *testTransport) Protocol() ProtocolType {
 
 func (t *testTransport) Unidirectional() bool {
 	return t.unidirectional
+}
+
+func (t *testTransport) Version() ProtocolVersion {
+	return t.protocolVersion
 }
 
 func (t *testTransport) DisabledPushFlags() uint64 {

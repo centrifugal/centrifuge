@@ -638,3 +638,117 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkWebsocketHandlerV2(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion2,
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	payload := []byte(`{"input": "test"}`)
+
+	benchmarks := []struct {
+		name    string
+		getConn func(b testing.TB, channel string, url string) *websocket.Conn
+	}{
+		{"JSON", newRealConnJSONV2},
+		{"Protobuf", newRealConnProtobufV2},
+	}
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			conn := bm.getConn(b, "test", url)
+			defer func() { _ = conn.Close() }()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := n.Publish("test", payload)
+				if err != nil {
+					panic(err)
+				}
+				_, _, err = conn.ReadMessage()
+				if err != nil {
+					panic(err)
+				}
+			}
+		})
+	}
+}
+
+func newRealConnJSONV2(b testing.TB, channel string, url string) *websocket.Conn {
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(b, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	cmd := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+
+	cmd = &protocol.Command{
+		Id: 2,
+		Subscribe: &protocol.SubscribeRequest{
+			Channel: channel,
+		},
+	}
+	cmdBytes, _ = json.Marshal(cmd)
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func newRealConnProtobufV2(b testing.TB, channel string, url string) *websocket.Conn {
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
+	require.NoError(b, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	cmd := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	n := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:n])
+	buf.Write(cmdBytes)
+
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+
+	cmd = &protocol.Command{
+		Id: 2,
+		Subscribe: &protocol.SubscribeRequest{
+			Channel: channel,
+		},
+	}
+	cmdBytes, _ = cmd.MarshalVT()
+
+	buf.Reset()
+	bs = make([]byte, 8)
+	n = binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:n])
+	buf.Write(cmdBytes)
+
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}

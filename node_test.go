@@ -1047,30 +1047,6 @@ func TestNode_OnNotification_NoHandler(t *testing.T) {
 	require.Equal(t, errNotificationHandlerNotRegistered, err)
 }
 
-func TestNode_OnTransportWrite(t *testing.T) {
-	node := defaultNodeNoHandlers()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	done := make(chan struct{})
-
-	node.OnTransportWrite(func(client *Client, event TransportWriteEvent) bool {
-		if event.IsPush {
-			close(done)
-		}
-		return false
-	})
-
-	client := newTestClient(t, node, "42")
-	connectClient(t, client)
-	err := client.Send([]byte("{}"))
-	require.NoError(t, err)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout")
-	}
-}
-
 func TestNode_handleNotification_NoHandler(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
