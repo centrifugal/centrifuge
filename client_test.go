@@ -3413,6 +3413,34 @@ func TestClient_OnTransportWrite(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
+	require.Equal(t, 1, client.transport.(*testTransport).numMessagesWritten)
+}
+
+func TestClient_OnTransportWriteSkip(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnTransportWrite(func(event TransportWriteEvent) bool {
+			require.Equal(t, "{\"result\":{\"type\":4,\"data\":{\"data\":{}}}}", string(event.Data))
+			require.NotNil(t, event.Reply.Result)
+			close(done)
+			return false
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+	require.Equal(t, 0, client.transport.(*testTransport).numMessagesWritten)
 }
 
 func connectClientV2(t testing.TB, client *Client) {

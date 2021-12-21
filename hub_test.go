@@ -17,16 +17,17 @@ import (
 )
 
 type testTransport struct {
-	mu              sync.Mutex
-	sink            chan []byte
-	closed          bool
-	closeCh         chan struct{}
-	disconnect      *Disconnect
-	protoType       ProtocolType
-	cancelFn        func()
-	unidirectional  bool
-	protocolVersion ProtocolVersion
-	writeErr        error
+	mu                 sync.Mutex
+	sink               chan []byte
+	closed             bool
+	closeCh            chan struct{}
+	disconnect         *Disconnect
+	protoType          ProtocolType
+	cancelFn           func()
+	unidirectional     bool
+	protocolVersion    ProtocolVersion
+	writeErr           error
+	numMessagesWritten int
 }
 
 func newTestTransport(cancelFn func()) *testTransport {
@@ -56,6 +57,7 @@ func (t *testTransport) setSink(sink chan []byte) {
 }
 
 func (t *testTransport) Write(message []byte) error {
+	t.numMessagesWritten++
 	if t.writeErr != nil {
 		return t.writeErr
 	}
@@ -71,6 +73,7 @@ func (t *testTransport) Write(message []byte) error {
 }
 
 func (t *testTransport) WriteMany(messages ...[]byte) error {
+	t.numMessagesWritten += len(messages)
 	if t.writeErr != nil {
 		return t.writeErr
 	}
@@ -399,7 +402,8 @@ func TestHubBroadcastJoin(t *testing.T) {
 			client := newTestSubscribedClient(t, n, "42", "test_channel")
 			transport := client.transport.(*testTransport)
 			transport.sink = make(chan []byte, 100)
-			transport.protoType = tc.protocolType
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
@@ -438,7 +442,8 @@ func TestHubBroadcastLeave(t *testing.T) {
 			client := newTestSubscribedClient(t, n, "42", "test_channel")
 			transport := client.transport.(*testTransport)
 			transport.sink = make(chan []byte, 100)
-			transport.protoType = tc.protocolType
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
