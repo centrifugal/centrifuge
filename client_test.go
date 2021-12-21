@@ -3405,6 +3405,9 @@ func TestClient_OnTransportWrite(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
+	transport := client.transport.(*testTransport)
+	sink := make(chan []byte, 1)
+	transport.setSink(sink)
 	connectClient(t, client)
 	err := client.Send([]byte("{}"))
 	require.NoError(t, err)
@@ -3413,7 +3416,11 @@ func TestClient_OnTransportWrite(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
-	require.Equal(t, 1, client.transport.(*testTransport).numMessagesWritten)
+	select {
+	case <-sink:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for transport write")
+	}
 }
 
 func TestClient_OnTransportWriteSkip(t *testing.T) {
@@ -3432,6 +3439,9 @@ func TestClient_OnTransportWriteSkip(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
+	transport := client.transport.(*testTransport)
+	sink := make(chan []byte, 1)
+	transport.setSink(sink)
 	connectClient(t, client)
 	err := client.Send([]byte("{}"))
 	require.NoError(t, err)
@@ -3440,7 +3450,12 @@ func TestClient_OnTransportWriteSkip(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
-	require.Equal(t, 0, client.transport.(*testTransport).numMessagesWritten)
+	select {
+	case <-sink:
+		require.Fail(t, "message written to transport – but it must not")
+	case <-time.After(time.Second):
+
+	}
 }
 
 func connectClientV2(t testing.TB, client *Client) {
