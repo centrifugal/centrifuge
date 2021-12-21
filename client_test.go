@@ -2049,6 +2049,7 @@ func TestClientHandleUnknownMethod(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
+	connectClient(t, client)
 	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
 		Channel: "test",
 	})

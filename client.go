@@ -946,13 +946,6 @@ func (c *Client) Handle(data []byte) bool {
 
 // handleCommand processes a single protocol.Command.
 func (c *Client) handleCommand(cmd *protocol.Command) bool {
-	if !c.authenticated && (cmd.Method != protocol.Command_CONNECT || cmd.Connect == nil) {
-		// Client must send connect command to authenticate itself first.
-		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
-		go func() { _ = c.close(DisconnectBadRequest) }()
-		return false
-	}
-
 	if cmd.Id == 0 && (cmd.Method != protocol.Command_SEND && cmd.Send == nil) {
 		// Only send command from client can be sent without incremental ID.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
@@ -1004,6 +997,13 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 }
 
 func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
+	isConnect := cmd.Connect != nil
+	if !c.authenticated && !isConnect {
+		// Client must send connect command to authenticate itself first.
+		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
+		return DisconnectBadRequest
+	}
+
 	protoType := c.transport.Protocol().toProto()
 	replyEncoder := protocol.GetReplyEncoder(protoType)
 
@@ -1109,6 +1109,13 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 }
 
 func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
+	isConnect := cmd.Method == protocol.Command_CONNECT
+	if !c.authenticated && !isConnect {
+		// Client must send connect command to authenticate itself first.
+		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
+		return DisconnectBadRequest
+	}
+
 	method := cmd.Method
 	params := cmd.Params
 
