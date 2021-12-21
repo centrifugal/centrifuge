@@ -3621,3 +3621,119 @@ func TestClientV2ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply.Push.Connect)
 }
+
+func TestClient_HandleCommandV2_NoID(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	clientV2 := newTestClientV2(t, node, "42")
+
+	ok := clientV2.handleCommand(&protocol.Command{
+		Connect: &protocol.ConnectRequest{},
+	})
+	require.False(t, ok)
+}
+
+func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	clientV2 := newTestClientV2(t, node, "42")
+
+	ok := clientV2.handleCommand(&protocol.Command{
+		Id:        1,
+		Subscribe: &protocol.SubscribeRequest{},
+	})
+	require.False(t, ok)
+}
+
+func TestClient_HandleCommandV2(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	clientV2 := newTestClientV2(t, node, "42")
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{}, nil)
+		})
+	})
+
+	ok := clientV2.handleCommand(&protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id: 2,
+		Subscribe: &protocol.SubscribeRequest{
+			Channel: "test",
+		},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id: 3,
+		Unsubscribe: &protocol.UnsubscribeRequest{
+			Channel: "test",
+		},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id:  4,
+		Rpc: &protocol.RPCRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id:   4,
+		Ping: &protocol.PingRequest{},
+	})
+	require.True(t, ok)
+
+	// Special type of ping.
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id: 5,
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id:      5,
+		Publish: &protocol.PublishRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Send: &protocol.SendRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id:       6,
+		Presence: &protocol.PresenceRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id:            7,
+		PresenceStats: &protocol.PresenceStatsRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id:      8,
+		History: &protocol.HistoryRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id:      9,
+		Refresh: &protocol.RefreshRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV2.handleCommand(&protocol.Command{
+		Id:         10,
+		SubRefresh: &protocol.SubRefreshRequest{},
+	})
+	require.True(t, ok)
+}

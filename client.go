@@ -946,7 +946,7 @@ func (c *Client) Handle(data []byte) bool {
 
 // handleCommand processes a single protocol.Command.
 func (c *Client) handleCommand(cmd *protocol.Command) bool {
-	if !c.authenticated && (cmd.Method != protocol.Command_CONNECT && cmd.Connect == nil) {
+	if !c.authenticated && (cmd.Method != protocol.Command_CONNECT || cmd.Connect == nil) {
 		// Client must send connect command to authenticate itself first.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
 		go func() { _ = c.close(DisconnectBadRequest) }()
