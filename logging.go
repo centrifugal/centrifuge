@@ -12,12 +12,15 @@ const (
 	// LogLevelDebug turns on debug logs - its generally too much for production in normal
 	// conditions but can help when developing and investigating problems in production.
 	LogLevelDebug
-	// LogLevelInfo is logs useful server information. This includes various information
+	// LogLevelInfo logs useful server information. This includes various information
 	// about problems with client connections which is not Centrifuge errors but
 	// in most situations malformed client behaviour.
 	LogLevelInfo
+	// LogLevelWarn logs server warnings. This may contain tips for a developer about things
+	// which should be addressed but usually not immediately.
+	LogLevelWarn
 	// LogLevelError level logs only server errors. This is logging that means non-working
-	// Centrifuge and maybe effort from developers/administrators to make things
+	// Centrifuge and may require effort from developers/administrators to make things
 	// work again.
 	LogLevelError
 )
@@ -27,6 +30,7 @@ var levelToString = map[LogLevel]string{
 	LogLevelTrace: "trace",
 	LogLevelDebug: "debug",
 	LogLevelInfo:  "info",
+	LogLevelWarn:  "warn",
 	LogLevelError: "error",
 	LogLevelNone:  "none",
 }

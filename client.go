@@ -35,11 +35,6 @@ type clientEventHub struct {
 	transportWriteHandler TransportWriteHandler
 }
 
-// OnTransportWrite allows setting TransportWriteHandler.
-func (c *Client) OnTransportWrite(h TransportWriteHandler) {
-	c.eventHub.transportWriteHandler = h
-}
-
 // OnAlive allows setting AliveHandler.
 // AliveHandler called periodically for active client connection.
 func (c *Client) OnAlive(h AliveHandler) {
@@ -113,6 +108,11 @@ func (c *Client) OnPresenceStats(h PresenceStatsHandler) {
 // At this moment you can only return a custom error or disconnect client.
 func (c *Client) OnHistory(h HistoryHandler) {
 	c.eventHub.historyHandler = h
+}
+
+// OnTransportWrite allows setting TransportWriteHandler.
+func (c *Client) OnTransportWrite(h TransportWriteHandler) {
+	c.eventHub.transportWriteHandler = h
 }
 
 // We poll current position in channel from history storage periodically.

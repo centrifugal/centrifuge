@@ -333,11 +333,14 @@ func TestHubDisconnect_ClientID(t *testing.T) {
 
 func TestHubBroadcastPublication(t *testing.T) {
 	tcs := []struct {
-		name         string
-		protocolType ProtocolType
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
 	}{
-		{name: "JSON", protocolType: ProtocolTypeJSON},
-		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
+		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
+		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
+		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
 	}
 
 	for _, tc := range tcs {
@@ -348,17 +351,18 @@ func TestHubBroadcastPublication(t *testing.T) {
 			client := newTestSubscribedClient(t, n, "42", "test_channel")
 			transport := client.transport.(*testTransport)
 			transport.sink = make(chan []byte, 100)
-			transport.protoType = tc.protocolType
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
 
-			// Broadcast to not existed channel.
+			// Broadcast to non-existing channel.
 			err := n.hub.BroadcastPublication(
-				"not_test_channel",
+				"non_existing_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
 				StreamPosition{},
 			)
 			require.NoError(t, err)
 
-			// Broadcast to existed channel.
+			// Broadcast to existing channel.
 			err = n.hub.BroadcastPublication(
 				"test_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
@@ -377,11 +381,14 @@ func TestHubBroadcastPublication(t *testing.T) {
 
 func TestHubBroadcastJoin(t *testing.T) {
 	tcs := []struct {
-		name         string
-		protocolType ProtocolType
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
 	}{
-		{name: "JSON", protocolType: ProtocolTypeJSON},
-		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
+		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
+		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
+		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
 	}
 
 	for _, tc := range tcs {
@@ -413,11 +420,14 @@ func TestHubBroadcastJoin(t *testing.T) {
 
 func TestHubBroadcastLeave(t *testing.T) {
 	tcs := []struct {
-		name         string
-		protocolType ProtocolType
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
 	}{
-		{name: "JSON", protocolType: ProtocolTypeJSON},
-		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
+		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
+		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
+		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
 	}
 
 	for _, tc := range tcs {

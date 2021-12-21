@@ -15,6 +15,13 @@ func TestWithHistory(t *testing.T) {
 	require.Equal(t, time.Second, opts.HistoryTTL)
 }
 
+func TestWithMeta(t *testing.T) {
+	opt := WithMeta(map[string]string{"test": "value"})
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, "value", opts.Meta["test"])
+}
+
 func TestSubscribeOptions(t *testing.T) {
 	subscribeOpts := []SubscribeOption{
 		WithExpireAt(1),

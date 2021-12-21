@@ -8,13 +8,14 @@ import (
 // Publication is a data sent to a channel.
 type Publication struct {
 	// Offset is an incremental position number inside a history stream.
-	// Zero value means that channel does not maintain Publication stream.
+	// Zero value means that the channel does not maintain Publication stream.
 	Offset uint64
 	// Data published to a channel.
 	Data []byte
 	// Info is an optional information about client connection published this data.
 	Info *ClientInfo
-	// Meta is a map with custom key-values attached to Publication.
+	// Meta is a map with custom key-values attached to a Publication. This Meta map
+	// will be delivered to a client.
 	Meta map[string]string
 }
 

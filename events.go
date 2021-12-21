@@ -63,8 +63,8 @@ type TransportWriteEvent struct {
 	Reply *protocol.Reply
 }
 
-// TransportWriteHandler called just before writing data to the Transport.
-// Application can skip sending data to a client returning false from a handler.
+// TransportWriteHandler called just before writing data to the Client's Transport.
+// An application can skip sending data to a client returning false from a handler.
 type TransportWriteHandler func(TransportWriteEvent) bool
 
 // RefreshEvent contains fields related to refresh event.

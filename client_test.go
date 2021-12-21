@@ -1099,6 +1099,16 @@ func newTestClient(t testing.TB, node *Node, userID string) *Client {
 	return client
 }
 
+func newTestClientV2(t testing.TB, node *Node, userID string) *Client {
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	newCtx := SetCredentials(ctx, &Credentials{UserID: userID})
+	client, err := newClient(newCtx, node, transport)
+	require.NoError(t, err)
+	return client
+}
+
 func getJSONEncodedParams(t testing.TB, request interface{}) []byte {
 	paramsEncoder := protocol.NewJSONParamsEncoder()
 	params, err := paramsEncoder.Encode(request)
@@ -3433,19 +3443,153 @@ func TestClient_OnTransportWriteProtocolV2(t *testing.T) {
 		})
 	})
 
-	ctx, cancelFn := context.WithCancel(context.Background())
-	transport := newTestTransport(cancelFn)
-	transport.setProtocolVersion(ProtocolVersion2)
-	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
-	client, err := newClient(newCtx, node, transport)
-	require.NoError(t, err)
-
+	client := newTestClientV2(t, node, "42")
 	connectClientV2(t, client)
-	err = client.Send([]byte("{}"))
+	err := client.Send([]byte("{}"))
 	require.NoError(t, err)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout")
 	}
+}
+
+func TestClientV1ReplyConstruction(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	clientV1 := newTestClient(t, node, "42")
+
+	reply, err := clientV1.getRefreshPushReply(&protocol.Refresh{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getRPCCommandReply(&protocol.RPCResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getSubscribeCommandReply(&protocol.SubscribeResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getHistoryCommandReply(&protocol.HistoryResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getPresenceStatsCommandReply(&protocol.PresenceStatsResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getPresenceCommandReply(&protocol.PresenceResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getPublishCommandReply(&protocol.PublishResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getUnsubscribeCommandReply(&protocol.UnsubscribeResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getSubRefreshCommandReply(&protocol.SubRefreshResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getRefreshCommandReply(&protocol.RefreshResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getUnsubscribePushReply("test")
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getSendPushReply([]byte("{}"))
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getConnectCommandReply(&protocol.ConnectResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getSubscribePushReply("test", &protocol.SubscribeResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getDisconnectPushReply(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+
+	reply, err = clientV1.getConnectPushReply(&protocol.ConnectResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Result)
+}
+
+func TestClientV2ReplyConstruction(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	clientV2 := newTestClientV2(t, node, "42")
+
+	reply, err := clientV2.getRefreshPushReply(&protocol.Refresh{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Push.Refresh)
+
+	reply, err = clientV2.getRPCCommandReply(&protocol.RPCResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Rpc)
+
+	reply, err = clientV2.getSubscribeCommandReply(&protocol.SubscribeResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Subscribe)
+
+	reply, err = clientV2.getHistoryCommandReply(&protocol.HistoryResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.History)
+
+	reply, err = clientV2.getPresenceStatsCommandReply(&protocol.PresenceStatsResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.PresenceStats)
+
+	reply, err = clientV2.getPresenceCommandReply(&protocol.PresenceResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Presence)
+
+	reply, err = clientV2.getPublishCommandReply(&protocol.PublishResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Publish)
+
+	reply, err = clientV2.getUnsubscribeCommandReply(&protocol.UnsubscribeResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Unsubscribe)
+
+	reply, err = clientV2.getSubRefreshCommandReply(&protocol.SubRefreshResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.SubRefresh)
+
+	reply, err = clientV2.getRefreshCommandReply(&protocol.RefreshResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Refresh)
+
+	reply, err = clientV2.getUnsubscribePushReply("test")
+	require.NoError(t, err)
+	require.NotNil(t, reply.Push.Unsubscribe)
+
+	reply, err = clientV2.getSendPushReply([]byte("{}"))
+	require.NoError(t, err)
+	require.NotNil(t, reply.Push.Message)
+
+	reply, err = clientV2.getConnectCommandReply(&protocol.ConnectResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Connect)
+
+	reply, err = clientV2.getSubscribePushReply("test", &protocol.SubscribeResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Push.Subscribe)
+
+	reply, err = clientV2.getDisconnectPushReply(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+	require.NotNil(t, reply.Push.Disconnect)
+
+	reply, err = clientV2.getConnectPushReply(&protocol.ConnectResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Push.Connect)
 }
