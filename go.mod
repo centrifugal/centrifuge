@@ -2,12 +2,10 @@ module github.com/centrifugal/centrifuge
 
 go 1.12
 
-replace github.com/centrifugal/protocol => ../protocol
-
 require (
 	github.com/FZambia/eagle v0.0.1
 	github.com/FZambia/sentinel v1.1.0
-	github.com/centrifugal/protocol v0.7.7-0.20211217125855-f72f5e9399c6
+	github.com/centrifugal/protocol v0.7.7-0.20211220095654-956aec57883a
 	github.com/gomodule/redigo v1.8.5
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/websocket v1.4.2
