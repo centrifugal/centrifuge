@@ -304,6 +304,11 @@ func (t *websocketTransport) Protocol() ProtocolType {
 	return t.opts.protoType
 }
 
+// ProtocolVersion returns transport ProtocolVersion.
+func (t *websocketTransport) ProtocolVersion() ProtocolVersion {
+	return t.opts.protoVersion
+}
+
 // Unidirectional returns whether transport is unidirectional.
 func (t *websocketTransport) Unidirectional() bool {
 	return false
@@ -312,11 +317,6 @@ func (t *websocketTransport) Unidirectional() bool {
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return PushFlagDisconnect
-}
-
-// Version ...
-func (t *websocketTransport) Version() ProtocolVersion {
-	return t.opts.protoVersion
 }
 
 func (t *websocketTransport) writeData(data []byte) error {

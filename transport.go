@@ -47,8 +47,8 @@ type TransportInfo interface {
 	// Protocol returns an underlying transport protocol type used.
 	// JSON or Protobuf types are supported.
 	Protocol() ProtocolType
-	// Version returns client protocol version.
-	Version() ProtocolVersion
+	// ProtocolVersion returns client protocol version.
+	ProtocolVersion() ProtocolVersion
 	// Unidirectional returns whether transport is unidirectional. For
 	// unidirectional transports Centrifuge uses Push protobuf messages
 	// without additional wrapping into Reply protocol message.

@@ -180,6 +180,10 @@ func (t *grpcTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeProtobuf
 }
 
+func (t *grpcTransport) ProtocolVersion() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 // Unidirectional returns whether transport is unidirectional.
 func (t *grpcTransport) Unidirectional() bool {
 	return true
@@ -188,11 +192,6 @@ func (t *grpcTransport) Unidirectional() bool {
 // DisabledPushFlags ...
 func (t *grpcTransport) DisabledPushFlags() uint64 {
 	return 0
-}
-
-// Version of protocol.
-func (t *grpcTransport) Version() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
 }
 
 func (t *grpcTransport) Write(message []byte) error {

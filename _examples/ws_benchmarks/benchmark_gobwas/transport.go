@@ -49,7 +49,7 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 }
 
 // Version of protocol.
-func (t *customWebsocketTransport) Version() centrifuge.ProtocolVersion {
+func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
 	return centrifuge.ProtocolVersion1
 }
 

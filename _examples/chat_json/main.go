@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -202,24 +203,24 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//go func() {
-	//	// Publish personal notifications for user 42 periodically.
-	//	i := 1
-	//	for {
-	//		_, err := node.Publish(
-	//			"#42",
-	//			[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
-	//			centrifuge.WithHistory(300, time.Minute),
-	//			centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
-	//		)
-	//		if err != nil {
-	//			log.Printf("error publishing to personal channel: %s", err)
-	//		}
-	//		i++
-	//		time.Sleep(5000 * time.Millisecond)
-	//	}
-	//}()
-	//
+	go func() {
+		// Publish personal notifications for user 42 periodically.
+		i := 1
+		for {
+			_, err := node.Publish(
+				"#42",
+				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
+			)
+			if err != nil {
+				log.Printf("error publishing to personal channel: %s", err)
+			}
+			i++
+			time.Sleep(5000 * time.Millisecond)
+		}
+	}()
+
 	//go func() {
 	//	// Publish to channel periodically.
 	//	i := 1

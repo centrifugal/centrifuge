@@ -363,7 +363,7 @@ func (c *Client) getDisconnectPushReply(d *Disconnect) (*protocol.Reply, error) 
 		Reason:    d.Reason,
 		Reconnect: d.Reconnect,
 	}
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeDisconnectPush(c.transport.Protocol().toProto(), disconnect)
 		if err != nil {
 			return nil, err
@@ -387,7 +387,7 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 			return nil
 		}
 		var data []byte
-		if c.transport.Version() == ProtocolVersion1 {
+		if c.transport.ProtocolVersion() == ProtocolVersion1 {
 			data = rep.Result
 			c.trace("-->", data)
 		} else {
@@ -497,7 +497,7 @@ func (c *Client) closeUnauthenticated() {
 func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	var data []byte
 	if c.transport.Unidirectional() {
-		if c.transport.Version() == ProtocolVersion1 {
+		if c.transport.ProtocolVersion() == ProtocolVersion1 {
 			data = reply.Reply.Result
 		} else {
 			data = reply.PushData()
@@ -732,7 +732,7 @@ func (c *Client) getSendPushReply(data []byte) (*protocol.Reply, error) {
 	p := &protocol.Message{
 		Data: data,
 	}
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeMessagePush(c.transport.Protocol().toProto(), p)
 		if err != nil {
 			return nil, err
@@ -777,7 +777,7 @@ func (c *Client) sendUnsubscribe(ch string) error {
 
 func (c *Client) getUnsubscribePushReply(ch string) (*protocol.Reply, error) {
 	p := &protocol.Unsubscribe{}
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeUnsubscribePush(c.transport.Protocol().toProto(), ch, p)
 		if err != nil {
 			return nil, err
@@ -990,7 +990,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	}
 	c.mu.Unlock()
 
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		return c.dispatchCommandV1(cmd)
 	}
 	return c.dispatchCommandV2(cmd)
@@ -1434,7 +1434,7 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 }
 
 func (c *Client) getRefreshPushReply(res *protocol.Refresh) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeRefreshPush(c.transport.Protocol().toProto(), res)
 		if err != nil {
 			return nil, err
@@ -1451,7 +1451,7 @@ func (c *Client) getRefreshPushReply(res *protocol.Refresh) (*protocol.Reply, er
 }
 
 func (c *Client) getRefreshCommandReply(res *protocol.RefreshResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeRefreshResult(res)
 		if err != nil {
 			return nil, err
@@ -1695,7 +1695,7 @@ func (c *Client) handleSubRefresh(cmd *protocol.SubRefreshRequest, rw *replyWrit
 }
 
 func (c *Client) getSubRefreshCommandReply(res *protocol.SubRefreshResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeSubRefreshResult(res)
 		if err != nil {
 			return nil, err
@@ -1730,7 +1730,7 @@ func (c *Client) handleUnsubscribe(cmd *protocol.UnsubscribeRequest, rw *replyWr
 }
 
 func (c *Client) getUnsubscribeCommandReply(res *protocol.UnsubscribeResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeUnsubscribeResult(res)
 		if err != nil {
 			return nil, err
@@ -1799,7 +1799,7 @@ func (c *Client) handlePublish(cmd *protocol.PublishRequest, rw *replyWriter) er
 }
 
 func (c *Client) getPublishCommandReply(res *protocol.PublishResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodePublishResult(res)
 		if err != nil {
 			return nil, err
@@ -1866,7 +1866,7 @@ func (c *Client) handlePresence(cmd *protocol.PresenceRequest, rw *replyWriter) 
 }
 
 func (c *Client) getPresenceCommandReply(res *protocol.PresenceResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodePresenceResult(res)
 		if err != nil {
 			return nil, err
@@ -1929,7 +1929,7 @@ func (c *Client) handlePresenceStats(cmd *protocol.PresenceStatsRequest, rw *rep
 }
 
 func (c *Client) getPresenceStatsCommandReply(res *protocol.PresenceStatsResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodePresenceStatsResult(res)
 		if err != nil {
 			return nil, err
@@ -2022,7 +2022,7 @@ func (c *Client) handleHistory(cmd *protocol.HistoryRequest, rw *replyWriter) er
 }
 
 func (c *Client) getHistoryCommandReply(res *protocol.HistoryResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeHistoryResult(res)
 		if err != nil {
 			return nil, err
@@ -2092,7 +2092,7 @@ func (c *Client) handleRPC(cmd *protocol.RPCRequest, rw *replyWriter) error {
 }
 
 func (c *Client) getRPCCommandReply(res *protocol.RPCResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeRPCResult(res)
 		if err != nil {
 			return nil, err
@@ -2383,7 +2383,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 		Expires: res.Expires,
 		Ttl:     res.Ttl,
 	}
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.EncodeConnectPush(c.transport.Protocol().toProto(), p)
 		if err != nil {
 			return nil, err
@@ -2398,7 +2398,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 }
 
 func (c *Client) getConnectCommandReply(res *protocol.ConnectResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeConnectResult(res)
 		if err != nil {
 			return nil, err
@@ -2464,7 +2464,7 @@ func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeRe
 		Positioned:  res.GetPositioned(),
 		Data:        res.Data,
 	}
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeSubscribePush(c.transport.Protocol().toProto(), channel, sub)
 		if err != nil {
 			return nil, err
@@ -2790,7 +2790,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 }
 
 func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*protocol.Reply, error) {
-	if c.transport.Version() == ProtocolVersion1 {
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeSubscribeResult(res)
 		if err != nil {
 			return nil, err

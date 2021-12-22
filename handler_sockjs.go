@@ -216,6 +216,11 @@ func (t *sockjsTransport) Protocol() ProtocolType {
 	return ProtocolTypeJSON
 }
 
+// ProtocolVersion returns transport ProtocolVersion.
+func (t *sockjsTransport) ProtocolVersion() ProtocolVersion {
+	return t.protocolVersion
+}
+
 // Unidirectional returns whether transport is unidirectional.
 func (t *sockjsTransport) Unidirectional() bool {
 	return false
@@ -227,11 +232,6 @@ func (t *sockjsTransport) DisabledPushFlags() uint64 {
 		return PushFlagDisconnect
 	}
 	return 0
-}
-
-// Version ...
-func (t *sockjsTransport) Version() ProtocolVersion {
-	return t.protocolVersion
 }
 
 // Write data to transport.

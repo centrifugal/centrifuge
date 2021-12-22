@@ -256,14 +256,14 @@ func (t *websocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.opts.protoType
 }
 
+// ProtocolVersion returns transport ProtocolVersion.
+func (t *websocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 // Unidirectional returns whether transport is unidirectional.
 func (t *websocketTransport) Unidirectional() bool {
 	return true
-}
-
-// Version of protocol.
-func (t *websocketTransport) Version() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
 }
 
 // DisabledPushFlags ...

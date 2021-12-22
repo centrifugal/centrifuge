@@ -99,7 +99,7 @@ func (t *testTransport) Unidirectional() bool {
 	return t.unidirectional
 }
 
-func (t *testTransport) Version() ProtocolVersion {
+func (t *testTransport) ProtocolVersion() ProtocolVersion {
 	return t.protocolVersion
 }
 

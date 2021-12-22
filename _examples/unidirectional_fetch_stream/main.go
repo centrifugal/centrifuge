@@ -285,6 +285,11 @@ func (t *streamTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeJSON
 }
 
+// ProtocolVersion ...
+func (t *streamTransport) ProtocolVersion() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 // Unidirectional returns whether transport is unidirectional.
 func (t *streamTransport) Unidirectional() bool {
 	return true
@@ -293,11 +298,6 @@ func (t *streamTransport) Unidirectional() bool {
 // DisabledPushFlags ...
 func (t *streamTransport) DisabledPushFlags() uint64 {
 	return 0
-}
-
-// Version of protocol.
-func (t *streamTransport) Version() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
 }
 
 func (t *streamTransport) Write(message []byte) error {
