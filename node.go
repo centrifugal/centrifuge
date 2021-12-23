@@ -423,7 +423,10 @@ const defaultSurveyTimeout = 10 * time.Second
 // survey then this method uses default 10 seconds timeout. Keep in mind that Survey does not
 // scale very well as number of Centrifuge Node grows. Though it has reasonably good performance
 // to perform rare tasks even with relatively large number of nodes.
-func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]SurveyResult, error) {
+// If toNodeID is not an empty string then a survey will be sent only to the concrete node in
+// a cluster, otherwise a survey sent to all running nodes. See a corresponding Node.OnSurvey
+// method to handle received surveys.
+func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID string) (map[string]SurveyResult, error) {
 	if n.surveyHandler == nil {
 		return nil, errSurveyHandlerNotRegistered
 	}
@@ -437,7 +440,12 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 		defer cancel()
 	}
 
-	numNodes := len(n.nodes.list())
+	var numNodes int
+	if toNodeID != "" {
+		numNodes = 1
+	} else {
+		numNodes = len(n.nodes.list())
+	}
 
 	n.surveyMu.Lock()
 	n.surveyID++
@@ -465,12 +473,14 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 
 	// Invoke handler on this node since control message handler
 	// ignores those sent from the current Node.
-	n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
-		surveyChan <- survey{
-			UID:    n.uid,
-			Result: SurveyResult(reply),
-		}
-	})
+	if toNodeID == "" || toNodeID == n.ID() {
+		n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
+			surveyChan <- survey{
+				UID:    n.uid,
+				Result: SurveyResult(reply),
+			}
+		})
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -495,7 +505,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 		Method: controlpb.Command_SURVEY_REQUEST,
 		Params: params,
 	}
-	err = n.publishControl(cmd, "")
+	err = n.publishControl(cmd, toNodeID)
 	if err != nil {
 		return nil, err
 	}
