@@ -730,7 +730,7 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 
 	waitAllNodes(t, node1, 2)
 
-	results, err := node1.Survey(context.Background(), "test_op", nil)
+	results, err := node1.Survey(context.Background(), "test_op", nil, "")
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 	res, ok := results[node1.ID()]
@@ -974,7 +974,7 @@ func BenchmarkRedisSurvey(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, err := node.Survey(context.Background(), "test_op", nil)
+				_, err := node.Survey(context.Background(), "test_op", nil, "")
 				if err != nil {
 					b.Fatal(err)
 				}
