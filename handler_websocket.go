@@ -24,9 +24,9 @@ const (
 
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
-	// ProtocolVersion this handler will use. If not set we are using ProtocolVersion1.
-	// ProtocolVersion2 is more optimized for the message introspection but not supported
-	// by all clients in the ecosystem yet.
+	// ProtocolVersion the handler will expect by default. If not set we are expecting
+	// client connected using ProtocolVersion1. ProtocolVersion2 is more optimized for
+	// the message introspection but not supported by all clients in the ecosystem yet.
 	ProtocolVersion ProtocolVersion
 
 	// CompressionLevel sets a level for websocket compression.
