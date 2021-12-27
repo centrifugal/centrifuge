@@ -49,15 +49,15 @@ func (t *benchmarkTransport) inc(num int) {
 }
 
 func (t *benchmarkTransport) writeCombined(items ...queue.Item) error {
-	bufs := make([][]byte, len(items))
+	buffers := make([][]byte, len(items))
 	for i := 0; i < len(items); i++ {
-		bufs[i] = items[i].Data
+		buffers[i] = items[i].Data
 	}
-	_, err := t.f.Write(bytes.Join(bufs, []byte("\n")))
+	_, err := t.f.Write(bytes.Join(buffers, []byte("\n")))
 	if err != nil {
 		panic(err)
 	}
-	t.inc(len(bufs))
+	t.inc(len(buffers))
 	return nil
 }
 

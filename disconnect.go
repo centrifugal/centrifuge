@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// Disconnect allows to configure how client will be disconnected from server.
+// Disconnect allows configuring how client will be disconnected from server.
 // The important note that Disconnect serialized to JSON must be less than 127 bytes
 // due to WebSocket protocol limitations (because at moment we send Disconnect inside
 // reason field of WebSocket close handshake).
@@ -19,7 +19,7 @@ type Disconnect struct {
 	Code uint32 `json:"code,omitempty"`
 	// Reason is a short description of disconnect.
 	Reason string `json:"reason"`
-	// Reconnect gives client an advice to reconnect after disconnect or not.
+	// Reconnect gives client advice to reconnect after disconnect or not.
 	Reconnect bool `json:"reconnect"`
 
 	closeTextOnce   sync.Once
@@ -38,8 +38,8 @@ func (d *Disconnect) Error() string {
 	return fmt.Sprintf("disconnected: code: %d, reason: %s, reconnect: %t", d.Code, d.Reason, d.Reconnect)
 }
 
-// CloseText allows to build disconnect advice sent inside Close frame.
-// At moment we don't encode Code here to not duplicate information
+// CloseText allows building disconnect advice sent inside Close frame.
+// At moment, we don't encode Code here to not duplicate information
 // since it is sent separately as Code of WebSocket/SockJS Close Frame.
 func (d *Disconnect) CloseText() string {
 	d.closeTextOnce.Do(func() {

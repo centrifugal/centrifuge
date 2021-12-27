@@ -25,17 +25,16 @@ const (
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
 	// ProtocolVersion the handler will expect by default. If not set we are expecting
-	// client connected using ProtocolVersion1. ProtocolVersion2 is more optimized for
-	// the message introspection but not supported by all clients in the ecosystem yet.
+	// client connected using ProtocolVersion1.
 	ProtocolVersion ProtocolVersion
 
 	// CompressionLevel sets a level for websocket compression.
 	// See possible value description at https://golang.org/pkg/compress/flate/#NewWriter
 	CompressionLevel int
 
-	// CompressionMinSize allows to set minimal limit in bytes for
+	// CompressionMinSize allows setting minimal limit in bytes for
 	// message to use compression when writing it into client connection.
-	// By default it's 0 - i.e. all messages will be compressed when
+	// By default, it's 0 - i.e. all messages will be compressed when
 	// WebsocketCompression enabled and compression negotiated with client.
 	CompressionMinSize int
 
@@ -48,7 +47,7 @@ type WebsocketConfig struct {
 	WriteBufferSize int
 
 	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
-	// By default DefaultWebsocketMaxMessageSize will be used.
+	// By default, DefaultWebsocketMessageSizeLimit will be used.
 	MessageSizeLimit int
 
 	// CheckOrigin func to provide custom origin check logic.
@@ -57,15 +56,15 @@ type WebsocketConfig struct {
 	CheckOrigin func(r *http.Request) bool
 
 	// PingInterval sets interval server will send ping messages to clients.
-	// By default DefaultPingInterval will be used.
+	// By default, DefaultWebsocketPingInterval will be used.
 	PingInterval time.Duration
 
 	// WriteTimeout is maximum time of write message operation.
 	// Slow client will be disconnected.
-	// By default DefaultWebsocketWriteTimeout will be used.
+	// By default, DefaultWebsocketWriteTimeout will be used.
 	WriteTimeout time.Duration
 
-	// Compression allows to enable websocket permessage-deflate
+	// Compression allows enabling websocket permessage-deflate
 	// compression support for raw websocket connections. It does
 	// not guarantee that compression will be used - i.e. it only
 	// says that server will try to negotiate it with client.
@@ -76,7 +75,7 @@ type WebsocketConfig struct {
 }
 
 // WebsocketHandler handles WebSocket client connections. WebSocket protocol
-// is a bidirectional connection between a client an a server for low-latency
+// is a bidirectional connection between a client and a server for low-latency
 // communication.
 type WebsocketHandler struct {
 	node    *Node

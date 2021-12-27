@@ -10,7 +10,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
-// MemoryBroker is builtin default Broker which allows to run Centrifuge-based
+// MemoryBroker is builtin default Broker which allows running Centrifuge-based
 // server without any external broker. All data managed inside process memory.
 //
 // With this Broker you can only run single Centrifuge node. If you need to scale

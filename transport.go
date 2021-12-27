@@ -35,7 +35,7 @@ const (
 	// ProtocolVersion1 is the current stable client protocol.
 	ProtocolVersion1 ProtocolVersion = 1
 	// ProtocolVersion2 is currently EXPERIMENTAL. There could be still some
-	// backwards incompatible adjustments in it. But the plan is to make it
+	// backwards incompatible adjustments to it. But the plan is to make it
 	// default in the future.
 	ProtocolVersion2 ProtocolVersion = 2
 )
@@ -75,7 +75,7 @@ type Transport interface {
 	// here is to have a path without any additional allocations for massive
 	// broadcasts (since variadic args cause allocation).
 	WriteMany(...[]byte) error
-	// Close must close a transport. Transport implementation can optionally
+	// Close must close transport. Transport implementation can optionally
 	// handle Disconnect passed here. For example builtin WebSocket transport
 	// sends Disconnect as part of websocket.CloseMessage.
 	Close(*Disconnect) error

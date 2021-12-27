@@ -31,13 +31,13 @@ type ConnectEvent struct {
 
 // ConnectReply contains reaction to ConnectEvent.
 type ConnectReply struct {
-	// Context allows to return modified context.
+	// Context allows returning a modified context.
 	Context context.Context
 	// Credentials should be set if app wants to authenticate connection.
 	// This field is optional since auth Credentials could be set through
 	// HTTP middleware.
 	Credentials *Credentials
-	// Data allows to set custom data in connect reply.
+	// Data allows setting custom data in connect reply.
 	Data []byte
 	// Subscriptions map contains channels to subscribe connection to on server-side.
 	Subscriptions map[string]SubscribeOptions
@@ -83,7 +83,7 @@ type RefreshReply struct {
 	// ExpireAt defines time in future when connection should expire,
 	// zero value means no expiration.
 	ExpireAt int64
-	// Info allows to modify connection information,
+	// Info allows modifying connection information,
 	// zero value means no modification of current connection Info.
 	Info []byte
 }
@@ -93,7 +93,7 @@ type RefreshReply struct {
 type RefreshCallback func(RefreshReply, error)
 
 // RefreshHandler called when it's time to validate client connection and
-// update it's expiration time if it's still actual.
+// update its expiration time if it's still actual.
 //
 // Centrifuge library supports two ways of refreshing connection: client-side
 // and server-side.
@@ -164,11 +164,14 @@ type UnsubscribeReason int
 
 // Known unsubscribe reasons.
 const (
-	// Unsubscribe was initiated by a client-side unsubscribe call.
+	// UnsubscribeReasonClient set when unsubscribe event was initiated
+	// by a client-side unsubscribe call.
 	UnsubscribeReasonClient UnsubscribeReason = 1
-	// Unsubscribe was initiated by a server-side unsubscribe call.
+	// UnsubscribeReasonServer set when unsubscribe event was initiated
+	// by a server-side unsubscribe call.
 	UnsubscribeReasonServer UnsubscribeReason = 2
-	// Unsubscribe was initiated by a client disconnect process.
+	// UnsubscribeReasonDisconnect set when unsubscribe event was initiated
+	// by a client disconnect process.
 	UnsubscribeReasonDisconnect UnsubscribeReason = 3
 )
 
@@ -178,7 +181,7 @@ type UnsubscribeEvent struct {
 	Channel string
 	// ServerSide set to true for server-side subscription unsubscribe events.
 	ServerSide bool
-	// Reason can help determining the reason of UnsubscribeEvent.
+	// Reason can help to determine the reason of UnsubscribeEvent.
 	Reason UnsubscribeReason
 	// Disconnect can be additionally set when Reason is UnsubscribeReasonDisconnect.
 	// If connection close was initiated by a server it will contain Disconnect object,
@@ -209,7 +212,7 @@ type PublishReply struct {
 	// Result if set will tell Centrifuge that message already published to
 	// channel by handler code. In this case Centrifuge won't try to publish
 	// into channel again after handler returned PublishReply. This can be
-	// useful if you need to know new Publication offset in your code or you
+	// useful if you need to know new Publication offset in your code, or you
 	// want to make sure message successfully published to Broker on server
 	// side (otherwise only client will get an error).
 	Result *PublishResult
@@ -352,7 +355,7 @@ type SurveyReply struct {
 // SurveyCallback should be called with SurveyReply as soon as survey completed.
 type SurveyCallback func(SurveyReply)
 
-// SurveyHandler allows to set survey handler function.
+// SurveyHandler allows setting survey handler function.
 type SurveyHandler func(SurveyEvent, SurveyCallback)
 
 // NotificationEvent with Op and Data.
@@ -368,13 +371,13 @@ type NotificationHandler func(NotificationEvent)
 // NodeInfoSendReply can modify sending Node control frame in some ways.
 type NodeInfoSendReply struct {
 	// Data allows setting an arbitrary data to the control node frame which is
-	// published by each Node periodically so it will be available in the
+	// published by each Node periodically, so it will be available in the
 	// result of Node.Info call for the current Node description. Keep this
-	// data reasonably small in size.
+	// data reasonably small.
 	Data []byte
 }
 
 // NodeInfoSendHandler called every time the control node frame is published
-// and allows modifying Node control frame sending. Currently attaching an
+// and allows modifying Node control frame sending. Currently, attaching an
 // arbitrary data to it. See NodeInfoSendReply.
 type NodeInfoSendHandler func() NodeInfoSendReply

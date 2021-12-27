@@ -96,13 +96,13 @@ func TestByteQueueCloseRemaining(t *testing.T) {
 	q := New()
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
-	msgs := q.CloseRemaining()
-	require.Equal(t, 2, len(msgs))
+	messages := q.CloseRemaining()
+	require.Equal(t, 2, len(messages))
 	ok := q.Add(testItem([]byte("3")))
 	require.Equal(t, false, ok)
 	require.Equal(t, true, q.Closed())
-	msgs = q.CloseRemaining()
-	require.Equal(t, 0, len(msgs))
+	messages = q.CloseRemaining()
+	require.Equal(t, 0, len(messages))
 }
 
 func BenchmarkQueueAdd(b *testing.B) {
@@ -115,7 +115,7 @@ func BenchmarkQueueAdd(b *testing.B) {
 	q.Close()
 }
 
-func addAndConsume(q Queue, n int) {
+func addAndConsume(q *Queue, n int) {
 	// Add to queue and consume in another goroutine.
 	done := make(chan struct{})
 	go func() {

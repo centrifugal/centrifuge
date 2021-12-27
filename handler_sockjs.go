@@ -15,8 +15,7 @@ import (
 // SockjsConfig represents config for SockJS handler.
 type SockjsConfig struct {
 	// ProtocolVersion the handler will expect by default. If not set we are expecting
-	// client connected using ProtocolVersion1. ProtocolVersion2 is more optimized for
-	// the message introspection but not supported by all clients in the ecosystem yet.
+	// client connected using ProtocolVersion1.
 	ProtocolVersion ProtocolVersion
 
 	// HandlerPrefix sets prefix for SockJS handler endpoint path.
@@ -28,19 +27,19 @@ type SockjsConfig struct {
 	// HeartbeatDelay sets how often to send heartbeat frames to clients.
 	HeartbeatDelay time.Duration
 
-	// CheckOrigin allows to decide whether to use CORS or not in XHR case.
+	// CheckOrigin allows deciding whether to use CORS or not in XHR case.
 	// When false returned then CORS headers won't be set.
 	CheckOrigin func(*http.Request) bool
 
-	// WebsocketCheckOrigin allows to set custom CheckOrigin func for underlying
+	// WebsocketCheckOrigin allows setting custom CheckOrigin func for underlying
 	// Gorilla Websocket based websocket.Upgrader.
 	WebsocketCheckOrigin func(*http.Request) bool
 
-	// WebsocketReadBufferSize is a parameter that is used for raw websocket websocket.Upgrader.
+	// WebsocketReadBufferSize is a parameter that is used for raw websocket.Upgrader.
 	// If set to zero reasonable default value will be used.
 	WebsocketReadBufferSize int
 
-	// WebsocketWriteBufferSize is a parameter that is used for raw websocket websocket.Upgrader.
+	// WebsocketWriteBufferSize is a parameter that is used for raw websocket.Upgrader.
 	// If set to zero reasonable default value will be used.
 	WebsocketWriteBufferSize int
 
@@ -49,7 +48,7 @@ type SockjsConfig struct {
 
 	// WebsocketWriteTimeout is maximum time of write message operation.
 	// Slow client will be disconnected.
-	// By default DefaultWebsocketWriteTimeout will be used.
+	// By default, DefaultWebsocketWriteTimeout will be used.
 	WebsocketWriteTimeout time.Duration
 }
 
@@ -246,7 +245,7 @@ func (t *sockjsTransport) Write(message []byte) error {
 	}
 }
 
-// Write data to transport.
+// WriteMany messages to transport.
 func (t *sockjsTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:

@@ -55,12 +55,12 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	return shutdownErr
 }
 
-// add adds connection into clientHub connections registry.
+// Add connection into clientHub connections registry.
 func (h *Hub) add(c *Client) error {
 	return h.connShards[index(c.UserID(), numHubShards)].add(c)
 }
 
-// Remove removes connection from clientHub connections registry.
+// Remove connection from clientHub connections registry.
 func (h *Hub) remove(c *Client) error {
 	return h.connShards[index(c.UserID(), numHubShards)].remove(c)
 }
@@ -192,7 +192,7 @@ func (h *connShard) shutdown(ctx context.Context, sem chan struct{}) error {
 	advice := DisconnectShutdown
 
 	h.mu.RLock()
-	// At this moment node won't accept new client connections so we can
+	// At this moment node won't accept new client connections, so we can
 	// safely copy existing clients and release lock.
 	clients := make([]*Client, 0, len(h.conns))
 	for _, client := range h.conns {
@@ -371,7 +371,7 @@ func (h *connShard) userConnections(userID string) map[string]*Client {
 	return conns
 }
 
-// add adds connection into clientHub connections registry.
+// Add connection into clientHub connections registry.
 func (h *connShard) add(c *Client) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -388,7 +388,7 @@ func (h *connShard) add(c *Client) error {
 	return nil
 }
 
-// Remove removes connection from clientHub connections registry.
+// Remove connection from clientHub connections registry.
 func (h *connShard) remove(c *Client) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()

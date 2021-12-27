@@ -17,7 +17,7 @@ type writerConfig struct {
 type writer struct {
 	mu       sync.Mutex
 	config   writerConfig
-	messages queue.Queue
+	messages *queue.Queue
 	closed   bool
 }
 

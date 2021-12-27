@@ -26,7 +26,7 @@ import (
 // Node is a heart of Centrifuge library – it keeps and manages client connections,
 // maintains information about other Centrifuge nodes in cluster, keeps references
 // to common things (like Broker and PresenceManager, Hub) etc.
-// By default Node uses in-memory implementations of Broker and PresenceManager -
+// By default, Node uses in-memory implementations of Broker and PresenceManager -
 // MemoryBroker and MemoryPresenceManager which allow running a single Node only.
 // To scale use other implementations of Broker and PresenceManager like builtin
 // RedisBroker and RedisPresenceManager.
@@ -139,7 +139,7 @@ func New(c Config) (*Node, error) {
 	if err := initMetricsRegistry(prometheus.DefaultRegisterer, c.MetricsNamespace); err != nil {
 		switch err.(type) {
 		case prometheus.AlreadyRegisteredError:
-			// Can happens when node initialized several times since we use DefaultRegisterer,
+			// Can happen when node initialized several times since we use DefaultRegisterer,
 			// skip for now.
 		default:
 			return nil, err
@@ -168,12 +168,12 @@ func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
 }
 
-// SetBroker allows to set Broker implementation to use.
+// SetBroker allows setting Broker implementation to use.
 func (n *Node) SetBroker(b Broker) {
 	n.broker = b
 }
 
-// SetPresenceManager allows to set PresenceManager to use.
+// SetPresenceManager allows setting PresenceManager to use.
 func (n *Node) SetPresenceManager(m PresenceManager) {
 	n.presenceManager = m
 }
@@ -205,12 +205,12 @@ func (n *Node) Run() error {
 	return n.subDissolver.Run()
 }
 
-// Log allows to log entry.
+// Log allows logging a LogEntry.
 func (n *Node) Log(entry LogEntry) {
 	n.logger.log(entry)
 }
 
-// LogEnabled allows to log entry.
+// LogEnabled allows check whether a LogLevel enabled or not.
 func (n *Node) LogEnabled(level LogLevel) bool {
 	return n.logger.enabled(level)
 }
@@ -722,7 +722,7 @@ type PublishResult struct {
 // protocol then you can not publish binary data to these channel.
 //
 // Channels in Centrifuge are ephemeral and its settings not persisted over different
-// publish operations. So if you want to have channel with history stream behind you
+// publish operations. So if you want to have a channel with history stream behind you
 // need to provide WithHistory option on every publish. To simplify working with different
 // channels you can make some type of publish wrapper in your own code.
 //
@@ -734,14 +734,14 @@ func (n *Node) Publish(channel string, data []byte, opts ...PublishOption) (Publ
 	return n.publish(channel, data, opts...)
 }
 
-// publishJoin allows to publish join message into channel when someone subscribes on it
+// publishJoin allows publishing join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishJoin(ch string, info *ClientInfo) error {
 	incMessagesSent("join")
 	return n.broker.PublishJoin(ch, info)
 }
 
-// publishLeave allows to publish join message into channel when someone subscribes on it
+// publishLeave allows publishing join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 	incMessagesSent("leave")
@@ -751,7 +751,7 @@ func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 var errNotificationHandlerNotRegistered = errors.New("notification handler not registered")
 
 // Notify allows sending an asynchronous notification to all other nodes
-// (or to a single specific node). Unlike Survey it does not wait for any
+// (or to a single specific node). Unlike Survey, it does not wait for any
 // response. If toNodeID is not an empty string then a notification will
 // be sent to a concrete node in cluster, otherwise a notification sent to
 // all running nodes. See a corresponding Node.OnNotification method to
@@ -1267,7 +1267,7 @@ func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 	}, nil
 }
 
-// History allows to extract Publications in channel.
+// History allows extracting Publications in channel.
 // The channel must belong to namespace where history is on.
 func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
 	incActionCount("history")
@@ -1327,7 +1327,7 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 type nodeRegistry struct {
-	// mu allows to synchronize access to node registry.
+	// mu allows synchronizing access to node registry.
 	mu sync.RWMutex
 	// currentUID keeps uid of current node
 	currentUID string

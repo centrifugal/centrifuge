@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// clientEventHub allows to deal with client event handlers.
+// clientEventHub allows dealing with client event handlers.
 // All its methods are not goroutine-safe and supposed to be called
 // once inside Node ConnectHandler.
 type clientEventHub struct {
@@ -219,8 +219,8 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 // Client represents client connection to server.
 type Client struct {
 	mu                sync.RWMutex
-	connectMu         sync.Mutex // allows to sync connect with disconnect.
-	presenceMu        sync.Mutex // allows to sync presence routine with client closing.
+	connectMu         sync.Mutex // allows syncing connect with disconnect.
+	presenceMu        sync.Mutex // allows syncing presence routine with client closing.
 	ctx               context.Context
 	transport         Transport
 	node              *Node
@@ -603,7 +603,7 @@ func (c *Client) updatePresence() {
 	for channel, channelContext := range channels {
 		c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay, func(result bool) {
 			// Ideally we should deal with single expired subscription in this
-			// case - i.e. unsubscribe client from channel and give an advice
+			// case - i.e. unsubscribe client from channel and give advice
 			// to resubscribe. But there is scenario when browser goes online
 			// after computer was in sleeping mode which I have not managed to
 			// handle reliably on client side when unsubscribe with resubscribe
@@ -746,7 +746,7 @@ func (c *Client) getSendPushReply(data []byte) (*protocol.Reply, error) {
 	}, nil
 }
 
-// Unsubscribe allows to unsubscribe client from channel.
+// Unsubscribe allows unsubscribing client from channel.
 func (c *Client) Unsubscribe(ch string) error {
 	c.mu.RLock()
 	if c.status == statusClosed {
@@ -2558,7 +2558,7 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 }
 
 // subscribeCmd handles subscribe command - clients send this when subscribe
-// on channel, if channel if private then we must validate provided sign here before
+// on channel, if channel is private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
 func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeReply, rw *replyWriter, serverSide bool) subscribeContext {

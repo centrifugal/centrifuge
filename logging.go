@@ -9,7 +9,7 @@ const (
 	// LogLevelTrace turns on trace logs - should only be used during development. This
 	// log level shows all client-server communication.
 	LogLevelTrace
-	// LogLevelDebug turns on debug logs - its generally too much for production in normal
+	// LogLevelDebug turns on debug logs - it's generally too much for production in normal
 	// conditions but can help when developing and investigating problems in production.
 	LogLevelDebug
 	// LogLevelInfo logs useful server information. This includes various information

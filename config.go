@@ -59,7 +59,7 @@ type Config struct {
 	// HistoryMaxPublicationLimit allows limiting the maximum number of publications to be
 	// asked over client API history call. This is useful when you have large streams and
 	// want to prevent a massive number of missed messages to be sent to a client when
-	// calling history without any limit explicitly set. By default no limit used.
+	// calling history without any limit explicitly set. By default, no limit used.
 	// This option does not affect Node.History method. See also RecoveryMaxPublicationLimit.
 	HistoryMaxPublicationLimit int
 	// RecoveryMaxPublicationLimit allows limiting the number of Publications that could be
@@ -77,8 +77,8 @@ const (
 	// nodeInfoCleanInterval is an interval in seconds, how often node must
 	// clean information about other running nodes.
 	nodeInfoCleanInterval = nodeInfoPublishInterval * 3
-	// nodeInfoMaxDelay is an interval in seconds – how many seconds node
-	// info considered actual.
+	// nodeInfoMaxDelay is an interval in seconds how long node info is
+	// considered actual.
 	nodeInfoMaxDelay = nodeInfoPublishInterval*2 + time.Second
 )
 
