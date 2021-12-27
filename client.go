@@ -394,7 +394,7 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 			data = prepared.NewReply(rep, c.transport.Protocol().toProto()).PushData()
 			c.trace("-->", data)
 		}
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: data, Reply: rep})
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: data})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after connect push", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -507,8 +507,7 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	}
 	c.trace("-->", data)
 	disconnect := c.messageWriter.enqueue(queue.Item{
-		Data:  data,
-		Reply: reply.Reply,
+		Data: data,
 	})
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
@@ -1028,7 +1027,7 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 			return encodeErr
 		}
 		c.trace("-->", replyData)
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData, Reply: rep})
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -1142,7 +1141,7 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 			return encodeErr
 		}
 		c.trace("-->", replyData)
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData, Reply: rep})
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
 				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))

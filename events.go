@@ -2,8 +2,6 @@ package centrifuge
 
 import (
 	"context"
-
-	"github.com/centrifugal/protocol"
 )
 
 // ConnectEvent contains fields related to connecting event (when a server
@@ -59,8 +57,6 @@ type ConnectHandler func(*Client)
 type TransportWriteEvent struct {
 	// Data is what we are going to send into the connection.
 	Data []byte
-	// Reply allows introspecting the contents of the data without need to deserialize it.
-	Reply *protocol.Reply
 }
 
 // TransportWriteHandler called just before writing data to the Client's Transport.

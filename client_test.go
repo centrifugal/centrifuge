@@ -3399,7 +3399,6 @@ func TestClient_OnTransportWrite(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnTransportWrite(func(event TransportWriteEvent) bool {
 			require.Equal(t, "{\"result\":{\"type\":4,\"data\":{\"data\":{}}}}", string(event.Data))
-			require.NotNil(t, event.Reply.Result)
 			close(done)
 			return true
 		})
@@ -3433,7 +3432,6 @@ func TestClient_OnTransportWriteSkip(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnTransportWrite(func(event TransportWriteEvent) bool {
 			require.Equal(t, "{\"result\":{\"type\":4,\"data\":{\"data\":{}}}}", string(event.Data))
-			require.NotNil(t, event.Reply.Result)
 			close(done)
 			return false
 		})
@@ -3478,10 +3476,6 @@ func TestClient_OnTransportWriteProtocolV2(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnTransportWrite(func(event TransportWriteEvent) bool {
 			require.Equal(t, "{\"push\":{\"message\":{\"data\":{}}}}", string(event.Data))
-			require.NotNil(t, event.Reply)
-			require.NotNil(t, event.Reply.Push)
-			require.NotNil(t, event.Reply.Push.Message)
-			require.Equal(t, "{}", string(event.Reply.Push.Message.Data))
 			close(done)
 			return true
 		})

@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -108,16 +107,6 @@ func main() {
 				}
 			}
 		}()
-
-		client.OnTransportWrite(func(event centrifuge.TransportWriteEvent) bool {
-			if event.Reply != nil && event.Reply.Push != nil && event.Reply.Push.Pub != nil {
-				if strings.Contains(string(event.Reply.Push.Pub.Data), "hello") {
-					client.Disconnect(centrifuge.DisconnectForceNoReconnect)
-					return false
-				}
-			}
-			return true
-		})
 
 		client.OnAlive(func() {
 			log.Printf("user %s connection is still active", client.UserID())
