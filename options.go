@@ -27,6 +27,13 @@ func WithMeta(meta map[string]string) PublishOption {
 	}
 }
 
+// WithEpoch allows publishing with specified stream epoch.
+func WithEpoch(epoch string) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.Epoch = epoch
+	}
+}
+
 // SubscribeOptions define per-subscription options.
 type SubscribeOptions struct {
 	// ExpireAt defines time in future when subscription should expire,
@@ -54,6 +61,8 @@ type SubscribeOptions struct {
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
 	RecoverSince *StreamPosition
+	// Epoch ...
+	Epoch string
 	// clientID to subscribe.
 	clientID string
 }
@@ -234,6 +243,8 @@ type HistoryOptions struct {
 	Limit int
 	// Reverse direction
 	Reverse bool
+	// Epoch ...
+	Epoch string
 }
 
 // HistoryOption is a type to represent various History options.
@@ -242,23 +253,30 @@ type HistoryOption func(options *HistoryOptions)
 // NoLimit defines that limit should not be applied.
 const NoLimit = -1
 
-// WithLimit allows to set HistoryOptions.Limit.
+// WithLimit allows setting HistoryOptions.Limit.
 func WithLimit(limit int) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Limit = limit
 	}
 }
 
-// WithSince allows to set HistoryOptions.Since option.
+// WithSince allows setting HistoryOptions.Since option.
 func WithSince(sp *StreamPosition) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Since = sp
 	}
 }
 
-// WithSince allows to set HistoryOptions.Since option.
+// WithReverse allows setting HistoryOptions.Reverse option.
 func WithReverse(reverse bool) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Reverse = reverse
+	}
+}
+
+// WithHistoryEpoch allows setting HistoryOptions.Epoch option.
+func WithHistoryEpoch(epoch string) HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.Epoch = epoch
 	}
 }

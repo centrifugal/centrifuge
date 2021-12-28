@@ -55,6 +55,8 @@ type HistoryFilter struct {
 	Limit int
 	// Reverse direction.
 	Reverse bool
+	// Epoch ...
+	Epoch string
 }
 
 // StreamPosition contains fields to describe position in stream.
@@ -91,6 +93,8 @@ type PublishOptions struct {
 	ClientInfo *ClientInfo
 	// Meta is a custom meta information for the Publication.
 	Meta map[string]string
+	// Epoch ...
+	Epoch string
 }
 
 // Broker is responsible for PUB/SUB mechanics.
