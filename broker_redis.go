@@ -205,6 +205,8 @@ else
   if ARGV[6] ~= "" and epoch ~= ARGV[6] then
 	epoch = ARGV[6]
 	redis.call("hset", KEYS[2], "e", epoch)
+    redis.call("hset", KEYS[2], "s", "0")
+	redis.call("del", KEYS[1])
   end
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
@@ -258,7 +260,6 @@ return {offset, epoch, pubs}
 	// ARGV[6] - optional stream epoch, TODO: should we "reset" stream on new epoch?
 	historyStreamSource = `
 redis.replicate_commands()
-local offset = redis.call("hget", KEYS[2], "s")
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("hget", KEYS[2], "e")
@@ -274,8 +275,11 @@ else
   if ARGV[6] ~= "" and epoch ~= ARGV[6] then
 	epoch = ARGV[6]
 	redis.call("hset", KEYS[2], "e", epoch)
+	redis.call("hset", KEYS[2], "s", "0")
+	redis.call("del", KEYS[1])
   end
 end
+local offset = redis.call("hget", KEYS[2], "s")
 if ARGV[5] ~= '0' then
 	redis.call("expire", KEYS[2], ARGV[5])
 end
@@ -570,6 +574,8 @@ func (b *RedisBroker) unsubscribe(s *RedisShard, ch string) error {
 }
 
 // History - see Broker.History.
+// History iteration API (since + reverse) works only for Redis Streams (used by default).
+// Forcing epoch works only for Redis Streams also.
 func (b *RedisBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	return b.history(b.getShard(ch), ch, filter)
 }

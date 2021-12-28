@@ -55,7 +55,7 @@ type HistoryFilter struct {
 	Limit int
 	// Reverse direction.
 	Reverse bool
-	// Epoch ...
+	// Epoch if set instructs history request to set an epoch for a stream.
 	Epoch string
 }
 
