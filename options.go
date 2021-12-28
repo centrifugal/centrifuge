@@ -27,7 +27,7 @@ func WithMeta(meta map[string]string) PublishOption {
 	}
 }
 
-// WithEpoch allows publishing with specified stream epoch.
+// WithEpoch allows publishing with specified stream epoch – see PublishOptions.Epoch.
 func WithEpoch(epoch string) PublishOption {
 	return func(opts *PublishOptions) {
 		opts.Epoch = epoch
@@ -61,7 +61,7 @@ type SubscribeOptions struct {
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
 	RecoverSince *StreamPosition
-	// Epoch ...
+	// Epoch to set for a stream (only works for positioned streams at the moment).
 	Epoch string
 	// clientID to subscribe.
 	clientID string
@@ -70,7 +70,7 @@ type SubscribeOptions struct {
 // SubscribeOption is a type to represent various Subscribe options.
 type SubscribeOption func(*SubscribeOptions)
 
-// WithExpireAt allows to set ExpireAt field.
+// WithExpireAt allows setting ExpireAt field.
 func WithExpireAt(expireAt int64) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.ExpireAt = expireAt
@@ -131,6 +131,13 @@ func WithSubscribeData(data []byte) SubscribeOption {
 func WithRecoverSince(since *StreamPosition) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.RecoverSince = since
+	}
+}
+
+// WithSubscribeEpoch allows setting SubscribeOptions.Epoch.
+func WithSubscribeEpoch(epoch string) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Epoch = epoch
 	}
 }
 
@@ -243,7 +250,8 @@ type HistoryOptions struct {
 	Limit int
 	// Reverse direction
 	Reverse bool
-	// Epoch ...
+	// Epoch if set instructs history request to set an epoch for a stream. On new
+	// epoch stream will be reset.
 	Epoch string
 }
 
