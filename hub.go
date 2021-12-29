@@ -5,8 +5,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/centrifugal/centrifuge/internal/prepared"
-
 	"github.com/centrifugal/protocol"
 )
 
@@ -497,67 +495,126 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	// get connections currently subscribed on channel.
-	channelSubscriptions, ok := h.subs[channel]
+	channelSubscribers, ok := h.subs[channel]
 	if !ok {
 		return nil
 	}
 
-	var jsonPublicationReplyV1 *prepared.Reply
-	var protobufPublicationReplyV1 *prepared.Reply
-	var jsonPublicationReplyV2 *prepared.Reply
-	var protobufPublicationReplyV2 *prepared.Reply
+	var (
+		jsonReplyV1     []byte
+		protobufReplyV1 []byte
+		jsonReplyV2     []byte
+		protobufReplyV2 []byte
 
-	// Iterate over channel subscribers and send message.
-	for _, c := range channelSubscriptions {
+		jsonPushV1     []byte
+		protobufPushV1 []byte
+		jsonPushV2     []byte
+		protobufPushV2 []byte
+	)
+
+	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
-				if jsonPublicationReplyV1 == nil {
-					pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: pushBytes,
-					}
-					jsonPublicationReplyV1 = prepared.NewReply(reply, protocol.TypeJSON)
+				pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
+				if err != nil {
+					return err
 				}
-				_ = c.writePublication(channel, pub, jsonPublicationReplyV1, sp)
+				if c.transport.Unidirectional() {
+					if jsonPushV1 == nil {
+						jsonPushV1 = pushBytes
+					}
+					_ = c.writePublication(channel, pub, jsonPushV1, sp)
+				} else {
+					if jsonReplyV1 == nil {
+						reply := &protocol.Reply{
+							Result: pushBytes,
+						}
+						encoder := protocol.GetReplyEncoder(protoType)
+						jsonReplyV1, err = encoder.Encode(reply)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writePublication(channel, pub, jsonReplyV1, sp)
+				}
 			} else {
-				if jsonPublicationReplyV2 == nil {
-					jsonPublicationReplyV2 = prepared.NewReply(&protocol.Reply{
-						Push: &protocol.Push{
-							Channel: channel,
-							Pub:     pub,
-						},
-					}, protocol.TypeJSON)
+				push := &protocol.Push{
+					Channel: channel,
+					Pub:     pub,
 				}
-				_ = c.writePublication(channel, pub, jsonPublicationReplyV2, sp)
+				if c.transport.Unidirectional() {
+					if jsonPushV2 == nil {
+						encoder := protocol.GetPushEncoder(protoType)
+						var err error
+						jsonPushV2, err = encoder.Encode(push)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writePublication(channel, pub, jsonPushV2, sp)
+				} else {
+					if jsonReplyV2 == nil {
+						encoder := protocol.GetReplyEncoder(protoType)
+						var err error
+						jsonReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writePublication(channel, pub, jsonReplyV2, sp)
+				}
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
-				if protobufPublicationReplyV1 == nil {
-					pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: pushBytes,
-					}
-					protobufPublicationReplyV1 = prepared.NewReply(reply, protocol.TypeProtobuf)
+				pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
+				if err != nil {
+					return err
 				}
-				_ = c.writePublication(channel, pub, protobufPublicationReplyV1, sp)
+				if c.transport.Unidirectional() {
+					if protobufPushV1 == nil {
+						protobufPushV1 = pushBytes
+					}
+					_ = c.writePublication(channel, pub, protobufPushV1, sp)
+				} else {
+					if protobufReplyV1 == nil {
+						reply := &protocol.Reply{
+							Result: pushBytes,
+						}
+						encoder := protocol.GetReplyEncoder(protoType)
+						protobufReplyV1, err = encoder.Encode(reply)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writePublication(channel, pub, protobufReplyV1, sp)
+				}
 			} else {
-				if protobufPublicationReplyV2 == nil {
-					protobufPublicationReplyV2 = prepared.NewReply(&protocol.Reply{
-						Push: &protocol.Push{
-							Channel: channel,
-							Pub:     pub,
-						},
-					}, protocol.TypeProtobuf)
+				push := &protocol.Push{
+					Channel: channel,
+					Pub:     pub,
 				}
-				_ = c.writePublication(channel, pub, protobufPublicationReplyV2, sp)
+				if c.transport.Unidirectional() {
+					if protobufPushV2 == nil {
+						encoder := protocol.GetPushEncoder(protoType)
+						var err error
+						protobufPushV2, err = encoder.Encode(push)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writePublication(channel, pub, protobufPushV2, sp)
+				} else {
+					if protobufReplyV2 == nil {
+						encoder := protocol.GetReplyEncoder(protoType)
+						var err error
+						protobufReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writePublication(channel, pub, protobufReplyV2, sp)
+				}
 			}
 		}
 	}
@@ -569,67 +626,126 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	channelSubscriptions, ok := h.subs[channel]
+	channelSubscribers, ok := h.subs[channel]
 	if !ok {
 		return nil
 	}
 
 	var (
-		jsonReplyV1     *prepared.Reply
-		protobufReplyV1 *prepared.Reply
-		jsonReplyV2     *prepared.Reply
-		protobufReplyV2 *prepared.Reply
+		jsonReplyV1     []byte
+		protobufReplyV1 []byte
+		jsonReplyV2     []byte
+		protobufReplyV2 []byte
+
+		jsonPushV1     []byte
+		protobufPushV1 []byte
+		jsonPushV2     []byte
+		protobufPushV2 []byte
 	)
 
-	for _, c := range channelSubscriptions {
+	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
-				if jsonReplyV1 == nil {
-					pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: pushBytes,
-					}
-					jsonReplyV1 = prepared.NewReply(reply, protocol.TypeJSON)
+				pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
+				if err != nil {
+					return err
 				}
-				_ = c.writeJoin(channel, jsonReplyV1)
+				if c.transport.Unidirectional() {
+					if jsonPushV1 == nil {
+						jsonPushV1 = pushBytes
+					}
+					_ = c.writeJoin(channel, jsonPushV1)
+				} else {
+					if jsonReplyV1 == nil {
+						reply := &protocol.Reply{
+							Result: pushBytes,
+						}
+						encoder := protocol.GetReplyEncoder(protoType)
+						jsonReplyV1, err = encoder.Encode(reply)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeJoin(channel, jsonReplyV1)
+				}
 			} else {
-				if jsonReplyV2 == nil {
-					jsonReplyV2 = prepared.NewReply(&protocol.Reply{
-						Push: &protocol.Push{
-							Channel: channel,
-							Join:    join,
-						},
-					}, protocol.TypeJSON)
+				push := &protocol.Push{
+					Channel: channel,
+					Join:    join,
 				}
-				_ = c.writeJoin(channel, jsonReplyV2)
+				if c.transport.Unidirectional() {
+					if jsonPushV2 == nil {
+						encoder := protocol.GetPushEncoder(protoType)
+						var err error
+						jsonPushV2, err = encoder.Encode(push)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeJoin(channel, jsonPushV2)
+				} else {
+					if jsonReplyV2 == nil {
+						encoder := protocol.GetReplyEncoder(protoType)
+						var err error
+						jsonReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeJoin(channel, jsonReplyV2)
+				}
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
-				if protobufReplyV1 == nil {
-					pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: pushBytes,
-					}
-					protobufReplyV1 = prepared.NewReply(reply, protocol.TypeProtobuf)
+				pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
+				if err != nil {
+					return err
 				}
-				_ = c.writeJoin(channel, protobufReplyV1)
+				if c.transport.Unidirectional() {
+					if protobufPushV1 == nil {
+						protobufPushV1 = pushBytes
+					}
+					_ = c.writeJoin(channel, protobufPushV1)
+				} else {
+					if protobufReplyV1 == nil {
+						reply := &protocol.Reply{
+							Result: pushBytes,
+						}
+						encoder := protocol.GetReplyEncoder(protoType)
+						protobufReplyV1, err = encoder.Encode(reply)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeJoin(channel, protobufReplyV1)
+				}
 			} else {
-				if protobufReplyV2 == nil {
-					protobufReplyV2 = prepared.NewReply(&protocol.Reply{
-						Push: &protocol.Push{
-							Channel: channel,
-							Join:    join,
-						},
-					}, protocol.TypeProtobuf)
+				push := &protocol.Push{
+					Channel: channel,
+					Join:    join,
 				}
-				_ = c.writeJoin(channel, protobufReplyV2)
+				if c.transport.Unidirectional() {
+					if protobufPushV2 == nil {
+						encoder := protocol.GetPushEncoder(protoType)
+						var err error
+						protobufPushV2, err = encoder.Encode(push)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeJoin(channel, protobufPushV2)
+				} else {
+					if protobufReplyV2 == nil {
+						encoder := protocol.GetReplyEncoder(protoType)
+						var err error
+						protobufReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeJoin(channel, protobufReplyV2)
+				}
 			}
 		}
 	}
@@ -641,67 +757,126 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	channelSubscriptions, ok := h.subs[channel]
+	channelSubscribers, ok := h.subs[channel]
 	if !ok {
 		return nil
 	}
 
 	var (
-		jsonReplyV1     *prepared.Reply
-		protobufReplyV1 *prepared.Reply
-		jsonReplyV2     *prepared.Reply
-		protobufReplyV2 *prepared.Reply
+		jsonReplyV1     []byte
+		protobufReplyV1 []byte
+		jsonReplyV2     []byte
+		protobufReplyV2 []byte
+
+		jsonPushV1     []byte
+		protobufPushV1 []byte
+		jsonPushV2     []byte
+		protobufPushV2 []byte
 	)
 
-	for _, c := range channelSubscriptions {
+	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
-				if jsonReplyV1 == nil {
-					pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: pushBytes,
-					}
-					jsonReplyV1 = prepared.NewReply(reply, protocol.TypeJSON)
+				pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
+				if err != nil {
+					return err
 				}
-				_ = c.writeLeave(channel, jsonReplyV1)
+				if c.transport.Unidirectional() {
+					if jsonPushV1 == nil {
+						jsonPushV1 = pushBytes
+					}
+					_ = c.writeLeave(channel, jsonPushV1)
+				} else {
+					if jsonReplyV1 == nil {
+						reply := &protocol.Reply{
+							Result: pushBytes,
+						}
+						encoder := protocol.GetReplyEncoder(protoType)
+						jsonReplyV1, err = encoder.Encode(reply)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeLeave(channel, jsonReplyV1)
+				}
 			} else {
-				if jsonReplyV2 == nil {
-					jsonReplyV2 = prepared.NewReply(&protocol.Reply{
-						Push: &protocol.Push{
-							Channel: channel,
-							Leave:   leave,
-						},
-					}, protocol.TypeJSON)
+				push := &protocol.Push{
+					Channel: channel,
+					Leave:   leave,
 				}
-				_ = c.writeLeave(channel, jsonReplyV2)
+				if c.transport.Unidirectional() {
+					if jsonPushV2 == nil {
+						encoder := protocol.GetPushEncoder(protoType)
+						var err error
+						jsonPushV2, err = encoder.Encode(push)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeLeave(channel, jsonPushV2)
+				} else {
+					if jsonReplyV2 == nil {
+						encoder := protocol.GetReplyEncoder(protoType)
+						var err error
+						jsonReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeLeave(channel, jsonReplyV2)
+				}
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
-				if protobufReplyV1 == nil {
-					pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
-					if err != nil {
-						return err
-					}
-					reply := &protocol.Reply{
-						Result: pushBytes,
-					}
-					protobufReplyV1 = prepared.NewReply(reply, protocol.TypeProtobuf)
+				pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
+				if err != nil {
+					return err
 				}
-				_ = c.writeLeave(channel, protobufReplyV1)
+				if c.transport.Unidirectional() {
+					if protobufPushV1 == nil {
+						protobufPushV1 = pushBytes
+					}
+					_ = c.writeLeave(channel, protobufPushV1)
+				} else {
+					if protobufReplyV1 == nil {
+						reply := &protocol.Reply{
+							Result: pushBytes,
+						}
+						encoder := protocol.GetReplyEncoder(protoType)
+						protobufReplyV1, err = encoder.Encode(reply)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeLeave(channel, protobufReplyV1)
+				}
 			} else {
-				if protobufReplyV2 == nil {
-					protobufReplyV2 = prepared.NewReply(&protocol.Reply{
-						Push: &protocol.Push{
-							Channel: channel,
-							Leave:   leave,
-						},
-					}, protocol.TypeProtobuf)
+				push := &protocol.Push{
+					Channel: channel,
+					Leave:   leave,
 				}
-				_ = c.writeLeave(channel, protobufReplyV2)
+				if c.transport.Unidirectional() {
+					if protobufPushV2 == nil {
+						encoder := protocol.GetPushEncoder(protoType)
+						var err error
+						protobufPushV2, err = encoder.Encode(push)
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeLeave(channel, protobufPushV2)
+				} else {
+					if protobufReplyV2 == nil {
+						encoder := protocol.GetReplyEncoder(protoType)
+						var err error
+						protobufReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						if err != nil {
+							return err
+						}
+					}
+					_ = c.writeLeave(channel, protobufReplyV2)
+				}
 			}
 		}
 	}

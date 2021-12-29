@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/prepared"
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 
@@ -363,7 +362,7 @@ func (c *Client) Connect(req ConnectRequest) {
 	}
 }
 
-func (c *Client) getDisconnectPushReply(d *Disconnect) (*protocol.Reply, error) {
+func (c *Client) getDisconnectPushReply(d *Disconnect) ([]byte, error) {
 	disconnect := &protocol.Disconnect{
 		Code:      d.Code,
 		Reason:    d.Reason,
@@ -374,13 +373,13 @@ func (c *Client) getDisconnectPushReply(d *Disconnect) (*protocol.Reply, error) 
 		if err != nil {
 			return nil, err
 		}
-		return &protocol.Reply{Result: pushBytes}, nil
+		return c.encodeReply(&protocol.Reply{Result: pushBytes})
 	}
-	return &protocol.Reply{
+	return c.encodeReply(&protocol.Reply{
 		Push: &protocol.Push{
 			Disconnect: disconnect,
 		},
-	}, nil
+	})
 }
 
 func hasFlag(flags, flag uint64) bool {
@@ -396,7 +395,12 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 		if c.transport.ProtocolVersion() == ProtocolVersion1 {
 			data = rep.Result
 		} else {
-			data = prepared.NewReply(rep, c.transport.Protocol().toProto()).PushData()
+			encoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
+			var err error
+			data, err = encoder.Encode(rep.Push)
+			if err != nil {
+				return err
+			}
 		}
 		disconnect := c.messageWriter.enqueue(queue.Item{Data: data})
 		if disconnect != nil {
@@ -498,17 +502,7 @@ func (c *Client) closeUnauthenticated() {
 	}
 }
 
-func (c *Client) transportEnqueue(reply *prepared.Reply) error {
-	var data []byte
-	if c.transport.Unidirectional() {
-		if c.transport.ProtocolVersion() == ProtocolVersion1 {
-			data = reply.Reply.Result
-		} else {
-			data = reply.PushData()
-		}
-	} else {
-		data = reply.Data()
-	}
+func (c *Client) transportEnqueue(data []byte) error {
 	disconnect := c.messageWriter.enqueue(queue.Item{
 		Data: data,
 	})
@@ -722,30 +716,45 @@ func (c *Client) Send(data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagMessage) {
 		return nil
 	}
-	reply, err := c.getSendPushReply(data)
+	replyData, err := c.getSendPushReply(data)
 	if err != nil {
 		return err
 	}
-	preparedReply := prepared.NewReply(reply, c.transport.Protocol().toProto())
-	return c.transportEnqueue(preparedReply)
+	return c.transportEnqueue(replyData)
 }
 
-func (c *Client) getSendPushReply(data []byte) (*protocol.Reply, error) {
+func (c *Client) encodeReply(reply *protocol.Reply) ([]byte, error) {
+	protoType := c.transport.Protocol().toProto()
+	if c.transport.Unidirectional() {
+		if c.transport.ProtocolVersion() == ProtocolVersion1 {
+			return reply.Result, nil
+		} else {
+			encoder := protocol.GetPushEncoder(protoType)
+			return encoder.Encode(reply.Push)
+		}
+	} else {
+		encoder := protocol.GetReplyEncoder(protoType)
+		return encoder.Encode(reply)
+	}
+}
+
+func (c *Client) getSendPushReply(data []byte) ([]byte, error) {
 	p := &protocol.Message{
 		Data: data,
 	}
+	protoType := c.transport.Protocol().toProto()
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
-		pushBytes, err := protocol.EncodeMessagePush(c.transport.Protocol().toProto(), p)
+		pushBytes, err := protocol.EncodeMessagePush(protoType, p)
 		if err != nil {
 			return nil, err
 		}
-		return &protocol.Reply{Result: pushBytes}, nil
+		return c.encodeReply(&protocol.Reply{Result: pushBytes})
 	}
-	return &protocol.Reply{
+	return c.encodeReply(&protocol.Reply{
 		Push: &protocol.Push{
 			Message: p,
 		},
-	}, nil
+	})
 }
 
 // Unsubscribe allows unsubscribing client from channel.
@@ -768,30 +777,29 @@ func (c *Client) sendUnsubscribe(ch string) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagUnsubscribe) {
 		return nil
 	}
-	reply, err := c.getUnsubscribePushReply(ch)
+	replyData, err := c.getUnsubscribePushReply(ch)
 	if err != nil {
 		return err
 	}
-	preparedReply := prepared.NewReply(reply, c.transport.Protocol().toProto())
-	_ = c.transportEnqueue(preparedReply)
+	_ = c.transportEnqueue(replyData)
 	return nil
 }
 
-func (c *Client) getUnsubscribePushReply(ch string) (*protocol.Reply, error) {
+func (c *Client) getUnsubscribePushReply(ch string) ([]byte, error) {
 	p := &protocol.Unsubscribe{}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeUnsubscribePush(c.transport.Protocol().toProto(), ch, p)
 		if err != nil {
 			return nil, err
 		}
-		return &protocol.Reply{Result: pushBytes}, nil
+		return c.encodeReply(&protocol.Reply{Result: pushBytes})
 	}
-	return &protocol.Reply{
+	return c.encodeReply(&protocol.Reply{
 		Push: &protocol.Push{
 			Channel:     ch,
 			Unsubscribe: p,
 		},
-	}, nil
+	})
 }
 
 // Disconnect client connection with specific disconnect code and reason.
@@ -849,8 +857,8 @@ func (c *Client) close(disconnect *Disconnect) error {
 	}
 
 	if disconnect != nil && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
-		if reply, err := c.getDisconnectPushReply(disconnect); err == nil {
-			_ = c.transportEnqueue(prepared.NewReply(reply, c.transport.Protocol().toProto()))
+		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
+			_ = c.transportEnqueue(replyData)
 		}
 	}
 
@@ -1424,29 +1432,28 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 		c.mu.Unlock()
 	}
 
-	reply, err := c.getRefreshPushReply(res)
+	replyData, err := c.getRefreshPushReply(res)
 	if err != nil {
 		return err
 	}
-	preparedReply := prepared.NewReply(reply, c.transport.Protocol().toProto())
-	return c.transportEnqueue(preparedReply)
+	return c.transportEnqueue(replyData)
 }
 
-func (c *Client) getRefreshPushReply(res *protocol.Refresh) (*protocol.Reply, error) {
+func (c *Client) getRefreshPushReply(res *protocol.Refresh) ([]byte, error) {
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeRefreshPush(c.transport.Protocol().toProto(), res)
 		if err != nil {
 			return nil, err
 		}
-		return &protocol.Reply{
+		return c.encodeReply(&protocol.Reply{
 			Result: pushBytes,
-		}, nil
+		})
 	}
-	return &protocol.Reply{
+	return c.encodeReply(&protocol.Reply{
 		Push: &protocol.Push{
 			Refresh: res,
 		},
-	}, nil
+	})
 }
 
 func (c *Client) getRefreshCommandReply(res *protocol.RefreshResult) (*protocol.Reply, error) {
@@ -2447,15 +2454,14 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagSubscribe) {
 		return nil
 	}
-	reply, err := c.getSubscribePushReply(channel, subCtx.result)
+	replyData, err := c.getSubscribePushReply(channel, subCtx.result)
 	if err != nil {
 		return err
 	}
-	preparedReply := prepared.NewReply(reply, c.transport.Protocol().toProto())
-	return c.transportEnqueue(preparedReply)
+	return c.transportEnqueue(replyData)
 }
 
-func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeResult) (*protocol.Reply, error) {
+func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeResult) ([]byte, error) {
 	sub := &protocol.Subscribe{
 		Offset:      res.GetOffset(),
 		Epoch:       res.GetEpoch(),
@@ -2468,14 +2474,14 @@ func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeRe
 		if err != nil {
 			return nil, err
 		}
-		return &protocol.Reply{Result: pushBytes}, nil
+		return c.encodeReply(&protocol.Reply{Result: pushBytes})
 	}
-	return &protocol.Reply{
+	return c.encodeReply(&protocol.Reply{
 		Push: &protocol.Push{
 			Channel:   channel,
 			Subscribe: sub,
 		},
-	}, nil
+	})
 }
 
 func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Error, *Disconnect) {
@@ -2803,7 +2809,7 @@ func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*proto
 	}, nil
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
@@ -2816,7 +2822,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 			return nil
 		}
 		c.mu.Unlock()
-		return c.transportEnqueue(reply)
+		return c.transportEnqueue(data)
 	}
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
@@ -2848,34 +2854,34 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(data)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, reply *prepared.Reply, sp StreamPosition) error {
+func (c *Client) writePublication(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
 	if pub.Offset == 0 {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}
-		return c.transportEnqueue(reply)
+		return c.transportEnqueue(data)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, reply, sp)
+		_ = c.writePublicationUpdatePosition(ch, pub, data, sp)
 	})
 	return nil
 }
 
-func (c *Client) writeJoin(_ string, reply *prepared.Reply) error {
+func (c *Client) writeJoin(_ string, data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(data)
 }
 
-func (c *Client) writeLeave(_ string, reply *prepared.Reply) error {
+func (c *Client) writeLeave(_ string, data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
-	return c.transportEnqueue(reply)
+	return c.transportEnqueue(data)
 }
 
 // Lock must be held outside.

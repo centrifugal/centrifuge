@@ -3492,16 +3492,46 @@ func TestClient_OnTransportWriteProtocolV2(t *testing.T) {
 	}
 }
 
+func newReplyDecoder(enc protocol.Type, data []byte) protocol.ReplyDecoder {
+	if enc == protocol.TypeJSON {
+		return protocol.NewJSONReplyDecoder(data)
+	}
+	return protocol.NewProtobufReplyDecoder(data)
+}
+
+func decodeReply(t *testing.T, protoType protocol.Type, data []byte) *protocol.Reply {
+	decoder := newReplyDecoder(protoType, data)
+	reply, err := decoder.Decode()
+	require.NoError(t, err)
+	return reply
+}
+
 func TestClientV1ReplyConstruction(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV1 := newTestClient(t, node, "42")
 
-	reply, err := clientV1.getRefreshPushReply(&protocol.Refresh{})
+	data, err := clientV1.getRefreshPushReply(&protocol.Refresh{})
 	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
-	reply, err = clientV1.getRPCCommandReply(&protocol.RPCResult{})
+	data, err = clientV1.getUnsubscribePushReply("test")
+	require.NoError(t, err)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
+
+	data, err = clientV1.getSendPushReply([]byte("{}"))
+	require.NoError(t, err)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
+
+	data, err = clientV1.getSubscribePushReply("test", &protocol.SubscribeResult{})
+	require.NoError(t, err)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
+
+	data, err = clientV1.getDisconnectPushReply(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
+
+	reply, err := clientV1.getRPCCommandReply(&protocol.RPCResult{})
 	require.NoError(t, err)
 	require.NotNil(t, reply.Result)
 
@@ -3537,23 +3567,7 @@ func TestClientV1ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply.Result)
 
-	reply, err = clientV1.getUnsubscribePushReply("test")
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getSendPushReply([]byte("{}"))
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
 	reply, err = clientV1.getConnectCommandReply(&protocol.ConnectResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getSubscribePushReply("test", &protocol.SubscribeResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getDisconnectPushReply(DisconnectForceNoReconnect)
 	require.NoError(t, err)
 	require.NotNil(t, reply.Result)
 
@@ -3567,9 +3581,29 @@ func TestClientV2ReplyConstruction(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
 
-	reply, err := clientV2.getRefreshPushReply(&protocol.Refresh{})
+	data, err := clientV2.getRefreshPushReply(&protocol.Refresh{})
 	require.NoError(t, err)
-	require.NotNil(t, reply.Push.Refresh)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Refresh)
+
+	data, err = clientV2.getUnsubscribePushReply("test")
+	require.NoError(t, err)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Unsubscribe)
+
+	data, err = clientV2.getSendPushReply([]byte("{}"))
+	require.NoError(t, err)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Message)
+
+	data, err = clientV2.getSubscribePushReply("test", &protocol.SubscribeResult{})
+	require.NoError(t, err)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Subscribe)
+
+	data, err = clientV2.getDisconnectPushReply(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Disconnect)
+
+	reply, err := clientV2.getConnectPushReply(&protocol.ConnectResult{})
+	require.NoError(t, err)
+	require.NotNil(t, reply.Push.Connect)
 
 	reply, err = clientV2.getRPCCommandReply(&protocol.RPCResult{})
 	require.NoError(t, err)
@@ -3607,29 +3641,9 @@ func TestClientV2ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply.Refresh)
 
-	reply, err = clientV2.getUnsubscribePushReply("test")
-	require.NoError(t, err)
-	require.NotNil(t, reply.Push.Unsubscribe)
-
-	reply, err = clientV2.getSendPushReply([]byte("{}"))
-	require.NoError(t, err)
-	require.NotNil(t, reply.Push.Message)
-
 	reply, err = clientV2.getConnectCommandReply(&protocol.ConnectResult{})
 	require.NoError(t, err)
 	require.NotNil(t, reply.Connect)
-
-	reply, err = clientV2.getSubscribePushReply("test", &protocol.SubscribeResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Push.Subscribe)
-
-	reply, err = clientV2.getDisconnectPushReply(DisconnectForceNoReconnect)
-	require.NoError(t, err)
-	require.NotNil(t, reply.Push.Disconnect)
-
-	reply, err = clientV2.getConnectPushReply(&protocol.ConnectResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Push.Connect)
 }
 
 func TestClient_HandleCommandV2_NoID(t *testing.T) {

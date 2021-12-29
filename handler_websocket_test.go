@@ -400,7 +400,7 @@ func testAuthMiddleware(h http.Handler) http.Handler {
 	})
 }
 
-// TestWebsocketHandlerConcurrentConnections allows to catch errors related
+// TestWebsocketHandlerConcurrentConnections allows catching errors related
 // to invalid buffer pool usages.
 func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 	n := defaultTestNode()
@@ -592,7 +592,7 @@ func TestCheckSameHostOrigin(t *testing.T) {
 	}
 }
 
-// BenchmarkWebsocketHandler allows to benchmark full flow with one real
+// BenchmarkWebsocketHandler allows benchmarking full flow with one real
 // Websocket connection subscribed to one channel. This is not very representative
 // in terms of time for operation as network IO involved but useful to look at
 // total allocations and difference between JSON and Protobuf cases using various buffer sizes.

@@ -10,9 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/prepared"
-
-	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -516,13 +513,6 @@ func TestHubSubscriptions(t *testing.T) {
 	require.Equal(t, h.NumChannels(), 0)
 	require.Zero(t, h.NumSubscribers("test1"))
 	require.Zero(t, h.NumSubscribers("test2"))
-}
-
-func TestPreparedReply(t *testing.T) {
-	reply := protocol.Reply{}
-	preparedReply := prepared.NewReply(&reply, protocol.TypeJSON)
-	data := preparedReply.Data()
-	require.NotNil(t, data)
 }
 
 func TestUserConnections(t *testing.T) {
