@@ -222,7 +222,7 @@ func main() {
 				centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
 			)
 			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
+				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
 			time.Sleep(10000 * time.Millisecond)

@@ -271,6 +271,9 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 					return nil
 				}
 			}
+			if client.node.LogEnabled(LogLevelTrace) {
+				client.trace("-->", item.Data)
+			}
 			if err := t.Write(item.Data); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
@@ -286,6 +289,9 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		WriteManyFn: func(items ...queue.Item) error {
 			messages := make([][]byte, 0, len(items))
 			for i := 0; i < len(items); i++ {
+				if client.node.LogEnabled(LogLevelTrace) {
+					client.trace("-->", items[i].Data)
+				}
 				if client.eventHub.transportWriteHandler != nil {
 					pass := client.eventHub.transportWriteHandler(TransportWriteEvent(items[i]))
 					if !pass {
@@ -389,10 +395,8 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 		var data []byte
 		if c.transport.ProtocolVersion() == ProtocolVersion1 {
 			data = rep.Result
-			c.trace("-->", data)
 		} else {
 			data = prepared.NewReply(rep, c.transport.Protocol().toProto()).PushData()
-			c.trace("-->", data)
 		}
 		disconnect := c.messageWriter.enqueue(queue.Item{Data: data})
 		if disconnect != nil {
@@ -505,7 +509,6 @@ func (c *Client) transportEnqueue(reply *prepared.Reply) error {
 	} else {
 		data = reply.Data()
 	}
-	c.trace("-->", data)
 	disconnect := c.messageWriter.enqueue(queue.Item{
 		Data: data,
 	})
@@ -871,9 +874,6 @@ func (c *Client) close(disconnect *Disconnect) error {
 }
 
 func (c *Client) trace(msg string, data []byte) {
-	if !c.node.LogEnabled(LogLevelTrace) {
-		return
-	}
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
@@ -917,7 +917,9 @@ func (c *Client) Handle(data []byte) bool {
 		return false
 	}
 
-	c.trace("<--", data)
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.trace("<--", data)
+	}
 
 	protoType := c.transport.Protocol().toProto()
 	decoder := protocol.GetCommandDecoder(protoType, data)
@@ -1026,7 +1028,6 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
 			return encodeErr
 		}
-		c.trace("-->", replyData)
 		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
@@ -1140,7 +1141,6 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
 			return encodeErr
 		}
-		c.trace("-->", replyData)
 		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
 		if disconnect != nil {
 			if c.node.logger.enabled(LogLevelDebug) {
