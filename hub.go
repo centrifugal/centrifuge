@@ -534,8 +534,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						reply := &protocol.Reply{
 							Result: pushBytes,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
-						jsonReplyV1, err = encoder.Encode(reply)
+						jsonReplyV1, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
 						}
@@ -549,9 +548,8 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 				}
 				if c.transport.Unidirectional() {
 					if jsonPushV2 == nil {
-						encoder := protocol.GetPushEncoder(protoType)
 						var err error
-						jsonPushV2, err = encoder.Encode(push)
+						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
 							return err
 						}
@@ -559,9 +557,8 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 					_ = c.writePublication(channel, pub, jsonPushV2, sp)
 				} else {
 					if jsonReplyV2 == nil {
-						encoder := protocol.GetReplyEncoder(protoType)
 						var err error
-						jsonReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
 							return err
 						}
@@ -589,8 +586,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						reply := &protocol.Reply{
 							Result: pushBytes,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
-						protobufReplyV1, err = encoder.Encode(reply)
+						protobufReplyV1, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
 						}
@@ -604,9 +600,8 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 							Channel: channel,
 							Pub:     pub,
 						}
-						encoder := protocol.GetPushEncoder(protoType)
 						var err error
-						protobufPushV2, err = encoder.Encode(push)
+						protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 						if err != nil {
 							return err
 						}
@@ -618,9 +613,8 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 							Channel: channel,
 							Pub:     pub,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
 						var err error
-						protobufReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
 							return err
 						}
@@ -677,8 +671,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						reply := &protocol.Reply{
 							Result: pushBytes,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
-						jsonReplyV1, err = encoder.Encode(reply)
+						jsonReplyV1, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
 						}
@@ -692,9 +685,8 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							Channel: channel,
 							Join:    join,
 						}
-						encoder := protocol.GetPushEncoder(protoType)
 						var err error
-						jsonPushV2, err = encoder.Encode(push)
+						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
 							return err
 						}
@@ -706,9 +698,8 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							Channel: channel,
 							Join:    join,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
 						var err error
-						jsonReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
 							return err
 						}
@@ -736,8 +727,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						reply := &protocol.Reply{
 							Result: pushBytes,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
-						protobufReplyV1, err = encoder.Encode(reply)
+						protobufReplyV1, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
 						}
@@ -751,9 +741,8 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							Channel: channel,
 							Join:    join,
 						}
-						encoder := protocol.GetPushEncoder(protoType)
 						var err error
-						protobufPushV2, err = encoder.Encode(push)
+						protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 						if err != nil {
 							return err
 						}
@@ -765,9 +754,8 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							Channel: channel,
 							Join:    join,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
 						var err error
-						protobufReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
 							return err
 						}
@@ -824,8 +812,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						reply := &protocol.Reply{
 							Result: pushBytes,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
-						jsonReplyV1, err = encoder.Encode(reply)
+						jsonReplyV1, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
 						}
@@ -839,9 +826,8 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							Channel: channel,
 							Leave:   leave,
 						}
-						encoder := protocol.GetPushEncoder(protoType)
 						var err error
-						jsonPushV2, err = encoder.Encode(push)
+						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
 							return err
 						}
@@ -853,9 +839,8 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							Channel: channel,
 							Leave:   leave,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
 						var err error
-						jsonReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
 							return err
 						}
@@ -883,8 +868,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						reply := &protocol.Reply{
 							Result: pushBytes,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
-						protobufReplyV1, err = encoder.Encode(reply)
+						protobufReplyV1, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
 						}
@@ -898,9 +882,8 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							Channel: channel,
 							Leave:   leave,
 						}
-						encoder := protocol.GetPushEncoder(protoType)
 						var err error
-						protobufPushV2, err = encoder.Encode(push)
+						protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 						if err != nil {
 							return err
 						}
@@ -912,9 +895,8 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							Channel: channel,
 							Leave:   leave,
 						}
-						encoder := protocol.GetReplyEncoder(protoType)
 						var err error
-						protobufReplyV2, err = encoder.Encode(&protocol.Reply{Push: push})
+						protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
 							return err
 						}
