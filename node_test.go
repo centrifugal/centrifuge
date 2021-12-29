@@ -577,10 +577,10 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "test"})
 	client, _ := newClient(newCtx, node, transport)
 	connectClient(b, client)
-	rwWrapper := testReplyWriterWrapper()
+	//rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, SubscribeReply{}, rwWrapper.rw, false)
+	}, SubscribeReply{}, &protocol.Command{}, false)
 	require.Nil(b, subCtx.disconnect)
 }
 

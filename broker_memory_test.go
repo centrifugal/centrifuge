@@ -436,7 +436,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 
 				rwWrapper := testReplyWriterWrapper()
 
-				disconnect := client.handleSubscribe(subscribeCmd, rwWrapper.rw)
+				disconnect := client.handleSubscribe(subscribeCmd, &protocol.Command{}, time.Now())
 				require.Nil(t, disconnect)
 				require.Nil(t, rwWrapper.replies[0].Error)
 				res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
