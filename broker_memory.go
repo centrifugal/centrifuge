@@ -268,12 +268,16 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 	}
 
 	if stream, ok := h.streams[ch]; ok {
-		index, _ = stream.Add(pub, opts.HistorySize)
 		epoch = stream.Epoch()
+		if opts.Epoch != "" && opts.Epoch != epoch {
+			stream.Reset(opts.Epoch)
+			epoch = opts.Epoch
+		}
+		index, _ = stream.Add(pub, opts.HistorySize)
 	} else {
-		stream := memstream.New()
-		index, _ = stream.Add(pub, opts.HistorySize)
+		stream := memstream.New(opts.Epoch)
 		epoch = stream.Epoch()
+		index, _ = stream.Add(pub, opts.HistorySize)
 		h.streams[ch] = stream
 	}
 	pub.Offset = index
@@ -282,8 +286,8 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 }
 
 // Lock must be held outside.
-func (h *historyHub) createStream(ch string) StreamPosition {
-	stream := memstream.New()
+func (h *historyHub) createStream(ch string, epoch string) StreamPosition {
+	stream := memstream.New(epoch)
 	h.streams[ch] = stream
 	streamPosition := StreamPosition{}
 	streamPosition.Offset = 0
@@ -315,7 +319,11 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 
 	stream, ok := h.streams[ch]
 	if !ok {
-		return nil, h.createStream(ch), nil
+		return nil, h.createStream(ch, filter.Epoch), nil
+	} else {
+		if filter.Epoch != "" && stream.Epoch() != filter.Epoch {
+			stream.Reset(filter.Epoch)
+		}
 	}
 
 	if filter.Since == nil {

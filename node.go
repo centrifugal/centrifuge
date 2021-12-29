@@ -1289,6 +1289,8 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 		builder.WriteString(strconv.Itoa(historyOpts.Limit))
 		builder.WriteString(",reverse:")
 		builder.WriteString(strconv.FormatBool(historyOpts.Reverse))
+		builder.WriteString(",epoch:")
+		builder.WriteString(historyOpts.Epoch)
 		key := builder.String()
 
 		result, err, _ := historyGroup.Do(key, func() (interface{}, error) {
@@ -1300,20 +1302,20 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 }
 
 // recoverHistory recovers publications since StreamPosition last seen by client.
-func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
+func (n *Node) recoverHistory(ch string, since StreamPosition, epoch string) (HistoryResult, error) {
 	incActionCount("history_recover")
 	limit := NoLimit
 	maxPublicationLimit := n.config.RecoveryMaxPublicationLimit
 	if maxPublicationLimit > 0 {
 		limit = maxPublicationLimit
 	}
-	return n.History(ch, WithLimit(limit), WithSince(&since))
+	return n.History(ch, WithLimit(limit), WithSince(&since), WithHistoryEpoch(epoch))
 }
 
 // streamTop returns current stream top StreamPosition for a channel.
-func (n *Node) streamTop(ch string) (StreamPosition, error) {
+func (n *Node) streamTop(ch string, epoch string) (StreamPosition, error) {
 	incActionCount("history_stream_top")
-	historyResult, err := n.History(ch)
+	historyResult, err := n.History(ch, WithHistoryEpoch(epoch))
 	if err != nil {
 		return StreamPosition{}, err
 	}

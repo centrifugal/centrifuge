@@ -173,13 +173,13 @@ type RedisShardConfig struct {
 	// ReadTimeout is a timeout on read operations. Note that at moment it should be greater
 	// than node ping publish interval in order to prevent timing out Pub/Sub connection's
 	// Receive call.
-	// By default DefaultRedisReadTimeout used.
+	// By default, DefaultRedisReadTimeout used.
 	ReadTimeout time.Duration
 	// WriteTimeout is a timeout on write operations.
-	// By default DefaultRedisWriteTimeout used.
+	// By default, DefaultRedisWriteTimeout used.
 	WriteTimeout time.Duration
 	// ConnectTimeout is a timeout on connect operation.
-	// By default DefaultRedisConnectTimeout used.
+	// By default, DefaultRedisConnectTimeout used.
 	ConnectTimeout time.Duration
 
 	network string

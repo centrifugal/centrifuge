@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 package centrifuge
@@ -496,6 +497,20 @@ func randString(n int) string {
 		b[i] = letterRunes[random.Intn(len(letterRunes))]
 	}
 	return string(b)
+}
+
+func TestRedisBrokerEpoch(t *testing.T) {
+	node := testNode(t)
+	b := newTestRedisBroker(t, node, true, false)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	testBrokerEpoch(t, b)
+}
+
+func TestRedisBrokerEpochCluster(t *testing.T) {
+	node := testNode(t)
+	b := newTestRedisBroker(t, node, true, true)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	testBrokerEpoch(t, b)
 }
 
 // TestRedisConsistentIndex exists to test consistent hashing algorithm we use.
@@ -1209,7 +1224,7 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 	})
 	require.NoError(t, err)
 
-	historyResult, err := node.recoverHistory(channel, StreamPosition{tt.SinceOffset, streamTop.Epoch})
+	historyResult, err := node.recoverHistory(channel, StreamPosition{tt.SinceOffset, streamTop.Epoch}, "")
 	require.NoError(t, err)
 	recoveredPubs, recovered := isRecovered(historyResult, tt.SinceOffset, streamTop.Epoch)
 	require.Equal(t, tt.NumRecovered, len(recoveredPubs))

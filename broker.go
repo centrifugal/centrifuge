@@ -55,6 +55,9 @@ type HistoryFilter struct {
 	Limit int
 	// Reverse direction.
 	Reverse bool
+	// Epoch if set instructs history request to set an epoch for a stream. On new
+	// epoch stream will be reset.
+	Epoch string
 }
 
 // StreamPosition contains fields to describe position in stream.
@@ -91,6 +94,9 @@ type PublishOptions struct {
 	ClientInfo *ClientInfo
 	// Meta is a custom meta information for the Publication.
 	Meta map[string]string
+	// Epoch if set instructs publish request to set an epoch for a stream. On new
+	// epoch stream will be reset.
+	Epoch string
 }
 
 // Broker is responsible for PUB/SUB mechanics.

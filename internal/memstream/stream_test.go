@@ -8,7 +8,7 @@ import (
 )
 
 func TestStream(t *testing.T) {
-	s := New()
+	s := New("")
 
 	const streamSize = 5
 
@@ -87,7 +87,7 @@ func TestStream(t *testing.T) {
 	require.Equal(t, streamTop, uint64(7))
 	require.Equal(t, 5, len(s.index))
 
-	s.Reset()
+	s.Reset("")
 	require.Equal(t, uint64(0), s.Top())
 	require.Equal(t, 0, len(s.index))
 	require.Equal(t, 0, s.list.Len())
@@ -96,7 +96,7 @@ func TestStream(t *testing.T) {
 }
 
 func TestStreamGetAll(t *testing.T) {
-	s := New()
+	s := New("")
 	items, streamTop, err := s.Get(0, false, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), streamTop)
@@ -109,7 +109,7 @@ func TestStreamGetAll(t *testing.T) {
 }
 
 func TestStreamClear(t *testing.T) {
-	s := New()
+	s := New("")
 	const streamSize = 5
 	_, err := s.Add([]byte("1"), streamSize)
 	require.NoError(t, err)
@@ -120,12 +120,12 @@ func TestStreamClear(t *testing.T) {
 }
 
 func TestStreamReset(t *testing.T) {
-	s := New()
+	s := New("")
 	epoch := s.Epoch()
 	const streamSize = 5
 	_, err := s.Add([]byte("1"), streamSize)
 	require.NoError(t, err)
-	s.Reset()
+	s.Reset("")
 	require.Zero(t, s.Top())
 	require.Equal(t, 0, len(s.index))
 	require.Equal(t, 0, s.list.Len())
@@ -133,7 +133,7 @@ func TestStreamReset(t *testing.T) {
 }
 
 func TestStreamOffset(t *testing.T) {
-	s := New()
+	s := New("")
 	const streamSize = 5
 	for i := 0; i < streamSize; i++ {
 		_, err := s.Add([]byte("elem"), streamSize)
@@ -151,7 +151,7 @@ func TestStreamOffset(t *testing.T) {
 }
 
 func TestStreamOffsetReverseNonExistingOffset(t *testing.T) {
-	s := New()
+	s := New("")
 	const streamSize = 2
 	for i := 0; i < 10; i++ {
 		_, err := s.Add([]byte("elem"), streamSize)
@@ -163,7 +163,7 @@ func TestStreamOffsetReverseNonExistingOffset(t *testing.T) {
 }
 
 func TestStreamNoLimitWithMiddle(t *testing.T) {
-	s := New()
+	s := New("")
 	const streamSize = 10
 	for i := 0; i < streamSize; i++ {
 		_, err := s.Add([]byte("elem"), streamSize)
