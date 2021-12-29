@@ -285,13 +285,13 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{Id: 1}, time.Now(), false, rwWrapper.rw)
+	result, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{Id: 1}, time.Now(), false, rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
 	client.triggerConnect()
 	client.scheduleOnConnectTimers()
-	return &protocol.ConnectResult{}
+	return result
 }
 
 func extractSubscribeResult(replies []*protocol.Reply, protoType ProtocolType) *protocol.SubscribeResult {
@@ -3071,9 +3071,11 @@ func TestClientTransportWriteError(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := defaultTestNode()
 			defer func() { _ = node.Shutdown(context.Background()) }()
-			transport := newTestTransport(func() {})
+			ctx, cancel := context.WithCancel(context.Background())
+			transport := newTestTransport(cancel)
 			transport.sink = make(chan []byte, 100)
 			transport.writeErr = tt.Error
+			transport.writeErrorContent = "test trigger message"
 
 			doneUnsubscribe := make(chan struct{})
 			doneDisconnect := make(chan struct{})
@@ -3091,21 +3093,22 @@ func TestClientTransportWriteError(t *testing.T) {
 				})
 			})
 
-			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 			client, _ := newClient(newCtx, node, transport)
 
 			connectClient(t, client)
 
 			rwWrapper := testReplyWriterWrapper()
-
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: "test",
 			}, SubscribeReply{}, &protocol.Command{}, false, rwWrapper.rw)
 			require.Nil(t, subCtx.disconnect)
+			require.Nil(t, subCtx.err)
 			require.Nil(t, rwWrapper.replies[0].Error)
 
-			_, err := node.Publish("test", []byte(`{"text": "test message"}`))
+			require.Equal(t, 1, node.Hub().NumSubscribers("test"))
+
+			_, err := node.Publish("test", []byte(`{"text": "test trigger message"}`))
 			require.NoError(t, err)
 
 			select {

@@ -14,16 +14,17 @@ import (
 )
 
 type testTransport struct {
-	mu              sync.Mutex
-	sink            chan []byte
-	closed          bool
-	closeCh         chan struct{}
-	disconnect      *Disconnect
-	protoType       ProtocolType
-	cancelFn        func()
-	unidirectional  bool
-	protocolVersion ProtocolVersion
-	writeErr        error
+	mu                sync.Mutex
+	sink              chan []byte
+	closed            bool
+	closeCh           chan struct{}
+	disconnect        *Disconnect
+	protoType         ProtocolType
+	cancelFn          func()
+	unidirectional    bool
+	protocolVersion   ProtocolVersion
+	writeErr          error
+	writeErrorContent string
 }
 
 func newTestTransport(cancelFn func()) *testTransport {
@@ -54,7 +55,9 @@ func (t *testTransport) setSink(sink chan []byte) {
 
 func (t *testTransport) Write(message []byte) error {
 	if t.writeErr != nil {
-		return t.writeErr
+		if t.writeErrorContent == "" || strings.Contains(string(message), t.writeErrorContent) {
+			return t.writeErr
+		}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -69,7 +72,11 @@ func (t *testTransport) Write(message []byte) error {
 
 func (t *testTransport) WriteMany(messages ...[]byte) error {
 	if t.writeErr != nil {
-		return t.writeErr
+		for _, message := range messages {
+			if t.writeErrorContent == "" || strings.Contains(string(message), t.writeErrorContent) {
+				return t.writeErr
+			}
+		}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()

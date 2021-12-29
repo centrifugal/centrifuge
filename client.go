@@ -2686,11 +2686,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 		// Need to flush data from writer so subscription response is
 		// sent before any subscription publication.
-		if rw != nil {
-			rw.write(rep)
-		} else {
-			c.writeEncodedCommandReply(protocol.Command_SUBSCRIBE, cmd, rep, rw)
-		}
+		c.writeEncodedCommandReply(protocol.Command_SUBSCRIBE, cmd, rep, rw)
 	}
 
 	var channelFlags uint8
