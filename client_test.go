@@ -829,9 +829,12 @@ func TestServerSideSubscriptions(t *testing.T) {
 	testCases := []struct {
 		Name           string
 		Unidirectional bool
+		ProtoVersion   ProtocolVersion
 	}{
-		{"bidi", false},
-		{"uni", true},
+		{"bidi-v1", false, ProtocolVersion1},
+		{"uni-v1", true, ProtocolVersion1},
+		{"bidi-v2", false, ProtocolVersion2},
+		{"uni-v2", true, ProtocolVersion2},
 	}
 
 	for _, tt := range testCases {
@@ -849,12 +852,17 @@ func TestServerSideSubscriptions(t *testing.T) {
 			})
 			transport := newTestTransport(func() {})
 			transport.setUnidirectional(tt.Unidirectional)
+			transport.setProtocolVersion(tt.ProtoVersion)
 			transport.sink = make(chan []byte, 100)
 			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 			client, _ := newClient(newCtx, node, transport)
 			if !tt.Unidirectional {
-				connectClient(t, client)
+				if tt.ProtoVersion == ProtocolVersion1 {
+					connectClient(t, client)
+				} else {
+					connectClientV2(t, client)
+				}
 			} else {
 				client.Connect(ConnectRequest{
 					Subs: map[string]SubscribeRequest{
@@ -3667,6 +3675,120 @@ func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
 		Subscribe: &protocol.SubscribeRequest{},
 	})
 	require.False(t, ok)
+}
+
+func getCommandParams(t *testing.T, p interface{}) []byte {
+	t.Helper()
+	data, err := json.Marshal(p)
+	require.NoError(t, err)
+	return data
+}
+
+func TestClient_HandleCommandV1(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	clientV1 := newTestClient(t, node, "42")
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{}, nil)
+		})
+	})
+
+	ok := clientV1.handleCommand(&protocol.Command{
+		Id:     1,
+		Method: protocol.Command_CONNECT,
+		Params: getCommandParams(t, &protocol.ConnectRequest{}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     2,
+		Method: protocol.Command_SUBSCRIBE,
+		Params: getCommandParams(t, &protocol.SubscribeRequest{
+			Channel: "test",
+		}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     3,
+		Method: protocol.Command_UNSUBSCRIBE,
+		Params: getCommandParams(t, &protocol.UnsubscribeRequest{
+			Channel: "test",
+		}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     4,
+		Method: protocol.Command_RPC,
+		Params: getCommandParams(t, &protocol.RPCRequest{}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     4,
+		Method: protocol.Command_PING,
+		Params: getCommandParams(t, &protocol.PingRequest{}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     5,
+		Method: protocol.Command_PUBLISH,
+		Params: getCommandParams(t, &protocol.PublishRequest{}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Method: protocol.Command_SEND,
+		Send:   &protocol.SendRequest{},
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     6,
+		Method: protocol.Command_PRESENCE,
+		Params: getCommandParams(t, &protocol.PresenceRequest{}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     7,
+		Method: protocol.Command_PRESENCE_STATS,
+		Params: getCommandParams(t, &protocol.PresenceStatsRequest{}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     8,
+		Method: protocol.Command_HISTORY,
+		Params: getCommandParams(t, &protocol.HistoryRequest{}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     9,
+		Method: protocol.Command_REFRESH,
+		Params: getCommandParams(t, &protocol.RefreshRequest{}),
+	})
+	require.True(t, ok)
+
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     10,
+		Method: protocol.Command_SUB_REFRESH,
+		Params: getCommandParams(t, &protocol.SubRefreshRequest{}),
+	})
+	require.True(t, ok)
+
+	// method not found results into an error, but not in a disconnect.
+	ok = clientV1.handleCommand(&protocol.Command{
+		Id:     11,
+		Method: 10001,
+		Params: nil,
+	})
+	require.True(t, ok)
 }
 
 func TestClient_HandleCommandV2(t *testing.T) {
