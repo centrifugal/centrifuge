@@ -51,18 +51,6 @@ type ConnectingHandler func(context.Context, ConnectEvent) (ConnectReply, error)
 // ConnectHandler called when client connected to server and ready to communicate.
 type ConnectHandler func(*Client)
 
-// TransportWriteEvent called just before sending data into the client connection. The
-// event is triggered from inside each client's message queue consumer – so it should
-// not directly affect Hub broadcast latencies.
-type TransportWriteEvent struct {
-	// Data is what we are going to send into the connection.
-	Data []byte
-}
-
-// TransportWriteHandler called just before writing data to the Client's Transport.
-// An application can skip sending data to a client returning false from a handler.
-type TransportWriteHandler func(TransportWriteEvent) bool
-
 // RefreshEvent contains fields related to refresh event.
 type RefreshEvent struct {
 	// ClientSideRefresh is true for refresh initiated by client-side refresh workflow.
@@ -377,3 +365,16 @@ type NodeInfoSendReply struct {
 // and allows modifying Node control frame sending. Currently, attaching an
 // arbitrary data to it. See NodeInfoSendReply.
 type NodeInfoSendHandler func() NodeInfoSendReply
+
+// TransportWriteEvent called just before sending data into the client connection. The
+// event is triggered from inside each client's message queue consumer – so it should
+// not directly affect Hub broadcast latencies.
+type TransportWriteEvent struct {
+	Data []byte
+}
+
+// TransportWriteHandler called just before writing data to Transport.
+// At this moment application can skip sending data to a client returning
+// false from a handler. The main purpose of this handler is not a message
+// filtering based on data content but rather tracing stuff.
+type TransportWriteHandler func(*Client, TransportWriteEvent) bool

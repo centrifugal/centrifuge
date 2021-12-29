@@ -577,10 +577,10 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "test"})
 	client, _ := newClient(newCtx, node, transport)
 	connectClient(b, client)
-	//rwWrapper := testReplyWriterWrapper()
+	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, SubscribeReply{}, &protocol.Command{}, false)
+	}, SubscribeReply{}, &protocol.Command{}, false, rwWrapper.rw)
 	require.Nil(b, subCtx.disconnect)
 }
 
@@ -1188,4 +1188,89 @@ func TestNode_OnNodeInfoSend(t *testing.T) {
 	result, err := n.Info()
 	require.NoError(t, err)
 	require.Equal(t, []byte("{}"), result.Nodes[0].Data)
+}
+
+func TestNode_OnTransportWrite(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnTransportWrite(func(_ *Client, event TransportWriteEvent) bool {
+		if string(event.Data) == "{\"result\":{\"type\":4,\"data\":{\"data\":{}}}}" {
+			close(done)
+		}
+		return true
+	})
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	sink := make(chan []byte, 1)
+	transport.setSink(sink)
+
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+
+	connectClient(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+	select {
+	case <-sink:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for transport write")
+	}
+}
+
+func TestNode_OnTransportWriteProtocolV2(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnTransportWrite(func(client *Client, event TransportWriteEvent) bool {
+		if string(event.Data) == "{\"push\":{\"message\":{\"data\":{}}}}" {
+			close(done)
+		}
+		return true
+	})
+
+	client := newTestClientV2(t, node, "42")
+	connectClientV2(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
+func TestNode_OnTransportWriteSkip(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnTransportWrite(func(_ *Client, event TransportWriteEvent) bool {
+		return false
+	})
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	sink := make(chan []byte, 1)
+	transport.setSink(sink)
+
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+
+	connectClient(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+
+	select {
+	case data := <-sink:
+		require.Fail(t, fmt.Sprintf("message written to transport – but it must not: %s", string(data)))
+	case <-time.After(time.Second):
+	}
 }

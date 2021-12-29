@@ -150,9 +150,10 @@ func TestHubUnsubscribe(t *testing.T) {
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	client := newTestSubscribedClient(t, n, "42", "test_channel")
-	transport := client.transport.(*testTransport)
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
 	transport.sink = make(chan []byte, 100)
+	newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 	// Unsubscribe not existed user.
 	err := n.hub.unsubscribe("1", "test_channel", "")
@@ -161,12 +162,19 @@ func TestHubUnsubscribe(t *testing.T) {
 	// Unsubscribe subscribed user.
 	err = n.hub.unsubscribe("42", "test_channel", "")
 	require.NoError(t, err)
-	select {
-	case data := <-transport.sink:
-		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}", string(data))
-	case <-time.After(2 * time.Second):
-		t.Fatal("no data in sink")
+
+LOOP:
+	for {
+		select {
+		case data := <-transport.sink:
+			if string(data) == "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}" {
+				break LOOP
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no data in sink")
+		}
 	}
+
 	require.Zero(t, n.hub.NumSubscribers("test_channel"))
 }
 
@@ -350,12 +358,13 @@ func TestHubBroadcastPublication(t *testing.T) {
 			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
-			client := newTestSubscribedClient(t, n, "42", "test_channel")
-			transport := client.transport.(*testTransport)
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
 			transport.sink = make(chan []byte, 100)
 			transport.setProtocolType(tc.protocolType)
 			transport.setProtocolVersion(tc.protocolVersion)
 			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 			// Broadcast to non-existing channel.
 			err := n.hub.BroadcastPublication(
@@ -372,11 +381,16 @@ func TestHubBroadcastPublication(t *testing.T) {
 				StreamPosition{},
 			)
 			require.NoError(t, err)
-			select {
-			case data := <-transport.sink:
-				require.True(t, strings.Contains(string(data), "broadcast_data"))
-			case <-time.After(2 * time.Second):
-				t.Fatal("no data in sink")
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
 			}
 		})
 	}
@@ -404,12 +418,13 @@ func TestHubBroadcastJoin(t *testing.T) {
 			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
-			client := newTestSubscribedClient(t, n, "42", "test_channel")
-			transport := client.transport.(*testTransport)
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
 			transport.sink = make(chan []byte, 100)
 			transport.setProtocolType(tc.protocolType)
 			transport.setProtocolVersion(tc.protocolVersion)
 			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
@@ -418,11 +433,16 @@ func TestHubBroadcastJoin(t *testing.T) {
 			// Broadcast to existed channel.
 			err = n.hub.broadcastJoin("test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
-			select {
-			case data := <-transport.sink:
-				require.True(t, strings.Contains(string(data), "broadcast_client"))
-			case <-time.After(2 * time.Second):
-				t.Fatal("no data in sink")
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_client") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
 			}
 		})
 	}
@@ -450,12 +470,13 @@ func TestHubBroadcastLeave(t *testing.T) {
 			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
-			client := newTestSubscribedClient(t, n, "42", "test_channel")
-			transport := client.transport.(*testTransport)
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
 			transport.sink = make(chan []byte, 100)
 			transport.setProtocolType(tc.protocolType)
 			transport.setProtocolVersion(tc.protocolVersion)
 			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
@@ -464,11 +485,16 @@ func TestHubBroadcastLeave(t *testing.T) {
 			// Broadcast to existed channel.
 			err = n.hub.broadcastLeave("test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
-			select {
-			case data := <-transport.sink:
-				require.Contains(t, string(data), "broadcast_client")
-			case <-time.After(2 * time.Second):
-				t.Fatal("no data in sink")
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_client") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
 			}
 		})
 	}

@@ -188,7 +188,6 @@ const (
 // shutdown unsubscribes users from all channels and disconnects them.
 func (h *connShard) shutdown(ctx context.Context, sem chan struct{}) error {
 	advice := DisconnectShutdown
-
 	h.mu.RLock()
 	// At this moment node won't accept new client connections, so we can
 	// safely copy existing clients and release lock.
