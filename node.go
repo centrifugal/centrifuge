@@ -77,9 +77,8 @@ type Node struct {
 	surveyMu       sync.RWMutex
 	surveyID       uint64
 
-	notificationHandler   NotificationHandler
-	transportWriteHandler TransportWriteHandler
-	nodeInfoSendHandler   NodeInfoSendHandler
+	notificationHandler NotificationHandler
+	nodeInfoSendHandler NodeInfoSendHandler
 }
 
 const (

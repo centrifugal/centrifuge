@@ -310,22 +310,6 @@ func extractSubscribeResult(replies []*protocol.Reply, protoType ProtocolType) *
 	return &res
 }
 
-func extractSubscribeResultV2(replies []*protocol.Reply, protoType ProtocolType) *protocol.SubscribeResult {
-	var res protocol.SubscribeResult
-	if protoType == ProtocolTypeJSON {
-		err := json.Unmarshal(replies[0].Result, &res)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		err := res.UnmarshalVT(replies[0].Result)
-		if err != nil {
-			panic(err)
-		}
-	}
-	return &res
-}
-
 func extractConnectReply(replies []*protocol.Reply, protoType ProtocolType) *protocol.ConnectResult {
 	var res protocol.ConnectResult
 	if protoType == ProtocolTypeJSON {
