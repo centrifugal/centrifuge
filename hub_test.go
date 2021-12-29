@@ -333,11 +333,16 @@ func TestHubBroadcastPublication(t *testing.T) {
 		name            string
 		protocolType    ProtocolType
 		protocolVersion ProtocolVersion
+		uni             bool
 	}{
 		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
 		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
 		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
 		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
 	for _, tc := range tcs {
@@ -350,6 +355,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 			transport.sink = make(chan []byte, 100)
 			transport.setProtocolType(tc.protocolType)
 			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
 
 			// Broadcast to non-existing channel.
 			err := n.hub.BroadcastPublication(
@@ -381,11 +387,16 @@ func TestHubBroadcastJoin(t *testing.T) {
 		name            string
 		protocolType    ProtocolType
 		protocolVersion ProtocolVersion
+		uni             bool
 	}{
 		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
 		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
 		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
 		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
 	for _, tc := range tcs {
@@ -398,6 +409,7 @@ func TestHubBroadcastJoin(t *testing.T) {
 			transport.sink = make(chan []byte, 100)
 			transport.setProtocolType(tc.protocolType)
 			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
@@ -421,11 +433,16 @@ func TestHubBroadcastLeave(t *testing.T) {
 		name            string
 		protocolType    ProtocolType
 		protocolVersion ProtocolVersion
+		uni             bool
 	}{
 		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
 		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
 		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
 		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
 	for _, tc := range tcs {
@@ -438,6 +455,7 @@ func TestHubBroadcastLeave(t *testing.T) {
 			transport.sink = make(chan []byte, 100)
 			transport.setProtocolType(tc.protocolType)
 			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
