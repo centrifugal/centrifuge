@@ -61,7 +61,7 @@ type SubscribeOptions struct {
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
 	RecoverSince *StreamPosition
-	// Epoch to set for a stream (only works for positioned streams at the moment).
+	// Epoch to set for a stream (only works for positioned streams).
 	Epoch string
 	// clientID to subscribe.
 	clientID string

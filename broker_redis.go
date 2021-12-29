@@ -187,7 +187,7 @@ return {offset, epoch}
 	// ARGV[3] - stream lifetime
 	// ARGV[4] - channel to publish message to if needed
 	// ARGV[5] - history meta key expiration time
-	// ARGV[6] - optional stream epoch, TODO: should we "reset" stream on new epoch?
+	// ARGV[6] - optional stream epoch.
 	addHistoryStreamSource = `
 redis.replicate_commands()
 local epoch
@@ -203,10 +203,10 @@ if epoch == false or epoch == nil then
   redis.call("hset", KEYS[2], "e", epoch)
 else
   if ARGV[6] ~= "" and epoch ~= ARGV[6] then
-	epoch = ARGV[6]
-	redis.call("hset", KEYS[2], "e", epoch)
+    epoch = ARGV[6]
+    redis.call("hset", KEYS[2], "e", epoch)
     redis.call("hset", KEYS[2], "s", "0")
-	redis.call("del", KEYS[1])
+    redis.call("del", KEYS[1])
   end
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
@@ -257,7 +257,7 @@ return {offset, epoch, pubs}
 	// ARGV[3] - limit
 	// ARGV[4] - reverse
 	// ARGV[5] - stream meta hash key expiration time
-	// ARGV[6] - optional stream epoch, TODO: should we "reset" stream on new epoch?
+	// ARGV[6] - optional stream epoch.
 	historyStreamSource = `
 redis.replicate_commands()
 local epoch
@@ -273,10 +273,10 @@ if epoch == false or epoch == nil then
   redis.call("hset", KEYS[2], "e", epoch)
 else
   if ARGV[6] ~= "" and epoch ~= ARGV[6] then
-	epoch = ARGV[6]
-	redis.call("hset", KEYS[2], "e", epoch)
-	redis.call("hset", KEYS[2], "s", "0")
-	redis.call("del", KEYS[1])
+    epoch = ARGV[6]
+    redis.call("hset", KEYS[2], "e", epoch)
+    redis.call("hset", KEYS[2], "s", "0")
+    redis.call("del", KEYS[1])
   end
 end
 local offset = redis.call("hget", KEYS[2], "s")

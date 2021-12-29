@@ -2659,7 +2659,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 				incRecover(res.Recovered)
 			}
 		} else {
-			streamTop, err := c.node.streamTop(channel, cmd.Epoch)
+			streamTop, err := c.node.streamTop(channel, reply.Options.Epoch)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting recovery state for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				c.pubSubSync.StopBuffering(channel)
@@ -2685,7 +2685,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 			return ctx
 		}
 	} else if reply.Options.Position {
-		streamTop, err := c.node.streamTop(channel, cmd.Epoch)
+		streamTop, err := c.node.streamTop(channel, reply.Options.Epoch)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error getting stream top for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
