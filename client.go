@@ -288,14 +288,14 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		WriteManyFn: func(items ...queue.Item) error {
 			messages := make([][]byte, 0, len(items))
 			for i := 0; i < len(items); i++ {
-				if client.node.LogEnabled(LogLevelTrace) {
-					client.trace("-->", items[i].Data)
-				}
 				if client.eventHub.transportWriteHandler != nil {
 					pass := client.eventHub.transportWriteHandler(TransportWriteEvent(items[i]))
 					if !pass {
 						continue
 					}
+				}
+				if client.node.LogEnabled(LogLevelTrace) {
+					client.trace("-->", items[i].Data)
 				}
 				messages = append(messages, items[i].Data)
 			}
@@ -308,7 +308,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 				}
 				return err
 			}
-			addTransportMessagesSent(t.Name(), float64(len(items)))
+			addTransportMessagesSent(t.Name(), float64(len(messages)))
 			return nil
 		},
 	}
@@ -387,9 +387,9 @@ func hasFlag(flags, flag uint64) bool {
 }
 
 func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) error {
-	write := func(rep *protocol.Reply) error {
+	write := func(rep *protocol.Reply) {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagConnect) {
-			return nil
+			return
 		}
 		var data []byte
 		if c.transport.ProtocolVersion() == ProtocolVersion1 {
@@ -399,7 +399,8 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 			var err error
 			data, err = encoder.Encode(rep.Push)
 			if err != nil {
-				return err
+				c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect push", map[string]interface{}{"push": fmt.Sprintf("%v", rep.Push), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+				return
 			}
 		}
 		disconnect := c.messageWriter.enqueue(queue.Item{Data: data})
@@ -409,7 +410,6 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 			}
 			go func() { _ = c.close(disconnect) }()
 		}
-		return disconnect
 	}
 
 	rw := &replyWriter{write, func() {}}
@@ -986,7 +986,7 @@ func (c *Client) handleCommand(cmd *protocol.Command) bool {
 }
 
 type replyWriter struct {
-	write func(*protocol.Reply) error
+	write func(*protocol.Reply)
 	done  func()
 }
 
@@ -1013,37 +1013,12 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 		return DisconnectBadRequest
 	}
 
-	protoType := c.transport.Protocol().toProto()
-	replyEncoder := protocol.GetReplyEncoder(protoType)
-
 	var method protocol.Command_MethodType
-	var encodeErr error
 
 	started := time.Now()
 
-	write := func(rep *protocol.Reply) error {
-		rep.Id = cmd.Id
-		if rep.Error != nil {
-			if c.node.LogEnabled(LogLevelInfo) {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
-			}
-			incReplyError(cmd.Method, rep.Error.Code)
-		}
-
-		var replyData []byte
-		replyData, encodeErr = replyEncoder.Encode(rep)
-		if encodeErr != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
-			return encodeErr
-		}
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
-		if disconnect != nil {
-			if c.node.logger.enabled(LogLevelDebug) {
-				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-			}
-			go func() { _ = c.close(disconnect) }()
-		}
-		return disconnect
+	write := func(rep *protocol.Reply) {
+		c.writeEncodedCommandReply(method, cmd, rep)
 	}
 
 	// done should be called after command fully processed.
@@ -1101,9 +1076,6 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 		method = protocol.Command_PING
 		handleErr = c.handlePing(rw)
 	}
-	if encodeErr != nil {
-		return DisconnectServerError
-	}
 	if handleErr != nil {
 		defer rw.done()
 		switch t := handleErr.(type) {
@@ -1116,6 +1088,33 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 	return nil
 }
 
+func (c *Client) writeEncodedCommandReply(method protocol.Command_MethodType, cmd *protocol.Command, rep *protocol.Reply) {
+	rep.Id = cmd.Id
+	if rep.Error != nil {
+		if c.node.LogEnabled(LogLevelInfo) {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
+		}
+		incReplyError(method, rep.Error.Code)
+	}
+
+	protoType := c.transport.Protocol().toProto()
+	replyEncoder := protocol.GetReplyEncoder(protoType)
+
+	var replyData []byte
+	replyData, err := replyEncoder.Encode(rep)
+	if err != nil {
+		c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+		return
+	}
+	disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
+	if disconnect != nil {
+		if c.node.logger.enabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+		}
+		go func() { _ = c.close(disconnect) }()
+	}
+}
+
 func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 	isConnect := cmd.Method == protocol.Command_CONNECT
 	if !c.authenticated && !isConnect {
@@ -1125,38 +1124,10 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 	}
 
 	method := cmd.Method
-	params := cmd.Params
-
-	protoType := c.transport.Protocol().toProto()
-	replyEncoder := protocol.GetReplyEncoder(protoType)
-
-	var encodeErr error
-
 	started := time.Now()
 
-	write := func(rep *protocol.Reply) error {
-		rep.Id = cmd.Id
-		if rep.Error != nil {
-			if c.node.LogEnabled(LogLevelInfo) {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
-			}
-			incReplyError(cmd.Method, rep.Error.Code)
-		}
-
-		var replyData []byte
-		replyData, encodeErr = replyEncoder.Encode(rep)
-		if encodeErr != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": encodeErr.Error()}))
-			return encodeErr
-		}
-		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
-		if disconnect != nil {
-			if c.node.logger.enabled(LogLevelDebug) {
-				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-			}
-			go func() { _ = c.close(disconnect) }()
-		}
-		return disconnect
+	write := func(rep *protocol.Reply) {
+		c.writeEncodedCommandReply(method, cmd, rep)
 	}
 
 	// done should be called after command fully processed.
@@ -1173,6 +1144,8 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 	rw := &replyWriter{write, done}
 
 	var handleErr error
+
+	params := cmd.Params
 
 	switch method {
 	case protocol.Command_CONNECT:
@@ -1261,9 +1234,6 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 		}
 	default:
 		handleErr = ErrorMethodNotFound
-	}
-	if encodeErr != nil {
-		return DisconnectServerError
 	}
 	if handleErr != nil {
 		defer rw.done()
@@ -1546,7 +1516,7 @@ func (c *Client) handleRefresh(cmd *protocol.RefreshRequest, rw *replyWriter) er
 			return
 		}
 
-		_ = writeReply(rw, rep)
+		writeReply(rw, rep)
 	}
 
 	c.eventHub.refreshHandler(event, cb)
@@ -1693,7 +1663,7 @@ func (c *Client) handleSubRefresh(cmd *protocol.SubRefreshRequest, rw *replyWrit
 			return
 		}
 
-		_ = writeReply(rw, rep)
+		writeReply(rw, rep)
 	}
 
 	c.eventHub.subRefreshHandler(event, cb)
@@ -1730,7 +1700,7 @@ func (c *Client) handleUnsubscribe(cmd *protocol.UnsubscribeRequest, rw *replyWr
 		c.node.logger.log(newLogEntry(LogLevelError, "error encoding unsubscribe", map[string]interface{}{"error": err.Error()}))
 		return DisconnectServerError
 	}
-	_ = writeReply(rw, rep)
+	writeReply(rw, rep)
 	rw.done()
 	return nil
 }
@@ -1797,7 +1767,7 @@ func (c *Client) handlePublish(cmd *protocol.PublishRequest, rw *replyWriter) er
 			c.logWriteInternalErrorFlush(rw, err, "error encoding publish")
 			return
 		}
-		_ = writeReply(rw, rep)
+		writeReply(rw, rep)
 	}
 
 	c.eventHub.publishHandler(event, cb)
@@ -1864,7 +1834,7 @@ func (c *Client) handlePresence(cmd *protocol.PresenceRequest, rw *replyWriter) 
 			c.logWriteInternalErrorFlush(rw, err, "error encoding presence")
 			return
 		}
-		_ = writeReply(rw, rep)
+		writeReply(rw, rep)
 	}
 
 	c.eventHub.presenceHandler(event, cb)
@@ -1927,7 +1897,7 @@ func (c *Client) handlePresenceStats(cmd *protocol.PresenceStatsRequest, rw *rep
 			c.logWriteInternalErrorFlush(rw, err, "error encoding presence stats")
 			return
 		}
-		_ = writeReply(rw, rep)
+		writeReply(rw, rep)
 	}
 
 	c.eventHub.presenceStatsHandler(event, cb)
@@ -2020,7 +1990,7 @@ func (c *Client) handleHistory(cmd *protocol.HistoryRequest, rw *replyWriter) er
 			c.logWriteInternalErrorFlush(rw, err, "error encoding history")
 			return
 		}
-		_ = writeReply(rw, rep)
+		writeReply(rw, rep)
 	}
 
 	c.eventHub.historyHandler(event, cb)
@@ -2043,13 +2013,13 @@ func (c *Client) getHistoryCommandReply(res *protocol.HistoryResult) (*protocol.
 }
 
 func (c *Client) handlePing(rw *replyWriter) error {
-	_ = writeReply(rw, &protocol.Reply{})
+	writeReply(rw, &protocol.Reply{})
 	defer rw.done()
 	return nil
 }
 
 func (c *Client) writeError(rw *replyWriter, error *Error) {
-	_ = rw.write(&protocol.Reply{Error: error.toProto()})
+	rw.write(&protocol.Reply{Error: error.toProto()})
 }
 
 func (c *Client) writeDisconnectOrErrorFlush(rw *replyWriter, replyError error) {
@@ -2062,8 +2032,8 @@ func (c *Client) writeDisconnectOrErrorFlush(rw *replyWriter, replyError error) 
 	}
 }
 
-func writeReply(rw *replyWriter, reply *protocol.Reply) error {
-	return rw.write(reply)
+func writeReply(rw *replyWriter, reply *protocol.Reply) {
+	rw.write(reply)
 }
 
 func (c *Client) handleRPC(cmd *protocol.RPCRequest, rw *replyWriter) error {
@@ -2090,7 +2060,7 @@ func (c *Client) handleRPC(cmd *protocol.RPCRequest, rw *replyWriter) error {
 			c.logWriteInternalErrorFlush(rw, err, "error encoding rpc")
 			return
 		}
-		_ = writeReply(rw, rep)
+		writeReply(rw, rep)
 	}
 
 	c.eventHub.rpcHandler(event, cb)
@@ -2346,7 +2316,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
 			return nil, DisconnectServerError
 		}
-		_ = writeReply(rw, reply)
+		writeReply(rw, reply)
 		defer rw.done()
 	} else {
 		reply, err := c.getConnectCommandReply(res)
@@ -2355,7 +2325,7 @@ func (c *Client) connectCmd(cmd *protocol.ConnectRequest, rw *replyWriter) (*pro
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
 			return nil, DisconnectServerError
 		}
-		_ = writeReply(rw, reply)
+		writeReply(rw, reply)
 		defer rw.done()
 	}
 
@@ -2737,7 +2707,7 @@ func (c *Client) subscribeCmd(cmd *protocol.SubscribeRequest, reply SubscribeRep
 
 		// Need to flush data from writer so subscription response is
 		// sent before any subscription publication.
-		_ = writeReply(rw, rep)
+		writeReply(rw, rep)
 	}
 
 	var channelFlags uint8

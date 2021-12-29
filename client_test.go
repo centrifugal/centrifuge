@@ -1261,9 +1261,8 @@ func testReplyWriterWrapper() *sliceReplyWriter {
 		replies: replies,
 	}
 	wrapper.rw = &replyWriter{
-		write: func(rep *protocol.Reply) error {
+		write: func(rep *protocol.Reply) {
 			wrapper.replies = append(wrapper.replies, rep)
-			return nil
 		},
 		done: func() {},
 	}
