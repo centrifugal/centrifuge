@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -618,8 +619,15 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 				if err != nil {
 					panic(err)
 				}
-				for j := 0; j < bm.numSubscribers; j++ {
-					<-sink
+				j := 0
+				for {
+					data := <-sink
+					if bytes.Contains(data, []byte("input")) {
+						j++
+					}
+					if j == bm.numSubscribers {
+						break
+					}
 				}
 			}
 			b.StopTimer()
