@@ -2295,7 +2295,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	} else {
 		reply, err := c.getConnectCommandReply(res)
 		if err != nil {
-			//c.unlockServerSideSubscriptions(subCtxMap)
+			c.unlockServerSideSubscriptions(subCtxMap)
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
 			return nil, DisconnectServerError
 		}
