@@ -1439,8 +1439,9 @@ func (n *Node) OnNodeInfoSend(handler NodeInfoSendHandler) {
 // All eventHub methods are not goroutine-safe and supposed
 // to be called once before Node Run called.
 type eventHub struct {
-	connectingHandler ConnectingHandler
-	connectHandler    ConnectHandler
+	connectingHandler     ConnectingHandler
+	connectHandler        ConnectHandler
+	transportWriteHandler TransportWriteHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1456,6 +1457,11 @@ func (n *Node) OnConnecting(handler ConnectingHandler) {
 // application can start communicating with client.
 func (n *Node) OnConnect(handler ConnectHandler) {
 	n.clientEvents.connectHandler = handler
+}
+
+// OnTransportWrite allows setting TransportWriteHandler. This should be done before Node.Run called.
+func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
+	n.clientEvents.transportWriteHandler = handler
 }
 
 type brokerEventHandler struct {

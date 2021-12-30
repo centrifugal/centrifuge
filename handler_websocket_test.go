@@ -308,52 +308,36 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 }
 
 func newRealConnJSON(b testing.TB, channel string, url string) *websocket.Conn {
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
-	require.NoError(b, err)
-	defer func() { _ = resp.Body.Close() }()
-
-	connectRequest := &protocol.ConnectRequest{}
-	params, _ := json.Marshal(connectRequest)
-	cmd := &protocol.Command{
-		Id:     1,
-		Method: protocol.Command_CONNECT,
-		Params: params,
-	}
-	cmdBytes, _ := json.Marshal(cmd)
-
-	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
-	_, _, err = conn.ReadMessage()
-	require.NoError(b, err)
+	conn := newRealConnJSONConnect(b, url)
 
 	subscribeRequest := &protocol.SubscribeRequest{
 		Channel: channel,
 	}
-	params, _ = json.Marshal(subscribeRequest)
-	cmd = &protocol.Command{
+	params, _ := json.Marshal(subscribeRequest)
+	cmd := &protocol.Command{
 		Id:     2,
 		Method: protocol.Command_SUBSCRIBE,
 		Params: params,
 	}
-	cmdBytes, _ = json.Marshal(cmd)
+	cmdBytes, _ := json.Marshal(cmd)
 	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
-	_, _, err = conn.ReadMessage()
+	_, _, err := conn.ReadMessage()
 	require.NoError(b, err)
 	return conn
 }
 
 func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Conn {
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
-	require.NoError(b, err)
-	defer func() { _ = resp.Body.Close() }()
+	conn := newRealConnProtobufConnect(b, url)
 
-	connectRequest := &protocol.ConnectRequest{}
-	params, _ := connectRequest.MarshalVT()
+	subscribeRequest := &protocol.SubscribeRequest{
+		Channel: channel,
+	}
+	params, _ := subscribeRequest.MarshalVT()
 	cmd := &protocol.Command{
-		Id:     1,
-		Method: protocol.Command_CONNECT,
+		Id:     2,
+		Method: protocol.Command_SUBSCRIBE,
 		Params: params,
 	}
-
 	cmdBytes, _ := cmd.MarshalVT()
 
 	var buf bytes.Buffer
@@ -363,28 +347,7 @@ func newRealConnProtobuf(b testing.TB, channel string, url string) *websocket.Co
 	buf.Write(cmdBytes)
 
 	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
-	_, _, err = conn.ReadMessage()
-	require.NoError(b, err)
-
-	subscribeRequest := &protocol.SubscribeRequest{
-		Channel: channel,
-	}
-	params, _ = subscribeRequest.MarshalVT()
-	cmd = &protocol.Command{
-		Id:     2,
-		Method: protocol.Command_SUBSCRIBE,
-		Params: params,
-	}
-	cmdBytes, _ = cmd.MarshalVT()
-
-	buf.Reset()
-	bs = make([]byte, 8)
-	n = binary.PutUvarint(bs, uint64(len(cmdBytes)))
-	buf.Write(bs[:n])
-	buf.Write(cmdBytes)
-
-	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
-	_, _, err = conn.ReadMessage()
+	_, _, err := conn.ReadMessage()
 	require.NoError(b, err)
 	return conn
 }
@@ -639,6 +602,218 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 	}
 }
 
+func newRealConnJSONConnect(b testing.TB, url string) *websocket.Conn {
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(b, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	connectRequest := &protocol.ConnectRequest{}
+	params, _ := json.Marshal(connectRequest)
+	cmd := &protocol.Command{
+		Id:     1,
+		Method: protocol.Command_CONNECT,
+		Params: params,
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func newRealConnProtobufConnect(b testing.TB, url string) *websocket.Conn {
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
+	require.NoError(b, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	connectRequest := &protocol.ConnectRequest{}
+	params, _ := connectRequest.MarshalVT()
+	cmd := &protocol.Command{
+		Id:     1,
+		Method: protocol.Command_CONNECT,
+		Params: params,
+	}
+
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	n := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:n])
+	buf.Write(cmdBytes)
+
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func BenchmarkWebsocketHandlerCommandReply(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
+			callback(RPCReply{
+				Data: []byte("{}"),
+			}, nil)
+		})
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	payload := []byte(`{"input": "test"}`)
+
+	benchmarks := []struct {
+		name    string
+		getConn func(b testing.TB, url string) *websocket.Conn
+	}{
+		{"JSON", newRealConnJSONConnect},
+		{"Protobuf", newRealConnProtobufConnect},
+	}
+
+	rpcRequest := &protocol.RPCRequest{
+		Data: payload,
+	}
+
+	params, _ := json.Marshal(rpcRequest)
+	cmd := &protocol.Command{
+		Id:     1,
+		Method: protocol.Command_RPC,
+		Params: params,
+	}
+	jsonCommand, _ := json.Marshal(cmd)
+
+	params, _ = rpcRequest.MarshalVT()
+	cmd = &protocol.Command{
+		Id:     1,
+		Method: protocol.Command_RPC,
+		Params: params,
+	}
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
+	buf.Write(cmdBytes)
+
+	protobufCommand := buf.Bytes()
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			conn := bm.getConn(b, url)
+			defer func() { _ = conn.Close() }()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var err error
+				if bm.name == "JSON" {
+					err = conn.WriteMessage(websocket.TextMessage, jsonCommand)
+				} else {
+					err = conn.WriteMessage(websocket.BinaryMessage, protobufCommand)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				_, _, err = conn.ReadMessage()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func newRealConnJSONConnectV2(b testing.TB, url string) *websocket.Conn {
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(b, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	cmd := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func newRealConnProtobufConnectV2(b testing.TB, url string) *websocket.Conn {
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
+	require.NoError(b, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	cmd := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	n := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:n])
+	buf.Write(cmdBytes)
+
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func newRealConnJSONV2(b testing.TB, channel string, url string) *websocket.Conn {
+	conn := newRealConnJSONConnectV2(b, url)
+
+	cmd := &protocol.Command{
+		Id: 2,
+		Subscribe: &protocol.SubscribeRequest{
+			Channel: channel,
+		},
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_, _, err := conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func newRealConnProtobufV2(b testing.TB, channel string, url string) *websocket.Conn {
+	conn := newRealConnProtobufConnectV2(b, url)
+
+	cmd := &protocol.Command{
+		Id: 2,
+		Subscribe: &protocol.SubscribeRequest{
+			Channel: channel,
+		},
+	}
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
+	buf.Write(cmdBytes)
+
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_, _, err := conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
 func BenchmarkWebsocketHandlerV2(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -683,72 +858,80 @@ func BenchmarkWebsocketHandlerV2(b *testing.B) {
 	}
 }
 
-func newRealConnJSONV2(b testing.TB, channel string, url string) *websocket.Conn {
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
-	require.NoError(b, err)
-	defer func() { _ = resp.Body.Close() }()
+func BenchmarkWebsocketHandlerCommandReplyV2(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
+			callback(RPCReply{
+				Data: []byte("{}"),
+			}, nil)
+		})
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion2,
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	payload := []byte(`{"input": "test"}`)
+
+	benchmarks := []struct {
+		name    string
+		getConn func(b testing.TB, url string) *websocket.Conn
+	}{
+		{"JSON", newRealConnJSONConnectV2},
+		{"Protobuf", newRealConnProtobufConnectV2},
+	}
+
+	rpcRequest := &protocol.RPCRequest{
+		Data: payload,
+	}
 
 	cmd := &protocol.Command{
-		Id:      1,
-		Connect: &protocol.ConnectRequest{},
+		Id:  1,
+		Rpc: rpcRequest,
 	}
-	cmdBytes, _ := json.Marshal(cmd)
-
-	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
-	_, _, err = conn.ReadMessage()
-	require.NoError(b, err)
-
-	cmd = &protocol.Command{
-		Id: 2,
-		Subscribe: &protocol.SubscribeRequest{
-			Channel: channel,
-		},
-	}
-	cmdBytes, _ = json.Marshal(cmd)
-	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
-	_, _, err = conn.ReadMessage()
-	require.NoError(b, err)
-	return conn
-}
-
-func newRealConnProtobufV2(b testing.TB, channel string, url string) *websocket.Conn {
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
-	require.NoError(b, err)
-	defer func() { _ = resp.Body.Close() }()
-
-	cmd := &protocol.Command{
-		Id:      1,
-		Connect: &protocol.ConnectRequest{},
-	}
+	jsonCommand, _ := json.Marshal(cmd)
 
 	cmdBytes, _ := cmd.MarshalVT()
 
 	var buf bytes.Buffer
 	bs := make([]byte, 8)
-	n := binary.PutUvarint(bs, uint64(len(cmdBytes)))
-	buf.Write(bs[:n])
+	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
 	buf.Write(cmdBytes)
 
-	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
-	_, _, err = conn.ReadMessage()
-	require.NoError(b, err)
+	protobufCommand := buf.Bytes()
 
-	cmd = &protocol.Command{
-		Id: 2,
-		Subscribe: &protocol.SubscribeRequest{
-			Channel: channel,
-		},
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			conn := bm.getConn(b, url)
+			defer func() { _ = conn.Close() }()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var err error
+				if bm.name == "JSON" {
+					err = conn.WriteMessage(websocket.TextMessage, jsonCommand)
+				} else {
+					err = conn.WriteMessage(websocket.BinaryMessage, protobufCommand)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				_, _, err = conn.ReadMessage()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
-	cmdBytes, _ = cmd.MarshalVT()
-
-	buf.Reset()
-	bs = make([]byte, 8)
-	n = binary.PutUvarint(bs, uint64(len(cmdBytes)))
-	buf.Write(bs[:n])
-	buf.Write(cmdBytes)
-
-	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
-	_, _, err = conn.ReadMessage()
-	require.NoError(b, err)
-	return conn
 }
