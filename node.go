@@ -1247,6 +1247,7 @@ func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 		Limit:   opts.Limit,
 		Since:   opts.Since,
 		Reverse: opts.Reverse,
+		Epoch:   opts.Epoch,
 	})
 	if err != nil {
 		return HistoryResult{}, err
