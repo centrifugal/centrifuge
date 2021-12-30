@@ -370,10 +370,13 @@ type NodeInfoSendHandler func() NodeInfoSendReply
 // event is triggered from inside each client's message queue consumer – so it should
 // not directly affect Hub broadcast latencies.
 type TransportWriteEvent struct {
+	// Data represents single Centrifuge protocol message which is going to be sent
+	// into the connection. For unidirectional transports this is an encoded protocol.Push
+	// type, for bidirectional transports this is an encoded protocol.Reply type.
 	Data []byte
 }
 
-// TransportWriteHandler called just before writing data to Transport.
+// TransportWriteHandler called just before writing data to the Transport.
 // At this moment application can skip sending data to a client returning
 // false from a handler. The main purpose of this handler is not a message
 // filtering based on data content but rather tracing stuff.
