@@ -541,12 +541,12 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 					_ = c.writePublication(channel, pub, jsonReplyV1, sp)
 				}
 			} else {
-				push := &protocol.Push{
-					Channel: channel,
-					Pub:     pub,
-				}
 				if c.transport.Unidirectional() {
 					if jsonPushV2 == nil {
+						push := &protocol.Push{
+							Channel: channel,
+							Pub:     pub,
+						}
 						var err error
 						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
@@ -556,6 +556,10 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 					_ = c.writePublication(channel, pub, jsonPushV2, sp)
 				} else {
 					if jsonReplyV2 == nil {
+						push := &protocol.Push{
+							Channel: channel,
+							Pub:     pub,
+						}
 						var err error
 						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {

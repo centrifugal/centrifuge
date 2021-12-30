@@ -528,7 +528,7 @@ var testPayload = map[string]interface{}{
 	"guid":       "478a00f4-19b1-4567-8097-013b8cc846b8",
 	"isActive":   false,
 	"balance":    "$2,199.02",
-	"picture":    "http://placehold.it/32x32",
+	"picture":    "https://placehold.it/32x32",
 	"age":        25,
 	"eyeColor":   "blue",
 	"name":       "Swanson Walker",
@@ -570,14 +570,19 @@ func BenchmarkNodePublishWithNoopBroker(b *testing.B) {
 	_ = node.Shutdown(context.Background())
 }
 
-func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
+func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte, protoVersion ProtocolVersion) {
 	ctx, cancelFn := context.WithCancel(context.Background())
 	transport := newTestTransport(cancelFn)
 	transport.setProtocolType(protoType)
+	transport.setProtocolVersion(protoVersion)
 	transport.setSink(sink)
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "test"})
 	client, _ := newClient(newCtx, node, transport)
-	connectClient(b, client)
+	if protoVersion == ProtocolVersion1 {
+		connectClient(b, client)
+	} else {
+		connectClientV2(b, client)
+	}
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
@@ -585,24 +590,29 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	require.Nil(b, subCtx.disconnect)
 }
 
-func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte) {
-	newFakeConn(b, node, channel, ProtocolTypeJSON, sink)
+func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte, protoVersion ProtocolVersion) {
+	newFakeConn(b, node, channel, ProtocolTypeJSON, sink, protoVersion)
 }
 
-func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []byte) {
-	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink)
+func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []byte, protoVersion ProtocolVersion) {
+	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink, protoVersion)
 }
 
 func BenchmarkBroadcastMemory(b *testing.B) {
 	benchmarks := []struct {
 		name           string
-		getFakeConn    func(b testing.TB, n *Node, channel string, sink chan []byte)
+		getFakeConn    func(b testing.TB, n *Node, channel string, sink chan []byte, protoVersion ProtocolVersion)
 		numSubscribers int
+		protoVersion   ProtocolVersion
 	}{
-		{"JSON", newFakeConnJSON, 1},
-		{"Protobuf", newFakeConnProtobuf, 1},
-		{"JSON", newFakeConnJSON, 10000},
-		{"Protobuf", newFakeConnProtobuf, 10000},
+		{"JSON-V1", newFakeConnJSON, 1, ProtocolVersion1},
+		{"Protobuf-V1", newFakeConnProtobuf, 1, ProtocolVersion1},
+		{"JSON-V1", newFakeConnJSON, 10000, ProtocolVersion1},
+		{"Protobuf-V1", newFakeConnProtobuf, 10000, ProtocolVersion1},
+		{"JSON-V2", newFakeConnJSON, 1, ProtocolVersion1},
+		{"Protobuf-V2", newFakeConnProtobuf, 1, ProtocolVersion1},
+		{"JSON-V2", newFakeConnJSON, 10000, ProtocolVersion1},
+		{"Protobuf-V2", newFakeConnProtobuf, 10000, ProtocolVersion1},
 	}
 
 	for _, bm := range benchmarks {
@@ -611,7 +621,7 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 			payload := []byte(`{"input": "test"}`)
 			sink := make(chan []byte, bm.numSubscribers)
 			for i := 0; i < bm.numSubscribers; i++ {
-				bm.getFakeConn(b, n, "test", sink)
+				bm.getFakeConn(b, n, "test", sink, bm.protoVersion)
 			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
