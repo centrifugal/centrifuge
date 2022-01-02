@@ -29,6 +29,7 @@ const (
 	PushFlagMessage
 )
 
+// ProtocolVersion defines protocol behavior.
 type ProtocolVersion uint8
 
 const (

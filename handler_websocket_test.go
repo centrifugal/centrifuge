@@ -649,6 +649,42 @@ func newRealConnProtobufConnect(b testing.TB, url string) *websocket.Conn {
 	return conn
 }
 
+func BenchmarkWebsocketHandlerConnect(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	benchmarks := []struct {
+		name    string
+		getConn func(b testing.TB, url string) *websocket.Conn
+	}{
+		{"JSON", newRealConnJSONConnect},
+		{"Protobuf", newRealConnProtobufConnect},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				conn := bm.getConn(b, url)
+				_ = conn.Close()
+			}
+		})
+	}
+}
+
 func BenchmarkWebsocketHandlerCommandReply(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()

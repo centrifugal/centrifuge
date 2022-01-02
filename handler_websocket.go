@@ -24,7 +24,7 @@ const (
 
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
-	// ProtocolVersion the handler will expect by default. If not set we are expecting
+	// ProtocolVersion the handler will serve. If not set we are expecting
 	// client connected using ProtocolVersion1.
 	ProtocolVersion ProtocolVersion
 
@@ -165,9 +165,10 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if subProtocol == "centrifuge-protobuf" {
 		protoType = ProtocolTypeProtobuf
 	} else {
-		// This is a deprecated way to get a protocol type.
-		if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("protocol") == "protobuf" {
-			protoType = ProtocolTypeProtobuf
+		if r.URL.RawQuery != "" {
+			if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("cf_protocol") == "protobuf" {
+				protoType = ProtocolTypeProtobuf
+			}
 		}
 	}
 
@@ -201,10 +202,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 		defer func() { _ = closeFn() }()
 
-		s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket}))
-		defer func(started time.Time) {
-			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
-		}(time.Now())
+		if s.node.LogEnabled(LogLevelDebug) {
+			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket}))
+			defer func(started time.Time) {
+				s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
+			}(time.Now())
+		}
 
 		for {
 			_, data, err := conn.ReadMessage()

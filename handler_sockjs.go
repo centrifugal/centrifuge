@@ -14,7 +14,7 @@ import (
 
 // SockjsConfig represents config for SockJS handler.
 type SockjsConfig struct {
-	// ProtocolVersion the handler will expect by default. If not set we are expecting
+	// ProtocolVersion the handler will serve. If not set we are expecting
 	// client connected using ProtocolVersion1.
 	ProtocolVersion ProtocolVersion
 
@@ -152,10 +152,13 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 			return
 		}
 		defer func() { _ = closeFn() }()
-		s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportSockJS}))
-		defer func(started time.Time) {
-			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportSockJS, "duration": time.Since(started)}))
-		}(time.Now())
+
+		if s.node.LogEnabled(LogLevelDebug) {
+			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportSockJS}))
+			defer func(started time.Time) {
+				s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportSockJS, "duration": time.Since(started)}))
+			}(time.Now())
+		}
 
 		var needWaitLoop bool
 
