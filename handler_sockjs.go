@@ -21,7 +21,9 @@ type SockjsConfig struct {
 	// HandlerPrefix sets prefix for SockJS handler endpoint path.
 	HandlerPrefix string
 
-	// URL is an address to SockJS client javascript library.
+	// URL is an address to SockJS client javascript library. Required for iframe-based
+	// transports to work. This URL should lead to the same SockJS client version as used
+	// for connecting on the client side.
 	URL string
 
 	// HeartbeatDelay sets how often to send heartbeat frames to clients.
@@ -230,10 +232,9 @@ func (t *sockjsTransport) Unidirectional() bool {
 
 // DisabledPushFlags ...
 func (t *sockjsTransport) DisabledPushFlags() uint64 {
-	if !t.Unidirectional() {
-		return PushFlagDisconnect
-	}
-	return 0
+	// SockJS has its own close frames to mimic WebSocket Close frames,
+	// so we don't need to send Disconnect pushes.
+	return PushFlagDisconnect
 }
 
 // Write data to transport.

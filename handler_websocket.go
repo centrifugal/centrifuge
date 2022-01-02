@@ -318,6 +318,7 @@ func (t *websocketTransport) Unidirectional() bool {
 
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
+	// Websocket sends disconnects in Close frames.
 	return PushFlagDisconnect
 }
 
