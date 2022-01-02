@@ -12,7 +12,7 @@ func (t ProtocolType) toProto() protocol.Type {
 const (
 	// ProtocolTypeJSON means JSON-based protocol.
 	ProtocolTypeJSON ProtocolType = "json"
-	// ProtocolTypeProtobuf means protobuf protocol.
+	// ProtocolTypeProtobuf means Protobuf protocol.
 	ProtocolTypeProtobuf ProtocolType = "protobuf"
 )
 
@@ -52,7 +52,7 @@ type TransportInfo interface {
 	ProtocolVersion() ProtocolVersion
 	// Unidirectional returns whether transport is unidirectional. For
 	// unidirectional transports Centrifuge uses Push protobuf messages
-	// without additional wrapping into Reply protocol message.
+	// without additional wrapping pushes into Reply type.
 	Unidirectional() bool
 	// DisabledPushFlags returns a disabled push flags for specific transport.
 	// For example this allows to disable sending Disconnect push in case of
