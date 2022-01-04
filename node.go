@@ -623,7 +623,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Whitelist)
+		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Whitelist)
 	case controlpb.Command_SURVEY_REQUEST:
 		cmd, err := n.controlDecoder.DecodeSurveyRequest(params)
 		if err != nil {
@@ -928,7 +928,6 @@ func (n *Node) pubDisconnect(user string, disconnect *Disconnect, clientID strin
 		Whitelist: whitelist,
 		Code:      disconnect.Code,
 		Reason:    disconnect.Reason,
-		Reconnect: disconnect.Reconnect,
 		Client:    clientID,
 	}
 	params, _ := n.controlEncoder.EncodeDisconnect(protoDisconnect)
