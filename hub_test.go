@@ -207,11 +207,13 @@ func TestHubDisconnect(t *testing.T) {
 
 	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
 		defer wg.Done()
+		require.False(t, e.Disconnect.Reconnect)
 		require.Equal(t, DisconnectForceNoReconnect.Code, e.Disconnect.Code)
 	}
 
 	clientWithReconnect.eventHub.disconnectHandler = func(e DisconnectEvent) {
 		defer wg.Done()
+		require.True(t, e.Disconnect.Reconnect)
 		require.Equal(t, DisconnectForceReconnect.Code, e.Disconnect.Code)
 	}
 

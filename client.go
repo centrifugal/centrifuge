@@ -358,8 +358,9 @@ func (c *Client) Connect(req ConnectRequest) {
 
 func (c *Client) getDisconnectPushReply(d *Disconnect) ([]byte, error) {
 	disconnect := &protocol.Disconnect{
-		Code:   d.Code,
-		Reason: d.Reason,
+		Code:      d.Code,
+		Reason:    d.Reason,
+		Reconnect: d.Reconnect,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		disconnect.Reconnect = d.isReconnect()

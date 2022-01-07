@@ -37,6 +37,9 @@ type Disconnect struct {
 	// Reason is a short description of disconnect code for humans.
 	Reason string `json:"reason"`
 
+	// Reconnect is only used for compatibility with ProtocolVersion1.
+	Reconnect bool `json:"reconnect"`
+
 	// These fields required for ProtocolVersion1 compatibility.
 	closeTextOnce   sync.Once
 	cachedCloseText string
@@ -56,6 +59,9 @@ func (d *Disconnect) Error() string {
 }
 
 func (d *Disconnect) isReconnect() bool {
+	if d.Reconnect {
+		return true
+	}
 	var reconnect = true
 	if (d.Code >= 3500 && d.Code < 3999) || (d.Code >= 4500 && d.Code <= 4999) {
 		reconnect = false
@@ -96,51 +102,60 @@ var (
 	// connection lost due to client not responding to ping from a server. Both
 	// scenarios are considered normal.
 	DisconnectNormal = &Disconnect{
-		Code:   3000,
-		Reason: "normal",
+		Code:      3000,
+		Reason:    "normal",
+		Reconnect: true,
 	}
 	// DisconnectShutdown sent when node is going to shut down.
 	DisconnectShutdown = &Disconnect{
-		Code:   3001,
-		Reason: "shutdown",
+		Code:      3001,
+		Reason:    "shutdown",
+		Reconnect: true,
 	}
 	// DisconnectServerError sent when internal error occurred on server.
 	DisconnectServerError = &Disconnect{
-		Code:   3004,
-		Reason: "internal server error",
+		Code:      3004,
+		Reason:    "internal server error",
+		Reconnect: true,
 	}
 	// DisconnectExpired sent when client connection expired.
 	DisconnectExpired = &Disconnect{
-		Code:   3005,
-		Reason: "expired",
+		Code:      3005,
+		Reason:    "expired",
+		Reconnect: true,
 	}
 	// DisconnectSubExpired sent when client subscription expired.
 	DisconnectSubExpired = &Disconnect{
-		Code:   3006,
-		Reason: "subscription expired",
+		Code:      3006,
+		Reason:    "subscription expired",
+		Reconnect: true,
 	}
 	// DisconnectSlow sent when client can't read messages fast enough.
 	DisconnectSlow = &Disconnect{
-		Code:   3008,
-		Reason: "slow",
+		Code:      3008,
+		Reason:    "slow",
+		Reconnect: true,
 	}
 	// DisconnectWriteError sent when an error occurred while writing to
 	// client connection.
 	DisconnectWriteError = &Disconnect{
-		Code:   3009,
-		Reason: "write error",
+		Code:      3009,
+		Reason:    "write error",
+		Reconnect: true,
 	}
 	// DisconnectInsufficientState sent when server detects wrong client
 	// position in channel Publication stream. Disconnect allows client
 	// to restore missed publications on reconnect.
 	DisconnectInsufficientState = &Disconnect{
-		Code:   3010,
-		Reason: "insufficient state",
+		Code:      3010,
+		Reason:    "insufficient state",
+		Reconnect: true,
 	}
 	// DisconnectForceReconnect sent when server disconnects connection.
 	DisconnectForceReconnect = &Disconnect{
-		Code:   3011,
-		Reason: "force reconnect",
+		Code:      3011,
+		Reason:    "force reconnect",
+		Reconnect: true,
 	}
 )
 
