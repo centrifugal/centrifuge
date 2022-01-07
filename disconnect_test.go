@@ -8,33 +8,33 @@ import (
 
 func TestDisconnect_CloseText(t *testing.T) {
 	d := DisconnectForceReconnect
-	closeText := d.CloseText()
+	closeText := d.CloseText(ProtocolVersion1)
 	require.Equal(t, `{"reason":"force reconnect","reconnect":true}`, closeText)
-	closeText = d.CloseText()
+	closeText = d.CloseText(ProtocolVersion1)
 	require.Equal(t, `{"reason":"force reconnect","reconnect":true}`, closeText)
 	d = DisconnectForceNoReconnect
-	closeText = d.CloseText()
+	closeText = d.CloseText(ProtocolVersion1)
 	require.Equal(t, `{"reason":"force disconnect","reconnect":false}`, closeText)
+	closeText = d.CloseText(ProtocolVersion2)
+	require.Equal(t, `force disconnect`, closeText)
 }
 
 func TestDisconnect_String(t *testing.T) {
 	d := Disconnect{
 		Code:            42,
 		Reason:          "reason",
-		Reconnect:       true,
 		cachedCloseText: "some information",
 	}
 	stringText := d.String()
-	require.Equal(t, "code: 42, reason: reason, reconnect: true", stringText)
+	require.Equal(t, "code: 42, reason: reason", stringText)
 }
 
 func TestDisconnect_Error(t *testing.T) {
 	d := Disconnect{
 		Code:            42,
 		Reason:          "reason",
-		Reconnect:       true,
 		cachedCloseText: "some information",
 	}
 	errorText := d.Error()
-	require.Equal(t, "disconnected: code: 42, reason: reason, reconnect: true", errorText)
+	require.Equal(t, "disconnected: code: 42, reason: reason", errorText)
 }

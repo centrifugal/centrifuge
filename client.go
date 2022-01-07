@@ -363,6 +363,7 @@ func (c *Client) getDisconnectPushReply(d *Disconnect) ([]byte, error) {
 		Reconnect: d.Reconnect,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
+		disconnect.Reconnect = d.isReconnect(ProtocolVersion1)
 		pushBytes, err := protocol.EncodeDisconnectPush(c.transport.Protocol().toProto(), disconnect)
 		if err != nil {
 			return nil, err
@@ -835,7 +836,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 	_ = c.transport.Close(disconnect)
 
 	if disconnect != nil && disconnect.Reason != "" {
-		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": disconnect.Reason, "reconnect": disconnect.Reconnect}))
+		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": disconnect.Reason}))
 	}
 	if disconnect != nil {
 		incServerDisconnect(disconnect.Code)

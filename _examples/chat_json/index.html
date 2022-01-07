@@ -25,6 +25,7 @@
                     protocolVersion: 'v2',
                 });
                 // const centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
+                //     protocolVersion: 'v2',
                 //     sockjsTransports: [
                 //         "xhr-streaming",
                 //     ]
@@ -65,7 +66,7 @@
                 });
 
                 centrifuge.on('disconnect', function(ctx){
-                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                    drawText('Disconnected: ' + ctx.code + ' (' + ctx.reason + ')' + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                     input.setAttribute('disabled', 'true');
                 });
 
