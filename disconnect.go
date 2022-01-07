@@ -58,15 +58,11 @@ func (d *Disconnect) Error() string {
 	return fmt.Sprintf("disconnected: code: %d, reason: %s", d.Code, d.Reason)
 }
 
-func (d *Disconnect) isReconnect() bool {
-	if d.Reconnect {
-		return true
+func (d *Disconnect) isReconnect(protoVersion ProtocolVersion) bool {
+	if protoVersion == ProtocolVersion1 {
+		return d.Reconnect
 	}
-	var reconnect = true
-	if (d.Code >= 3500 && d.Code < 3999) || (d.Code >= 4500 && d.Code <= 4999) {
-		reconnect = false
-	}
-	return reconnect
+	return d.Code < 3500 || d.Code >= 5000 || (d.Code >= 4000 && d.Code < 4500)
 }
 
 // CloseText allows building disconnect advice sent inside Close frame.
@@ -83,7 +79,7 @@ func (d *Disconnect) CloseText(protoVersion ProtocolVersion) string {
 		reason, _ := json.Marshal(d.Reason)
 		buf.Write(reason)
 		buf.WriteString(`,"reconnect":`)
-		var reconnect = d.isReconnect()
+		var reconnect = d.isReconnect(ProtocolVersion1)
 		if reconnect {
 			buf.WriteString("true")
 		} else {

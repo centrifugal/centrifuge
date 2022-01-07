@@ -363,7 +363,7 @@ func (c *Client) getDisconnectPushReply(d *Disconnect) ([]byte, error) {
 		Reconnect: d.Reconnect,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
-		disconnect.Reconnect = d.isReconnect()
+		disconnect.Reconnect = d.isReconnect(ProtocolVersion1)
 		pushBytes, err := protocol.EncodeDisconnectPush(c.transport.Protocol().toProto(), disconnect)
 		if err != nil {
 			return nil, err
