@@ -555,11 +555,11 @@ func TestCheckSameHostOrigin(t *testing.T) {
 	}
 }
 
-// BenchmarkWebsocketHandler allows benchmarking full flow with one real
+// BenchmarkWsPubSub allows benchmarking full flow with one real
 // Websocket connection subscribed to one channel. This is not very representative
 // in terms of time for operation as network IO involved but useful to look at
 // total allocations and difference between JSON and Protobuf cases using various buffer sizes.
-func BenchmarkWebsocketHandler(b *testing.B) {
+func BenchmarkWsPubSubV1(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -580,7 +580,7 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 		getConn func(b testing.TB, channel string, url string) *websocket.Conn
 	}{
 		{"JSON", newRealConnJSON},
-		{"Protobuf", newRealConnProtobuf},
+		{"PB", newRealConnProtobuf},
 	}
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
@@ -649,7 +649,7 @@ func newRealConnProtobufConnect(b testing.TB, url string) *websocket.Conn {
 	return conn
 }
 
-func BenchmarkWebsocketHandlerConnect(b *testing.B) {
+func BenchmarkWsConnectV1(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -670,7 +670,7 @@ func BenchmarkWebsocketHandlerConnect(b *testing.B) {
 		getConn func(b testing.TB, url string) *websocket.Conn
 	}{
 		{"JSON", newRealConnJSONConnect},
-		{"Protobuf", newRealConnProtobufConnect},
+		{"PB", newRealConnProtobufConnect},
 	}
 
 	for _, bm := range benchmarks {
@@ -685,7 +685,7 @@ func BenchmarkWebsocketHandlerConnect(b *testing.B) {
 	}
 }
 
-func BenchmarkWebsocketHandlerCommandReply(b *testing.B) {
+func BenchmarkWsCommandReplyV1(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -714,7 +714,7 @@ func BenchmarkWebsocketHandlerCommandReply(b *testing.B) {
 		getConn func(b testing.TB, url string) *websocket.Conn
 	}{
 		{"JSON", newRealConnJSONConnect},
-		{"Protobuf", newRealConnProtobufConnect},
+		{"PB", newRealConnProtobufConnect},
 	}
 
 	rpcRequest := &protocol.RPCRequest{
@@ -850,7 +850,7 @@ func newRealConnProtobufV2(b testing.TB, channel string, url string) *websocket.
 	return conn
 }
 
-func BenchmarkWebsocketHandlerV2(b *testing.B) {
+func BenchmarkWsPubSubV2(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -872,7 +872,7 @@ func BenchmarkWebsocketHandlerV2(b *testing.B) {
 		getConn func(b testing.TB, channel string, url string) *websocket.Conn
 	}{
 		{"JSON", newRealConnJSONV2},
-		{"Protobuf", newRealConnProtobufV2},
+		{"PB", newRealConnProtobufV2},
 	}
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
@@ -894,7 +894,7 @@ func BenchmarkWebsocketHandlerV2(b *testing.B) {
 	}
 }
 
-func BenchmarkWebsocketHandlerCommandReplyV2(b *testing.B) {
+func BenchmarkWsCommandReplyV2(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -924,7 +924,7 @@ func BenchmarkWebsocketHandlerCommandReplyV2(b *testing.B) {
 		getConn func(b testing.TB, url string) *websocket.Conn
 	}{
 		{"JSON", newRealConnJSONConnectV2},
-		{"Protobuf", newRealConnProtobufConnectV2},
+		{"PB", newRealConnProtobufConnectV2},
 	}
 
 	rpcRequest := &protocol.RPCRequest{
