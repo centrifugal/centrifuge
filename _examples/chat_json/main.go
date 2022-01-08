@@ -201,7 +201,6 @@ func main() {
 				"#42",
 				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
 				centrifuge.WithHistory(300, time.Minute),
-				centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
 			)
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
@@ -219,7 +218,6 @@ func main() {
 				"chat:index",
 				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
 				centrifuge.WithHistory(300, time.Minute),
-				centrifuge.WithMeta(map[string]string{"nodeId": node.ID()}),
 			)
 			if err != nil {
 				log.Printf("error publishing to channel: %s", err)
