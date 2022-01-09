@@ -96,7 +96,7 @@ func main() {
 				select {
 				case <-client.Context().Done():
 					return
-				case <-time.After(5000 * time.Second):
+				case <-time.After(5 * time.Second):
 					err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
 					if err != nil {
 						if err == io.EOF {

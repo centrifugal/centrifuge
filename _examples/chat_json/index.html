@@ -8,7 +8,7 @@
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
         <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
+        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -63,7 +63,7 @@
                 });
 
                 centrifuge.on('disconnect', function(ctx){
-                    drawText('Disconnected: ' + ctx.code + ' (' + ctx.reason + ')' + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                    drawText('Disconnected: ' + ctx.reason  + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                     input.setAttribute('disabled', 'true');
                 });
 

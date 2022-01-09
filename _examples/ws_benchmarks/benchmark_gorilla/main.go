@@ -96,7 +96,7 @@ func main() {
 	}
 
 	protocolVersion := centrifuge.ProtocolVersion1
-	if os.Getenv("CENTRIFUGE_PROTOCOL_V2") != "" {
+	if os.Getenv("CF_PROTOCOL_V2") != "" {
 		log.Println("using client protocol v2")
 		protocolVersion = centrifuge.ProtocolVersion2
 	}
