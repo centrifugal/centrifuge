@@ -244,6 +244,7 @@ func TestSockjsHandlerURLParams(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	_, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
+	require.Equal(t, "o", string(msg))
 	_, msg, err = conn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, "c[3501,\"bad request\"]", string(msg))
