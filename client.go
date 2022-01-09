@@ -470,10 +470,9 @@ func (c *Client) closeUnauthenticated() {
 	}
 }
 
-func (c *Client) transportEnqueue(data []byte, isPush bool) error {
+func (c *Client) transportEnqueue(data []byte) error {
 	disconnect := c.messageWriter.enqueue(queue.Item{
-		Data:   data,
-		IsPush: isPush,
+		Data: data,
 	})
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
@@ -689,7 +688,7 @@ func (c *Client) Send(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return c.transportEnqueue(replyData, true)
+	return c.transportEnqueue(replyData)
 }
 
 func (c *Client) encodeReply(reply *protocol.Reply) ([]byte, error) {
@@ -750,7 +749,7 @@ func (c *Client) sendUnsubscribe(ch string) error {
 	if err != nil {
 		return err
 	}
-	_ = c.transportEnqueue(replyData, true)
+	_ = c.transportEnqueue(replyData)
 	return nil
 }
 
@@ -827,7 +826,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 	if disconnect != nil && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
 		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
-			_ = c.transportEnqueue(replyData, true)
+			_ = c.transportEnqueue(replyData)
 		}
 	}
 
@@ -1050,7 +1049,7 @@ func (c *Client) writeEncodedPush(rep *protocol.Reply, rw *replyWriter) {
 			return
 		}
 	}
-	disconnect := c.messageWriter.enqueue(queue.Item{Data: data, IsPush: true})
+	disconnect := c.messageWriter.enqueue(queue.Item{Data: data})
 	if disconnect != nil {
 		if c.node.logger.enabled(LogLevelDebug) {
 			c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after connect push", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
@@ -1362,7 +1361,7 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 	if err != nil {
 		return err
 	}
-	return c.transportEnqueue(replyData, true)
+	return c.transportEnqueue(replyData)
 }
 
 func (c *Client) getRefreshPushReply(res *protocol.Refresh) ([]byte, error) {
@@ -2408,7 +2407,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if err != nil {
 		return err
 	}
-	return c.transportEnqueue(replyData, true)
+	return c.transportEnqueue(replyData)
 }
 
 func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeResult) ([]byte, error) {
@@ -2772,7 +2771,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 			return nil
 		}
 		c.mu.Unlock()
-		return c.transportEnqueue(data, true)
+		return c.transportEnqueue(data)
 	}
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
@@ -2804,7 +2803,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	return c.transportEnqueue(data, true)
+	return c.transportEnqueue(data)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
@@ -2812,7 +2811,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data []b
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}
-		return c.transportEnqueue(data, true)
+		return c.transportEnqueue(data)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
 		_ = c.writePublicationUpdatePosition(ch, pub, data, sp)
@@ -2824,14 +2823,14 @@ func (c *Client) writeJoin(_ string, data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
-	return c.transportEnqueue(data, true)
+	return c.transportEnqueue(data)
 }
 
 func (c *Client) writeLeave(_ string, data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
-	return c.transportEnqueue(data, true)
+	return c.transportEnqueue(data)
 }
 
 // Lock must be held outside.

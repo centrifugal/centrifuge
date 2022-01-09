@@ -5,8 +5,7 @@ import (
 )
 
 type Item struct {
-	Data   []byte
-	IsPush bool
+	Data []byte
 }
 
 // Queue is an unbounded queue of Item.

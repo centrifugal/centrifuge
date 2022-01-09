@@ -374,9 +374,6 @@ type TransportWriteEvent struct {
 	// into the connection. For unidirectional transports this is an encoded protocol.Push
 	// type, for bidirectional transports this is an encoded protocol.Reply type.
 	Data []byte
-	// IsPush is a boolean flag which is set to true if TransportWriteEvent.Data contains
-	// encoded protocol.Push message.
-	IsPush bool
 }
 
 // TransportWriteHandler called just before writing data to the Transport.
