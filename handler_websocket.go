@@ -117,6 +117,28 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportWebsocket)
 
+	var protoType = ProtocolTypeJSON
+	protoVersion := s.config.ProtocolVersion
+
+	if r.URL.RawQuery != "" {
+		query := r.URL.Query()
+		if query.Get("format") == "protobuf" || query.Get("cf_protocol") == "protobuf" {
+			protoType = ProtocolTypeProtobuf
+		}
+		if queryProtocolVersion := query.Get("cf_protocol_version"); queryProtocolVersion != "" {
+			switch queryProtocolVersion {
+			case "v1":
+				protoVersion = ProtocolVersion1
+			case "v2":
+				protoVersion = ProtocolVersion2
+			default:
+				s.node.logger.log(newLogEntry(LogLevelInfo, "unknown protocol version", map[string]interface{}{"transport": transportWebsocket, "version": queryProtocolVersion}))
+				http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
 	compression := s.config.Compression
 	compressionLevel := s.config.CompressionLevel
 	compressionMinSize := s.config.CompressionMinSize
@@ -159,17 +181,9 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	var protoType = ProtocolTypeJSON
-
 	subProtocol := conn.Subprotocol()
 	if subProtocol == "centrifuge-protobuf" {
 		protoType = ProtocolTypeProtobuf
-	} else {
-		if r.URL.RawQuery != "" {
-			if r.URL.Query().Get("format") == "protobuf" || r.URL.Query().Get("cf_protocol") == "protobuf" {
-				protoType = ProtocolTypeProtobuf
-			}
-		}
 	}
 
 	// Separate goroutine for better GC of caller's data.
@@ -179,7 +193,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
 			protoType:          protoType,
-			protoVersion:       s.version,
+			protoVersion:       protoVersion,
 		}
 
 		graceCh := make(chan struct{})

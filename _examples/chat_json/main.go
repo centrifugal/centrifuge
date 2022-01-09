@@ -228,14 +228,12 @@ func main() {
 	}()
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		ProtocolVersion:    centrifuge.ProtocolVersion2,
 		ReadBufferSize:     1024,
 		UseWriteBufferPool: true,
 	})
 	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
 
 	sockjsHandler := centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
-		ProtocolVersion:          centrifuge.ProtocolVersion2,
 		URL:                      "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
 		HandlerPrefix:            "/connection/sockjs",
 		WebsocketReadBufferSize:  1024,

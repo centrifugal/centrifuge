@@ -75,6 +75,47 @@ func TestWebsocketHandlerSubprotocol(t *testing.T) {
 	waitWithTimeout(t, done)
 }
 
+func TestWebsocketHandlerURLParams(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, event.Transport.Protocol(), ProtocolTypeProtobuf)
+		require.Equal(t, event.Transport.ProtocolVersion(), ProtocolVersion1)
+		close(done)
+		return ConnectReply{}, nil
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(node, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion2,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	dialer := &websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: 45 * time.Second,
+	}
+
+	// Connect with invalid protocol version.
+	_, _, err := dialer.Dial(url+"/connection/websocket?cf_protocol=protobuf&cf_protocol_version=v3", nil)
+	require.Error(t, err)
+
+	conn, resp, err := dialer.Dial(url+"/connection/websocket?cf_protocol=protobuf&cf_protocol_version=v1", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	err = conn.WriteMessage(websocket.BinaryMessage, getConnectCommandProtobuf(t))
+	require.NoError(t, err)
+	waitWithTimeout(t, done)
+}
+
 func TestWebsocketTransportWrite(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()

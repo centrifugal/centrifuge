@@ -135,9 +135,26 @@ func newSockJSHandler(s *SockjsHandler, sockjsPrefix string, sockjsOpts sockjs.O
 func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 	incTransportConnect(transportSockJS)
 
+	protoVersion := s.protocolVersion
+	if sess.Request().URL.RawQuery != "" {
+		query := sess.Request().URL.Query()
+		if queryProtocolVersion := query.Get("cf_protocol_version"); queryProtocolVersion != "" {
+			switch queryProtocolVersion {
+			case "v1":
+				protoVersion = ProtocolVersion1
+			case "v2":
+				protoVersion = ProtocolVersion2
+			default:
+				s.node.logger.log(newLogEntry(LogLevelInfo, "unknown protocol version", map[string]interface{}{"transport": transportSockJS, "version": queryProtocolVersion}))
+				_ = sess.Close(3501, "bad request")
+				return
+			}
+		}
+	}
+
 	// Separate goroutine for better GC of caller's data.
 	go func() {
-		transport := newSockjsTransport(sess, s.protocolVersion)
+		transport := newSockjsTransport(sess, protoVersion)
 
 		select {
 		case <-s.node.NotifyShutdown():
