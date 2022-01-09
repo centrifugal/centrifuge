@@ -1073,7 +1073,6 @@ func (c *Client) writeEncodedCommandReply(method protocol.Command_MethodType, cm
 	protoType := c.transport.Protocol().toProto()
 	replyEncoder := protocol.GetReplyEncoder(protoType)
 
-	var replyData []byte
 	replyData, err := replyEncoder.Encode(rep)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
