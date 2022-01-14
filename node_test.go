@@ -242,6 +242,13 @@ func TestNode_Shutdown(t *testing.T) {
 	require.NoError(t, n.Shutdown(context.Background()))
 }
 
+func TestNode_shutdownCmd(t *testing.T) {
+	// Testing that shutdownCmd removes node from nodes registry.
+	n := defaultNodeNoHandlers()
+	require.NoError(t, n.shutdownCmd(n.ID()))
+	require.True(t, len(n.nodes.list()) == 0)
+}
+
 func TestClientEventHub(t *testing.T) {
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -254,6 +261,7 @@ func TestNodeRegistry(t *testing.T) {
 	nodeInfo1 := controlpb.Node{Uid: "node1"}
 	nodeInfo2 := controlpb.Node{Uid: "node2"}
 	registry.add(&nodeInfo1)
+	registry.add(&nodeInfo1) // Make sure update works.
 	registry.add(&nodeInfo2)
 	require.Equal(t, 2, len(registry.list()))
 	info := registry.get("node1")
@@ -371,13 +379,14 @@ func TestNode_Subscribe(t *testing.T) {
 			require.Equal(t, "42", client.UserID())
 			require.Equal(t, "test_channel", event.Channel)
 			require.True(t, event.ServerSide)
+			require.Equal(t, UnsubscribeReasonServer, event.Reason)
 			close(done)
 		})
 	})
 
 	newTestConnectedClient(t, n, "42")
 
-	err := n.Subscribe("42", "test_channel")
+	err := n.Subscribe("42", "test_channel", WithRecoverSince(&StreamPosition{0, "test"}))
 	require.NoError(t, err)
 	require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
 
@@ -516,6 +525,13 @@ func TestNode_RemoveHistory(t *testing.T) {
 
 	err := n.RemoveHistory("test_user")
 	require.NoError(t, err)
+}
+
+func TestNode_History_ErrorOnReverseWithZeroOffset(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	_, err := n.History("test", WithReverse(true), WithSince(&StreamPosition{Offset: 0}))
+	require.Equal(t, err, ErrorBadRequest)
 }
 
 func TestIndex(t *testing.T) {
@@ -707,6 +723,14 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 		err = n.handleControl(brokenCmdBytes)
 		require.EqualError(t, err, "unexpected EOF")
+
+		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
+			Method: controlpb.Command_REFRESH,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
 	})
 
 	t.Run("Node", func(t *testing.T) {
@@ -744,11 +768,10 @@ func TestNode_handleControl(t *testing.T) {
 		n := defaultNodeNoHandlers()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		client := newTestConnectedClient(t, n, "42")
+		newTestConnectedClient(t, n, "42")
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
 			Method: controlpb.Command_SUBSCRIBE,
 			Params: []byte("random"),
 		})
@@ -756,10 +779,13 @@ func TestNode_handleControl(t *testing.T) {
 		paramsBytes, err := enc.EncodeSubscribe(&controlpb.Subscribe{
 			Channel: "test_channel",
 			User:    "42",
+			RecoverSince: &controlpb.StreamPosition{
+				Offset: 0,
+				Epoch:  "test",
+			},
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
 			Method: controlpb.Command_SUBSCRIBE,
 			Params: paramsBytes,
 		})
@@ -821,6 +847,25 @@ func TestNode_handleControl(t *testing.T) {
 		require.Zero(t, n.hub.NumSubscribers("test_channel"))
 	})
 
+	t.Run("Shutdown", func(t *testing.T) {
+		t.Parallel()
+
+		n := defaultNodeNoHandlers()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		enc := controlproto.NewProtobufEncoder()
+
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Uid:    "",
+			Method: controlpb.Command_SHUTDOWN,
+			Params: nil,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(cmdBytes)
+		require.NoError(t, err)
+	})
+
 	t.Run("Disconnect", func(t *testing.T) {
 		t.Parallel()
 
@@ -868,6 +913,36 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, n.hub.NumSubscribers("test_channel"))
 		require.Zero(t, len(n.hub.UserConnections("42")))
+	})
+
+	t.Run("Refresh", func(t *testing.T) {
+		t.Parallel()
+
+		n := defaultTestNode()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		enc := controlproto.NewProtobufEncoder()
+		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Uid:    "",
+			Method: controlpb.Command_REFRESH,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		paramsBytes, err := enc.EncodeRefresh(&controlpb.Refresh{
+			User: "42",
+		})
+		require.NoError(t, err)
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Uid:    "",
+			Method: controlpb.Command_REFRESH,
+			Params: paramsBytes,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+		err = n.handleControl(cmdBytes)
+		require.NoError(t, err)
 	})
 
 	t.Run("Unknown", func(t *testing.T) {
@@ -1078,6 +1153,24 @@ func TestNode_OnNotification(t *testing.T) {
 	})
 
 	err := node.Notify("notification", []byte(`notification`), "")
+	require.NoError(t, err)
+	require.True(t, handlerCalled)
+}
+
+func TestNode_OnNotification_SameNode(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	handlerCalled := false
+
+	node.OnNotification(func(event NotificationEvent) {
+		require.Equal(t, "notification", event.Op)
+		require.Equal(t, []byte(`notification`), event.Data)
+		require.Equal(t, node.ID(), event.FromNodeID)
+		handlerCalled = true
+	})
+
+	err := node.Notify("notification", []byte(`notification`), node.ID())
 	require.NoError(t, err)
 	require.True(t, handlerCalled)
 }

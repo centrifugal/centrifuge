@@ -2444,49 +2444,49 @@ func TestClientClose(t *testing.T) {
 	require.Equal(t, DisconnectShutdown, client.transport.(*testTransport).disconnect)
 }
 
-//func TestClientHandleRPCNotAvailable(t *testing.T) {
-//	node := defaultTestNode()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	client := newTestClient(t, node, "42")
-//	connectClient(t, client)
-//
-//	rwWrapper := testReplyWriterWrapper()
-//
-//	err := client.handleRPC(&protocol.RPCRequest{
-//		Method: "xxx",
-//	},&protocol.Command{}, time.Now(), rwWrapper.rw)
-//	require.Equal(t, ErrorNotAvailable, err)
-//}
-//
-//func TestClientHandleRPC(t *testing.T) {
-//	node := defaultTestNode()
-//	defer func() { _ = node.Shutdown(context.Background()) }()
-//
-//	client := newTestClient(t, node, "42")
-//
-//	var rpcHandlerCalled bool
-//
-//	node.OnConnect(func(client *Client) {
-//		client.OnRPC(func(event RPCEvent, cb RPCCallback) {
-//			rpcHandlerCalled = true
-//			expectedData := []byte("{}")
-//			require.Equal(t, expectedData, event.Data)
-//			cb(RPCReply{}, nil)
-//		})
-//	})
-//
-//	connectClient(t, client)
-//
-//	rwWrapper := testReplyWriterWrapper()
-//
-//	err := client.handleRPC(&protocol.RPCRequest{
-//		Data: []byte("{}"),
-//	},&protocol.Command{}, time.Now(), rwWrapper.rw)
-//	require.NoError(t, err)
-//	require.Nil(t, rwWrapper.replies[0].Error)
-//	require.True(t, rpcHandlerCalled)
-//}
+func TestClientHandleRPCNotAvailable(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+
+	err := client.handleRPC(&protocol.RPCRequest{
+		Method: "xxx",
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.Equal(t, ErrorNotAvailable, err)
+}
+
+func TestClientHandleRPC(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	var rpcHandlerCalled bool
+
+	node.OnConnect(func(client *Client) {
+		client.OnRPC(func(event RPCEvent, cb RPCCallback) {
+			rpcHandlerCalled = true
+			expectedData := []byte("{}")
+			require.Equal(t, expectedData, event.Data)
+			cb(RPCReply{}, nil)
+		})
+	})
+
+	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+
+	err := client.handleRPC(&protocol.RPCRequest{
+		Data: []byte("{}"),
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	require.True(t, rpcHandlerCalled)
+}
 
 func TestClientHandleSendNoHandlerSet(t *testing.T) {
 	node := defaultTestNode()
