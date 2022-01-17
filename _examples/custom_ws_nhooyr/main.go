@@ -202,6 +202,11 @@ func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.protoType
 }
 
+// ProtocolVersion ...
+func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 // Unidirectional implementation.
 func (t *customWebsocketTransport) Unidirectional() bool {
 	return false

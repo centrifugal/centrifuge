@@ -205,3 +205,72 @@ func TestSockjsTransportWriteMany(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "a[\"1\\n22\"]", string(p))
 }
+
+func TestSockjsHandlerURLParams(t *testing.T) {
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials: &Credentials{UserID: "user"},
+		}, nil
+	})
+
+	doneCh := make(chan struct{})
+
+	n.OnConnect(func(client *Client) {
+		require.Equal(t, transportSockJS, client.Transport().Name())
+		require.Equal(t, ProtocolTypeJSON, client.Transport().Protocol())
+		require.Equal(t, ProtocolVersion2, client.Transport().ProtocolVersion())
+		close(doneCh)
+	})
+
+	mux.Handle("/connection/sockjs/", NewSockjsHandler(n, SockjsConfig{
+		HandlerPrefix: "/connection/sockjs",
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	// Connect with invalid protocol version.
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket?cf_protocol_version=v3", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, "o", string(msg))
+	_, msg, err = conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, "c[3501,\"bad request\"]", string(msg))
+	_, _, err = conn.ReadMessage()
+	require.Error(t, err)
+
+	conn, resp, err = websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket?cf_protocol_version=v2", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	_, p, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, "o", string(p)) // open frame of SockJS protocol.
+
+	connectRequest := &protocol.ConnectRequest{
+		Token: "boom",
+	}
+	cmd := &protocol.Command{
+		Id:      1,
+		Connect: connectRequest,
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	err = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
+	require.NoError(t, err)
+
+	waitWithTimeout(t, doneCh)
+}

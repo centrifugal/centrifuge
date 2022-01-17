@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -241,6 +242,13 @@ func TestNode_Shutdown(t *testing.T) {
 	require.NoError(t, n.Shutdown(context.Background()))
 }
 
+func TestNode_shutdownCmd(t *testing.T) {
+	// Testing that shutdownCmd removes node from nodes registry.
+	n := defaultNodeNoHandlers()
+	require.NoError(t, n.shutdownCmd(n.ID()))
+	require.True(t, len(n.nodes.list()) == 0)
+}
+
 func TestClientEventHub(t *testing.T) {
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -253,6 +261,7 @@ func TestNodeRegistry(t *testing.T) {
 	nodeInfo1 := controlpb.Node{Uid: "node1"}
 	nodeInfo2 := controlpb.Node{Uid: "node2"}
 	registry.add(&nodeInfo1)
+	registry.add(&nodeInfo1) // Make sure update works.
 	registry.add(&nodeInfo2)
 	require.Equal(t, 2, len(registry.list()))
 	info := registry.get("node1")
@@ -370,13 +379,14 @@ func TestNode_Subscribe(t *testing.T) {
 			require.Equal(t, "42", client.UserID())
 			require.Equal(t, "test_channel", event.Channel)
 			require.True(t, event.ServerSide)
+			require.Equal(t, UnsubscribeReasonServer, event.Reason)
 			close(done)
 		})
 	})
 
 	newTestConnectedClient(t, n, "42")
 
-	err := n.Subscribe("42", "test_channel")
+	err := n.Subscribe("42", "test_channel", WithRecoverSince(&StreamPosition{0, "test"}))
 	require.NoError(t, err)
 	require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
 
@@ -517,6 +527,13 @@ func TestNode_RemoveHistory(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestNode_History_ErrorOnReverseWithZeroOffset(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	_, err := n.History("test", WithReverse(true), WithSince(&StreamPosition{Offset: 0}))
+	require.Equal(t, err, ErrorBadRequest)
+}
+
 func TestIndex(t *testing.T) {
 	require.Equal(t, 0, index("2121", 1))
 }
@@ -527,7 +544,7 @@ var testPayload = map[string]interface{}{
 	"guid":       "478a00f4-19b1-4567-8097-013b8cc846b8",
 	"isActive":   false,
 	"balance":    "$2,199.02",
-	"picture":    "http://placehold.it/32x32",
+	"picture":    "https://placehold.it/32x32",
 	"age":        25,
 	"eyeColor":   "blue",
 	"name":       "Swanson Walker",
@@ -569,39 +586,49 @@ func BenchmarkNodePublishWithNoopBroker(b *testing.B) {
 	_ = node.Shutdown(context.Background())
 }
 
-func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte) {
+func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolType, sink chan []byte, protoVersion ProtocolVersion) {
 	ctx, cancelFn := context.WithCancel(context.Background())
 	transport := newTestTransport(cancelFn)
 	transport.setProtocolType(protoType)
+	transport.setProtocolVersion(protoVersion)
 	transport.setSink(sink)
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "test"})
 	client, _ := newClient(newCtx, node, transport)
-	connectClient(b, client)
+	if protoVersion == ProtocolVersion1 {
+		connectClient(b, client)
+	} else {
+		connectClientV2(b, client)
+	}
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, SubscribeReply{}, rwWrapper.rw, false)
+	}, SubscribeReply{}, &protocol.Command{}, false, rwWrapper.rw)
 	require.Nil(b, subCtx.disconnect)
 }
 
-func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte) {
-	newFakeConn(b, node, channel, ProtocolTypeJSON, sink)
+func newFakeConnJSON(b testing.TB, node *Node, channel string, sink chan []byte, protoVersion ProtocolVersion) {
+	newFakeConn(b, node, channel, ProtocolTypeJSON, sink, protoVersion)
 }
 
-func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []byte) {
-	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink)
+func newFakeConnProtobuf(b testing.TB, node *Node, channel string, sink chan []byte, protoVersion ProtocolVersion) {
+	newFakeConn(b, node, channel, ProtocolTypeProtobuf, sink, protoVersion)
 }
 
 func BenchmarkBroadcastMemory(b *testing.B) {
 	benchmarks := []struct {
 		name           string
-		getFakeConn    func(b testing.TB, n *Node, channel string, sink chan []byte)
+		getFakeConn    func(b testing.TB, n *Node, channel string, sink chan []byte, protoVersion ProtocolVersion)
 		numSubscribers int
+		protoVersion   ProtocolVersion
 	}{
-		{"JSON", newFakeConnJSON, 1},
-		{"Protobuf", newFakeConnProtobuf, 1},
-		{"JSON", newFakeConnJSON, 10000},
-		{"Protobuf", newFakeConnProtobuf, 10000},
+		{"JSON-V1", newFakeConnJSON, 1, ProtocolVersion1},
+		{"Protobuf-V1", newFakeConnProtobuf, 1, ProtocolVersion1},
+		{"JSON-V1", newFakeConnJSON, 10000, ProtocolVersion1},
+		{"Protobuf-V1", newFakeConnProtobuf, 10000, ProtocolVersion1},
+		{"JSON-V2", newFakeConnJSON, 1, ProtocolVersion1},
+		{"Protobuf-V2", newFakeConnProtobuf, 1, ProtocolVersion1},
+		{"JSON-V2", newFakeConnJSON, 10000, ProtocolVersion1},
+		{"Protobuf-V2", newFakeConnProtobuf, 10000, ProtocolVersion1},
 	}
 
 	for _, bm := range benchmarks {
@@ -610,7 +637,7 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 			payload := []byte(`{"input": "test"}`)
 			sink := make(chan []byte, bm.numSubscribers)
 			for i := 0; i < bm.numSubscribers; i++ {
-				bm.getFakeConn(b, n, "test", sink)
+				bm.getFakeConn(b, n, "test", sink, bm.protoVersion)
 			}
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -618,8 +645,15 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 				if err != nil {
 					panic(err)
 				}
-				for j := 0; j < bm.numSubscribers; j++ {
-					<-sink
+				j := 0
+				for {
+					data := <-sink
+					if bytes.Contains(data, []byte("input")) {
+						j++
+					}
+					if j == bm.numSubscribers {
+						break
+					}
 				}
 			}
 			b.StopTimer()
@@ -689,6 +723,14 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 		err = n.handleControl(brokenCmdBytes)
 		require.EqualError(t, err, "unexpected EOF")
+
+		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
+			Method: controlpb.Command_REFRESH,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
 	})
 
 	t.Run("Node", func(t *testing.T) {
@@ -726,11 +768,10 @@ func TestNode_handleControl(t *testing.T) {
 		n := defaultNodeNoHandlers()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		client := newTestConnectedClient(t, n, "42")
+		newTestConnectedClient(t, n, "42")
 
 		enc := controlproto.NewProtobufEncoder()
 		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
 			Method: controlpb.Command_SUBSCRIBE,
 			Params: []byte("random"),
 		})
@@ -738,10 +779,13 @@ func TestNode_handleControl(t *testing.T) {
 		paramsBytes, err := enc.EncodeSubscribe(&controlpb.Subscribe{
 			Channel: "test_channel",
 			User:    "42",
+			RecoverSince: &controlpb.StreamPosition{
+				Offset: 0,
+				Epoch:  "test",
+			},
 		})
 		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
 			Method: controlpb.Command_SUBSCRIBE,
 			Params: paramsBytes,
 		})
@@ -803,6 +847,25 @@ func TestNode_handleControl(t *testing.T) {
 		require.Zero(t, n.hub.NumSubscribers("test_channel"))
 	})
 
+	t.Run("Shutdown", func(t *testing.T) {
+		t.Parallel()
+
+		n := defaultNodeNoHandlers()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		enc := controlproto.NewProtobufEncoder()
+
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Uid:    "",
+			Method: controlpb.Command_SHUTDOWN,
+			Params: nil,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(cmdBytes)
+		require.NoError(t, err)
+	})
+
 	t.Run("Disconnect", func(t *testing.T) {
 		t.Parallel()
 
@@ -850,6 +913,36 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, n.hub.NumSubscribers("test_channel"))
 		require.Zero(t, len(n.hub.UserConnections("42")))
+	})
+
+	t.Run("Refresh", func(t *testing.T) {
+		t.Parallel()
+
+		n := defaultTestNode()
+		defer func() { _ = n.Shutdown(context.Background()) }()
+
+		enc := controlproto.NewProtobufEncoder()
+		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Uid:    "",
+			Method: controlpb.Command_REFRESH,
+			Params: []byte("random"),
+		})
+		require.NoError(t, err)
+		paramsBytes, err := enc.EncodeRefresh(&controlpb.Refresh{
+			User: "42",
+		})
+		require.NoError(t, err)
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Uid:    "",
+			Method: controlpb.Command_REFRESH,
+			Params: paramsBytes,
+		})
+		require.NoError(t, err)
+
+		err = n.handleControl(brokenCmdBytes)
+		require.EqualError(t, err, "unexpected EOF")
+		err = n.handleControl(cmdBytes)
+		require.NoError(t, err)
 	})
 
 	t.Run("Unknown", func(t *testing.T) {
@@ -976,7 +1069,31 @@ func TestNode_OnSurvey(t *testing.T) {
 		}()
 	})
 
-	results, err := node.Survey(context.Background(), "test_op", nil)
+	results, err := node.Survey(context.Background(), "test_op", nil, "")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	res, ok := results[node.ID()]
+	require.True(t, ok)
+	require.Equal(t, uint32(1), res.Code)
+	require.Equal(t, []byte("1"), res.Data)
+}
+
+func TestNode_OnSurveyWithNodeID(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
+		go func() {
+			require.Nil(t, event.Data)
+			require.Equal(t, "test_op", event.Op)
+			callback(SurveyReply{
+				Data: []byte("1"),
+				Code: 1,
+			})
+		}()
+	})
+
+	results, err := node.Survey(context.Background(), "test_op", nil, node.ID())
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	res, ok := results[node.ID()]
@@ -989,7 +1106,7 @@ func TestNode_OnSurvey_NoHandler(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	_, err := node.Survey(context.Background(), "test_op", nil)
+	_, err := node.Survey(context.Background(), "test_op", nil, "")
 	require.Error(t, err)
 	require.Equal(t, errSurveyHandlerNotRegistered, err)
 }
@@ -1016,7 +1133,7 @@ func TestNode_OnSurvey_Timeout(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
-	_, err := node.Survey(ctx, "test_op", nil)
+	_, err := node.Survey(ctx, "test_op", nil, "")
 	require.Error(t, err)
 	require.Equal(t, context.DeadlineExceeded, err)
 	close(done)
@@ -1040,35 +1157,29 @@ func TestNode_OnNotification(t *testing.T) {
 	require.True(t, handlerCalled)
 }
 
+func TestNode_OnNotification_SameNode(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	handlerCalled := false
+
+	node.OnNotification(func(event NotificationEvent) {
+		require.Equal(t, "notification", event.Op)
+		require.Equal(t, []byte(`notification`), event.Data)
+		require.Equal(t, node.ID(), event.FromNodeID)
+		handlerCalled = true
+	})
+
+	err := node.Notify("notification", []byte(`notification`), node.ID())
+	require.NoError(t, err)
+	require.True(t, handlerCalled)
+}
+
 func TestNode_OnNotification_NoHandler(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := node.Notify("notification", []byte(`notification`), "")
 	require.Equal(t, errNotificationHandlerNotRegistered, err)
-}
-
-func TestNode_OnTransportWrite(t *testing.T) {
-	node := defaultNodeNoHandlers()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	done := make(chan struct{})
-
-	node.OnTransportWrite(func(client *Client, event TransportWriteEvent) bool {
-		if event.IsPush {
-			close(done)
-		}
-		return false
-	})
-
-	client := newTestClient(t, node, "42")
-	connectClient(t, client)
-	err := client.Send([]byte("{}"))
-	require.NoError(t, err)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout")
-	}
 }
 
 func TestNode_handleNotification_NoHandler(t *testing.T) {
@@ -1188,4 +1299,89 @@ func TestNode_OnNodeInfoSend(t *testing.T) {
 	result, err := n.Info()
 	require.NoError(t, err)
 	require.Equal(t, []byte("{}"), result.Nodes[0].Data)
+}
+
+func TestNode_OnTransportWrite(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnTransportWrite(func(_ *Client, event TransportWriteEvent) bool {
+		if string(event.Data) == "{\"result\":{\"type\":4,\"data\":{\"data\":{}}}}" {
+			close(done)
+		}
+		return true
+	})
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	sink := make(chan []byte, 1)
+	transport.setSink(sink)
+
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+
+	connectClient(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+	select {
+	case <-sink:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for transport write")
+	}
+}
+
+func TestNode_OnTransportWriteProtocolV2(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnTransportWrite(func(client *Client, event TransportWriteEvent) bool {
+		if string(event.Data) == "{\"push\":{\"message\":{\"data\":{}}}}" {
+			close(done)
+		}
+		return true
+	})
+
+	client := newTestClientV2(t, node, "42")
+	connectClientV2(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout")
+	}
+}
+
+func TestNode_OnTransportWriteSkip(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnTransportWrite(func(_ *Client, event TransportWriteEvent) bool {
+		return false
+	})
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	sink := make(chan []byte, 1)
+	transport.setSink(sink)
+
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+
+	connectClient(t, client)
+	err := client.Send([]byte("{}"))
+	require.NoError(t, err)
+
+	select {
+	case data := <-sink:
+		require.Fail(t, fmt.Sprintf("message written to transport – but it must not: %s", string(data)))
+	case <-time.After(time.Second):
+	}
 }

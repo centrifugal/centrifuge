@@ -26,7 +26,7 @@ import (
 // Node is a heart of Centrifuge library – it keeps and manages client connections,
 // maintains information about other Centrifuge nodes in cluster, keeps references
 // to common things (like Broker and PresenceManager, Hub) etc.
-// By default Node uses in-memory implementations of Broker and PresenceManager -
+// By default, Node uses in-memory implementations of Broker and PresenceManager -
 // MemoryBroker and MemoryPresenceManager which allow running a single Node only.
 // To scale use other implementations of Broker and PresenceManager like builtin
 // RedisBroker and RedisPresenceManager.
@@ -77,9 +77,8 @@ type Node struct {
 	surveyMu       sync.RWMutex
 	surveyID       uint64
 
-	notificationHandler   NotificationHandler
-	transportWriteHandler TransportWriteHandler
-	nodeInfoSendHandler   NodeInfoSendHandler
+	notificationHandler NotificationHandler
+	nodeInfoSendHandler NodeInfoSendHandler
 }
 
 const (
@@ -140,7 +139,7 @@ func New(c Config) (*Node, error) {
 	if err := initMetricsRegistry(prometheus.DefaultRegisterer, c.MetricsNamespace); err != nil {
 		switch err.(type) {
 		case prometheus.AlreadyRegisteredError:
-			// Can happens when node initialized several times since we use DefaultRegisterer,
+			// Can happen when node initialized several times since we use DefaultRegisterer,
 			// skip for now.
 		default:
 			return nil, err
@@ -169,12 +168,12 @@ func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
 }
 
-// SetBroker allows to set Broker implementation to use.
+// SetBroker allows setting Broker implementation to use.
 func (n *Node) SetBroker(b Broker) {
 	n.broker = b
 }
 
-// SetPresenceManager allows to set PresenceManager to use.
+// SetPresenceManager allows setting PresenceManager to use.
 func (n *Node) SetPresenceManager(m PresenceManager) {
 	n.presenceManager = m
 }
@@ -206,12 +205,12 @@ func (n *Node) Run() error {
 	return n.subDissolver.Run()
 }
 
-// Log allows to log entry.
+// Log allows logging a LogEntry.
 func (n *Node) Log(entry LogEntry) {
 	n.logger.log(entry)
 }
 
-// LogEnabled allows to log entry.
+// LogEnabled allows check whether a LogLevel enabled or not.
 func (n *Node) LogEnabled(level LogLevel) bool {
 	return n.logger.enabled(level)
 }
@@ -424,7 +423,10 @@ const defaultSurveyTimeout = 10 * time.Second
 // survey then this method uses default 10 seconds timeout. Keep in mind that Survey does not
 // scale very well as number of Centrifuge Node grows. Though it has reasonably good performance
 // to perform rare tasks even with relatively large number of nodes.
-func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]SurveyResult, error) {
+// If toNodeID is not an empty string then a survey will be sent only to the concrete node in
+// a cluster, otherwise a survey sent to all running nodes. See a corresponding Node.OnSurvey
+// method to handle received surveys.
+func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID string) (map[string]SurveyResult, error) {
 	if n.surveyHandler == nil {
 		return nil, errSurveyHandlerNotRegistered
 	}
@@ -438,7 +440,12 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 		defer cancel()
 	}
 
-	numNodes := len(n.nodes.list())
+	var numNodes int
+	if toNodeID != "" {
+		numNodes = 1
+	} else {
+		numNodes = len(n.nodes.list())
+	}
 
 	n.surveyMu.Lock()
 	n.surveyID++
@@ -466,12 +473,14 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 
 	// Invoke handler on this node since control message handler
 	// ignores those sent from the current Node.
-	n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
-		surveyChan <- survey{
-			UID:    n.uid,
-			Result: SurveyResult(reply),
-		}
-	})
+	if toNodeID == "" || toNodeID == n.ID() {
+		n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
+			surveyChan <- survey{
+				UID:    n.uid,
+				Result: SurveyResult(reply),
+			}
+		})
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -496,7 +505,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte) (map[string]S
 		Method: controlpb.Command_SURVEY_REQUEST,
 		Params: params,
 	}
-	err = n.publishControl(cmd, "")
+	err = n.publishControl(cmd, toNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -713,7 +722,7 @@ type PublishResult struct {
 // protocol then you can not publish binary data to these channel.
 //
 // Channels in Centrifuge are ephemeral and its settings not persisted over different
-// publish operations. So if you want to have channel with history stream behind you
+// publish operations. So if you want to have a channel with history stream behind you
 // need to provide WithHistory option on every publish. To simplify working with different
 // channels you can make some type of publish wrapper in your own code.
 //
@@ -725,14 +734,14 @@ func (n *Node) Publish(channel string, data []byte, opts ...PublishOption) (Publ
 	return n.publish(channel, data, opts...)
 }
 
-// publishJoin allows to publish join message into channel when someone subscribes on it
+// publishJoin allows publishing join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishJoin(ch string, info *ClientInfo) error {
 	incMessagesSent("join")
 	return n.broker.PublishJoin(ch, info)
 }
 
-// publishLeave allows to publish join message into channel when someone subscribes on it
+// publishLeave allows publishing join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 	incMessagesSent("leave")
@@ -742,7 +751,7 @@ func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 var errNotificationHandlerNotRegistered = errors.New("notification handler not registered")
 
 // Notify allows sending an asynchronous notification to all other nodes
-// (or to a single specific node). Unlike Survey it does not wait for any
+// (or to a single specific node). Unlike Survey, it does not wait for any
 // response. If toNodeID is not an empty string then a notification will
 // be sent to a concrete node in cluster, otherwise a notification sent to
 // all running nodes. See a corresponding Node.OnNotification method to
@@ -1178,6 +1187,7 @@ func pubToProto(pub *Publication) *protocol.Publication {
 		Offset: pub.Offset,
 		Data:   pub.Data,
 		Info:   infoToProto(pub.Info),
+		Meta:   pub.Meta,
 	}
 }
 
@@ -1189,6 +1199,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		Offset: pub.GetOffset(),
 		Data:   pub.Data,
 		Info:   infoFromProto(pub.GetInfo()),
+		Meta:   pub.GetMeta(),
 	}
 }
 
@@ -1236,6 +1247,7 @@ func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 		Limit:   opts.Limit,
 		Since:   opts.Since,
 		Reverse: opts.Reverse,
+		Epoch:   opts.Epoch,
 	})
 	if err != nil {
 		return HistoryResult{}, err
@@ -1256,7 +1268,7 @@ func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 	}, nil
 }
 
-// History allows to extract Publications in channel.
+// History allows extracting Publications in channel.
 // The channel must belong to namespace where history is on.
 func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) {
 	incActionCount("history")
@@ -1278,6 +1290,8 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 		builder.WriteString(strconv.Itoa(historyOpts.Limit))
 		builder.WriteString(",reverse:")
 		builder.WriteString(strconv.FormatBool(historyOpts.Reverse))
+		builder.WriteString(",epoch:")
+		builder.WriteString(historyOpts.Epoch)
 		key := builder.String()
 
 		result, err, _ := historyGroup.Do(key, func() (interface{}, error) {
@@ -1289,20 +1303,20 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 }
 
 // recoverHistory recovers publications since StreamPosition last seen by client.
-func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
+func (n *Node) recoverHistory(ch string, since StreamPosition, epoch string) (HistoryResult, error) {
 	incActionCount("history_recover")
 	limit := NoLimit
 	maxPublicationLimit := n.config.RecoveryMaxPublicationLimit
 	if maxPublicationLimit > 0 {
 		limit = maxPublicationLimit
 	}
-	return n.History(ch, WithLimit(limit), WithSince(&since))
+	return n.History(ch, WithLimit(limit), WithSince(&since), WithHistoryEpoch(epoch))
 }
 
 // streamTop returns current stream top StreamPosition for a channel.
-func (n *Node) streamTop(ch string) (StreamPosition, error) {
+func (n *Node) streamTop(ch string, epoch string) (StreamPosition, error) {
 	incActionCount("history_stream_top")
-	historyResult, err := n.History(ch)
+	historyResult, err := n.History(ch, WithHistoryEpoch(epoch))
 	if err != nil {
 		return StreamPosition{}, err
 	}
@@ -1316,7 +1330,7 @@ func (n *Node) RemoveHistory(ch string) error {
 }
 
 type nodeRegistry struct {
-	// mu allows to synchronize access to node registry.
+	// mu allows synchronizing access to node registry.
 	mu sync.RWMutex
 	// currentUID keeps uid of current node
 	currentUID string
@@ -1417,11 +1431,6 @@ func (n *Node) OnNotification(handler NotificationHandler) {
 	n.notificationHandler = handler
 }
 
-// OnTransportWrite allows setting TransportWriteHandler. This should be done before Node.Run called.
-func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
-	n.transportWriteHandler = handler
-}
-
 // OnNodeInfoSend allows setting NodeInfoSendHandler. This should be done before Node.Run called.
 func (n *Node) OnNodeInfoSend(handler NodeInfoSendHandler) {
 	n.nodeInfoSendHandler = handler
@@ -1431,8 +1440,9 @@ func (n *Node) OnNodeInfoSend(handler NodeInfoSendHandler) {
 // All eventHub methods are not goroutine-safe and supposed
 // to be called once before Node Run called.
 type eventHub struct {
-	connectingHandler ConnectingHandler
-	connectHandler    ConnectHandler
+	connectingHandler     ConnectingHandler
+	connectHandler        ConnectHandler
+	transportWriteHandler TransportWriteHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1448,6 +1458,11 @@ func (n *Node) OnConnecting(handler ConnectingHandler) {
 // application can start communicating with client.
 func (n *Node) OnConnect(handler ConnectHandler) {
 	n.clientEvents.connectHandler = handler
+}
+
+// OnTransportWrite allows setting TransportWriteHandler. This should be done before Node.Run called.
+func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
+	n.clientEvents.transportWriteHandler = handler
 }
 
 type brokerEventHandler struct {

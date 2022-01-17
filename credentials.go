@@ -7,7 +7,7 @@ type Credentials struct {
 	// UserID tells library an ID of current user. Leave this empty string
 	// if you need access from anonymous user.
 	UserID string
-	// ExpireAt allows to set time in future when connection must be validated.
+	// ExpireAt allows setting time in future when connection must be validated.
 	// In this case Client.OnRefresh callback must be set by application. Zero
 	// value means no expiration.
 	ExpireAt int64

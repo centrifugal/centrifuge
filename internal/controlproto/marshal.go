@@ -55,7 +55,7 @@ func (e *ProtobufEncoder) EncodeSurveyRequest(cmd *controlpb.SurveyRequest) ([]b
 	return cmd.MarshalVT()
 }
 
-// EncodeSurveyRequest ...
+// EncodeSurveyResponse ...
 func (e *ProtobufEncoder) EncodeSurveyResponse(cmd *controlpb.SurveyResponse) ([]byte, error) {
 	return cmd.MarshalVT()
 }

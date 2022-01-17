@@ -12,7 +12,7 @@ func (t ProtocolType) toProto() protocol.Type {
 const (
 	// ProtocolTypeJSON means JSON-based protocol.
 	ProtocolTypeJSON ProtocolType = "json"
-	// ProtocolTypeProtobuf means protobuf protocol.
+	// ProtocolTypeProtobuf means Protobuf protocol.
 	ProtocolTypeProtobuf ProtocolType = "protobuf"
 )
 
@@ -29,6 +29,18 @@ const (
 	PushFlagMessage
 )
 
+// ProtocolVersion defines protocol behavior.
+type ProtocolVersion uint8
+
+const (
+	// ProtocolVersion1 is the current stable client protocol.
+	ProtocolVersion1 ProtocolVersion = 1
+	// ProtocolVersion2 is currently EXPERIMENTAL. There could be still some
+	// backwards incompatible adjustments to it. But the plan is to make it
+	// default in the future.
+	ProtocolVersion2 ProtocolVersion = 2
+)
+
 // TransportInfo has read-only transport description methods.
 type TransportInfo interface {
 	// Name returns a name of transport.
@@ -36,9 +48,11 @@ type TransportInfo interface {
 	// Protocol returns an underlying transport protocol type used.
 	// JSON or Protobuf types are supported.
 	Protocol() ProtocolType
+	// ProtocolVersion returns client protocol version.
+	ProtocolVersion() ProtocolVersion
 	// Unidirectional returns whether transport is unidirectional. For
 	// unidirectional transports Centrifuge uses Push protobuf messages
-	// without additional wrapping into Reply protocol message.
+	// without additional wrapping pushes into Reply type.
 	Unidirectional() bool
 	// DisabledPushFlags returns a disabled push flags for specific transport.
 	// For example this allows to disable sending Disconnect push in case of
@@ -62,7 +76,7 @@ type Transport interface {
 	// here is to have a path without any additional allocations for massive
 	// broadcasts (since variadic args cause allocation).
 	WriteMany(...[]byte) error
-	// Close must close a transport. Transport implementation can optionally
+	// Close must close transport. Transport implementation can optionally
 	// handle Disconnect passed here. For example builtin WebSocket transport
 	// sends Disconnect as part of websocket.CloseMessage.
 	Close(*Disconnect) error

@@ -55,7 +55,7 @@ const (
 func surveyChannels(node *centrifuge.Node) (map[string]int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	results, err := node.Survey(ctx, "channels", nil)
+	results, err := node.Survey(ctx, "channels", nil, "")
 	if err != nil {
 		return nil, err
 	}

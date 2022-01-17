@@ -31,7 +31,7 @@ const (
 
 // RedisPresenceManagerConfig is a config for RedisPresenceManager.
 type RedisPresenceManagerConfig struct {
-	// Prefix to use before every channel name and key in Redis. By default
+	// Prefix to use before every channel name and key in Redis. By default,
 	// DefaultRedisPresenceManagerPrefix will be used.
 	Prefix string
 

@@ -15,6 +15,20 @@ func TestWithHistory(t *testing.T) {
 	require.Equal(t, time.Second, opts.HistoryTTL)
 }
 
+func TestWithMeta(t *testing.T) {
+	opt := WithMeta(map[string]string{"test": "value"})
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, "value", opts.Meta["test"])
+}
+
+func TestWithEpoch(t *testing.T) {
+	opt := WithEpoch("test")
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, "test", opts.Epoch)
+}
+
 func TestSubscribeOptions(t *testing.T) {
 	subscribeOpts := []SubscribeOption{
 		WithExpireAt(1),
@@ -23,6 +37,7 @@ func TestSubscribeOptions(t *testing.T) {
 		WithPosition(true),
 		WithRecover(true),
 		WithChannelInfo([]byte(`test`)),
+		WithSubscribeEpoch("test"),
 	}
 	opts := &SubscribeOptions{}
 	for _, opt := range subscribeOpts {
@@ -34,6 +49,7 @@ func TestSubscribeOptions(t *testing.T) {
 	require.True(t, opts.Position)
 	require.True(t, opts.Recover)
 	require.Equal(t, []byte(`test`), opts.ChannelInfo)
+	require.Equal(t, "test", opts.Epoch)
 }
 
 func TestWithDisconnect(t *testing.T) {

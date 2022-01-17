@@ -45,7 +45,7 @@ var _ Broker = (*RedisBroker)(nil)
 // RedisBroker additionally supports Redis Sentinel, client-side consistent sharding
 // and can work with Redis Cluster (including client-side sharding between different
 // Redis Clusters to scale PUB/SUB).
-// By default Redis >= 5 required (due to the fact RedisBroker uses STREAM data structure).
+// By default, Redis >= 5 required (due to the fact RedisBroker uses STREAM data structure).
 type RedisBroker struct {
 	controlRound           uint64 // Keep atomic on struct top for 32-bit architectures.
 	node                   *Node
@@ -97,7 +97,7 @@ type RedisBrokerConfig struct {
 	UseLists bool
 
 	// PubSubNumWorkers sets how many PUB/SUB message processing workers will
-	// be started. By default runtime.NumCPU() workers used.
+	// be started. By default, runtime.NumCPU() workers used.
 	PubSubNumWorkers int
 
 	// Shards is a list of Redis shards to use. At least one shard must be provided.
@@ -187,6 +187,7 @@ return {offset, epoch}
 	// ARGV[3] - stream lifetime
 	// ARGV[4] - channel to publish message to if needed
 	// ARGV[5] - history meta key expiration time
+	// ARGV[6] - optional stream epoch.
 	addHistoryStreamSource = `
 redis.replicate_commands()
 local epoch
@@ -194,8 +195,19 @@ if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("hget", KEYS[2], "e")
 end
 if epoch == false or epoch == nil then
-  epoch = redis.call('time')[1]
+  if ARGV[6] ~= "" then
+  	epoch = ARGV[6]
+  else
+    epoch = redis.call('time')[1]
+  end
   redis.call("hset", KEYS[2], "e", epoch)
+else
+  if ARGV[6] ~= "" and epoch ~= ARGV[6] then
+    epoch = ARGV[6]
+    redis.call("hset", KEYS[2], "e", epoch)
+    redis.call("hset", KEYS[2], "s", "0")
+    redis.call("del", KEYS[1])
+  end
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
 if ARGV[5] ~= '0' then
@@ -245,17 +257,29 @@ return {offset, epoch, pubs}
 	// ARGV[3] - limit
 	// ARGV[4] - reverse
 	// ARGV[5] - stream meta hash key expiration time
+	// ARGV[6] - optional stream epoch.
 	historyStreamSource = `
 redis.replicate_commands()
-local offset = redis.call("hget", KEYS[2], "s")
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("hget", KEYS[2], "e")
 end
 if epoch == false or epoch == nil then
-  epoch = redis.call('time')[1]
+  if ARGV[6] ~= "" then
+	epoch = ARGV[6]
+  else
+	epoch = redis.call('time')[1]
+  end
   redis.call("hset", KEYS[2], "e", epoch)
+else
+  if ARGV[6] ~= "" and epoch ~= ARGV[6] then
+    epoch = ARGV[6]
+    redis.call("hset", KEYS[2], "e", epoch)
+    redis.call("hset", KEYS[2], "s", "0")
+    redis.call("del", KEYS[1])
+  end
 end
+local offset = redis.call("hget", KEYS[2], "s")
 if ARGV[5] ~= '0' then
 	redis.call("expire", KEYS[2], ARGV[5])
 end
@@ -351,6 +375,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 	protoPub := &protocol.Publication{
 		Data: data,
 		Info: infoToProto(opts.ClientInfo),
+		Meta: opts.Meta,
 	}
 	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {
@@ -397,7 +422,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 		size = opts.HistorySize - 1
 		script = b.addHistoryListScript
 	}
-	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds})
+	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds, opts.Epoch})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return StreamPosition{}, resp.err
@@ -549,6 +574,8 @@ func (b *RedisBroker) unsubscribe(s *RedisShard, ch string) error {
 }
 
 // History - see Broker.History.
+// History iteration API (since + reverse) works only for Redis Streams (used by default).
+// Forcing epoch works only for Redis Streams also.
 func (b *RedisBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
 	return b.history(b.getShard(ch), ch, filter)
 }
@@ -1061,7 +1088,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 
 	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
-	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, filter.Reverse, historyMetaTTLSeconds})
+	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, filter.Reverse, historyMetaTTLSeconds, filter.Epoch})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err

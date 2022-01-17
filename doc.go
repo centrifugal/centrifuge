@@ -4,7 +4,7 @@
 // also used as a core of Centrifugo server (https://github.com/centrifugal/centrifugo).
 //
 // Centrifuge library provides several features on top of plain Websocket
-// implementation - read highlights in library README on Github –
+// implementation - read highlights in library README on GitHub –
 // https://github.com/centrifugal/centrifuge.
 //
 // The API of this library is almost all goroutine-safe except cases where
@@ -12,7 +12,7 @@
 // code inside event handlers should be synchronized since event handlers
 // can be called concurrently. Library expects that code inside event handlers
 // will not block. See more information about client connection lifetime and
-// event handler order/concurrency in README on Github.
+// event handler order/concurrency in README on GitHub.
 //
 // Also check out examples in repo to see main library concepts in action.
 package centrifuge

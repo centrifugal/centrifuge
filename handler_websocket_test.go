@@ -75,6 +75,47 @@ func TestWebsocketHandlerSubprotocol(t *testing.T) {
 	waitWithTimeout(t, done)
 }
 
+func TestWebsocketHandlerURLParams(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		require.Equal(t, event.Transport.Protocol(), ProtocolTypeProtobuf)
+		require.Equal(t, event.Transport.ProtocolVersion(), ProtocolVersion1)
+		close(done)
+		return ConnectReply{}, nil
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(node, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion2,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	dialer := &websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: 45 * time.Second,
+	}
+
+	// Connect with invalid protocol version.
+	_, _, err := dialer.Dial(url+"/connection/websocket?cf_protocol=protobuf&cf_protocol_version=v3", nil)
+	require.Error(t, err)
+
+	conn, resp, err := dialer.Dial(url+"/connection/websocket?cf_protocol=protobuf&cf_protocol_version=v1", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+	err = conn.WriteMessage(websocket.BinaryMessage, getConnectCommandProtobuf(t))
+	require.NoError(t, err)
+	waitWithTimeout(t, done)
+}
+
 func TestWebsocketTransportWrite(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -363,7 +404,7 @@ func testAuthMiddleware(h http.Handler) http.Handler {
 	})
 }
 
-// TestWebsocketHandlerConcurrentConnections allows to catch errors related
+// TestWebsocketHandlerConcurrentConnections allows catching errors related
 // to invalid buffer pool usages.
 func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 	n := defaultTestNode()
@@ -555,11 +596,11 @@ func TestCheckSameHostOrigin(t *testing.T) {
 	}
 }
 
-// BenchmarkWebsocketHandler allows to benchmark full flow with one real
+// BenchmarkWsPubSub allows benchmarking full flow with one real
 // Websocket connection subscribed to one channel. This is not very representative
 // in terms of time for operation as network IO involved but useful to look at
 // total allocations and difference between JSON and Protobuf cases using various buffer sizes.
-func BenchmarkWebsocketHandler(b *testing.B) {
+func BenchmarkWsPubSubV1(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -580,7 +621,7 @@ func BenchmarkWebsocketHandler(b *testing.B) {
 		getConn func(b testing.TB, channel string, url string) *websocket.Conn
 	}{
 		{"JSON", newRealConnJSON},
-		{"Protobuf", newRealConnProtobuf},
+		{"PB", newRealConnProtobuf},
 	}
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
@@ -649,7 +690,43 @@ func newRealConnProtobufConnect(b testing.TB, url string) *websocket.Conn {
 	return conn
 }
 
-func BenchmarkWebsocketHandlerCommandReply(b *testing.B) {
+func BenchmarkWsConnectV1(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	benchmarks := []struct {
+		name    string
+		getConn func(b testing.TB, url string) *websocket.Conn
+	}{
+		{"JSON", newRealConnJSONConnect},
+		{"PB", newRealConnProtobufConnect},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				conn := bm.getConn(b, url)
+				_ = conn.Close()
+			}
+		})
+	}
+}
+
+func BenchmarkWsCommandReplyV1(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -678,7 +755,7 @@ func BenchmarkWebsocketHandlerCommandReply(b *testing.B) {
 		getConn func(b testing.TB, url string) *websocket.Conn
 	}{
 		{"JSON", newRealConnJSONConnect},
-		{"Protobuf", newRealConnProtobufConnect},
+		{"PB", newRealConnProtobufConnect},
 	}
 
 	rpcRequest := &protocol.RPCRequest{
@@ -699,6 +776,208 @@ func BenchmarkWebsocketHandlerCommandReply(b *testing.B) {
 		Method: protocol.Command_RPC,
 		Params: params,
 	}
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
+	buf.Write(cmdBytes)
+
+	protobufCommand := buf.Bytes()
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			conn := bm.getConn(b, url)
+			defer func() { _ = conn.Close() }()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var err error
+				if bm.name == "JSON" {
+					err = conn.WriteMessage(websocket.TextMessage, jsonCommand)
+				} else {
+					err = conn.WriteMessage(websocket.BinaryMessage, protobufCommand)
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+				_, _, err = conn.ReadMessage()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func newRealConnJSONConnectV2(b testing.TB, url string) *websocket.Conn {
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	require.NoError(b, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	cmd := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func newRealConnProtobufConnectV2(b testing.TB, url string) *websocket.Conn {
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
+	require.NoError(b, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	cmd := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	n := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:n])
+	buf.Write(cmdBytes)
+
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_, _, err = conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func newRealConnJSONV2(b testing.TB, channel string, url string) *websocket.Conn {
+	conn := newRealConnJSONConnectV2(b, url)
+
+	cmd := &protocol.Command{
+		Id: 2,
+		Subscribe: &protocol.SubscribeRequest{
+			Channel: channel,
+		},
+	}
+	cmdBytes, _ := json.Marshal(cmd)
+	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	_, _, err := conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func newRealConnProtobufV2(b testing.TB, channel string, url string) *websocket.Conn {
+	conn := newRealConnProtobufConnectV2(b, url)
+
+	cmd := &protocol.Command{
+		Id: 2,
+		Subscribe: &protocol.SubscribeRequest{
+			Channel: channel,
+		},
+	}
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
+	buf.Write(cmdBytes)
+
+	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	_, _, err := conn.ReadMessage()
+	require.NoError(b, err)
+	return conn
+}
+
+func BenchmarkWsPubSubV2(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion2,
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	payload := []byte(`{"input": "test"}`)
+
+	benchmarks := []struct {
+		name    string
+		getConn func(b testing.TB, channel string, url string) *websocket.Conn
+	}{
+		{"JSON", newRealConnJSONV2},
+		{"PB", newRealConnProtobufV2},
+	}
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			b.ReportAllocs()
+			conn := bm.getConn(b, "test", url)
+			defer func() { _ = conn.Close() }()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := n.Publish("test", payload)
+				if err != nil {
+					panic(err)
+				}
+				_, _, err = conn.ReadMessage()
+				if err != nil {
+					panic(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkWsCommandReplyV2(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
+			callback(RPCReply{
+				Data: []byte("{}"),
+			}, nil)
+		})
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion2,
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	payload := []byte(`{"input": "test"}`)
+
+	benchmarks := []struct {
+		name    string
+		getConn func(b testing.TB, url string) *websocket.Conn
+	}{
+		{"JSON", newRealConnJSONConnectV2},
+		{"PB", newRealConnProtobufConnectV2},
+	}
+
+	rpcRequest := &protocol.RPCRequest{
+		Data: payload,
+	}
+
+	cmd := &protocol.Command{
+		Id:  1,
+		Rpc: rpcRequest,
+	}
+	jsonCommand, _ := json.Marshal(cmd)
+
 	cmdBytes, _ := cmd.MarshalVT()
 
 	var buf bytes.Buffer

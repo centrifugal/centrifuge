@@ -8,12 +8,15 @@ import (
 // Publication is a data sent to a channel.
 type Publication struct {
 	// Offset is an incremental position number inside a history stream.
-	// Zero value means that channel does not maintain Publication stream.
+	// Zero value means that the channel does not maintain Publication stream.
 	Offset uint64
 	// Data published to a channel.
 	Data []byte
-	// Info is an optional information about client connection published this data.
+	// Info is optional information about client connection published this data.
 	Info *ClientInfo
+	// Meta is a map with custom key-values attached to a Publication. This Meta map
+	// will be delivered to a client.
+	Meta map[string]string
 }
 
 // ClientInfo contains information about client connection.
@@ -22,9 +25,9 @@ type ClientInfo struct {
 	ClientID string
 	// UserID is an ID of authenticated user. Zero value means anonymous user.
 	UserID string
-	// ConnInfo is an additional information about connection.
+	// ConnInfo is additional information about connection.
 	ConnInfo []byte
-	// ChanInfo is an additional information about connection in context of
+	// ChanInfo is additional information about connection in context of
 	// channel subscription.
 	ChanInfo []byte
 }
@@ -41,7 +44,7 @@ type BrokerEventHandler interface {
 	HandleControl(data []byte) error
 }
 
-// HistoryFilter allows to filter history according to fields set.
+// HistoryFilter allows filtering history according to fields set.
 type HistoryFilter struct {
 	// Since used to extract publications from stream since provided StreamPosition.
 	Since *StreamPosition
@@ -52,6 +55,9 @@ type HistoryFilter struct {
 	Limit int
 	// Reverse direction.
 	Reverse bool
+	// Epoch if set instructs history request to set an epoch for a stream. On new
+	// epoch stream will be reset.
+	Epoch string
 }
 
 // StreamPosition contains fields to describe position in stream.
@@ -63,9 +69,9 @@ type StreamPosition struct {
 	// Epoch allows handling situations when storage
 	// lost stream entirely for some reason (expired or lost after restart) and we
 	// want to track this fact to prevent successful recovery from another stream.
-	// I.e. for example we have stream [1, 2, 3], then it's lost and new stream
+	// I.e. for example we have a stream [1, 2, 3], then it's lost and new stream
 	// contains [1, 2, 3, 4], client that recovers from position 3 will only receive
-	// publication 4 missing 1, 2, 3 from new stream. With epoch we can tell client
+	// publication 4 missing 1, 2, 3 from new stream. With epoch, we can tell client
 	// that correct recovery is not possible.
 	Epoch string
 }
@@ -84,8 +90,13 @@ type PublishOptions struct {
 	HistoryTTL time.Duration
 	// HistorySize sets history size limit to prevent infinite stream growth.
 	HistorySize int
-	// ClientInfo to include into Publication. By default no ClientInfo will be appended.
+	// ClientInfo to include into Publication. By default, no ClientInfo will be appended.
 	ClientInfo *ClientInfo
+	// Meta is a custom meta information for the Publication.
+	Meta map[string]string
+	// Epoch if set instructs publish request to set an epoch for a stream. On new
+	// epoch stream will be reset.
+	Epoch string
 }
 
 // Broker is responsible for PUB/SUB mechanics.
@@ -99,7 +110,7 @@ type Broker interface {
 	// Unsubscribe node from channel to stop listening messages from it.
 	Unsubscribe(ch string) error
 
-	// Publish allows to send data into channel. Data should be
+	// Publish allows sending data into channel. Data should be
 	// delivered to all clients subscribed to this channel at moment on any
 	// Centrifuge node (with at most once delivery guarantee).
 	//
@@ -117,7 +128,7 @@ type Broker interface {
 	PublishJoin(ch string, info *ClientInfo) error
 	// PublishLeave publishes Leave Push message into channel.
 	PublishLeave(ch string, info *ClientInfo) error
-	// PublishControl allows to send control command data. If nodeID is empty string
+	// PublishControl allows sending control command data. If nodeID is empty string
 	// then message should be delivered to all running nodes, if nodeID is set then
 	// message should be delivered only to node with specified ID.
 	PublishControl(data []byte, nodeID, shardKey string) error

@@ -40,6 +40,11 @@ func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.protoType
 }
 
+// ProtocolVersion ...
+func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 // Unidirectional returns whether transport is unidirectional.
 func (t *customWebsocketTransport) Unidirectional() bool {
 	return false

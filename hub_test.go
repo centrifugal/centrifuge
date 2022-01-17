@@ -10,35 +10,39 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/prepared"
-
-	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
 
 type testTransport struct {
-	mu             sync.Mutex
-	sink           chan []byte
-	closed         bool
-	closeCh        chan struct{}
-	disconnect     *Disconnect
-	protoType      ProtocolType
-	cancelFn       func()
-	unidirectional bool
-	writeErr       error
+	mu                sync.Mutex
+	sink              chan []byte
+	closed            bool
+	closeCh           chan struct{}
+	disconnect        *Disconnect
+	protoType         ProtocolType
+	cancelFn          func()
+	unidirectional    bool
+	protocolVersion   ProtocolVersion
+	writeErr          error
+	writeErrorContent string
 }
 
 func newTestTransport(cancelFn func()) *testTransport {
 	return &testTransport{
-		cancelFn:       cancelFn,
-		protoType:      ProtocolTypeJSON,
-		closeCh:        make(chan struct{}),
-		unidirectional: false,
+		cancelFn:        cancelFn,
+		protoType:       ProtocolTypeJSON,
+		closeCh:         make(chan struct{}),
+		unidirectional:  false,
+		protocolVersion: ProtocolVersion1,
 	}
 }
 
 func (t *testTransport) setProtocolType(pType ProtocolType) {
 	t.protoType = pType
+}
+
+func (t *testTransport) setProtocolVersion(v ProtocolVersion) {
+	t.protocolVersion = v
 }
 
 func (t *testTransport) setUnidirectional(uni bool) {
@@ -51,7 +55,9 @@ func (t *testTransport) setSink(sink chan []byte) {
 
 func (t *testTransport) Write(message []byte) error {
 	if t.writeErr != nil {
-		return t.writeErr
+		if t.writeErrorContent == "" || strings.Contains(string(message), t.writeErrorContent) {
+			return t.writeErr
+		}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -66,7 +72,11 @@ func (t *testTransport) Write(message []byte) error {
 
 func (t *testTransport) WriteMany(messages ...[]byte) error {
 	if t.writeErr != nil {
-		return t.writeErr
+		for _, message := range messages {
+			if t.writeErrorContent == "" || strings.Contains(string(message), t.writeErrorContent) {
+				return t.writeErr
+			}
+		}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -91,6 +101,10 @@ func (t *testTransport) Protocol() ProtocolType {
 
 func (t *testTransport) Unidirectional() bool {
 	return t.unidirectional
+}
+
+func (t *testTransport) ProtocolVersion() ProtocolVersion {
+	return t.protocolVersion
 }
 
 func (t *testTransport) DisabledPushFlags() uint64 {
@@ -143,9 +157,10 @@ func TestHubUnsubscribe(t *testing.T) {
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	client := newTestSubscribedClient(t, n, "42", "test_channel")
-	transport := client.transport.(*testTransport)
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
 	transport.sink = make(chan []byte, 100)
+	newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 	// Unsubscribe not existed user.
 	err := n.hub.unsubscribe("1", "test_channel", "")
@@ -154,12 +169,19 @@ func TestHubUnsubscribe(t *testing.T) {
 	// Unsubscribe subscribed user.
 	err = n.hub.unsubscribe("42", "test_channel", "")
 	require.NoError(t, err)
-	select {
-	case data := <-transport.sink:
-		require.Equal(t, "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}", string(data))
-	case <-time.After(2 * time.Second):
-		t.Fatal("no data in sink")
+
+LOOP:
+	for {
+		select {
+		case data := <-transport.sink:
+			if string(data) == "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}" {
+				break LOOP
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no data in sink")
+		}
 	}
+
 	require.Zero(t, n.hub.NumSubscribers("test_channel"))
 }
 
@@ -186,11 +208,13 @@ func TestHubDisconnect(t *testing.T) {
 	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
 		defer wg.Done()
 		require.False(t, e.Disconnect.Reconnect)
+		require.Equal(t, DisconnectForceNoReconnect.Code, e.Disconnect.Code)
 	}
 
 	clientWithReconnect.eventHub.disconnectHandler = func(e DisconnectEvent) {
 		defer wg.Done()
 		require.True(t, e.Disconnect.Reconnect)
+		require.Equal(t, DisconnectForceReconnect.Code, e.Disconnect.Code)
 	}
 
 	// Disconnect not existed user.
@@ -323,11 +347,19 @@ func TestHubDisconnect_ClientID(t *testing.T) {
 
 func TestHubBroadcastPublication(t *testing.T) {
 	tcs := []struct {
-		name         string
-		protocolType ProtocolType
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
 	}{
-		{name: "JSON", protocolType: ProtocolTypeJSON},
-		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
+		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
+		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
+		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
 	for _, tc := range tcs {
@@ -335,31 +367,39 @@ func TestHubBroadcastPublication(t *testing.T) {
 			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
-			client := newTestSubscribedClient(t, n, "42", "test_channel")
-			transport := client.transport.(*testTransport)
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
 			transport.sink = make(chan []byte, 100)
-			transport.protoType = tc.protocolType
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
-			// Broadcast to not existed channel.
+			// Broadcast to non-existing channel.
 			err := n.hub.BroadcastPublication(
-				"not_test_channel",
+				"non_existing_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
 				StreamPosition{},
 			)
 			require.NoError(t, err)
 
-			// Broadcast to existed channel.
+			// Broadcast to existing channel.
 			err = n.hub.BroadcastPublication(
 				"test_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
 				StreamPosition{},
 			)
 			require.NoError(t, err)
-			select {
-			case data := <-transport.sink:
-				require.True(t, strings.Contains(string(data), "broadcast_data"))
-			case <-time.After(2 * time.Second):
-				t.Fatal("no data in sink")
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
 			}
 		})
 	}
@@ -367,11 +407,19 @@ func TestHubBroadcastPublication(t *testing.T) {
 
 func TestHubBroadcastJoin(t *testing.T) {
 	tcs := []struct {
-		name         string
-		protocolType ProtocolType
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
 	}{
-		{name: "JSON", protocolType: ProtocolTypeJSON},
-		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
+		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
+		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
+		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
 	for _, tc := range tcs {
@@ -379,10 +427,13 @@ func TestHubBroadcastJoin(t *testing.T) {
 			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
-			client := newTestSubscribedClient(t, n, "42", "test_channel")
-			transport := client.transport.(*testTransport)
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
 			transport.sink = make(chan []byte, 100)
-			transport.protoType = tc.protocolType
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
@@ -391,11 +442,16 @@ func TestHubBroadcastJoin(t *testing.T) {
 			// Broadcast to existed channel.
 			err = n.hub.broadcastJoin("test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
-			select {
-			case data := <-transport.sink:
-				require.True(t, strings.Contains(string(data), "broadcast_client"))
-			case <-time.After(2 * time.Second):
-				t.Fatal("no data in sink")
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_client") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
 			}
 		})
 	}
@@ -403,11 +459,19 @@ func TestHubBroadcastJoin(t *testing.T) {
 
 func TestHubBroadcastLeave(t *testing.T) {
 	tcs := []struct {
-		name         string
-		protocolType ProtocolType
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
 	}{
-		{name: "JSON", protocolType: ProtocolTypeJSON},
-		{name: "Protobuf", protocolType: ProtocolTypeProtobuf},
+		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
+		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
+		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
+		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
 	for _, tc := range tcs {
@@ -415,10 +479,13 @@ func TestHubBroadcastLeave(t *testing.T) {
 			n := defaultTestNode()
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
-			client := newTestSubscribedClient(t, n, "42", "test_channel")
-			transport := client.transport.(*testTransport)
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
 			transport.sink = make(chan []byte, 100)
-			transport.protoType = tc.protocolType
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
@@ -427,11 +494,16 @@ func TestHubBroadcastLeave(t *testing.T) {
 			// Broadcast to existed channel.
 			err = n.hub.broadcastLeave("test_channel", &ClientInfo{ClientID: "broadcast_client"})
 			require.NoError(t, err)
-			select {
-			case data := <-transport.sink:
-				require.Contains(t, string(data), "broadcast_client")
-			case <-time.After(2 * time.Second):
-				t.Fatal("no data in sink")
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_client") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
 			}
 		})
 	}
@@ -494,13 +566,6 @@ func TestHubSubscriptions(t *testing.T) {
 	require.Equal(t, h.NumChannels(), 0)
 	require.Zero(t, h.NumSubscribers("test1"))
 	require.Zero(t, h.NumSubscribers("test2"))
-}
-
-func TestPreparedReply(t *testing.T) {
-	reply := protocol.Reply{}
-	preparedReply := prepared.NewReply(&reply, protocol.TypeJSON)
-	data := preparedReply.Data()
-	require.NotNil(t, data)
 }
 
 func TestUserConnections(t *testing.T) {

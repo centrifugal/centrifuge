@@ -5,55 +5,13 @@ import (
 )
 
 type Item struct {
-	Data   []byte
-	IsPush bool
+	Data []byte
 }
 
 // Queue is an unbounded queue of Item.
 // The queue is goroutine safe.
 // Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT)
-type Queue interface {
-	// Add an Item to the back of the queue
-	// will return false if the queue is closed.
-	// In that case the Item is dropped.
-	Add(Item) bool
-
-	// Remove will remove a Item from the queue.
-	// If false is returned, it either means 1) there were no items on the queue
-	// or 2) the queue is closed.
-	Remove() (Item, bool)
-
-	// Close the queue and discard all entries in the queue
-	// all goroutines in wait() will return
-	Close()
-
-	// CloseRemaining will close the queue and return all entries in the queue.
-	// All goroutines in wait() will return
-	CloseRemaining() []Item
-
-	// Closed returns true if the queue has been closed
-	// The call cannot guarantee that the queue hasn't been
-	// closed while the function returns, so only "true" has a definite meaning.
-	Closed() bool
-
-	// Wait for a Item to be added or queue to be closed.
-	// If there is items on the queue the first will
-	// be returned immediately.
-	// Will return "", false if the queue is closed.
-	// Otherwise the return value of "remove" is returned.
-	Wait() bool
-
-	// Cap returns the capacity (without allocations).
-	Cap() int
-
-	// Len returns the current length of the queue.
-	Len() int
-
-	// Size returns the current size of the queue in bytes.
-	Size() int
-}
-
-type byteQueue struct {
+type Queue struct {
 	mu      sync.RWMutex
 	cond    *sync.Cond
 	nodes   []Item
@@ -67,9 +25,9 @@ type byteQueue struct {
 
 var initialCapacity = 2
 
-// New ByteQueue returns a new Item queue with initial capacity.
-func New() Queue {
-	sq := &byteQueue{
+// New Queue returns a new Item queue with initial capacity.
+func New() *Queue {
+	sq := &Queue{
 		initCap: initialCapacity,
 		nodes:   make([]Item, initialCapacity),
 	}
@@ -78,7 +36,7 @@ func New() Queue {
 }
 
 // WriteMany mutex must be held when calling
-func (q *byteQueue) resize(n int) {
+func (q *Queue) resize(n int) {
 	nodes := make([]Item, n)
 	if q.head < q.tail {
 		copy(nodes, q.nodes[q.head:q.tail])
@@ -92,17 +50,17 @@ func (q *byteQueue) resize(n int) {
 	q.nodes = nodes
 }
 
-// Add a Item to the back of the queue
+// Add an Item to the back of the queue
 // will return false if the queue is closed.
 // In that case the Item is dropped.
-func (q *byteQueue) Add(i Item) bool {
+func (q *Queue) Add(i Item) bool {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
 		return false
 	}
 	if q.cnt == len(q.nodes) {
-		// Also tested a grow rate of 1.5, see: http://stackoverflow.com/questions/2269063/buffer-growth-strategy
+		// Also tested a growth rate of 1.5, see: http://stackoverflow.com/questions/2269063/buffer-growth-strategy
 		// In Go this resulted in a higher memory usage.
 		q.resize(q.cnt * 2)
 	}
@@ -117,7 +75,7 @@ func (q *byteQueue) Add(i Item) bool {
 
 // Close the queue and discard all entries in the queue
 // all goroutines in wait() will return
-func (q *byteQueue) Close() {
+func (q *Queue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.closed = true
@@ -129,7 +87,7 @@ func (q *byteQueue) Close() {
 
 // CloseRemaining will close the queue and return all entries in the queue.
 // All goroutines in wait() will return.
-func (q *byteQueue) CloseRemaining() []Item {
+func (q *Queue) CloseRemaining() []Item {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
@@ -153,7 +111,7 @@ func (q *byteQueue) CloseRemaining() []Item {
 // Closed returns true if the queue has been closed
 // The call cannot guarantee that the queue hasn't been
 // closed while the function returns, so only "true" has a definite meaning.
-func (q *byteQueue) Closed() bool {
+func (q *Queue) Closed() bool {
 	q.mu.RLock()
 	c := q.closed
 	q.mu.RUnlock()
@@ -163,8 +121,8 @@ func (q *byteQueue) Closed() bool {
 // Wait for a message to be added.
 // If there are items on the queue will return immediately.
 // Will return false if the queue is closed.
-// Otherwise returns true.
-func (q *byteQueue) Wait() bool {
+// Otherwise, returns true.
+func (q *Queue) Wait() bool {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
@@ -179,10 +137,10 @@ func (q *byteQueue) Wait() bool {
 	return true
 }
 
-// Remove will remove a Item from the queue.
+// Remove will remove an Item from the queue.
 // If false is returned, it either means 1) there were no items on the queue
 // or 2) the queue is closed.
-func (q *byteQueue) Remove() (Item, bool) {
+func (q *Queue) Remove() (Item, bool) {
 	q.mu.Lock()
 	if q.cnt == 0 {
 		q.mu.Unlock()
@@ -202,7 +160,7 @@ func (q *byteQueue) Remove() (Item, bool) {
 }
 
 // Cap returns the capacity (without allocations)
-func (q *byteQueue) Cap() int {
+func (q *Queue) Cap() int {
 	q.mu.RLock()
 	c := cap(q.nodes)
 	q.mu.RUnlock()
@@ -210,7 +168,7 @@ func (q *byteQueue) Cap() int {
 }
 
 // Len returns the current length of the queue.
-func (q *byteQueue) Len() int {
+func (q *Queue) Len() int {
 	q.mu.RLock()
 	l := q.cnt
 	q.mu.RUnlock()
@@ -218,7 +176,7 @@ func (q *byteQueue) Len() int {
 }
 
 // Size returns the current size of the queue.
-func (q *byteQueue) Size() int {
+func (q *Queue) Size() int {
 	q.mu.RLock()
 	s := q.size
 	q.mu.RUnlock()

@@ -17,7 +17,7 @@ type writerConfig struct {
 type writer struct {
 	mu       sync.Mutex
 	config   writerConfig
-	messages queue.Queue
+	messages *queue.Queue
 	closed   bool
 }
 
@@ -80,15 +80,13 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 				break
 			}
 		}
-		if len(messages) > 0 {
-			if len(messages) == 1 {
-				writeErr = w.config.WriteFn(messages[0])
-			} else {
-				writeErr = w.config.WriteManyFn(messages...)
-			}
+		if len(messages) == 1 {
+			writeErr = w.config.WriteFn(messages[0])
+		} else {
+			writeErr = w.config.WriteManyFn(messages...)
 		}
 	} else {
-		// WriteMany single message without allocating new [][]byte slice.
+		// WriteMany single message without allocating new slice.
 		writeErr = w.config.WriteFn(msg)
 	}
 	if writeErr != nil {
@@ -107,8 +105,7 @@ func (w *writer) run() {
 	}
 
 	for {
-		ok := w.waitSendMessage(maxMessagesInFrame)
-		if !ok {
+		if ok := w.waitSendMessage(maxMessagesInFrame); !ok {
 			return
 		}
 	}

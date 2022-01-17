@@ -197,7 +197,11 @@ func main() {
 		// Publish personal notifications for user 42 periodically.
 		i := 1
 		for {
-			_, err := node.Publish("#42", []byte(`{"personal": "`+strconv.Itoa(i)+`"}`), centrifuge.WithHistory(300, time.Minute))
+			_, err := node.Publish(
+				"#42",
+				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(300, time.Minute),
+			)
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
 			}
@@ -210,9 +214,13 @@ func main() {
 		// Publish to channel periodically.
 		i := 1
 		for {
-			_, err := node.Publish("chat:index", []byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`), centrifuge.WithHistory(300, time.Minute))
+			_, err := node.Publish(
+				"chat:index",
+				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(300, time.Minute),
+			)
 			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
+				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
 			time.Sleep(10000 * time.Millisecond)

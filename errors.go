@@ -28,8 +28,10 @@ func (e Error) Error() string {
 // Here we define well-known errors that can be used in client protocol
 // replies.
 // Library user can define own application specific errors. When define new
-// custom error it is recommended to use error codes > 1000 assuming that
+// custom error it is recommended to use error codes >= 1000 assuming that
 // codes in interval 0-999 reserved by Centrifuge.
+// Server Error codes start with 100 as we aim to have client-side error codes
+// in the future, see https://github.com/centrifugal/centrifuge/issues/149.
 var (
 	// ErrorInternal means server error, if returned this is a signal
 	// that something went wrong with server itself and client most probably
@@ -99,7 +101,7 @@ var (
 		Message: "too many requests",
 	}
 	// ErrorUnrecoverablePosition means that stream does not contain required
-	// range of publications to fulfill a history query. This can be happen to
+	// range of publications to fulfill a history query. This can happen due to
 	// expiration, size limitation or due to wrong epoch.
 	ErrorUnrecoverablePosition = &Error{
 		Code:    112,

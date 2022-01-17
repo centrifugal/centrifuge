@@ -198,6 +198,39 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	h.RUnlock()
 }
 
+func testBrokerEpoch(t *testing.T, b Broker) {
+	t.Helper()
+	sp, err := b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, Epoch: "xyz"})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), sp.Offset)
+	require.Equal(t, "xyz", sp.Epoch)
+	_, sp, err = b.History("test", HistoryFilter{})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), sp.Offset)
+	require.Equal(t, "xyz", sp.Epoch)
+	sp, err = b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, Epoch: ""})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), sp.Offset)
+	require.Equal(t, "xyz", sp.Epoch)
+	sp, err = b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, Epoch: "xxx"})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), sp.Offset)
+	require.Equal(t, "xxx", sp.Epoch)
+	_, sp, err = b.History("test", HistoryFilter{})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), sp.Offset)
+	require.Equal(t, "xxx", sp.Epoch)
+	_, sp, err = b.History("test", HistoryFilter{Epoch: "zzz"})
+	require.NoError(t, err)
+	require.Zero(t, sp.Offset)
+	require.Equal(t, "zzz", sp.Epoch)
+}
+
+func TestMemoryBrokerEpoch(t *testing.T) {
+	b := testMemoryBroker()
+	testBrokerEpoch(t, b)
+}
+
 func TestMemoryBrokerRecover(t *testing.T) {
 	e := testMemoryBroker()
 
@@ -403,7 +436,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 
 				rwWrapper := testReplyWriterWrapper()
 
-				disconnect := client.handleSubscribe(getJSONEncodedParams(t, subscribeCmd), rwWrapper.rw)
+				disconnect := client.handleSubscribe(subscribeCmd, &protocol.Command{}, time.Now(), rwWrapper.rw)
 				require.Nil(t, disconnect)
 				require.Nil(t, rwWrapper.replies[0].Error)
 				res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
