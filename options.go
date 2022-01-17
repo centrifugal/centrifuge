@@ -28,6 +28,9 @@ func WithMeta(meta map[string]string) PublishOption {
 }
 
 // WithEpoch allows publishing with specified stream epoch – see PublishOptions.Epoch.
+// This API is EXPERIMENTAL and may be changed/removed in the future releases – please
+// consider discussing the use case with Centrifuge maintainer before using this. In most
+// cases you don't need to control Epoch from the outside.
 func WithEpoch(epoch string) PublishOption {
 	return func(opts *PublishOptions) {
 		opts.Epoch = epoch
@@ -62,6 +65,9 @@ type SubscribeOptions struct {
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
 	RecoverSince *StreamPosition
 	// Epoch to set for a stream (only works for positioned streams).
+	// This API is EXPERIMENTAL and may be changed/removed in the future releases – please
+	// consider discussing the use case with Centrifuge maintainer before using this. In most
+	// cases you don't need to control Epoch from the outside.
 	Epoch string
 	// clientID to subscribe.
 	clientID string
@@ -135,6 +141,9 @@ func WithRecoverSince(since *StreamPosition) SubscribeOption {
 }
 
 // WithSubscribeEpoch allows setting SubscribeOptions.Epoch.
+// This API is EXPERIMENTAL and may be changed/removed in the future releases – please
+// consider discussing the use case with Centrifuge maintainer before using this. In most
+// cases you don't need to control Epoch from the outside.
 func WithSubscribeEpoch(epoch string) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.Epoch = epoch
@@ -283,6 +292,9 @@ func WithReverse(reverse bool) HistoryOption {
 }
 
 // WithHistoryEpoch allows setting HistoryOptions.Epoch option.
+// This API is EXPERIMENTAL and may be changed/removed in the future releases – please
+// consider discussing the use case with Centrifuge maintainer before using this. In most
+// cases you don't need to control Epoch from the outside.
 func WithHistoryEpoch(epoch string) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Epoch = epoch
