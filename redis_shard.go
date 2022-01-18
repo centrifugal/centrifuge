@@ -86,6 +86,7 @@ func confFromAddress(address string, conf RedisShardConfig) (RedisShardConfig, e
 		return conf, errors.New("connection address should have tcp://, redis:// or unix:// scheme")
 	}
 	if u.User != nil {
+		conf.User = u.User.Username()
 		if pass, ok := u.User.Password(); ok {
 			conf.Password = pass
 		}
@@ -153,11 +154,15 @@ type RedisShardConfig struct {
 	SentinelAddresses []string
 	// SentinelMasterName is a name of Redis instance master Sentinel monitors.
 	SentinelMasterName string
+	// SentinelUser is a user for Sentinel ACL-based auth.
+	SentinelUser string
 	// SentinelPassword is a password for Sentinel. Works with Sentinel >= 5.0.1.
 	SentinelPassword string
 
 	// DB is Redis database number. If not set then database 0 used.
 	DB int
+	// User for Redis ACL-based auth.
+	User string
 	// Password is password to use when connecting to Redis database.
 	// If zero then password not used.
 	Password string
@@ -426,6 +431,7 @@ func (sr *subRequest) result() error {
 }
 
 func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr string, options ...redis.DialOption) (*redis.Pool, error) {
+	user := conf.User
 	password := conf.Password
 	db := conf.DB
 
@@ -455,7 +461,13 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 					return nil, err
 				}
 				if conf.SentinelPassword != "" {
-					if _, err := c.Do("AUTH", conf.SentinelPassword); err != nil {
+					var err error
+					if conf.SentinelUser != "" {
+						_, err = c.Do("AUTH", conf.SentinelUser, conf.SentinelPassword)
+					} else {
+						_, err = c.Do("AUTH", conf.SentinelPassword)
+					}
+					if err != nil {
 						_ = c.Close()
 						n.Log(NewLogEntry(LogLevelError, "error auth in Redis Sentinel", map[string]interface{}{"error": err.Error()}))
 						return nil, err
@@ -518,7 +530,13 @@ func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr st
 				}
 
 				if password != "" {
-					if _, err := c.Do("AUTH", password); err != nil {
+					var err error
+					if user != "" {
+						_, err = c.Do("AUTH", user, password)
+					} else {
+						_, err = c.Do("AUTH", password)
+					}
+					if err != nil {
 						_ = c.Close()
 						n.Log(NewLogEntry(LogLevelError, "error auth in Redis", map[string]interface{}{"error": err.Error()}))
 						return nil, err
