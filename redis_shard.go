@@ -86,7 +86,9 @@ func confFromAddress(address string, conf RedisShardConfig) (RedisShardConfig, e
 		return conf, errors.New("connection address should have tcp://, redis:// or unix:// scheme")
 	}
 	if u.User != nil {
-		conf.User = u.User.Username()
+		if u.User.Username() != "" {
+			conf.User = u.User.Username()
+		}
 		if pass, ok := u.User.Password(); ok {
 			conf.Password = pass
 		}
