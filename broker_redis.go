@@ -154,6 +154,7 @@ const (
 	// ARGV[3] - history lifetime
 	// ARGV[4] - channel to publish message to if needed
 	// ARGV[5] - history meta key expiration time
+	// ARGV[6] - optional expected stream epoch.
 	addHistorySource = `
 redis.replicate_commands()
 local epoch
@@ -161,8 +162,16 @@ if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("hget", KEYS[2], "e")
 end
 if epoch == false or epoch == nil then
-  epoch = redis.call('time')[1]
+  if ARGV[6] ~= "" then
+	return {1, 0, ""}
+  else
+    epoch = redis.call('time')[1]
+  end
   redis.call("hset", KEYS[2], "e", epoch)
+else
+  if ARGV[6] ~= "" and epoch ~= ARGV[6] then
+	return {1, 0, ""}
+  end
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
 if ARGV[5] ~= '0' then
@@ -175,7 +184,7 @@ redis.call("expire", KEYS[1], ARGV[3])
 if ARGV[4] ~= '' then
 	redis.call("publish", ARGV[4], payload)
 end
-return {1, offset, epoch}
+return {0, offset, epoch}
 		`
 
 	// addHistoryStreamSource contains Lua script to save data to Redis stream and
