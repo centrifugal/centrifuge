@@ -270,12 +270,12 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 	if stream, ok := h.streams[ch]; ok {
 		epoch = stream.Epoch()
 		if opts.ExpectedEpoch != "" && opts.ExpectedEpoch != epoch {
-			return StreamPosition{}, PublishError{ErrCode: 1}
+			return StreamPosition{}, PublishError{ErrCode: PublishErrorUnexpectedEpoch}
 		}
 		offset, _ = stream.Add(pub, opts.HistorySize)
 	} else {
 		if opts.ExpectedEpoch != "" {
-			return StreamPosition{}, PublishError{ErrCode: 1}
+			return StreamPosition{}, PublishError{ErrCode: PublishErrorUnexpectedEpoch}
 		}
 		stream := memstream.New("")
 		epoch = stream.Epoch()

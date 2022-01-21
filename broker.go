@@ -99,8 +99,16 @@ type PublishOptions struct {
 	ExpectedEpoch string
 }
 
+const (
+	// PublishErrorUnexpectedEpoch may be returned if stream already has different
+	// epoch than passed inside PublishOptions.ExpectedEpoch. In this case Publication
+	// is dropped by Broker.
+	PublishErrorUnexpectedEpoch uint64 = 1
+)
+
 // PublishError may be returned by a Broker.Publish with a special ErrCode.
 type PublishError struct {
+	// ErrCode for identifying the root cause of PublishError.
 	ErrCode uint64
 }
 
