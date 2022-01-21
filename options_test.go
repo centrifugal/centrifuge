@@ -23,10 +23,10 @@ func TestWithMeta(t *testing.T) {
 }
 
 func TestWithEpoch(t *testing.T) {
-	opt := WithEpoch("test")
+	opt := WithExpectedEpoch("test")
 	opts := &PublishOptions{}
 	opt(opts)
-	require.Equal(t, "test", opts.Epoch)
+	require.Equal(t, "test", opts.ExpectedEpoch)
 }
 
 func TestSubscribeOptions(t *testing.T) {

@@ -244,7 +244,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 	h.Lock()
 	defer h.Unlock()
 
-	var index uint64
+	var offset uint64
 	var epoch string
 
 	expireAt := time.Now().Unix() + int64(opts.HistoryTTL.Seconds())
@@ -269,20 +269,22 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 
 	if stream, ok := h.streams[ch]; ok {
 		epoch = stream.Epoch()
-		if opts.Epoch != "" && opts.Epoch != epoch {
-			stream.Reset(opts.Epoch)
-			epoch = opts.Epoch
+		if opts.ExpectedEpoch != "" && opts.ExpectedEpoch != epoch {
+			return StreamPosition{}, PublishError{ErrCode: PublishErrorUnexpectedEpoch}
 		}
-		index, _ = stream.Add(pub, opts.HistorySize)
+		offset, _ = stream.Add(pub, opts.HistorySize)
 	} else {
-		stream := memstream.New(opts.Epoch)
+		if opts.ExpectedEpoch != "" {
+			return StreamPosition{}, PublishError{ErrCode: PublishErrorUnexpectedEpoch}
+		}
+		stream := memstream.New("")
 		epoch = stream.Epoch()
-		index, _ = stream.Add(pub, opts.HistorySize)
+		offset, _ = stream.Add(pub, opts.HistorySize)
 		h.streams[ch] = stream
 	}
-	pub.Offset = index
+	pub.Offset = offset
 
-	return StreamPosition{Offset: index, Epoch: epoch}, nil
+	return StreamPosition{Offset: offset, Epoch: epoch}, nil
 }
 
 // Lock must be held outside.

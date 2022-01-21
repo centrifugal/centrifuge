@@ -200,26 +200,28 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 
 func testBrokerEpoch(t *testing.T, b Broker) {
 	t.Helper()
-	sp, err := b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, Epoch: "xyz"})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), sp.Offset)
-	require.Equal(t, "xyz", sp.Epoch)
+
+	sp, err := b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, ExpectedEpoch: "xyz"})
+	require.Error(t, err)
+	require.ErrorIs(t, err, PublishError{ErrCode: 1})
+
 	_, sp, err = b.History("test", HistoryFilter{})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), sp.Offset)
+	require.Equal(t, uint64(0), sp.Offset)
+	require.NotZero(t, sp.Epoch)
+
+	newSp, err := b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, ExpectedEpoch: sp.Epoch})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), newSp.Offset)
+	require.Equal(t, sp.Epoch, newSp.Epoch)
+
+	_, sp, err = b.History("test", HistoryFilter{
+		Epoch: "xyz",
+	})
+	require.NoError(t, err)
+	require.Zero(t, sp.Offset)
 	require.Equal(t, "xyz", sp.Epoch)
-	sp, err = b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, Epoch: ""})
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), sp.Offset)
-	require.Equal(t, "xyz", sp.Epoch)
-	sp, err = b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, Epoch: "xxx"})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), sp.Offset)
-	require.Equal(t, "xxx", sp.Epoch)
-	_, sp, err = b.History("test", HistoryFilter{})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), sp.Offset)
-	require.Equal(t, "xxx", sp.Epoch)
+
 	_, sp, err = b.History("test", HistoryFilter{Epoch: "zzz"})
 	require.NoError(t, err)
 	require.Zero(t, sp.Offset)
