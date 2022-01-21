@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -94,9 +95,17 @@ type PublishOptions struct {
 	ClientInfo *ClientInfo
 	// Meta is a custom meta information for the Publication.
 	Meta map[string]string
-	// Epoch if set instructs publish request to set an epoch for a stream. On new
-	// epoch stream will be reset.
-	Epoch string
+	// ExpectedEpoch if set instructs publish request to check an epoch for a stream.
+	ExpectedEpoch string
+}
+
+// PublishError may be returned by a Broker.Publish with a special ErrCode.
+type PublishError struct {
+	ErrCode uint64
+}
+
+func (p PublishError) Error() string {
+	return fmt.Sprintf("publish error with code %d", p.ErrCode)
 }
 
 // Broker is responsible for PUB/SUB mechanics.

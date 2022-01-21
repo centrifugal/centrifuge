@@ -175,7 +175,7 @@ redis.call("expire", KEYS[1], ARGV[3])
 if ARGV[4] ~= '' then
 	redis.call("publish", ARGV[4], payload)
 end
-return {offset, epoch}
+return {1, offset, epoch}
 		`
 
 	// addHistoryStreamSource contains Lua script to save data to Redis stream and
@@ -187,7 +187,7 @@ return {offset, epoch}
 	// ARGV[3] - stream lifetime
 	// ARGV[4] - channel to publish message to if needed
 	// ARGV[5] - history meta key expiration time
-	// ARGV[6] - optional stream epoch.
+	// ARGV[6] - optional expected stream epoch.
 	addHistoryStreamSource = `
 redis.replicate_commands()
 local epoch
@@ -196,17 +196,14 @@ if redis.call('exists', KEYS[2]) ~= 0 then
 end
 if epoch == false or epoch == nil then
   if ARGV[6] ~= "" then
-  	epoch = ARGV[6]
+	return {1, 0, ""}
   else
     epoch = redis.call('time')[1]
   end
   redis.call("hset", KEYS[2], "e", epoch)
 else
   if ARGV[6] ~= "" and epoch ~= ARGV[6] then
-    epoch = ARGV[6]
-    redis.call("hset", KEYS[2], "e", epoch)
-    redis.call("hset", KEYS[2], "s", "0")
-    redis.call("del", KEYS[1])
+	return {1, 0, ""}
   end
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
@@ -219,7 +216,7 @@ if ARGV[4] ~= '' then
 	local payload = "__" .. "p1:" .. offset .. ":" .. epoch .. "__" .. ARGV[1]
 	redis.call("publish", ARGV[4], payload)
 end
-return {offset, epoch}
+return {0, offset, epoch}
 	`
 
 	// Retrieve channel history information.
@@ -422,24 +419,31 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 		size = opts.HistorySize - 1
 		script = b.addHistoryListScript
 	}
-	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds, opts.Epoch})
+	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds, opts.ExpectedEpoch})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return StreamPosition{}, resp.err
 	}
 	replies, ok := resp.reply.([]interface{})
-	if !ok || len(replies) != 2 {
+	if !ok || len(replies) != 3 {
 		return StreamPosition{}, errors.New("wrong Redis reply")
 	}
-	index, err := redis.Uint64(replies[0], nil)
+	errCode, err := redis.Uint64(replies[0], nil)
+	if err != nil {
+		return StreamPosition{}, errors.New("wrong Redis reply error code")
+	}
+	if errCode > 0 {
+		return StreamPosition{}, PublishError{ErrCode: errCode}
+	}
+	offset, err := redis.Uint64(replies[1], nil)
 	if err != nil {
 		return StreamPosition{}, errors.New("wrong Redis reply offset")
 	}
-	epoch, err := redis.String(replies[1], nil)
+	epoch, err := redis.String(replies[2], nil)
 	if err != nil {
 		return StreamPosition{}, errors.New("wrong Redis reply epoch")
 	}
-	return StreamPosition{Offset: index, Epoch: epoch}, nil
+	return StreamPosition{Offset: offset, Epoch: epoch}, nil
 }
 
 // PublishJoin - see Broker.PublishJoin.

@@ -1310,13 +1310,13 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, epoch string) (Hi
 	if maxPublicationLimit > 0 {
 		limit = maxPublicationLimit
 	}
-	return n.History(ch, WithLimit(limit), WithSince(&since), WithHistoryEpoch(epoch))
+	return n.History(ch, WithLimit(limit), WithSince(&since), WithEpoch(epoch))
 }
 
 // streamTop returns current stream top StreamPosition for a channel.
 func (n *Node) streamTop(ch string, epoch string) (StreamPosition, error) {
 	incActionCount("history_stream_top")
-	historyResult, err := n.History(ch, WithHistoryEpoch(epoch))
+	historyResult, err := n.History(ch, WithEpoch(epoch))
 	if err != nil {
 		return StreamPosition{}, err
 	}

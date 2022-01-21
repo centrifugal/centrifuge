@@ -27,13 +27,13 @@ func WithMeta(meta map[string]string) PublishOption {
 	}
 }
 
-// WithEpoch allows publishing with specified stream epoch – see PublishOptions.Epoch.
+// WithExpectedEpoch allows setting PublishOptions.ExpectedEpoch.
 // This API is EXPERIMENTAL and may be changed/removed in the future releases – please
 // consider discussing the use case with Centrifuge maintainer before using this. In most
 // cases you don't need to control Epoch from the outside.
-func WithEpoch(epoch string) PublishOption {
+func WithExpectedEpoch(epoch string) PublishOption {
 	return func(opts *PublishOptions) {
-		opts.Epoch = epoch
+		opts.ExpectedEpoch = epoch
 	}
 }
 
@@ -259,8 +259,8 @@ type HistoryOptions struct {
 	Limit int
 	// Reverse direction
 	Reverse bool
-	// Epoch if set instructs history request to set an epoch for a stream. On new
-	// epoch stream will be reset.
+	// Epoch if set instructs history request to set an epoch for a stream.
+	// On new epoch stream will be reset.
 	Epoch string
 }
 
@@ -291,11 +291,11 @@ func WithReverse(reverse bool) HistoryOption {
 	}
 }
 
-// WithHistoryEpoch allows setting HistoryOptions.Epoch option.
+// WithEpoch allows setting HistoryOptions.Epoch option.
 // This API is EXPERIMENTAL and may be changed/removed in the future releases – please
 // consider discussing the use case with Centrifuge maintainer before using this. In most
 // cases you don't need to control Epoch from the outside.
-func WithHistoryEpoch(epoch string) HistoryOption {
+func WithEpoch(epoch string) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Epoch = epoch
 	}
