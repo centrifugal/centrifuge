@@ -203,7 +203,7 @@ func testBrokerEpoch(t *testing.T, b Broker) {
 
 	sp, err := b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, ExpectedEpoch: "xyz"})
 	require.Error(t, err)
-	require.ErrorIs(t, err, PublishError{ErrCode: 1})
+	require.ErrorIs(t, err, PublishError{Code: 1})
 
 	_, sp, err = b.History("test", HistoryFilter{})
 	require.NoError(t, err)

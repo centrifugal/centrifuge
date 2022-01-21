@@ -442,7 +442,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 		return StreamPosition{}, errors.New("wrong Redis reply error code")
 	}
 	if errCode > 0 {
-		return StreamPosition{}, PublishError{ErrCode: errCode}
+		return StreamPosition{}, PublishError{Code: errCode}
 	}
 	offset, err := redis.Uint64(replies[1], nil)
 	if err != nil {

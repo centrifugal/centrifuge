@@ -106,14 +106,14 @@ const (
 	PublishErrorUnexpectedEpoch uint64 = 1
 )
 
-// PublishError may be returned by a Broker.Publish with a special ErrCode.
+// PublishError may be returned by a Broker.Publish with a special error Code.
 type PublishError struct {
-	// ErrCode for identifying the root cause of PublishError.
-	ErrCode uint64
+	// Code for identifying the root cause of PublishError.
+	Code uint64
 }
 
 func (p PublishError) Error() string {
-	return fmt.Sprintf("publish error with code %d", p.ErrCode)
+	return fmt.Sprintf("publish error with code %d", p.Code)
 }
 
 // Broker is responsible for PUB/SUB mechanics.
