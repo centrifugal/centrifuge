@@ -1187,7 +1187,7 @@ func pubToProto(pub *Publication) *protocol.Publication {
 		Offset: pub.Offset,
 		Data:   pub.Data,
 		Info:   infoToProto(pub.Info),
-		Meta:   pub.Meta,
+		Tags:   pub.Tags,
 	}
 }
 
@@ -1199,7 +1199,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		Offset: pub.GetOffset(),
 		Data:   pub.Data,
 		Info:   infoFromProto(pub.GetInfo()),
-		Meta:   pub.GetMeta(),
+		Tags:   pub.GetTags(),
 	}
 }
 

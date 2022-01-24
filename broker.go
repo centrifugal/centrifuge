@@ -15,9 +15,9 @@ type Publication struct {
 	Data []byte
 	// Info is optional information about client connection published this data.
 	Info *ClientInfo
-	// Meta is a map with custom key-values attached to a Publication. This Meta map
+	// Tags is a map with custom key-values attached to a Publication. This Tags map
 	// will be delivered to a client.
-	Meta map[string]string
+	Tags map[string]string
 }
 
 // ClientInfo contains information about client connection.
@@ -93,8 +93,8 @@ type PublishOptions struct {
 	HistorySize int
 	// ClientInfo to include into Publication. By default, no ClientInfo will be appended.
 	ClientInfo *ClientInfo
-	// Meta is a custom meta information for the Publication.
-	Meta map[string]string
+	// Tags is a custom meta information for the Publication.
+	Tags map[string]string
 	// ExpectedEpoch if set instructs publish request to check an epoch for a stream.
 	ExpectedEpoch string
 }

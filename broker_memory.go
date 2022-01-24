@@ -90,7 +90,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 	pub := &Publication{
 		Data: data,
 		Info: opts.ClientInfo,
-		Meta: opts.Meta,
+		Tags: opts.Tags,
 	}
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {
 		streamTop, err := b.historyHub.add(ch, pub, opts)

@@ -381,7 +381,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 	protoPub := &protocol.Publication{
 		Data: data,
 		Info: infoToProto(opts.ClientInfo),
-		Meta: opts.Meta,
+		Tags: opts.Tags,
 	}
 	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {

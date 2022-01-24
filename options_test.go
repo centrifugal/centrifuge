@@ -16,10 +16,10 @@ func TestWithHistory(t *testing.T) {
 }
 
 func TestWithMeta(t *testing.T) {
-	opt := WithMeta(map[string]string{"test": "value"})
+	opt := WithTags(map[string]string{"test": "value"})
 	opts := &PublishOptions{}
 	opt(opts)
-	require.Equal(t, "value", opts.Meta["test"])
+	require.Equal(t, "value", opts.Tags["test"])
 }
 
 func TestWithEpoch(t *testing.T) {

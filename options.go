@@ -20,10 +20,10 @@ func WithClientInfo(info *ClientInfo) PublishOption {
 	}
 }
 
-// WithMeta allows setting Publication.Meta.
-func WithMeta(meta map[string]string) PublishOption {
+// WithTags allows setting Publication.Tags.
+func WithTags(meta map[string]string) PublishOption {
 	return func(opts *PublishOptions) {
-		opts.Meta = meta
+		opts.Tags = meta
 	}
 }
 

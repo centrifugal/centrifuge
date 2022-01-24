@@ -9,7 +9,7 @@ Centrifuge v0.20.0 comes with new client protocol support and some internal opti
 * `TransportWriteEvent.IsPush` field is removed (we can discuss putting it back later if required). 
 * Node `Survey` API now allows choosing the node to which we want to send survey request.
 * Warn log level introduced between info and error.
-* Publication now has `Meta` field (`map[string]string`) – this may help to put some useful info into publication without modifying payload. It can help to avoid processing payload in some scenarios.
+* Publication now has `Tags` field (`map[string]string`) – this may help to put some useful info into publication without modifying payload. It can help to avoid processing payload in some scenarios.
 * Support for setting auth user in Redis shard configuration – for Redis itself and for Sentinel. This is useful is ACL-based auth used on Redis side.
 * We now allow controlling epoch from application level. This feature is experimental, please do not use it without clear understanding what it allows achieving. In short – it allows binding Centrifuge stream to some external identifier to inherit Centrifuge stream positioning behavior. In most cases you don't need to control stream epoch from the application code.
 
@@ -31,9 +31,9 @@ LogLevelWarn: added
 ProtocolVersion1: added
 ProtocolVersion2: added
 ProtocolVersion: added
-Publication.Meta: added
+Publication.Tags: added
 PublishOptions.Epoch: added
-PublishOptions.Meta: added
+PublishOptions.Tags: added
 RedisShardConfig.SentinelUser: added
 RedisShardConfig.User: added
 SockjsConfig.ProtocolVersion: added
@@ -41,7 +41,7 @@ SubscribeOptions.Epoch: added
 WebsocketConfig.ProtocolVersion: added
 WithEpoch: added
 WithHistoryEpoch: added
-WithMeta: added
+WithTags: added
 WithSubscribeEpoch: added
 
 # summary
