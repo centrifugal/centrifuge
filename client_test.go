@@ -3036,7 +3036,7 @@ func TestClientCheckPosition(t *testing.T) {
 
 	// valid position resets positionCheckFailures.
 	require.NotZero(t, client.channels["channel"].positionCheckFailures)
-	sp, _ := node.streamTop("channel", "")
+	sp, _ := node.streamTop("channel")
 	got = client.checkPosition(50*time.Second, "channel", channelContext{
 		positionCheckTime: 50, flags: flagRecover, streamPosition: sp,
 	})

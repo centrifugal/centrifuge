@@ -2,20 +2,19 @@ package centrifuge
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
 // Publication is a data sent to a channel.
 type Publication struct {
 	// Offset is an incremental position number inside a history stream.
-	// Zero value means that the channel does not maintain Publication stream.
+	// Zero value means that channel does not maintain Publication stream.
 	Offset uint64
 	// Data published to a channel.
 	Data []byte
 	// Info is optional information about client connection published this data.
 	Info *ClientInfo
-	// Tags is a map with custom key-values attached to a Publication. This Tags map
+	// Tags contains a map with custom key-values attached to a Publication. Tags map
 	// will be delivered to a client.
 	Tags map[string]string
 }
@@ -56,9 +55,6 @@ type HistoryFilter struct {
 	Limit int
 	// Reverse direction.
 	Reverse bool
-	// Epoch if set instructs history request to set an epoch for a stream. On new
-	// epoch stream will be reset.
-	Epoch string
 }
 
 // StreamPosition contains fields to describe position in stream.
@@ -93,27 +89,8 @@ type PublishOptions struct {
 	HistorySize int
 	// ClientInfo to include into Publication. By default, no ClientInfo will be appended.
 	ClientInfo *ClientInfo
-	// Tags is a custom meta information for the Publication.
+	// Tags to set Publication.Tags.
 	Tags map[string]string
-	// ExpectedEpoch if set instructs publish request to check an epoch for a stream.
-	ExpectedEpoch string
-}
-
-const (
-	// PublishErrorUnexpectedEpoch may be returned if stream already has different
-	// epoch than passed inside PublishOptions.ExpectedEpoch. In this case Publication
-	// is dropped by Broker.
-	PublishErrorUnexpectedEpoch uint64 = 1
-)
-
-// PublishError may be returned by a Broker.Publish with a special error Code.
-type PublishError struct {
-	// Code for identifying the root cause of PublishError.
-	Code uint64
-}
-
-func (p PublishError) Error() string {
-	return fmt.Sprintf("publish error with code %d", p.Code)
 }
 
 // Broker is responsible for PUB/SUB mechanics.

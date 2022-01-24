@@ -10,7 +10,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/priority"
 )
 
-// MemoryBroker is builtin default Broker which allows running Centrifuge-based
+// MemoryBroker is builtin default Broker which allows to run Centrifuge-based
 // server without any external broker. All data managed inside process memory.
 //
 // With this Broker you can only run single Centrifuge node. If you need to scale
@@ -268,18 +268,12 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 	}
 
 	if stream, ok := h.streams[ch]; ok {
-		epoch = stream.Epoch()
-		if opts.ExpectedEpoch != "" && opts.ExpectedEpoch != epoch {
-			return StreamPosition{}, PublishError{Code: PublishErrorUnexpectedEpoch}
-		}
 		offset, _ = stream.Add(pub, opts.HistorySize)
+		epoch = stream.Epoch()
 	} else {
-		if opts.ExpectedEpoch != "" {
-			return StreamPosition{}, PublishError{Code: PublishErrorUnexpectedEpoch}
-		}
-		stream := memstream.New("")
-		epoch = stream.Epoch()
+		stream := memstream.New()
 		offset, _ = stream.Add(pub, opts.HistorySize)
+		epoch = stream.Epoch()
 		h.streams[ch] = stream
 	}
 	pub.Offset = offset
@@ -288,8 +282,8 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 }
 
 // Lock must be held outside.
-func (h *historyHub) createStream(ch string, epoch string) StreamPosition {
-	stream := memstream.New(epoch)
+func (h *historyHub) createStream(ch string) StreamPosition {
+	stream := memstream.New()
 	h.streams[ch] = stream
 	streamPosition := StreamPosition{}
 	streamPosition.Offset = 0
@@ -321,11 +315,7 @@ func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, Strea
 
 	stream, ok := h.streams[ch]
 	if !ok {
-		return nil, h.createStream(ch, filter.Epoch), nil
-	} else {
-		if filter.Epoch != "" && stream.Epoch() != filter.Epoch {
-			stream.Reset(filter.Epoch)
-		}
+		return nil, h.createStream(ch), nil
 	}
 
 	if filter.Since == nil {

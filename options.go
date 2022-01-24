@@ -27,16 +27,6 @@ func WithTags(meta map[string]string) PublishOption {
 	}
 }
 
-// WithExpectedEpoch allows setting PublishOptions.ExpectedEpoch.
-// This API is EXPERIMENTAL and may be changed/removed in the future releases – please
-// consider discussing the use case with Centrifuge maintainer before using this. In most
-// cases you don't need to control Epoch from the outside.
-func WithExpectedEpoch(epoch string) PublishOption {
-	return func(opts *PublishOptions) {
-		opts.ExpectedEpoch = epoch
-	}
-}
-
 // SubscribeOptions define per-subscription options.
 type SubscribeOptions struct {
 	// ExpireAt defines time in future when subscription should expire,
@@ -64,11 +54,6 @@ type SubscribeOptions struct {
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
 	RecoverSince *StreamPosition
-	// Epoch to set for a stream (only works for positioned streams).
-	// This API is EXPERIMENTAL and may be changed/removed in the future releases – please
-	// consider discussing the use case with Centrifuge maintainer before using this. In most
-	// cases you don't need to control Epoch from the outside.
-	Epoch string
 	// clientID to subscribe.
 	clientID string
 }
@@ -137,16 +122,6 @@ func WithSubscribeData(data []byte) SubscribeOption {
 func WithRecoverSince(since *StreamPosition) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.RecoverSince = since
-	}
-}
-
-// WithSubscribeEpoch allows setting SubscribeOptions.Epoch.
-// This API is EXPERIMENTAL and may be changed/removed in the future releases – please
-// consider discussing the use case with Centrifuge maintainer before using this. In most
-// cases you don't need to control Epoch from the outside.
-func WithSubscribeEpoch(epoch string) SubscribeOption {
-	return func(opts *SubscribeOptions) {
-		opts.Epoch = epoch
 	}
 }
 
@@ -259,9 +234,6 @@ type HistoryOptions struct {
 	Limit int
 	// Reverse direction
 	Reverse bool
-	// Epoch if set instructs history request to set an epoch for a stream.
-	// On new epoch stream will be reset.
-	Epoch string
 }
 
 // HistoryOption is a type to represent various History options.
@@ -288,15 +260,5 @@ func WithSince(sp *StreamPosition) HistoryOption {
 func WithReverse(reverse bool) HistoryOption {
 	return func(opts *HistoryOptions) {
 		opts.Reverse = reverse
-	}
-}
-
-// WithEpoch allows setting HistoryOptions.Epoch option.
-// This API is EXPERIMENTAL and may be changed/removed in the future releases – please
-// consider discussing the use case with Centrifuge maintainer before using this. In most
-// cases you don't need to control Epoch from the outside.
-func WithEpoch(epoch string) HistoryOption {
-	return func(opts *HistoryOptions) {
-		opts.Epoch = epoch
 	}
 }

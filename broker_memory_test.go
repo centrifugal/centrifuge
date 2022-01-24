@@ -198,41 +198,6 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	h.RUnlock()
 }
 
-func testBrokerEpoch(t *testing.T, b Broker) {
-	t.Helper()
-
-	sp, err := b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, ExpectedEpoch: "xyz"})
-	require.Error(t, err)
-	require.ErrorIs(t, err, PublishError{Code: 1})
-
-	_, sp, err = b.History("test", HistoryFilter{})
-	require.NoError(t, err)
-	require.Equal(t, uint64(0), sp.Offset)
-	require.NotZero(t, sp.Epoch)
-
-	newSp, err := b.Publish("test", []byte("1"), PublishOptions{HistorySize: 10, HistoryTTL: time.Minute, ExpectedEpoch: sp.Epoch})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), newSp.Offset)
-	require.Equal(t, sp.Epoch, newSp.Epoch)
-
-	_, sp, err = b.History("test", HistoryFilter{
-		Epoch: "xyz",
-	})
-	require.NoError(t, err)
-	require.Zero(t, sp.Offset)
-	require.Equal(t, "xyz", sp.Epoch)
-
-	_, sp, err = b.History("test", HistoryFilter{Epoch: "zzz"})
-	require.NoError(t, err)
-	require.Zero(t, sp.Offset)
-	require.Equal(t, "zzz", sp.Epoch)
-}
-
-func TestMemoryBrokerEpoch(t *testing.T) {
-	b := testMemoryBroker()
-	testBrokerEpoch(t, b)
-}
-
 func TestMemoryBrokerRecover(t *testing.T) {
 	e := testMemoryBroker()
 

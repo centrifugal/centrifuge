@@ -499,39 +499,25 @@ func randString(n int) string {
 	return string(b)
 }
 
-func TestRedisBrokerEpoch(t *testing.T) {
-	node := testNode(t)
-	b := newTestRedisBroker(t, node, true, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	testBrokerEpoch(t, b)
-}
-
-func TestRedisBrokerEpochCluster(t *testing.T) {
-	node := testNode(t)
-	b := newTestRedisBroker(t, node, true, true)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	testBrokerEpoch(t, b)
-}
-
 // TestRedisConsistentIndex exists to test consistent hashing algorithm we use.
 // As we use random in this test we carefully do requires here.
 // At least it can protect us from stupid mistakes to certain degree.
-// We just expect +-equal distribution and keeping most of the channels on
+// We just expect +-equal distribution and keeping most of chans on
 // the same shard after resharding.
 func TestRedisConsistentIndex(t *testing.T) {
 
 	rand.Seed(time.Now().UnixNano())
-	numChannels := 10000
+	numChans := 10000
 	numShards := 10
-	channels := make([]string, numChannels)
-	for i := 0; i < numChannels; i++ {
-		channels[i] = randString(rand.Intn(10) + 1)
+	chans := make([]string, numChans)
+	for i := 0; i < numChans; i++ {
+		chans[i] = randString(rand.Intn(10) + 1)
 	}
 	chanToShard := make(map[string]int)
 	chanToReshard := make(map[string]int)
 	shardToChan := make(map[int][]string)
 
-	for _, ch := range channels {
+	for _, ch := range chans {
 		shard := consistentIndex(ch, numShards)
 		reshard := consistentIndex(ch, numShards+1)
 		chanToShard[ch] = shard
@@ -540,13 +526,13 @@ func TestRedisConsistentIndex(t *testing.T) {
 		if _, ok := shardToChan[shard]; !ok {
 			shardToChan[shard] = []string{}
 		}
-		shardChannels := shardToChan[shard]
-		shardChannels = append(shardChannels, ch)
-		shardToChan[shard] = shardChannels
+		shardChans := shardToChan[shard]
+		shardChans = append(shardChans, ch)
+		shardToChan[shard] = shardChans
 	}
 
-	for shard, shardChannels := range shardToChan {
-		shardFraction := float64(len(shardChannels)) * 100 / float64(len(channels))
+	for shard, shardChans := range shardToChan {
+		shardFraction := float64(len(shardChans)) * 100 / float64(len(chans))
 		fmt.Printf("Shard %d: %f%%\n", shard, shardFraction)
 	}
 
@@ -559,7 +545,7 @@ func TestRedisConsistentIndex(t *testing.T) {
 			sameShards++
 		}
 	}
-	sameFraction := float64(sameShards) * 100 / float64(len(channels))
+	sameFraction := float64(sameShards) * 100 / float64(len(chans))
 	fmt.Printf("Same shards after resharding: %f%%\n", sameFraction)
 	require.True(t, sameFraction > 0.7)
 }
@@ -1224,7 +1210,7 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 	})
 	require.NoError(t, err)
 
-	historyResult, err := node.recoverHistory(channel, StreamPosition{tt.SinceOffset, streamTop.Epoch}, "")
+	historyResult, err := node.recoverHistory(channel, StreamPosition{tt.SinceOffset, streamTop.Epoch})
 	require.NoError(t, err)
 	recoveredPubs, recovered := isRecovered(historyResult, tt.SinceOffset, streamTop.Epoch)
 	require.Equal(t, tt.NumRecovered, len(recoveredPubs))

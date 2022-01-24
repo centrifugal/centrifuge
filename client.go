@@ -609,7 +609,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channe
 		return true
 	}
 	position := chCtx.streamPosition
-	streamTop, err := c.node.streamTop(ch, "")
+	streamTop, err := c.node.streamTop(ch)
 	if err != nil {
 		return true
 	}
@@ -2587,7 +2587,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmdOffset, req.Epoch}, reply.Options.Epoch)
+			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmdOffset, req.Epoch})
 			if err != nil {
 				if errors.Is(err, ErrorUnrecoverablePosition) {
 					// Result contains stream position in case of ErrorUnrecoverablePosition
@@ -2614,7 +2614,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				incRecover(res.Recovered)
 			}
 		} else {
-			streamTop, err := c.node.streamTop(channel, reply.Options.Epoch)
+			streamTop, err := c.node.streamTop(channel)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting recovery state for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				c.pubSubSync.StopBuffering(channel)
@@ -2640,7 +2640,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			return ctx
 		}
 	} else if reply.Options.Position {
-		streamTop, err := c.node.streamTop(channel, reply.Options.Epoch)
+		streamTop, err := c.node.streamTop(channel)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error getting stream top for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {

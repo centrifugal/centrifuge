@@ -39,14 +39,11 @@ type Stream struct {
 }
 
 // New creates new Stream.
-func New(epoch string) *Stream {
-	if epoch == "" {
-		epoch = genEpoch()
-	}
+func New() *Stream {
 	return &Stream{
 		list:  list.New(),
 		index: make(map[uint64]*list.Element),
-		epoch: epoch,
+		epoch: genEpoch(),
 	}
 }
 
@@ -79,12 +76,9 @@ func (s *Stream) Epoch() string {
 }
 
 // Reset stream.
-func (s *Stream) Reset(epoch string) {
-	if epoch == "" {
-		epoch = genEpoch()
-	}
+func (s *Stream) Reset() {
 	s.top = 0
-	s.epoch = epoch
+	s.epoch = genEpoch()
 	s.Clear()
 }
 

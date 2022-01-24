@@ -22,13 +22,6 @@ func TestWithMeta(t *testing.T) {
 	require.Equal(t, "value", opts.Tags["test"])
 }
 
-func TestWithEpoch(t *testing.T) {
-	opt := WithExpectedEpoch("test")
-	opts := &PublishOptions{}
-	opt(opts)
-	require.Equal(t, "test", opts.ExpectedEpoch)
-}
-
 func TestSubscribeOptions(t *testing.T) {
 	subscribeOpts := []SubscribeOption{
 		WithExpireAt(1),
@@ -37,7 +30,6 @@ func TestSubscribeOptions(t *testing.T) {
 		WithPosition(true),
 		WithRecover(true),
 		WithChannelInfo([]byte(`test`)),
-		WithSubscribeEpoch("test"),
 	}
 	opts := &SubscribeOptions{}
 	for _, opt := range subscribeOpts {
@@ -49,7 +41,6 @@ func TestSubscribeOptions(t *testing.T) {
 	require.True(t, opts.Position)
 	require.True(t, opts.Recover)
 	require.Equal(t, []byte(`test`), opts.ChannelInfo)
-	require.Equal(t, "test", opts.Epoch)
 }
 
 func TestWithDisconnect(t *testing.T) {
