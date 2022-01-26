@@ -215,7 +215,7 @@ func WithDisconnectClient(clientID string) DisconnectOption {
 	}
 }
 
-// WithDisconnectClientWhitelist allows to set ClientWhitelist.
+// WithDisconnectClientWhitelist allows setting ClientWhitelist.
 func WithDisconnectClientWhitelist(whitelist []string) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.ClientWhitelist = whitelist

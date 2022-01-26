@@ -101,7 +101,7 @@ func main() {
 	cfg := centrifuge.DefaultConfig
 
 	// Node is the core object in Centrifuge library responsible for
-	// many useful things. For example Node allows to publish messages
+	// many useful things. For example Node allows publishing messages
 	// to channels with its Publish method.
 	node, err := centrifuge.New(cfg)
 	if err != nil {

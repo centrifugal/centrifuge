@@ -1,14 +1,12 @@
 v0.20.0
 =======
 
-Centrifuge v0.20.0 comes with new client protocol support and some internal optimizations. It improves Survey method, refactors Disconnect code semantics. While there are many changes it should be possible to adopt v0.20.0 without any backwards compatibility issues. Client connectors which support client protocol v2 will be released soon.
-
-* Support client protocol v2. In v0.20.0 it's considered experimental but the plan is to make it default in the future releases. The initial motivation described in [#217](https://github.com/centrifugal/centrifuge/issues/217) and implementation is in [#218](https://github.com/centrifugal/centrifuge/pull/218).
+* Support client protocol v2. As of v0.20.0 it's considered experimental and can have some adjustments in the following releases. But the plan is to make it default at some point. The initial motivation described in [#217](https://github.com/centrifugal/centrifuge/issues/217) and implementation is in [#218](https://github.com/centrifugal/centrifuge/pull/218). Client connectors which support client protocol v2 will be released soon. Both `WebsocketConfig` and `SockjsConfig` now have an option to set default protocol version handler will expect from connecting clients. It's also possible to override that option by using `cf_protocol_version` URL parameter (`v1` or `v2`) when connecting to the server. This should provide a way to migrate to new protocol gradually.
 * Refactor disconnect semantics for client protocol v2. We are getting rid of JSON in close reason by introducing strict ranges for disconnect codes - see [#221](https://github.com/centrifugal/centrifuge/pull/221). Client connectors will expose disconnect codes when working with client protocol v2. Client-side disconnect reasons will also have its own codes – according to [this comment](https://github.com/centrifugal/centrifuge/issues/149#issuecomment-727551279).
-* Various optimizations in message broadcast, client command handling, client initial connect.
+* Various optimizations in message broadcast, client command handling, client initial connect – fewer things now escape to the heap.
 * `TransportWriteEvent.IsPush` field is removed (we can discuss putting it back later if required). 
 * Node `Survey` API now allows choosing the node to which we want to send survey request.
-* Warn log level introduced between info and error.
+* Warn log level introduced between Info and Error.
 * Publication now has `Tags` field (`map[string]string`) – this may help to put some useful info into publication without modifying payload. It can help to avoid processing payload in some scenarios.
 * Support for setting auth user in Redis shard configuration – for Redis itself and for Sentinel. This is useful is ACL-based auth used on Redis side.
 

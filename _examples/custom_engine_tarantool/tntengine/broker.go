@@ -42,10 +42,10 @@ var _ centrifuge.Broker = (*Broker)(nil)
 type BrokerConfig struct {
 	// HistoryMetaTTL sets a time of stream meta key expiration in Tarantool. Stream
 	// meta key is a Tarantool HASH that contains top offset in channel and epoch value.
-	// By default stream meta keys do not expire.
+	// By default, stream meta keys do not expire.
 	HistoryMetaTTL time.Duration
 
-	// UsePolling allows to turn on polling mode instead of push.
+	// UsePolling allows turning on polling mode instead of push.
 	UsePolling bool
 
 	// Shards is a list of Tarantool instances to shard data by channel.

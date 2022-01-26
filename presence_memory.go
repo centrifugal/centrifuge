@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// MemoryPresenceManager is builtin default PresenceManager which allows to run
+// MemoryPresenceManager is builtin default PresenceManager which allows running
 // Centrifuge-based server without any external storage. All data managed inside process
 // memory.
 //

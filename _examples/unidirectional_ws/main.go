@@ -348,9 +348,9 @@ type WebsocketConfig struct {
 	// See possible value description at https://golang.org/pkg/compress/flate/#NewWriter
 	CompressionLevel int
 
-	// CompressionMinSize allows to set minimal limit in bytes for
+	// CompressionMinSize allows setting minimal limit in bytes for
 	// message to use compression when writing it into client connection.
-	// By default it's 0 - i.e. all messages will be compressed when
+	// By default, it's 0 - i.e. all messages will be compressed when
 	// WebsocketCompression enabled and compression negotiated with client.
 	CompressionMinSize int
 
