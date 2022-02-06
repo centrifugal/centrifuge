@@ -228,9 +228,6 @@ func main() {
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ReadBufferSize:     1024,
 		UseWriteBufferPool: true,
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
 	})
 	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
 
