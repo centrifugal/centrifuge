@@ -36,11 +36,10 @@ func waitExitSignal(n *centrifuge.Node) {
 func main() {
 	log.Printf("NumCPU: %d", runtime.NumCPU())
 
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelError
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelError,
+		LogHandler: handleLog,
+	})
 
 	if os.Getenv("CENTRIFUGE_BROKER") == "redis" {
 		redisShardConfigs := []centrifuge.RedisShardConfig{

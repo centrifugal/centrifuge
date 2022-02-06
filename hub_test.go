@@ -114,6 +114,13 @@ func (t *testTransport) DisabledPushFlags() uint64 {
 	return PushFlagDisconnect
 }
 
+func (t *testTransport) AppLevelPing() AppLevelPing {
+	return AppLevelPing{
+		PingInterval: 10 * time.Second,
+		PongTimeout:  4 * time.Second,
+	}
+}
+
 func (t *testTransport) Close(disconnect *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()

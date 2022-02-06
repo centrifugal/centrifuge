@@ -6,7 +6,7 @@ import (
 
 // Config contains Node configuration options.
 type Config struct {
-	// Version of server – will be sent to a client on connection establishment
+	// Version of server – if set will be sent to a client on connection establishment
 	// phase in reply to connect command from a client.
 	Version string
 	// Name is a unique name of the current server Node. Name used as human-readable
@@ -18,33 +18,41 @@ type Config struct {
 	LogHandler LogHandler
 	// NodeInfoMetricsAggregateInterval sets interval for automatic metrics
 	// aggregation. It's not reasonable to have it less than one second.
+	// Zero value means 60 * time.Second.
 	NodeInfoMetricsAggregateInterval time.Duration
 	// ClientPresenceUpdateInterval sets an interval how often connected
 	// clients update presence information.
+	// Zero value means 27 * time.Second.
 	ClientPresenceUpdateInterval time.Duration
 	// ClientExpiredCloseDelay is an extra time given to client to refresh
 	// its connection in the end of connection TTL. At moment only used for
 	// a client-side refresh workflow.
+	// Zero value means 25 * time.Second.
 	ClientExpiredCloseDelay time.Duration
 	// ClientExpiredSubCloseDelay is an extra time given to client to
 	// refresh its expiring subscription in the end of subscription TTL.
 	// At the moment only used for a client-side subscription refresh workflow.
+	// Zero value means 25 * time.Second.
 	ClientExpiredSubCloseDelay time.Duration
 	// ClientStaleCloseDelay is a timeout after which connection will be
 	// closed if still not authenticated (i.e. no valid connect command
 	// received yet).
+	// Zero value means 25 * time.Second.
 	ClientStaleCloseDelay time.Duration
 	// ClientChannelPositionCheckDelay defines minimal time from previous
 	// client position check in channel. If client does not pass check it will
 	// be disconnected with DisconnectInsufficientState.
+	// Zero value means 40 * time.Second.
 	ClientChannelPositionCheckDelay time.Duration
 	// ClientQueueMaxSize is a maximum size of client's message queue in bytes.
 	// After this queue size exceeded Centrifuge closes client's connection.
+	// Zero value means 1048576 bytes (1MB).
 	ClientQueueMaxSize int
 	// ClientChannelLimit sets upper limit of client-side channels each client
 	// can subscribe to. Client-side subscriptions attempts will get an ErrorLimitExceeded
 	// in subscribe reply. Server-side subscriptions above limit will result into
 	// DisconnectChannelLimit.
+	// Zero value means 128.
 	ClientChannelLimit int
 	// UserConnectionLimit limits number of client connections to single Node
 	// from user with the same ID. Zero value means unlimited. Anonymous users
@@ -52,6 +60,7 @@ type Config struct {
 	UserConnectionLimit int
 	// ChannelMaxLength is the maximum length of a channel name. This is only checked
 	// for client-side subscription requests.
+	// Zero value means 255.
 	ChannelMaxLength int
 	// MetricsNamespace is a Prometheus metrics namespace to use for internal metrics.
 	// If not set then the default namespace name `centrifuge` will be used.
@@ -83,14 +92,5 @@ const (
 )
 
 // DefaultConfig is Config initialized with default values for all fields.
-var DefaultConfig = Config{
-	NodeInfoMetricsAggregateInterval: 60 * time.Second,
-	ClientPresenceUpdateInterval:     25 * time.Second,
-	ClientExpiredCloseDelay:          25 * time.Second,
-	ClientExpiredSubCloseDelay:       25 * time.Second,
-	ClientStaleCloseDelay:            25 * time.Second,
-	ClientChannelPositionCheckDelay:  40 * time.Second,
-	ClientQueueMaxSize:               10485760, // 10MB by default.
-	ClientChannelLimit:               128,
-	ChannelMaxLength:                 255,
-}
+// Deprecated, use Config struct directly – it now uses reasonable zero values.
+var DefaultConfig = Config{}

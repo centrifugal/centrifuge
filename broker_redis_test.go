@@ -35,10 +35,10 @@ func newTestRedisBroker(tb testing.TB, n *Node, useStreams bool, useCluster bool
 }
 
 func testNode(tb testing.TB) *Node {
-	conf := DefaultConfig
-	conf.LogLevel = LogLevelDebug
-	conf.LogHandler = func(entry LogEntry) {}
-	node, err := New(conf)
+	node, err := New(Config{
+		LogLevel:   LogLevelDebug,
+		LogHandler: func(entry LogEntry) {},
+	})
 	require.NoError(tb, err)
 	return node
 }
@@ -684,7 +684,7 @@ func TestRedisExtractPushData(t *testing.T) {
 func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 	redisConf := testRedisConf()
 
-	node1, _ := New(DefaultConfig)
+	node1, _ := New(Config{})
 
 	s, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
@@ -708,7 +708,7 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 		})
 	})
 
-	node2, _ := New(DefaultConfig)
+	node2, _ := New(Config{})
 
 	s2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
@@ -747,7 +747,7 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 func TestNode_OnNotification_TwoNodes(t *testing.T) {
 	redisConf := testRedisConf()
 
-	node1, _ := New(DefaultConfig)
+	node1, _ := New(Config{})
 
 	s, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
@@ -772,7 +772,7 @@ func TestNode_OnNotification_TwoNodes(t *testing.T) {
 		close(ch1)
 	})
 
-	node2, _ := New(DefaultConfig)
+	node2, _ := New(Config{})
 
 	s2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
@@ -813,7 +813,7 @@ func TestNode_OnNotification_TwoNodes(t *testing.T) {
 func TestRedisPubSubTwoNodes(t *testing.T) {
 	redisConf := testRedisConf()
 
-	node1, _ := New(DefaultConfig)
+	node1, _ := New(Config{})
 
 	s, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
@@ -847,7 +847,7 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	_ = e1.Run(brokerEventHandler)
 	require.NoError(t, e1.Subscribe("test"))
 
-	node2, _ := New(DefaultConfig)
+	node2, _ := New(Config{})
 	s2, err := NewRedisShard(node2, redisConf)
 	require.NoError(t, err)
 
@@ -932,7 +932,7 @@ func BenchmarkRedisSurvey(b *testing.B) {
 			data := make([]byte, tt.DataSize)
 
 			for i := 0; i < tt.NumOtherNodes; i++ {
-				node, _ := New(DefaultConfig)
+				node, _ := New(Config{})
 				s, err := NewRedisShard(node, redisConf)
 				if err != nil {
 					b.Fatal(err)
@@ -952,7 +952,7 @@ func BenchmarkRedisSurvey(b *testing.B) {
 				})
 			}
 
-			node, _ := New(DefaultConfig)
+			node, _ := New(Config{})
 			s, err := NewRedisShard(node, redisConf)
 			if err != nil {
 				b.Fatal(err)
@@ -1168,8 +1168,7 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 }
 
 func nodeWithRedisBroker(tb testing.TB, useStreams bool, useCluster bool) *Node {
-	c := DefaultConfig
-	n, err := New(c)
+	n, err := New(Config{})
 	if err != nil {
 		tb.Fatal(err)
 	}

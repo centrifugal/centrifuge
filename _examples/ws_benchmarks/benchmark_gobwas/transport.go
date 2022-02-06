@@ -48,9 +48,13 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
 }
 
-// Version of protocol.
 func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
 	return centrifuge.ProtocolVersion1
+}
+
+// AppLevelPing not implemented here, example only works over ProtocolVersion1.
+func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
+	return centrifuge.AppLevelPing{}
 }
 
 func (t *customWebsocketTransport) read() ([]byte, bool, error) {
@@ -129,7 +133,7 @@ func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) erro
 	t.mu.Unlock()
 
 	if disconnect != nil {
-		data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), disconnect.CloseText())
+		data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
 		_ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
 		return t.conn.Close()
 	}

@@ -88,6 +88,31 @@ const (
 
 // New creates Node with provided Config.
 func New(c Config) (*Node, error) {
+	if c.NodeInfoMetricsAggregateInterval == 0 {
+		c.NodeInfoMetricsAggregateInterval = 60 * time.Second
+	}
+	if c.ClientPresenceUpdateInterval == 0 {
+		c.ClientPresenceUpdateInterval = 27 * time.Second
+	}
+	if c.ClientExpiredCloseDelay == 0 {
+		c.ClientExpiredCloseDelay = 25 * time.Second
+	}
+	if c.ClientExpiredSubCloseDelay == 0 {
+		c.ClientExpiredSubCloseDelay = 25 * time.Second
+	}
+	if c.ClientStaleCloseDelay == 0 {
+		c.ClientStaleCloseDelay = 25 * time.Second
+	}
+	if c.ClientQueueMaxSize == 0 {
+		c.ClientQueueMaxSize = 1048576 // 1MB by default.
+	}
+	if c.ClientChannelLimit == 0 {
+		c.ClientChannelLimit = 128
+	}
+	if c.ChannelMaxLength == 0 {
+		c.ChannelMaxLength = 255
+	}
+
 	uid := uuid.Must(uuid.NewRandom()).String()
 
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)

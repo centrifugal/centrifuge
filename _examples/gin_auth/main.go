@@ -90,11 +90,10 @@ func authMiddleware(h http.Handler) http.Handler {
 }
 
 func main() {
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelDebug,
+		LogHandler: handleLog,
+	})
 
 	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		// Let's include user email into connect reply, so we can display user name in chat.

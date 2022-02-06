@@ -15,6 +15,17 @@ import (
 	"github.com/google/uuid"
 )
 
+// Empty Replies/Pushes for pings.
+var jsonPingReply = []byte(`{}`)
+var protobufPingReply []byte
+var jsonPingPush = []byte(`{}`)
+var protobufPingPush []byte
+
+func init() {
+	protobufPingReply, _ = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{})
+	protobufPingPush, _ = protocol.DefaultProtobufPushEncoder.Encode(&protocol.Push{})
+}
+
 // clientEventHub allows dealing with client event handlers.
 // All its methods are not goroutine-safe and supposed to be called
 // once inside Node ConnectHandler.
@@ -150,6 +161,8 @@ const (
 	timerOpStale    timerOp = 1
 	timerOpPresence timerOp = 2
 	timerOpExpire   timerOp = 3
+	timerOpPing     timerOp = 4
+	timerOpPong     timerOp = 5
 )
 
 type status uint8
@@ -230,6 +243,10 @@ type Client struct {
 	timerOp           timerOp
 	nextPresence      int64
 	nextExpire        int64
+	nextPing          int64
+	nextPong          int64
+	lastSeen          int64
+	lastPing          int64
 	eventHub          *clientEventHub
 	timer             *time.Timer
 }
@@ -358,9 +375,8 @@ func (c *Client) Connect(req ConnectRequest) {
 
 func (c *Client) getDisconnectPushReply(d *Disconnect) ([]byte, error) {
 	disconnect := &protocol.Disconnect{
-		Code:      d.Code,
-		Reason:    d.Reason,
-		Reconnect: d.Reconnect,
+		Code:   d.Code,
+		Reason: d.Reason,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		disconnect.Reconnect = d.isReconnect(ProtocolVersion1)
@@ -406,6 +422,10 @@ func (c *Client) onTimerOp() {
 		c.updatePresence()
 	case timerOpExpire:
 		c.expire()
+	case timerOpPing:
+		c.sendPing()
+	case timerOpPong:
+		c.checkPong()
 	}
 }
 
@@ -428,6 +448,16 @@ func (c *Client) scheduleNextTimer() {
 		minEventTime = c.nextPresence
 		needTimer = true
 	}
+	if c.nextPing > 0 && (minEventTime == 0 || c.nextPing < minEventTime) {
+		nextTimerOp = timerOpPing
+		minEventTime = c.nextPing
+		needTimer = true
+	}
+	if c.nextPong > 0 && (minEventTime == 0 || c.nextPong < minEventTime) {
+		nextTimerOp = timerOpPong
+		minEventTime = c.nextPong
+		needTimer = true
+	}
 	if needTimer {
 		c.timerOp = nextTimerOp
 		afterDuration := time.Duration(minEventTime-time.Now().UnixNano()) * time.Nanosecond
@@ -442,11 +472,57 @@ func (c *Client) stopTimer() {
 	}
 }
 
+func (c *Client) sendPing() {
+	c.mu.Lock()
+	c.lastPing = time.Now().Unix()
+	c.mu.Unlock()
+	unidirectional := c.transport.Unidirectional()
+	if c.transport.Unidirectional() {
+		if c.transport.Protocol() == ProtocolTypeJSON {
+			_ = c.transportEnqueue(jsonPingPush)
+		} else {
+			_ = c.transportEnqueue(protobufPingPush)
+		}
+	} else {
+		if c.transport.Protocol() == ProtocolTypeJSON {
+			_ = c.transportEnqueue(jsonPingReply)
+		} else {
+			_ = c.transportEnqueue(protobufPingReply)
+		}
+	}
+	c.mu.Lock()
+	appLevelPing := c.transport.AppLevelPing()
+	if appLevelPing.PongTimeout > 0 && !unidirectional {
+		c.nextPong = time.Now().Add(appLevelPing.PongTimeout).UnixNano()
+	}
+	c.addPingUpdate()
+	c.mu.Unlock()
+}
+
+func (c *Client) checkPong() {
+	c.mu.RLock()
+	lastPing := c.lastPing
+	lastSeen := c.lastSeen
+	c.mu.RUnlock()
+	if lastSeen < lastPing {
+		go func() { c.Disconnect(DisconnectNoPong) }()
+		return
+	}
+	c.mu.Lock()
+	c.nextPong = 0
+	c.scheduleNextTimer()
+	c.mu.Unlock()
+}
+
+// Lock must be held outside.
+func (c *Client) addPingUpdate() {
+	c.nextPing = time.Now().Add(c.transport.AppLevelPing().PingInterval).UnixNano()
+	c.scheduleNextTimer()
+}
+
 // Lock must be held outside.
 func (c *Client) addPresenceUpdate() {
-	config := c.node.config
-	presenceInterval := config.ClientPresenceUpdateInterval
-	c.nextPresence = time.Now().Add(presenceInterval).UnixNano()
+	c.nextPresence = time.Now().Add(c.node.config.ClientPresenceUpdateInterval).UnixNano()
 	c.scheduleNextTimer()
 }
 
@@ -923,8 +999,9 @@ func (c *Client) Handle(data []byte) bool {
 
 // handleCommand processes a single protocol.Command.
 func (c *Client) handleCommand(cmd *protocol.Command) bool {
-	if cmd.Id == 0 && (cmd.Method != protocol.Command_SEND && cmd.Send == nil) {
-		// Only send command from client can be sent without incremental ID.
+	if c.transport.ProtocolVersion() == ProtocolVersion1 && cmd.Id == 0 && (cmd.Method != protocol.Command_SEND && cmd.Send == nil) {
+		// Only send command from client can be sent without incremental ID in ProtocolVersion1. For
+		// ProtocolVersion2 we treat empty commands as pongs.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "command ID required for commands with reply expected", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
 		go func() { _ = c.close(DisconnectBadRequest) }()
 		return false
@@ -960,10 +1037,13 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 		c.mu.Unlock()
 		return nil
 	}
+	c.lastSeen = time.Now().Unix()
 	c.mu.Unlock()
-
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		return c.dispatchCommandV1(cmd)
+	}
+	if cmd.Id == 0 {
+		return nil
 	}
 	return c.dispatchCommandV2(cmd)
 }
@@ -1308,6 +1388,9 @@ func (c *Client) scheduleOnConnectTimers() {
 			expireAfter += conf.ClientExpiredCloseDelay
 		}
 		c.addExpireUpdate(expireAfter)
+	}
+	if c.transport.ProtocolVersion() > ProtocolVersion1 && c.transport.AppLevelPing().PingInterval > 0 {
+		c.addPingUpdate()
 	}
 	c.mu.Unlock()
 }
@@ -2185,7 +2268,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		return nil, DisconnectNormal
 	}
 
-	c.node.logger.log(newLogEntry(LogLevelDebug, "client authenticated", map[string]interface{}{"client": c.uid, "user": c.user}))
+	if c.node.LogEnabled(LogLevelDebug) {
+		c.node.logger.log(newLogEntry(LogLevelDebug, "client authenticated", map[string]interface{}{"client": c.uid, "user": c.user}))
+	}
 
 	if userConnectionLimit > 0 && user != "" && len(c.node.hub.UserConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": user, "client": c.uid, "limit": userConnectionLimit}))
@@ -2209,6 +2294,10 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		Version: version,
 		Expires: expires,
 		Ttl:     ttl,
+	}
+
+	if c.transport.ProtocolVersion() > ProtocolVersion1 && c.transport.AppLevelPing().PingInterval > 0 {
+		res.Ping = uint32(c.transport.AppLevelPing().PingInterval.Seconds())
 	}
 
 	// Client successfully connected.
@@ -2337,6 +2426,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 		Subs:    res.Subs,
 		Expires: res.Expires,
 		Ttl:     res.Ttl,
+		Ping:    res.Ping,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.EncodeConnectPush(c.transport.Protocol().toProto(), p)

@@ -61,11 +61,10 @@ var exampleChannel = "unidirectional"
 func main() {
 	flag.Parse()
 
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelDebug,
+		LogHandler: handleLog,
+	})
 
 	if *redis {
 		redisShardConfigs := []centrifuge.RedisShardConfig{
@@ -271,6 +270,11 @@ func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
+// AppLevelPing not implemented here, example only works over ProtocolVersion1.
+func (t *websocketTransport) AppLevelPing() centrifuge.AppLevelPing {
+	return centrifuge.AppLevelPing{}
+}
+
 func (t *websocketTransport) writeData(data []byte) error {
 	if t.opts.compressionMinSize > 0 {
 		t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
@@ -301,7 +305,6 @@ func (t *websocketTransport) Write(message []byte) error {
 	return t.WriteMany(message)
 }
 
-// Write data to transport.
 func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:

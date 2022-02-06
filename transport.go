@@ -1,6 +1,10 @@
 package centrifuge
 
-import "github.com/centrifugal/protocol"
+import (
+	"time"
+
+	"github.com/centrifugal/protocol"
+)
 
 // ProtocolType represents client connection transport encoding format.
 type ProtocolType string
@@ -41,17 +45,34 @@ const (
 	ProtocolVersion2 ProtocolVersion = 2
 )
 
-// TransportInfo has read-only transport description methods.
+// AppLevelPing is a configuration that describes desired application
+// level ping-pong behavior. AppLevelPing works only with clients that
+// use ProtocolVersion2.
+type AppLevelPing struct {
+	// PingInterval tells how often to issue application-level server-to-client pings.
+	// Zero value will disable pings.
+	PingInterval time.Duration
+	// PongTimeout sets time for application-level pong check after issuing ping.
+	// Pong only checked for bidirectional clients as unidirectional clients can't send
+	// pong back. PongTimeout must be less than PingInterval – this is a limitation of
+	// current implementation (should be fine for most cases though). Zero value disables
+	// pong checks.
+	PongTimeout time.Duration
+}
+
+// TransportInfo has read-only transport description methods. Some of these methods
+// can modify the behaviour of Client.
 type TransportInfo interface {
 	// Name returns a name of transport.
 	Name() string
-	// Protocol returns an underlying transport protocol type used.
-	// JSON or Protobuf types are supported.
+	// Protocol returns an underlying transport protocol type used by transport.
+	// JSON or Protobuf protocol types are supported by Centrifuge. Message encoding
+	// happens of Client level.
 	Protocol() ProtocolType
-	// ProtocolVersion returns client protocol version.
+	// ProtocolVersion returns protocol version used by transport.
 	ProtocolVersion() ProtocolVersion
 	// Unidirectional returns whether transport is unidirectional. For
-	// unidirectional transports Centrifuge uses Push protobuf messages
+	// unidirectional transports Client writes Push protobuf messages
 	// without additional wrapping pushes into Reply type.
 	Unidirectional() bool
 	// DisabledPushFlags returns a disabled push flags for specific transport.
@@ -59,6 +80,9 @@ type TransportInfo interface {
 	// bidirectional WebSocket implementation since disconnect data sent inside
 	// Close frame.
 	DisabledPushFlags() uint64
+	// AppLevelPing returns application-level server-to-client ping
+	// configuration.
+	AppLevelPing() AppLevelPing
 }
 
 // Transport abstracts a connection transport between server and client.
@@ -68,13 +92,16 @@ type Transport interface {
 	TransportInfo
 	// Write should write single push data into a connection. Every byte slice
 	// here is a single Reply (or Push for unidirectional transport) encoded
-	// according transport ProtocolType.
+	// according transport ProtocolType. For ProtocolVersion2 this can also
+	// be an empty slice which describes an application-level ping message.
 	Write([]byte) error
 	// WriteMany should write data into a connection. Every byte slice here is a
 	// single Reply (or Push for unidirectional transport) encoded according
-	// transport ProtocolType. The reason why we have both Write and WriteMany
-	// here is to have a path without any additional allocations for massive
-	// broadcasts (since variadic args cause allocation).
+	// transport ProtocolType. For ProtocolVersion2 this can also be an empty
+	// slice which describes an application-level ping message.
+	// The reason why we have both Write and WriteMany here is to have a path
+	// without extra allocations for massive broadcasts (since variadic args cause
+	// allocation).
 	WriteMany(...[]byte) error
 	// Close must close transport. Transport implementation can optionally
 	// handle Disconnect passed here. For example builtin WebSocket transport

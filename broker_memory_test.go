@@ -11,10 +11,10 @@ import (
 )
 
 func testMemoryBroker() *MemoryBroker {
-	conf := DefaultConfig
-	conf.LogLevel = LogLevelDebug
-	conf.LogHandler = func(entry LogEntry) {}
-	n, _ := New(conf)
+	n, _ := New(Config{
+		LogLevel:   LogLevelDebug,
+		LogHandler: func(entry LogEntry) {},
+	})
 	e, _ := NewMemoryBroker(n, MemoryBrokerConfig{})
 	n.SetBroker(e)
 	err := n.Run()

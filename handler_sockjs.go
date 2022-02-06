@@ -26,7 +26,9 @@ type SockjsConfig struct {
 	// for connecting on the client side.
 	URL string
 
-	// HeartbeatDelay sets how often to send heartbeat frames to clients.
+	// HeartbeatDelay sets how often to send heartbeat frames to clients. Only used for
+	// ProtocolVersion1. For ProtocolVersion2 we are using application level server-to-client
+	// pings.
 	HeartbeatDelay time.Duration
 
 	// CheckOrigin allows deciding whether to use CORS or not in XHR case.
@@ -52,6 +54,14 @@ type SockjsConfig struct {
 	// Slow client will be disconnected.
 	// By default, DefaultWebsocketWriteTimeout will be used.
 	WebsocketWriteTimeout time.Duration
+
+	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
+	// For zero value 25 secs will be used.
+	AppLevelPingInterval time.Duration
+	// AppLevelPongTimeout sets time for application-level pong check after issuing ping.
+	// AppLevelPongTimeout must be less than AppLevelPingInterval. For zero value 10 secs
+	// will be used.
+	AppLevelPongTimeout time.Duration
 }
 
 // SockjsHandler accepts SockJS connections. SockJS has a bunch of fallback
@@ -62,15 +72,16 @@ type SockjsConfig struct {
 // more than one Centrifuge Node on a backend (so SockJS to be able to emulate
 // bidirectional protocol). So if you can afford it - use WebsocketHandler only.
 type SockjsHandler struct {
-	node            *Node
-	config          SockjsConfig
-	handler         http.Handler
-	protocolVersion ProtocolVersion
+	node      *Node
+	config    SockjsConfig
+	handlerV1 http.Handler
+	handlerV2 http.Handler
 }
 
 // NewSockjsHandler creates new SockjsHandler.
 func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 	options := sockjs.DefaultOptions
+
 	wsUpgrader := &websocket.Upgrader{
 		ReadBufferSize:  config.WebsocketReadBufferSize,
 		WriteBufferSize: config.WebsocketWriteBufferSize,
@@ -87,6 +98,7 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 		wsUpgrader.WriteBufferSize = config.WebsocketWriteBufferSize
 	}
 	options.WebsocketUpgrader = wsUpgrader
+
 	// Override sockjs url. It's important to use the same SockJS
 	// library version on client and server sides when using iframe
 	// based SockJS transports, otherwise SockJS will raise error
@@ -98,7 +110,11 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 		options.CheckOrigin = sameHostOriginCheck(node)
 	}
 
+	if config.HeartbeatDelay == 0 {
+		config.HeartbeatDelay = 25 * time.Second
+	}
 	options.HeartbeatDelay = config.HeartbeatDelay
+
 	wsWriteTimeout := config.WebsocketWriteTimeout
 	if wsWriteTimeout == 0 {
 		wsWriteTimeout = DefaultWebsocketWriteTimeout
@@ -110,34 +126,23 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 	}
 
 	s := &SockjsHandler{
-		node:            node,
-		config:          config,
-		protocolVersion: config.ProtocolVersion,
+		node:   node,
+		config: config,
 	}
 
-	handler := newSockJSHandler(s, config.HandlerPrefix, options)
-	s.handler = handler
+	handlerV1 := sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV1)
+	s.handlerV1 = handlerV1
+
+	// Disabling heartbeats for ProtocolVersion2 since we use app-level pings.
+	options.HeartbeatDelay = 0
+	s.handlerV2 = sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV2)
 	return s
 }
 
 func (s *SockjsHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	s.handler.ServeHTTP(rw, r)
-}
-
-// newSockJSHandler returns SockJS handler bind to sockjsPrefix url prefix.
-// SockJS handler has several handlers inside responsible for various tasks
-// according to SockJS protocol.
-func newSockJSHandler(s *SockjsHandler, sockjsPrefix string, sockjsOpts sockjs.Options) http.Handler {
-	return sockjs.NewHandler(sockjsPrefix, sockjsOpts, s.sockJSHandler)
-}
-
-// sockJSHandler called when new client connection comes to SockJS endpoint.
-func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
-	incTransportConnect(transportSockJS)
-
-	protoVersion := s.protocolVersion
-	if sess.Request().URL.RawQuery != "" {
-		query := sess.Request().URL.Query()
+	protoVersion := s.config.ProtocolVersion
+	if r.URL.RawQuery != "" {
+		query := r.URL.Query()
 		if queryProtocolVersion := query.Get("cf_protocol_version"); queryProtocolVersion != "" {
 			switch queryProtocolVersion {
 			case "v1":
@@ -146,15 +151,54 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 				protoVersion = ProtocolVersion2
 			default:
 				s.node.logger.log(newLogEntry(LogLevelInfo, "unknown protocol version", map[string]interface{}{"transport": transportSockJS, "version": queryProtocolVersion}))
-				_ = sess.Close(3501, "bad request")
 				return
 			}
+		}
+	}
+	if protoVersion == ProtocolVersion1 {
+		s.handlerV1.ServeHTTP(rw, r)
+	} else {
+		s.handlerV2.ServeHTTP(rw, r)
+	}
+}
+
+// sockJSHandler called when new client connection comes to SockJS endpoint.
+func (s *SockjsHandler) sockJSHandlerV1(sess sockjs.Session) {
+	s.handleSession(ProtocolVersion1, sess)
+}
+
+// sockJSHandler called when new client connection comes to SockJS endpoint.
+func (s *SockjsHandler) sockJSHandlerV2(sess sockjs.Session) {
+	s.handleSession(ProtocolVersion2, sess)
+}
+
+// sockJSHandler called when new client connection comes to SockJS endpoint.
+func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.Session) {
+	incTransportConnect(transportSockJS)
+
+	var (
+		pingInterval time.Duration
+		pongTimeout  time.Duration
+	)
+
+	if protoVersion > ProtocolVersion1 {
+		pingInterval = s.config.AppLevelPingInterval
+		if pingInterval == 0 {
+			pingInterval = 25 * time.Second
+		}
+		pongTimeout = s.config.AppLevelPongTimeout
+		if pongTimeout == 0 {
+			pongTimeout = 10 * time.Second
 		}
 	}
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
-		transport := newSockjsTransport(sess, protoVersion)
+		transport := newSockjsTransport(sess, sockjsTransportOptions{
+			protocolVersion: protoVersion,
+			pingInterval:    pingInterval,
+			pongTimeout:     pongTimeout,
+		})
 
 		select {
 		case <-s.node.NotifyShutdown():
@@ -210,19 +254,25 @@ const (
 	transportSockJS = "sockjs"
 )
 
-type sockjsTransport struct {
-	mu              sync.RWMutex
-	closed          bool
-	closeCh         chan struct{}
-	session         sockjs.Session
+type sockjsTransportOptions struct {
 	protocolVersion ProtocolVersion
+	pingInterval    time.Duration
+	pongTimeout     time.Duration
 }
 
-func newSockjsTransport(s sockjs.Session, v ProtocolVersion) *sockjsTransport {
+type sockjsTransport struct {
+	mu      sync.RWMutex
+	closeCh chan struct{}
+	session sockjs.Session
+	opts    sockjsTransportOptions
+	closed  bool
+}
+
+func newSockjsTransport(s sockjs.Session, opts sockjsTransportOptions) *sockjsTransport {
 	t := &sockjsTransport{
-		session:         s,
-		closeCh:         make(chan struct{}),
-		protocolVersion: v,
+		session: s,
+		closeCh: make(chan struct{}),
+		opts:    opts,
 	}
 	return t
 }
@@ -239,7 +289,7 @@ func (t *sockjsTransport) Protocol() ProtocolType {
 
 // ProtocolVersion returns transport ProtocolVersion.
 func (t *sockjsTransport) ProtocolVersion() ProtocolVersion {
-	return t.protocolVersion
+	return t.opts.protocolVersion
 }
 
 // Unidirectional returns whether transport is unidirectional.
@@ -252,6 +302,14 @@ func (t *sockjsTransport) DisabledPushFlags() uint64 {
 	// SockJS has its own close frames to mimic WebSocket Close frames,
 	// so we don't need to send Disconnect pushes.
 	return PushFlagDisconnect
+}
+
+// AppLevelPing ...
+func (t *sockjsTransport) AppLevelPing() AppLevelPing {
+	return AppLevelPing{
+		PingInterval: t.opts.pingInterval,
+		PongTimeout:  t.opts.pongTimeout,
+	}
 }
 
 // Write data to transport.

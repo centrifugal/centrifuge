@@ -55,11 +55,10 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelInfo
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelInfo,
+		LogHandler: handleLog,
+	})
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
@@ -217,6 +216,11 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
 }
 
+// AppLevelPing not implemented here, example only works over ProtocolVersion1.
+func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
+	return centrifuge.AppLevelPing{}
+}
+
 // Write ...
 func (t *customWebsocketTransport) Write(message []byte) error {
 	select {
@@ -277,7 +281,7 @@ func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) erro
 	t.mu.Unlock()
 
 	if disconnect != nil {
-		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.CloseText())
+		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
 	}
 	return t.conn.Close(websocket.StatusNormalClosure, "")
 }

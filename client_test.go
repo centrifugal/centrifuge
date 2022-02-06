@@ -170,6 +170,33 @@ func TestClientTimerSchedule(t *testing.T) {
 	require.Equal(t, timerOpPresence, client.timerOp)
 }
 
+func TestClientV2TimerSchedule(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2(t, node, "42")
+
+	client.mu.Lock()
+	require.NotNil(t, client.timer)
+	require.Equal(t, timerOpStale, client.timerOp)
+	client.mu.Unlock()
+
+	connectClientV2(t, client)
+
+	client.mu.Lock()
+	require.NotNil(t, client.timer)
+	require.Equal(t, timerOpPing, client.timerOp)
+	client.mu.Unlock()
+
+	client.sendPing()
+
+	client.mu.Lock()
+	require.NotZero(t, client.lastPing)
+	require.NotZero(t, client.nextPong)
+	require.NotNil(t, client.timer)
+	require.Equal(t, timerOpPong, client.timerOp)
+	client.mu.Unlock()
+}
+
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -3218,10 +3245,10 @@ func (b *slowHistoryBroker) History(ch string, filter HistoryFilter) ([]*Publica
 }
 
 func TestSubscribeWithBufferedPublications(t *testing.T) {
-	c := DefaultConfig
-	c.LogLevel = LogLevelTrace
-	c.LogHandler = func(entry LogEntry) {}
-	node, err := New(c)
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -3348,10 +3375,10 @@ func TestClientChannelsCleanupOnSubscribeDisconnect(t *testing.T) {
 }
 
 func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
-	c := DefaultConfig
-	c.LogLevel = LogLevelTrace
-	c.LogHandler = func(entry LogEntry) {}
-	node, err := New(c)
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -3398,10 +3425,10 @@ func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
 }
 
 func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
-	c := DefaultConfig
-	c.LogLevel = LogLevelTrace
-	c.LogHandler = func(entry LogEntry) {}
-	node, err := New(c)
+	node, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -3611,7 +3638,9 @@ func TestClient_HandleCommandV2_NoID(t *testing.T) {
 	ok := clientV2.handleCommand(&protocol.Command{
 		Connect: &protocol.ConnectRequest{},
 	})
-	require.False(t, ok)
+	// Interpreted as PONG in ProtocolVersion2.
+	require.True(t, ok)
+	require.NotZero(t, clientV2.lastSeen)
 }
 
 func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {

@@ -74,6 +74,10 @@ func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.protoType
 }
 
+func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
+	return centrifuge.ProtocolVersion1
+}
+
 // Unidirectional returns whether transport is unidirectional.
 func (t *customWebsocketTransport) Unidirectional() bool {
 	return false
@@ -84,9 +88,9 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
 }
 
-// Version of protocol.
-func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
+// AppLevelPing not implemented here, example only works over ProtocolVersion1.
+func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
+	return centrifuge.AppLevelPing{}
 }
 
 // Write ...
@@ -206,11 +210,10 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 func main() {
 	log.Printf("NumCPU: %d", runtime.NumCPU())
 
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelError
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelError,
+		LogHandler: handleLog,
+	})
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{

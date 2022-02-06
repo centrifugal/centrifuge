@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/centrifugal/protocol"
-
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -236,22 +235,10 @@ func TestSockjsHandlerURLParams(t *testing.T) {
 	url := "ws" + server.URL[4:]
 
 	// Connect with invalid protocol version.
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket?cf_protocol_version=v3", nil)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
-	require.NotNil(t, conn)
-	defer func() { _ = conn.Close() }()
-	_, msg, err := conn.ReadMessage()
-	require.NoError(t, err)
-	require.Equal(t, "o", string(msg))
-	_, msg, err = conn.ReadMessage()
-	require.NoError(t, err)
-	require.Equal(t, "c[3501,\"bad request\"]", string(msg))
-	_, _, err = conn.ReadMessage()
+	_, _, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket?cf_protocol_version=v3", nil)
 	require.Error(t, err)
 
-	conn, resp, err = websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket?cf_protocol_version=v2", nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/sockjs/220/fi0988475/websocket?cf_protocol_version=v2", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)

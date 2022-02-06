@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -61,12 +59,10 @@ func channelSubscribeAllowed(channel string) bool {
 }
 
 func main() {
-	cfg := centrifuge.DefaultConfig
-
-	cfg.LogLevel = centrifuge.LogLevelInfo
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelInfo,
+		LogHandler: handleLog,
+	})
 
 	// Override default broker which does not use HistoryMetaTTL.
 	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{
@@ -89,24 +85,24 @@ func main() {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
-		// Event handler should not block, so start separate goroutine to
-		// periodically send messages to client.
-		go func() {
-			for {
-				select {
-				case <-client.Context().Done():
-					return
-				case <-time.After(5 * time.Second):
-					err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-					if err != nil {
-						if err == io.EOF {
-							return
-						}
-						log.Printf("error sending message: %s", err)
-					}
-				}
-			}
-		}()
+		//// Event handler should not block, so start separate goroutine to
+		//// periodically send messages to client.
+		//go func() {
+		//	for {
+		//		select {
+		//		case <-client.Context().Done():
+		//			return
+		//		case <-time.After(5 * time.Second):
+		//			err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+		//			if err != nil {
+		//				if err == io.EOF {
+		//					return
+		//				}
+		//				log.Printf("error sending message: %s", err)
+		//			}
+		//		}
+		//	}
+		//}()
 
 		client.OnAlive(func() {
 			log.Printf("user %s connection is still active", client.UserID())
@@ -193,47 +189,52 @@ func main() {
 		log.Fatal(err)
 	}
 
-	go func() {
-		// Publish personal notifications for user 42 periodically.
-		i := 1
-		for {
-			_, err := node.Publish(
-				"#42",
-				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute),
-			)
-			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
-			}
-			i++
-			time.Sleep(5000 * time.Millisecond)
-		}
-	}()
-
-	go func() {
-		// Publish to channel periodically.
-		i := 1
-		for {
-			_, err := node.Publish(
-				"chat:index",
-				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute),
-			)
-			if err != nil {
-				log.Printf("error publishing to channel: %s", err)
-			}
-			i++
-			time.Sleep(10000 * time.Millisecond)
-		}
-	}()
+	//go func() {
+	//	// Publish personal notifications for user 42 periodically.
+	//	i := 1
+	//	for {
+	//		_, err := node.Publish(
+	//			"#42",
+	//			[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
+	//			centrifuge.WithHistory(300, time.Minute),
+	//		)
+	//		if err != nil {
+	//			log.Printf("error publishing to personal channel: %s", err)
+	//		}
+	//		i++
+	//		time.Sleep(5000 * time.Millisecond)
+	//	}
+	//}()
+	//
+	//go func() {
+	//	// Publish to channel periodically.
+	//	i := 1
+	//	for {
+	//		_, err := node.Publish(
+	//			"chat:index",
+	//			[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
+	//			centrifuge.WithHistory(300, time.Minute),
+	//		)
+	//		if err != nil {
+	//			log.Printf("error publishing to channel: %s", err)
+	//		}
+	//		i++
+	//		time.Sleep(10000 * time.Millisecond)
+	//	}
+	//}()
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+		ProtocolVersion:    centrifuge.ProtocolVersion2,
 		ReadBufferSize:     1024,
 		UseWriteBufferPool: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
 	})
 	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
 
 	sockjsHandler := centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
+		ProtocolVersion:          centrifuge.ProtocolVersion2,
 		URL:                      "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
 		HandlerPrefix:            "/connection/sockjs",
 		WebsocketReadBufferSize:  1024,

@@ -94,11 +94,10 @@ func respondChannelsSurvey(node *centrifuge.Node) centrifuge.SurveyReply {
 func main() {
 	flag.Parse()
 
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelDebug,
+		LogHandler: handleLog,
+	})
 
 	node.OnSurvey(func(event centrifuge.SurveyEvent, cb centrifuge.SurveyCallback) {
 		switch event.Op {

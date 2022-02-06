@@ -45,12 +45,10 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
-	cfg := centrifuge.DefaultConfig
-
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelDebug,
+		LogHandler: handleLog,
+	})
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
@@ -113,7 +111,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+		ProtocolVersion: centrifuge.ProtocolVersion2,
+		PingInterval:    5 * time.Second,
+		PongTimeout:     3 * time.Second,
+	})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

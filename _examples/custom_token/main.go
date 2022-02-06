@@ -32,15 +32,12 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
-	cfg := centrifuge.DefaultConfig
-
-	cfg.LogLevel = centrifuge.LogLevelInfo
-	cfg.LogHandler = handleLog
-
-	// Better to keep default in production. Here we just speeding up things a bit.
-	cfg.ClientExpiredCloseDelay = 5 * time.Second
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelDebug,
+		LogHandler: handleLog,
+		// Better to keep default in production. Here we are just speeding up things a bit.
+		ClientExpiredCloseDelay: 5 * time.Second,
+	})
 
 	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{
 		HistoryMetaTTL: 120 * time.Second,
