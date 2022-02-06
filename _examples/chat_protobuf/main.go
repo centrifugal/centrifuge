@@ -113,8 +113,6 @@ func main() {
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ProtocolVersion: centrifuge.ProtocolVersion2,
-		PingInterval:    5 * time.Second,
-		PongTimeout:     3 * time.Second,
 	})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
