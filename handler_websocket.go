@@ -377,8 +377,8 @@ func (t *websocketTransport) DisabledPushFlags() uint64 {
 // AppLevelPing ...
 func (t *websocketTransport) AppLevelPing() AppLevelPing {
 	return AppLevelPing{
-		PingInterval: 25 * time.Second,
-		PongTimeout:  10 * time.Second,
+		PingInterval: t.opts.pingInterval,
+		PongTimeout:  t.opts.pongTimeout,
 	}
 }
 

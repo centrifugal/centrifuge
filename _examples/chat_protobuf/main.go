@@ -111,9 +111,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		ProtocolVersion: centrifuge.ProtocolVersion2,
-	})))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
