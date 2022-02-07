@@ -25,6 +25,8 @@ type testTransport struct {
 	protocolVersion   ProtocolVersion
 	writeErr          error
 	writeErrorContent string
+	pingInterval      time.Duration
+	pongTimeout       time.Duration
 }
 
 func newTestTransport(cancelFn func()) *testTransport {
@@ -34,6 +36,8 @@ func newTestTransport(cancelFn func()) *testTransport {
 		closeCh:         make(chan struct{}),
 		unidirectional:  false,
 		protocolVersion: ProtocolVersion1,
+		pingInterval:    10 * time.Second,
+		pongTimeout:     3 * time.Second,
 	}
 }
 
@@ -51,6 +55,11 @@ func (t *testTransport) setUnidirectional(uni bool) {
 
 func (t *testTransport) setSink(sink chan []byte) {
 	t.sink = sink
+}
+
+func (t *testTransport) setPing(pingInterval, pongTimeout time.Duration) {
+	t.pingInterval = pingInterval
+	t.pongTimeout = pongTimeout
 }
 
 func (t *testTransport) Write(message []byte) error {
@@ -116,8 +125,8 @@ func (t *testTransport) DisabledPushFlags() uint64 {
 
 func (t *testTransport) AppLevelPing() AppLevelPing {
 	return AppLevelPing{
-		PingInterval: 10 * time.Second,
-		PongTimeout:  4 * time.Second,
+		PingInterval: t.pingInterval,
+		PongTimeout:  t.pongTimeout,
 	}
 }
 

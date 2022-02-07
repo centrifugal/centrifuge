@@ -170,6 +170,17 @@ func TestClientTimerSchedule(t *testing.T) {
 	require.Equal(t, timerOpPresence, client.timerOp)
 }
 
+func TestClientGetPingData(t *testing.T) {
+	data := getPingData(true, ProtocolTypeJSON)
+	require.Equal(t, jsonPingPush, data)
+	data = getPingData(false, ProtocolTypeJSON)
+	require.Equal(t, jsonPingReply, data)
+	data = getPingData(true, ProtocolTypeProtobuf)
+	require.Equal(t, protobufPingPush, data)
+	data = getPingData(false, ProtocolTypeProtobuf)
+	require.Equal(t, protobufPingReply, data)
+}
+
 func TestClientV2TimerSchedule(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -195,6 +206,61 @@ func TestClientV2TimerSchedule(t *testing.T) {
 	require.NotNil(t, client.timer)
 	require.Equal(t, timerOpPong, client.timerOp)
 	client.mu.Unlock()
+}
+
+func TestClientV2DisconnectNoPong(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	done := make(chan struct{})
+	node.OnConnect(func(client *Client) {
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectNoPong.Code, event.Disconnect.Code)
+			close(done)
+		})
+	})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setPing(2*time.Second, time.Second)
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+	connectClientV2(t, client)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no disconnect in timeout")
+	}
+}
+
+func TestClientV2PingPong(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	done := make(chan struct{})
+	node.OnConnect(func(client *Client) {
+		client.OnDisconnect(func(event DisconnectEvent) {
+			close(done)
+		})
+	})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setPing(2*time.Second, time.Second)
+	messages := make(chan []byte)
+	transport.setSink(messages)
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+	go func() {
+		for msg := range messages {
+			if string(msg) == "{}" {
+				// PING
+				client.Handle([]byte("{}"))
+			}
+		}
+	}()
+	connectClientV2(t, client)
+	select {
+	case <-done:
+		t.Fatal("unexpected disconnect, client must receive pong")
+	case <-time.After(4 * time.Second):
+	}
 }
 
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {

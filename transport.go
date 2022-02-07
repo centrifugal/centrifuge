@@ -92,13 +92,11 @@ type Transport interface {
 	TransportInfo
 	// Write should write single push data into a connection. Every byte slice
 	// here is a single Reply (or Push for unidirectional transport) encoded
-	// according transport ProtocolType. For ProtocolVersion2 this can also
-	// be an empty slice which describes an application-level ping message.
+	// according transport ProtocolType.
 	Write([]byte) error
 	// WriteMany should write data into a connection. Every byte slice here is a
 	// single Reply (or Push for unidirectional transport) encoded according
-	// transport ProtocolType. For ProtocolVersion2 this can also be an empty
-	// slice which describes an application-level ping message.
+	// transport ProtocolType.
 	// The reason why we have both Write and WriteMany here is to have a path
 	// without extra allocations for massive broadcasts (since variadic args cause
 	// allocation).

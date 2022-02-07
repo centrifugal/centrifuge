@@ -472,24 +472,28 @@ func (c *Client) stopTimer() {
 	}
 }
 
+func getPingData(uni bool, protoType ProtocolType) []byte {
+	if uni {
+		if protoType == ProtocolTypeJSON {
+			return jsonPingPush
+		} else {
+			return protobufPingPush
+		}
+	} else {
+		if protoType == ProtocolTypeJSON {
+			return jsonPingReply
+		} else {
+			return protobufPingReply
+		}
+	}
+}
+
 func (c *Client) sendPing() {
 	c.mu.Lock()
 	c.lastPing = time.Now().Unix()
 	c.mu.Unlock()
 	unidirectional := c.transport.Unidirectional()
-	if c.transport.Unidirectional() {
-		if c.transport.Protocol() == ProtocolTypeJSON {
-			_ = c.transportEnqueue(jsonPingPush)
-		} else {
-			_ = c.transportEnqueue(protobufPingPush)
-		}
-	} else {
-		if c.transport.Protocol() == ProtocolTypeJSON {
-			_ = c.transportEnqueue(jsonPingReply)
-		} else {
-			_ = c.transportEnqueue(protobufPingReply)
-		}
-	}
+	_ = c.transportEnqueue(getPingData(unidirectional, c.transport.Protocol()))
 	c.mu.Lock()
 	appLevelPing := c.transport.AppLevelPing()
 	if appLevelPing.PongTimeout > 0 && !unidirectional {
