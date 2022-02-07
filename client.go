@@ -2300,8 +2300,14 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		Ttl:     ttl,
 	}
 
-	if c.transport.ProtocolVersion() > ProtocolVersion1 && c.transport.AppLevelPing().PingInterval > 0 {
-		res.Ping = uint32(c.transport.AppLevelPing().PingInterval.Seconds())
+	if c.transport.ProtocolVersion() > ProtocolVersion1 {
+		appLevelPing := c.transport.AppLevelPing()
+		if appLevelPing.PingInterval > 0 {
+			res.Ping = uint32(c.transport.AppLevelPing().PingInterval.Seconds())
+		}
+		if !c.transport.Unidirectional() && appLevelPing.PongTimeout > 0 {
+			res.Pong = true
+		}
 	}
 
 	// Client successfully connected.

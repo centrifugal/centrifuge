@@ -15,14 +15,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Defaults.
-const (
-	DefaultWebsocketPingInterval     = 25 * time.Second
-	DefaultWebsocketPongTimeout      = 10 * time.Second
-	DefaultWebsocketWriteTimeout     = 1 * time.Second
-	DefaultWebsocketMessageSizeLimit = 65536 // 64KB
-)
-
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
 	// ProtocolVersion the handler will serve. If not set we are expecting
@@ -48,7 +40,7 @@ type WebsocketConfig struct {
 	WriteBufferSize int
 
 	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
-	// By default, DefaultWebsocketMessageSizeLimit will be used.
+	// By default, 65536 bytes (64KB) will be used.
 	MessageSizeLimit int
 
 	// CheckOrigin func to provide custom origin check logic.
@@ -58,7 +50,7 @@ type WebsocketConfig struct {
 
 	// WriteTimeout is maximum time of write message operation.
 	// Slow client will be disconnected.
-	// By default, DefaultWebsocketWriteTimeout will be used.
+	// By default, 1 * time.Second will be used.
 	WriteTimeout time.Duration
 
 	// Compression allows enabling websocket permessage-deflate
@@ -70,8 +62,8 @@ type WebsocketConfig struct {
 	// UseWriteBufferPool enables using buffer pool for writes.
 	UseWriteBufferPool bool
 
-	// PingInterval sets interval server will send ping messages to clients.
-	// By default, DefaultWebsocketPingInterval is used. Only used for clients
+	// PingInterval sets interval server will send ping frames to clients.
+	// By default, 25 * time.Second is used. Only used for clients
 	// with ProtocolVersion1.
 	PingInterval time.Duration
 	// PongTimeout sets the time to wait for pong messages from the client.
@@ -81,10 +73,12 @@ type WebsocketConfig struct {
 
 	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
 	// For zero value 25 secs will be used. Only used for clients with ProtocolVersion2.
+	// To disable sending app-level pings in ProtocolVersion2 use -1.
 	AppLevelPingInterval time.Duration
 	// AppLevelPongTimeout sets time for application-level pong check after issuing ping.
 	// AppLevelPongTimeout must be less than AppLevelPingInterval. For zero value 10 secs
-	// will be used. Only used for clients with ProtocolVersion2.
+	// will be used. Only used for clients with ProtocolVersion2. To disable pong checks
+	// use -1.
 	AppLevelPongTimeout time.Duration
 }
 
@@ -175,14 +169,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		pongTimeout  time.Duration
 	)
 
-	if protoVersion == ProtocolVersion1 {
+	if protoVersion == ProtocolVersion1 || s.config.AppLevelPingInterval < 0 {
 		pingInterval = s.config.PingInterval
 		if pingInterval == 0 {
-			pingInterval = DefaultWebsocketPingInterval
+			pingInterval = 25 * time.Second
 		}
 		pongTimeout = s.config.PongTimeout
 		if pongTimeout == 0 {
-			pongTimeout = DefaultWebsocketPongTimeout
+			pongTimeout = 10 * time.Second
 		}
 	} else {
 		pingInterval = s.config.AppLevelPingInterval
@@ -190,18 +184,20 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pingInterval = 25 * time.Second
 		}
 		pongTimeout = s.config.AppLevelPongTimeout
-		if pongTimeout == 0 {
+		if pongTimeout < 0 {
+			pongTimeout = 0
+		} else if pongTimeout == 0 {
 			pongTimeout = 10 * time.Second
 		}
 	}
 
 	writeTimeout := s.config.WriteTimeout
 	if writeTimeout == 0 {
-		writeTimeout = DefaultWebsocketWriteTimeout
+		writeTimeout = 1 * time.Second
 	}
 	messageSizeLimit := s.config.MessageSizeLimit
 	if messageSizeLimit == 0 {
-		messageSizeLimit = DefaultWebsocketMessageSizeLimit
+		messageSizeLimit = 65536 // 64KB
 	}
 	if messageSizeLimit > 0 {
 		conn.SetReadLimit(int64(messageSizeLimit))

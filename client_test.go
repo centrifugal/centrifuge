@@ -209,6 +209,7 @@ func TestClientV2TimerSchedule(t *testing.T) {
 }
 
 func TestClientV2DisconnectNoPong(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	done := make(chan struct{})
@@ -232,6 +233,7 @@ func TestClientV2DisconnectNoPong(t *testing.T) {
 }
 
 func TestClientV2PingPong(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	done := make(chan struct{})
@@ -494,6 +496,7 @@ func TestClientSubscribe(t *testing.T) {
 }
 
 func TestClientSubscribeBrokerErrorOnSubscribe(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	broker.errorOnSubscribe = true
 	node := nodeWithBroker(broker)
@@ -528,6 +531,7 @@ func TestClientSubscribeBrokerErrorOnSubscribe(t *testing.T) {
 }
 
 func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	broker.errorOnHistory = true
 	node := nodeWithBroker(broker)
@@ -596,6 +600,7 @@ func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
 }
 
 func TestClientSubscribePositionedError(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	broker.errorOnHistory = true
 	node := nodeWithBroker(broker)
@@ -660,6 +665,7 @@ func TestClientSubscribePositioned(t *testing.T) {
 }
 
 func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
+	t.Parallel()
 	broker := NewTestBroker()
 	broker.errorOnHistory = true
 	node := nodeWithBroker(broker)
@@ -695,6 +701,7 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 }
 
 func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
+	t.Parallel()
 	broker := NewTestBroker()
 	node := nodeWithBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -787,6 +794,7 @@ func TestClientSubscribeValidateErrors(t *testing.T) {
 }
 
 func TestClientSubscribeReceivePublication(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
@@ -825,6 +833,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 }
 
 func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -915,6 +924,7 @@ type testContextKey int
 var keyTest testContextKey = 1
 
 func TestConnectingReply(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -950,6 +960,7 @@ func TestConnectingReply(t *testing.T) {
 }
 
 func TestServerSideSubscriptions(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		Name           string
 		Unidirectional bool
@@ -1037,6 +1048,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 }
 
 func TestClientRefresh(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1140,6 +1152,7 @@ func TestClientRefresh(t *testing.T) {
 }
 
 func TestClientRefreshExpireAtInThePast(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1253,6 +1266,7 @@ func getJSONEncodedParams(t testing.TB, request interface{}) []byte {
 }
 
 func TestClientUnsubscribeClientSide(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1296,6 +1310,7 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 }
 
 func TestClientUnsubscribeServerSide(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
@@ -1331,6 +1346,7 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 }
 
 func TestClientAliveHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -1518,6 +1534,7 @@ type testClientMessage struct {
 }
 
 func TestClientPublishHandler(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2080,6 +2097,7 @@ func TestClientHistoryNotAvailable(t *testing.T) {
 }
 
 func TestClientCloseUnauthenticated(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2097,6 +2115,7 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 }
 
 func TestClientHandleUnidirectional(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2127,6 +2146,7 @@ func TestExtractUnidirectionalDisconnect(t *testing.T) {
 }
 
 func TestClientHandleEmptyData(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2145,6 +2165,7 @@ func TestClientHandleEmptyData(t *testing.T) {
 }
 
 func TestClientHandleBrokenData(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2159,6 +2180,7 @@ func TestClientHandleBrokenData(t *testing.T) {
 }
 
 func TestClientHandleCommandNotAuthenticated(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2193,6 +2215,7 @@ func TestClientHandleUnknownMethod(t *testing.T) {
 }
 
 func TestClientHandleCommandWithBrokenParams(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() {
 		_ = node.Shutdown(context.Background())
@@ -2315,6 +2338,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 }
 
 func TestClientOnAlive(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	node.config.ClientPresenceUpdateInterval = time.Second
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -2341,6 +2365,7 @@ func TestClientOnAlive(t *testing.T) {
 }
 
 func TestClientHandleCommandWithoutID(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2373,6 +2398,7 @@ func TestToClientError(t *testing.T) {
 }
 
 func TestClientAlreadyAuthenticated(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2393,6 +2419,7 @@ func TestClientAlreadyAuthenticated(t *testing.T) {
 }
 
 func TestClientCloseExpired(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2469,6 +2496,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 }
 
 func TestClientSubExpired(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2712,6 +2740,7 @@ func TestClientSideRefresh(t *testing.T) {
 }
 
 func TestServerSideRefresh(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2760,6 +2789,7 @@ func TestServerSideRefresh(t *testing.T) {
 }
 
 func TestServerSideRefreshDisconnect(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2811,6 +2841,7 @@ func TestServerSideRefreshDisconnect(t *testing.T) {
 }
 
 func TestServerSideRefreshCustomError(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -2986,6 +3017,7 @@ func TestClientSideSubRefreshUnexpected(t *testing.T) {
 }
 
 func TestCloseNoRace(t *testing.T) {
+	t.Parallel()
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -3151,6 +3183,7 @@ func errLogLevel(err error) LogLevel {
 }
 
 func TestClientTransportWriteError(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		Name               string
 		Error              error

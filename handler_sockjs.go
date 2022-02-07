@@ -52,15 +52,16 @@ type SockjsConfig struct {
 
 	// WebsocketWriteTimeout is maximum time of write message operation.
 	// Slow client will be disconnected.
-	// By default, DefaultWebsocketWriteTimeout will be used.
+	// By default, 1 * time.Second will be used.
 	WebsocketWriteTimeout time.Duration
 
 	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
-	// For zero value 25 secs will be used.
+	// For zero value 25 secs will be used. To disable sending app-level pings in ProtocolVersion2
+	// use -1.
 	AppLevelPingInterval time.Duration
 	// AppLevelPongTimeout sets time for application-level pong check after issuing ping.
 	// AppLevelPongTimeout must be less than AppLevelPingInterval. For zero value 10 secs
-	// will be used.
+	// will be used. To disable pong checks use -1.
 	AppLevelPongTimeout time.Duration
 }
 
@@ -117,7 +118,7 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 
 	wsWriteTimeout := config.WebsocketWriteTimeout
 	if wsWriteTimeout == 0 {
-		wsWriteTimeout = DefaultWebsocketWriteTimeout
+		wsWriteTimeout = 1 * time.Second
 	}
 	options.WebsocketWriteTimeout = wsWriteTimeout
 
@@ -133,8 +134,10 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 	handlerV1 := sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV1)
 	s.handlerV1 = handlerV1
 
-	// Disabling heartbeats for ProtocolVersion2 since we use app-level pings.
-	options.HeartbeatDelay = 0
+	// Disable heartbeats for ProtocolVersion2 if we are using app-level pings.
+	if s.config.AppLevelPingInterval >= 0 {
+		options.HeartbeatDelay = 0
+	}
 	s.handlerV2 = sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV2)
 	return s
 }
@@ -183,11 +186,15 @@ func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.
 
 	if protoVersion > ProtocolVersion1 {
 		pingInterval = s.config.AppLevelPingInterval
-		if pingInterval == 0 {
+		if pingInterval < 0 {
+			pingInterval = 0
+		} else if pingInterval == 0 {
 			pingInterval = 25 * time.Second
 		}
 		pongTimeout = s.config.AppLevelPongTimeout
-		if pongTimeout == 0 {
+		if pongTimeout < 0 {
+			pongTimeout = 0
+		} else if pongTimeout == 0 {
 			pongTimeout = 10 * time.Second
 		}
 	}
