@@ -67,7 +67,7 @@ type WebsocketConfig struct {
 	// with ProtocolVersion1.
 	PingInterval time.Duration
 	// PongTimeout sets the time to wait for pong messages from the client.
-	// By default, DefaultWebsocketPongTimeout is used. Only used for clients
+	// By default, PingInterval / 3 is used. Only used for clients
 	// with ProtocolVersion1.
 	PongTimeout time.Duration
 
@@ -171,7 +171,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		pongTimeout  time.Duration
 	)
 
-	appLevelPing := protoVersion >= ProtocolVersion1 && s.config.AppLevelPingInterval >= 0
+	appLevelPing := protoVersion > ProtocolVersion1 && s.config.AppLevelPingInterval >= 0
 
 	if !appLevelPing {
 		pingInterval = s.config.PingInterval
@@ -180,7 +180,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 		pongTimeout = s.config.PongTimeout
 		if pongTimeout == 0 {
-			pongTimeout = 10 * time.Second
+			pongTimeout = pingInterval / 3
 		}
 	} else {
 		pingInterval = s.config.AppLevelPingInterval
