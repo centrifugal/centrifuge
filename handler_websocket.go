@@ -72,13 +72,15 @@ type WebsocketConfig struct {
 	PongTimeout time.Duration
 
 	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
-	// For zero value 25 secs will be used. Only used for clients with ProtocolVersion2.
-	// To disable sending app-level pings in ProtocolVersion2 use -1.
+	// AppLevelPingInterval is only used for clients with ProtocolVersion2.
+	// AppLevelPingInterval is EXPERIMENTAL and is a subject to change.
+	// For zero value 25 secs will be used. To disable sending app-level pings in ProtocolVersion2 use -1.
 	AppLevelPingInterval time.Duration
-	// AppLevelPongTimeout sets time for application-level pong check after issuing ping.
-	// AppLevelPongTimeout must be less than AppLevelPingInterval. For zero value 10 secs
-	// will be used. Only used for clients with ProtocolVersion2. To disable pong checks
-	// use -1.
+	// AppLevelPongTimeout sets time for application-level pong check after issuing
+	// ping. AppLevelPongTimeout must be less than AppLevelPingInterval.
+	// AppLevelPongTimeout is only used for clients with ProtocolVersion2.
+	// AppLevelPongTimeout is EXPERIMENTAL and is a subject to change.
+	// For zero value AppLevelPingInterval / 3 will be used. To disable pong checks use -1.
 	AppLevelPongTimeout time.Duration
 }
 
@@ -169,7 +171,9 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		pongTimeout  time.Duration
 	)
 
-	if protoVersion == ProtocolVersion1 || s.config.AppLevelPingInterval < 0 {
+	appLevelPing := protoVersion >= ProtocolVersion1 && s.config.AppLevelPingInterval >= 0
+
+	if !appLevelPing {
 		pingInterval = s.config.PingInterval
 		if pingInterval == 0 {
 			pingInterval = 25 * time.Second
@@ -187,7 +191,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		if pongTimeout < 0 {
 			pongTimeout = 0
 		} else if pongTimeout == 0 {
-			pongTimeout = 10 * time.Second
+			pongTimeout = pingInterval / 3
 		}
 	}
 
@@ -203,7 +207,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		conn.SetReadLimit(int64(messageSizeLimit))
 	}
 
-	if protoVersion == ProtocolVersion1 && pingInterval > 0 {
+	if !appLevelPing && pingInterval > 0 {
 		readDeadline := pingInterval + pongTimeout
 		_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 		conn.SetPongHandler(func(string) error {
@@ -220,6 +224,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		opts := websocketTransportOptions{
+			appLevelPing:       appLevelPing,
 			pingInterval:       pingInterval,
 			pongTimeout:        pongTimeout,
 			writeTimeout:       writeTimeout,
@@ -304,6 +309,7 @@ type websocketTransportOptions struct {
 	writeTimeout       time.Duration
 	compressionMinSize int
 	protoVersion       ProtocolVersion
+	appLevelPing       bool
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}) *websocketTransport {
@@ -313,7 +319,7 @@ func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions,
 		graceCh: graceCh,
 		opts:    opts,
 	}
-	if opts.protoVersion == ProtocolVersion1 && opts.pingInterval > 0 {
+	if !opts.appLevelPing && opts.pingInterval > 0 {
 		transport.addPing()
 	}
 	return transport

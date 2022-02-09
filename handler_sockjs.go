@@ -56,12 +56,15 @@ type SockjsConfig struct {
 	WebsocketWriteTimeout time.Duration
 
 	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
-	// For zero value 25 secs will be used. To disable sending app-level pings in ProtocolVersion2
-	// use -1.
+	// AppLevelPingInterval is only used for clients with ProtocolVersion2.
+	// AppLevelPingInterval is EXPERIMENTAL and is a subject to change.
+	// For zero value 25 secs will be used. To disable app-level pings use -1.
 	AppLevelPingInterval time.Duration
-	// AppLevelPongTimeout sets time for application-level pong check after issuing ping.
-	// AppLevelPongTimeout must be less than AppLevelPingInterval. For zero value 10 secs
-	// will be used. To disable pong checks use -1.
+	// AppLevelPongTimeout sets time for application-level pong check after issuing
+	// ping. AppLevelPongTimeout must be less than AppLevelPingInterval.
+	// AppLevelPongTimeout is only used for clients with ProtocolVersion2.
+	// AppLevelPongTimeout is EXPERIMENTAL and is a subject to change.
+	// For zero value AppLevelPingInterval / 3 will be used. To disable pong checks use -1.
 	AppLevelPongTimeout time.Duration
 }
 
@@ -195,7 +198,7 @@ func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.
 		if pongTimeout < 0 {
 			pongTimeout = 0
 		} else if pongTimeout == 0 {
-			pongTimeout = 10 * time.Second
+			pongTimeout = pingInterval / 3
 		}
 	}
 
