@@ -630,7 +630,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.unsubscribe(cmd.User, cmd.Channel, cmd.Client)
+		return n.hub.unsubscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session)
 	case controlpb.Command_SUBSCRIBE:
 		cmd, err := n.controlDecoder.DecodeSubscribe(params)
 		if err != nil {
@@ -641,14 +641,14 @@ func (n *Node) handleControl(data []byte) error {
 		if cmd.RecoverSince != nil {
 			recoverSince = &StreamPosition{Offset: cmd.RecoverSince.Offset, Epoch: cmd.RecoverSince.Epoch}
 		}
-		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithPresence(cmd.Presence), WithJoinLeave(cmd.JoinLeave), WithPosition(cmd.Position), WithRecover(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince))
+		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithPresence(cmd.Presence), WithJoinLeave(cmd.JoinLeave), WithPosition(cmd.Position), WithRecover(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince))
 	case controlpb.Command_DISCONNECT:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Whitelist)
+		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Session, cmd.Whitelist)
 	case controlpb.Command_SURVEY_REQUEST:
 		cmd, err := n.controlDecoder.DecodeSurveyRequest(params)
 		if err != nil {
@@ -676,7 +676,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding refresh control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.refresh(cmd.User, cmd.Client, WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info))
+		return n.hub.refresh(cmd.User, cmd.Client, cmd.Session, WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info))
 	default:
 		n.logger.log(newLogEntry(LogLevelError, "unknown control message method", map[string]interface{}{"method": method}))
 		return fmt.Errorf("control method not found: %d", method)
@@ -894,6 +894,7 @@ func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error
 		Recover:     opts.Recover,
 		ExpireAt:    opts.ExpireAt,
 		Client:      opts.clientID,
+		Session:     opts.sessionID,
 		Data:        opts.Data,
 	}
 	if opts.RecoverSince != nil {
@@ -917,6 +918,7 @@ func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
 		Expired:  opts.Expired,
 		ExpireAt: opts.ExpireAt,
 		Client:   opts.clientID,
+		Session:  opts.sessionID,
 		Info:     opts.Info,
 	}
 	params, _ := n.controlEncoder.EncodeRefresh(refresh)
@@ -935,6 +937,7 @@ func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) e
 		User:    user,
 		Channel: ch,
 		Client:  opts.clientID,
+		Session: opts.sessionID,
 	}
 	params, _ := n.controlEncoder.EncodeUnsubscribe(unsubscribe)
 	cmd := &controlpb.Command{
@@ -947,7 +950,7 @@ func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) e
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from server.
-func (n *Node) pubDisconnect(user string, disconnect *Disconnect, clientID string, whitelist []string) error {
+func (n *Node) pubDisconnect(user string, disconnect *Disconnect, clientID string, sessionID string, whitelist []string) error {
 	protoDisconnect := &controlpb.Disconnect{
 		User:      user,
 		Whitelist: whitelist,
@@ -955,6 +958,7 @@ func (n *Node) pubDisconnect(user string, disconnect *Disconnect, clientID strin
 		Reason:    disconnect.Reason,
 		Reconnect: disconnect.Reconnect,
 		Client:    clientID,
+		Session:   sessionID,
 	}
 	params, _ := n.controlEncoder.EncodeDisconnect(protoDisconnect)
 	cmd := &controlpb.Command{
@@ -1057,7 +1061,7 @@ func (n *Node) Subscribe(userID string, channel string, opts ...SubscribeOption)
 		opt(subscribeOpts)
 	}
 	// Subscribe on this node.
-	err := n.hub.subscribe(userID, channel, subscribeOpts.clientID, opts...)
+	err := n.hub.subscribe(userID, channel, subscribeOpts.clientID, subscribeOpts.sessionID, opts...)
 	if err != nil {
 		return err
 	}
@@ -1073,7 +1077,7 @@ func (n *Node) Unsubscribe(userID string, channel string, opts ...UnsubscribeOpt
 		opt(unsubscribeOpts)
 	}
 	// Unsubscribe on this node.
-	err := n.hub.unsubscribe(userID, channel, unsubscribeOpts.clientID)
+	err := n.hub.unsubscribe(userID, channel, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
 	if err != nil {
 		return err
 	}
@@ -1092,12 +1096,12 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 	if customDisconnect == nil {
 		customDisconnect = DisconnectForceNoReconnect
 	}
-	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.ClientWhitelist)
+	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
 	if err != nil {
 		return err
 	}
 	// Send disconnect control message to other nodes
-	return n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.ClientWhitelist)
+	return n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
 }
 
 // Refresh user connection.
@@ -1110,7 +1114,7 @@ func (n *Node) Refresh(userID string, opts ...RefreshOption) error {
 		opt(refreshOpts)
 	}
 	// Refresh on this node.
-	err := n.hub.refresh(userID, refreshOpts.clientID, opts...)
+	err := n.hub.refresh(userID, refreshOpts.clientID, refreshOpts.sessionID, opts...)
 	if err != nil {
 		return err
 	}

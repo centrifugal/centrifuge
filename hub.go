@@ -68,20 +68,20 @@ func (h *Hub) UserConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
 }
 
-func (h *Hub) disconnect(userID string, disconnect *Disconnect, clientID string, whitelist []string) error {
-	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, whitelist)
+func (h *Hub) disconnect(userID string, disconnect *Disconnect, clientID, sessionID string, whitelist []string) error {
+	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, sessionID, whitelist)
 }
 
-func (h *Hub) refresh(userID string, clientID string, opts ...RefreshOption) error {
-	return h.connShards[index(userID, numHubShards)].refresh(userID, clientID, opts...)
+func (h *Hub) refresh(userID string, clientID, sessionID string, opts ...RefreshOption) error {
+	return h.connShards[index(userID, numHubShards)].refresh(userID, clientID, sessionID, opts...)
 }
 
-func (h *Hub) unsubscribe(userID string, ch string, clientID string) error {
-	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, clientID)
+func (h *Hub) unsubscribe(userID string, ch string, clientID string, sessionID string) error {
+	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, clientID, sessionID)
 }
 
-func (h *Hub) subscribe(userID string, ch string, clientID string, opts ...SubscribeOption) error {
-	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, clientID, opts...)
+func (h *Hub) subscribe(userID string, ch string, clientID string, sessionID string, opts ...SubscribeOption) error {
+	return h.connShards[index(userID, numHubShards)].subscribe(userID, ch, clientID, sessionID, opts...)
 }
 
 func (h *Hub) addSub(ch string, c *Client) (bool, error) {
@@ -239,7 +239,7 @@ func stringInSlice(str string, slice []string) bool {
 	return false
 }
 
-func (h *connShard) subscribe(user string, ch string, clientID string, opts ...SubscribeOption) error {
+func (h *connShard) subscribe(user string, ch string, clientID string, sessionID string, opts ...SubscribeOption) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -248,6 +248,9 @@ func (h *connShard) subscribe(user string, ch string, clientID string, opts ...S
 	var wg sync.WaitGroup
 	for _, c := range userConnections {
 		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		if sessionID != "" && c.SessionID() != sessionID {
 			continue
 		}
 		wg.Add(1)
@@ -265,7 +268,7 @@ func (h *connShard) subscribe(user string, ch string, clientID string, opts ...S
 	return firstErr
 }
 
-func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
+func (h *connShard) unsubscribe(user string, ch string, clientID string, sessionID string) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -274,6 +277,9 @@ func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
 	var wg sync.WaitGroup
 	for _, c := range userConnections {
 		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		if sessionID != "" && c.SessionID() != sessionID {
 			continue
 		}
 		wg.Add(1)
@@ -291,7 +297,7 @@ func (h *connShard) unsubscribe(user string, ch string, clientID string) error {
 	return firstErr
 }
 
-func (h *connShard) refresh(user string, clientID string, opts ...RefreshOption) error {
+func (h *connShard) refresh(user string, clientID string, sessionID string, opts ...RefreshOption) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -300,6 +306,9 @@ func (h *connShard) refresh(user string, clientID string, opts ...RefreshOption)
 	var wg sync.WaitGroup
 	for _, c := range userConnections {
 		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		if sessionID != "" && c.SessionID() != sessionID {
 			continue
 		}
 		wg.Add(1)
@@ -317,7 +326,7 @@ func (h *connShard) refresh(user string, clientID string, opts ...RefreshOption)
 	return firstErr
 }
 
-func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID string, whitelist []string) error {
+func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID string, sessionID string, whitelist []string) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error
@@ -329,6 +338,9 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID str
 			continue
 		}
 		if clientID != "" && c.ID() != clientID {
+			continue
+		}
+		if sessionID != "" && c.SessionID() != sessionID {
 			continue
 		}
 		wg.Add(1)

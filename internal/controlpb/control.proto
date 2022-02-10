@@ -56,6 +56,7 @@ message Subscribe {
     string client = 9;
     bytes data = 10;
     StreamPosition recover_since = 11;
+    string session = 12;
 }
 
 message StreamPosition {
@@ -67,6 +68,7 @@ message Unsubscribe {
     string channel = 1;
     string user = 2;
     string client = 3;
+    string session = 4;
 }
 
 message Disconnect {
@@ -76,6 +78,7 @@ message Disconnect {
     string reason = 4;
     bool reconnect = 5;
     string client = 6;
+    string session = 7;
 }
 
 message SurveyRequest {
@@ -101,4 +104,5 @@ message Refresh {
     bool expired = 3;
     int64 expire_at = 4;
     bytes info = 5;
+    string session = 6;
 }
