@@ -727,7 +727,7 @@ func BenchmarkWsConnectV1(b *testing.B) {
 }
 
 func BenchmarkWsConnectV2(b *testing.B) {
-	//b.Skip()
+	b.Skip()
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 

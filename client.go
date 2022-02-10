@@ -2437,6 +2437,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 		Expires: res.Expires,
 		Ttl:     res.Ttl,
 		Ping:    res.Ping,
+		Pong:    res.Pong,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.EncodeConnectPush(c.transport.Protocol().toProto(), p)
