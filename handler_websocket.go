@@ -15,13 +15,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Defaults.
-const (
-	DefaultWebsocketPingInterval     = 25 * time.Second
-	DefaultWebsocketWriteTimeout     = 1 * time.Second
-	DefaultWebsocketMessageSizeLimit = 65536 // 64KB
-)
-
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
 	// ProtocolVersion the handler will serve. If not set we are expecting
@@ -47,7 +40,7 @@ type WebsocketConfig struct {
 	WriteBufferSize int
 
 	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
-	// By default, DefaultWebsocketMessageSizeLimit will be used.
+	// By default, 65536 bytes (64KB) will be used.
 	MessageSizeLimit int
 
 	// CheckOrigin func to provide custom origin check logic.
@@ -55,13 +48,9 @@ type WebsocketConfig struct {
 	// expects Origin host to match request Host.
 	CheckOrigin func(r *http.Request) bool
 
-	// PingInterval sets interval server will send ping messages to clients.
-	// By default, DefaultWebsocketPingInterval will be used.
-	PingInterval time.Duration
-
 	// WriteTimeout is maximum time of write message operation.
 	// Slow client will be disconnected.
-	// By default, DefaultWebsocketWriteTimeout will be used.
+	// By default, 1 * time.Second will be used.
 	WriteTimeout time.Duration
 
 	// Compression allows enabling websocket permessage-deflate
@@ -72,6 +61,27 @@ type WebsocketConfig struct {
 
 	// UseWriteBufferPool enables using buffer pool for writes.
 	UseWriteBufferPool bool
+
+	// PingInterval sets interval server will send ping frames to clients.
+	// By default, 25 * time.Second is used. Only used for clients
+	// with ProtocolVersion1.
+	PingInterval time.Duration
+	// PongTimeout sets the time to wait for pong messages from the client.
+	// By default, PingInterval / 3 is used. Only used for clients
+	// with ProtocolVersion1.
+	PongTimeout time.Duration
+
+	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
+	// AppLevelPingInterval is only used for clients with ProtocolVersion2.
+	// AppLevelPingInterval is EXPERIMENTAL and is a subject to change.
+	// For zero value 25 secs will be used. To disable sending app-level pings in ProtocolVersion2 use -1.
+	AppLevelPingInterval time.Duration
+	// AppLevelPongTimeout sets time for application-level pong check after issuing
+	// ping. AppLevelPongTimeout must be less than AppLevelPingInterval.
+	// AppLevelPongTimeout is only used for clients with ProtocolVersion2.
+	// AppLevelPongTimeout is EXPERIMENTAL and is a subject to change.
+	// For zero value AppLevelPingInterval / 3 will be used. To disable pong checks use -1.
+	AppLevelPongTimeout time.Duration
 }
 
 // WebsocketHandler handles WebSocket client connections. WebSocket protocol
@@ -156,27 +166,52 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	pingInterval := s.config.PingInterval
-	if pingInterval == 0 {
-		pingInterval = DefaultWebsocketPingInterval
+	var (
+		pingInterval time.Duration
+		pongTimeout  time.Duration
+	)
+
+	appLevelPing := protoVersion > ProtocolVersion1 && s.config.AppLevelPingInterval >= 0
+
+	if !appLevelPing {
+		pingInterval = s.config.PingInterval
+		if pingInterval == 0 {
+			pingInterval = 25 * time.Second
+		}
+		pongTimeout = s.config.PongTimeout
+		if pongTimeout == 0 {
+			pongTimeout = pingInterval / 3
+		}
+	} else {
+		pingInterval = s.config.AppLevelPingInterval
+		if pingInterval == 0 {
+			pingInterval = 25 * time.Second
+		}
+		pongTimeout = s.config.AppLevelPongTimeout
+		if pongTimeout < 0 {
+			pongTimeout = 0
+		} else if pongTimeout == 0 {
+			pongTimeout = pingInterval / 3
+		}
 	}
+
 	writeTimeout := s.config.WriteTimeout
 	if writeTimeout == 0 {
-		writeTimeout = DefaultWebsocketWriteTimeout
+		writeTimeout = 1 * time.Second
 	}
 	messageSizeLimit := s.config.MessageSizeLimit
 	if messageSizeLimit == 0 {
-		messageSizeLimit = DefaultWebsocketMessageSizeLimit
+		messageSizeLimit = 65536 // 64KB
 	}
-
 	if messageSizeLimit > 0 {
 		conn.SetReadLimit(int64(messageSizeLimit))
 	}
-	if pingInterval > 0 {
-		pongWait := pingInterval * 10 / 9
-		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	if !appLevelPing && pingInterval > 0 {
+		readDeadline := pingInterval + pongTimeout
+		_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 		conn.SetPongHandler(func(string) error {
-			_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+			_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 			return nil
 		})
 	}
@@ -189,7 +224,9 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		opts := websocketTransportOptions{
+			appLevelPing:       appLevelPing,
 			pingInterval:       pingInterval,
+			pongTimeout:        pongTimeout,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
 			protoType:          protoType,
@@ -235,9 +272,10 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 
 		// https://github.com/gorilla/websocket/issues/448
-		conn.SetPingHandler(nil)
-		conn.SetPongHandler(nil)
-		conn.SetCloseHandler(nil)
+		// We only set custom pong handler in proto v1.
+		if protoVersion == ProtocolVersion1 {
+			conn.SetPongHandler(nil)
+		}
 		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
@@ -267,9 +305,11 @@ type websocketTransport struct {
 type websocketTransportOptions struct {
 	protoType          ProtocolType
 	pingInterval       time.Duration
+	pongTimeout        time.Duration
 	writeTimeout       time.Duration
 	compressionMinSize int
 	protoVersion       ProtocolVersion
+	appLevelPing       bool
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}) *websocketTransport {
@@ -279,7 +319,7 @@ func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions,
 		graceCh: graceCh,
 		opts:    opts,
 	}
-	if opts.pingInterval > 0 {
+	if !opts.appLevelPing && opts.pingInterval > 0 {
 		transport.addPing()
 	}
 	return transport
@@ -334,6 +374,14 @@ func (t *websocketTransport) Unidirectional() bool {
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	// Websocket sends disconnects in Close frames.
 	return PushFlagDisconnect
+}
+
+// AppLevelPing ...
+func (t *websocketTransport) AppLevelPing() AppLevelPing {
+	return AppLevelPing{
+		PingInterval: t.opts.pingInterval,
+		PongTimeout:  t.opts.pongTimeout,
+	}
 }
 
 func (t *websocketTransport) writeData(data []byte) error {

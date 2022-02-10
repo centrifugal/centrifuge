@@ -45,11 +45,10 @@ func channelSubscribeAllowed(channel string) bool {
 }
 
 func main() {
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelInfo
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelDebug,
+		LogHandler: handleLog,
+	})
 
 	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{
 		HistoryMetaTTL: 120 * time.Second,

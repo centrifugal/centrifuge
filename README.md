@@ -96,14 +96,11 @@ func auth(h http.Handler) http.Handler {
 }
 
 func main() {
-	// We use default config here as a starting point. Default config
-	// contains reasonable values for available options.
-	cfg := centrifuge.DefaultConfig
-
 	// Node is the core object in Centrifuge library responsible for
 	// many useful things. For example Node allows publishing messages
-	// to channels with its Publish method.
-	node, err := centrifuge.New(cfg)
+	// into channels with its Publish method. Here we initialize Node
+	// with Config which has reasonable defaults for zero values.
+	node, err := centrifuge.New(centrifuge.Config{})
 	if err != nil {
 		log.Fatal(err)
 	}

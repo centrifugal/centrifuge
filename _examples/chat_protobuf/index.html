@@ -23,7 +23,7 @@
                 const container = document.getElementById('messages');
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
-                    protocol: 'protobuf' // Note we are setting protobuf protocol here!
+                    protocol: 'protobuf', // Note we are setting protobuf protocol here!
                 });
 
                 // bind listeners on centrifuge object instance events.

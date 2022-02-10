@@ -55,11 +55,10 @@ var exampleChannel = "unidirectional"
 func main() {
 	flag.Parse()
 
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelDebug,
+		LogHandler: handleLog,
+	})
 
 	if *redis {
 		redisShardConfigs := []centrifuge.RedisShardConfig{
@@ -280,6 +279,11 @@ func (t *eventsourceTransport) Unidirectional() bool {
 // DisabledPushFlags ...
 func (t *eventsourceTransport) DisabledPushFlags() uint64 {
 	return 0
+}
+
+// AppLevelPing not implemented here, example only works over ProtocolVersion1.
+func (t *eventsourceTransport) AppLevelPing() centrifuge.AppLevelPing {
+	return centrifuge.AppLevelPing{}
 }
 
 func (t *eventsourceTransport) Write(message []byte) error {

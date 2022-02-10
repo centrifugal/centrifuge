@@ -61,12 +61,10 @@ func channelSubscribeAllowed(channel string) bool {
 }
 
 func main() {
-	cfg := centrifuge.DefaultConfig
-
-	cfg.LogLevel = centrifuge.LogLevelInfo
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelInfo,
+		LogHandler: handleLog,
+	})
 
 	// Override default broker which does not use HistoryMetaTTL.
 	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{

@@ -7,10 +7,10 @@ import (
 )
 
 func testMemoryPresenceManager() *MemoryPresenceManager {
-	conf := DefaultConfig
-	conf.LogLevel = LogLevelDebug
-	conf.LogHandler = func(entry LogEntry) {}
-	n, _ := New(conf)
+	n, _ := New(Config{
+		LogLevel:   LogLevelDebug,
+		LogHandler: func(entry LogEntry) {},
+	})
 	m, _ := NewMemoryPresenceManager(n, MemoryPresenceManagerConfig{})
 	return m
 }

@@ -38,6 +38,7 @@ type Disconnect struct {
 	Reason string `json:"reason"`
 
 	// Reconnect is only used for compatibility with ProtocolVersion1.
+	// Ignore this field if all your clients are using ProtocolVersion2.
 	Reconnect bool `json:"reconnect"`
 
 	// These fields required for ProtocolVersion1 compatibility.
@@ -102,44 +103,44 @@ var (
 		Reason:    "normal",
 		Reconnect: true,
 	}
-	// DisconnectShutdown sent when node is going to shut down.
+	// DisconnectShutdown issued when node is going to shut down.
 	DisconnectShutdown = &Disconnect{
 		Code:      3001,
 		Reason:    "shutdown",
 		Reconnect: true,
 	}
-	// DisconnectServerError sent when internal error occurred on server.
+	// DisconnectServerError issued when internal error occurred on server.
 	DisconnectServerError = &Disconnect{
 		Code:      3004,
 		Reason:    "internal server error",
 		Reconnect: true,
 	}
-	// DisconnectExpired sent when client connection expired.
+	// DisconnectExpired issued when client connection expired.
 	DisconnectExpired = &Disconnect{
 		Code:      3005,
 		Reason:    "expired",
 		Reconnect: true,
 	}
-	// DisconnectSubExpired sent when client subscription expired.
+	// DisconnectSubExpired issued when client subscription expired.
 	DisconnectSubExpired = &Disconnect{
 		Code:      3006,
 		Reason:    "subscription expired",
 		Reconnect: true,
 	}
-	// DisconnectSlow sent when client can't read messages fast enough.
+	// DisconnectSlow issued when client can't read messages fast enough.
 	DisconnectSlow = &Disconnect{
 		Code:      3008,
 		Reason:    "slow",
 		Reconnect: true,
 	}
-	// DisconnectWriteError sent when an error occurred while writing to
+	// DisconnectWriteError issued when an error occurred while writing to
 	// client connection.
 	DisconnectWriteError = &Disconnect{
 		Code:      3009,
 		Reason:    "write error",
 		Reconnect: true,
 	}
-	// DisconnectInsufficientState sent when server detects wrong client
+	// DisconnectInsufficientState issued when server detects wrong client
 	// position in channel Publication stream. Disconnect allows client
 	// to restore missed publications on reconnect.
 	DisconnectInsufficientState = &Disconnect{
@@ -147,46 +148,54 @@ var (
 		Reason:    "insufficient state",
 		Reconnect: true,
 	}
-	// DisconnectForceReconnect sent when server disconnects connection.
+	// DisconnectForceReconnect issued when server disconnects connection.
 	DisconnectForceReconnect = &Disconnect{
 		Code:      3011,
 		Reason:    "force reconnect",
+		Reconnect: true,
+	}
+	// DisconnectNoPong may be issued when server disconnects bidirectional
+	// connection due to no pong received to application-level server-to-client
+	// pings in a configured time.
+	DisconnectNoPong = &Disconnect{
+		Code:      3012,
+		Reason:    "no pong",
 		Reconnect: true,
 	}
 )
 
 // The codes below are built-in terminal codes.
 var (
-	// DisconnectInvalidToken sent when client came with invalid token.
+	// DisconnectInvalidToken issued when client came with invalid token.
 	DisconnectInvalidToken = &Disconnect{
 		Code:   3500,
 		Reason: "invalid token",
 	}
-	// DisconnectBadRequest sent when client uses malformed protocol
+	// DisconnectBadRequest issued when client uses malformed protocol
 	// frames or wrong order of commands.
 	DisconnectBadRequest = &Disconnect{
 		Code:   3501,
 		Reason: "bad request",
 	}
-	// DisconnectStale sent to close connection that did not become
+	// DisconnectStale issued to close connection that did not become
 	// authenticated in configured interval after dialing.
 	DisconnectStale = &Disconnect{
 		Code:   3502,
 		Reason: "stale",
 	}
-	// DisconnectForceNoReconnect sent when server disconnects connection
+	// DisconnectForceNoReconnect issued when server disconnects connection
 	// and asks it to not reconnect again.
 	DisconnectForceNoReconnect = &Disconnect{
 		Code:   3503,
 		Reason: "force disconnect",
 	}
-	// DisconnectConnectionLimit can be sent when client connection exceeds a
+	// DisconnectConnectionLimit can be issued when client connection exceeds a
 	// configured connection limit (per user ID or due to other rule).
 	DisconnectConnectionLimit = &Disconnect{
 		Code:   3504,
 		Reason: "connection limit",
 	}
-	// DisconnectChannelLimit can be sent when client connection exceeds a
+	// DisconnectChannelLimit can be issued when client connection exceeds a
 	// configured channel limit.
 	DisconnectChannelLimit = &Disconnect{
 		Code:   3505,

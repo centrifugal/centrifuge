@@ -40,7 +40,7 @@ type SubscribeOptions struct {
 	JoinLeave bool
 	// When position is on client will additionally sync its position inside
 	// a stream to prevent message loss. Make sure you are enabling Position in channels
-	// that maintain Publication history stream. When Position is on  Centrifuge will
+	// that maintain Publication history stream. When Position is on Centrifuge will
 	// include StreamPosition information to subscribe response - for a client to be able
 	// to manually track its position inside a stream.
 	Position bool

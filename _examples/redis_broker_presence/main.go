@@ -51,11 +51,10 @@ func waitExitSignal(n *centrifuge.Node) {
 func main() {
 	flag.Parse()
 
-	cfg := centrifuge.DefaultConfig
-	cfg.LogLevel = centrifuge.LogLevelDebug
-	cfg.LogHandler = handleLog
-
-	node, _ := centrifuge.New(cfg)
+	node, _ := centrifuge.New(centrifuge.Config{
+		LogLevel:   centrifuge.LogLevelDebug,
+		LogHandler: handleLog,
+	})
 
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
@@ -97,7 +96,7 @@ func main() {
 
 	redisShardConfigs := []centrifuge.RedisShardConfig{
 		{Address: "localhost:6379"},
-		{Address: "localhost:6380"},
+		//{Address: "localhost:6380"},
 	}
 	var redisShards []*centrifuge.RedisShard
 	for _, redisConf := range redisShardConfigs {
@@ -139,9 +138,12 @@ func main() {
 		// Publish channel notifications from server periodically.
 		i := 1
 		for {
-			_, err := node.Publish("chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`))
+			_, err := node.Publish(
+				"chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(10, time.Minute),
+			)
 			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
+				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
 			time.Sleep(5000 * time.Millisecond)
@@ -153,7 +155,10 @@ func main() {
 		go func(i int) {
 			for {
 				time.Sleep(time.Second)
-				_, err := node.Publish("chat:"+strconv.Itoa(i), []byte("hello"))
+				_, err := node.Publish(
+					"chat:"+strconv.Itoa(i), []byte("hello"),
+					centrifuge.WithHistory(10, time.Minute),
+				)
 				if err != nil {
 					log.Println(err.Error())
 				}

@@ -145,7 +145,7 @@ func (e *TestPresenceManager) PresenceStats(_ string) (PresenceStats, error) {
 }
 
 func nodeWithBroker(broker Broker) *Node {
-	c := DefaultConfig
+	c := Config{}
 	n, err := New(c)
 	if err != nil {
 		panic(err)
@@ -163,7 +163,7 @@ func nodeWithTestBroker() *Node {
 }
 
 func nodeWithPresenceManager(presenceManager PresenceManager) *Node {
-	c := DefaultConfig
+	c := Config{}
 	n, err := New(c)
 	if err != nil {
 		panic(err)
@@ -177,10 +177,10 @@ func nodeWithPresenceManager(presenceManager PresenceManager) *Node {
 }
 
 func defaultNodeNoHandlers() *Node {
-	c := DefaultConfig
-	c.LogLevel = LogLevelTrace
-	c.LogHandler = func(entry LogEntry) {}
-	n, err := New(c)
+	n, err := New(Config{
+		LogLevel:   LogLevelTrace,
+		LogHandler: func(entry LogEntry) {},
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -192,10 +192,11 @@ func defaultNodeNoHandlers() *Node {
 }
 
 func defaultTestNodeBenchmark(b *testing.B) *Node {
-	c := DefaultConfig
-	c.LogLevel = LogLevelError
-	c.LogHandler = func(entry LogEntry) {
-		b.Fatal(entry.Message, entry.Fields)
+	c := Config{
+		LogLevel: LogLevelError,
+		LogHandler: func(entry LogEntry) {
+			b.Fatal(entry.Message, entry.Fields)
+		},
 	}
 	n, err := New(c)
 	if err != nil {
@@ -274,15 +275,15 @@ func TestNodeRegistry(t *testing.T) {
 }
 
 func TestNodeLogHandler(t *testing.T) {
-	c := DefaultConfig
 	doneCh := make(chan struct{})
-	c.LogHandler = func(entry LogEntry) {
-		require.Equal(t, LogLevelInfo, entry.Level)
-		require.Equal(t, "test2", entry.Message)
-		close(doneCh)
-	}
-	c.LogLevel = LogLevelInfo
-	n, _ := New(c)
+	n, _ := New(Config{
+		LogLevel: LogLevelInfo,
+		LogHandler: func(entry LogEntry) {
+			require.Equal(t, LogLevelInfo, entry.Level)
+			require.Equal(t, "test2", entry.Message)
+			close(doneCh)
+		},
+	})
 	// Debug should not be logged.
 	n.Log(NewLogEntry(LogLevelDebug, "test1", nil))
 	n.Log(NewLogEntry(LogLevelInfo, "test2", nil))
@@ -294,14 +295,14 @@ func TestNodeLogHandler(t *testing.T) {
 }
 
 func TestNode_SetBroker(t *testing.T) {
-	n, _ := New(DefaultConfig)
+	n, _ := New(Config{})
 	broker := testMemoryBroker()
 	n.SetBroker(broker)
 	require.Equal(t, n.broker, broker)
 }
 
 func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
-	n, _ := New(DefaultConfig)
+	n, _ := New(Config{})
 	n.SetPresenceManager(nil)
 	require.NoError(t, n.addPresence("test", "uid", nil))
 	require.NoError(t, n.removePresence("test", "uid"))
@@ -312,10 +313,10 @@ func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
 }
 
 func TestNode_LogEnabled(t *testing.T) {
-	c := DefaultConfig
-	c.LogLevel = LogLevelInfo
-	c.LogHandler = func(entry LogEntry) {}
-	n, _ := New(c)
+	n, _ := New(Config{
+		LogLevel:   LogLevelInfo,
+		LogHandler: func(entry LogEntry) {},
+	})
 	require.False(t, n.LogEnabled(LogLevelDebug))
 	require.True(t, n.LogEnabled(LogLevelInfo))
 }
@@ -323,7 +324,7 @@ func TestNode_LogEnabled(t *testing.T) {
 func TestNode_RunError(t *testing.T) {
 	broker := NewTestBroker()
 	broker.errorOnRun = true
-	node, err := New(DefaultConfig)
+	node, err := New(Config{})
 	require.NoError(t, err)
 	node.SetBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -333,7 +334,7 @@ func TestNode_RunError(t *testing.T) {
 func TestNode_RunPubControlError(t *testing.T) {
 	broker := NewTestBroker()
 	broker.errorOnPublishControl = true
-	node, err := New(DefaultConfig)
+	node, err := New(Config{})
 	require.NoError(t, err)
 	node.SetBroker(broker)
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -341,7 +342,7 @@ func TestNode_RunPubControlError(t *testing.T) {
 }
 
 func TestNode_SetPresenceManager(t *testing.T) {
-	n, _ := New(DefaultConfig)
+	n, _ := New(Config{})
 	presenceManager := testMemoryPresenceManager()
 	n.SetPresenceManager(presenceManager)
 	require.Equal(t, n.presenceManager, presenceManager)
@@ -1273,7 +1274,7 @@ func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 }
 
 func TestNode_OnNodeInfoSend(t *testing.T) {
-	n, err := New(DefaultConfig)
+	n, err := New(Config{})
 	if err != nil {
 		panic(err)
 	}
