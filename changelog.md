@@ -1,3 +1,32 @@
+v0.21.0
+=======
+
+* It's now possible to use `Config` directly when creating new Centrifuge Node, without using `DefaultConfig` which is now deprecated.
+* Removed some constants with default values, added better comments which reflect zero value behavior - no need to jump to const definition when reading code/docs.
+* Some allocation optimizations in WebSocket disconnect process.
+* Continue working on ProtocolVersion2 – introducing application-level server-to-client pings. This is still EXPERIMENTAL at the moment and may be changed in later releases.
+
+```
+gorelease -base v0.20.0 -version v0.21.0
+# github.com/centrifugal/centrifuge
+## incompatible changes
+DefaultWebsocketMessageSizeLimit: removed
+DefaultWebsocketPingInterval: removed
+DefaultWebsocketWriteTimeout: removed
+TransportInfo.AppLevelPing: added
+## compatible changes
+AppLevelPing: added
+DisconnectNoPong: added
+SockjsConfig.AppLevelPingInterval: added
+SockjsConfig.AppLevelPongTimeout: added
+WebsocketConfig.AppLevelPingInterval: added
+WebsocketConfig.AppLevelPongTimeout: added
+WebsocketConfig.PongTimeout: added
+
+# summary
+v0.21.0 is a valid semantic version for this release.
+```
+
 v0.20.0
 =======
 

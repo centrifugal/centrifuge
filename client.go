@@ -2327,9 +2327,11 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			res.Pong = true
 		}
 		if c.transport.Unidirectional() {
-			res.Session = c.session
 			res.Node = c.node.ID()
 		}
+	}
+	if c.transport.Unidirectional() {
+		res.Session = c.session
 	}
 
 	// Client successfully connected.
@@ -2459,6 +2461,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 		Expires: res.Expires,
 		Ttl:     res.Ttl,
 		Ping:    res.Ping,
+		Pong:    res.Pong,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.EncodeConnectPush(c.transport.Protocol().toProto(), p)
