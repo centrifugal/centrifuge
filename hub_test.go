@@ -392,12 +392,10 @@ func TestHubDisconnect_SessionID(t *testing.T) {
 	shouldNotBeClosed := make(chan struct{})
 
 	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
-		fmt.Printf("%#v\n", e.Disconnect)
 		close(shouldBeClosed)
 	}
 
 	clientToKeep.eventHub.disconnectHandler = func(e DisconnectEvent) {
-		fmt.Printf("%#v\n", e.Disconnect)
 		close(shouldNotBeClosed)
 	}
 

@@ -219,7 +219,7 @@ func WithUnsubscribeSession(sessionID string) UnsubscribeOption {
 // DisconnectOptions define some fields to alter behaviour of Disconnect operation.
 type DisconnectOptions struct {
 	// Disconnect represents custom disconnect to use.
-	// By default DisconnectForceNoReconnect will be used.
+	// By default, DisconnectForceNoReconnect will be used.
 	Disconnect *Disconnect
 	// ClientWhitelist contains client IDs to keep.
 	ClientWhitelist []string
@@ -232,21 +232,21 @@ type DisconnectOptions struct {
 // DisconnectOption is a type to represent various Disconnect options.
 type DisconnectOption func(options *DisconnectOptions)
 
-// WithDisconnect allows to set custom Disconnect.
+// WithDisconnect allows setting custom Disconnect.
 func WithDisconnect(disconnect *Disconnect) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.Disconnect = disconnect
 	}
 }
 
-// WithDisconnectClient allows to set Client.
+// WithDisconnectClient allows setting Client.
 func WithDisconnectClient(clientID string) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.clientID = clientID
 	}
 }
 
-// WithDisconnectSession allows to set session ID to disconnect.
+// WithDisconnectSession allows setting session ID to disconnect.
 func WithDisconnectSession(sessionID string) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.sessionID = sessionID
