@@ -731,7 +731,7 @@ func (c *Client) ID() string {
 // SessionID returns unique client session id. Session ID is not shared to other
 // connections in any way.
 func (c *Client) SessionID() string {
-	return c.uid
+	return c.session
 }
 
 // UserID returns user id associated with client connection.
@@ -2326,9 +2326,6 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if !c.transport.Unidirectional() && appLevelPing.PongTimeout > 0 {
 			res.Pong = true
 		}
-		if c.transport.Unidirectional() {
-			res.Node = c.node.ID()
-		}
 	}
 	if c.transport.Unidirectional() {
 		res.Session = c.session
@@ -2462,6 +2459,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 		Ttl:     res.Ttl,
 		Ping:    res.Ping,
 		Pong:    res.Pong,
+		Session: res.Session,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.EncodeConnectPush(c.transport.Protocol().toProto(), p)
