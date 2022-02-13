@@ -314,7 +314,7 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	}
 }
 
-func TestHubDisconnect_ClientID(t *testing.T) {
+func TestHubOperationsWithClientID(t *testing.T) {
 	t.Parallel()
 
 	n := defaultNodeNoHandlers()
@@ -345,7 +345,15 @@ func TestHubDisconnect_ClientID(t *testing.T) {
 
 	clientToDisconnect := client.ID()
 
-	err := n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, "", nil)
+	require.Equal(t, 2, n.hub.NumSubscriptions())
+	err := n.hub.subscribe("12", "channel", clientToKeep.ID(), "")
+	require.NoError(t, err)
+	require.Equal(t, 3, n.hub.NumSubscriptions())
+	err = n.hub.unsubscribe("12", "channel", clientToKeep.ID(), "")
+	require.NoError(t, err)
+	require.Equal(t, 2, n.hub.NumSubscriptions())
+
+	err = n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, "", nil)
 	require.NoError(t, err)
 
 	select {
@@ -362,7 +370,7 @@ func TestHubDisconnect_ClientID(t *testing.T) {
 	}
 }
 
-func TestHubDisconnect_SessionID(t *testing.T) {
+func TestHubOperationsWithSessionID(t *testing.T) {
 	t.Parallel()
 
 	n := defaultNodeNoHandlers()
@@ -401,7 +409,15 @@ func TestHubDisconnect_SessionID(t *testing.T) {
 
 	sessionToDisconnect := client.sessionID()
 
-	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", sessionToDisconnect, nil)
+	require.Equal(t, 0, n.hub.NumSubscriptions())
+	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID())
+	require.NoError(t, err)
+	require.Equal(t, 1, n.hub.NumSubscriptions())
+	err = n.hub.unsubscribe("12", "test", "", clientToKeep.sessionID())
+	require.NoError(t, err)
+	require.Equal(t, 0, n.hub.NumSubscriptions())
+
+	err = n.hub.disconnect("12", DisconnectConnectionLimit, "", sessionToDisconnect, nil)
 	require.NoError(t, err)
 
 	select {
