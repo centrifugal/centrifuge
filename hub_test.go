@@ -368,23 +368,22 @@ func TestHubDisconnect_SessionID(t *testing.T) {
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	n.OnConnect(func(client *Client) {
-		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{}, nil)
-		})
-	})
+	n.OnConnect(func(client *Client) {})
 
 	transport := newTestTransport(func() {})
 	transport.setUnidirectional(true)
 	transport.setProtocolVersion(ProtocolVersion2)
-	transport.sink = make(chan []byte, 100)
 	ctx := context.Background()
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "12"})
-
 	client, _ := newClient(newCtx, n, transport)
 	connectClientV2(t, client)
 
-	clientToKeep, _ := newClient(newCtx, n, transport)
+	transport2 := newTestTransport(func() {})
+	transport2.setUnidirectional(true)
+	transport2.setProtocolVersion(ProtocolVersion2)
+	ctx2 := context.Background()
+	newCtx2 := SetCredentials(ctx2, &Credentials{UserID: "12"})
+	clientToKeep, _ := newClient(newCtx2, n, transport2)
 	connectClientV2(t, clientToKeep)
 
 	require.Len(t, n.hub.UserConnections("12"), 2)
@@ -393,14 +392,16 @@ func TestHubDisconnect_SessionID(t *testing.T) {
 	shouldNotBeClosed := make(chan struct{})
 
 	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		fmt.Printf("%#v\n", e.Disconnect)
 		close(shouldBeClosed)
 	}
 
 	clientToKeep.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		fmt.Printf("%#v\n", e.Disconnect)
 		close(shouldNotBeClosed)
 	}
 
-	sessionToDisconnect := client.SessionID()
+	sessionToDisconnect := client.sessionID()
 
 	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", sessionToDisconnect, nil)
 	require.NoError(t, err)

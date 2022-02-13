@@ -728,9 +728,9 @@ func (c *Client) ID() string {
 	return c.uid
 }
 
-// SessionID returns unique client session id. Session ID is not shared to other
+// sessionID returns unique client session id. Session ID is not shared to other
 // connections in any way.
-func (c *Client) SessionID() string {
+func (c *Client) sessionID() string {
 	return c.session
 }
 

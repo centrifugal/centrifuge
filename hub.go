@@ -250,7 +250,7 @@ func (h *connShard) subscribe(user string, ch string, clientID string, sessionID
 		if clientID != "" && c.ID() != clientID {
 			continue
 		}
-		if sessionID != "" && c.SessionID() != sessionID {
+		if sessionID != "" && c.sessionID() != sessionID {
 			continue
 		}
 		wg.Add(1)
@@ -279,7 +279,7 @@ func (h *connShard) unsubscribe(user string, ch string, clientID string, session
 		if clientID != "" && c.ID() != clientID {
 			continue
 		}
-		if sessionID != "" && c.SessionID() != sessionID {
+		if sessionID != "" && c.sessionID() != sessionID {
 			continue
 		}
 		wg.Add(1)
@@ -308,7 +308,7 @@ func (h *connShard) refresh(user string, clientID string, sessionID string, opts
 		if clientID != "" && c.ID() != clientID {
 			continue
 		}
-		if sessionID != "" && c.SessionID() != sessionID {
+		if sessionID != "" && c.sessionID() != sessionID {
 			continue
 		}
 		wg.Add(1)
@@ -340,7 +340,7 @@ func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID str
 		if clientID != "" && c.ID() != clientID {
 			continue
 		}
-		if sessionID != "" && c.SessionID() != sessionID {
+		if sessionID != "" && c.sessionID() != sessionID {
 			continue
 		}
 		wg.Add(1)
