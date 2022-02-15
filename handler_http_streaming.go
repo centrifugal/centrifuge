@@ -50,6 +50,8 @@ func (h *HttpStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	protocolType := ProtocolTypeJSON
+
 	var cmd *protocol.Command
 	if r.Method == http.MethodPost {
 		maxBytesSize := int64(h.config.MaxRequestBodySize)
@@ -66,7 +68,12 @@ func (h *HttpStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
 			return
 		}
-		cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
+		if r.Header.Get("Content-Type") == "application/octet-stream" {
+			protocolType = ProtocolTypeProtobuf
+			cmd, err = protocol.NewProtobufCommandDecoder(connectRequestData).Decode()
+		} else {
+			cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
+		}
 		if err != nil && err != io.EOF {
 			if h.node.LogEnabled(LogLevelDebug) {
 				h.node.Log(NewLogEntry(LogLevelDebug, "malformed connect request", map[string]interface{}{"error": err.Error()}))
@@ -78,7 +85,7 @@ func (h *HttpStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	transport := newStreamTransport(r)
+	transport := newStreamTransport(r, protocolType)
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
 		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": transportHttpStreaming}))
@@ -123,13 +130,24 @@ func (h *HttpStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			if !ok {
 				return
 			}
-			_, err = w.Write(data)
-			if err != nil {
-				return
-			}
-			_, err = w.Write([]byte("\n"))
-			if err != nil {
-				return
+			if protocolType == ProtocolTypeProtobuf {
+				protoType := protocolType.toProto()
+				encoder := protocol.GetDataEncoder(protoType)
+				_ = encoder.Encode(data)
+				_, err := w.Write(encoder.Finish())
+				if err != nil {
+					return
+				}
+				protocol.PutDataEncoder(protoType, encoder)
+			} else {
+				_, err = w.Write(data)
+				if err != nil {
+					return
+				}
+				_, err = w.Write([]byte("\n"))
+				if err != nil {
+					return
+				}
 			}
 			flusher.Flush()
 		}
@@ -147,14 +165,16 @@ type streamTransport struct {
 	disconnectCh chan *Disconnect
 	closedCh     chan struct{}
 	closed       bool
+	protocolType ProtocolType
 }
 
-func newStreamTransport(req *http.Request) *streamTransport {
+func newStreamTransport(req *http.Request, protocolType ProtocolType) *streamTransport {
 	return &streamTransport{
 		messages:     make(chan []byte),
 		disconnectCh: make(chan *Disconnect),
 		closedCh:     make(chan struct{}),
 		req:          req,
+		protocolType: protocolType,
 	}
 }
 
@@ -163,7 +183,7 @@ func (t *streamTransport) Name() string {
 }
 
 func (t *streamTransport) Protocol() ProtocolType {
-	return ProtocolTypeJSON
+	return t.protocolType
 }
 
 // ProtocolVersion returns transport protocol version.

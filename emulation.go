@@ -9,29 +9,20 @@ import (
 	"github.com/centrifugal/protocol"
 )
 
-type EmulationRequest struct {
-	SessionID string
-	NodeID    string
-
-	Command *protocol.Command
-}
-
-type EmulationResponse struct{}
-
 type EmulationConfig struct{}
 
 type EmulationHandler struct {
-	node   *Node
-	config EmulationConfig
-	layer  *EmulationLayer
+	node     *Node
+	config   EmulationConfig
+	emuLayer *emulationLayer
 }
 
 // NewEmulationHandler creates new EmulationHandler.
 func NewEmulationHandler(node *Node, config EmulationConfig) *EmulationHandler {
 	return &EmulationHandler{
-		node:   node,
-		config: config,
-		layer:  newEmulationLayer(node),
+		node:     node,
+		config:   config,
+		emuLayer: newEmulationLayer(node),
 	}
 }
 
@@ -49,13 +40,17 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req protocol.EmulationRequest
-	err = json.Unmarshal(data, &req)
+	if r.Header.Get("Content-Type") == "application/octet-stream" {
+		err = req.UnmarshalVT(data)
+	} else {
+		err = json.Unmarshal(data, &req)
+	}
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelInfo, "can't unmarshal emulation request", map[string]interface{}{"req": &req, "error": err.Error()}))
 		rw.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	err = s.layer.Emulate(&req)
+	err = s.emuLayer.Emulate(&req)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelError, "error processing emulation request", map[string]interface{}{"req": &req, "error": err.Error()}))
 		rw.WriteHeader(http.StatusInternalServerError)
@@ -64,15 +59,15 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	rw.WriteHeader(http.StatusNoContent)
 }
 
-type EmulationLayer struct {
+type emulationLayer struct {
 	node *Node
 }
 
-func newEmulationLayer(node *Node) *EmulationLayer {
-	return &EmulationLayer{node: node}
+func newEmulationLayer(node *Node) *emulationLayer {
+	return &emulationLayer{node: node}
 }
 
-func (l *EmulationLayer) Emulate(req *protocol.EmulationRequest) error {
+func (l *emulationLayer) Emulate(req *protocol.EmulationRequest) error {
 	return l.node.sendEmulation(req)
 }
 
@@ -122,11 +117,7 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 		data = req.Data
 	}
 	go func() {
-		ok = client.Handle(data)
-		if !ok {
-			cb(SurveyReply{Code: 4})
-			return
-		}
+		_ = client.Handle(data)
 		cb(SurveyReply{})
 	}()
 }
