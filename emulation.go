@@ -1,0 +1,132 @@
+package centrifuge
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+
+	"github.com/centrifugal/protocol"
+)
+
+type EmulationRequest struct {
+	SessionID string
+	NodeID    string
+
+	Command *protocol.Command
+}
+
+type EmulationResponse struct{}
+
+type EmulationConfig struct{}
+
+type EmulationHandler struct {
+	node   *Node
+	config EmulationConfig
+	layer  *EmulationLayer
+}
+
+// NewEmulationHandler creates new EmulationHandler.
+func NewEmulationHandler(node *Node, config EmulationConfig) *EmulationHandler {
+	return &EmulationHandler{
+		node:   node,
+		config: config,
+		layer:  newEmulationLayer(node),
+	}
+}
+
+func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	// TODO: move CORS out of handler.
+	rw.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+	rw.Header().Set("Access-Control-Allow-Credentials", "true")
+	if allowHeaders := r.Header.Get("Access-Control-Request-Headers"); allowHeaders != "" && allowHeaders != "null" {
+		rw.Header().Add("Access-Control-Allow-Headers", allowHeaders)
+	}
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.node.logger.log(newLogEntry(LogLevelError, "can't read emulation request body", map[string]interface{}{"error": err.Error()}))
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	var req protocol.EmulationRequest
+	err = json.Unmarshal(data, &req)
+	if err != nil {
+		s.node.logger.log(newLogEntry(LogLevelInfo, "can't unmarshal emulation request", map[string]interface{}{"req": &req, "error": err.Error()}))
+		rw.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	err = s.layer.Emulate(&req)
+	if err != nil {
+		s.node.logger.log(newLogEntry(LogLevelError, "error processing emulation request", map[string]interface{}{"req": &req, "error": err.Error()}))
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	rw.WriteHeader(http.StatusNoContent)
+}
+
+type EmulationLayer struct {
+	node *Node
+}
+
+func newEmulationLayer(node *Node) *EmulationLayer {
+	return &EmulationLayer{node: node}
+}
+
+func (l *EmulationLayer) Emulate(req *protocol.EmulationRequest) error {
+	return l.node.sendEmulation(req)
+}
+
+const emulationOp = "centrifuge_emulation"
+
+func (n *Node) sendEmulation(req *protocol.EmulationRequest) error {
+	data, err := req.MarshalVT()
+	if err != nil {
+		return err
+	}
+	_, err = n.Survey(context.Background(), emulationOp, data, req.Node)
+	return err
+}
+
+type emulationSurveyHandler struct {
+	node *Node
+}
+
+func newEmulationSurveyHandler(node *Node) *emulationSurveyHandler {
+	return &emulationSurveyHandler{node: node}
+}
+
+func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallback) {
+	var req protocol.EmulationRequest
+	err := req.UnmarshalVT(e.Data)
+	if err != nil {
+		h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request", map[string]interface{}{"data": string(e.Data), "error": err.Error()}))
+		cb(SurveyReply{Code: 1})
+		return
+	}
+	client, ok := h.node.Hub().clientBySession(req.Session)
+	if !ok {
+		cb(SurveyReply{Code: 2})
+		return
+	}
+	var data []byte
+	if client.transport.Protocol() == ProtocolTypeJSON {
+		var d string
+		err = json.Unmarshal(req.Data, &d)
+		if err != nil {
+			h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request data", map[string]interface{}{"data": string(req.Data), "error": err.Error()}))
+			cb(SurveyReply{Code: 3})
+			return
+		}
+		data = []byte(d)
+	} else {
+		data = req.Data
+	}
+	go func() {
+		ok = client.Handle(data)
+		if !ok {
+			cb(SurveyReply{Code: 4})
+			return
+		}
+		cb(SurveyReply{})
+	}()
+}

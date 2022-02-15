@@ -307,6 +307,11 @@ func (t *sockjsTransport) Unidirectional() bool {
 	return false
 }
 
+// Emulation ...
+func (t *sockjsTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *sockjsTransport) DisabledPushFlags() uint64 {
 	// SockJS has its own close frames to mimic WebSocket Close frames,

@@ -7,7 +7,7 @@ replace github.com/centrifugal/centrifuge => ../
 require (
 	github.com/FZambia/tarantool v0.2.2
 	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/protocol v0.8.4
+	github.com/centrifugal/protocol v0.8.5-0.20220215061156-2b70f12bfa56
 	github.com/cristalhq/jwt/v3 v3.0.0
 	github.com/dchest/uniuri v0.0.0-20200228104902-7aecb25e1fe5
 	github.com/gin-contrib/sessions v0.0.3

@@ -79,6 +79,8 @@ type Node struct {
 
 	notificationHandler NotificationHandler
 	nodeInfoSendHandler NodeInfoSendHandler
+
+	emulationSurveyHandler *emulationSurveyHandler
 }
 
 const (
@@ -144,6 +146,8 @@ func New(c Config) (*Node, error) {
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
 	}
+
+	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
 	if c.LogHandler != nil {
 		n.logger = newLogger(c.LogLevel, c.LogHandler)
@@ -452,7 +456,7 @@ const defaultSurveyTimeout = 10 * time.Second
 // a cluster, otherwise a survey sent to all running nodes. See a corresponding Node.OnSurvey
 // method to handle received surveys.
 func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID string) (map[string]SurveyResult, error) {
-	if n.surveyHandler == nil {
+	if n.surveyHandler == nil && op != emulationOp {
 		return nil, errSurveyHandlerNotRegistered
 	}
 
@@ -496,15 +500,29 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 
 	results := map[string]SurveyResult{}
 
+	needDistributedPublish := true
+
 	// Invoke handler on this node since control message handler
 	// ignores those sent from the current Node.
 	if toNodeID == "" || toNodeID == n.ID() {
-		n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
-			surveyChan <- survey{
-				UID:    n.uid,
-				Result: SurveyResult(reply),
-			}
-		})
+		if toNodeID == n.ID() {
+			needDistributedPublish = false
+		}
+		if op == emulationOp {
+			n.emulationSurveyHandler.HandleEmulation(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
+				surveyChan <- survey{
+					UID:    n.uid,
+					Result: SurveyResult(reply),
+				}
+			})
+		} else {
+			n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
+				surveyChan <- survey{
+					UID:    n.uid,
+					Result: SurveyResult(reply),
+				}
+			})
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -525,14 +543,16 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 		}
 	}()
 
-	cmd := &controlpb.Command{
-		Uid:    n.uid,
-		Method: controlpb.Command_SURVEY_REQUEST,
-		Params: params,
-	}
-	err = n.publishControl(cmd, toNodeID)
-	if err != nil {
-		return nil, err
+	if needDistributedPublish {
+		cmd := &controlpb.Command{
+			Uid:    n.uid,
+			Method: controlpb.Command_SURVEY_REQUEST,
+			Params: params,
+		}
+		err = n.publishControl(cmd, toNodeID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	wg.Wait()

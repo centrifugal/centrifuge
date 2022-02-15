@@ -370,6 +370,11 @@ func (t *websocketTransport) Unidirectional() bool {
 	return false
 }
 
+// Emulation ...
+func (t *websocketTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	// Websocket sends disconnects in Close frames.

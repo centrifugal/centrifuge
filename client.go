@@ -264,7 +264,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	uid := uidObject.String()
 
 	var session string
-	if t.Unidirectional() {
+	if t.Unidirectional() || t.Emulation() {
 		sessionObject, err := uuid.NewRandom()
 		if err != nil {
 			return nil, nil, err
@@ -379,6 +379,15 @@ func extractUnidirectionalDisconnect(err error) *Disconnect {
 // with a server.
 func (c *Client) Connect(req ConnectRequest) {
 	err := c.unidirectionalConnect(req.toProto())
+	if err != nil {
+		d := extractUnidirectionalDisconnect(err)
+		go func() { _ = c.close(d) }()
+	}
+}
+
+// BidirectionalConnect ...
+func (c *Client) BidirectionalConnect(req *protocol.ConnectRequest) {
+	err := c.unidirectionalConnect(req)
 	if err != nil {
 		d := extractUnidirectionalDisconnect(err)
 		go func() { _ = c.close(d) }()
@@ -2327,8 +2336,11 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			res.Pong = true
 		}
 	}
-	if c.transport.Unidirectional() {
+	if c.transport.Unidirectional() || c.transport.Emulation() {
 		res.Session = c.session
+	}
+	if c.transport.Emulation() {
+		res.Node = c.node.ID()
 	}
 
 	// Client successfully connected.
@@ -2460,6 +2472,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 		Ping:    res.Ping,
 		Pong:    res.Pong,
 		Session: res.Session,
+		Node:    res.Node,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.EncodeConnectPush(c.transport.Protocol().toProto(), p)

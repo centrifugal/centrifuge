@@ -14,16 +14,27 @@ const numHubShards = 64
 type Hub struct {
 	connShards [numHubShards]*connShard
 	subShards  [numHubShards]*subShard
+	sessionsMu sync.RWMutex
+	sessions   map[string]*Client
 }
 
 // newHub initializes Hub.
 func newHub() *Hub {
-	h := &Hub{}
+	h := &Hub{
+		sessions: map[string]*Client{},
+	}
 	for i := 0; i < numHubShards; i++ {
 		h.connShards[i] = newConnShard()
 		h.subShards[i] = newSubShard()
 	}
 	return h
+}
+
+func (h *Hub) clientBySession(session string) (*Client, bool) {
+	h.sessionsMu.RLock()
+	defer h.sessionsMu.RUnlock()
+	c, ok := h.sessions[session]
+	return c, ok
 }
 
 // shutdown unsubscribes users from all channels and disconnects them.
@@ -55,11 +66,21 @@ func (h *Hub) shutdown(ctx context.Context) error {
 
 // Add connection into clientHub connections registry.
 func (h *Hub) add(c *Client) error {
+	h.sessionsMu.Lock()
+	if c.sessionID() != "" {
+		h.sessions[c.sessionID()] = c
+	}
+	h.sessionsMu.Unlock()
 	return h.connShards[index(c.UserID(), numHubShards)].add(c)
 }
 
 // Remove connection from clientHub connections registry.
 func (h *Hub) remove(c *Client) error {
+	h.sessionsMu.Lock()
+	if c.sessionID() != "" {
+		delete(h.sessions, c.sessionID())
+	}
+	h.sessionsMu.Unlock()
 	return h.connShards[index(c.UserID(), numHubShards)].remove(c)
 }
 
