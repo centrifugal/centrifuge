@@ -20,7 +20,7 @@
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('http://' + window.location.host+ '/connection/http_stream', {
+                const centrifuge = new Centrifuge('http://' + window.location.host+ '/connection/sse', {
                     protocolVersion: 'v2',
                 });
 

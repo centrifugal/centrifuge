@@ -9,8 +9,8 @@ import (
 	"github.com/centrifugal/protocol"
 )
 
-// HTTPStreamingConfig represents config for HTTPStreamingHandler.
-type HTTPStreamingConfig struct {
+// SSEConfig represents config for SSEHandler.
+type SSEConfig struct {
 	// MaxRequestBodySize limits request body size.
 	MaxRequestBodySize int
 	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
@@ -26,38 +26,46 @@ type HTTPStreamingConfig struct {
 	AppLevelPongTimeout time.Duration
 }
 
-// HTTPStreamingHandler handles WebSocket client connections. WebSocket protocol
+// SSEHandler handles WebSocket client connections. WebSocket protocol
 // is a bidirectional connection between a client and a server for low-latency
 // communication.
-type HTTPStreamingHandler struct {
+type SSEHandler struct {
 	node   *Node
-	config HTTPStreamingConfig
+	config SSEConfig
 }
 
-// NewHTTPStreamingHandler creates new HTTPStreamingHandler.
-func NewHTTPStreamingHandler(node *Node, config HTTPStreamingConfig) *HTTPStreamingHandler {
-	return &HTTPStreamingHandler{
+// NewSSEHandler creates new SSEHandler.
+func NewSSEHandler(node *Node, config SSEConfig) *SSEHandler {
+	return &SSEHandler{
 		node:   node,
 		config: config,
 	}
 }
 
-func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	incTransportConnect(transportHTTPStreaming)
+// Since SSE is a GET request (at least in browsers) we are looking for connect
+// request in URL params. This should be a properly encoded JSON object with connect command.
+const connectUrlParam = "cf_connect"
 
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	protocolType := ProtocolTypeJSON
+func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	incTransportConnect(transportSSE)
 
 	var cmd *protocol.Command
-	if r.Method == http.MethodPost {
-		maxBytesSize := int64(h.config.MaxRequestBodySize)
-		if maxBytesSize == 0 {
-			maxBytesSize = 64 * 1024
+
+	if r.Method == http.MethodGet {
+		connectRequestString := r.URL.Query().Get(connectUrlParam)
+		if connectRequestString != "" {
+			var err error
+			cmd, err = protocol.NewJSONCommandDecoder([]byte(connectRequestString)).Decode()
+			if err != nil && err != io.EOF {
+				h.node.Log(NewLogEntry(LogLevelInfo, "malformed connect request", map[string]interface{}{"error": err.Error()}))
+				return
+			}
+		} else {
+			h.node.Log(NewLogEntry(LogLevelDebug, "no connect command", map[string]interface{}{}))
+			return
 		}
+	} else if r.Method == http.MethodPost {
+		maxBytesSize := int64(h.config.MaxRequestBodySize)
 		r.Body = http.MaxBytesReader(w, r.Body, maxBytesSize)
 		connectRequestData, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -68,13 +76,8 @@ func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
 			return
 		}
-		if r.Header.Get("Content-Type") == "application/octet-stream" {
-			protocolType = ProtocolTypeProtobuf
-			cmd, err = protocol.NewProtobufCommandDecoder(connectRequestData).Decode()
-		} else {
-			cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
-		}
-		if err != nil && err != io.EOF {
+		cmd, err = protocol.NewJSONCommandDecoder([]byte(connectRequestData)).Decode()
+		if err != nil {
 			if h.node.LogEnabled(LogLevelDebug) {
 				h.node.Log(NewLogEntry(LogLevelDebug, "malformed connect request", map[string]interface{}{"error": err.Error()}))
 			}
@@ -85,10 +88,10 @@ func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	transport := newHTTPStreamTransport(r, protocolType)
+	transport := newSSETransport(r)
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
-		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": transportHTTPStreaming}))
+		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": "uni_sse"}))
 		return
 	}
 	defer func() { _ = closeFn() }()
@@ -107,6 +110,7 @@ func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		w.Header().Set("Connection", "keep-alive")
 	}
 	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "private, no-cache, no-store, must-revalidate, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expire", "0")
@@ -116,8 +120,12 @@ func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	_, err = w.Write([]byte("\r\n"))
+	if err != nil {
+		return
+	}
+	flusher.Flush()
 
-	// TODO: make sure it is ok to call handleCommand from the outside of the client.
 	_ = c.handleCommand(cmd)
 
 	for {
@@ -130,24 +138,9 @@ func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			if !ok {
 				return
 			}
-			if protocolType == ProtocolTypeProtobuf {
-				protoType := protocolType.toProto()
-				encoder := protocol.GetDataEncoder(protoType)
-				_ = encoder.Encode(data)
-				_, err := w.Write(encoder.Finish())
-				if err != nil {
-					return
-				}
-				protocol.PutDataEncoder(protoType, encoder)
-			} else {
-				_, err = w.Write(data)
-				if err != nil {
-					return
-				}
-				_, err = w.Write([]byte("\n"))
-				if err != nil {
-					return
-				}
+			_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
+			if err != nil {
+				return
 			}
 			flusher.Flush()
 		}
@@ -155,70 +148,68 @@ func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 const (
-	transportHTTPStreaming = "http_streaming"
+	transportSSE = "sse"
 )
 
-type httpStreamTransport struct {
+type sseTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
 	messages     chan []byte
 	disconnectCh chan *Disconnect
 	closedCh     chan struct{}
 	closed       bool
-	protocolType ProtocolType
 }
 
-func newHTTPStreamTransport(req *http.Request, protocolType ProtocolType) *httpStreamTransport {
-	return &httpStreamTransport{
+func newSSETransport(req *http.Request) *sseTransport {
+	return &sseTransport{
 		messages:     make(chan []byte),
 		disconnectCh: make(chan *Disconnect),
 		closedCh:     make(chan struct{}),
 		req:          req,
-		protocolType: protocolType,
 	}
 }
 
-func (t *httpStreamTransport) Name() string {
-	return transportHTTPStreaming
+func (t *sseTransport) Name() string {
+	return transportSSE
 }
 
-func (t *httpStreamTransport) Protocol() ProtocolType {
-	return t.protocolType
+func (t *sseTransport) Protocol() ProtocolType {
+	return ProtocolTypeJSON
 }
 
 // ProtocolVersion returns transport protocol version.
-func (t *httpStreamTransport) ProtocolVersion() ProtocolVersion {
+func (t *sseTransport) ProtocolVersion() ProtocolVersion {
 	return ProtocolVersion2
 }
 
 // Unidirectional returns whether transport is unidirectional.
-func (t *httpStreamTransport) Unidirectional() bool {
+func (t *sseTransport) Unidirectional() bool {
 	return false
 }
 
 // Emulation ...
-func (t *httpStreamTransport) Emulation() bool {
+func (t *sseTransport) Emulation() bool {
 	return true
 }
 
 // DisabledPushFlags ...
-func (t *httpStreamTransport) DisabledPushFlags() uint64 {
+func (t *sseTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
 // AppLevelPing ...
-func (t *httpStreamTransport) AppLevelPing() AppLevelPing {
+func (t *sseTransport) AppLevelPing() AppLevelPing {
 	return AppLevelPing{
 		PingInterval: 25 * time.Second,
 		PongTimeout:  10 * time.Second,
 	}
 }
 
-func (t *httpStreamTransport) Write(message []byte) error {
+func (t *sseTransport) Write(message []byte) error {
 	return t.WriteMany(message)
 }
 
-func (t *httpStreamTransport) WriteMany(messages ...[]byte) error {
+func (t *sseTransport) WriteMany(messages ...[]byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -234,7 +225,7 @@ func (t *httpStreamTransport) WriteMany(messages ...[]byte) error {
 	return nil
 }
 
-func (t *httpStreamTransport) Close(_ *Disconnect) error {
+func (t *sseTransport) Close(_ *Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
