@@ -20,7 +20,21 @@
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('http://' + window.location.host+ '/connection/sse', {
+                const transports = [
+                    {
+                        transport: 'websocket',
+                        endpoint: 'ws://' + window.location.host+ '/connection/websocket'
+                    },
+                    {
+                        transport: 'http_stream',
+                        endpoint: 'http://' + window.location.host+ '/connection/http_stream'
+                    },
+                    {
+                        transport: 'sse',
+                        endpoint: 'http://' + window.location.host+ '/connection/sse'
+                    },
+                ];
+                const centrifuge = new Centrifuge(transports, {
                     protocolVersion: 'v2',
                 });
 
@@ -86,8 +100,6 @@
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError);
 
-                showPresence(sub);
-
                 // Trigger actual connection establishing with a server.
                 // At this moment actual client work starts - i.e. subscriptions
                 // defined start subscribing etc.
@@ -95,9 +107,7 @@
 
                 function handleSubscribe(ctx) {
                     drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ', data: ' + JSON.stringify(ctx.data) + ')');
-                    if (ctx.isResubscribe) {
-                        showPresence(sub);
-                    }
+                    showPresence(sub);
 
                     // This can be whatever JSON you want.
                     const rpcRequest = {"method": "getCurrentYear"};

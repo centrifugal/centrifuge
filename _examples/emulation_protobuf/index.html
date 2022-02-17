@@ -22,7 +22,14 @@
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('http://localhost:8000/connection/http_stream', {
+                const transports = [
+                    {
+                        transport: 'http_stream',
+                        endpoint: 'http://localhost:8000/connection/http_stream'
+                    }
+                ]
+
+                const centrifuge = new Centrifuge(transports, {
                     protocol: 'protobuf', // Note we are setting protobuf protocol here!
                     protocolVersion: 'v2',
                 });
