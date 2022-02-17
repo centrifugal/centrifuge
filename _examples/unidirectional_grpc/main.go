@@ -189,6 +189,11 @@ func (t *grpcTransport) Unidirectional() bool {
 	return true
 }
 
+// Emulation ...
+func (t *grpcTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *grpcTransport) DisabledPushFlags() uint64 {
 	return 0

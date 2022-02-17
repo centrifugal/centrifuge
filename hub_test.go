@@ -112,6 +112,10 @@ func (t *testTransport) Unidirectional() bool {
 	return t.unidirectional
 }
 
+func (t *testTransport) Emulation() bool {
+	return false
+}
+
 func (t *testTransport) ProtocolVersion() ProtocolVersion {
 	return t.protocolVersion
 }

@@ -294,6 +294,11 @@ func (t *streamTransport) Unidirectional() bool {
 	return true
 }
 
+// Emulation ...
+func (t *streamTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *streamTransport) DisabledPushFlags() uint64 {
 	return 0

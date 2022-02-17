@@ -265,6 +265,11 @@ func (t *websocketTransport) Unidirectional() bool {
 	return true
 }
 
+// Emulation ...
+func (t *websocketTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return 0

@@ -83,6 +83,11 @@ func (t *customWebsocketTransport) Unidirectional() bool {
 	return false
 }
 
+// Emulation ...
+func (t *customWebsocketTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
