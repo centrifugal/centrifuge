@@ -30,6 +30,8 @@ func TestSubscribeOptions(t *testing.T) {
 		WithPosition(true),
 		WithRecover(true),
 		WithChannelInfo([]byte(`test`)),
+		WithSubscribeSession("session"),
+		WithSubscribeClient("test"),
 	}
 	opts := &SubscribeOptions{}
 	for _, opt := range subscribeOpts {
@@ -41,6 +43,8 @@ func TestSubscribeOptions(t *testing.T) {
 	require.True(t, opts.Position)
 	require.True(t, opts.Recover)
 	require.Equal(t, []byte(`test`), opts.ChannelInfo)
+	require.Equal(t, "test", opts.clientID)
+	require.Equal(t, "session", opts.sessionID)
 }
 
 func TestWithDisconnect(t *testing.T) {
@@ -85,11 +89,25 @@ func TestWithUnsubscribeClient(t *testing.T) {
 	require.Equal(t, "client", opts.clientID)
 }
 
+func TestWithUnsubscribeSession(t *testing.T) {
+	opt := WithUnsubscribeSession("session")
+	opts := &UnsubscribeOptions{}
+	opt(opts)
+	require.Equal(t, "session", opts.sessionID)
+}
+
 func TestWithDisconnectClient(t *testing.T) {
 	opt := WithDisconnectClient("client")
 	opts := &DisconnectOptions{}
 	opt(opts)
 	require.Equal(t, "client", opts.clientID)
+}
+
+func TestWithDisconnectSession(t *testing.T) {
+	opt := WithDisconnectSession("session")
+	opts := &DisconnectOptions{}
+	opt(opts)
+	require.Equal(t, "session", opts.sessionID)
 }
 
 func TestRefreshOptions(t *testing.T) {
@@ -98,6 +116,7 @@ func TestRefreshOptions(t *testing.T) {
 		WithRefreshExpireAt(12),
 		WithRefreshExpired(true),
 		WithRefreshInfo([]byte(`test`)),
+		WithRefreshSession("session"),
 	}
 	opts := &RefreshOptions{}
 	for _, opt := range refreshOpts {
@@ -107,4 +126,5 @@ func TestRefreshOptions(t *testing.T) {
 	require.True(t, opts.Expired)
 	require.Equal(t, "client", opts.clientID)
 	require.Equal(t, []byte(`test`), opts.Info)
+	require.Equal(t, "session", opts.sessionID)
 }

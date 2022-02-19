@@ -179,11 +179,11 @@ func TestHubUnsubscribe(t *testing.T) {
 	newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 	// Unsubscribe not existed user.
-	err := n.hub.unsubscribe("1", "test_channel", "")
+	err := n.hub.unsubscribe("1", "test_channel", "", "")
 	require.NoError(t, err)
 
 	// Unsubscribe subscribed user.
-	err = n.hub.unsubscribe("42", "test_channel", "")
+	err = n.hub.unsubscribe("42", "test_channel", "", "")
 	require.NoError(t, err)
 
 LOOP:
@@ -234,11 +234,11 @@ func TestHubDisconnect(t *testing.T) {
 	}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("1", DisconnectForceNoReconnect, "", nil)
+	err := n.hub.disconnect("1", DisconnectForceNoReconnect, "", "", nil)
 	require.NoError(t, err)
 
 	// Disconnect subscribed user.
-	err = n.hub.disconnect("42", DisconnectForceNoReconnect, "", nil)
+	err = n.hub.disconnect("42", DisconnectForceNoReconnect, "", "", nil)
 	require.NoError(t, err)
 	select {
 	case <-client.transport.(*testTransport).closeCh:
@@ -249,7 +249,7 @@ func TestHubDisconnect(t *testing.T) {
 	require.Equal(t, 0, n.hub.NumSubscribers("test_channel"))
 
 	// Disconnect subscribed user with reconnect.
-	err = n.hub.disconnect("24", DisconnectForceReconnect, "", nil)
+	err = n.hub.disconnect("24", DisconnectForceReconnect, "", "", nil)
 	require.NoError(t, err)
 	select {
 	case <-clientWithReconnect.transport.(*testTransport).closeCh:
@@ -297,7 +297,7 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	whitelist := []string{clientToKeep.ID()}
 
 	// Disconnect not existed user.
-	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", whitelist)
+	err := n.hub.disconnect("12", DisconnectConnectionLimit, "", "", whitelist)
 	require.NoError(t, err)
 
 	select {
@@ -314,7 +314,9 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 	}
 }
 
-func TestHubDisconnect_ClientID(t *testing.T) {
+func TestHubOperationsWithClientID(t *testing.T) {
+	t.Parallel()
+
 	n := defaultNodeNoHandlers()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -343,8 +345,15 @@ func TestHubDisconnect_ClientID(t *testing.T) {
 
 	clientToDisconnect := client.ID()
 
-	// Disconnect not existed user.
-	err := n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, nil)
+	require.Equal(t, 2, n.hub.NumSubscriptions())
+	err := n.hub.subscribe("12", "channel", clientToKeep.ID(), "")
+	require.NoError(t, err)
+	require.Equal(t, 3, n.hub.NumSubscriptions())
+	err = n.hub.unsubscribe("12", "channel", clientToKeep.ID(), "")
+	require.NoError(t, err)
+	require.Equal(t, 2, n.hub.NumSubscriptions())
+
+	err = n.hub.disconnect("12", DisconnectConnectionLimit, clientToDisconnect, "", nil)
 	require.NoError(t, err)
 
 	select {
@@ -355,6 +364,69 @@ func TestHubDisconnect_ClientID(t *testing.T) {
 		case <-time.After(time.Second):
 			require.Len(t, n.hub.UserConnections("12"), 1)
 			require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
+		}
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	}
+}
+
+func TestHubOperationsWithSessionID(t *testing.T) {
+	t.Parallel()
+
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {})
+
+	transport := newTestTransport(func() {})
+	transport.setUnidirectional(true)
+	transport.setProtocolVersion(ProtocolVersion2)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "12"})
+	client, _ := newClient(newCtx, n, transport)
+	connectClientV2(t, client)
+
+	transport2 := newTestTransport(func() {})
+	transport2.setUnidirectional(true)
+	transport2.setProtocolVersion(ProtocolVersion2)
+	ctx2 := context.Background()
+	newCtx2 := SetCredentials(ctx2, &Credentials{UserID: "12"})
+	clientToKeep, _ := newClient(newCtx2, n, transport2)
+	connectClientV2(t, clientToKeep)
+
+	require.Len(t, n.hub.UserConnections("12"), 2)
+
+	shouldBeClosed := make(chan struct{})
+	shouldNotBeClosed := make(chan struct{})
+
+	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		close(shouldBeClosed)
+	}
+
+	clientToKeep.eventHub.disconnectHandler = func(e DisconnectEvent) {
+		close(shouldNotBeClosed)
+	}
+
+	sessionToDisconnect := client.sessionID()
+
+	require.Equal(t, 0, n.hub.NumSubscriptions())
+	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID())
+	require.NoError(t, err)
+	require.Equal(t, 1, n.hub.NumSubscriptions())
+	err = n.hub.unsubscribe("12", "test", "", clientToKeep.sessionID())
+	require.NoError(t, err)
+	require.Equal(t, 0, n.hub.NumSubscriptions())
+
+	err = n.hub.disconnect("12", DisconnectConnectionLimit, "", sessionToDisconnect, nil)
+	require.NoError(t, err)
+
+	select {
+	case <-shouldBeClosed:
+		select {
+		case <-shouldNotBeClosed:
+			require.Fail(t, "client should not be disconnected")
+		case <-time.After(time.Second):
+			require.Len(t, n.hub.UserConnections("12"), 1)
 		}
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for channel close")

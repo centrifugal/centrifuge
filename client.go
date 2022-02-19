@@ -235,6 +235,7 @@ type Client struct {
 	messageWriter     *writer
 	pubSubSync        *recovery.PubSubSync
 	uid               string
+	session           string
 	user              string
 	info              []byte
 	authenticated     bool
@@ -256,14 +257,25 @@ type ClientCloseFunc func() error
 
 // NewClient initializes new Client.
 func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseFunc, error) {
-	uuidObject, err := uuid.NewRandom()
+	uidObject, err := uuid.NewRandom()
 	if err != nil {
 		return nil, nil, err
+	}
+	uid := uidObject.String()
+
+	var session string
+	if t.Unidirectional() {
+		sessionObject, err := uuid.NewRandom()
+		if err != nil {
+			return nil, nil, err
+		}
+		session = sessionObject.String()
 	}
 
 	client := &Client{
 		ctx:        ctx,
-		uid:        uuidObject.String(),
+		uid:        uid,
+		session:    session,
 		node:       n,
 		transport:  t,
 		channels:   make(map[string]channelContext),
@@ -714,6 +726,12 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channe
 // ID returns unique client connection id.
 func (c *Client) ID() string {
 	return c.uid
+}
+
+// sessionID returns unique client session id. Session ID is not shared to other
+// connections in any way.
+func (c *Client) sessionID() string {
+	return c.session
 }
 
 // UserID returns user id associated with client connection.
@@ -2309,6 +2327,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			res.Pong = true
 		}
 	}
+	if c.transport.Unidirectional() {
+		res.Session = c.session
+	}
 
 	// Client successfully connected.
 	c.mu.Lock()
@@ -2438,6 +2459,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 		Ttl:     res.Ttl,
 		Ping:    res.Ping,
 		Pong:    res.Pong,
+		Session: res.Session,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.EncodeConnectPush(c.transport.Protocol().toProto(), p)

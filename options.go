@@ -56,6 +56,8 @@ type SubscribeOptions struct {
 	RecoverSince *StreamPosition
 	// clientID to subscribe.
 	clientID string
+	// sessionID to subscribe.
+	sessionID string
 }
 
 // SubscribeOption is a type to represent various Subscribe options.
@@ -111,6 +113,14 @@ func WithSubscribeClient(clientID string) SubscribeOption {
 	}
 }
 
+// WithSubscribeSession allows setting session ID that should be subscribed.
+// This option not used when Client.Subscribe called.
+func WithSubscribeSession(sessionID string) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.sessionID = sessionID
+	}
+}
+
 // WithSubscribeData allows setting custom data to send with subscribe push.
 func WithSubscribeData(data []byte) SubscribeOption {
 	return func(opts *SubscribeOptions) {
@@ -136,6 +146,8 @@ type RefreshOptions struct {
 	Info []byte
 	// clientID to refresh.
 	clientID string
+	// sessionID to refresh.
+	sessionID string
 }
 
 // RefreshOption is a type to represent various Refresh options.
@@ -145,6 +157,13 @@ type RefreshOption func(options *RefreshOptions)
 func WithRefreshClient(clientID string) RefreshOption {
 	return func(opts *RefreshOptions) {
 		opts.clientID = clientID
+	}
+}
+
+// WithRefreshSession to limit refresh only for specified session ID.
+func WithRefreshSession(sessionID string) RefreshOption {
+	return func(opts *RefreshOptions) {
+		opts.sessionID = sessionID
 	}
 }
 
@@ -174,6 +193,8 @@ func WithRefreshInfo(info []byte) RefreshOption {
 type UnsubscribeOptions struct {
 	// clientID to unsubscribe.
 	clientID string
+	// sessionID to unsubscribe.
+	sessionID string
 }
 
 // UnsubscribeOption is a type to represent various Unsubscribe options.
@@ -187,31 +208,48 @@ func WithUnsubscribeClient(clientID string) UnsubscribeOption {
 	}
 }
 
+// WithUnsubscribeSession allows setting session ID that should be unsubscribed.
+// This option not used when Client.Unsubscribe called.
+func WithUnsubscribeSession(sessionID string) UnsubscribeOption {
+	return func(opts *UnsubscribeOptions) {
+		opts.sessionID = sessionID
+	}
+}
+
 // DisconnectOptions define some fields to alter behaviour of Disconnect operation.
 type DisconnectOptions struct {
 	// Disconnect represents custom disconnect to use.
-	// By default DisconnectForceNoReconnect will be used.
+	// By default, DisconnectForceNoReconnect will be used.
 	Disconnect *Disconnect
 	// ClientWhitelist contains client IDs to keep.
 	ClientWhitelist []string
 	// clientID to disconnect.
 	clientID string
+	// sessionID to disconnect.
+	sessionID string
 }
 
 // DisconnectOption is a type to represent various Disconnect options.
 type DisconnectOption func(options *DisconnectOptions)
 
-// WithDisconnect allows to set custom Disconnect.
+// WithDisconnect allows setting custom Disconnect.
 func WithDisconnect(disconnect *Disconnect) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.Disconnect = disconnect
 	}
 }
 
-// WithDisconnectClient allows to set Client.
+// WithDisconnectClient allows setting Client.
 func WithDisconnectClient(clientID string) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.clientID = clientID
+	}
+}
+
+// WithDisconnectSession allows setting session ID to disconnect.
+func WithDisconnectSession(sessionID string) DisconnectOption {
+	return func(opts *DisconnectOptions) {
+		opts.sessionID = sessionID
 	}
 }
 
