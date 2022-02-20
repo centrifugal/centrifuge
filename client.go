@@ -121,9 +121,9 @@ func (c *Client) OnHistory(h HistoryHandler) {
 
 // We poll current position in channel from history storage periodically.
 // If client position is wrong maxCheckPositionFailures times in a row
-// then client will be disconnected with InsufficientState reason. Polling
-// not used in channels with high frequency updates since we can check position
-// comparing client offset with offset in incoming Publication.
+// then client will be disconnected/unsubscribed with InsufficientState reason.
+// Polling not used in channels with high frequency updates since we can check
+// position comparing client offset with offset in incoming Publication.
 const maxCheckPositionFailures uint8 = 2
 
 // Note: up to 8 possible flags here.
@@ -681,9 +681,15 @@ func (c *Client) updatePresence() {
 
 		checkDelay := config.ClientChannelPositionCheckDelay
 		if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
-			go func() { _ = c.close(DisconnectInsufficientState) }()
-			// No need to proceed after close.
-			return
+			serverSide := channelHasFlag(channelContext.flags, flagServerSide)
+			if c.isInsufficientStateUnsubscribe(serverSide) {
+				go func(ch string) { c.handleInsufficientStateUnsubscribe(ch) }(channel)
+				continue
+			} else {
+				go func() { c.handleInsufficientStateDisconnect() }()
+				// No need to proceed after close.
+				return
+			}
 		}
 
 		err := c.updateChannelPresence(channel, channelContext)
@@ -845,14 +851,14 @@ func (c *Client) Unsubscribe(ch string) error {
 	if err != nil {
 		return err
 	}
-	return c.sendUnsubscribe(ch)
+	return c.sendUnsubscribe(ch, protocol.Unsubscribe_PERMANENT)
 }
 
-func (c *Client) sendUnsubscribe(ch string) error {
+func (c *Client) sendUnsubscribe(ch string, unsubscribeType protocol.Unsubscribe_Type) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagUnsubscribe) {
 		return nil
 	}
-	replyData, err := c.getUnsubscribePushReply(ch)
+	replyData, err := c.getUnsubscribePushReply(ch, unsubscribeType)
 	if err != nil {
 		return err
 	}
@@ -860,8 +866,10 @@ func (c *Client) sendUnsubscribe(ch string) error {
 	return nil
 }
 
-func (c *Client) getUnsubscribePushReply(ch string) ([]byte, error) {
-	p := &protocol.Unsubscribe{}
+func (c *Client) getUnsubscribePushReply(ch string, unsubscribeType protocol.Unsubscribe_Type) ([]byte, error) {
+	p := &protocol.Unsubscribe{
+		Type: unsubscribeType,
+	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeUnsubscribePush(c.transport.Protocol().toProto(), ch, p)
 		if err != nil {
@@ -2732,6 +2740,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestEpoch = historyResult.Epoch
 					res.Recovered = false
 					incRecover(res.Recovered)
+					if c.transport.ProtocolVersion() > ProtocolVersion1 {
+						c.pubSubSync.StopBuffering(channel)
+						return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
+					}
 				} else {
 					c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					c.pubSubSync.StopBuffering(channel)
@@ -2772,7 +2784,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
-			ctx.disconnect = DisconnectInsufficientState
+			if c.transport.ProtocolVersion() > ProtocolVersion1 {
+				return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
+			} else {
+				ctx.disconnect = DisconnectInsufficientState
+			}
 			return ctx
 		}
 	} else if reply.Options.Position {
@@ -2894,6 +2910,35 @@ func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*proto
 	}, nil
 }
 
+func (c *Client) handleInsufficientState(ch string, serverSide bool) {
+	if c.isInsufficientStateUnsubscribe(serverSide) {
+		c.handleInsufficientStateUnsubscribe(ch)
+	} else {
+		c.handleInsufficientStateDisconnect()
+	}
+}
+
+func (c *Client) isInsufficientStateUnsubscribe(serverSide bool) bool {
+	return c.transport.ProtocolVersion() > ProtocolVersion1 && !serverSide
+}
+
+func (c *Client) handleInsufficientStateDisconnect() {
+	_ = c.close(DisconnectInsufficientState)
+}
+
+func (c *Client) handleInsufficientStateUnsubscribe(ch string) {
+	err := c.unsubscribe(ch, UnsubscribeReasonInsufficientState, nil)
+	if err != nil {
+		_ = c.close(DisconnectServerError)
+		return
+	}
+	err = c.sendUnsubscribe(ch, protocol.Unsubscribe_INSUFFICIENT_STATE)
+	if err != nil {
+		_ = c.close(DisconnectWriteError)
+		return
+	}
+}
+
 func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
@@ -2909,6 +2954,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return c.transportEnqueue(data)
 	}
+	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
@@ -2917,8 +2963,8 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		if c.node.logger.enabled(LogLevelDebug) {
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
 		}
-		// Oops: sth lost, let client reconnect to recover its state.
-		go func() { _ = c.close(DisconnectInsufficientState) }()
+		// Oops: sth lost, let client reconnect/resubscribe to recover its state.
+		go func() { c.handleInsufficientState(ch, serverSide) }()
 		c.mu.Unlock()
 		return nil
 	}
@@ -2926,8 +2972,8 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		if c.node.logger.enabled(LogLevelDebug) {
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
 		}
-		// Oops: sth lost, let client reconnect to recover its state.
-		go func() { _ = c.close(DisconnectInsufficientState) }()
+		// Oops: sth lost, let client reconnect/resubscribe to recover its state.
+		go func() { c.handleInsufficientState(ch, serverSide) }()
 		c.mu.Unlock()
 		return nil
 	}
@@ -2974,44 +3020,48 @@ func (c *Client) unsubscribe(channel string, reason UnsubscribeReason, disconnec
 	c.mu.RLock()
 	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]
-	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
 	c.mu.RUnlock()
+	if !ok {
+		return nil
+	}
 
-	if ok {
-		c.mu.Lock()
-		delete(c.channels, channel)
-		c.mu.Unlock()
+	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
 
-		if channelHasFlag(chCtx.flags, flagPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
-			err := c.node.removePresence(channel, c.uid)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error removing channel presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			}
-		}
+	c.mu.Lock()
+	delete(c.channels, channel)
+	c.mu.Unlock()
 
-		if channelHasFlag(chCtx.flags, flagJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
-			_ = c.node.publishLeave(channel, info)
-		}
-
-		if err := c.node.removeSubscription(channel, c); err != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error removing subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			return err
-		}
-
-		if channelHasFlag(chCtx.flags, flagSubscribed) {
-			if c.eventHub.unsubscribeHandler != nil {
-				c.eventHub.unsubscribeHandler(UnsubscribeEvent{
-					Channel:    channel,
-					ServerSide: serverSide,
-					Reason:     reason,
-					Disconnect: disconnect,
-				})
-			}
+	if channelHasFlag(chCtx.flags, flagPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
+		err := c.node.removePresence(channel, c.uid)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error removing channel presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
+
+	if channelHasFlag(chCtx.flags, flagJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
+		_ = c.node.publishLeave(channel, info)
+	}
+
+	if err := c.node.removeSubscription(channel, c); err != nil {
+		c.node.logger.log(newLogEntry(LogLevelError, "error removing subscription", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		return err
+	}
+
+	if channelHasFlag(chCtx.flags, flagSubscribed) {
+		if c.eventHub.unsubscribeHandler != nil {
+			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
+				Channel:    channel,
+				ServerSide: serverSide,
+				Reason:     reason,
+				Disconnect: disconnect,
+			})
+		}
+	}
+
 	if c.node.logger.enabled(LogLevelDebug) {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "client unsubscribed from channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid}))
 	}
+
 	return nil
 }
 

@@ -157,6 +157,9 @@ const (
 	// UnsubscribeReasonDisconnect set when unsubscribe event was initiated
 	// by a client disconnect process.
 	UnsubscribeReasonDisconnect UnsubscribeReason = 3
+	// UnsubscribeReasonInsufficientState set when client unsubscribed from a channel
+	// due to insufficient state in a stream.
+	UnsubscribeReasonInsufficientState UnsubscribeReason = 4
 )
 
 // UnsubscribeEvent contains fields related to unsubscribe event.

@@ -150,27 +150,29 @@ func main() {
 		}
 	}()
 
-	// Simulate some work inside Redis.
-	for i := 0; i < 10; i++ {
-		go func(i int) {
-			for {
-				time.Sleep(time.Second)
-				_, err := node.Publish(
-					"chat:"+strconv.Itoa(i), []byte("hello"),
-					centrifuge.WithHistory(10, time.Minute),
-				)
-				if err != nil {
-					log.Println(err.Error())
-				}
-				_, err = node.History("chat:" + strconv.Itoa(i))
-				if err != nil {
-					log.Println(err.Error())
-				}
-			}
-		}(i)
-	}
+	//// Simulate some work inside Redis.
+	//for i := 0; i < 10; i++ {
+	//	go func(i int) {
+	//		for {
+	//			time.Sleep(time.Second)
+	//			_, err := node.Publish(
+	//				"chat:"+strconv.Itoa(i), []byte("hello"),
+	//				centrifuge.WithHistory(10, time.Minute),
+	//			)
+	//			if err != nil {
+	//				log.Println(err.Error())
+	//			}
+	//			_, err = node.History("chat:" + strconv.Itoa(i))
+	//			if err != nil {
+	//				log.Println(err.Error())
+	//			}
+	//		}
+	//	}(i)
+	//}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+		ProtocolVersion: centrifuge.ProtocolVersion2,
+	})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

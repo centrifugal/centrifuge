@@ -7,7 +7,7 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -20,7 +20,9 @@
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket');
+                const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
+                    protocolVersion: 'v2'
+                });
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
@@ -56,6 +58,10 @@
                 function handleSubscribeError(err) {
                     drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
                     console.log("subscription failed", err);
+                    if (err.code === 112) {
+                        // Unrecoverable position. Just subscribe from scratch.
+                        sub.subscribe();
+                    }
                 }
 
                 function handleMessage(message) {
@@ -81,8 +87,8 @@
                     drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
                 }
 
-                function handleUnsubscribe(sub) {
-                    drawText('Unsubscribed from channel ' + sub.channel);
+                function handleUnsubscribe(ctx) {
+                    drawText('Unsubscribed from channel ' + ctx.channel);
                 }
 
                 function showPresence(sub) {
