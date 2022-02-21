@@ -11,6 +11,8 @@ import (
 
 type EmulationConfig struct{}
 
+// EmulationHandler ...
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type EmulationHandler struct {
 	node     *Node
 	config   EmulationConfig
@@ -18,6 +20,7 @@ type EmulationHandler struct {
 }
 
 // NewEmulationHandler creates new EmulationHandler.
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
 func NewEmulationHandler(node *Node, config EmulationConfig) *EmulationHandler {
 	return &EmulationHandler{
 		node:     node,
