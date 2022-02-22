@@ -29,12 +29,14 @@ type SSEConfig struct {
 // SSEHandler handles WebSocket client connections. WebSocket protocol
 // is a bidirectional connection between a client and a server for low-latency
 // communication.
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type SSEHandler struct {
 	node   *Node
 	config SSEConfig
 }
 
 // NewSSEHandler creates new SSEHandler.
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
 func NewSSEHandler(node *Node, config SSEConfig) *SSEHandler {
 	return &SSEHandler{
 		node:   node,
@@ -76,7 +78,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
 			return
 		}
-		cmd, err = protocol.NewJSONCommandDecoder([]byte(connectRequestData)).Decode()
+		cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
 		if err != nil {
 			if h.node.LogEnabled(LogLevelDebug) {
 				h.node.Log(NewLogEntry(LogLevelDebug, "malformed connect request", map[string]interface{}{"error": err.Error()}))
@@ -200,8 +202,8 @@ func (t *sseTransport) DisabledPushFlags() uint64 {
 // AppLevelPing ...
 func (t *sseTransport) AppLevelPing() AppLevelPing {
 	return AppLevelPing{
-		PingInterval: 25 * time.Second,
-		PongTimeout:  10 * time.Second,
+		PingInterval: 3 * time.Second,
+		PongTimeout:  1 * time.Second,
 	}
 }
 

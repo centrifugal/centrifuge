@@ -29,12 +29,14 @@ type HTTPStreamingConfig struct {
 // HTTPStreamingHandler handles WebSocket client connections. WebSocket protocol
 // is a bidirectional connection between a client and a server for low-latency
 // communication.
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type HTTPStreamingHandler struct {
 	node   *Node
 	config HTTPStreamingConfig
 }
 
 // NewHTTPStreamingHandler creates new HTTPStreamingHandler.
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
 func NewHTTPStreamingHandler(node *Node, config HTTPStreamingConfig) *HTTPStreamingHandler {
 	return &HTTPStreamingHandler{
 		node:   node,
