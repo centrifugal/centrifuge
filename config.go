@@ -73,6 +73,7 @@ type Config struct {
 	HistoryMaxPublicationLimit int
 	// RecoveryMaxPublicationLimit allows limiting the number of Publications that could be
 	// restored during the automatic recovery process. See also HistoryMaxPublicationLimit.
+	// By default, no limit used.
 	RecoveryMaxPublicationLimit int
 	// UseSingleFlight allows turning on mode where singleflight will be automatically used for
 	// Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
