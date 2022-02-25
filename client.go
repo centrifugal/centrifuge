@@ -2932,7 +2932,7 @@ func (c *Client) handleInsufficientStateUnsubscribe(ch string) {
 		_ = c.close(DisconnectServerError)
 		return
 	}
-	err = c.sendUnsubscribe(ch, protocol.Unsubscribe_INSUFFICIENT_STATE)
+	err = c.sendUnsubscribe(ch, protocol.Unsubscribe_INSUFFICIENT)
 	if err != nil {
 		_ = c.close(DisconnectWriteError)
 		return

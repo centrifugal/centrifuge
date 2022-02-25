@@ -52,7 +52,7 @@
                     centrifuge.send(data);
                 });
 
-                centrifuge.on('publish', function(ctx) {
+                centrifuge.on('publication', function(ctx) {
                     drawText('Server-side publication from channel ' + ctx.channel + ": " + JSON.stringify(ctx.data));
                 });
 
@@ -65,7 +65,7 @@
                 });
 
                 centrifuge.on('subscribe', function(ctx) {
-                    drawText('Subscribe to server-side channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
+                    drawText('Subscribe to server-side channel ' + ctx.channel);
                 });
 
                 centrifuge.on('unsubscribe', function(ctx) {
@@ -75,6 +75,11 @@
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason  + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                     input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('close', function(ctx){
+                    drawText('Closed: ' + ctx.reason);
+                    centrifuge.connect();
                 });
 
                 // show how many users currently in channel.
@@ -93,20 +98,48 @@
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                const sub = centrifuge.subscribe(channel, handleMessage)
-                        .on("join", handleJoin)
-                        .on("leave", handleLeave)
-                        .on("unsubscribe", handleUnsubscribe)
-                        .on("subscribe", handleSubscribe)
-                        .on("error", handleSubscribeError);
+                const sub = centrifuge.newSubscription(channel)
+                    .on('publication', handleMessage)
+                    .on("join", handleJoin)
+                    .on("leave", handleLeave)
+                    .on("unsubscribe", handleUnsubscribe)
+                    .on("subscribe", handleSubscribe)
+                    .on("error", handleSubscribeError)
+                    .on('close', handleClose)
+
+                // We can call subscribe even in client disconnected state. Subscription
+                // will be queued.
+                sub.subscribe();
 
                 // Trigger actual connection establishing with a server.
                 // At this moment actual client work starts - i.e. subscriptions
                 // defined start subscribing etc.
                 centrifuge.connect();
 
+                // function resubscribe() {
+                //     setTimeout(function () {
+                //         sub.unsubscribe();
+                //         setTimeout(function () {
+                //             sub.subscribe();
+                //             resubscribe();
+                //         }, 2000)
+                //     }, 1000);
+                // }
+                // resubscribe();
+                //
+                // function reconnect() {
+                //     setTimeout(function () {
+                //         centrifuge.close();
+                //         setTimeout(function () {
+                //             centrifuge.connect();
+                //             reconnect();
+                //         }, 2000)
+                //     }, 1000);
+                // }
+                // reconnect();
+
                 function handleSubscribe(ctx) {
-                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ', data: ' + JSON.stringify(ctx.data) + ')');
+                    drawText('Subscribed on client-side channel ' + ctx.channel +  ', data: ' + JSON.stringify(ctx.data) + ')');
                     showPresence(sub);
 
                     // This can be whatever JSON you want.
@@ -123,28 +156,33 @@
                     drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
                 }
 
-                function handleMessage(message) {
+                function handleMessage(ctx) {
                     let clientID;
-                    if (message.info){
-                        clientID = message.info.client;
+                    if (ctx.info){
+                        clientID = ctx.info.client;
                     } else {
                         clientID = null;
                     }
-                    const inputText = message.data["input"].toString();
+                    const inputText = ctx.data["input"].toString();
                     const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
 
-                function handleJoin(message) {
-                    drawText('Client joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                function handleJoin(ctx) {
+                    drawText('Client joined channel ' + this.channel + ' (uid ' + ctx.info["client"] + ', user '+ ctx.info["user"] +')');
                 }
 
-                function handleLeave(message) {
-                    drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                function handleLeave(ctx) {
+                    drawText('Client left channel ' + this.channel + ' (uid ' + ctx.info["client"] + ', user '+ ctx.info["user"] +')');
                 }
 
-                function handleUnsubscribe(sub) {
-                    drawText('Unsubscribed from channel ' + sub.channel);
+                function handleUnsubscribe(ctx) {
+                    drawText('Unsubscribed from channel ' + ctx.channel);
+                }
+
+                function handleClose(ctx) {
+                    drawText('Subscription closed for channel ' + ctx.channel + ', reason: ' + JSON.stringify(ctx));
+                    sub.subscribe();
                 }
 
                 function drawText(text) {

@@ -21,72 +21,141 @@
                 const container = document.getElementById('messages');
 
                 const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
-                    protocolVersion: 'v2'
+                    protocolVersion: 'v2',
+                    debug: true,
                 });
 
-                // bind listeners on centrifuge object instance events.
+                centrifuge.on('state', function (ctx) {
+                    drawText(ctx.prevState + ' -> ' + ctx.state);
+                });
+
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
                     input.removeAttribute("disabled");
                 });
 
+                centrifuge.on('error', function(ctx) {
+                    console.log(ctx);
+                });
+
+                centrifuge.on('publication', handlePublication);
+
+                centrifuge.on('subscribe', function (ctx) {
+                    drawText('Subscribed on channel ' + ctx.channel);
+                });
+
+                centrifuge.on('unsubscribe', function (ctx) {
+                    drawText('Unsubscribed from channel ' + ctx.channel);
+                });
+
+                // Disconnect may be called:
+                // * Clean disconnect of a client, both server-side and client-side subscriptions are kept.
+                // * Clean close of client, both server-side and client-side subscriptions closed and removed.
+                // * Disconnect code without reconnect from server, both server-side and client-side subscriptions closed and removed.
+                // * Disconnect code with reconnect advice from server, both server-side and client-side subscriptions are kept.
+                // * Fatal non-retryable error, both server-side and client-side subscriptions closed and removed.
+                // * Unrecoverable position for server-side subscriptions. Client-side subscription information is still kept.
                 centrifuge.on('disconnect', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
                     input.setAttribute('disabled', 'true');
                 });
 
-                // subscribe on channel and bind various event listeners. Actual
-                // subscription request will be sent after client connects to
-                // a server.
-                const sub = centrifuge.subscribe(channel, handleMessage)
+                // Connection to the server closed. Client won't keep reconnecting.
+                // Reasons:
+                // * Clean close of client, both server-side and client-side subscriptions closed and removed.
+                // * Disconnect code without reconnect from server, both server-side and client-side subscriptions closed and removed.
+                // * Fatal non-retryable error, both server-side and client-side subscriptions closed and removed.
+                // * Unrecoverable position for server-side subscriptions. Client-side subscription information is still kept.
+                centrifuge.on('close', function (ctx) {
+                    drawText('Closed: '+ ctx.reason);
+                    // centrifuge.connect();
+                });
+
+                // create new subscription on a channel and bind various event listeners.
+                const sub = centrifuge.newSubscription(channel)
+                        // .on('state', handleState)
+                        .on('publication', handlePublication)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
-                        .on("unsubscribe", handleUnsubscribe)
                         .on("subscribe", handleSubscribe)
-                        .on("error", handleSubscribeError);
+                        .on("error", handleSubscribeError)
+                        .on("unsubscribe", handleUnsubscribe)
+                        .on('close', handleClose);
+
+                // Start subscribing, request will be queued until client connects to a server.
+                sub.subscribe();
+
+                // function resubscribe() {
+                //     setTimeout(function () {
+                //         sub.unsubscribe();
+                //         setTimeout(function () {
+                //             sub.subscribe();
+                //             resubscribe();
+                //         }, 2000)
+                //     }, 1000);
+                // }
+                // resubscribe();
+                //
+                // function reconnect() {
+                //     setTimeout(function () {
+                //         centrifuge.disconnect();
+                //         setTimeout(function () {
+                //             centrifuge.connect();
+                //             reconnect();
+                //         }, 2000)
+                //     }, 1000);
+                // }
+                // reconnect();
 
                 // Trigger actual connection establishing with a server.
                 // At this moment actual client work starts - i.e. subscriptions
                 // defined start subscribing etc.
                 centrifuge.connect();
 
+                function handleState(ctx) {
+                    drawText('Subscription state: ' + ctx.prevState + ' -> ' + ctx.state);
+                }
+
+                function handleClose(ctx) {
+                    drawText('Subscription closed for channel ' + ctx.channel + ', reason: ' + ctx.reason);
+                    sub.subscribe();
+                }
+
                 function handleSubscribe(ctx) {
-                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
+                    drawText('Subscribed on channel ' + ctx.channel);
                     showPresence(sub);
                 }
 
                 function handleSubscribeError(err) {
                     drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
-                    console.log("subscription failed", err);
-                    if (err.code === 112) {
-                        // Unrecoverable position. Just subscribe from scratch.
-                        sub.subscribe();
-                    }
                 }
 
-                function handleMessage(message) {
-                    console.log("new message received", message);
+                function handlePublication(message) {
                     let clientID;
                     if (message.info){
                         clientID = message.info.client;
                     } else {
                         clientID = null;
                     }
-                    const inputText = message.data["input"].toString();
+                    const inputText = 'Offset ' + message.offset.toString() + ': ' + message.data["input"].toString();
                     const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
 
                 function handleJoin(message) {
-                    console.log("subscription join event fired", message);
                     drawText('Client joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
                 }
 
                 function handleLeave(message) {
-                    console.log("subscription leave event fired", message);
                     drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
                 }
 
+                // Unsubscribe can be caused by:
+                // Client disconnect, we keep subscription state.
+                // Client close, we remove subscription state.
+                // Client unrecoverable position, subscription state kept.
+                // Unsubscribe from a server
+                // Subscription unrecoverable position, internal state removed.
                 function handleUnsubscribe(ctx) {
                     drawText('Unsubscribed from channel ' + ctx.channel);
                 }
@@ -112,7 +181,7 @@
                 document.getElementById('form').addEventListener('submit', function(event) {
                     event.preventDefault();
                     sub.publish({"input": input.value}).then(function() {
-                        console.log('message accepted by server');
+                        // message accepted by server.
                     }, function(err) {
                         console.log('error publishing message', err);
                     });

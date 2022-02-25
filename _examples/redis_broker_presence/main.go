@@ -56,11 +56,32 @@ func main() {
 		LogHandler: handleLog,
 	})
 
+	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		return centrifuge.ConnectReply{
+			Subscriptions: map[string]centrifuge.SubscribeOptions{
+				"test": {
+					Recover: true,
+				},
+			},
+		}, nil
+	})
+
+	i := 1
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
+		//go func() {
+		//	time.Sleep(time.Second)
+		//	client.Disconnect(centrifuge.DisconnectForceReconnect)
+		//}()
+
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+			i++
+			if i%2 == 0 {
+				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorInternal)
+				return
+			}
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
@@ -140,13 +161,13 @@ func main() {
 		for {
 			_, err := node.Publish(
 				"chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(10, time.Minute),
+				centrifuge.WithHistory(100, time.Minute),
 			)
 			if err != nil {
 				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
-			time.Sleep(5000 * time.Millisecond)
+			time.Sleep(1000 * time.Millisecond)
 		}
 	}()
 
