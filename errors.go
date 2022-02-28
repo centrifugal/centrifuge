@@ -10,14 +10,16 @@ var _ error = (*Error)(nil)
 
 // Error represents client reply error.
 type Error struct {
-	Code    uint32
-	Message string
+	Code      uint32
+	Message   string
+	Temporary bool
 }
 
 func (e *Error) toProto() *protocol.Error {
 	return &protocol.Error{
-		Code:    e.Code,
-		Message: e.Message,
+		Code:      e.Code,
+		Message:   e.Message,
+		Temporary: e.Temporary,
 	}
 }
 
@@ -37,8 +39,9 @@ var (
 	// that something went wrong with server itself and client most probably
 	// not guilty.
 	ErrorInternal = &Error{
-		Code:    100,
-		Message: "internal server error",
+		Code:      100,
+		Message:   "internal server error",
+		Temporary: true,
 	}
 	// ErrorUnauthorized says that request is unauthorized.
 	ErrorUnauthorized = &Error{
@@ -97,8 +100,9 @@ var (
 	// ErrorTooManyRequests means that server rejected request due to
 	// its rate limiting strategies.
 	ErrorTooManyRequests = &Error{
-		Code:    111,
-		Message: "too many requests",
+		Code:      111,
+		Message:   "too many requests",
+		Temporary: true,
 	}
 	// ErrorUnrecoverablePosition means that stream does not contain required
 	// range of publications to fulfill a history query. This can happen due to

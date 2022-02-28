@@ -16,11 +16,13 @@
 
             const channel = "chat:index";
 
+            let centrifuge;
+
             window.addEventListener('load', function() {
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
+                centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
                     protocolVersion: 'v2',
                     debug: true,
                 });
@@ -73,7 +75,7 @@
 
                 // create new subscription on a channel and bind various event listeners.
                 const sub = centrifuge.newSubscription(channel)
-                        // .on('state', handleState)
+                        .on('state', handleState)
                         .on('publication', handlePublication)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
