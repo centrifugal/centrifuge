@@ -230,7 +230,7 @@ func main() {
 	//http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 	//	ProtocolVersion: centrifuge.ProtocolVersion2,
 	//})))
-	//http.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamingHandler(node, centrifuge.HTTPStreamingConfig{})))
+	//http.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
 	http.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
 	http.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
 

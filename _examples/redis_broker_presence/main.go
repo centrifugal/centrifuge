@@ -71,11 +71,6 @@ func main() {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
-		//go func() {
-		//	time.Sleep(time.Second)
-		//	client.Disconnect(centrifuge.DisconnectForceReconnect)
-		//}()
-
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			i++
 			if i%2 == 0 {

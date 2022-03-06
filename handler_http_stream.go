@@ -9,8 +9,9 @@ import (
 	"github.com/centrifugal/protocol"
 )
 
-// HTTPStreamingConfig represents config for HTTPStreamingHandler.
-type HTTPStreamingConfig struct {
+// HTTPStreamConfig represents config for HTTPStreamHandler.
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
+type HTTPStreamConfig struct {
 	// MaxRequestBodySize limits request body size.
 	MaxRequestBodySize int
 	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
@@ -26,25 +27,25 @@ type HTTPStreamingConfig struct {
 	AppLevelPongTimeout time.Duration
 }
 
-// HTTPStreamingHandler handles WebSocket client connections. WebSocket protocol
+// HTTPStreamHandler handles WebSocket client connections. WebSocket protocol
 // is a bidirectional connection between a client and a server for low-latency
 // communication.
 // EXPERIMENTAL, this is still a subject to change, do not use in production.
-type HTTPStreamingHandler struct {
+type HTTPStreamHandler struct {
 	node   *Node
-	config HTTPStreamingConfig
+	config HTTPStreamConfig
 }
 
-// NewHTTPStreamingHandler creates new HTTPStreamingHandler.
+// NewHTTPStreamHandler creates new HTTPStreamHandler.
 // EXPERIMENTAL, this is still a subject to change, do not use in production.
-func NewHTTPStreamingHandler(node *Node, config HTTPStreamingConfig) *HTTPStreamingHandler {
-	return &HTTPStreamingHandler{
+func NewHTTPStreamHandler(node *Node, config HTTPStreamConfig) *HTTPStreamHandler {
+	return &HTTPStreamHandler{
 		node:   node,
 		config: config,
 	}
 }
 
-func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportHTTPStreaming)
 
 	if r.Method == http.MethodOptions {
@@ -87,7 +88,29 @@ func (h *HTTPStreamingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	transport := newHTTPStreamTransport(r, protocolType)
+	var (
+		pingInterval time.Duration
+		pongTimeout  time.Duration
+	)
+
+	if h.config.AppLevelPingInterval >= 0 {
+		pingInterval = h.config.AppLevelPingInterval
+		if pingInterval == 0 {
+			pingInterval = 25 * time.Second
+		}
+		pongTimeout = h.config.AppLevelPongTimeout
+		if pongTimeout < 0 {
+			pongTimeout = 0
+		} else if pongTimeout == 0 {
+			pongTimeout = pingInterval / 3
+		}
+	}
+
+	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
+		protocolType: protocolType,
+		pingInterval: pingInterval,
+		pongTimeout:  pongTimeout,
+	})
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
 		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": transportHTTPStreaming}))
@@ -167,16 +190,22 @@ type httpStreamTransport struct {
 	disconnectCh chan *Disconnect
 	closedCh     chan struct{}
 	closed       bool
-	protocolType ProtocolType
+	config       httpStreamTransportConfig
 }
 
-func newHTTPStreamTransport(req *http.Request, protocolType ProtocolType) *httpStreamTransport {
+type httpStreamTransportConfig struct {
+	protocolType ProtocolType
+	pingInterval time.Duration
+	pongTimeout  time.Duration
+}
+
+func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig) *httpStreamTransport {
 	return &httpStreamTransport{
 		messages:     make(chan []byte),
 		disconnectCh: make(chan *Disconnect),
 		closedCh:     make(chan struct{}),
 		req:          req,
-		protocolType: protocolType,
+		config:       config,
 	}
 }
 
@@ -185,7 +214,7 @@ func (t *httpStreamTransport) Name() string {
 }
 
 func (t *httpStreamTransport) Protocol() ProtocolType {
-	return t.protocolType
+	return t.config.protocolType
 }
 
 // ProtocolVersion returns transport protocol version.
@@ -211,8 +240,8 @@ func (t *httpStreamTransport) DisabledPushFlags() uint64 {
 // AppLevelPing ...
 func (t *httpStreamTransport) AppLevelPing() AppLevelPing {
 	return AppLevelPing{
-		PingInterval: 25 * time.Second,
-		PongTimeout:  10 * time.Second,
+		PingInterval: t.config.pingInterval,
+		PongTimeout:  t.config.pongTimeout,
 	}
 }
 

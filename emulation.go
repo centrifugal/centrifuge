@@ -30,12 +30,6 @@ func NewEmulationHandler(node *Node, config EmulationConfig) *EmulationHandler {
 }
 
 func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	//// TODO: move CORS out of handler.
-	//rw.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
-	//rw.Header().Set("Access-Control-Allow-Credentials", "true")
-	//if allowHeaders := r.Header.Get("Access-Control-Request-Headers"); allowHeaders != "" && allowHeaders != "null" {
-	//	rw.Header().Add("Access-Control-Allow-Headers", allowHeaders)
-	//}
 	if r.Method == http.MethodOptions {
 		// For pre-flight browser requests.
 		rw.WriteHeader(http.StatusOK)

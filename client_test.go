@@ -3598,7 +3598,7 @@ func TestClientV1ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
-	data, err = clientV1.getUnsubscribePushReply("test")
+	data, err = clientV1.getUnsubscribePushReply("test", protocol.Unsubscribe_PERMANENT)
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
@@ -3668,7 +3668,7 @@ func TestClientV2ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Refresh)
 
-	data, err = clientV2.getUnsubscribePushReply("test")
+	data, err = clientV2.getUnsubscribePushReply("test", protocol.Unsubscribe_PERMANENT)
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Unsubscribe)
 

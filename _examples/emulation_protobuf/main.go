@@ -111,7 +111,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamingHandler(node, centrifuge.HTTPStreamingConfig{})))
+	http.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
 	http.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 

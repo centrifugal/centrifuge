@@ -10,6 +10,7 @@ import (
 )
 
 // SSEConfig represents config for SSEHandler.
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type SSEConfig struct {
 	// MaxRequestBodySize limits request body size.
 	MaxRequestBodySize int
@@ -90,7 +91,25 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	transport := newSSETransport(r)
+	var (
+		pingInterval time.Duration
+		pongTimeout  time.Duration
+	)
+
+	if h.config.AppLevelPingInterval >= 0 {
+		pingInterval = h.config.AppLevelPingInterval
+		if pingInterval == 0 {
+			pingInterval = 25 * time.Second
+		}
+		pongTimeout = h.config.AppLevelPongTimeout
+		if pongTimeout < 0 {
+			pongTimeout = 0
+		} else if pongTimeout == 0 {
+			pongTimeout = pingInterval / 3
+		}
+	}
+
+	transport := newSSETransport(r, sseTransportConfig{pingInterval: pingInterval, pongTimeout: pongTimeout})
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
 		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": "uni_sse"}))
@@ -159,15 +178,22 @@ type sseTransport struct {
 	messages     chan []byte
 	disconnectCh chan *Disconnect
 	closedCh     chan struct{}
+	config       sseTransportConfig
 	closed       bool
 }
 
-func newSSETransport(req *http.Request) *sseTransport {
+type sseTransportConfig struct {
+	pingInterval time.Duration
+	pongTimeout  time.Duration
+}
+
+func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport {
 	return &sseTransport{
 		messages:     make(chan []byte),
 		disconnectCh: make(chan *Disconnect),
 		closedCh:     make(chan struct{}),
 		req:          req,
+		config:       config,
 	}
 }
 
@@ -202,8 +228,8 @@ func (t *sseTransport) DisabledPushFlags() uint64 {
 // AppLevelPing ...
 func (t *sseTransport) AppLevelPing() AppLevelPing {
 	return AppLevelPing{
-		PingInterval: 3 * time.Second,
-		PongTimeout:  1 * time.Second,
+		PingInterval: t.config.pingInterval,
+		PongTimeout:  t.config.pongTimeout,
 	}
 }
 
