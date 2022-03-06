@@ -4,12 +4,10 @@ go 1.14
 
 replace github.com/centrifugal/centrifuge => ../
 
-replace github.com/centrifugal/protocol => ../../protocol
-
 require (
 	github.com/FZambia/tarantool v0.2.2
 	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/protocol v0.8.5-0.20220220055605-c8279a478a1d
+	github.com/centrifugal/protocol v0.8.5-0.20220306171102-96fa05b7c932
 	github.com/cristalhq/jwt/v3 v3.0.0
 	github.com/dchest/uniuri v0.0.0-20200228104902-7aecb25e1fe5
 	github.com/gin-contrib/sessions v0.0.3
