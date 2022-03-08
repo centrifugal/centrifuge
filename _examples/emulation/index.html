@@ -116,28 +116,6 @@
                 // defined start subscribing etc.
                 centrifuge.connect();
 
-                // function resubscribe() {
-                //     setTimeout(function () {
-                //         sub.unsubscribe();
-                //         setTimeout(function () {
-                //             sub.subscribe();
-                //             resubscribe();
-                //         }, 2000)
-                //     }, 1000);
-                // }
-                // resubscribe();
-                //
-                // function reconnect() {
-                //     setTimeout(function () {
-                //         centrifuge.close();
-                //         setTimeout(function () {
-                //             centrifuge.connect();
-                //             reconnect();
-                //         }, 2000)
-                //     }, 1000);
-                // }
-                // reconnect();
-
                 function handleSubscribe(ctx) {
                     drawText('Subscribed on client-side channel ' + ctx.channel +  ', data: ' + JSON.stringify(ctx.data) + ')');
                     showPresence(sub);

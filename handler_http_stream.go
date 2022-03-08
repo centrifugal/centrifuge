@@ -46,7 +46,7 @@ func NewHTTPStreamHandler(node *Node, config HTTPStreamConfig) *HTTPStreamHandle
 }
 
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	incTransportConnect(transportHTTPStreaming)
+	incTransportConnect(transportHTTPStream)
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
@@ -113,7 +113,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
-		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": transportHTTPStreaming}))
+		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": transportHTTPStream}))
 		return
 	}
 	defer func() { _ = closeFn() }()
@@ -180,7 +180,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	transportHTTPStreaming = "http_streaming"
+	transportHTTPStream = "http_stream"
 )
 
 type httpStreamTransport struct {
@@ -210,7 +210,7 @@ func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig)
 }
 
 func (t *httpStreamTransport) Name() string {
-	return transportHTTPStreaming
+	return transportHTTPStream
 }
 
 func (t *httpStreamTransport) Protocol() ProtocolType {

@@ -18,17 +18,15 @@
 
             let centrifuge;
 
-            window.addEventListener('load', function() {
+            window.addEventListener('load', async function() {
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
 
-                centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {
-                    protocolVersion: 'v2',
-                    debug: true,
-                });
+                // centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket', {});
+                centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {});
 
                 centrifuge.on('state', function (ctx) {
-                    drawText('State: ' + ctx.prevState + ' -> ' + ctx.state);
+                    drawText('State: ' + ctx.oldState + ' -> ' + ctx.newState);
                 });
 
                 centrifuge.on('connect', function(ctx){
@@ -37,7 +35,7 @@
                 });
 
                 centrifuge.on('error', function(ctx) {
-                    console.log(ctx);
+                    drawText('Error connecting: ' + ctx.message);
                 });
 
                 centrifuge.on('publication', handlePublication);
@@ -57,7 +55,7 @@
 
                 centrifuge.on('close', function (ctx) {
                     drawText('Closed: '+ ctx.reason);
-                    if (ctx.reason === centrifuge.CLOSE_UNRECOVERABLE_POSITION) {
+                    if (ctx.reason === Centrifuge.CloseReason.UnrecoverablePosition) {
                         // Load initial state.
                         centrifuge.connect();
                     }
@@ -82,9 +80,9 @@
                 //         sub.unsubscribe();
                 //         setTimeout(function () {
                 //             sub.subscribe();
-                //             resubscribe();
-                //         }, 2000)
-                //     }, 1000);
+                //             // resubscribe();
+                //         }, 10000)
+                //     }, 2000);
                 // }
                 // resubscribe();
                 //
@@ -105,12 +103,12 @@
                 centrifuge.connect();
 
                 function handleState(ctx) {
-                    drawText('Subscription state: ' + ctx.prevState + ' -> ' + ctx.state);
+                    drawText('Subscription state ' + ctx.channel + ': ' + ctx.oldState + ' -> ' + ctx.newState);
                 }
 
                 function handleClose(ctx) {
                     drawText('Subscription closed for channel ' + ctx.channel + ', reason: ' + ctx.reason);
-                    if (ctx.reason === sub.CLOSE_UNRECOVERABLE_POSITION) {
+                    if (ctx.reason === Centrifuge.SubscriptionCloseReason.UnrecoverablePosition) {
                         sub.subscribe();
                     }
                 }
