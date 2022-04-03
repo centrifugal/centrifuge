@@ -38,8 +38,6 @@
                     protocolVersion: 'v2',
                 });
 
-                centrifuge.setConnectData({"user-agent": navigator.userAgent});
-
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
@@ -77,16 +75,20 @@
                     input.setAttribute('disabled', 'true');
                 });
 
-                centrifuge.on('close', function(ctx){
-                    drawText('Closed: ' + ctx.reason);
+                centrifuge.on('error', function(ctx){
+                    drawText('Client error: ' + JSON.stringify(ctx));
                     centrifuge.connect();
+                });
+
+                centrifuge.on('fail', function(ctx){
+                    drawText('Client failed: ' + ctx.reason);
                 });
 
                 // show how many users currently in channel.
                 function showPresence(sub) {
                     sub.presence().then(function(result) {
                         let count = 0;
-                        for (let key in result.presence){
+                        for (let key in result.clients){
                             count++;
                         }
                         drawText('Presence: now in this room – ' + count + ' clients');
@@ -104,8 +106,8 @@
                     .on("leave", handleLeave)
                     .on("unsubscribe", handleUnsubscribe)
                     .on("subscribe", handleSubscribe)
+                    .on('fail', handleFail)
                     .on("error", handleSubscribeError)
-                    .on('close', handleClose)
 
                 // We can call subscribe even in client disconnected state. Subscription
                 // will be queued.
@@ -120,10 +122,7 @@
                     drawText('Subscribed on client-side channel ' + ctx.channel +  ', data: ' + JSON.stringify(ctx.data) + ')');
                     showPresence(sub);
 
-                    // This can be whatever JSON you want.
-                    const rpcRequest = {"method": "getCurrentYear"};
-
-                    centrifuge.rpc(rpcRequest).then(function(data){
+                    centrifuge.rpc("getCurrentYear", {}).then(function(data){
                         drawText("RPC response data: " + JSON.stringify(data));
                     }, function(err) {
                         drawText("RPC error: " + JSON.stringify(err));
@@ -158,8 +157,8 @@
                     drawText('Unsubscribed from channel ' + ctx.channel);
                 }
 
-                function handleClose(ctx) {
-                    drawText('Subscription closed for channel ' + ctx.channel + ', reason: ' + JSON.stringify(ctx));
+                function handleFail(ctx) {
+                    drawText('Subscription failed for channel ' + ctx.channel + ', reason: ' + ctx.reason);
                     sub.subscribe();
                 }
 

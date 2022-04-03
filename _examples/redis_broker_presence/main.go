@@ -60,7 +60,8 @@ func main() {
 		return centrifuge.ConnectReply{
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
 				"test": {
-					Recover: true,
+					Recover:   true,
+					JoinLeave: true,
 				},
 			},
 		}, nil

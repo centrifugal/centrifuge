@@ -2740,10 +2740,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestEpoch = historyResult.Epoch
 					res.Recovered = false
 					incRecover(res.Recovered)
-					if c.transport.ProtocolVersion() > ProtocolVersion1 {
-						c.pubSubSync.StopBuffering(channel)
-						return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
-					}
+					//if c.transport.ProtocolVersion() > ProtocolVersion1 {
+					//	c.pubSubSync.StopBuffering(channel)
+					//	return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
+					//}
 				} else {
 					c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					c.pubSubSync.StopBuffering(channel)
@@ -2784,11 +2784,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
-			if c.transport.ProtocolVersion() > ProtocolVersion1 {
-				return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
-			} else {
-				ctx.disconnect = DisconnectInsufficientState
-			}
+			//if c.transport.ProtocolVersion() > ProtocolVersion1 {
+			//	return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
+			//} else {
+			ctx.disconnect = DisconnectInsufficientState
+			//}
 			return ctx
 		}
 	} else if reply.Options.Position {
