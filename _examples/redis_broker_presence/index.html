@@ -66,8 +66,7 @@
                         .on("subscribe", handleSubscribe)
                         .on("error", handleSubscribeError)
                         .on("unsubscribe", handleUnsubscribe)
-                        .on("fail", handleFail)
-                        .on('close', handleClose);
+                        .on("fail", handleFail);
 
                 // Start subscribing, request will be queued until client connects to a server.
                 sub.subscribe();
