@@ -847,18 +847,18 @@ func (c *Client) Unsubscribe(ch string) error {
 	}
 	c.mu.RUnlock()
 
-	err := c.unsubscribe(ch, UnsubscribeReasonServer, nil)
+	err := c.unsubscribe(ch, UnsubscribeCodeServer, nil)
 	if err != nil {
 		return err
 	}
-	return c.sendUnsubscribe(ch, protocol.Unsubscribe_PERMANENT)
+	return c.sendUnsubscribe(ch, UnsubscribeCodeServer)
 }
 
-func (c *Client) sendUnsubscribe(ch string, unsubscribeType protocol.Unsubscribe_Type) error {
+func (c *Client) sendUnsubscribe(ch string, code UnsubscribeCode) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagUnsubscribe) {
 		return nil
 	}
-	replyData, err := c.getUnsubscribePushReply(ch, unsubscribeType)
+	replyData, err := c.getUnsubscribePushReply(ch, uint32(code))
 	if err != nil {
 		return err
 	}
@@ -866,9 +866,9 @@ func (c *Client) sendUnsubscribe(ch string, unsubscribeType protocol.Unsubscribe
 	return nil
 }
 
-func (c *Client) getUnsubscribePushReply(ch string, unsubscribeType protocol.Unsubscribe_Type) ([]byte, error) {
+func (c *Client) getUnsubscribePushReply(ch string, code uint32) ([]byte, error) {
 	p := &protocol.Unsubscribe{
-		Type: unsubscribeType,
+		Code: code,
 	}
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		pushBytes, err := protocol.EncodeUnsubscribePush(c.transport.Protocol().toProto(), ch, p)
@@ -921,7 +921,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 	if len(channels) > 0 {
 		// Unsubscribe from all channels.
 		for channel := range channels {
-			err := c.unsubscribe(channel, UnsubscribeReasonDisconnect, disconnect)
+			err := c.unsubscribe(channel, UnsubscribeCodeDisconnect, disconnect)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
@@ -1774,7 +1774,7 @@ func (c *Client) handleUnsubscribe(req *protocol.UnsubscribeRequest, cmd *protoc
 		return c.logDisconnectBadRequest("channel required for unsubscribe")
 	}
 
-	if err := c.unsubscribe(channel, UnsubscribeReasonClient, nil); err != nil {
+	if err := c.unsubscribe(channel, UnsubscribeCodeClient, nil); err != nil {
 		return err
 	}
 
@@ -2927,12 +2927,12 @@ func (c *Client) handleInsufficientStateDisconnect() {
 }
 
 func (c *Client) handleInsufficientStateUnsubscribe(ch string) {
-	err := c.unsubscribe(ch, UnsubscribeReasonInsufficientState, nil)
+	err := c.unsubscribe(ch, UnsubscribeCodeInsufficient, nil)
 	if err != nil {
 		_ = c.close(DisconnectServerError)
 		return
 	}
-	err = c.sendUnsubscribe(ch, protocol.Unsubscribe_INSUFFICIENT)
+	err = c.sendUnsubscribe(ch, UnsubscribeCodeInsufficient)
 	if err != nil {
 		_ = c.close(DisconnectWriteError)
 		return
@@ -3016,7 +3016,7 @@ func (c *Client) writeLeave(_ string, data []byte) error {
 }
 
 // Lock must be held outside.
-func (c *Client) unsubscribe(channel string, reason UnsubscribeReason, disconnect *Disconnect) error {
+func (c *Client) unsubscribe(channel string, code UnsubscribeCode, disconnect *Disconnect) error {
 	c.mu.RLock()
 	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]
@@ -3052,7 +3052,7 @@ func (c *Client) unsubscribe(channel string, reason UnsubscribeReason, disconnec
 			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
 				Channel:    channel,
 				ServerSide: serverSide,
-				Reason:     reason,
+				Code:       code,
 				Disconnect: disconnect,
 			})
 		}

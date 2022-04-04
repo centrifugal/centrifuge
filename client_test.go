@@ -1279,7 +1279,7 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 			callback(SubscribeReply{}, nil)
 		})
 		client.OnUnsubscribe(func(e UnsubscribeEvent) {
-			require.Equal(t, UnsubscribeReasonClient, e.Reason)
+			require.Equal(t, UnsubscribeCodeClient, e.Code)
 			require.Nil(t, e.Disconnect)
 			close(unsubscribed)
 		})
@@ -1322,7 +1322,7 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 			callback(SubscribeReply{}, nil)
 		})
 		client.OnUnsubscribe(func(e UnsubscribeEvent) {
-			require.Equal(t, UnsubscribeReasonServer, e.Reason)
+			require.Equal(t, UnsubscribeCodeServer, e.Code)
 			require.Nil(t, e.Disconnect)
 			close(unsubscribed)
 		})
@@ -3208,7 +3208,7 @@ func TestClientTransportWriteError(t *testing.T) {
 
 			node.OnConnect(func(client *Client) {
 				client.OnUnsubscribe(func(event UnsubscribeEvent) {
-					require.Equal(t, UnsubscribeReasonDisconnect, event.Reason)
+					require.Equal(t, UnsubscribeCodeDisconnect, event.Code)
 					require.Equal(t, tt.ExpectedDisconnect, event.Disconnect)
 					close(doneUnsubscribe)
 				})
@@ -3598,7 +3598,7 @@ func TestClientV1ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
-	data, err = clientV1.getUnsubscribePushReply("test", protocol.Unsubscribe_PERMANENT)
+	data, err = clientV1.getUnsubscribePushReply("test", uint32(UnsubscribeCodeServer))
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
@@ -3668,7 +3668,7 @@ func TestClientV2ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Refresh)
 
-	data, err = clientV2.getUnsubscribePushReply("test", protocol.Unsubscribe_PERMANENT)
+	data, err = clientV2.getUnsubscribePushReply("test", uint32(UnsubscribeCodeServer))
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Unsubscribe)
 

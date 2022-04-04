@@ -97,6 +97,50 @@ type RefreshHandler func(RefreshEvent, RefreshCallback)
 // callback will run every ClientPresenceUpdateInterval and can save you a timer.
 type AliveHandler func()
 
+// UnsubscribeCode describes the reason why client unsubscribed from a channel.
+type UnsubscribeCode uint32
+
+// Known unsubscribe codes.
+const (
+	// UnsubscribeCodeDisconnect set when unsubscribe event was initiated
+	// by a disconnect process.
+	UnsubscribeCodeDisconnect UnsubscribeCode = 0
+	// UnsubscribeCodeClient set when unsubscribe event was initiated
+	// by a client-side unsubscribe call.
+	UnsubscribeCodeClient UnsubscribeCode = 1
+	// UnsubscribeCodeServer set when unsubscribe event was initiated
+	// by a server-side unsubscribe call.
+	UnsubscribeCodeServer UnsubscribeCode = 2
+	// UnsubscribeCodeInsufficient set when client unsubscribed from
+	// a channel due to insufficient state in a stream. We expect client to
+	// resubscribe after receiving this.
+	UnsubscribeCodeInsufficient UnsubscribeCode = 3
+	// UnsubscribeCodeUnrecoverable set when client unsubscribed from
+	// a channel due to unrecoverable position. This is not used at the
+	// moment but may be a good addition later: this way client can avoid
+	// resubscribe upon insufficient state if recovery known to be impossible.
+	// Implementing this requires PUB/SUB sync logic at the moment of
+	// insufficient state.
+	// UnsubscribeCodeUnrecoverable UnsubscribeCode = 4
+)
+
+// UnsubscribeEvent contains fields related to unsubscribe event.
+type UnsubscribeEvent struct {
+	// Channel client unsubscribed from.
+	Channel string
+	// ServerSide set to true for server-side subscription unsubscribe events.
+	ServerSide bool
+	// Code can help to determine the source of UnsubscribeEvent.
+	Code UnsubscribeCode
+	// Disconnect can be additionally set when UnsubscribeEvent.Code is UnsubscribeCodeDisconnect.
+	// If connection close was initiated by a server it will contain Disconnect object,
+	// if client connection lost or closed normally from a client side Disconnect is nil.
+	Disconnect *Disconnect
+}
+
+// UnsubscribeHandler called when client unsubscribed from channel.
+type UnsubscribeHandler func(UnsubscribeEvent)
+
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
 	// Disconnect can optionally contain a Disconnect object that was sent from
@@ -141,43 +185,6 @@ type SubscribeReply struct {
 
 // SubscribeHandler called when client wants to subscribe on channel.
 type SubscribeHandler func(SubscribeEvent, SubscribeCallback)
-
-// UnsubscribeReason is a type that describes the reason why client
-// unsubscribed from a channel.
-type UnsubscribeReason int
-
-// Known unsubscribe reasons.
-const (
-	// UnsubscribeReasonClient set when unsubscribe event was initiated
-	// by a client-side unsubscribe call.
-	UnsubscribeReasonClient UnsubscribeReason = 1
-	// UnsubscribeReasonServer set when unsubscribe event was initiated
-	// by a server-side unsubscribe call.
-	UnsubscribeReasonServer UnsubscribeReason = 2
-	// UnsubscribeReasonDisconnect set when unsubscribe event was initiated
-	// by a client disconnect process.
-	UnsubscribeReasonDisconnect UnsubscribeReason = 3
-	// UnsubscribeReasonInsufficientState set when client unsubscribed from a channel
-	// due to insufficient state in a stream.
-	UnsubscribeReasonInsufficientState UnsubscribeReason = 4
-)
-
-// UnsubscribeEvent contains fields related to unsubscribe event.
-type UnsubscribeEvent struct {
-	// Channel client unsubscribed from.
-	Channel string
-	// ServerSide set to true for server-side subscription unsubscribe events.
-	ServerSide bool
-	// Reason can help to determine the reason of UnsubscribeEvent.
-	Reason UnsubscribeReason
-	// Disconnect can be additionally set when Reason is UnsubscribeReasonDisconnect.
-	// If connection close was initiated by a server it will contain Disconnect object,
-	// if client connection lost or closed normally from a client side Disconnect is nil.
-	Disconnect *Disconnect
-}
-
-// UnsubscribeHandler called when client unsubscribed from channel.
-type UnsubscribeHandler func(UnsubscribeEvent)
 
 // PublishEvent contains fields related to publish event. Note that this event
 // called before actual publish to Broker so handler has an option to reject this

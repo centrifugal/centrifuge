@@ -380,7 +380,7 @@ func TestNode_Subscribe(t *testing.T) {
 			require.Equal(t, "42", client.UserID())
 			require.Equal(t, "test_channel", event.Channel)
 			require.True(t, event.ServerSide)
-			require.Equal(t, UnsubscribeReasonServer, event.Reason)
+			require.Equal(t, UnsubscribeCodeServer, event.Code)
 			close(done)
 		})
 	})
