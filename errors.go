@@ -29,11 +29,9 @@ func (e Error) Error() string {
 
 // Here we define well-known errors that can be used in client protocol
 // replies.
-// Library user can define own application specific errors. When define new
-// custom error it is recommended to use error codes >= 1000 assuming that
-// codes in interval 0-999 reserved by Centrifuge.
-// Server Error codes start with 100 as we aim to have client-side error codes
-// in the future, see https://github.com/centrifugal/centrifuge/issues/149.
+// Library user can define own application specific errors. When defining new
+// custom errors use error codes in range [400, 1999] assuming that
+// codes in interval 0-399 reserved by Centrifuge.
 var (
 	// ErrorInternal means server error, if returned this is a signal
 	// that something went wrong with server itself and client most probably

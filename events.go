@@ -100,28 +100,24 @@ type AliveHandler func()
 // UnsubscribeCode describes the reason why client unsubscribed from a channel.
 type UnsubscribeCode uint32
 
-// Known unsubscribe codes.
+// Known unsubscribe codes. Codes sent to client connection must be kept
+// in range [2000, 2999]. Unsubscribe codes >= 2500 coming from server to client
+// result into resubscribe attempt.
 const (
+	// UnsubscribeCodeClient set when unsubscribe event was initiated
+	// by an explicit client-side unsubscribe call.
+	UnsubscribeCodeClient UnsubscribeCode = 0
 	// UnsubscribeCodeDisconnect set when unsubscribe event was initiated
 	// by a disconnect process.
-	UnsubscribeCodeDisconnect UnsubscribeCode = 0
-	// UnsubscribeCodeClient set when unsubscribe event was initiated
-	// by a client-side unsubscribe call.
-	UnsubscribeCodeClient UnsubscribeCode = 1
+	UnsubscribeCodeDisconnect UnsubscribeCode = 1
 	// UnsubscribeCodeServer set when unsubscribe event was initiated
-	// by a server-side unsubscribe call.
-	UnsubscribeCodeServer UnsubscribeCode = 2
+	// by an explicit server-side unsubscribe call.
+	UnsubscribeCodeServer UnsubscribeCode = 2000
 	// UnsubscribeCodeInsufficient set when client unsubscribed from
 	// a channel due to insufficient state in a stream. We expect client to
-	// resubscribe after receiving this.
-	UnsubscribeCodeInsufficient UnsubscribeCode = 3
-	// UnsubscribeCodeUnrecoverable set when client unsubscribed from
-	// a channel due to unrecoverable position. This is not used at the
-	// moment but may be a good addition later: this way client can avoid
-	// resubscribe upon insufficient state if recovery known to be impossible.
-	// Implementing this requires PUB/SUB sync logic at the moment of
-	// insufficient state.
-	// UnsubscribeCodeUnrecoverable UnsubscribeCode = 4
+	// resubscribe after receiving this since it's still may be possible to
+	// recover state.
+	UnsubscribeCodeInsufficient UnsubscribeCode = 2500
 )
 
 // UnsubscribeEvent contains fields related to unsubscribe event.
