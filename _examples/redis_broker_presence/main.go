@@ -59,10 +59,10 @@ func main() {
 	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				"test": {
-					Recover:   true,
-					JoinLeave: true,
-				},
+				//"test": {
+				//	Recover:   true,
+				//	JoinLeave: true,
+				//},
 			},
 		}, nil
 	})
