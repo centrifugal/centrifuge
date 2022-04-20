@@ -2821,7 +2821,14 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 	}
 
-	res.Publications = recoveredPubs
+	if c.transport.ProtocolVersion() == ProtocolVersion1 {
+		res.Publications = recoveredPubs
+	} else {
+		if res.Recovered {
+			res.Publications = recoveredPubs
+		}
+		res.WasRecovering = req.Recover
+	}
 
 	if !serverSide {
 		// Write subscription reply only if initiated by client.

@@ -75,6 +75,7 @@ func main() {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			i++
 			if i%2 == 0 {
+				// Emulate internal error, client must resubscribe successfully.
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorInternal)
 				return
 			}
@@ -157,35 +158,31 @@ func main() {
 		for {
 			_, err := node.Publish(
 				"chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(100, time.Minute),
+				centrifuge.WithHistory(2000, time.Minute),
 			)
 			if err != nil {
 				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
-			time.Sleep(1000 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 
-	//// Simulate some work inside Redis.
-	//for i := 0; i < 10; i++ {
-	//	go func(i int) {
-	//		for {
-	//			time.Sleep(time.Second)
-	//			_, err := node.Publish(
-	//				"chat:"+strconv.Itoa(i), []byte("hello"),
-	//				centrifuge.WithHistory(10, time.Minute),
-	//			)
-	//			if err != nil {
-	//				log.Println(err.Error())
-	//			}
-	//			_, err = node.History("chat:" + strconv.Itoa(i))
-	//			if err != nil {
-	//				log.Println(err.Error())
-	//			}
-	//		}
-	//	}(i)
-	//}
+	go func() {
+		// Publish channel notifications from server periodically.
+		i := 1
+		for {
+			_, err := node.Publish(
+				"test", []byte(`{"input": "`+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(2000, time.Minute),
+			)
+			if err != nil {
+				log.Printf("error publishing to channel: %s", err)
+			}
+			i++
+			time.Sleep(150 * time.Millisecond)
+		}
+	}()
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ProtocolVersion: centrifuge.ProtocolVersion2,
