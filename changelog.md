@@ -1,3 +1,8 @@
+v0.21.1
+=======
+
+* Fix regression of v0.21.0: periodic stream position check was off due to missing zero value in `Config`.
+
 v0.21.0
 =======
 
