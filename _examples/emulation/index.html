@@ -39,7 +39,7 @@
                 });
 
                 // bind listeners on centrifuge object instance events.
-                centrifuge.on('connect', function(ctx){
+                centrifuge.on('connected', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
                     input.removeAttribute('disabled');
                 });
@@ -62,26 +62,31 @@
                     drawText('Server-side leave from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
                 });
 
-                centrifuge.on('subscribe', function(ctx) {
-                    drawText('Subscribe to server-side channel ' + ctx.channel);
+                centrifuge.on('subscribed', function(ctx) {
+                    drawText('Subscribed to server-side channel ' + ctx.channel);
                 });
 
-                centrifuge.on('unsubscribe', function(ctx) {
+                centrifuge.on('subscribing', function(ctx) {
+                    drawText('Subscribing to server-side channel ' + ctx.channel);
+                });
+
+                centrifuge.on('unsubscribed', function(ctx) {
                     drawText('Unsubscribe from server-side channel ' + ctx.channel);
                 });
 
-                centrifuge.on('disconnect', function(ctx){
-                    drawText('Disconnected: ' + ctx.reason  + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
                     input.setAttribute('disabled', 'true');
                 });
 
                 centrifuge.on('error', function(ctx){
                     drawText('Client error: ' + JSON.stringify(ctx));
                     centrifuge.connect();
-                });
-
-                centrifuge.on('fail', function(ctx){
-                    drawText('Client failed: ' + ctx.reason);
                 });
 
                 // show how many users currently in channel.
@@ -101,12 +106,12 @@
                 // subscription request will be sent after client connects to
                 // a server.
                 const sub = centrifuge.newSubscription(channel)
-                    .on('publication', handleMessage)
+                    .on('publication', handlePublication)
                     .on("join", handleJoin)
                     .on("leave", handleLeave)
-                    .on("unsubscribe", handleUnsubscribe)
-                    .on("subscribe", handleSubscribe)
-                    .on('fail', handleFail)
+                    .on("subscribing", handleSubscribing)
+                    .on("unsubscribed", handleUnsubscribed)
+                    .on("subscribed", handleSubscribed)
                     .on("error", handleSubscribeError)
 
                 // We can call subscribe even in client disconnected state. Subscription
@@ -118,7 +123,7 @@
                 // defined start subscribing etc.
                 centrifuge.connect();
 
-                function handleSubscribe(ctx) {
+                function handleSubscribed(ctx) {
                     drawText('Subscribed on client-side channel ' + ctx.channel +  ', data: ' + JSON.stringify(ctx.data) + ')');
                     showPresence(sub);
 
@@ -133,7 +138,7 @@
                     drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
                 }
 
-                function handleMessage(ctx) {
+                function handlePublication(ctx) {
                     let clientID;
                     if (ctx.info){
                         clientID = ctx.info.client;
@@ -153,13 +158,12 @@
                     drawText('Client left channel ' + this.channel + ' (uid ' + ctx.info["client"] + ', user '+ ctx.info["user"] +')');
                 }
 
-                function handleUnsubscribe(ctx) {
-                    drawText('Unsubscribed from channel ' + ctx.channel);
+                function handleUnsubscribed(ctx) {
+                    drawText('Unsubscribed from channel ' + ctx.channel + ', reason: ' + ctx.reason);
                 }
 
-                function handleFail(ctx) {
-                    drawText('Subscription failed for channel ' + ctx.channel + ', reason: ' + ctx.reason);
-                    sub.subscribe();
+                function handleSubscribing(ctx) {
+                    drawText('Subscribing to channel ' + ctx.channel + ', reason: ' + ctx.reason);
                 }
 
                 function drawText(text) {

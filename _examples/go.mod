@@ -4,8 +4,6 @@ go 1.14
 
 replace github.com/centrifugal/centrifuge => ../
 
-replace github.com/centrifugal/protocol => ../../protocol
-
 require (
 	github.com/FZambia/tarantool v0.2.2
 	github.com/centrifugal/centrifuge v0.8.2
