@@ -73,40 +73,40 @@ func main() {
 		LogHandler: handleLog,
 	})
 
-	redisShardConfigs := []centrifuge.RedisShardConfig{
-		{Address: "localhost:6379"},
-	}
-	var redisShards []*centrifuge.RedisShard
-	for _, redisConf := range redisShardConfigs {
-		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
-		if err != nil {
-			log.Fatal(err)
-		}
-		redisShards = append(redisShards, redisShard)
-	}
-
-	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-		// Use reasonably large expiration interval for stream meta key,
-		// much bigger than maximum HistoryLifetime value in Node config.
-		// This way stream metadata will expire, in some cases you may want
-		// to prevent its expiration setting this to zero value.
-		HistoryMetaTTL: 7 * 24 * time.Hour,
-
-		// And configure a couple of shards to use.
-		Shards: redisShards,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	node.SetBroker(broker)
-
-	presenceManager, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
-		Shards: redisShards,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	node.SetPresenceManager(presenceManager)
+	//redisShardConfigs := []centrifuge.RedisShardConfig{
+	//	{Address: "localhost:6379"},
+	//}
+	//var redisShards []*centrifuge.RedisShard
+	//for _, redisConf := range redisShardConfigs {
+	//	redisShard, err := centrifuge.NewRedisShard(node, redisConf)
+	//	if err != nil {
+	//		log.Fatal(err)
+	//	}
+	//	redisShards = append(redisShards, redisShard)
+	//}
+	//
+	//broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
+	//	// Use reasonably large expiration interval for stream meta key,
+	//	// much bigger than maximum HistoryLifetime value in Node config.
+	//	// This way stream metadata will expire, in some cases you may want
+	//	// to prevent its expiration setting this to zero value.
+	//	HistoryMetaTTL: 7 * 24 * time.Hour,
+	//
+	//	// And configure a couple of shards to use.
+	//	Shards: redisShards,
+	//})
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//node.SetBroker(broker)
+	//
+	//presenceManager, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
+	//	Shards: redisShards,
+	//})
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//node.SetPresenceManager(presenceManager)
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
