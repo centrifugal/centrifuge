@@ -194,7 +194,7 @@ LOOP:
 	for {
 		select {
 		case data := <-transport.sink:
-			if string(data) == "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}" {
+			if string(data) == "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{\"code\":2000}}}" {
 				break LOOP
 			}
 		case <-time.After(2 * time.Second):
