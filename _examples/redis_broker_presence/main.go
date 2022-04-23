@@ -56,29 +56,11 @@ func main() {
 		LogHandler: handleLog,
 	})
 
-	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		return centrifuge.ConnectReply{
-			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				"test": {
-					Recover:   true,
-					JoinLeave: true,
-				},
-			},
-		}, nil
-	})
-
-	i := 1
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			i++
-			if i%2 == 0 {
-				// Emulate internal error, client must resubscribe successfully.
-				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorInternal)
-				return
-			}
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
@@ -158,38 +140,37 @@ func main() {
 		for {
 			_, err := node.Publish(
 				"chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(2000, time.Minute),
+				centrifuge.WithHistory(10, time.Minute),
 			)
 			if err != nil {
 				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(5000 * time.Millisecond)
 		}
 	}()
 
-	go func() {
-		// Publish channel notifications from server periodically.
-		i := 1
-		for {
-			_, err := node.Publish(
-				"test", []byte(`{"input": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(2000, time.Minute),
-			)
-			if err != nil {
-				log.Printf("error publishing to channel: %s", err)
+	// Simulate some work inside Redis.
+	for i := 0; i < 10; i++ {
+		go func(i int) {
+			for {
+				time.Sleep(time.Second)
+				_, err := node.Publish(
+					"chat:"+strconv.Itoa(i), []byte("hello"),
+					centrifuge.WithHistory(10, time.Minute),
+				)
+				if err != nil {
+					log.Println(err.Error())
+				}
+				_, err = node.History("chat:" + strconv.Itoa(i))
+				if err != nil {
+					log.Println(err.Error())
+				}
 			}
-			i++
-			time.Sleep(150 * time.Millisecond)
-		}
-	}()
+		}(i)
+	}
 
-	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		ProtocolVersion: centrifuge.ProtocolVersion2,
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	})))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

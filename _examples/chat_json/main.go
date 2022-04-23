@@ -226,7 +226,6 @@ func main() {
 	}()
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		ProtocolVersion:    centrifuge.ProtocolVersion2,
 		ReadBufferSize:     1024,
 		UseWriteBufferPool: true,
 	})
