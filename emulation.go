@@ -3,15 +3,22 @@ package centrifuge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
 	"github.com/centrifugal/protocol"
 )
 
+// EmulationConfig is a config for EmulationHandler.
+// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type EmulationConfig struct{}
 
-// EmulationHandler ...
+// EmulationHandler allows receiving client protocol commands from client and proxy
+// them to the right node (where client session lives). This makes it possible to use
+// unidirectional transports for server-to-clients data flow but still emulate
+// bidirectional connection - thanks to this handler. Redirection to the correct node
+// works over Survey.
 // EXPERIMENTAL, this is still a subject to change, do not use in production.
 type EmulationHandler struct {
 	node     *Node
@@ -55,7 +62,11 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	err = s.emuLayer.Emulate(&req)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelError, "error processing emulation request", map[string]interface{}{"req": &req, "error": err.Error()}))
-		rw.WriteHeader(http.StatusInternalServerError)
+		if err == errNodeNotFound {
+			rw.WriteHeader(http.StatusNotFound)
+		} else {
+			rw.WriteHeader(http.StatusInternalServerError)
+		}
 		return
 	}
 	rw.WriteHeader(http.StatusNoContent)
@@ -75,7 +86,13 @@ func (l *emulationLayer) Emulate(req *protocol.EmulationRequest) error {
 
 const emulationOp = "centrifuge_emulation"
 
+var errNodeNotFound = errors.New("node not found")
+
 func (n *Node) sendEmulation(req *protocol.EmulationRequest) error {
+	_, ok := n.nodes.get(req.Node)
+	if !ok {
+		return errNodeNotFound
+	}
 	data, err := req.MarshalVT()
 	if err != nil {
 		return err

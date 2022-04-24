@@ -29,6 +29,7 @@ var (
 	replyErrorCount        *prometheus.CounterVec
 	serverDisconnectCount  *prometheus.CounterVec
 	commandDurationSummary *prometheus.SummaryVec
+	surveyDurationSummary  *prometheus.SummaryVec
 	recoverCount           *prometheus.CounterVec
 	transportConnectCount  *prometheus.CounterVec
 	transportMessagesSent  *prometheus.CounterVec
@@ -390,6 +391,14 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Number of channels with one or more subscribers.",
 	})
 
+	surveyDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace:  metricsNamespace,
+		Subsystem:  "node",
+		Name:       "survey_duration_seconds",
+		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
+		Help:       "Survey duration summary.",
+	}, []string{"op"})
+
 	replyErrorCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
@@ -409,7 +418,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Subsystem:  "client",
 		Name:       "command_duration_seconds",
 		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-		Help:       "clientID command duration summary.",
+		Help:       "Client command duration summary.",
 	}, []string{"method"})
 
 	recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -534,6 +543,8 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	if err := registry.Register(buildInfoGauge); err != nil {
 		return err
 	}
-
+	if err := registry.Register(surveyDurationSummary); err != nil {
+		return err
+	}
 	return nil
 }

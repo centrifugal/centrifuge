@@ -118,7 +118,11 @@ func New(c Config) (*Node, error) {
 		c.ChannelMaxLength = 255
 	}
 
-	uid := uuid.Must(uuid.NewRandom()).String()
+	uidObj, err := uuid.NewRandom()
+	if err != nil {
+		return nil, err
+	}
+	uid := uidObj.String()
 
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)
 	for i := 0; i < numSubLocks; i++ {
@@ -458,12 +462,17 @@ const defaultSurveyTimeout = 10 * time.Second
 // If toNodeID is not an empty string then a survey will be sent only to the concrete node in
 // a cluster, otherwise a survey sent to all running nodes. See a corresponding Node.OnSurvey
 // method to handle received surveys.
+// Survey ops starting with `centrifuge_` are reserved by Centrifuge library.
 func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID string) (map[string]SurveyResult, error) {
 	if n.surveyHandler == nil && op != emulationOp {
 		return nil, errSurveyHandlerNotRegistered
 	}
 
 	incActionCount("survey")
+	started := time.Now()
+	defer func() {
+		surveyDurationSummary.WithLabelValues(op).Observe(time.Since(started).Seconds())
+	}()
 
 	if _, ok := ctx.Deadline(); !ok {
 		// If no timeout provided then fallback to defaultSurveyTimeout to avoid endless surveys.
@@ -1409,11 +1418,11 @@ func (r *nodeRegistry) list() []*controlpb.Node {
 	return nodes
 }
 
-func (r *nodeRegistry) get(uid string) *controlpb.Node {
+func (r *nodeRegistry) get(uid string) (*controlpb.Node, bool) {
 	r.mu.RLock()
-	info := r.nodes[uid]
+	info, ok := r.nodes[uid]
 	r.mu.RUnlock()
-	return info
+	return info, ok
 }
 
 func (r *nodeRegistry) add(info *controlpb.Node) bool {
