@@ -1,3 +1,8 @@
+v0.14.3
+=======
+
+* Fix panic on subscription PUB/SUB sync [#229](https://github.com/centrifugal/centrifuge/pull/229)
+
 v0.14.2
 =======
 
