@@ -1,6 +1,6 @@
 module github.com/centrifugal/centrifuge/_examples
 
-go 1.14
+go 1.16
 
 replace github.com/centrifugal/centrifuge => ../
 
@@ -18,15 +18,12 @@ require (
 	github.com/gorilla/mux v1.7.4
 	github.com/gorilla/sessions v1.2.0
 	github.com/gorilla/websocket v1.5.0
-	github.com/klauspost/compress v1.14.2 // indirect
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
-	github.com/minio/highwayhash v1.0.2 // indirect
-	github.com/nats-io/nats-server/v2 v2.7.2 // indirect
-	github.com/nats-io/nats.go v1.13.1-0.20220121202836-972a071d373d
+	github.com/nats-io/nats-server/v2 v2.8.1 // indirect
+	github.com/nats-io/nats.go v1.14.0
 	github.com/prometheus/client_golang v1.12.1
 	github.com/stretchr/testify v1.7.0
 	github.com/vmihailenco/msgpack/v5 v5.3.1
-	golang.org/x/crypto v0.0.0-20220210151621-f4118a5b28e2 // indirect
 	golang.org/x/oauth2 v0.0.0-20220223155221-ee480838109b
 	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
 	google.golang.org/grpc v1.36.0
