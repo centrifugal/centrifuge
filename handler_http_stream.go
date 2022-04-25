@@ -57,14 +57,14 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var cmd *protocol.Command
 	if r.Method == http.MethodPost {
-		maxBytesSize := int64(h.config.MaxRequestBodySize)
+		maxBytesSize := h.config.MaxRequestBodySize
 		if maxBytesSize == 0 {
 			maxBytesSize = 64 * 1024
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxBytesSize)
+		r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytesSize))
 		connectRequestData, err := io.ReadAll(r.Body)
 		if err != nil {
-			if len(connectRequestData) >= int(maxBytesSize) {
+			if len(connectRequestData) >= maxBytesSize {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}

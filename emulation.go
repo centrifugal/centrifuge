@@ -12,7 +12,10 @@ import (
 
 // EmulationConfig is a config for EmulationHandler.
 // EXPERIMENTAL, this is still a subject to change, do not use in production.
-type EmulationConfig struct{}
+type EmulationConfig struct {
+	// MaxRequestBodySize limits request body size (in bytes). By default we accept 64kb max.
+	MaxRequestBodySize int
+}
 
 // EmulationHandler allows receiving client protocol commands from client and proxy
 // them to the right node (where client session lives). This makes it possible to use
@@ -42,12 +45,24 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 		return
 	}
+
+	maxBytesSize := s.config.MaxRequestBodySize
+	if maxBytesSize == 0 {
+		maxBytesSize = 64 * 1024
+	}
+	r.Body = http.MaxBytesReader(rw, r.Body, int64(maxBytesSize))
+
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
+		if len(data) >= maxBytesSize {
+			rw.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
 		s.node.logger.log(newLogEntry(LogLevelError, "can't read emulation request body", map[string]interface{}{"error": err.Error()}))
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
 	var req protocol.EmulationRequest
 	if r.Header.Get("Content-Type") == "application/octet-stream" {
 		err = req.UnmarshalVT(data)
@@ -59,6 +74,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusBadRequest)
 		return
 	}
+
 	err = s.emuLayer.Emulate(&req)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelError, "error processing emulation request", map[string]interface{}{"req": &req, "error": err.Error()}))
