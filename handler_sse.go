@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -52,31 +53,36 @@ const connectUrlParam = "cf_connect"
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportSSE)
 
+	var connectRequestData []byte
 	var cmd *protocol.Command
-
 	if r.Method == http.MethodGet {
 		connectRequestString := r.URL.Query().Get(connectUrlParam)
 		if connectRequestString != "" {
 			var err error
-			cmd, err = protocol.NewJSONCommandDecoder([]byte(connectRequestString)).Decode()
+			connectRequestData = []byte(connectRequestString)
+			cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
 			if err != nil && err != io.EOF {
 				h.node.Log(NewLogEntry(LogLevelInfo, "malformed connect request", map[string]interface{}{"error": err.Error()}))
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
 		} else {
 			h.node.Log(NewLogEntry(LogLevelDebug, "no connect command", map[string]interface{}{}))
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 	} else if r.Method == http.MethodPost {
 		maxBytesSize := int64(h.config.MaxRequestBodySize)
 		r.Body = http.MaxBytesReader(w, r.Body, maxBytesSize)
-		connectRequestData, err := io.ReadAll(r.Body)
+		var err error
+		connectRequestData, err = io.ReadAll(r.Body)
 		if err != nil {
 			if len(connectRequestData) >= int(maxBytesSize) {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
 			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
@@ -84,6 +90,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if h.node.LogEnabled(LogLevelDebug) {
 				h.node.Log(NewLogEntry(LogLevelDebug, "malformed connect request", map[string]interface{}{"error": err.Error()}))
 			}
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 	} else {
@@ -147,6 +154,9 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
+	if h.node.LogEnabled(LogLevelTrace) {
+		h.node.logger.log(newLogEntry(LogLevelTrace, "<--", map[string]interface{}{"client": c.ID(), "user": "", "data": fmt.Sprintf("%#v", string(connectRequestData))}))
+	}
 	_ = c.handleCommand(cmd)
 
 	for {

@@ -385,15 +385,6 @@ func (c *Client) Connect(req ConnectRequest) {
 	}
 }
 
-// BidirectionalConnect ...
-func (c *Client) BidirectionalConnect(req *protocol.ConnectRequest) {
-	err := c.unidirectionalConnect(req)
-	if err != nil {
-		d := extractUnidirectionalDisconnect(err)
-		go func() { _ = c.close(d) }()
-	}
-}
-
 func (c *Client) getDisconnectPushReply(d *Disconnect) ([]byte, error) {
 	disconnect := &protocol.Disconnect{
 		Code:   d.Code,

@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -55,6 +56,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	protocolType := ProtocolTypeJSON
 
+	var connectRequestData []byte
 	var cmd *protocol.Command
 	if r.Method == http.MethodPost {
 		maxBytesSize := h.config.MaxRequestBodySize
@@ -62,13 +64,15 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			maxBytesSize = 64 * 1024
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytesSize))
-		connectRequestData, err := io.ReadAll(r.Body)
+		var err error
+		connectRequestData, err = io.ReadAll(r.Body)
 		if err != nil {
+			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
 			if len(connectRequestData) >= maxBytesSize {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
-			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		if r.Header.Get("Content-Type") == "application/octet-stream" {
@@ -81,6 +85,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if h.node.LogEnabled(LogLevelDebug) {
 				h.node.Log(NewLogEntry(LogLevelDebug, "malformed connect request", map[string]interface{}{"error": err.Error()}))
 			}
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 	} else {
@@ -142,7 +147,9 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: make sure it is ok to call handleCommand from the outside of the client.
+	if h.node.LogEnabled(LogLevelTrace) {
+		h.node.logger.log(newLogEntry(LogLevelTrace, "<--", map[string]interface{}{"client": c.ID(), "user": "", "data": fmt.Sprintf("%#v", string(connectRequestData))}))
+	}
 	_ = c.handleCommand(cmd)
 
 	for {
