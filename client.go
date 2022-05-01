@@ -1619,9 +1619,11 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	}
 
 	event := SubscribeEvent{
-		Channel: req.Channel,
-		Token:   req.Token,
-		Data:    req.Data,
+		Channel:     req.Channel,
+		Token:       req.Token,
+		Data:        req.Data,
+		Positioned:  req.Positioned,
+		Recoverable: req.Recoverable,
 	}
 
 	cb := func(reply SubscribeReply, err error) {

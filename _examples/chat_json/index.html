@@ -83,7 +83,7 @@
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                const sub = centrifuge.subscribe(channel, handleMessage)
+                const sub = centrifuge.subscribe(channel, handlePublication)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
                         .on("unsubscribe", handleUnsubscribe)
@@ -117,7 +117,7 @@
                     drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
                 }
 
-                function handleMessage(message) {
+                function handlePublication(message) {
                     let clientID;
                     if (message.info){
                         clientID = message.info.client;

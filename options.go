@@ -34,21 +34,23 @@ type SubscribeOptions struct {
 	ExpireAt int64
 	// ChannelInfo defines custom channel information, zero value means no channel information.
 	ChannelInfo []byte
-	// Presence turns on participating in channel presence.
+	// Presence turns on participating in channel presence - i.e. client subscription
+	// will be visible in a current channel presence.
 	Presence bool
 	// JoinLeave enables sending Join and Leave messages for this client in channel.
 	JoinLeave bool
 	// When position is on client will additionally sync its position inside
-	// a stream to prevent message loss. Make sure you are enabling Position in channels
+	// a stream to prevent message loss. The loss can happen due to at most once
+	// guarantees of PUB/SUB model. Make sure you are enabling Position in channels
 	// that maintain Publication history stream. When Position is on Centrifuge will
-	// include StreamPosition information to subscribe response - for a client to be able
-	// to manually track its position inside a stream.
+	// include StreamPosition information to subscribe response - for a client to be
+	// able to manually track its position inside a stream.
 	Position bool
-	// Recover turns on recovery option for a channel. In this case client will try to
-	// recover missed messages automatically upon resubscribe to a channel after reconnect
-	// to a server. This option also enables client position tracking inside a stream
-	// (like Position option) to prevent occasional message loss. Make sure you are using
-	// Recover in channels that maintain Publication history stream.
+	// Recover turns on automatic recovery for a channel. In this case client will try to
+	// recover missed messages upon resubscribe to a channel after reconnect to a server.
+	// This option also enables client position tracking inside a stream (i.e. enabling
+	// Recover will automatically enable Position option) to prevent occasional message loss.
+	// Make sure you are using Recover in channels that maintain Publication history stream.
 	Recover bool
 	// Data to send to a client with Subscribe Push.
 	Data []byte
