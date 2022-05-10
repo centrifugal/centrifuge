@@ -3146,13 +3146,13 @@ func TestClientCheckPosition(t *testing.T) {
 	require.True(t, got)
 
 	// not initial, not time to check.
-	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagRecover})
+	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPosition})
 	require.True(t, got)
 
 	// invalid position.
-	client.channels["channel"] = channelContext{positionCheckFailures: 2, flags: flagRecover}
+	client.channels["channel"] = channelContext{positionCheckFailures: 2, flags: flagPosition}
 	got = client.checkPosition(50*time.Second, "channel", channelContext{
-		positionCheckTime: 50, flags: flagRecover,
+		positionCheckTime: 50, flags: flagPosition,
 	})
 	require.False(t, got)
 	require.Contains(t, client.channels, "channel")
@@ -3163,7 +3163,7 @@ func TestClientCheckPosition(t *testing.T) {
 	require.NotZero(t, client.channels["channel"].positionCheckFailures)
 	sp, _ := node.streamTop("channel")
 	got = client.checkPosition(50*time.Second, "channel", channelContext{
-		positionCheckTime: 50, flags: flagRecover, streamPosition: sp,
+		positionCheckTime: 50, flags: flagPosition, streamPosition: sp,
 	})
 	require.True(t, got)
 	require.Zero(t, client.channels["channel"].positionCheckFailures)
@@ -3518,7 +3518,7 @@ func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
 
 	<-startPublishingCh
 	close(stopPublishingCh)
-	client.Disconnect(DisconnectNormal)
+	client.Disconnect(nil)
 	<-disconnectedCh
 	require.Len(t, node.Hub().Channels(), 0, node.Hub().Channels())
 }
@@ -3598,7 +3598,7 @@ func TestClientV1ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
-	data, err = clientV1.getUnsubscribePushReply("test", uint32(UnsubscribeCodeServer))
+	data, err = clientV1.getUnsubscribePushReply("test", Unsubscribe{Code: UnsubscribeCodeServer, Reason: unsubscribeReason(UnsubscribeCodeServer)})
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
@@ -3668,7 +3668,7 @@ func TestClientV2ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Refresh)
 
-	data, err = clientV2.getUnsubscribePushReply("test", uint32(UnsubscribeCodeServer))
+	data, err = clientV2.getUnsubscribePushReply("test", Unsubscribe{Code: UnsubscribeCodeServer, Reason: unsubscribeReason(UnsubscribeCodeServer)})
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Unsubscribe)
 

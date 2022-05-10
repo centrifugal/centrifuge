@@ -6,7 +6,8 @@ type Unsubscribe struct {
 	// UnsubscribeCodeServer, UnsubscribeCodeInsufficient. In theory, we can also
 	// allow applications to set their custom unsubscribe codes in the future.
 	Code uint32 `json:"code"`
-	// Reason is a short description of unsubscribe code for humans.
+	// Reason is a short description of unsubscribe code for humans. Suitable for
+	// logs for better connection behavior observability.
 	Reason string `json:"reason,omitempty"`
 }
 

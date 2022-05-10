@@ -273,7 +273,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 	_ = w.close()
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
-	require.Equal(t, DisconnectNormal, disconnect)
+	require.Equal(t, DisconnectConnectionClosed, disconnect)
 }
 
 func TestWriterWriteError(t *testing.T) {
