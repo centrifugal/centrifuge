@@ -95,9 +95,9 @@ func (d *Disconnect) CloseText(protoVersion ProtocolVersion) string {
 // Some predefined non-terminal disconnect structures used by
 // the library internally.
 var (
-	// DisconnectNormal is clean disconnect when client cleanly disconnected or
-	// connection lost due to client not responding to ping from a server. Both
-	// scenarios are considered normal.
+	// DisconnectNormal is a disconnect caused by client disconnection which was
+	// not forced by a server. This can be a clean disconnect, or temporary disconnect
+	// due to internet connection loss.
 	DisconnectNormal = &Disconnect{
 		Code:      3000,
 		Reason:    "normal",

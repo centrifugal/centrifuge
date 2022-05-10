@@ -171,7 +171,7 @@ func main() {
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
-			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
+			log.Printf("user %s unsubscribed from %s (%s)", client.UserID(), e.Channel, e.Reason)
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
@@ -237,7 +237,7 @@ func main() {
 				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
-			time.Sleep(1000 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 		}
 	}()
 

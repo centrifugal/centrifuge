@@ -97,37 +97,23 @@ type RefreshHandler func(RefreshEvent, RefreshCallback)
 // callback will run every ClientPresenceUpdateInterval and can save you a timer.
 type AliveHandler func()
 
-// UnsubscribeCode describes the reason why client unsubscribed from a channel.
-type UnsubscribeCode uint32
-
-// Known unsubscribe codes. Codes sent to client connection must be kept
-// in range [2000, 2999]. Unsubscribe codes >= 2500 coming from server to client
-// result into resubscribe attempt.
-const (
-	// UnsubscribeCodeClient set when unsubscribe event was initiated
-	// by an explicit client-side unsubscribe call.
-	UnsubscribeCodeClient UnsubscribeCode = 0
-	// UnsubscribeCodeDisconnect set when unsubscribe event was initiated
-	// by a disconnect process.
-	UnsubscribeCodeDisconnect UnsubscribeCode = 1
-	// UnsubscribeCodeServer set when unsubscribe event was initiated
-	// by an explicit server-side unsubscribe call.
-	UnsubscribeCodeServer UnsubscribeCode = 2000
-	// UnsubscribeCodeInsufficient set when client unsubscribed from
-	// a channel due to insufficient state in a stream. We expect client to
-	// resubscribe after receiving this since it's still may be possible to
-	// recover state.
-	UnsubscribeCodeInsufficient UnsubscribeCode = 2500
-)
-
 // UnsubscribeEvent contains fields related to unsubscribe event.
 type UnsubscribeEvent struct {
 	// Channel client unsubscribed from.
 	Channel string
 	// ServerSide set to true for server-side subscription unsubscribe events.
 	ServerSide bool
-	// Code can help to determine the source of UnsubscribeEvent.
-	Code UnsubscribeCode
+
+	// Code identifies the source of unsubscribe (i.e. why unsubscribed event happened).
+	// Several unsubscribe codes already used by a library, see for example UnsubscribeCodeClient,
+	// UnsubscribeCodeDisconnect, UnsubscribeCodeServer, UnsubscribeCodeInsufficient.
+	// In theory, we can also allow applications to set their custom unsubscribe
+	// codes in the future.
+	Code uint32
+	// Reason is a short human-readable description of unsubscribe code, suitable for
+	// logs and debugging.
+	Reason string
+
 	// Disconnect can be additionally set when UnsubscribeEvent.Code is UnsubscribeCodeDisconnect.
 	// If connection close was initiated by a server it will contain Disconnect object,
 	// if client connection lost or closed normally from a client side Disconnect is nil.
@@ -141,8 +127,8 @@ type UnsubscribeHandler func(UnsubscribeEvent)
 type DisconnectEvent struct {
 	// Disconnect can optionally contain a Disconnect object that was sent from
 	// a server to a client with closing handshake. If this field exists then client
-	// connection was closed by a server. This field is nil then client disconnected
-	// normally from the client-side or connection with a client has been lost.
+	// connection closing was initiated by a server. If this field is nil then client
+	// disconnection was not initiated by a server.
 	Disconnect *Disconnect
 }
 
