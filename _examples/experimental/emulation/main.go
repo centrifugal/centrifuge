@@ -220,7 +220,7 @@ func main() {
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
-			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+			log.Printf("user %s disconnected (%s)", client.UserID(), e.Reason)
 		})
 	})
 

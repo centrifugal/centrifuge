@@ -103,20 +103,11 @@ type UnsubscribeEvent struct {
 	Channel string
 	// ServerSide set to true for server-side subscription unsubscribe events.
 	ServerSide bool
-
-	// Code identifies the source of unsubscribe (i.e. why unsubscribed event happened).
-	// Several unsubscribe codes already used by a library, see for example UnsubscribeCodeClient,
-	// UnsubscribeCodeDisconnect, UnsubscribeCodeServer, UnsubscribeCodeInsufficient.
-	// In theory, we can also allow applications to set their custom unsubscribe
-	// codes in the future.
-	Code uint32
-	// Reason is a short human-readable description of unsubscribe code, suitable for
-	// logs and debugging.
-	Reason string
-
-	// Disconnect can be additionally set when UnsubscribeEvent.Code is UnsubscribeCodeDisconnect.
-	// If connection close was initiated by a server it will contain Disconnect object,
-	// if client connection lost or closed normally from a client side Disconnect is nil.
+	// Unsubscribe identifies the source of unsubscribe (i.e. why unsubscribed event happened).
+	Unsubscribe
+	// Disconnect can be additionally set to identify the reason of disconnect when Unsubscribe.Code
+	// is UnsubscribeCodeDisconnect - i.e. when unsubscribe caused by a client disconnection process.
+	// Otherwise, it's nil.
 	Disconnect *Disconnect
 }
 
@@ -125,11 +116,10 @@ type UnsubscribeHandler func(UnsubscribeEvent)
 
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
-	// Disconnect can optionally contain a Disconnect object that was sent from
-	// a server to a client with closing handshake. If this field exists then client
-	// connection closing was initiated by a server. If this field is nil then client
-	// disconnection was not initiated by a server.
-	Disconnect *Disconnect
+	// Disconnect contains a Disconnect object which identifies the code and reason
+	// of disconnect process. When disconnect was not initiated by a server this
+	// is always DisconnectConnectionClosed.
+	*Disconnect
 }
 
 // DisconnectHandler called when client disconnects from server. The important

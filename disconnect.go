@@ -92,17 +92,19 @@ func (d *Disconnect) CloseText(protoVersion ProtocolVersion) string {
 	return d.cachedCloseText
 }
 
+// DisconnectConnectionClosed is a special Disconnect object used when
+// client connection was closed without any advice from a server side.
+// This can be a clean disconnect, or temporary disconnect of the client
+// due to internet connection loss. Server can not distinguish the actual
+// reason of disconnect.
+var DisconnectConnectionClosed = &Disconnect{
+	Code:   3000,
+	Reason: "connection closed",
+}
+
 // Some predefined non-terminal disconnect structures used by
 // the library internally.
 var (
-	// DisconnectNormal is a disconnect caused by client disconnection which was
-	// not forced by a server. This can be a clean disconnect, or temporary disconnect
-	// due to internet connection loss.
-	DisconnectNormal = &Disconnect{
-		Code:      3000,
-		Reason:    "normal",
-		Reconnect: true,
-	}
 	// DisconnectShutdown issued when node is going to shut down.
 	DisconnectShutdown = &Disconnect{
 		Code:      3001,

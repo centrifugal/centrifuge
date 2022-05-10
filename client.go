@@ -344,7 +344,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		client.timer = time.AfterFunc(staleCloseDelay, client.onTimerOp)
 		client.mu.Unlock()
 	}
-	return client, func() error { return client.close(nil) }, nil
+	return client, func() error { return client.close(DisconnectConnectionClosed) }, nil
 }
 
 func extractUnidirectionalDisconnect(err error) *Disconnect {
@@ -836,7 +836,7 @@ func (c *Client) Unsubscribe(ch string) error {
 	}
 	c.mu.RUnlock()
 
-	unsub := unsubscribeAdvice{
+	unsub := Unsubscribe{
 		Code:   UnsubscribeCodeServer,
 		Reason: unsubscribeReason(UnsubscribeCodeServer),
 	}
@@ -848,7 +848,7 @@ func (c *Client) Unsubscribe(ch string) error {
 	return c.sendUnsubscribe(ch, unsub)
 }
 
-func (c *Client) sendUnsubscribe(ch string, unsub unsubscribeAdvice) error {
+func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagUnsubscribe) {
 		return nil
 	}
@@ -860,7 +860,7 @@ func (c *Client) sendUnsubscribe(ch string, unsub unsubscribeAdvice) error {
 	return nil
 }
 
-func (c *Client) getUnsubscribePushReply(ch string, unsub unsubscribeAdvice) ([]byte, error) {
+func (c *Client) getUnsubscribePushReply(ch string, unsub Unsubscribe) ([]byte, error) {
 	p := &protocol.Unsubscribe{
 		Code:   unsub.Code,
 		Reason: unsub.Reason,
@@ -881,13 +881,18 @@ func (c *Client) getUnsubscribePushReply(ch string, unsub unsubscribeAdvice) ([]
 }
 
 // Disconnect client connection with specific disconnect code and reason.
-// This method internally creates a new goroutine at moment to do
+// If nil is passed then DisconnectForceNoReconnect is used.
+//
+// This method internally creates a new goroutine at the moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
 // and alive callback ordering/sync problems. Will be a noop if client
 // already closed. As this method runs a separate goroutine client
 // connection will be closed eventually (i.e. not immediately).
 func (c *Client) Disconnect(disconnect *Disconnect) {
 	go func() {
+		if disconnect == nil {
+			disconnect = DisconnectForceNoReconnect
+		}
 		_ = c.close(disconnect)
 	}()
 }
@@ -915,7 +920,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 	if len(channels) > 0 {
 		// Unsubscribe from all channels.
-		unsub := unsubscribeAdvice{
+		unsub := Unsubscribe{
 			Code:   UnsubscribeCodeDisconnect,
 			Reason: unsubscribeReason(UnsubscribeCodeDisconnect),
 		}
@@ -956,6 +961,9 @@ func (c *Client) close(disconnect *Disconnect) error {
 		incServerDisconnect(disconnect.Code)
 	}
 	if c.eventHub.disconnectHandler != nil && prevStatus == statusConnected {
+		if disconnect == nil {
+			disconnect = DisconnectConnectionClosed
+		}
 		c.eventHub.disconnectHandler(DisconnectEvent{
 			Disconnect: disconnect,
 		})
@@ -1059,7 +1067,7 @@ func (c *Client) handleCommand(cmd *protocol.Command) bool {
 	default:
 	}
 	if disconnect != nil {
-		if disconnect != DisconnectNormal {
+		if disconnect != DisconnectConnectionClosed {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 		}
 		go func() { _ = c.close(disconnect) }()
@@ -1777,7 +1785,7 @@ func (c *Client) handleUnsubscribe(req *protocol.UnsubscribeRequest, cmd *protoc
 		return c.logDisconnectBadRequest("channel required for unsubscribe")
 	}
 
-	unsub := unsubscribeAdvice{
+	unsub := Unsubscribe{
 		Code:   UnsubscribeCodeClient,
 		Reason: unsubscribeReason(UnsubscribeCodeClient),
 	}
@@ -2215,7 +2223,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.RUnlock()
 
 	if closed {
-		return nil, DisconnectNormal
+		return nil, DisconnectConnectionClosed
 	}
 
 	if authenticated {
@@ -2312,7 +2320,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.Unlock()
 
 	if closed {
-		return nil, DisconnectNormal
+		return nil, DisconnectConnectionClosed
 	}
 
 	if c.node.LogEnabled(LogLevelDebug) {
@@ -2932,7 +2940,7 @@ func (c *Client) handleInsufficientStateDisconnect() {
 }
 
 func (c *Client) handleInsufficientStateUnsubscribe(ch string) {
-	unsub := unsubscribeAdvice{
+	unsub := Unsubscribe{
 		Code:   UnsubscribeCodeInsufficient,
 		Reason: unsubscribeReason(UnsubscribeCodeInsufficient),
 	}
@@ -3025,7 +3033,7 @@ func (c *Client) writeLeave(_ string, data []byte) error {
 }
 
 // Lock must be held outside.
-func (c *Client) unsubscribe(channel string, unsubscribe unsubscribeAdvice, disconnect *Disconnect) error {
+func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect *Disconnect) error {
 	c.mu.RLock()
 	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]
@@ -3059,11 +3067,10 @@ func (c *Client) unsubscribe(channel string, unsubscribe unsubscribeAdvice, disc
 	if channelHasFlag(chCtx.flags, flagSubscribed) {
 		if c.eventHub.unsubscribeHandler != nil {
 			c.eventHub.unsubscribeHandler(UnsubscribeEvent{
-				Channel:    channel,
-				ServerSide: serverSide,
-				Code:       unsubscribe.Code,
-				Reason:     unsubscribe.Reason,
-				Disconnect: disconnect,
+				Channel:     channel,
+				ServerSide:  serverSide,
+				Unsubscribe: unsubscribe,
+				Disconnect:  disconnect,
 			})
 		}
 	}

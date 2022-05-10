@@ -1,7 +1,10 @@
 package centrifuge
 
-type unsubscribeAdvice struct {
-	// Code is unsubscribe code.
+type Unsubscribe struct {
+	// Code is unsubscribe code. Several unsubscribe codes already used by
+	// a library, see for example UnsubscribeCodeClient, UnsubscribeCodeDisconnect,
+	// UnsubscribeCodeServer, UnsubscribeCodeInsufficient. In theory, we can also
+	// allow applications to set their custom unsubscribe codes in the future.
 	Code uint32 `json:"code"`
 	// Reason is a short description of unsubscribe code for humans.
 	Reason string `json:"reason,omitempty"`

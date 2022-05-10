@@ -367,7 +367,7 @@ func (t *sockjsTransport) Close(disconnect *Disconnect) error {
 	t.mu.Unlock()
 
 	if disconnect == nil {
-		disconnect = DisconnectNormal
+		disconnect = DisconnectConnectionClosed
 	}
 	return t.session.Close(disconnect.Code, disconnect.CloseText(t.ProtocolVersion()))
 }
