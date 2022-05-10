@@ -63,7 +63,7 @@
                 });
 
                 centrifuge.on('subscribed', function(ctx) {
-                    drawText('Subscribed to server-side channel ' + ctx.channel);
+                    drawText('Subscribed to server-side channel ' + ctx.channel +  ' (ctx: ' + JSON.stringify(ctx) + ')');
                 });
 
                 centrifuge.on('subscribing', function(ctx) {
