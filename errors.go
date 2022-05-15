@@ -9,6 +9,9 @@ import (
 var _ error = (*Error)(nil)
 
 // Error represents client reply error.
+// Library user can define own application specific errors. When defining new
+// custom errors use error codes in range [400, 1999] assuming that codes in
+// interval 0-399 are reserved by Centrifuge.
 type Error struct {
 	Code      uint32
 	Message   string
@@ -27,11 +30,7 @@ func (e Error) Error() string {
 	return fmt.Sprintf("%d: %s", e.Code, e.Message)
 }
 
-// Here we define well-known errors that can be used in client protocol
-// replies.
-// Library user can define own application specific errors. When defining new
-// custom errors use error codes in range [400, 1999] assuming that
-// codes in interval 0-399 reserved by Centrifuge.
+// Here we define well-known errors that can be used in client protocol replies.
 var (
 	// ErrorInternal means server error, if returned this is a signal
 	// that something went wrong with server itself and client most probably
@@ -109,11 +108,5 @@ var (
 	ErrorUnrecoverablePosition = &Error{
 		Code:    112,
 		Message: "unrecoverable position",
-	}
-	// ErrorTokenRevoked indicates that connection or subscription token was revoked (invalidated).
-	// In this case client should drop the current token and try to ask a new one.
-	ErrorTokenRevoked = &Error{
-		Code:    113,
-		Message: "token revoked",
 	}
 )
