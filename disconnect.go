@@ -40,10 +40,6 @@ type Disconnect struct {
 	// Reconnect is only used for compatibility with ProtocolVersion1.
 	// Ignore this field if all your clients are using ProtocolVersion2.
 	Reconnect bool `json:"reconnect"`
-
-	// These fields required for ProtocolVersion1 compatibility.
-	closeTextOnce   sync.Once
-	cachedCloseText string
 }
 
 // Make sure Disconnect implements error interface.
@@ -66,6 +62,14 @@ func (d *Disconnect) isReconnect(protoVersion ProtocolVersion) bool {
 	return d.Code < 3500 || d.Code >= 5000 || (d.Code >= 4000 && d.Code < 4500)
 }
 
+// This is a temporary close text cache for ProtocolVersion1 compatibility.
+var closeTextCacheMu sync.RWMutex
+var closeTextCache map[uint32]string
+
+func init() {
+	closeTextCache = map[uint32]string{}
+}
+
 // CloseText allows building disconnect advice sent inside Close frame.
 // At moment, we don't encode Code here to not duplicate information
 // since it is sent separately as Code of WebSocket/SockJS Close Frame.
@@ -73,8 +77,10 @@ func (d *Disconnect) CloseText(protoVersion ProtocolVersion) string {
 	if protoVersion >= ProtocolVersion2 {
 		return d.Reason
 	}
-	// ProtocolVersion1 requires JSON with reconnect advice in reason text.
-	d.closeTextOnce.Do(func() {
+	closeTextCacheMu.RLock()
+	closeText, ok := closeTextCache[d.Code]
+	closeTextCacheMu.RUnlock()
+	if !ok {
 		buf := strings.Builder{}
 		buf.WriteString(`{"reason":`)
 		reason, _ := json.Marshal(d.Reason)
@@ -87,9 +93,12 @@ func (d *Disconnect) CloseText(protoVersion ProtocolVersion) string {
 			buf.WriteString("false")
 		}
 		buf.WriteString(`}`)
-		d.cachedCloseText = buf.String()
-	})
-	return d.cachedCloseText
+		closeText = buf.String()
+		closeTextCacheMu.Lock()
+		closeTextCache[d.Code] = closeText
+		closeTextCacheMu.Unlock()
+	}
+	return closeText
 }
 
 // DisconnectConnectionClosed is a special Disconnect object used when
@@ -120,7 +129,7 @@ var (
 	// DisconnectExpired issued when client connection expired.
 	DisconnectExpired = &Disconnect{
 		Code:      3005,
-		Reason:    "expired",
+		Reason:    "connection expired",
 		Reconnect: true,
 	}
 	// DisconnectSubExpired issued when client subscription expired.

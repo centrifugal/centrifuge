@@ -34,6 +34,10 @@ var (
 		Code:   UnsubscribeCodeInsufficient,
 		Reason: "insufficient state",
 	}
+	unsubscribeExpired = Unsubscribe{
+		Code:   UnsubscribeCodeExpired,
+		Reason: "subscription expired",
+	}
 )
 
 // Known unsubscribe codes.
@@ -54,4 +58,6 @@ const (
 	// resubscribe after receiving this since it's still may be possible to
 	// recover a state since known StreamPosition.
 	UnsubscribeCodeInsufficient uint32 = 2500
+	// UnsubscribeCodeExpired set when client subscription expired.
+	UnsubscribeCodeExpired uint32 = 2501
 )

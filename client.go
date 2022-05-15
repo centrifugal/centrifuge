@@ -119,13 +119,6 @@ func (c *Client) OnHistory(h HistoryHandler) {
 	c.eventHub.historyHandler = h
 }
 
-// We poll current position in channel from history storage periodically.
-// If client position is wrong maxCheckPositionFailures times in a row
-// then client will be disconnected/unsubscribed with InsufficientState reason.
-// Polling not used in channels with high frequency updates since we can check
-// position comparing client offset with offset in incoming Publication.
-const maxCheckPositionFailures uint8 = 2
-
 const (
 	// flagSubscribed will be set upon successful Subscription to a channel.
 	// Until that moment channel exists in client Channels map only to track
@@ -656,23 +649,21 @@ func (c *Client) updatePresence() {
 	}
 	for channel, channelContext := range channels {
 		c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay, func(result bool) {
-			// Ideally we should deal with single expired subscription in this
-			// case - i.e. unsubscribe client from channel and give advice
-			// to resubscribe. But there is scenario when browser goes online
-			// after computer was in sleeping mode which I have not managed to
-			// handle reliably on client side when unsubscribe with resubscribe
-			// flag was used. So I decided to stick with disconnect for now -
-			// it seems to work fine and drastically simplifies client code.
 			if !result {
-				go func() { _ = c.close(DisconnectSubExpired) }()
+				serverSide := channelHasFlag(channelContext.flags, flagServerSide)
+				if c.isAsyncUnsubscribe(serverSide) {
+					go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeExpired) }(channel)
+				} else {
+					go func() { _ = c.close(DisconnectSubExpired) }()
+				}
 			}
 		})
 
 		checkDelay := config.ClientChannelPositionCheckDelay
 		if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
 			serverSide := channelHasFlag(channelContext.flags, flagServerSide)
-			if c.isInsufficientStateUnsubscribe(serverSide) {
-				go func(ch string) { c.handleInsufficientStateUnsubscribe(ch) }(channel)
+			if c.isAsyncUnsubscribe(serverSide) {
+				go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeInsufficientState) }(channel)
 				continue
 			} else {
 				go func() { c.handleInsufficientStateDisconnect() }()
@@ -704,27 +695,38 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channe
 	if !needCheckPosition {
 		return true
 	}
-	position := chCtx.streamPosition
+
 	streamTop, err := c.node.streamTop(ch)
 	if err != nil {
 		return true
 	}
 
-	isValidPosition := streamTop.Offset == position.Offset && streamTop.Epoch == position.Epoch
-	keepConnection := true
+	// Load actual stream position from channel context.
 	c.mu.Lock()
-	if chContext, ok := c.channels[ch]; ok {
-		chContext.positionCheckTime = nowUnix
-		if !isValidPosition {
-			chContext.positionCheckFailures++
-			keepConnection = chContext.positionCheckFailures < maxCheckPositionFailures
-		} else {
-			chContext.positionCheckFailures = 0
-		}
-		c.channels[ch] = chContext
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		return true
 	}
+	chCtx, ok := c.channels[ch]
+	if !ok || !channelHasFlag(chCtx.flags, flagSubscribed) {
+		c.mu.Unlock()
+		return true
+	}
+	position := chCtx.streamPosition
 	c.mu.Unlock()
-	return keepConnection
+
+	isValidPosition := streamTop.Epoch == position.Epoch && position.Offset >= streamTop.Offset
+	if isValidPosition {
+		c.mu.Lock()
+		if chContext, ok := c.channels[ch]; ok {
+			chContext.positionCheckTime = nowUnix
+			c.channels[ch] = chContext
+		}
+		c.mu.Unlock()
+		return true
+	}
+
+	return false
 }
 
 // ID returns unique client connection id.
@@ -876,19 +878,23 @@ func (c *Client) getUnsubscribePushReply(ch string, unsub Unsubscribe) ([]byte, 
 }
 
 // Disconnect client connection with specific disconnect code and reason.
-// If nil is passed then DisconnectForceNoReconnect is used.
+// If zero args or nil passed then DisconnectForceNoReconnect is used.
 //
 // This method internally creates a new goroutine at the moment to do
 // closing stuff. An extra goroutine is required to solve disconnect
 // and alive callback ordering/sync problems. Will be a noop if client
 // already closed. As this method runs a separate goroutine client
 // connection will be closed eventually (i.e. not immediately).
-func (c *Client) Disconnect(disconnect *Disconnect) {
+func (c *Client) Disconnect(disconnect ...*Disconnect) {
+	if len(disconnect) > 1 {
+		panic("Client.Disconnect called with more than 1 argument")
+	}
 	go func() {
-		if disconnect == nil {
-			disconnect = DisconnectForceNoReconnect
+		if len(disconnect) == 0 || disconnect[0] == nil {
+			_ = c.close(DisconnectForceNoReconnect)
+		} else {
+			_ = c.close(disconnect[0])
 		}
-		_ = c.close(disconnect)
 	}()
 }
 
@@ -2911,14 +2917,14 @@ func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*proto
 }
 
 func (c *Client) handleInsufficientState(ch string, serverSide bool) {
-	if c.isInsufficientStateUnsubscribe(serverSide) {
-		c.handleInsufficientStateUnsubscribe(ch)
+	if c.isAsyncUnsubscribe(serverSide) {
+		c.handleAsyncUnsubscribe(ch, unsubscribeInsufficientState)
 	} else {
 		c.handleInsufficientStateDisconnect()
 	}
 }
 
-func (c *Client) isInsufficientStateUnsubscribe(serverSide bool) bool {
+func (c *Client) isAsyncUnsubscribe(serverSide bool) bool {
 	return c.transport.ProtocolVersion() > ProtocolVersion1 && !serverSide
 }
 
@@ -2926,13 +2932,13 @@ func (c *Client) handleInsufficientStateDisconnect() {
 	_ = c.close(DisconnectInsufficientState)
 }
 
-func (c *Client) handleInsufficientStateUnsubscribe(ch string) {
-	err := c.unsubscribe(ch, unsubscribeInsufficientState, nil)
+func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
+	err := c.unsubscribe(ch, unsub, nil)
 	if err != nil {
 		_ = c.close(DisconnectServerError)
 		return
 	}
-	err = c.sendUnsubscribe(ch, unsubscribeInsufficientState)
+	err = c.sendUnsubscribe(ch, unsub)
 	if err != nil {
 		_ = c.close(DisconnectWriteError)
 		return

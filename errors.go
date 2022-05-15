@@ -85,7 +85,8 @@ var (
 		Code:    108,
 		Message: "not available",
 	}
-	// ErrorTokenExpired indicates that connection token expired.
+	// ErrorTokenExpired indicates that connection or subscription token expired.
+	// In this case client should drop the current token and try to ask a new one.
 	ErrorTokenExpired = &Error{
 		Code:    109,
 		Message: "token expired",
@@ -108,5 +109,11 @@ var (
 	ErrorUnrecoverablePosition = &Error{
 		Code:    112,
 		Message: "unrecoverable position",
+	}
+	// ErrorTokenRevoked indicates that connection or subscription token was revoked (invalidated).
+	// In this case client should drop the current token and try to ask a new one.
+	ErrorTokenRevoked = &Error{
+		Code:    113,
+		Message: "token revoked",
 	}
 )
