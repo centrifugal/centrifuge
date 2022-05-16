@@ -947,7 +947,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 		}
 	}
 
-	if disconnect != nil && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
+	if disconnect != nil && disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
 		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
 			_ = c.transportEnqueue(replyData)
 		}
@@ -958,10 +958,10 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 	_ = c.transport.Close(disconnect)
 
-	if disconnect != nil && disconnect.Reason != "" {
+	if disconnect != nil && disconnect.Code != DisconnectConnectionClosed.Code {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": disconnect.Reason}))
 	}
-	if disconnect != nil {
+	if disconnect != nil && disconnect.Code != DisconnectConnectionClosed.Code {
 		incServerDisconnect(disconnect.Code)
 	}
 	if c.eventHub.disconnectHandler != nil && prevStatus == statusConnected {
@@ -969,7 +969,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 			disconnect = DisconnectConnectionClosed
 		}
 		c.eventHub.disconnectHandler(DisconnectEvent{
-			Disconnect: disconnect,
+			Disconnect: *disconnect,
 		})
 	}
 	return nil

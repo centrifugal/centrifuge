@@ -460,7 +460,7 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 	close(t.closeCh)
 	t.mu.Unlock()
 
-	if disconnect != nil {
+	if disconnect != nil && disconnect.Code != DisconnectConnectionClosed.Code {
 		msg := websocket.FormatCloseMessage(int(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
 		err := t.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
 		if err != nil {

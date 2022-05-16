@@ -1,5 +1,7 @@
 package centrifuge
 
+import "fmt"
+
 // Unsubscribe describes how client must be unsubscribed (or was unsubscribed) from
 // a channel.
 // Codes for unsubscribe advices going to client connections must be in range [2000, 2999].
@@ -15,6 +17,11 @@ type Unsubscribe struct {
 	// Reason is a short description of unsubscribe code for humans. Suitable for
 	// logs for better connection behavior observability.
 	Reason string `json:"reason,omitempty"`
+}
+
+// String representation.
+func (d Unsubscribe) String() string {
+	return fmt.Sprintf("code: %d, reason: %s", d.Code, d.Reason)
 }
 
 var (

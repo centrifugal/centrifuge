@@ -39,6 +39,7 @@ type Disconnect struct {
 
 	// Reconnect is only used for compatibility with ProtocolVersion1.
 	// Ignore this field if all your clients are using ProtocolVersion2.
+	// Deprecated.
 	Reconnect bool `json:"reconnect"`
 }
 
@@ -46,7 +47,7 @@ type Disconnect struct {
 var _ error = (*Disconnect)(nil)
 
 // String representation.
-func (d *Disconnect) String() string {
+func (d Disconnect) String() string {
 	return fmt.Sprintf("code: %d, reason: %s", d.Code, d.Reason)
 }
 

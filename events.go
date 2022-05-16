@@ -119,7 +119,7 @@ type DisconnectEvent struct {
 	// Disconnect contains a Disconnect object which identifies the code and reason
 	// of disconnect process. When disconnect was not initiated by a server this
 	// is always DisconnectConnectionClosed.
-	*Disconnect
+	Disconnect
 }
 
 // DisconnectHandler called when client disconnects from server. The important
