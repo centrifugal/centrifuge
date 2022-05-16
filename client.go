@@ -571,6 +571,12 @@ func (c *Client) updateChannelPresence(ch string, chCtx channelContext) error {
 	if !channelHasFlag(chCtx.flags, flagPresence) {
 		return nil
 	}
+	c.mu.RLock()
+	if _, ok := c.channels[ch]; !ok {
+		c.mu.RUnlock()
+		return nil
+	}
+	c.mu.RUnlock()
 	return c.node.addPresence(ch, c.uid, &ClientInfo{
 		ClientID: c.uid,
 		UserID:   c.user,
@@ -648,6 +654,11 @@ func (c *Client) updatePresence() {
 		c.eventHub.aliveHandler()
 	}
 	for channel, channelContext := range channels {
+		err := c.updateChannelPresence(channel, channelContext)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error updating presence for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+
 		c.checkSubscriptionExpiration(channel, channelContext, config.ClientExpiredSubCloseDelay, func(result bool) {
 			if !result {
 				serverSide := channelHasFlag(channelContext.flags, flagServerSide)
@@ -670,11 +681,6 @@ func (c *Client) updatePresence() {
 				// No need to proceed after close.
 				return
 			}
-		}
-
-		err := c.updateChannelPresence(channel, channelContext)
-		if err != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error updating presence for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 	c.mu.Lock()
