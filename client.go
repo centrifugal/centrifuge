@@ -134,12 +134,11 @@ const (
 // channelContext contains extra context for channel connection subscribed to.
 // Note: this struct is aligned to consume less memory.
 type channelContext struct {
-	Info                  []byte
-	expireAt              int64
-	positionCheckTime     int64
-	streamPosition        StreamPosition
-	positionCheckFailures uint8
-	flags                 uint8
+	Info              []byte
+	expireAt          int64
+	positionCheckTime int64
+	streamPosition    StreamPosition
+	flags             uint8
 }
 
 func channelHasFlag(flags, flag uint8) bool {
@@ -2990,7 +2989,6 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		return nil
 	}
 	channelContext.positionCheckTime = time.Now().Unix()
-	channelContext.positionCheckFailures = 0
 	channelContext.streamPosition.Offset = pub.Offset
 	c.channels[ch] = channelContext
 	c.mu.Unlock()

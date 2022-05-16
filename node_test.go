@@ -444,7 +444,7 @@ func TestNode_Disconnect(t *testing.T) {
 	n.OnConnect(func(client *Client) {
 		client.OnDisconnect(func(event DisconnectEvent) {
 			require.Equal(t, "42", client.UserID())
-			require.Equal(t, DisconnectBadRequest, event.Disconnect)
+			require.Equal(t, DisconnectBadRequest.Code, event.Code)
 			close(done)
 		})
 	})

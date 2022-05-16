@@ -509,7 +509,7 @@ func TestClientSubscribeBrokerErrorOnSubscribe(t *testing.T) {
 			callback(SubscribeReply{}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(done)
 		})
 	})
@@ -546,7 +546,7 @@ func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(done)
 		})
 	})
@@ -615,7 +615,7 @@ func TestClientSubscribePositionedError(t *testing.T) {
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(done)
 		})
 	})
@@ -678,7 +678,7 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(done)
 		})
 	})
@@ -713,7 +713,7 @@ func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
 			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectInsufficientState, event.Disconnect)
+			require.Equal(t, DisconnectInsufficientState.Code, event.Code)
 			close(done)
 		})
 	})
@@ -2270,7 +2270,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 			counterMu.Lock()
 			numDisconnectCalls++
 			counterMu.Unlock()
-			require.Equal(t, DisconnectBadRequest, event.Disconnect)
+			require.Equal(t, DisconnectBadRequest.Code, event.Code)
 			wg.Done()
 		})
 	})
@@ -2516,7 +2516,7 @@ func TestClientSubExpired(t *testing.T) {
 		})
 
 		client.OnDisconnect(func(event DisconnectEvent) {
-			if event.Disconnect == DisconnectSubExpired {
+			if event.Disconnect == *DisconnectSubExpired {
 				close(doneCh)
 			}
 		})
@@ -2820,7 +2820,7 @@ func TestServerSideRefreshDisconnect(t *testing.T) {
 			close(done)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectExpired, event.Disconnect)
+			require.Equal(t, DisconnectExpired.Code, event.Code)
 			close(disconnected)
 		})
 	})
@@ -2872,7 +2872,7 @@ func TestServerSideRefreshCustomError(t *testing.T) {
 			close(done)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(disconnected)
 		})
 	})
@@ -3148,25 +3148,6 @@ func TestClientCheckPosition(t *testing.T) {
 	// not initial, not time to check.
 	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPosition})
 	require.True(t, got)
-
-	// invalid position.
-	client.channels["channel"] = channelContext{positionCheckFailures: 2, flags: flagPosition}
-	got = client.checkPosition(50*time.Second, "channel", channelContext{
-		positionCheckTime: 50, flags: flagPosition,
-	})
-	require.False(t, got)
-	require.Contains(t, client.channels, "channel")
-	require.EqualValues(t, 3, client.channels["channel"].positionCheckFailures)
-	require.EqualValues(t, 200, client.channels["channel"].positionCheckTime)
-
-	// valid position resets positionCheckFailures.
-	require.NotZero(t, client.channels["channel"].positionCheckFailures)
-	sp, _ := node.streamTop("channel")
-	got = client.checkPosition(50*time.Second, "channel", channelContext{
-		positionCheckTime: 50, flags: flagPosition, streamPosition: sp,
-	})
-	require.True(t, got)
-	require.Zero(t, client.channels["channel"].positionCheckFailures)
 }
 
 func TestErrLogLevel(t *testing.T) {
@@ -3214,7 +3195,7 @@ func TestClientTransportWriteError(t *testing.T) {
 				})
 
 				client.OnDisconnect(func(event DisconnectEvent) {
-					require.Equal(t, tt.ExpectedDisconnect, event.Disconnect)
+					require.Equal(t, tt.ExpectedDisconnect.Code, event.Code)
 					close(doneDisconnect)
 				})
 			})
