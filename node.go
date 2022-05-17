@@ -662,7 +662,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.unsubscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session)
+		return n.hub.unsubscribe(cmd.User, cmd.Channel, Unsubscribe{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session)
 	case controlpb.Command_SUBSCRIBE:
 		cmd, err := n.controlDecoder.DecodeSubscribe(params)
 		if err != nil {
@@ -964,14 +964,16 @@ func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
 
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
 // nodes could unsubscribe user from channel.
-func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) error {
-	unsubscribe := &controlpb.Unsubscribe{
+func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID, sessionID string) error {
+	unsub := &controlpb.Unsubscribe{
 		User:    user,
 		Channel: ch,
-		Client:  opts.clientID,
-		Session: opts.sessionID,
+		Code:    unsubscribe.Code,
+		Reason:  unsubscribe.Reason,
+		Client:  clientID,
+		Session: sessionID,
 	}
-	params, _ := n.controlEncoder.EncodeUnsubscribe(unsubscribe)
+	params, _ := n.controlEncoder.EncodeUnsubscribe(unsub)
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
 		Method: controlpb.Command_UNSUBSCRIBE,
@@ -1108,13 +1110,18 @@ func (n *Node) Unsubscribe(userID string, channel string, opts ...UnsubscribeOpt
 	for _, opt := range opts {
 		opt(unsubscribeOpts)
 	}
+	customUnsubscribe := unsubscribeServer
+	if unsubscribeOpts.unsubscribe != nil {
+		customUnsubscribe = *unsubscribeOpts.unsubscribe
+	}
+
 	// Unsubscribe on this node.
-	err := n.hub.unsubscribe(userID, channel, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
+	err := n.hub.unsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
 	if err != nil {
 		return err
 	}
 	// Send unsubscribe control message to other nodes.
-	return n.pubUnsubscribe(userID, channel, *unsubscribeOpts)
+	return n.pubUnsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
 }
 
 // Disconnect allows closing all user connections on all nodes.

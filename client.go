@@ -835,19 +835,28 @@ func (c *Client) getSendPushReply(data []byte) ([]byte, error) {
 }
 
 // Unsubscribe allows unsubscribing client from channel.
-func (c *Client) Unsubscribe(ch string) error {
+func (c *Client) Unsubscribe(ch string, unsubscribe ...Unsubscribe) {
+	if len(unsubscribe) > 1 {
+		panic("Client.Unsubscribe called with more than 1 unsubscribe argument")
+	}
 	c.mu.RLock()
 	if c.status == statusClosed {
 		c.mu.RUnlock()
-		return nil
+		return
 	}
 	c.mu.RUnlock()
 
-	err := c.unsubscribe(ch, unsubscribeServer, nil)
-	if err != nil {
-		return err
+	unsub := unsubscribeServer
+	if len(unsubscribe) > 0 {
+		unsub = unsubscribe[0]
 	}
-	return c.sendUnsubscribe(ch, unsubscribeServer)
+
+	err := c.unsubscribe(ch, unsub, nil)
+	if err != nil {
+		go c.Disconnect(DisconnectServerError)
+		return
+	}
+	_ = c.sendUnsubscribe(ch, unsub)
 }
 
 func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {

@@ -129,16 +129,16 @@
                     drawText(text);
                 }
 
-                function handleJoin(message) {
-                    drawText('Client joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                function handleJoin(ctx) {
+                    drawText('Client joined channel ' + this.channel + ' (uid ' + ctx.info["client"] + ', user '+ ctx.info["user"] +')');
                 }
 
-                function handleLeave(message) {
-                    drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                function handleLeave(ctx) {
+                    drawText('Client left channel ' + this.channel + ' (uid ' + ctx.info["client"] + ', user '+ ctx.info["user"] +')');
                 }
 
-                function handleUnsubscribe(sub) {
-                    drawText('Unsubscribed from channel ' + sub.channel);
+                function handleUnsubscribe(ctx) {
+                    drawText('Unsubscribed from channel ' + ctx.channel  + ', ' + JSON.stringify(ctx));
                 }
 
                 function drawText(text) {

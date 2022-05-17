@@ -197,6 +197,8 @@ type UnsubscribeOptions struct {
 	clientID string
 	// sessionID to unsubscribe.
 	sessionID string
+	// custom unsubscribe object.
+	unsubscribe *Unsubscribe
 }
 
 // UnsubscribeOption is a type to represent various Unsubscribe options.
@@ -218,6 +220,13 @@ func WithUnsubscribeSession(sessionID string) UnsubscribeOption {
 	}
 }
 
+// WithCustomUnsubscribe allows setting custom Unsubscribe.
+func WithCustomUnsubscribe(unsubscribe Unsubscribe) UnsubscribeOption {
+	return func(opts *UnsubscribeOptions) {
+		opts.unsubscribe = &unsubscribe
+	}
+}
+
 // DisconnectOptions define some fields to alter behaviour of Disconnect operation.
 type DisconnectOptions struct {
 	// Disconnect represents custom disconnect to use.
@@ -234,8 +243,8 @@ type DisconnectOptions struct {
 // DisconnectOption is a type to represent various Disconnect options.
 type DisconnectOption func(options *DisconnectOptions)
 
-// WithDisconnect allows setting custom Disconnect.
-func WithDisconnect(disconnect *Disconnect) DisconnectOption {
+// WithCustomDisconnect allows setting custom Disconnect.
+func WithCustomDisconnect(disconnect *Disconnect) DisconnectOption {
 	return func(opts *DisconnectOptions) {
 		opts.Disconnect = disconnect
 	}

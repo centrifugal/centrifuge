@@ -451,7 +451,7 @@ func TestNode_Disconnect(t *testing.T) {
 
 	newTestConnectedClient(t, n, "42")
 
-	err = n.Disconnect("42", WithDisconnect(DisconnectBadRequest))
+	err = n.Disconnect("42", WithCustomDisconnect(DisconnectBadRequest))
 	require.NoError(t, err)
 	select {
 	case <-done:
@@ -468,7 +468,7 @@ func TestNode_pubUnsubscribe(t *testing.T) {
 	testBroker, _ := node.broker.(*TestBroker)
 	require.EqualValues(t, 1, testBroker.publishControlCount)
 
-	err := node.pubUnsubscribe("42", "holypeka", UnsubscribeOptions{})
+	err := node.pubUnsubscribe("42", "holypeka", unsubscribeServer, "", "")
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testBroker.publishControlCount)
 }

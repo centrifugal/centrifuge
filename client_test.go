@@ -148,8 +148,7 @@ func TestClientUnsubscribeClosedClient(t *testing.T) {
 	subscribeClient(t, client, "test")
 	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
-	err = client.Unsubscribe("test")
-	require.NoError(t, err)
+	client.Unsubscribe("test")
 }
 
 func TestClientTimerSchedule(t *testing.T) {
@@ -1332,8 +1331,7 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 	subscribeClient(t, client, "test")
 	require.Equal(t, 1, len(client.Channels()))
 
-	err := client.Unsubscribe("test")
-	require.NoError(t, err)
+	client.Unsubscribe("test")
 	require.Equal(t, 0, len(client.Channels()))
 	require.Equal(t, 1, node.Hub().NumClients())
 	require.Equal(t, 0, node.Hub().NumChannels())

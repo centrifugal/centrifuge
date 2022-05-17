@@ -183,11 +183,11 @@ func TestHubUnsubscribe(t *testing.T) {
 	newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 	// Unsubscribe not existed user.
-	err := n.hub.unsubscribe("1", "test_channel", "", "")
+	err := n.hub.unsubscribe("1", "test_channel", unsubscribeServer, "", "")
 	require.NoError(t, err)
 
 	// Unsubscribe subscribed user.
-	err = n.hub.unsubscribe("42", "test_channel", "", "")
+	err = n.hub.unsubscribe("42", "test_channel", unsubscribeServer, "", "")
 	require.NoError(t, err)
 
 LOOP:
@@ -353,7 +353,7 @@ func TestHubOperationsWithClientID(t *testing.T) {
 	err := n.hub.subscribe("12", "channel", clientToKeep.ID(), "")
 	require.NoError(t, err)
 	require.Equal(t, 3, n.hub.NumSubscriptions())
-	err = n.hub.unsubscribe("12", "channel", clientToKeep.ID(), "")
+	err = n.hub.unsubscribe("12", "channel", unsubscribeServer, clientToKeep.ID(), "")
 	require.NoError(t, err)
 	require.Equal(t, 2, n.hub.NumSubscriptions())
 
@@ -417,7 +417,7 @@ func TestHubOperationsWithSessionID(t *testing.T) {
 	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID())
 	require.NoError(t, err)
 	require.Equal(t, 1, n.hub.NumSubscriptions())
-	err = n.hub.unsubscribe("12", "test", "", clientToKeep.sessionID())
+	err = n.hub.unsubscribe("12", "test", unsubscribeServer, "", clientToKeep.sessionID())
 	require.NoError(t, err)
 	require.Equal(t, 0, n.hub.NumSubscriptions())
 

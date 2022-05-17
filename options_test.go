@@ -48,7 +48,7 @@ func TestSubscribeOptions(t *testing.T) {
 }
 
 func TestWithDisconnect(t *testing.T) {
-	opt := WithDisconnect(DisconnectConnectionLimit)
+	opt := WithCustomDisconnect(DisconnectConnectionLimit)
 	opts := &DisconnectOptions{}
 	opt(opts)
 	require.Equal(t, DisconnectConnectionLimit, opts.Disconnect)
@@ -94,6 +94,17 @@ func TestWithUnsubscribeSession(t *testing.T) {
 	opts := &UnsubscribeOptions{}
 	opt(opts)
 	require.Equal(t, "session", opts.sessionID)
+}
+
+func TestWithCustomUnsubscribe(t *testing.T) {
+	opt := WithCustomUnsubscribe(Unsubscribe{
+		Code:   2200,
+		Reason: "x",
+	})
+	opts := &UnsubscribeOptions{}
+	opt(opts)
+	require.Equal(t, uint32(2200), opts.unsubscribe.Code)
+	require.Equal(t, "x", opts.unsubscribe.Reason)
 }
 
 func TestWithDisconnectClient(t *testing.T) {
