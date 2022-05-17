@@ -126,7 +126,7 @@ func TestWebsocketTransportWrite(t *testing.T) {
 		// Write to transport directly - this is only valid for tests, in normal situation
 		// we write over client methods.
 		require.NoError(t, transport.Write([]byte("hello")))
-		return ConnectReply{}, DisconnectForceNoReconnect
+		return ConnectReply{}, NewDisconnectError(DisconnectForceNoReconnect)
 	})
 
 	mux := http.NewServeMux()
@@ -166,7 +166,7 @@ func TestWebsocketTransportWriteMany(t *testing.T) {
 		// Write to transport directly - this is only valid for tests, in normal situation
 		// we write over client methods.
 		require.NoError(t, transport.WriteMany([]byte("11"), []byte("2")))
-		return ConnectReply{}, DisconnectForceNoReconnect
+		return ConnectReply{}, NewDisconnectError(DisconnectForceNoReconnect)
 	})
 
 	mux := http.NewServeMux()
@@ -321,7 +321,7 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 
 	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		graceCh = event.Transport.(*websocketTransport).graceCh
-		return ConnectReply{}, DisconnectInvalidToken
+		return ConnectReply{}, NewDisconnectError(DisconnectInvalidToken)
 	})
 
 	connectRequest := &protocol.ConnectRequest{

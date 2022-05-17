@@ -101,7 +101,7 @@ func (h *Hub) unsubscribe(userID string, ch string, unsubscribe Unsubscribe, cli
 	return h.connShards[index(userID, numHubShards)].unsubscribe(userID, ch, unsubscribe, clientID, sessionID)
 }
 
-func (h *Hub) disconnect(userID string, disconnect *Disconnect, clientID, sessionID string, whitelist []string) error {
+func (h *Hub) disconnect(userID string, disconnect Disconnect, clientID, sessionID string, whitelist []string) error {
 	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, sessionID, whitelist)
 }
 
@@ -339,7 +339,7 @@ func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe,
 	return nil
 }
 
-func (h *connShard) disconnect(user string, disconnect *Disconnect, clientID string, sessionID string, whitelist []string) error {
+func (h *connShard) disconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string) error {
 	userConnections := h.userConnections(user)
 
 	var firstErr error

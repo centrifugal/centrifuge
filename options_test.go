@@ -51,7 +51,7 @@ func TestWithDisconnect(t *testing.T) {
 	opt := WithCustomDisconnect(DisconnectConnectionLimit)
 	opts := &DisconnectOptions{}
 	opt(opts)
-	require.Equal(t, DisconnectConnectionLimit, opts.Disconnect)
+	require.Equal(t, DisconnectConnectionLimit.Code, opts.Disconnect.Code)
 }
 
 func TestWithClientWhitelist(t *testing.T) {

@@ -18,7 +18,7 @@ type testTransport struct {
 	sink              chan []byte
 	closed            bool
 	closeCh           chan struct{}
-	disconnect        *Disconnect
+	disconnect        Disconnect
 	protoType         ProtocolType
 	cancelFn          func()
 	unidirectional    bool
@@ -134,7 +134,7 @@ func (t *testTransport) AppLevelPing() AppLevelPing {
 	}
 }
 
-func (t *testTransport) Close(disconnect *Disconnect) error {
+func (t *testTransport) Close(disconnect Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

@@ -244,9 +244,9 @@ type DisconnectOptions struct {
 type DisconnectOption func(options *DisconnectOptions)
 
 // WithCustomDisconnect allows setting custom Disconnect.
-func WithCustomDisconnect(disconnect *Disconnect) DisconnectOption {
+func WithCustomDisconnect(disconnect Disconnect) DisconnectOption {
 	return func(opts *DisconnectOptions) {
-		opts.Disconnect = disconnect
+		opts.Disconnect = &disconnect
 	}
 }
 

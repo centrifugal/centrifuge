@@ -7,6 +7,23 @@ import (
 	"sync"
 )
 
+// Make sure disconnectError implements error interface.
+var _ error = (*disconnectError)(nil)
+
+type disconnectError struct {
+	Disconnect
+}
+
+func (d disconnectError) Error() string {
+	return fmt.Sprintf("code: %d, reason: %s", d.Code, d.Reason)
+}
+
+// NewDisconnectError allows to create a special error from Disconnect object
+// which results into a client disconnect with corresponding Code and Reason.
+func NewDisconnectError(d Disconnect) error {
+	return &disconnectError{Disconnect: d}
+}
+
 // Disconnect allows configuring how client will be disconnected from a server.
 // A server can provide a Disconnect.Code and Disconnect.Reason to a client. Clients
 // can execute some custom logic based on a certain Disconnect.Code. Code is also
@@ -43,17 +60,9 @@ type Disconnect struct {
 	Reconnect bool `json:"reconnect"`
 }
 
-// Make sure Disconnect implements error interface.
-var _ error = (*Disconnect)(nil)
-
 // String representation.
 func (d Disconnect) String() string {
 	return fmt.Sprintf("code: %d, reason: %s", d.Code, d.Reason)
-}
-
-// Error representation.
-func (d *Disconnect) Error() string {
-	return fmt.Sprintf("disconnected: code: %d, reason: %s", d.Code, d.Reason)
 }
 
 func (d *Disconnect) isReconnect(protoVersion ProtocolVersion) bool {
@@ -107,7 +116,7 @@ func (d *Disconnect) CloseText(protoVersion ProtocolVersion) string {
 // This can be a clean disconnect, or temporary disconnect of the client
 // due to internet connection loss. Server can not distinguish the actual
 // reason of disconnect.
-var DisconnectConnectionClosed = &Disconnect{
+var DisconnectConnectionClosed = Disconnect{
 	Code:   3000,
 	Reason: "connection closed",
 }
@@ -116,38 +125,38 @@ var DisconnectConnectionClosed = &Disconnect{
 // the library internally.
 var (
 	// DisconnectShutdown issued when node is going to shut down.
-	DisconnectShutdown = &Disconnect{
+	DisconnectShutdown = Disconnect{
 		Code:      3001,
 		Reason:    "shutdown",
 		Reconnect: true,
 	}
 	// DisconnectServerError issued when internal error occurred on server.
-	DisconnectServerError = &Disconnect{
+	DisconnectServerError = Disconnect{
 		Code:      3004,
 		Reason:    "internal server error",
 		Reconnect: true,
 	}
 	// DisconnectExpired issued when client connection expired.
-	DisconnectExpired = &Disconnect{
+	DisconnectExpired = Disconnect{
 		Code:      3005,
 		Reason:    "connection expired",
 		Reconnect: true,
 	}
 	// DisconnectSubExpired issued when client subscription expired.
-	DisconnectSubExpired = &Disconnect{
+	DisconnectSubExpired = Disconnect{
 		Code:      3006,
 		Reason:    "subscription expired",
 		Reconnect: true,
 	}
 	// DisconnectSlow issued when client can't read messages fast enough.
-	DisconnectSlow = &Disconnect{
+	DisconnectSlow = Disconnect{
 		Code:      3008,
 		Reason:    "slow",
 		Reconnect: true,
 	}
 	// DisconnectWriteError issued when an error occurred while writing to
 	// client connection.
-	DisconnectWriteError = &Disconnect{
+	DisconnectWriteError = Disconnect{
 		Code:      3009,
 		Reason:    "write error",
 		Reconnect: true,
@@ -155,13 +164,13 @@ var (
 	// DisconnectInsufficientState issued when server detects wrong client
 	// position in channel Publication stream. Disconnect allows client
 	// to restore missed publications on reconnect.
-	DisconnectInsufficientState = &Disconnect{
+	DisconnectInsufficientState = Disconnect{
 		Code:      3010,
 		Reason:    "insufficient state",
 		Reconnect: true,
 	}
 	// DisconnectForceReconnect issued when server disconnects connection.
-	DisconnectForceReconnect = &Disconnect{
+	DisconnectForceReconnect = Disconnect{
 		Code:      3011,
 		Reason:    "force reconnect",
 		Reconnect: true,
@@ -169,7 +178,7 @@ var (
 	// DisconnectNoPong may be issued when server disconnects bidirectional
 	// connection due to no pong received to application-level server-to-client
 	// pings in a configured time.
-	DisconnectNoPong = &Disconnect{
+	DisconnectNoPong = Disconnect{
 		Code:      3012,
 		Reason:    "no pong",
 		Reconnect: true,
@@ -179,37 +188,37 @@ var (
 // The codes below are built-in terminal codes.
 var (
 	// DisconnectInvalidToken issued when client came with invalid token.
-	DisconnectInvalidToken = &Disconnect{
+	DisconnectInvalidToken = Disconnect{
 		Code:   3500,
 		Reason: "invalid token",
 	}
 	// DisconnectBadRequest issued when client uses malformed protocol
 	// frames or wrong order of commands.
-	DisconnectBadRequest = &Disconnect{
+	DisconnectBadRequest = Disconnect{
 		Code:   3501,
 		Reason: "bad request",
 	}
 	// DisconnectStale issued to close connection that did not become
 	// authenticated in configured interval after dialing.
-	DisconnectStale = &Disconnect{
+	DisconnectStale = Disconnect{
 		Code:   3502,
 		Reason: "stale",
 	}
 	// DisconnectForceNoReconnect issued when server disconnects connection
 	// and asks it to not reconnect again.
-	DisconnectForceNoReconnect = &Disconnect{
+	DisconnectForceNoReconnect = Disconnect{
 		Code:   3503,
 		Reason: "force disconnect",
 	}
 	// DisconnectConnectionLimit can be issued when client connection exceeds a
 	// configured connection limit (per user ID or due to other rule).
-	DisconnectConnectionLimit = &Disconnect{
+	DisconnectConnectionLimit = Disconnect{
 		Code:   3504,
 		Reason: "connection limit",
 	}
 	// DisconnectChannelLimit can be issued when client connection exceeds a
 	// configured channel limit.
-	DisconnectChannelLimit = &Disconnect{
+	DisconnectChannelLimit = Disconnect{
 		Code:   3505,
 		Reason: "channel limit",
 	}

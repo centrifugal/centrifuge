@@ -355,7 +355,7 @@ func (t *sockjsTransport) WriteMany(messages ...[]byte) error {
 }
 
 // Close closes transport.
-func (t *sockjsTransport) Close(disconnect *Disconnect) error {
+func (t *sockjsTransport) Close(disconnect Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
 		// Already closed, noop.
@@ -365,9 +365,5 @@ func (t *sockjsTransport) Close(disconnect *Disconnect) error {
 	t.closed = true
 	close(t.closeCh)
 	t.mu.Unlock()
-
-	if disconnect == nil {
-		disconnect = DisconnectConnectionClosed
-	}
 	return t.session.Close(disconnect.Code, disconnect.CloseText(t.ProtocolVersion()))
 }

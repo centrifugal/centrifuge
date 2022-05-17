@@ -258,7 +258,7 @@ func TestWriterDisconnectSlow(t *testing.T) {
 	defer func() { _ = w.close() }()
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
-	require.Equal(t, DisconnectSlow, disconnect)
+	require.Equal(t, DisconnectSlow.Code, disconnect.Code)
 }
 
 func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
@@ -273,7 +273,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 	_ = w.close()
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
-	require.Equal(t, DisconnectConnectionClosed, disconnect)
+	require.Equal(t, DisconnectConnectionClosed.Code, disconnect.Code)
 }
 
 func TestWriterWriteError(t *testing.T) {

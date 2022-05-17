@@ -186,7 +186,7 @@ type sseTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
 	messages     chan []byte
-	disconnectCh chan *Disconnect
+	disconnectCh chan struct{}
 	closedCh     chan struct{}
 	config       sseTransportConfig
 	closed       bool
@@ -200,7 +200,7 @@ type sseTransportConfig struct {
 func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport {
 	return &sseTransport{
 		messages:     make(chan []byte),
-		disconnectCh: make(chan *Disconnect),
+		disconnectCh: make(chan struct{}),
 		closedCh:     make(chan struct{}),
 		req:          req,
 		config:       config,
@@ -263,7 +263,7 @@ func (t *sseTransport) WriteMany(messages ...[]byte) error {
 	return nil
 }
 
-func (t *sseTransport) Close(_ *Disconnect) error {
+func (t *sseTransport) Close(_ Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

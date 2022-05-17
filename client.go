@@ -288,8 +288,8 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 			}
 			if err := t.Write(item.Data); err != nil {
 				switch v := err.(type) {
-				case *Disconnect:
-					go func() { _ = client.close(v) }()
+				case *disconnectError:
+					go func() { _ = client.close(v.Disconnect) }()
 				default:
 					go func() { _ = client.close(DisconnectWriteError) }()
 				}
@@ -314,8 +314,8 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 			}
 			if err := t.WriteMany(messages...); err != nil {
 				switch v := err.(type) {
-				case *Disconnect:
-					go func() { _ = client.close(v) }()
+				case *disconnectError:
+					go func() { _ = client.close(v.Disconnect) }()
 				default:
 					go func() { _ = client.close(DisconnectWriteError) }()
 				}
@@ -339,14 +339,11 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	return client, func() error { return client.close(DisconnectConnectionClosed) }, nil
 }
 
-func extractUnidirectionalDisconnect(err error) *Disconnect {
-	if err == nil {
-		return nil
-	}
-	var d *Disconnect
+func extractUnidirectionalDisconnect(err error) Disconnect {
+	var d Disconnect
 	switch t := err.(type) {
-	case *Disconnect:
-		d = t
+	case *disconnectError:
+		d = t.Disconnect
 	case *Error:
 		switch t.Code {
 		case ErrorExpired.Code:
@@ -375,7 +372,7 @@ func (c *Client) Connect(req ConnectRequest) {
 	}
 }
 
-func (c *Client) getDisconnectPushReply(d *Disconnect) ([]byte, error) {
+func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
 	disconnect := &protocol.Disconnect{
 		Code:   d.Code,
 		Reason: d.Reason,
@@ -558,7 +555,7 @@ func (c *Client) transportEnqueue(data []byte) error {
 	})
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
-		go func() { _ = c.close(disconnect) }()
+		go func() { _ = c.close(*disconnect) }()
 		return io.EOF
 	}
 	return nil
@@ -899,12 +896,12 @@ func (c *Client) getUnsubscribePushReply(ch string, unsub Unsubscribe) ([]byte, 
 // and alive callback ordering/sync problems. Will be a noop if client
 // already closed. As this method runs a separate goroutine client
 // connection will be closed eventually (i.e. not immediately).
-func (c *Client) Disconnect(disconnect ...*Disconnect) {
+func (c *Client) Disconnect(disconnect ...Disconnect) {
 	if len(disconnect) > 1 {
 		panic("Client.Disconnect called with more than 1 argument")
 	}
 	go func() {
-		if len(disconnect) == 0 || disconnect[0] == nil {
+		if len(disconnect) == 0 {
 			_ = c.close(DisconnectForceNoReconnect)
 		} else {
 			_ = c.close(disconnect[0])
@@ -912,7 +909,7 @@ func (c *Client) Disconnect(disconnect ...*Disconnect) {
 	}()
 }
 
-func (c *Client) close(disconnect *Disconnect) error {
+func (c *Client) close(disconnect Disconnect) error {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.connectMu.Lock()
@@ -937,7 +934,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 		// Unsubscribe from all channels.
 		unsub := unsubscribeDisconnect
 		for channel := range channels {
-			err := c.unsubscribe(channel, unsub, disconnect)
+			err := c.unsubscribe(channel, unsub, &disconnect)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			}
@@ -955,7 +952,7 @@ func (c *Client) close(disconnect *Disconnect) error {
 		}
 	}
 
-	if disconnect != nil && disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
+	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
 		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
 			_ = c.transportEnqueue(replyData)
 		}
@@ -966,18 +963,15 @@ func (c *Client) close(disconnect *Disconnect) error {
 
 	_ = c.transport.Close(disconnect)
 
-	if disconnect != nil && disconnect.Code != DisconnectConnectionClosed.Code {
+	if disconnect.Code != DisconnectConnectionClosed.Code {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]interface{}{"client": c.uid, "user": c.user, "reason": disconnect.Reason}))
 	}
-	if disconnect != nil && disconnect.Code != DisconnectConnectionClosed.Code {
+	if disconnect.Code != DisconnectConnectionClosed.Code {
 		incServerDisconnect(disconnect.Code)
 	}
 	if c.eventHub.disconnectHandler != nil && prevStatus == statusConnected {
-		if disconnect == nil {
-			disconnect = DisconnectConnectionClosed
-		}
 		c.eventHub.disconnectHandler(DisconnectEvent{
-			Disconnect: *disconnect,
+			Disconnect: disconnect,
 		})
 	}
 	return nil
@@ -1079,10 +1073,10 @@ func (c *Client) handleCommand(cmd *protocol.Command) bool {
 	default:
 	}
 	if disconnect != nil {
-		if disconnect != DisconnectConnectionClosed {
+		if disconnect.Code != DisconnectConnectionClosed.Code {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]interface{}{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 		}
-		go func() { _ = c.close(disconnect) }()
+		go func() { _ = c.close(*disconnect) }()
 		return false
 	}
 	return true
@@ -1111,7 +1105,7 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 	if !c.authenticated && !isConnect {
 		// Client must send connect command to authenticate itself first.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
-		return DisconnectBadRequest
+		return &DisconnectBadRequest
 	}
 
 	var method protocol.Command_MethodType
@@ -1165,8 +1159,8 @@ func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 			observeCommandDuration(method, time.Since(started))
 		}()
 		switch t := handleErr.(type) {
-		case *Disconnect:
-			return t
+		case *disconnectError:
+			return &t.Disconnect
 		default:
 			c.writeError(method, cmd, toClientErr(handleErr), nil)
 		}
@@ -1189,10 +1183,7 @@ func (c *Client) writeEncodedPush(rep *protocol.Reply, rw *replyWriter) {
 	}
 	disconnect := c.messageWriter.enqueue(queue.Item{Data: data})
 	if disconnect != nil {
-		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after connect push", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-		}
-		go func() { _ = c.close(disconnect) }()
+		go func() { _ = c.close(*disconnect) }()
 	}
 	if rw != nil {
 		rw.write(rep)
@@ -1218,10 +1209,7 @@ func (c *Client) writeEncodedCommandReply(method protocol.Command_MethodType, cm
 	}
 	disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
 	if disconnect != nil {
-		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect after sending reply", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
-		}
-		go func() { _ = c.close(disconnect) }()
+		go func() { _ = c.close(*disconnect) }()
 	}
 	if rw != nil {
 		rw.write(rep)
@@ -1233,7 +1221,7 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 	if !c.authenticated && !isConnect {
 		// Client must send connect command to authenticate itself first.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
-		return DisconnectBadRequest
+		return &DisconnectBadRequest
 	}
 
 	method := cmd.Method
@@ -1331,8 +1319,8 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 			observeCommandDuration(method, time.Since(started))
 		}()
 		switch t := handleErr.(type) {
-		case *Disconnect:
-			return t
+		case *disconnectError:
+			return &t.Disconnect
 		default:
 			c.writeError(method, cmd, toClientErr(handleErr), nil)
 		}
@@ -1383,8 +1371,8 @@ func (c *Client) expire() {
 		cb := func(reply RefreshReply, err error) {
 			if err != nil {
 				switch t := err.(type) {
-				case *Disconnect:
-					_ = c.close(t)
+				case *disconnectError:
+					_ = c.close(t.Disconnect)
 					return
 				default:
 					_ = c.close(DisconnectServerError)
@@ -1643,7 +1631,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	replyError, disconnect := c.validateSubscribeRequest(req)
 	if disconnect != nil || replyError != nil {
 		if disconnect != nil {
-			return disconnect
+			return NewDisconnectError(*disconnect)
 		}
 		return replyError
 	}
@@ -1671,7 +1659,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 
 		if ctx.disconnect != nil {
 			c.onSubscribeError(req.Channel)
-			c.Disconnect(ctx.disconnect)
+			c.Disconnect(*ctx.disconnect)
 			return
 		}
 		if ctx.err != nil {
@@ -1804,7 +1792,7 @@ func (c *Client) handleUnsubscribe(req *protocol.UnsubscribeRequest, cmd *protoc
 	rep, err := c.getUnsubscribeCommandReply(&protocol.UnsubscribeResult{})
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error encoding unsubscribe", map[string]interface{}{"error": err.Error()}))
-		return DisconnectServerError
+		return NewDisconnectError(DisconnectServerError)
 	}
 	c.writeEncodedCommandReply(protocol.Command_UNSUBSCRIBE, cmd, rep, rw)
 	observeCommandDuration(protocol.Command_UNSUBSCRIBE, time.Since(started))
@@ -2138,8 +2126,8 @@ func (c *Client) writeError(method protocol.Command_MethodType, cmd *protocol.Co
 
 func (c *Client) writeDisconnectOrErrorFlush(method protocol.Command_MethodType, cmd *protocol.Command, replyError error, rw *replyWriter) {
 	switch t := replyError.(type) {
-	case *Disconnect:
-		go func() { _ = c.close(t) }()
+	case *disconnectError:
+		go func() { _ = c.close(t.Disconnect) }()
 		return
 	default:
 		c.writeError(method, cmd, toClientErr(replyError), rw)
@@ -2230,7 +2218,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.RUnlock()
 
 	if closed {
-		return nil, DisconnectConnectionClosed
+		return nil, NewDisconnectError(DisconnectConnectionClosed)
 	}
 
 	if authenticated {
@@ -2293,7 +2281,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 
 	if channelLimit > 0 && len(subscriptions) > channelLimit {
-		return nil, DisconnectChannelLimit
+		return nil, NewDisconnectError(DisconnectChannelLimit)
 	}
 
 	if credentials == nil {
@@ -2327,7 +2315,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.Unlock()
 
 	if closed {
-		return nil, DisconnectConnectionClosed
+		return nil, NewDisconnectError(DisconnectConnectionClosed)
 	}
 
 	if c.node.LogEnabled(LogLevelDebug) {
@@ -2336,7 +2324,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	if userConnectionLimit > 0 && user != "" && len(c.node.hub.UserConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]interface{}{"user": user, "client": c.uid, "limit": userConnectionLimit}))
-		return nil, DisconnectConnectionLimit
+		return nil, NewDisconnectError(DisconnectConnectionLimit)
 	}
 
 	c.mu.RLock()
@@ -2382,7 +2370,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	err := c.node.addClient(c)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding client", map[string]interface{}{"client": c.uid, "error": err.Error()}))
-		return nil, DisconnectServerError
+		return nil, NewDisconnectError(DisconnectServerError)
 	}
 
 	if !clientSideRefresh {
@@ -2438,7 +2426,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				c.onSubscribeError(channel)
 			}
 			if subDisconnect != nil {
-				return nil, subDisconnect
+				return nil, NewDisconnectError(*subDisconnect)
 			}
 			return nil, subError
 		}
@@ -2451,7 +2439,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			if err != nil {
 				c.unlockServerSideSubscriptions(subCtxMap)
 				c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
-				return nil, DisconnectServerError
+				return nil, NewDisconnectError(DisconnectServerError)
 			}
 			c.writeEncodedPush(reply, rw)
 		}
@@ -2460,7 +2448,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if err != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
-			return nil, DisconnectServerError
+			return nil, NewDisconnectError(DisconnectServerError)
 		}
 		c.writeEncodedCommandReply(protocol.Command_CONNECT, cmd, reply, rw)
 	}
@@ -2604,7 +2592,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	channel := cmd.Channel
 	if channel == "" {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "channel required for subscribe", map[string]interface{}{"user": c.user, "client": c.uid}))
-		return nil, DisconnectBadRequest
+		return nil, &DisconnectBadRequest
 	}
 
 	config := c.node.config
@@ -2727,7 +2715,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 			return errorDisconnectContext(clientErr, nil)
 		}
-		ctx.disconnect = DisconnectServerError
+		ctx.disconnect = &DisconnectServerError
 		return ctx
 	}
 
@@ -2736,7 +2724,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error adding presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 			c.pubSubSync.StopBuffering(channel)
-			ctx.disconnect = DisconnectServerError
+			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
 	}
@@ -2778,7 +2766,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 						return errorDisconnectContext(clientErr, nil)
 					}
-					ctx.disconnect = DisconnectServerError
+					ctx.disconnect = &DisconnectServerError
 					return ctx
 				}
 			} else {
@@ -2797,7 +2785,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
 					return errorDisconnectContext(clientErr, nil)
 				}
-				ctx.disconnect = DisconnectServerError
+				ctx.disconnect = &DisconnectServerError
 				return ctx
 			}
 			latestOffset = streamTop.Offset
@@ -2812,7 +2800,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
-			ctx.disconnect = DisconnectInsufficientState
+			ctx.disconnect = &DisconnectInsufficientState
 			return ctx
 		}
 	}
@@ -2855,7 +2843,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				// Will be called later in case of server side sub.
 				c.pubSubSync.StopBuffering(channel)
 			}
-			ctx.disconnect = DisconnectServerError
+			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
 
@@ -3084,14 +3072,14 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	return nil
 }
 
-func (c *Client) logDisconnectBadRequest(message string) *Disconnect {
+func (c *Client) logDisconnectBadRequest(message string) error {
 	c.node.logger.log(newLogEntry(LogLevelInfo, message, map[string]interface{}{"user": c.user, "client": c.uid}))
-	return DisconnectBadRequest
+	return NewDisconnectError(DisconnectBadRequest)
 }
 
-func (c *Client) logDisconnectBadRequestWithError(err error, message string) *Disconnect {
+func (c *Client) logDisconnectBadRequestWithError(err error, message string) error {
 	c.node.logger.log(newLogEntry(LogLevelInfo, message, map[string]interface{}{"error": err.Error(), "user": c.user, "client": c.uid}))
-	return DisconnectBadRequest
+	return NewDisconnectError(DisconnectBadRequest)
 }
 
 func (c *Client) logWriteInternalErrorFlush(method protocol.Command_MethodType, cmd *protocol.Command, err error, message string, rw *replyWriter) {

@@ -680,7 +680,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Session, cmd.Whitelist)
+		return n.hub.disconnect(cmd.User, Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Session, cmd.Whitelist)
 	case controlpb.Command_SURVEY_REQUEST:
 		cmd, err := n.controlDecoder.DecodeSurveyRequest(params)
 		if err != nil {
@@ -984,7 +984,7 @@ func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, c
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from server.
-func (n *Node) pubDisconnect(user string, disconnect *Disconnect, clientID string, sessionID string, whitelist []string) error {
+func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string) error {
 	protoDisconnect := &controlpb.Disconnect{
 		User:      user,
 		Whitelist: whitelist,
@@ -1131,9 +1131,9 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 		opt(disconnectOpts)
 	}
 	// Disconnect user from this node
-	customDisconnect := disconnectOpts.Disconnect
-	if customDisconnect == nil {
-		customDisconnect = DisconnectForceNoReconnect
+	customDisconnect := DisconnectForceNoReconnect
+	if disconnectOpts.Disconnect != nil {
+		customDisconnect = *disconnectOpts.Disconnect
 	}
 	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
 	if err != nil {

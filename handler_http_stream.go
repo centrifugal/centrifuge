@@ -194,7 +194,7 @@ type httpStreamTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
 	messages     chan []byte
-	disconnectCh chan *Disconnect
+	disconnectCh chan struct{}
 	closedCh     chan struct{}
 	closed       bool
 	config       httpStreamTransportConfig
@@ -209,7 +209,7 @@ type httpStreamTransportConfig struct {
 func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig) *httpStreamTransport {
 	return &httpStreamTransport{
 		messages:     make(chan []byte),
-		disconnectCh: make(chan *Disconnect),
+		disconnectCh: make(chan struct{}),
 		closedCh:     make(chan struct{}),
 		req:          req,
 		config:       config,
@@ -272,7 +272,7 @@ func (t *httpStreamTransport) WriteMany(messages ...[]byte) error {
 	return nil
 }
 
-func (t *httpStreamTransport) Close(_ *Disconnect) error {
+func (t *httpStreamTransport) Close(_ Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
