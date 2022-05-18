@@ -91,7 +91,3 @@ const (
 	// considered actual.
 	nodeInfoMaxDelay = nodeInfoPublishInterval*2 + time.Second
 )
-
-// DefaultConfig is Config initialized with default values for all fields.
-// Deprecated, use Config struct directly – it now uses reasonable zero values.
-var DefaultConfig = Config{}

@@ -180,7 +180,6 @@ type customWebsocketTransport struct {
 
 	conn      *websocket.Conn
 	protoType centrifuge.ProtocolType
-	request   *http.Request
 }
 
 func newWebsocketTransport(conn *websocket.Conn, protoType centrifuge.ProtocolType) *customWebsocketTransport {

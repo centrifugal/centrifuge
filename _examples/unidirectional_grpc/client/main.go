@@ -9,8 +9,8 @@ import (
 
 	"github.com/centrifugal/centrifuge/_examples/unidirectional_grpc/clientproto"
 
-	"github.com/golang/protobuf/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 var (

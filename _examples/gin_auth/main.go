@@ -96,11 +96,11 @@ func main() {
 	})
 
 	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		// Let's include user email into connect reply, so we can display user name in chat.
-		// This is an optional step actually.
+		// Let's include user email into connect reply, so we can display username in chat.
+		// This is an optional step, actually.
 		cred, ok := centrifuge.GetCredentials(ctx)
 		if !ok {
-			return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+			return centrifuge.ConnectReply{}, centrifuge.NewDisconnectError(centrifuge.DisconnectServerError)
 		}
 		data, _ := json.Marshal(connectData{
 			Email: cred.UserID,

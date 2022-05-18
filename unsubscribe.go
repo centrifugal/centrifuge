@@ -2,8 +2,8 @@ package centrifuge
 
 import "fmt"
 
-// Unsubscribe describes how client must be unsubscribed (or was unsubscribed) from
-// a channel.
+// Unsubscribe describes how client must be unsubscribed (or was unsubscribed)
+// from a channel.
 // Codes for unsubscribe advices going to client connections must be in range [2000, 2999].
 // Unsubscribe codes >= 2500 coming from server to client result into resubscribe attempt.
 // Codes [0, 2099] and [2500, 2599] are reserved for Centrifuge library internal use
