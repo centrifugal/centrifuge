@@ -7,23 +7,6 @@ import (
 	"sync"
 )
 
-// Make sure disconnectError implements error interface.
-var _ error = (*disconnectError)(nil)
-
-type disconnectError struct {
-	Disconnect
-}
-
-func (d disconnectError) Error() string {
-	return fmt.Sprintf("code: %d, reason: %s", d.Code, d.Reason)
-}
-
-// NewDisconnectError allows to create a special error from Disconnect object
-// which results into a client disconnect with corresponding Code and Reason.
-func NewDisconnectError(d Disconnect) error {
-	return &disconnectError{Disconnect: d}
-}
-
 // Disconnect allows configuring how client will be disconnected from a server.
 // A server can provide a Disconnect.Code and Disconnect.Reason to a client. Clients
 // can execute some custom logic based on a certain Disconnect.Code. Code is also
@@ -63,6 +46,12 @@ type Disconnect struct {
 // String representation.
 func (d Disconnect) String() string {
 	return fmt.Sprintf("code: %d, reason: %s", d.Code, d.Reason)
+}
+
+// Error to use Disconnect as a callback handler error to signal Centrifuge
+// that client must be disconnected with corresponding Code and Reason.
+func (d Disconnect) Error() string {
+	return d.String()
 }
 
 func (d *Disconnect) isReconnect(protoVersion ProtocolVersion) bool {

@@ -115,7 +115,7 @@ func TestSockjsTransportWrite(t *testing.T) {
 		// Write to transport directly - this is only valid for tests, in normal situation
 		// we write over client methods.
 		require.NoError(t, transport.Write([]byte("hello")))
-		return ConnectReply{}, NewDisconnectError(DisconnectForceNoReconnect)
+		return ConnectReply{}, DisconnectForceNoReconnect
 	})
 
 	mux := http.NewServeMux()
@@ -165,7 +165,7 @@ func TestSockjsTransportWriteMany(t *testing.T) {
 		// Write to transport directly - this is only valid for tests, in normal situation
 		// we write over client methods.
 		require.NoError(t, transport.WriteMany([]byte("1"), []byte("22")))
-		return ConnectReply{}, NewDisconnectError(DisconnectForceNoReconnect)
+		return ConnectReply{}, DisconnectForceNoReconnect
 	})
 
 	mux := http.NewServeMux()

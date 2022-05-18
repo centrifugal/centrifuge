@@ -29,10 +29,10 @@ func TestDisconnect_String(t *testing.T) {
 }
 
 func TestDisconnect_Error(t *testing.T) {
-	d := NewDisconnectError(Disconnect{
+	d := Disconnect{
 		Code:   42,
 		Reason: "reason",
-	})
+	}
 	errorText := d.Error()
 	require.Equal(t, "code: 42, reason: reason", errorText)
 }

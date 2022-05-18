@@ -100,7 +100,7 @@ func main() {
 		// This is an optional step, actually.
 		cred, ok := centrifuge.GetCredentials(ctx)
 		if !ok {
-			return centrifuge.ConnectReply{}, centrifuge.NewDisconnectError(centrifuge.DisconnectServerError)
+			return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
 		}
 		data, _ := json.Marshal(connectData{
 			Email: cred.UserID,

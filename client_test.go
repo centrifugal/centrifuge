@@ -271,7 +271,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	client, _ := newClient(context.Background(), node, transport)
 	rwWrapper := testReplyWriterWrapper()
 	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 }
 
 func TestClientConnectContextCredentials(t *testing.T) {
@@ -789,7 +789,7 @@ func TestClientSubscribeValidateErrors(t *testing.T) {
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 }
 
 func TestClientSubscribeReceivePublication(t *testing.T) {
@@ -915,7 +915,7 @@ func TestUserConnectionLimit(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	anotherClient, _ := newClient(newCtx, node, transport)
 	_, err := anotherClient.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectConnectionLimit), err)
+	require.Equal(t, DisconnectConnectionLimit, err)
 }
 
 type testContextKey int
@@ -1290,7 +1290,7 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	params := &protocol.UnsubscribeRequest{Channel: ""}
 	err := client.handleUnsubscribe(params, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 
 	rwWrapper = testReplyWriterWrapper()
 	params = &protocol.UnsubscribeRequest{Channel: "test"}
@@ -1444,7 +1444,7 @@ func TestClientRefreshEmptyToken(t *testing.T) {
 
 	cmd := &protocol.RefreshRequest{Token: ""}
 	err := client.handleRefresh(cmd, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 }
 
 func TestClientRefreshUnexpected(t *testing.T) {
@@ -1469,7 +1469,7 @@ func TestClientRefreshUnexpected(t *testing.T) {
 
 	cmd := &protocol.RefreshRequest{Token: "xxx"}
 	err := client.handleRefresh(cmd, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 }
 
 func TestClientPublishNotAvailable(t *testing.T) {
@@ -1566,7 +1566,7 @@ func TestClientPublishHandler(t *testing.T) {
 		err := json.Unmarshal(e.Data, &msg)
 		require.NoError(t, err)
 		if msg.Input == "with disconnect" {
-			cb(PublishReply{}, NewDisconnectError(DisconnectBadRequest))
+			cb(PublishReply{}, DisconnectBadRequest)
 			return
 		}
 		if msg.Input == "with error" {
@@ -1687,7 +1687,7 @@ func TestClientPresence(t *testing.T) {
 	err := client.handlePresence(&protocol.PresenceRequest{
 		Channel: "",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handlePresence(&protocol.PresenceRequest{
@@ -1705,7 +1705,7 @@ func TestClientPresence(t *testing.T) {
 	err = client.handlePresenceStats(&protocol.PresenceStatsRequest{
 		Channel: "",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handlePresenceStats(&protocol.PresenceStatsRequest{
@@ -1883,7 +1883,7 @@ func TestClientHistoryNoFilter(t *testing.T) {
 	err := client.handleHistory(&protocol.HistoryRequest{
 		Channel: "",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handleHistory(&protocol.HistoryRequest{
@@ -2133,9 +2133,9 @@ func TestExtractUnidirectionalDisconnect(t *testing.T) {
 	require.Equal(t, DisconnectServerError, d)
 	d = extractUnidirectionalDisconnect(ErrorLimitExceeded)
 	require.Equal(t, DisconnectServerError, d)
-	d = extractUnidirectionalDisconnect(NewDisconnectError(DisconnectChannelLimit))
+	d = extractUnidirectionalDisconnect(DisconnectChannelLimit)
 	require.Equal(t, DisconnectChannelLimit, d)
-	d = extractUnidirectionalDisconnect(NewDisconnectError(DisconnectServerError))
+	d = extractUnidirectionalDisconnect(DisconnectServerError)
 	require.Equal(t, DisconnectServerError, d)
 	d = extractUnidirectionalDisconnect(ErrorExpired)
 	require.Equal(t, DisconnectExpired, d)
@@ -2684,7 +2684,7 @@ func TestClientHandlePublish(t *testing.T) {
 		Data:    []byte(`{"hello":1}`),
 		Channel: "",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handlePublish(&protocol.PublishRequest{
@@ -2812,7 +2812,7 @@ func TestServerSideRefreshDisconnect(t *testing.T) {
 		client.OnRefresh(func(e RefreshEvent, cb RefreshCallback) {
 			require.Equal(t, "", e.Token)
 			require.False(t, e.ClientSideRefresh)
-			cb(RefreshReply{}, NewDisconnectError(DisconnectExpired))
+			cb(RefreshReply{}, DisconnectExpired)
 			close(done)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
@@ -2955,7 +2955,7 @@ func TestClientSideSubRefresh(t *testing.T) {
 		Channel: "",
 		Token:   "test_token",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handleSubRefresh(&protocol.SubRefreshRequest{
@@ -3009,7 +3009,7 @@ func TestClientSideSubRefreshUnexpected(t *testing.T) {
 		Channel: "test",
 		Token:   "test_token",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, NewDisconnectError(DisconnectBadRequest), err)
+	require.Equal(t, DisconnectBadRequest, err)
 }
 
 func TestCloseNoRace(t *testing.T) {
@@ -3117,7 +3117,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 
 	// Error from handler.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
-		cb(SubRefreshReply{}, NewDisconnectError(DisconnectExpired))
+		cb(SubRefreshReply{}, DisconnectExpired)
 	}
 	nowTime = time.Unix(200, 0)
 	client.checkSubscriptionExpiration("channel", chanCtx, 50*time.Second, func(b bool) {
@@ -3166,7 +3166,7 @@ func TestClientTransportWriteError(t *testing.T) {
 		Error              error
 		ExpectedDisconnect Disconnect
 	}{
-		{"disconnect", NewDisconnectError(DisconnectSlow), DisconnectSlow},
+		{"disconnect", DisconnectSlow, DisconnectSlow},
 		{"other", errors.New("boom"), DisconnectWriteError},
 	}
 
@@ -3435,7 +3435,7 @@ func TestClientChannelsCleanupOnSubscribeDisconnect(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{}, NewDisconnectError(DisconnectChannelLimit))
+			cb(SubscribeReply{}, DisconnectChannelLimit)
 		})
 	})
 
