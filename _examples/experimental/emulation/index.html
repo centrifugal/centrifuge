@@ -23,25 +23,37 @@
                 const transports = [
                     {
                         transport: 'websocket',
-                        endpoint: 'ws://' + window.location.host+ '/connection/websocket'
+                        endpoint: `ws://${window.location.host}/connection/websocket`
                     },
                     {
                         transport: 'http_stream',
-                        endpoint: 'http://' + window.location.host+ '/connection/http_stream'
+                        endpoint: `//${window.location.host}/connection/http_stream`
                     },
                     {
                         transport: 'sse',
-                        endpoint: 'http://' + window.location.host+ '/connection/sse'
+                        endpoint: `//${window.location.host}connection/sse`
                     },
                 ];
-                const centrifuge = new Centrifuge(transports, {
-                    protocolVersion: 'v2',
-                });
+                const centrifuge = new Centrifuge(transports);
 
-                // bind listeners on centrifuge object instance events.
                 centrifuge.on('connected', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
                     input.removeAttribute('disabled');
+                });
+
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('error', function(ctx){
+                    drawText('Client error: ' + JSON.stringify(ctx));
+                    centrifuge.connect();
                 });
 
                 centrifuge.on('message', function(data) {
@@ -72,21 +84,6 @@
 
                 centrifuge.on('unsubscribed', function(ctx) {
                     drawText('Unsubscribe from server-side channel ' + ctx.channel);
-                });
-
-                centrifuge.on('connecting', function(ctx){
-                    drawText('Connecting: ' + ctx.reason);
-                    input.setAttribute('disabled', 'true');
-                });
-
-                centrifuge.on('disconnected', function(ctx){
-                    drawText('Disconnected: ' + ctx.reason);
-                    input.setAttribute('disabled', 'true');
-                });
-
-                centrifuge.on('error', function(ctx){
-                    drawText('Client error: ' + JSON.stringify(ctx));
-                    centrifuge.connect();
                 });
 
                 // show how many users currently in channel.
