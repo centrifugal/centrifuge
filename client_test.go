@@ -739,6 +739,46 @@ func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
 	}
 }
 
+func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch string) {
+	t.Parallel()
+	broker := NewTestBroker()
+	node := nodeWithBroker(broker)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+		})
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			require.Equal(t, UnsubscribeCodeInsufficient, event.Code)
+			close(done)
+		})
+	})
+
+	client := newTestClientV2(t, node, "42")
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test",
+		Recover: true,
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	err = node.handlePublication("test", &Publication{
+		Offset: offset,
+	}, StreamPosition{offset, epoch})
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+}
+
 func TestClientUnexpectedOffsetEpoch(t *testing.T) {
 	tests := []struct {
 		Name   string
@@ -752,6 +792,23 @@ func TestClientUnexpectedOffsetEpoch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testUnexpectedOffsetEpoch(t, tt.Offset, tt.Epoch)
+		})
+	}
+}
+
+func TestClientUnexpectedOffsetEpochClientV2(t *testing.T) {
+	tests := []struct {
+		Name   string
+		Offset uint64
+		Epoch  string
+	}{
+		{"wrong_offset", 2, ""},
+		{"wrong_epoch", 1, "xyz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			testUnexpectedOffsetEpochProtocolV2(t, tt.Offset, tt.Epoch)
 		})
 	}
 }
@@ -3143,6 +3200,75 @@ func TestClientCheckPosition(t *testing.T) {
 
 	// not initial, not time to check.
 	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPosition})
+	require.True(t, got)
+}
+
+func TestClientIsValidPosition(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time {
+		return time.Unix(200, 0)
+	}
+	node.mu.Unlock()
+
+	client.channels = map[string]channelContext{
+		"example": {
+			flags:             flagSubscribed,
+			positionCheckTime: 50,
+			streamPosition: StreamPosition{
+				Offset: 20,
+				Epoch:  "test",
+			},
+		},
+	}
+
+	got := client.isValidPosition(StreamPosition{
+		Offset: 20,
+		Epoch:  "test",
+	}, 200, "example")
+	require.True(t, got)
+	require.Equal(t, int64(200), client.channels["example"].positionCheckTime)
+
+	got = client.isValidPosition(StreamPosition{
+		Offset: 19,
+		Epoch:  "test",
+	}, 210, "example")
+	require.True(t, got)
+	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
+
+	got = client.isValidPosition(StreamPosition{
+		Offset: 21,
+		Epoch:  "test",
+	}, 220, "example")
+	require.False(t, got)
+	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
+
+	client.channels = map[string]channelContext{
+		"example": {
+			positionCheckTime: 50,
+			streamPosition: StreamPosition{
+				Offset: 20,
+				Epoch:  "test",
+			},
+		},
+	}
+	// no subscribed flag.
+	got = client.isValidPosition(StreamPosition{
+		Offset: 21,
+		Epoch:  "test",
+	}, 220, "example")
+	require.True(t, got)
+
+	_ = client.close(DisconnectConnectionClosed)
+	// closed client.
+	got = client.isValidPosition(StreamPosition{
+		Offset: 21,
+		Epoch:  "test",
+	}, 220, "example")
 	require.True(t, got)
 }
 

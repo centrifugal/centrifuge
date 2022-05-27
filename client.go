@@ -706,10 +706,14 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channe
 
 	streamTop, err := c.node.streamTop(ch)
 	if err != nil {
+		// Check later.
 		return true
 	}
 
-	// Load actual stream position from channel context.
+	return c.isValidPosition(streamTop, nowUnix, ch)
+}
+
+func (c *Client) isValidPosition(streamTop StreamPosition, nowUnix int64, ch string) bool {
 	c.mu.Lock()
 	if c.status == statusClosed {
 		c.mu.Unlock()
