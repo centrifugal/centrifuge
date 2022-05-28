@@ -413,6 +413,8 @@ func TestHubOperationsWithSessionID(t *testing.T) {
 
 	sessionToDisconnect := client.sessionID()
 
+	_, ok := n.hub.clientBySession(sessionToDisconnect)
+	require.True(t, ok)
 	require.Equal(t, 0, n.hub.NumSubscriptions())
 	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID())
 	require.NoError(t, err)
