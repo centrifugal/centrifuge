@@ -9,7 +9,7 @@ Centrifuge library is a real-time core of [Centrifugo](https://github.com/centri
 
 Library highlights:
 
-* Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.github.io/centrifugo/misc/benchmark/)
+* Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.dev/blog/2020/02/10/million-connections-with-centrifugo)
 * Builtin bidirectional transports: WebSocket (JSON or binary Protobuf) and SockJS (JSON only)
 * Possibility to use unidirectional transports without using custom Centrifuge client library: see examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws)  
 * Built-in horizontal scalability with Redis PUB/SUB, consistent Redis sharding, Sentinel and Redis Cluster for HA
@@ -39,8 +39,8 @@ If you opt for a **unidirectional** communication then you may leverage Centrifu
 ### Explore Centrifuge
 
 * see Centrifuge [Documentation on pkg.go.dev](https://pkg.go.dev/github.com/centrifugal/centrifuge)
-* read [Centrifuge introduction post](https://centrifugal.github.io/centrifugo/blog/intro_centrifuge/) in Centrifugo blog   
-* you can also consider [Centrifugo server documentation](https://centrifugal.github.io/centrifugo/) as extra doc for this package (since Centrifugo is built on top of Centrifuge library, though keep in mind that Centrifugo adds some things on top, Centrifugo source code is also a good place to learn from)
+* read [Centrifuge introduction post](https://centrifugal.dev/blog/2021/01/15/centrifuge-intro) in Centrifugo blog   
+* you can also consider [Centrifugo server documentation](https://centrifugal.dev/) as extra doc for this package (since Centrifugo is built on top of Centrifuge library, though keep in mind that Centrifugo adds some things on top, Centrifugo source code is also a good place to learn from)
 * read this README to the end for [installation](#installation) details, [quick example](#quick-example) and [tips and tricks](#tips-and-tricks) section
 * check out [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder
 
