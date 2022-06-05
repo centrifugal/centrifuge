@@ -310,6 +310,10 @@ type HistoryCallback func(HistoryReply, error)
 // HistoryHandler must handle incoming command from client.
 type HistoryHandler func(HistoryEvent, HistoryCallback)
 
+// StateSnapshotHandler must return a copy of current client's
+// internal state. Returning a copy is important to avoid data races.
+type StateSnapshotHandler func() (interface{}, error)
+
 // SurveyEvent with Op and Data of survey.
 type SurveyEvent struct {
 	Op   string

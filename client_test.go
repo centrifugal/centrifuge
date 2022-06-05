@@ -3668,6 +3668,26 @@ func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
 	require.Len(t, node.Hub().Channels(), 0, node.Hub().Channels())
 }
 
+func TestClientOnStateSnapshot(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnStateSnapshot(func() (interface{}, error) {
+			return 1, nil
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	result, err := client.StateSnapshot()
+	require.NoError(t, err)
+	num, ok := result.(int)
+	require.True(t, ok)
+	require.Equal(t, 1, num)
+}
+
 func connectClientV2(t testing.TB, client *Client) {
 	rwWrapper := testReplyWriterWrapper()
 	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)

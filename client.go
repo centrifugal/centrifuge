@@ -42,6 +42,7 @@ type clientEventHub struct {
 	presenceHandler      PresenceHandler
 	presenceStatsHandler PresenceStatsHandler
 	historyHandler       HistoryHandler
+	stateSnapshotHandler StateSnapshotHandler
 }
 
 // OnAlive allows setting AliveHandler.
@@ -117,6 +118,12 @@ func (c *Client) OnPresenceStats(h PresenceStatsHandler) {
 // At this moment you can only return a custom error or disconnect client.
 func (c *Client) OnHistory(h HistoryHandler) {
 	c.eventHub.historyHandler = h
+}
+
+// OnStateSnapshot allows settings StateSnapshotHandler.
+// This API is EXPERIMENTAL and may be removed in the future versions.
+func (c *Client) OnStateSnapshot(h StateSnapshotHandler) {
+	c.eventHub.stateSnapshotHandler = h
 }
 
 const (
@@ -764,6 +771,15 @@ func (c *Client) Info() []byte {
 	copy(info, c.info)
 	c.mu.Unlock()
 	return info
+}
+
+// StateSnapshot allows collecting current state copy.
+// Mostly useful for connection introspection from the outside.
+func (c *Client) StateSnapshot() (interface{}, error) {
+	if c.eventHub.stateSnapshotHandler != nil {
+		return c.eventHub.stateSnapshotHandler()
+	}
+	return nil, nil
 }
 
 // Transport returns client connection transport information.

@@ -84,6 +84,19 @@ func (h *Hub) remove(c *Client) error {
 	return h.connShards[index(c.UserID(), numHubShards)].remove(c)
 }
 
+// Connections returns all user connections to the current Node.
+func (h *Hub) Connections() map[string]*Client {
+	conns := make(map[string]*Client)
+	for _, shard := range h.connShards {
+		shard.mu.RLock()
+		for clientID, c := range shard.conns {
+			conns[clientID] = c
+		}
+		shard.mu.RUnlock()
+	}
+	return conns
+}
+
 // UserConnections returns all user connections to the current Node.
 func (h *Hub) UserConnections(userID string) map[string]*Client {
 	return h.connShards[index(userID, numHubShards)].userConnections(userID)
