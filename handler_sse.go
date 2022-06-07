@@ -1,13 +1,10 @@
 package centrifuge
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/centrifugal/protocol"
 )
 
 // SSEConfig represents config for SSEHandler.
@@ -46,26 +43,19 @@ func NewSSEHandler(node *Node, config SSEConfig) *SSEHandler {
 	}
 }
 
-// Since SSE is a GET request (at least in browsers) we are looking for connect
-// request in URL params. This should be a properly encoded JSON object with connect command.
+// Since SSE is a GET request (at least in browsers) we are looking
+// for connect request in URL params. This should be a properly encoded
+// command(s) in Centrifuge protocol.
 const connectUrlParam = "cf_connect"
 
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportSSE)
 
-	var connectRequestData []byte
-	var cmd *protocol.Command
+	var requestData []byte
 	if r.Method == http.MethodGet {
-		connectRequestString := r.URL.Query().Get(connectUrlParam)
-		if connectRequestString != "" {
-			var err error
-			connectRequestData = []byte(connectRequestString)
-			cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
-			if err != nil && err != io.EOF {
-				h.node.Log(NewLogEntry(LogLevelInfo, "malformed connect request", map[string]interface{}{"error": err.Error()}))
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
+		requestDataString := r.URL.Query().Get(connectUrlParam)
+		if requestDataString != "" {
+			requestData = []byte(requestDataString)
 		} else {
 			h.node.Log(NewLogEntry(LogLevelDebug, "no connect command", map[string]interface{}{}))
 			w.WriteHeader(http.StatusBadRequest)
@@ -75,22 +65,14 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		maxBytesSize := int64(h.config.MaxRequestBodySize)
 		r.Body = http.MaxBytesReader(w, r.Body, maxBytesSize)
 		var err error
-		connectRequestData, err = io.ReadAll(r.Body)
+		requestData, err = io.ReadAll(r.Body)
 		if err != nil {
-			if len(connectRequestData) >= int(maxBytesSize) {
+			if len(requestData) >= int(maxBytesSize) {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
 			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
 			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
-		if err != nil {
-			if h.node.LogEnabled(LogLevelDebug) {
-				h.node.Log(NewLogEntry(LogLevelDebug, "malformed connect request", map[string]interface{}{"error": err.Error()}))
-			}
-			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 	} else {
@@ -154,10 +136,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	if h.node.LogEnabled(LogLevelTrace) {
-		h.node.logger.log(newLogEntry(LogLevelTrace, "<--", map[string]interface{}{"client": c.ID(), "user": "", "data": fmt.Sprintf("%#v", string(connectRequestData))}))
-	}
-	_ = c.handleCommand(cmd)
+	_ = c.Handle(requestData)
 
 	for {
 		select {

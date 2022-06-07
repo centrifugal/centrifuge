@@ -1,7 +1,6 @@
 package centrifuge
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -55,9 +54,11 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	protocolType := ProtocolTypeJSON
+	if r.Header.Get("Content-Type") == "application/octet-stream" {
+		protocolType = ProtocolTypeProtobuf
+	}
 
-	var connectRequestData []byte
-	var cmd *protocol.Command
+	var requestData []byte
 	if r.Method == http.MethodPost {
 		maxBytesSize := h.config.MaxRequestBodySize
 		if maxBytesSize == 0 {
@@ -65,27 +66,14 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytesSize))
 		var err error
-		connectRequestData, err = io.ReadAll(r.Body)
+		requestData, err = io.ReadAll(r.Body)
 		if err != nil {
 			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
-			if len(connectRequestData) >= maxBytesSize {
+			if len(requestData) >= maxBytesSize {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
 			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		if r.Header.Get("Content-Type") == "application/octet-stream" {
-			protocolType = ProtocolTypeProtobuf
-			cmd, err = protocol.NewProtobufCommandDecoder(connectRequestData).Decode()
-		} else {
-			cmd, err = protocol.NewJSONCommandDecoder(connectRequestData).Decode()
-		}
-		if err != nil && err != io.EOF {
-			if h.node.LogEnabled(LogLevelDebug) {
-				h.node.Log(NewLogEntry(LogLevelDebug, "malformed connect request", map[string]interface{}{"error": err.Error()}))
-			}
-			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 	} else {
@@ -147,10 +135,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.node.LogEnabled(LogLevelTrace) {
-		h.node.logger.log(newLogEntry(LogLevelTrace, "<--", map[string]interface{}{"client": c.ID(), "user": "", "data": fmt.Sprintf("%#v", string(connectRequestData))}))
-	}
-	_ = c.handleCommand(cmd)
+	_ = c.Handle(requestData)
 
 	for {
 		select {
