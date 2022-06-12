@@ -57,12 +57,20 @@ func waitExitSignal(n *centrifuge.Node) {
 	<-done
 }
 
-const exampleChannel = "chat:index"
+var exampleChannels = []string{
+	"chat:index",
+	"tokenized",
+}
 
 // Check whether channel is allowed for subscribing. In real case permission
 // check will probably be more complex than in this example.
 func channelSubscribeAllowed(channel string) bool {
-	return channel == exampleChannel
+	for _, ch := range exampleChannels {
+		if ch == channel {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
@@ -237,7 +245,7 @@ func main() {
 				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(1000 * time.Millisecond)
 		}
 	}()
 

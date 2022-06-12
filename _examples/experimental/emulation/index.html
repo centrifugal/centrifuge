@@ -34,7 +34,7 @@
                         endpoint: `//${window.location.host}/connection/sse`
                     },
                 ];
-                const centrifuge = new Centrifuge(transports);
+                const centrifuge = new Centrifuge(transports, {});
 
                 centrifuge.on('connected', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
@@ -127,7 +127,6 @@
                 function handleSubscribed(ctx) {
                     drawText('Subscribed on client-side channel ' + ctx.channel +  ' (ctx: ' + JSON.stringify(ctx) + ')');
                     showPresence(sub);
-
                     centrifuge.rpc("getCurrentYear", {}).then(function(data){
                         drawText("RPC response data: " + JSON.stringify(data));
                     }, function(err) {
