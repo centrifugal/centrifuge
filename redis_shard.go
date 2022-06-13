@@ -324,12 +324,14 @@ func (s *RedisShard) runDataPipeline() error {
 	copy(scripts, s.scripts)
 	s.scriptsMu.RUnlock()
 	for _, script := range scripts {
+		println("loading script")
 		err := script.Load(conn)
 		if err != nil {
 			// Can not proceed if script has not been loaded.
 			_ = conn.Close()
 			return fmt.Errorf("error loading Lua script: %w", err)
 		}
+		println("script loaded")
 	}
 	_ = conn.Close()
 
