@@ -304,9 +304,9 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 		if err != nil {
 			return err
 		}
-		if err := b.checkCapabilities(shard); err != nil {
-			return fmt.Errorf("capability error on %s: %v", shard.string(), err)
-		}
+		//if err := b.checkCapabilities(shard); err != nil {
+		//	return fmt.Errorf("capability error on %s: %v", shard.string(), err)
+		//}
 	}
 	return nil
 }
