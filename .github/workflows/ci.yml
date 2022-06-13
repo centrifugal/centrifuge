@@ -35,9 +35,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Start single Redis
-        uses: supercharge/redis-github-action@1.1.0
-        with:
-          redis-version: ${{ matrix.redis-version }}
+        run: docker run -d -p 6379:6379 --ulimit memlock=-1 docker.dragonflydb.io/dragonflydb/dragonfly:v0.3.0-alpha
 
       - name: Start Redis Cluster
         run: docker run -d -e "IP=0.0.0.0" -p 7000-7006:7000-7006 grokzen/redis-cluster:latest
