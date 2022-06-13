@@ -316,7 +316,7 @@ func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 		return nil
 	}
 	// Check whether Redis Streams supported.
-	dr := shard.newDataRequest("XINFO", nil, "", []interface{}{"HELP"})
+	dr := shard.newDataRequest("XRANGE", nil, "", []interface{}{"_", "0-0", "0-0"})
 	resp := shard.getDataResponse(dr)
 	if resp.err != nil {
 		if strings.Contains(resp.err.Error(), "ERR unknown command") {
