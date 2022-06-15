@@ -974,12 +974,14 @@ func BenchmarkRedisSurvey(b *testing.B) {
 			waitAllNodes(b, node, tt.NumOtherNodes+1)
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_, err := node.Survey(context.Background(), "test_op", nil, "")
-				if err != nil {
-					b.Fatal(err)
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					_, err := node.Survey(context.Background(), "test_op", nil, "")
+					if err != nil {
+						b.Fatal(err)
+					}
 				}
-			}
+			})
 			b.StopTimer()
 		})
 	}

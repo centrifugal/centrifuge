@@ -517,7 +517,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 	// Invoke handler on this node since control message handler
 	// ignores those sent from the current Node.
 	if toNodeID == "" || toNodeID == n.ID() {
-		if toNodeID == n.ID() {
+		if toNodeID == n.ID() || (toNodeID == "" && numNodes == 1) {
 			needDistributedPublish = false
 		}
 		if op == emulationOp {
