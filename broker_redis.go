@@ -179,7 +179,7 @@ end
 return {offset, epoch}
 		`
 
-	// addHistoryStreamSource contains Lua script to save data to Redis stream and
+	// addHistoryStreamSource contains a Lua script to save data to Redis stream and
 	// publish it into channel.
 	// KEYS[1] - history stream key
 	// KEYS[2] - stream meta hash key
@@ -797,11 +797,11 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 			// Add message to worker channel preserving message order - i.b. messages
 			// from the same channel will be processed in the same worker.
 			workers[index(n.Channel, numWorkers)] <- n
-		case redis.Subscription:
 		case error:
 			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
 			s.reloadPipeline()
 			return
+		default:
 		}
 	}
 }
