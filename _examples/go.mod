@@ -17,6 +17,7 @@ require (
 	github.com/gorilla/mux v1.7.4
 	github.com/gorilla/sessions v1.2.0
 	github.com/gorilla/websocket v1.5.0
+	github.com/lucas-clemente/quic-go v0.27.2
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
 	github.com/nats-io/nats-server/v2 v2.8.1 // indirect
 	github.com/nats-io/nats.go v1.14.0
