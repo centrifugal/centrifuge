@@ -3874,7 +3874,7 @@ func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
 		Id:        1,
 		Subscribe: &protocol.SubscribeRequest{},
 	})
-	require.False(t, ok)
+	require.True(t, ok)
 }
 
 func getCommandParams(t *testing.T, p interface{}) []byte {

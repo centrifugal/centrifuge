@@ -1129,9 +1129,12 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
 	isConnect := cmd.Connect != nil
 	if !c.authenticated && !isConnect {
-		// Client must send connect command to authenticate itself first.
-		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
-		return &DisconnectBadRequest
+		// Client must send connect command to authenticate itself first. Till that moment we ignore
+		// all other commands. Ignoring and not disconnecting here is important since client could send
+		// optimistic subscription commands but got an error upon handling connect command. Client
+		// which is not authenticated in a configured time will be eventually disconnected with a stale
+		// reason.
+		return nil
 	}
 
 	var method protocol.Command_MethodType
@@ -1433,9 +1436,9 @@ func (c *Client) expire() {
 }
 
 func (c *Client) handleConnect(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
-	_, disconnect := c.connectCmd(req, cmd, started, false, rw)
-	if disconnect != nil {
-		return disconnect
+	_, err := c.connectCmd(req, cmd, started, false, rw)
+	if err != nil {
+		return err
 	}
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
