@@ -365,10 +365,7 @@ func (n *Node) cleanNodeInfo() {
 		case <-n.shutdownCh:
 			return
 		case <-time.After(nodeInfoCleanInterval):
-			n.mu.RLock()
-			delay := nodeInfoMaxDelay
-			n.mu.RUnlock()
-			n.nodes.clean(delay)
+			n.nodes.clean(nodeInfoMaxDelay)
 		}
 	}
 }
