@@ -23,7 +23,7 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       matrix:
-        go-version: [1.16, 1.17]
+        go-version: [1.17, 1.18]
         redis-version: [6]
     steps:
       - name: Install Go stable version
@@ -49,7 +49,7 @@ jobs:
         run: go test -v -race -tags integration -coverprofile=coverage.out $(go list ./... | grep -v /_examples/)
 
       - name: Upload code coverage to codecov
-        if: matrix.go-version == '1.17'
+        if: matrix.go-version == '1.18'
         uses: codecov/codecov-action@v1
         with:
           file: ./coverage.out

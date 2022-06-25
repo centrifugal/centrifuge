@@ -245,7 +245,7 @@ func main() {
 				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
-			time.Sleep(1000 * time.Millisecond)
+			time.Sleep(10000 * time.Millisecond)
 		}
 	}()
 
