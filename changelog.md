@@ -1,3 +1,95 @@
+v0.23.0
+=======
+
+This release is a work concentrated around two main things:
+
+* More work on client protocol v2. This should become part of [Centrifugo v4](https://github.com/centrifugal/centrifugo/issues/500). New SDKs which work over new protocol and have new API will be soon released. SDKs will behave according to [client SDK API spec](https://centrifugal.dev/docs/next/transports/client_api). Probably in next major release of Centrifuge we will switch using protocol v2 by default. For now things should be backwards compatible with current protocol.
+* Introducing our own EXPERIMENTAL bidirectional emulation layer using HTTP-streaming and EventSource transports. There are a couple of examples which demonstrate how to use it. Examples located in `_examples/experimental` directory.
+
+Lots of changes here but in most cases it should be straightforward to adapt.
+
+Some important release highlights:
+
+* Avoid using pointers for Disconnects. This allows reducing a risk of getting nil pointer dereference inside `OnDisconnect` callback.
+* `DefaultConfig` removed, use `Config{}` as a starting point.
+* `OnStateSnapshot` callback for connection to return state to the external code, useful for connection introspection. This is EXPERIMENTAL and a subject to change.
+* Refactor unsubscribe reasons, make unsubscribe first-class citizen with unsubscribe codes.
+* Introducing `Temporary` flag for `Error` to indicate temporary errors to a client.
+
+```
+❯ gorelease -base v0.22.2 -version v0.23.0
+# github.com/centrifugal/centrifuge
+## incompatible changes
+(*Client).Disconnect: changed from func(*Disconnect) to func(...Disconnect)
+(*Client).Unsubscribe: changed from func(string) error to func(string, ...Unsubscribe)
+DefaultConfig: removed
+DisconnectBadRequest: changed from *Disconnect to Disconnect
+DisconnectChannelLimit: changed from *Disconnect to Disconnect
+DisconnectConnectionLimit: changed from *Disconnect to Disconnect
+DisconnectEvent.Disconnect: changed from *Disconnect to Disconnect
+DisconnectExpired: changed from *Disconnect to Disconnect
+DisconnectForceNoReconnect: changed from *Disconnect to Disconnect
+DisconnectForceReconnect: changed from *Disconnect to Disconnect
+DisconnectInsufficientState: changed from *Disconnect to Disconnect
+DisconnectInvalidToken: changed from *Disconnect to Disconnect
+DisconnectNoPong: changed from *Disconnect to Disconnect
+DisconnectNormal: removed
+DisconnectServerError: changed from *Disconnect to Disconnect
+DisconnectShutdown: changed from *Disconnect to Disconnect
+DisconnectSlow: changed from *Disconnect to Disconnect
+DisconnectStale: changed from *Disconnect to Disconnect
+DisconnectSubExpired: changed from *Disconnect to Disconnect
+DisconnectWriteError: changed from *Disconnect to Disconnect
+Error.Error: removed
+Hub: old is comparable, new is not
+Transport.Close: changed from func(*Disconnect) error to func(Disconnect) error
+TransportInfo.Emulation: added
+UnsubscribeEvent.Reason: removed
+UnsubscribeReason: removed
+UnsubscribeReasonClient: removed
+UnsubscribeReasonDisconnect: removed
+UnsubscribeReasonServer: removed
+WithDisconnect: removed
+## compatible changes
+(*Client).OnStateSnapshot: added
+(*Client).StateSnapshot: added
+(*Disconnect).CloseText: added
+(*Hub).Connections: added
+Disconnect.Error: added
+Disconnect.String: added
+DisconnectConnectionClosed: added
+DisconnectEvent.Code: added
+DisconnectEvent.Reason: added
+DisconnectEvent.Reconnect: added
+EmulationConfig: added
+EmulationHandler: added
+Error.Temporary: added
+HTTPStreamConfig: added
+HTTPStreamHandler: added
+NewEmulationHandler: added
+NewHTTPStreamHandler: added
+NewSSEHandler: added
+SSEConfig: added
+SSEHandler: added
+StateSnapshotHandler: added
+SubscribeEvent.Positioned: added
+SubscribeEvent.Recoverable: added
+Unsubscribe.String: added
+Unsubscribe: added
+UnsubscribeCodeClient: added
+UnsubscribeCodeDisconnect: added
+UnsubscribeCodeExpired: added
+UnsubscribeCodeInsufficient: added
+UnsubscribeCodeServer: added
+UnsubscribeEvent.Code: added
+UnsubscribeEvent.Unsubscribe: added
+WithCustomDisconnect: added
+WithCustomUnsubscribe: added
+
+# summary
+v0.23.0 is a valid semantic version for this release.
+```
+
 v0.22.2
 =======
 
