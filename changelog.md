@@ -4,7 +4,7 @@ v0.23.0
 This release is a work concentrated around two main things:
 
 * More work on client protocol v2. This should become part of [Centrifugo v4](https://github.com/centrifugal/centrifugo/issues/500). New SDKs which work over new protocol and have new API will be soon released. SDKs will behave according to [client SDK API spec](https://centrifugal.dev/docs/next/transports/client_api). Probably in next major release of Centrifuge we will switch using protocol v2 by default. For now things should be backwards compatible with current protocol.
-* Introducing our own EXPERIMENTAL bidirectional emulation layer using HTTP-streaming and EventSource transports. There are a couple of examples which demonstrate how to use it. Examples located in `_examples/experimental` directory.
+* Introducing our own EXPERIMENTAL bidirectional emulation layer using HTTP-streaming and EventSource transports. There are a couple of examples which demonstrate how to use it. Examples located in `_examples/experimental` directory. The important thing about emulation implementation is that it does not require sticky sessions on load balancer in distributed case.
 
 Lots of changes here but in most cases it should be straightforward to adapt.
 
