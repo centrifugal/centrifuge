@@ -4,9 +4,9 @@ v0.23.0
 This release is a work concentrated around two main things:
 
 * More work on client protocol v2. This should become part of [Centrifugo v4](https://github.com/centrifugal/centrifugo/issues/500). New SDKs which work over new protocol and have new API will be soon released. SDKs will behave according to [client SDK API spec](https://centrifugal.dev/docs/next/transports/client_api). Probably in next major release of Centrifuge we will switch using protocol v2 by default. For now things should be backwards compatible with current protocol.
-* Introducing our own EXPERIMENTAL bidirectional emulation layer using HTTP-streaming and EventSource transports. There are a couple of examples which demonstrate how to use it. Examples located in `_examples/experimental` directory. The important thing about emulation implementation is that it does not require sticky sessions on load balancer in distributed case.
+* Introducing our own EXPERIMENTAL bidirectional emulation layer using HTTP-streaming and EventSource transports. There are a couple of examples which demonstrate how to use it. Examples located in `_examples/experimental` directory. The important thing about emulation implementation is that it does not require sticky sessions on load balancer in distributed case. This should be a modern alternative to SockJS, and the cool thing is that our new Javascript SDK will be able to automatically fallback to HTTP-based transports in case of problems with WebSocket connection. More information will be available soon upon Centrifugo v4 release. 
 
-Lots of changes here but in most cases it should be straightforward to adapt.
+Lots of changes here but in most cases it should be straightforward to adapt. Don't hesitate to reach me out in [community chat rooms](https://centrifugal.dev/docs/getting-started/introduction#join-community) in case of any questions.
 
 Some important release highlights:
 
