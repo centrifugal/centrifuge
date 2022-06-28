@@ -4,17 +4,23 @@ v0.23.0
 This release is a work concentrated around two main things:
 
 * More work on client protocol v2. This should become part of [Centrifugo v4](https://github.com/centrifugal/centrifugo/issues/500). New SDKs which work over new protocol and have new API will be soon released. SDKs will behave according to [client SDK API spec](https://centrifugal.dev/docs/next/transports/client_api). Probably in next major release of Centrifuge we will switch using protocol v2 by default. For now things should be backwards compatible with current protocol.
-* Introducing our own EXPERIMENTAL bidirectional emulation layer using HTTP-streaming and EventSource transports. There are a couple of examples which demonstrate how to use it. Examples located in `_examples/experimental` directory. The important thing about emulation implementation is that it does not require sticky sessions on load balancer in distributed case. This should be a modern alternative to SockJS, and the cool thing is that our new Javascript SDK will be able to automatically fallback to HTTP-based transports in case of problems with WebSocket connection. More information will be available soon upon Centrifugo v4 release. 
+* Introducing our own EXPERIMENTAL bidirectional emulation layer using HTTP-streaming and EventSource transports. There are a couple of examples which demonstrate how to use it. Examples located in `_examples/experimental` directory (they require new `centrifuge-js` SDK served locally from [v3_dev branch](https://github.com/centrifugal/centrifuge-js/tree/v3_dev)). The important thing about our emulation implementation is that it does not require sticky sessions on load balancer in distributed case. This should be a more lightweight alternative to SockJS, and the cool thing is that our new Javascript SDK will be able to automatically fallback to HTTP-based transports in case of problems with WebSocket connection. More information will be available soon upon Centrifugo v4 release.
 
-Lots of changes here but in most cases it should be straightforward to adapt. Don't hesitate to reach me out in [community chat rooms](https://centrifugal.dev/docs/getting-started/introduction#join-community) in case of any questions.
+Lots of changes here but in most cases it should be straightforward to adapt. Don't hesitate to reach out with questions in [community chat rooms](https://centrifugal.dev/docs/getting-started/introduction#join-community).
 
 Some important release highlights:
 
-* Avoid using pointers for Disconnects. This allows reducing a risk of getting nil pointer dereference inside `OnDisconnect` callback.
-* `DefaultConfig` removed, use `Config{}` as a starting point.
-* `OnStateSnapshot` callback for connection to return state to the external code, useful for connection introspection. This is EXPERIMENTAL and a subject to change.
+* `DefaultConfig` removed, use `Config{}` as a starting point. I.e. `centrifuge.New(centrifuge.Config{})` is equivalent to  `centrifuge.New(centrifuge.DefaultConfig)`.
+* We are avoiding using pointers for Disconnects. We got rid of nil Disconnect inside `OnDisconnect` callback when connection closing was not forced by a server. Where we previously had `nil` we now always have `DisconnectConnectionClosed`. This should make library usage more safe and better describes the reason of disconnection.
 * Refactor unsubscribe reasons, make unsubscribe first-class citizen with unsubscribe codes.
-* Introducing `Temporary` flag for `Error` to indicate temporary errors to a client.
+* Introducing `Temporary` flag for `Error` to indicate temporary errors to a client. This allows making Subscriptions more resilient in client protocol v2 - subscriptions will re-subscribe automatically upon receiving temporary errors.
+* There are updated rules in code numbers used for errors, unsubscribes and disconnects. This allows splitting code number space and avoid code overlap. While these rules may be tricky to follow – we believe that in most cases library users do not deal with them a lot in application code:
+  * For errors: error codes must be in range [0, 1999]. Codes [0, 99] are reserved for client-side errors. Codes [100, 399] are reserved for Centrifuge library internal usage. So applications must use codes in range [400, 1999] when creating custom errors.
+  * For unsubscribe codes: codes must be in range [2000, 2999]. Unsubscribe codes >= 2500 coming from server to client result into resubscribe attempt in client protocol V2. Codes [2000, 2099] and [2500, 2599] are reserved for Centrifuge library internal usage. In client protocol v2 we are making Subscriptions to behave isolated from Connection. For example, some individual subscriptions can expire, but it does not result into connection close, only that individual Subscription will re-subscribe if required.
+  * For disconnect codes: codes must be in range [3000, 4999]. Codes [3000, 3999] are reserved for Centrifuge library internal usage. Upon receiving disconnect code in range [3000, 3499] or [4000, 4499] client won't reconnect to a server. Splitting disconnect codes to ranges allows getting rid of sending JSON-encoded data in WebSocket CLOSE frame in client protocol v2. Thus – less network traffic and more lightweight disconnection process.
+* `OnStateSnapshot` callback for connection to return Client current state to the external code, useful for connection introspection. This is EXPERIMENTAL and a subject to change.
+
+As you can see many changes in this release are concentrated around making library more strict in some aspects, this is a part of standardization and unifying client protocol and SDK API/behavior we want to achieve.
 
 ```
 ❯ gorelease -base v0.22.2 -version v0.23.0
