@@ -19,6 +19,7 @@ Some important release highlights:
   * For unsubscribe codes: codes must be in range [2000, 2999]. Unsubscribe codes >= 2500 coming from server to client result into resubscribe attempt in client protocol V2. Codes [2000, 2099] and [2500, 2599] are reserved for Centrifuge library internal usage. In client protocol v2 we are making Subscriptions to behave isolated from Connection. For example, some individual subscriptions can expire, but it does not result into connection close, only that individual Subscription will re-subscribe if required.
   * For disconnect codes: codes must be in range [3000, 4999]. Codes [3000, 3999] are reserved for Centrifuge library internal usage. Upon receiving disconnect code in range [3000, 3499] or [4000, 4499] client won't reconnect to a server. Splitting disconnect codes to ranges allows getting rid of sending JSON-encoded data in WebSocket CLOSE frame in client protocol v2. Thus – less network traffic and more lightweight disconnection process.
 * `OnStateSnapshot` callback for connection to return Client current state to the external code, useful for connection introspection. This is EXPERIMENTAL and a subject to change.
+* Remove an unnecessary lock - [#230](https://github.com/centrifugal/centrifuge/pull/230)
 
 As you can see many changes in this release are concentrated around making library more strict in some aspects, this is a part of standardization and unifying client protocol and SDK API/behavior we want to achieve.
 
