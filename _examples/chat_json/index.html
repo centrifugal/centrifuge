@@ -25,7 +25,7 @@
                 // const centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
                 //     sockjsTransports: [
                 //         "xhr-streaming",
-                //     ]
+                //     ],
                 // });
 
                 centrifuge.setConnectData({"user-agent": navigator.userAgent});
@@ -83,7 +83,7 @@
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                const sub = centrifuge.subscribe(channel, handleMessage)
+                const sub = centrifuge.subscribe(channel, handlePublication)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
                         .on("unsubscribe", handleUnsubscribe)
@@ -117,7 +117,7 @@
                     drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
                 }
 
-                function handleMessage(message) {
+                function handlePublication(message) {
                     let clientID;
                     if (message.info){
                         clientID = message.info.client;
@@ -129,16 +129,16 @@
                     drawText(text);
                 }
 
-                function handleJoin(message) {
-                    drawText('Client joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                function handleJoin(ctx) {
+                    drawText('Client joined channel ' + this.channel + ' (uid ' + ctx.info["client"] + ', user '+ ctx.info["user"] +')');
                 }
 
-                function handleLeave(message) {
-                    drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                function handleLeave(ctx) {
+                    drawText('Client left channel ' + this.channel + ' (uid ' + ctx.info["client"] + ', user '+ ctx.info["user"] +')');
                 }
 
-                function handleUnsubscribe(sub) {
-                    drawText('Unsubscribed from channel ' + sub.channel);
+                function handleUnsubscribe(ctx) {
+                    drawText('Unsubscribed from channel ' + ctx.channel  + ', ' + JSON.stringify(ctx));
                 }
 
                 function drawText(text) {

@@ -41,6 +41,30 @@ func TestWebsocketHandler(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 }
 
+func TestWebsocketHandlerProtocolV2(t *testing.T) {
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
+		UseWriteBufferPool: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+		Compression: true,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?cf_protocol_version=v2", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+}
+
 func TestWebsocketHandlerSubprotocol(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()

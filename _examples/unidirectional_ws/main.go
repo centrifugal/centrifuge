@@ -265,6 +265,11 @@ func (t *websocketTransport) Unidirectional() bool {
 	return true
 }
 
+// Emulation ...
+func (t *websocketTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return 0
@@ -323,7 +328,7 @@ func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 const closeFrameWait = 5 * time.Second
 
 // Close closes transport.
-func (t *websocketTransport) Close(_ *centrifuge.Disconnect) error {
+func (t *websocketTransport) Close(_ centrifuge.Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()

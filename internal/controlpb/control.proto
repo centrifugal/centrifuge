@@ -69,6 +69,8 @@ message Unsubscribe {
     string user = 2;
     string client = 3;
     string session = 4;
+    uint32 code = 5;
+    string reason = 6;
 }
 
 message Disconnect {

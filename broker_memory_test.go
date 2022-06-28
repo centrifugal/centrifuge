@@ -95,6 +95,7 @@ func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
 }
 
 func TestMemoryHistoryHub(t *testing.T) {
+	t.Parallel()
 	h := newHistoryHub(0)
 	h.runCleanups()
 	h.RLock()
@@ -364,6 +365,7 @@ var recoverTestChannels = []recoverTestChannel{
 }
 
 func TestMemoryClientSubscribeRecover(t *testing.T) {
+	t.Parallel()
 	for _, tt := range recoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := defaultNodeNoHandlers()

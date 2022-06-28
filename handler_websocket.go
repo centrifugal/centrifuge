@@ -370,6 +370,11 @@ func (t *websocketTransport) Unidirectional() bool {
 	return false
 }
 
+// Emulation ...
+func (t *websocketTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	// Websocket sends disconnects in Close frames.
@@ -442,7 +447,7 @@ func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 const closeFrameWait = 5 * time.Second
 
 // Close closes transport.
-func (t *websocketTransport) Close(disconnect *Disconnect) error {
+func (t *websocketTransport) Close(disconnect Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -455,7 +460,7 @@ func (t *websocketTransport) Close(disconnect *Disconnect) error {
 	close(t.closeCh)
 	t.mu.Unlock()
 
-	if disconnect != nil {
+	if disconnect.Code != DisconnectConnectionClosed.Code {
 		msg := websocket.FormatCloseMessage(int(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
 		err := t.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
 		if err != nil {

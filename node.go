@@ -79,6 +79,8 @@ type Node struct {
 
 	notificationHandler NotificationHandler
 	nodeInfoSendHandler NodeInfoSendHandler
+
+	emulationSurveyHandler *emulationSurveyHandler
 }
 
 const (
@@ -116,7 +118,11 @@ func New(c Config) (*Node, error) {
 		c.ChannelMaxLength = 255
 	}
 
-	uid := uuid.Must(uuid.NewRandom()).String()
+	uidObj, err := uuid.NewRandom()
+	if err != nil {
+		return nil, err
+	}
+	uid := uidObj.String()
 
 	subLocks := make(map[int]*sync.Mutex, numSubLocks)
 	for i := 0; i < numSubLocks; i++ {
@@ -147,6 +153,8 @@ func New(c Config) (*Node, error) {
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
 	}
+
+	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
 	if c.LogHandler != nil {
 		n.logger = newLogger(c.LogLevel, c.LogHandler)
@@ -451,12 +459,17 @@ const defaultSurveyTimeout = 10 * time.Second
 // If toNodeID is not an empty string then a survey will be sent only to the concrete node in
 // a cluster, otherwise a survey sent to all running nodes. See a corresponding Node.OnSurvey
 // method to handle received surveys.
+// Survey ops starting with `centrifuge_` are reserved by Centrifuge library.
 func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID string) (map[string]SurveyResult, error) {
-	if n.surveyHandler == nil {
+	if n.surveyHandler == nil && op != emulationOp {
 		return nil, errSurveyHandlerNotRegistered
 	}
 
 	incActionCount("survey")
+	started := time.Now()
+	defer func() {
+		surveyDurationSummary.WithLabelValues(op).Observe(time.Since(started).Seconds())
+	}()
 
 	if _, ok := ctx.Deadline(); !ok {
 		// If no timeout provided then fallback to defaultSurveyTimeout to avoid endless surveys.
@@ -496,15 +509,29 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 
 	results := map[string]SurveyResult{}
 
+	needDistributedPublish := true
+
 	// Invoke handler on this node since control message handler
 	// ignores those sent from the current Node.
 	if toNodeID == "" || toNodeID == n.ID() {
-		n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
-			surveyChan <- survey{
-				UID:    n.uid,
-				Result: SurveyResult(reply),
-			}
-		})
+		if toNodeID == n.ID() || (toNodeID == "" && numNodes == 1) {
+			needDistributedPublish = false
+		}
+		if op == emulationOp {
+			n.emulationSurveyHandler.HandleEmulation(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
+				surveyChan <- survey{
+					UID:    n.uid,
+					Result: SurveyResult(reply),
+				}
+			})
+		} else {
+			n.surveyHandler(SurveyEvent{Op: op, Data: data}, func(reply SurveyReply) {
+				surveyChan <- survey{
+					UID:    n.uid,
+					Result: SurveyResult(reply),
+				}
+			})
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -525,14 +552,16 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 		}
 	}()
 
-	cmd := &controlpb.Command{
-		Uid:    n.uid,
-		Method: controlpb.Command_SURVEY_REQUEST,
-		Params: params,
-	}
-	err = n.publishControl(cmd, toNodeID)
-	if err != nil {
-		return nil, err
+	if needDistributedPublish {
+		cmd := &controlpb.Command{
+			Uid:    n.uid,
+			Method: controlpb.Command_SURVEY_REQUEST,
+			Params: params,
+		}
+		err = n.publishControl(cmd, toNodeID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	wg.Wait()
@@ -630,7 +659,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding unsubscribe control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.unsubscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session)
+		return n.hub.unsubscribe(cmd.User, cmd.Channel, Unsubscribe{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session)
 	case controlpb.Command_SUBSCRIBE:
 		cmd, err := n.controlDecoder.DecodeSubscribe(params)
 		if err != nil {
@@ -648,7 +677,7 @@ func (n *Node) handleControl(data []byte) error {
 			n.logger.log(newLogEntry(LogLevelError, "error decoding disconnect control params", map[string]interface{}{"error": err.Error()}))
 			return err
 		}
-		return n.hub.disconnect(cmd.User, &Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Session, cmd.Whitelist)
+		return n.hub.disconnect(cmd.User, Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Session, cmd.Whitelist)
 	case controlpb.Command_SURVEY_REQUEST:
 		cmd, err := n.controlDecoder.DecodeSurveyRequest(params)
 		if err != nil {
@@ -932,14 +961,16 @@ func (n *Node) pubRefresh(user string, opts RefreshOptions) error {
 
 // pubUnsubscribe publishes unsubscribe control message to all nodes – so all
 // nodes could unsubscribe user from channel.
-func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) error {
-	unsubscribe := &controlpb.Unsubscribe{
+func (n *Node) pubUnsubscribe(user string, ch string, unsubscribe Unsubscribe, clientID, sessionID string) error {
+	unsub := &controlpb.Unsubscribe{
 		User:    user,
 		Channel: ch,
-		Client:  opts.clientID,
-		Session: opts.sessionID,
+		Code:    unsubscribe.Code,
+		Reason:  unsubscribe.Reason,
+		Client:  clientID,
+		Session: sessionID,
 	}
-	params, _ := n.controlEncoder.EncodeUnsubscribe(unsubscribe)
+	params, _ := n.controlEncoder.EncodeUnsubscribe(unsub)
 	cmd := &controlpb.Command{
 		Uid:    n.uid,
 		Method: controlpb.Command_UNSUBSCRIBE,
@@ -950,7 +981,7 @@ func (n *Node) pubUnsubscribe(user string, ch string, opts UnsubscribeOptions) e
 
 // pubDisconnect publishes disconnect control message to all nodes – so all
 // nodes could disconnect user from server.
-func (n *Node) pubDisconnect(user string, disconnect *Disconnect, clientID string, sessionID string, whitelist []string) error {
+func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string) error {
 	protoDisconnect := &controlpb.Disconnect{
 		User:      user,
 		Whitelist: whitelist,
@@ -1076,13 +1107,18 @@ func (n *Node) Unsubscribe(userID string, channel string, opts ...UnsubscribeOpt
 	for _, opt := range opts {
 		opt(unsubscribeOpts)
 	}
+	customUnsubscribe := unsubscribeServer
+	if unsubscribeOpts.unsubscribe != nil {
+		customUnsubscribe = *unsubscribeOpts.unsubscribe
+	}
+
 	// Unsubscribe on this node.
-	err := n.hub.unsubscribe(userID, channel, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
+	err := n.hub.unsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
 	if err != nil {
 		return err
 	}
 	// Send unsubscribe control message to other nodes.
-	return n.pubUnsubscribe(userID, channel, *unsubscribeOpts)
+	return n.pubUnsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
 }
 
 // Disconnect allows closing all user connections on all nodes.
@@ -1092,9 +1128,9 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 		opt(disconnectOpts)
 	}
 	// Disconnect user from this node
-	customDisconnect := disconnectOpts.Disconnect
-	if customDisconnect == nil {
-		customDisconnect = DisconnectForceNoReconnect
+	customDisconnect := DisconnectForceNoReconnect
+	if disconnectOpts.Disconnect != nil {
+		customDisconnect = *disconnectOpts.Disconnect
 	}
 	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
 	if err != nil {
@@ -1386,11 +1422,11 @@ func (r *nodeRegistry) list() []*controlpb.Node {
 	return nodes
 }
 
-func (r *nodeRegistry) get(uid string) *controlpb.Node {
+func (r *nodeRegistry) get(uid string) (*controlpb.Node, bool) {
 	r.mu.RLock()
-	info := r.nodes[uid]
+	info, ok := r.nodes[uid]
 	r.mu.RUnlock()
-	return info
+	return info, ok
 }
 
 func (r *nodeRegistry) add(info *controlpb.Node) bool {

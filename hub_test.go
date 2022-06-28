@@ -18,7 +18,7 @@ type testTransport struct {
 	sink              chan []byte
 	closed            bool
 	closeCh           chan struct{}
-	disconnect        *Disconnect
+	disconnect        Disconnect
 	protoType         ProtocolType
 	cancelFn          func()
 	unidirectional    bool
@@ -112,6 +112,10 @@ func (t *testTransport) Unidirectional() bool {
 	return t.unidirectional
 }
 
+func (t *testTransport) Emulation() bool {
+	return false
+}
+
 func (t *testTransport) ProtocolVersion() ProtocolVersion {
 	return t.protocolVersion
 }
@@ -130,7 +134,7 @@ func (t *testTransport) AppLevelPing() AppLevelPing {
 	}
 }
 
-func (t *testTransport) Close(disconnect *Disconnect) error {
+func (t *testTransport) Close(disconnect Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -179,18 +183,18 @@ func TestHubUnsubscribe(t *testing.T) {
 	newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 
 	// Unsubscribe not existed user.
-	err := n.hub.unsubscribe("1", "test_channel", "", "")
+	err := n.hub.unsubscribe("1", "test_channel", unsubscribeServer, "", "")
 	require.NoError(t, err)
 
 	// Unsubscribe subscribed user.
-	err = n.hub.unsubscribe("42", "test_channel", "", "")
+	err = n.hub.unsubscribe("42", "test_channel", unsubscribeServer, "", "")
 	require.NoError(t, err)
 
 LOOP:
 	for {
 		select {
 		case data := <-transport.sink:
-			if string(data) == "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{}}}" {
+			if string(data) == "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{\"code\":2000,\"reason\":\"server unsubscribe\"}}}" {
 				break LOOP
 			}
 		case <-time.After(2 * time.Second):
@@ -349,7 +353,7 @@ func TestHubOperationsWithClientID(t *testing.T) {
 	err := n.hub.subscribe("12", "channel", clientToKeep.ID(), "")
 	require.NoError(t, err)
 	require.Equal(t, 3, n.hub.NumSubscriptions())
-	err = n.hub.unsubscribe("12", "channel", clientToKeep.ID(), "")
+	err = n.hub.unsubscribe("12", "channel", unsubscribeServer, clientToKeep.ID(), "")
 	require.NoError(t, err)
 	require.Equal(t, 2, n.hub.NumSubscriptions())
 
@@ -409,11 +413,13 @@ func TestHubOperationsWithSessionID(t *testing.T) {
 
 	sessionToDisconnect := client.sessionID()
 
+	_, ok := n.hub.clientBySession(sessionToDisconnect)
+	require.True(t, ok)
 	require.Equal(t, 0, n.hub.NumSubscriptions())
 	err := n.hub.subscribe("12", "test", "", clientToKeep.sessionID())
 	require.NoError(t, err)
 	require.Equal(t, 1, n.hub.NumSubscriptions())
-	err = n.hub.unsubscribe("12", "test", "", clientToKeep.sessionID())
+	err = n.hub.unsubscribe("12", "test", unsubscribeServer, "", clientToKeep.sessionID())
 	require.NoError(t, err)
 	require.Equal(t, 0, n.hub.NumSubscriptions())
 

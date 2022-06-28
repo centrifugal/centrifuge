@@ -76,7 +76,7 @@ func main() {
 		cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
-			// Subscribe to personal several server-side channel.
+			// Subscribe to a personal server-side channel.
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
 				"#" + cred.UserID: {Recover: true, Presence: true, JoinLeave: true},
 			},
@@ -85,7 +85,7 @@ func main() {
 
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
-		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
+		log.Printf("[user %s] connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
 		// Event handler should not block, so start separate goroutine to
 		// periodically send messages to client.
@@ -106,23 +106,22 @@ func main() {
 			}
 		}()
 
-		client.OnAlive(func() {
-			log.Printf("user %s connection is still active", client.UserID())
-		})
-
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			log.Printf("[user %s] connection is going to expire, refreshing", client.UserID())
+
 			cb(centrifuge.RefreshReply{
 				ExpireAt: time.Now().Unix() + 60,
 			}, nil)
 		})
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+			log.Printf("[user %s] subscribes on %s", client.UserID(), e.Channel)
+
 			if !channelSubscribeAllowed(e.Channel) {
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
+
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
 					Recover:   true,
@@ -133,12 +132,9 @@ func main() {
 			}, nil)
 		})
 
-		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
-			log.Printf("user %s unsubscribed from %s", client.UserID(), e.Channel)
-		})
-
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			log.Printf("[user %s[ publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+
 			if !client.IsSubscribed(e.Channel) {
 				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)
 				return
@@ -163,14 +159,16 @@ func main() {
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
-			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
+			log.Printf("[user %s] sent RPC, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
+
 			cb(centrifuge.RPCReply{
 				Data: []byte(`{"year": "2020"}`),
 			}, nil)
 		})
 
 		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
-			log.Printf("user %s calls presence on %s", client.UserID(), e.Channel)
+			log.Printf("[user %s] calls presence on %s", client.UserID(), e.Channel)
+
 			if !client.IsSubscribed(e.Channel) {
 				cb(centrifuge.PresenceReply{}, centrifuge.ErrorPermissionDenied)
 				return
@@ -179,11 +177,19 @@ func main() {
 		})
 
 		client.OnMessage(func(e centrifuge.MessageEvent) {
-			log.Printf("message from user: %s, data: %s", client.UserID(), string(e.Data))
+			log.Printf("[user %s] sent message, data: %s", client.UserID(), string(e.Data))
+		})
+
+		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
+			log.Printf("[user %s] unsubscribed from %s: %s", client.UserID(), e.Channel, e.Reason)
+		})
+
+		client.OnAlive(func() {
+			log.Printf("[user %s] connection is still active", client.UserID())
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
-			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
+			log.Printf("[user %s] disconnected: %s", client.UserID(), e.Reason)
 		})
 	})
 

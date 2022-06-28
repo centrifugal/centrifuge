@@ -43,6 +43,11 @@ func (t *customWebsocketTransport) Unidirectional() bool {
 	return false
 }
 
+// Emulation ...
+func (t *customWebsocketTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
@@ -122,7 +127,7 @@ func (t *customWebsocketTransport) WriteMany(messages ...[]byte) error {
 }
 
 // Close ...
-func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) error {
+func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -132,7 +137,7 @@ func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) erro
 	close(t.closeCh)
 	t.mu.Unlock()
 
-	if disconnect != nil {
+	if disconnect != centrifuge.DisconnectConnectionClosed {
 		data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
 		_ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
 		return t.conn.Close()

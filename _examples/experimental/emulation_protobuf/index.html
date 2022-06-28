@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title></title>
+        <style type="text/css">
+            input[type="text"] { width: 300px; }
+            .muted {color: #CCCCCC; font-size: 10px;}
+        </style>
+        <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding-indexes.js"></script>
+        <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding.js"></script>
+        <script type="text/javascript" src="http://localhost:2000/centrifuge.protobuf.js"></script>
+        <script type="text/javascript">
+            // helper functions to work with escaping html.
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            function replaceTag(tag) {return tagsToReplace[tag] || tag;}
+            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
+
+            const channel = "chat:index";
+
+            window.addEventListener('load', function() {
+                const input = document.getElementById("input");
+                const container = document.getElementById('messages');
+
+                const transports = [
+                    {
+                        transport: 'http_stream',
+                        endpoint: 'http://localhost:8000/connection/http_stream'
+                    }
+                ]
+
+                const centrifuge = new Centrifuge(transports, {
+                    protocol: 'protobuf', // Note we are setting protobuf protocol here!
+                });
+
+                // bind listeners on centrifuge object instance events.
+                centrifuge.on('connected', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
+                    input.removeAttribute('disabled');
+                });
+
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('error', function(ctx){
+                    drawText('Client error: ' + JSON.stringify(ctx));
+                    centrifuge.connect();
+                });
+
+                centrifuge.on('message', function(ctx) {
+                    const str = new TextDecoder("utf-8").decode(ctx.data);
+                    drawText(str);
+                    // Echo data back to server with 'ack' prefix.
+                    const echoData = new TextEncoder("utf-8").encode("ack " + str);
+                    centrifuge.send(echoData);
+                });
+
+                centrifuge.on('publication', function(ctx) {
+                    let str = new TextDecoder("utf-8").decode(ctx.data);
+                    drawText('Server-side publication from channel ' + ctx.channel + ": " + str);
+                });
+
+                centrifuge.on('join', function(ctx) {
+                    drawText('Server-side join from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('leave', function(ctx) {
+                    drawText('Server-side leave from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('subscribed', function(ctx) {
+                    drawText('Subscribed to server-side channel ' + ctx.channel +  ' (ctx: ' + JSON.stringify(ctx) + ')');
+                });
+
+                centrifuge.on('subscribing', function(ctx) {
+                    drawText('Subscribing to server-side channel ' + ctx.channel);
+                });
+
+                centrifuge.on('unsubscribed', function(ctx) {
+                    drawText('Unsubscribe from server-side channel ' + ctx.channel);
+                });
+
+                // subscribe on channel and bind various event listeners. Actual
+                // subscription request will be sent after client connects to
+                // a server.
+                const sub = centrifuge.newSubscription(channel, {recoverable: true})
+                    .on('publication', handlePublication)
+                    .on("join", handleJoin)
+                    .on("leave", handleLeave)
+                    .on("subscribing", handleSubscribing)
+                    .on("unsubscribed", handleUnsubscribed)
+                    .on("subscribed", handleSubscribed)
+                    .on("error", handleSubscriptionError)
+
+                // We can call subscribe even in client disconnected state. Subscription
+                // will be queued.
+                sub.subscribe();
+
+                // Trigger actual connection establishing with a server.
+                // At this moment actual client work starts - i.e. subscriptions
+                // defined start subscribing etc.
+                centrifuge.connect();
+
+                function handleSubscribed(ctx) {
+                    drawText('Subscribed on channel ' + ctx.channel);
+
+                    const rpcRequest = {"test": "payload"}
+                    const binary = new TextEncoder().encode(JSON.stringify(rpcRequest));
+
+                    centrifuge.rpc("test_method", binary).then(function(result){
+                        const str = new TextDecoder("utf-8").decode(result.data);
+                        drawText("RPC response data: " + str);
+                    }, function(err) {
+                        drawText("RPC error: " + JSON.stringify(err));
+                    });
+                }
+
+                function handleSubscribing(ctx) {
+                    drawText('Subscribing to channel ' + ctx.channel + ', code: ' + ctx.code + ', reason: ' + ctx.reason);
+                }
+
+                function handleUnsubscribed(sub) {
+                    drawText('Unsubscribed from channel ' + sub.channel);
+                }
+
+                function handleSubscriptionError(ctx) {
+                    drawText('Subscription error in channel ' + ctx.channel + ': ' + JSON.stringify(ctx));
+                }
+
+                function handlePublication(ctx) {
+                    const str = new TextDecoder("utf-8").decode(ctx.data);
+                    const data = JSON.parse(str);
+                    let clientID;
+                    if (ctx.info) {
+                        clientID = ctx.info.client;
+                    } else {
+                        clientID = null;
+                    }
+                    const inputText = data["input"].toString();
+                    const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
+                    drawText(text);
+                }
+
+                function handleJoin(message) {
+                    drawText('Someone joined channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                }
+
+                function handleLeave(message) {
+                    drawText('Someone left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
+                }
+
+                function drawText(text) {
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
+                }
+
+                document.getElementById('form').addEventListener('submit', function(event) {
+                    event.preventDefault();
+                    const data = {"input": input.value};
+                    const binaryData = new TextEncoder("utf-8").encode(JSON.stringify(data));
+                    sub.publish(binaryData).then(function() {
+                        drawText('Publication accepted by server');
+                    }, function(err) {
+                        drawText("Publish error: " + err.code + ' ' + err.message);
+                        console.log('error publishing message', err);
+                    });
+                    input.value = '';
+                });
+            });
+        </script>
+    </head>
+    <body>
+        <form id="form">
+            <input type="text" id="input" autocomplete="off" />
+            <input type="submit" id="submit" value="»">
+        </form>
+        <ul id="messages"></ul>
+    </body>
+</html>

@@ -9,36 +9,36 @@ import (
 var _ error = (*Error)(nil)
 
 // Error represents client reply error.
+// Library user can define own application specific errors. When defining new
+// custom errors use error codes in range [400, 1999] assuming that codes in
+// interval 0-399 are reserved by Centrifuge.
 type Error struct {
-	Code    uint32
-	Message string
+	Code      uint32
+	Message   string
+	Temporary bool
 }
 
 func (e *Error) toProto() *protocol.Error {
 	return &protocol.Error{
-		Code:    e.Code,
-		Message: e.Message,
+		Code:      e.Code,
+		Message:   e.Message,
+		Temporary: e.Temporary,
 	}
 }
 
-func (e Error) Error() string {
+func (e *Error) Error() string {
 	return fmt.Sprintf("%d: %s", e.Code, e.Message)
 }
 
-// Here we define well-known errors that can be used in client protocol
-// replies.
-// Library user can define own application specific errors. When define new
-// custom error it is recommended to use error codes >= 1000 assuming that
-// codes in interval 0-999 reserved by Centrifuge.
-// Server Error codes start with 100 as we aim to have client-side error codes
-// in the future, see https://github.com/centrifugal/centrifuge/issues/149.
+// Here we define well-known errors that can be used in client protocol replies.
 var (
 	// ErrorInternal means server error, if returned this is a signal
 	// that something went wrong with server itself and client most probably
 	// not guilty.
 	ErrorInternal = &Error{
-		Code:    100,
-		Message: "internal server error",
+		Code:      100,
+		Message:   "internal server error",
+		Temporary: true,
 	}
 	// ErrorUnauthorized says that request is unauthorized.
 	ErrorUnauthorized = &Error{
@@ -84,7 +84,8 @@ var (
 		Code:    108,
 		Message: "not available",
 	}
-	// ErrorTokenExpired indicates that connection token expired.
+	// ErrorTokenExpired indicates that connection or subscription token expired.
+	// In this case client should drop the current token and try to ask a new one.
 	ErrorTokenExpired = &Error{
 		Code:    109,
 		Message: "token expired",
@@ -97,8 +98,9 @@ var (
 	// ErrorTooManyRequests means that server rejected request due to
 	// its rate limiting strategies.
 	ErrorTooManyRequests = &Error{
-		Code:    111,
-		Message: "too many requests",
+		Code:      111,
+		Message:   "too many requests",
+		Temporary: true,
 	}
 	// ErrorUnrecoverablePosition means that stream does not contain required
 	// range of publications to fulfill a history query. This can happen due to

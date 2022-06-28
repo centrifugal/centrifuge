@@ -34,21 +34,23 @@ type SubscribeOptions struct {
 	ExpireAt int64
 	// ChannelInfo defines custom channel information, zero value means no channel information.
 	ChannelInfo []byte
-	// Presence turns on participating in channel presence.
+	// Presence turns on participating in channel presence - i.e. client subscription
+	// will be visible in a current channel presence.
 	Presence bool
 	// JoinLeave enables sending Join and Leave messages for this client in channel.
 	JoinLeave bool
 	// When position is on client will additionally sync its position inside
-	// a stream to prevent message loss. Make sure you are enabling Position in channels
+	// a stream to prevent message loss. The loss can happen due to at most once
+	// guarantees of PUB/SUB model. Make sure you are enabling Position in channels
 	// that maintain Publication history stream. When Position is on Centrifuge will
-	// include StreamPosition information to subscribe response - for a client to be able
-	// to manually track its position inside a stream.
+	// include StreamPosition information to subscribe response - for a client to be
+	// able to manually track its position inside a stream.
 	Position bool
-	// Recover turns on recovery option for a channel. In this case client will try to
-	// recover missed messages automatically upon resubscribe to a channel after reconnect
-	// to a server. This option also enables client position tracking inside a stream
-	// (like Position option) to prevent occasional message loss. Make sure you are using
-	// Recover in channels that maintain Publication history stream.
+	// Recover turns on automatic recovery for a channel. In this case client will try to
+	// recover missed messages upon resubscribe to a channel after reconnect to a server.
+	// This option also enables client position tracking inside a stream (i.e. enabling
+	// Recover will automatically enable Position option) to prevent occasional message loss.
+	// Make sure you are using Recover in channels that maintain Publication history stream.
 	Recover bool
 	// Data to send to a client with Subscribe Push.
 	Data []byte
@@ -195,6 +197,8 @@ type UnsubscribeOptions struct {
 	clientID string
 	// sessionID to unsubscribe.
 	sessionID string
+	// custom unsubscribe object.
+	unsubscribe *Unsubscribe
 }
 
 // UnsubscribeOption is a type to represent various Unsubscribe options.
@@ -216,6 +220,13 @@ func WithUnsubscribeSession(sessionID string) UnsubscribeOption {
 	}
 }
 
+// WithCustomUnsubscribe allows setting custom Unsubscribe.
+func WithCustomUnsubscribe(unsubscribe Unsubscribe) UnsubscribeOption {
+	return func(opts *UnsubscribeOptions) {
+		opts.unsubscribe = &unsubscribe
+	}
+}
+
 // DisconnectOptions define some fields to alter behaviour of Disconnect operation.
 type DisconnectOptions struct {
 	// Disconnect represents custom disconnect to use.
@@ -232,10 +243,10 @@ type DisconnectOptions struct {
 // DisconnectOption is a type to represent various Disconnect options.
 type DisconnectOption func(options *DisconnectOptions)
 
-// WithDisconnect allows setting custom Disconnect.
-func WithDisconnect(disconnect *Disconnect) DisconnectOption {
+// WithCustomDisconnect allows setting custom Disconnect.
+func WithCustomDisconnect(disconnect Disconnect) DisconnectOption {
 	return func(opts *DisconnectOptions) {
-		opts.Disconnect = disconnect
+		opts.Disconnect = &disconnect
 	}
 }
 

@@ -281,6 +281,11 @@ func (t *eventsourceTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
+// Emulation ...
+func (t *eventsourceTransport) Emulation() bool {
+	return false
+}
+
 // AppLevelPing not implemented here, example only works over ProtocolVersion1.
 func (t *eventsourceTransport) AppLevelPing() centrifuge.AppLevelPing {
 	return centrifuge.AppLevelPing{}
@@ -306,7 +311,7 @@ func (t *eventsourceTransport) WriteMany(messages ...[]byte) error {
 	return nil
 }
 
-func (t *eventsourceTransport) Close(_ *centrifuge.Disconnect) error {
+func (t *eventsourceTransport) Close(_ centrifuge.Disconnect) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

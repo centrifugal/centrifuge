@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -53,7 +52,6 @@ type customWebsocketTransport struct {
 
 	conn      *websocket.Conn
 	protoType centrifuge.ProtocolType
-	request   *http.Request
 }
 
 func newWebsocketTransport(conn *websocket.Conn, protoType centrifuge.ProtocolType) *customWebsocketTransport {
@@ -80,6 +78,11 @@ func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion 
 
 // Unidirectional returns whether transport is unidirectional.
 func (t *customWebsocketTransport) Unidirectional() bool {
+	return false
+}
+
+// Emulation ...
+func (t *customWebsocketTransport) Emulation() bool {
 	return false
 }
 
@@ -142,7 +145,7 @@ func (t *customWebsocketTransport) WriteMany(messages ...[]byte) error {
 }
 
 // Close ...
-func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) error {
+func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -152,12 +155,8 @@ func (t *customWebsocketTransport) Close(disconnect *centrifuge.Disconnect) erro
 	close(t.closeCh)
 	t.mu.Unlock()
 
-	if disconnect != nil {
-		reason, err := json.Marshal(disconnect)
-		if err != nil {
-			return err
-		}
-		return t.conn.Close(websocket.StatusCode(disconnect.Code), string(reason))
+	if disconnect != centrifuge.DisconnectConnectionClosed {
+		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
 	}
 	return t.conn.Close(websocket.StatusNormalClosure, "")
 }

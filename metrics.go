@@ -29,6 +29,7 @@ var (
 	replyErrorCount        *prometheus.CounterVec
 	serverDisconnectCount  *prometheus.CounterVec
 	commandDurationSummary *prometheus.SummaryVec
+	surveyDurationSummary  *prometheus.SummaryVec
 	recoverCount           *prometheus.CounterVec
 	transportConnectCount  *prometheus.CounterVec
 	transportMessagesSent  *prometheus.CounterVec
@@ -61,11 +62,15 @@ var (
 	recoverCountYes prometheus.Counter
 	recoverCountNo  prometheus.Counter
 
-	transportConnectCountWebsocket prometheus.Counter
-	transportConnectCountSockJS    prometheus.Counter
+	transportConnectCountWebsocket  prometheus.Counter
+	transportConnectCountSockJS     prometheus.Counter
+	transportConnectCountSSE        prometheus.Counter
+	transportConnectCountHTTPStream prometheus.Counter
 
-	transportMessagesSentWebsocket prometheus.Counter
-	transportMessagesSentSockJS    prometheus.Counter
+	transportMessagesSentWebsocket  prometheus.Counter
+	transportMessagesSentSockJS     prometheus.Counter
+	transportMessagesSentSSE        prometheus.Counter
+	transportMessagesSentHTTPStream prometheus.Counter
 
 	commandDurationConnect       prometheus.Observer
 	commandDurationSubscribe     prometheus.Observer
@@ -188,6 +193,10 @@ func incTransportConnect(transport string) {
 		transportConnectCountWebsocket.Inc()
 	case transportSockJS:
 		transportConnectCountSockJS.Inc()
+	case transportSSE:
+		transportConnectCountSSE.Inc()
+	case transportHTTPStream:
+		transportConnectCountHTTPStream.Inc()
 	default:
 		transportConnectCount.WithLabelValues(transport).Inc()
 	}
@@ -202,6 +211,10 @@ func incTransportMessagesSent(transport string) {
 		transportMessagesSentWebsocket.Inc()
 	case transportSockJS:
 		transportMessagesSentSockJS.Inc()
+	case transportSSE:
+		transportMessagesSentSSE.Inc()
+	case transportHTTPStream:
+		transportMessagesSentHTTPStream.Inc()
 	default:
 		transportMessagesSent.WithLabelValues(transport).Inc()
 	}
@@ -216,6 +229,10 @@ func addTransportMessagesSent(transport string, n float64) {
 		transportMessagesSentWebsocket.Add(n)
 	case transportSockJS:
 		transportMessagesSentSockJS.Add(n)
+	case transportSSE:
+		transportMessagesSentSSE.Add(n)
+	case transportHTTPStream:
+		transportMessagesSentHTTPStream.Add(n)
 	default:
 		transportMessagesSent.WithLabelValues(transport).Add(n)
 	}
@@ -374,6 +391,14 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Number of channels with one or more subscribers.",
 	})
 
+	surveyDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace:  metricsNamespace,
+		Subsystem:  "node",
+		Name:       "survey_duration_seconds",
+		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
+		Help:       "Survey duration summary.",
+	}, []string{"op"})
+
 	replyErrorCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
@@ -393,7 +418,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Subsystem:  "client",
 		Name:       "command_duration_seconds",
 		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
-		Help:       "clientID command duration summary.",
+		Help:       "Client command duration summary.",
 	}, []string{"method"})
 
 	recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -447,9 +472,13 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 
 	transportConnectCountWebsocket = transportConnectCount.WithLabelValues(transportWebsocket)
 	transportConnectCountSockJS = transportConnectCount.WithLabelValues(transportSockJS)
+	transportConnectCountHTTPStream = transportConnectCount.WithLabelValues(transportHTTPStream)
+	transportConnectCountSSE = transportConnectCount.WithLabelValues(transportSSE)
 
 	transportMessagesSentWebsocket = transportMessagesSent.WithLabelValues(transportWebsocket)
 	transportMessagesSentSockJS = transportMessagesSent.WithLabelValues(transportSockJS)
+	transportMessagesSentSSE = transportMessagesSent.WithLabelValues(transportSSE)
+	transportMessagesSentHTTPStream = transportMessagesSent.WithLabelValues(transportHTTPStream)
 
 	labelForMethod := func(methodType protocol.Command_MethodType) string {
 		return strings.ToLower(protocol.Command_MethodType_name[int32(methodType)])
@@ -514,6 +543,8 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	if err := registry.Register(buildInfoGauge); err != nil {
 		return err
 	}
-
+	if err := registry.Register(surveyDurationSummary); err != nil {
+		return err
+	}
 	return nil
 }

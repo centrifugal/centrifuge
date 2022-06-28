@@ -66,7 +66,7 @@ func main() {
 		if presenceStats.NumClients >= 2 {
 			err = node.Disconnect(
 				client.UserID(),
-				centrifuge.WithDisconnect(centrifuge.DisconnectConnectionLimit),
+				centrifuge.WithCustomDisconnect(centrifuge.DisconnectConnectionLimit),
 				centrifuge.WithDisconnectClientWhitelist([]string{client.ID()}),
 			)
 			if err != nil {

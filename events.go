@@ -97,13 +97,29 @@ type RefreshHandler func(RefreshEvent, RefreshCallback)
 // callback will run every ClientPresenceUpdateInterval and can save you a timer.
 type AliveHandler func()
 
+// UnsubscribeEvent contains fields related to unsubscribe event.
+type UnsubscribeEvent struct {
+	// Channel client unsubscribed from.
+	Channel string
+	// ServerSide set to true for server-side subscription unsubscribe events.
+	ServerSide bool
+	// Unsubscribe identifies the source of unsubscribe (i.e. why unsubscribed event happened).
+	Unsubscribe
+	// Disconnect can be additionally set to identify the reason of disconnect when Unsubscribe.Code
+	// is UnsubscribeCodeDisconnect - i.e. when unsubscribe caused by a client disconnection process.
+	// Otherwise, it's nil.
+	Disconnect *Disconnect
+}
+
+// UnsubscribeHandler called when client unsubscribed from channel.
+type UnsubscribeHandler func(UnsubscribeEvent)
+
 // DisconnectEvent contains fields related to disconnect event.
 type DisconnectEvent struct {
-	// Disconnect can optionally contain a Disconnect object that was sent from
-	// a server to a client with closing handshake. If this field exists then client
-	// connection was closed by a server. This field is nil then client disconnected
-	// normally from the client-side or connection with a client has been lost.
-	Disconnect *Disconnect
+	// Disconnect contains a Disconnect object which identifies the code and reason
+	// of disconnect process. When disconnect was not initiated by a server this
+	// is always DisconnectConnectionClosed.
+	Disconnect
 }
 
 // DisconnectHandler called when client disconnects from server. The important
@@ -122,6 +138,10 @@ type SubscribeEvent struct {
 	Token string
 	// Data received from client as part of Subscribe Command.
 	Data []byte
+	// Client wants to create subscription with positioned property.
+	Positioned bool
+	// Client wants to create subscription with recoverable property.
+	Recoverable bool
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do
@@ -141,40 +161,6 @@ type SubscribeReply struct {
 
 // SubscribeHandler called when client wants to subscribe on channel.
 type SubscribeHandler func(SubscribeEvent, SubscribeCallback)
-
-// UnsubscribeReason is a type that describes the reason why client
-// unsubscribed from a channel.
-type UnsubscribeReason int
-
-// Known unsubscribe reasons.
-const (
-	// UnsubscribeReasonClient set when unsubscribe event was initiated
-	// by a client-side unsubscribe call.
-	UnsubscribeReasonClient UnsubscribeReason = 1
-	// UnsubscribeReasonServer set when unsubscribe event was initiated
-	// by a server-side unsubscribe call.
-	UnsubscribeReasonServer UnsubscribeReason = 2
-	// UnsubscribeReasonDisconnect set when unsubscribe event was initiated
-	// by a client disconnect process.
-	UnsubscribeReasonDisconnect UnsubscribeReason = 3
-)
-
-// UnsubscribeEvent contains fields related to unsubscribe event.
-type UnsubscribeEvent struct {
-	// Channel client unsubscribed from.
-	Channel string
-	// ServerSide set to true for server-side subscription unsubscribe events.
-	ServerSide bool
-	// Reason can help to determine the reason of UnsubscribeEvent.
-	Reason UnsubscribeReason
-	// Disconnect can be additionally set when Reason is UnsubscribeReasonDisconnect.
-	// If connection close was initiated by a server it will contain Disconnect object,
-	// if client connection lost or closed normally from a client side Disconnect is nil.
-	Disconnect *Disconnect
-}
-
-// UnsubscribeHandler called when client unsubscribed from channel.
-type UnsubscribeHandler func(UnsubscribeEvent)
 
 // PublishEvent contains fields related to publish event. Note that this event
 // called before actual publish to Broker so handler has an option to reject this
@@ -323,6 +309,10 @@ type HistoryCallback func(HistoryReply, error)
 
 // HistoryHandler must handle incoming command from client.
 type HistoryHandler func(HistoryEvent, HistoryCallback)
+
+// StateSnapshotHandler must return a copy of current client's
+// internal state. Returning a copy is important to avoid data races.
+type StateSnapshotHandler func() (interface{}, error)
 
 // SurveyEvent with Op and Data of survey.
 type SurveyEvent struct {

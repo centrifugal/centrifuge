@@ -113,7 +113,7 @@ func TestClientClosedState(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
-	err := client.close(nil)
+	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
 	require.True(t, client.status == statusClosed)
 }
@@ -148,8 +148,7 @@ func TestClientUnsubscribeClosedClient(t *testing.T) {
 	subscribeClient(t, client, "test")
 	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
-	err = client.Unsubscribe("test")
-	require.NoError(t, err)
+	client.Unsubscribe("test")
 }
 
 func TestClientTimerSchedule(t *testing.T) {
@@ -509,7 +508,7 @@ func TestClientSubscribeBrokerErrorOnSubscribe(t *testing.T) {
 			callback(SubscribeReply{}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(done)
 		})
 	})
@@ -546,7 +545,7 @@ func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(done)
 		})
 	})
@@ -615,7 +614,7 @@ func TestClientSubscribePositionedError(t *testing.T) {
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(done)
 		})
 	})
@@ -678,7 +677,7 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(done)
 		})
 	})
@@ -713,13 +712,53 @@ func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
 			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectInsufficientState, event.Disconnect)
+			require.Equal(t, DisconnectInsufficientState.Code, event.Code)
 			close(done)
 		})
 	})
 
 	client := newTestClient(t, node, "42")
 	connectClient(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test",
+		Recover: true,
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	err = node.handlePublication("test", &Publication{
+		Offset: offset,
+	}, StreamPosition{offset, epoch})
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+}
+
+func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch string) {
+	t.Parallel()
+	broker := NewTestBroker()
+	node := nodeWithBroker(broker)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+		})
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			require.Equal(t, UnsubscribeCodeInsufficient, event.Code)
+			close(done)
+		})
+	})
+
+	client := newTestClientV2(t, node, "42")
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -753,6 +792,23 @@ func TestClientUnexpectedOffsetEpoch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testUnexpectedOffsetEpoch(t, tt.Offset, tt.Epoch)
+		})
+	}
+}
+
+func TestClientUnexpectedOffsetEpochClientV2(t *testing.T) {
+	tests := []struct {
+		Name   string
+		Offset uint64
+		Epoch  string
+	}{
+		{"wrong_offset", 2, ""},
+		{"wrong_epoch", 1, "xyz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.Name, func(t *testing.T) {
+			testUnexpectedOffsetEpochProtocolV2(t, tt.Offset, tt.Epoch)
 		})
 	}
 }
@@ -1279,7 +1335,7 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 			callback(SubscribeReply{}, nil)
 		})
 		client.OnUnsubscribe(func(e UnsubscribeEvent) {
-			require.Equal(t, UnsubscribeReasonClient, e.Reason)
+			require.Equal(t, UnsubscribeCodeClient, e.Code)
 			require.Nil(t, e.Disconnect)
 			close(unsubscribed)
 		})
@@ -1322,7 +1378,7 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 			callback(SubscribeReply{}, nil)
 		})
 		client.OnUnsubscribe(func(e UnsubscribeEvent) {
-			require.Equal(t, UnsubscribeReasonServer, e.Reason)
+			require.Equal(t, UnsubscribeCodeServer, e.Code)
 			require.Nil(t, e.Disconnect)
 			close(unsubscribed)
 		})
@@ -1332,8 +1388,7 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 	subscribeClient(t, client, "test")
 	require.Equal(t, 1, len(client.Channels()))
 
-	err := client.Unsubscribe("test")
-	require.NoError(t, err)
+	client.Unsubscribe("test")
 	require.Equal(t, 0, len(client.Channels()))
 	require.Equal(t, 1, node.Hub().NumClients())
 	require.Equal(t, 0, node.Hub().NumChannels())
@@ -2131,9 +2186,7 @@ func TestClientHandleUnidirectional(t *testing.T) {
 }
 
 func TestExtractUnidirectionalDisconnect(t *testing.T) {
-	d := extractUnidirectionalDisconnect(nil)
-	require.Nil(t, d)
-	d = extractUnidirectionalDisconnect(errors.New("test"))
+	d := extractUnidirectionalDisconnect(errors.New("test"))
 	require.Equal(t, DisconnectServerError, d)
 	d = extractUnidirectionalDisconnect(ErrorLimitExceeded)
 	require.Equal(t, DisconnectServerError, d)
@@ -2270,7 +2323,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 			counterMu.Lock()
 			numDisconnectCalls++
 			counterMu.Unlock()
-			require.Equal(t, DisconnectBadRequest, event.Disconnect)
+			require.Equal(t, DisconnectBadRequest.Code, event.Code)
 			wg.Done()
 		})
 	})
@@ -2384,9 +2437,9 @@ func TestClientHandleCommandWithoutID(t *testing.T) {
 }
 
 func TestErrorDisconnectContext(t *testing.T) {
-	ctx := errorDisconnectContext(nil, DisconnectForceReconnect)
+	ctx := errorDisconnectContext(nil, &DisconnectForceReconnect)
 	require.Nil(t, ctx.err)
-	require.Equal(t, DisconnectForceReconnect, ctx.disconnect)
+	require.Equal(t, DisconnectForceReconnect.Code, ctx.disconnect.Code)
 	ctx = errorDisconnectContext(ErrorLimitExceeded, nil)
 	require.Nil(t, ctx.disconnect)
 	require.Equal(t, ErrorLimitExceeded, ctx.err)
@@ -2544,7 +2597,7 @@ func TestClientSend(t *testing.T) {
 	err := client.Send([]byte(`{}`))
 	require.NoError(t, err)
 
-	err = client.close(nil)
+	err = client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
 
 	err = client.Send([]byte(`{}`))
@@ -2820,7 +2873,7 @@ func TestServerSideRefreshDisconnect(t *testing.T) {
 			close(done)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectExpired, event.Disconnect)
+			require.Equal(t, DisconnectExpired.Code, event.Code)
 			close(disconnected)
 		})
 	})
@@ -2872,7 +2925,7 @@ func TestServerSideRefreshCustomError(t *testing.T) {
 			close(done)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectServerError, event.Disconnect)
+			require.Equal(t, DisconnectServerError.Code, event.Code)
 			close(disconnected)
 		})
 	})
@@ -3146,27 +3199,77 @@ func TestClientCheckPosition(t *testing.T) {
 	require.True(t, got)
 
 	// not initial, not time to check.
-	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagRecover})
+	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPosition})
 	require.True(t, got)
+}
 
-	// invalid position.
-	client.channels["channel"] = channelContext{positionCheckFailures: 2, flags: flagRecover}
-	got = client.checkPosition(50*time.Second, "channel", channelContext{
-		positionCheckTime: 50, flags: flagRecover,
-	})
+func TestClientIsValidPosition(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	node.mu.Lock()
+	node.nowTimeGetter = func() time.Time {
+		return time.Unix(200, 0)
+	}
+	node.mu.Unlock()
+
+	client.channels = map[string]channelContext{
+		"example": {
+			flags:             flagSubscribed,
+			positionCheckTime: 50,
+			streamPosition: StreamPosition{
+				Offset: 20,
+				Epoch:  "test",
+			},
+		},
+	}
+
+	got := client.isValidPosition(StreamPosition{
+		Offset: 20,
+		Epoch:  "test",
+	}, 200, "example")
+	require.True(t, got)
+	require.Equal(t, int64(200), client.channels["example"].positionCheckTime)
+
+	got = client.isValidPosition(StreamPosition{
+		Offset: 19,
+		Epoch:  "test",
+	}, 210, "example")
+	require.True(t, got)
+	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
+
+	got = client.isValidPosition(StreamPosition{
+		Offset: 21,
+		Epoch:  "test",
+	}, 220, "example")
 	require.False(t, got)
-	require.Contains(t, client.channels, "channel")
-	require.EqualValues(t, 3, client.channels["channel"].positionCheckFailures)
-	require.EqualValues(t, 200, client.channels["channel"].positionCheckTime)
+	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
 
-	// valid position resets positionCheckFailures.
-	require.NotZero(t, client.channels["channel"].positionCheckFailures)
-	sp, _ := node.streamTop("channel")
-	got = client.checkPosition(50*time.Second, "channel", channelContext{
-		positionCheckTime: 50, flags: flagRecover, streamPosition: sp,
-	})
+	client.channels = map[string]channelContext{
+		"example": {
+			positionCheckTime: 50,
+			streamPosition: StreamPosition{
+				Offset: 20,
+				Epoch:  "test",
+			},
+		},
+	}
+	// no subscribed flag.
+	got = client.isValidPosition(StreamPosition{
+		Offset: 21,
+		Epoch:  "test",
+	}, 220, "example")
 	require.True(t, got)
-	require.Zero(t, client.channels["channel"].positionCheckFailures)
+
+	_ = client.close(DisconnectConnectionClosed)
+	// closed client.
+	got = client.isValidPosition(StreamPosition{
+		Offset: 21,
+		Epoch:  "test",
+	}, 220, "example")
+	require.True(t, got)
 }
 
 func TestErrLogLevel(t *testing.T) {
@@ -3187,7 +3290,7 @@ func TestClientTransportWriteError(t *testing.T) {
 	testCases := []struct {
 		Name               string
 		Error              error
-		ExpectedDisconnect *Disconnect
+		ExpectedDisconnect Disconnect
 	}{
 		{"disconnect", DisconnectSlow, DisconnectSlow},
 		{"other", errors.New("boom"), DisconnectWriteError},
@@ -3208,13 +3311,13 @@ func TestClientTransportWriteError(t *testing.T) {
 
 			node.OnConnect(func(client *Client) {
 				client.OnUnsubscribe(func(event UnsubscribeEvent) {
-					require.Equal(t, UnsubscribeReasonDisconnect, event.Reason)
-					require.Equal(t, tt.ExpectedDisconnect, event.Disconnect)
+					require.Equal(t, UnsubscribeCodeDisconnect, event.Code)
+					require.Equal(t, tt.ExpectedDisconnect.Code, event.Disconnect.Code)
 					close(doneUnsubscribe)
 				})
 
 				client.OnDisconnect(func(event DisconnectEvent) {
-					require.Equal(t, tt.ExpectedDisconnect, event.Disconnect)
+					require.Equal(t, tt.ExpectedDisconnect.Code, event.Code)
 					close(doneDisconnect)
 				})
 			})
@@ -3518,7 +3621,7 @@ func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
 
 	<-startPublishingCh
 	close(stopPublishingCh)
-	client.Disconnect(DisconnectNormal)
+	client.Disconnect()
 	<-disconnectedCh
 	require.Len(t, node.Hub().Channels(), 0, node.Hub().Channels())
 }
@@ -3565,6 +3668,26 @@ func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
 	require.Len(t, node.Hub().Channels(), 0, node.Hub().Channels())
 }
 
+func TestClientOnStateSnapshot(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnect(func(client *Client) {
+		client.OnStateSnapshot(func() (interface{}, error) {
+			return 1, nil
+		})
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClient(t, client)
+
+	result, err := client.StateSnapshot()
+	require.NoError(t, err)
+	num, ok := result.(int)
+	require.True(t, ok)
+	require.Equal(t, 1, num)
+}
+
 func connectClientV2(t testing.TB, client *Client) {
 	rwWrapper := testReplyWriterWrapper()
 	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
@@ -3598,7 +3721,7 @@ func TestClientV1ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
-	data, err = clientV1.getUnsubscribePushReply("test")
+	data, err = clientV1.getUnsubscribePushReply("test", unsubscribeServer)
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
 
@@ -3668,7 +3791,7 @@ func TestClientV2ReplyConstruction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Refresh)
 
-	data, err = clientV2.getUnsubscribePushReply("test")
+	data, err = clientV2.getUnsubscribePushReply("test", unsubscribeServer)
 	require.NoError(t, err)
 	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Push.Unsubscribe)
 
@@ -3751,7 +3874,7 @@ func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
 		Id:        1,
 		Subscribe: &protocol.SubscribeRequest{},
 	})
-	require.False(t, ok)
+	require.True(t, ok)
 }
 
 func getCommandParams(t *testing.T, p interface{}) []byte {

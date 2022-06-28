@@ -307,6 +307,11 @@ func (t *sockjsTransport) Unidirectional() bool {
 	return false
 }
 
+// Emulation ...
+func (t *sockjsTransport) Emulation() bool {
+	return false
+}
+
 // DisabledPushFlags ...
 func (t *sockjsTransport) DisabledPushFlags() uint64 {
 	// SockJS has its own close frames to mimic WebSocket Close frames,
@@ -350,7 +355,7 @@ func (t *sockjsTransport) WriteMany(messages ...[]byte) error {
 }
 
 // Close closes transport.
-func (t *sockjsTransport) Close(disconnect *Disconnect) error {
+func (t *sockjsTransport) Close(disconnect Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
 		// Already closed, noop.
@@ -360,9 +365,5 @@ func (t *sockjsTransport) Close(disconnect *Disconnect) error {
 	t.closed = true
 	close(t.closeCh)
 	t.mu.Unlock()
-
-	if disconnect == nil {
-		disconnect = DisconnectNormal
-	}
 	return t.session.Close(disconnect.Code, disconnect.CloseText(t.ProtocolVersion()))
 }

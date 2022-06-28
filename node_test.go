@@ -265,7 +265,8 @@ func TestNodeRegistry(t *testing.T) {
 	registry.add(&nodeInfo1) // Make sure update works.
 	registry.add(&nodeInfo2)
 	require.Equal(t, 2, len(registry.list()))
-	info := registry.get("node1")
+	info, ok := registry.get("node1")
+	require.True(t, ok)
 	require.Equal(t, "node1", info.Uid)
 	registry.clean(10 * time.Second)
 	time.Sleep(2 * time.Second)
@@ -380,7 +381,7 @@ func TestNode_Subscribe(t *testing.T) {
 			require.Equal(t, "42", client.UserID())
 			require.Equal(t, "test_channel", event.Channel)
 			require.True(t, event.ServerSide)
-			require.Equal(t, UnsubscribeReasonServer, event.Reason)
+			require.Equal(t, UnsubscribeCodeServer, event.Code)
 			close(done)
 		})
 	})
@@ -443,14 +444,14 @@ func TestNode_Disconnect(t *testing.T) {
 	n.OnConnect(func(client *Client) {
 		client.OnDisconnect(func(event DisconnectEvent) {
 			require.Equal(t, "42", client.UserID())
-			require.Equal(t, DisconnectBadRequest, event.Disconnect)
+			require.Equal(t, DisconnectBadRequest.Code, event.Code)
 			close(done)
 		})
 	})
 
 	newTestConnectedClient(t, n, "42")
 
-	err = n.Disconnect("42", WithDisconnect(DisconnectBadRequest))
+	err = n.Disconnect("42", WithCustomDisconnect(DisconnectBadRequest))
 	require.NoError(t, err)
 	select {
 	case <-done:
@@ -467,7 +468,7 @@ func TestNode_pubUnsubscribe(t *testing.T) {
 	testBroker, _ := node.broker.(*TestBroker)
 	require.EqualValues(t, 1, testBroker.publishControlCount)
 
-	err := node.pubUnsubscribe("42", "holypeka", UnsubscribeOptions{})
+	err := node.pubUnsubscribe("42", "holypeka", unsubscribeServer, "", "")
 	require.NoError(t, err)
 	require.EqualValues(t, 2, testBroker.publishControlCount)
 }
@@ -1113,6 +1114,7 @@ func TestNode_OnSurvey_NoHandler(t *testing.T) {
 }
 
 func TestNode_OnSurvey_Timeout(t *testing.T) {
+	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 

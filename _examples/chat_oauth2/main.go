@@ -225,6 +225,10 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = response.Body.Close() }()
 
 	contents, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		log.Printf("Error reading body  %s\n", err.Error())
+		return
+	}
 
 	var user *GoogleUser
 	err = json.Unmarshal(contents, &user)

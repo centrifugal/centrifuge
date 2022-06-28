@@ -37,8 +37,9 @@ func main() {
 	log.Printf("NumCPU: %d", runtime.NumCPU())
 
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelError,
-		LogHandler: handleLog,
+		LogLevel:           centrifuge.LogLevelError,
+		LogHandler:         handleLog,
+		ClientQueueMaxSize: 10 * 1024 * 1024,
 	})
 
 	if os.Getenv("CENTRIFUGE_BROKER") == "redis" {

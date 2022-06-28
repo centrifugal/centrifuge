@@ -114,10 +114,10 @@ func (w *writer) run() {
 func (w *writer) enqueue(item queue.Item) *Disconnect {
 	ok := w.messages.Add(item)
 	if !ok {
-		return DisconnectNormal
+		return &DisconnectConnectionClosed
 	}
 	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
-		return DisconnectSlow
+		return &DisconnectSlow
 	}
 	return nil
 }

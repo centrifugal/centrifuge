@@ -21,9 +21,8 @@ func TestDisconnect_CloseText(t *testing.T) {
 
 func TestDisconnect_String(t *testing.T) {
 	d := Disconnect{
-		Code:            42,
-		Reason:          "reason",
-		cachedCloseText: "some information",
+		Code:   42,
+		Reason: "reason",
 	}
 	stringText := d.String()
 	require.Equal(t, "code: 42, reason: reason", stringText)
@@ -31,10 +30,9 @@ func TestDisconnect_String(t *testing.T) {
 
 func TestDisconnect_Error(t *testing.T) {
 	d := Disconnect{
-		Code:            42,
-		Reason:          "reason",
-		cachedCloseText: "some information",
+		Code:   42,
+		Reason: "reason",
 	}
 	errorText := d.Error()
-	require.Equal(t, "disconnected: code: 42, reason: reason", errorText)
+	require.Equal(t, "code: 42, reason: reason", errorText)
 }

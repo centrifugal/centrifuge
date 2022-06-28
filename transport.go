@@ -75,6 +75,9 @@ type TransportInfo interface {
 	// unidirectional transports Client writes Push protobuf messages
 	// without additional wrapping pushes into Reply type.
 	Unidirectional() bool
+	// Emulation must return true for transport that uses Centrifuge emulation layer.
+	// See EmulationHandler for more details.
+	Emulation() bool
 	// DisabledPushFlags returns a disabled push flags for specific transport.
 	// For example this allows to disable sending Disconnect push in case of
 	// bidirectional WebSocket implementation since disconnect data sent inside
@@ -104,5 +107,5 @@ type Transport interface {
 	// Close must close transport. Transport implementation can optionally
 	// handle Disconnect passed here. For example builtin WebSocket transport
 	// sends Disconnect as part of websocket.CloseMessage.
-	Close(*Disconnect) error
+	Close(Disconnect) error
 }

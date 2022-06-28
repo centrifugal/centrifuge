@@ -155,14 +155,14 @@ const (
 	// ARGV[3] - history lifetime
 	// ARGV[4] - channel to publish message to if needed
 	// ARGV[5] - history meta key expiration time
+	// ARGV[6] - new epoch value if no epoch set yet
 	addHistorySource = `
-redis.replicate_commands()
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("hget", KEYS[2], "e")
 end
 if epoch == false or epoch == nil then
-  epoch = redis.call('time')[1]
+  epoch = ARGV[6]
   redis.call("hset", KEYS[2], "e", epoch)
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
@@ -179,7 +179,7 @@ end
 return {offset, epoch}
 		`
 
-	// addHistoryStreamSource contains Lua script to save data to Redis stream and
+	// addHistoryStreamSource contains a Lua script to save data to Redis stream and
 	// publish it into channel.
 	// KEYS[1] - history stream key
 	// KEYS[2] - stream meta hash key
@@ -188,14 +188,14 @@ return {offset, epoch}
 	// ARGV[3] - stream lifetime
 	// ARGV[4] - channel to publish message to if needed
 	// ARGV[5] - history meta key expiration time
+	// ARGV[6] - new epoch value if no epoch set yet
 	addHistoryStreamSource = `
-redis.replicate_commands()
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("hget", KEYS[2], "e")
 end
 if epoch == false or epoch == nil then
-  epoch = redis.call('time')[1]
+  epoch = ARGV[6]
   redis.call("hset", KEYS[2], "e", epoch)
 end
 local offset = redis.call("hincrby", KEYS[2], "s", 1)
@@ -217,15 +217,15 @@ return {offset, epoch}
 	// ARGV[1] - include publications into response
 	// ARGV[2] - publications list right bound
 	// ARGV[3] - list meta hash key expiration time
+	// ARGV[4] - new epoch value if no epoch set yet
 	historyListSource = `
-redis.replicate_commands()
 local offset = redis.call("hget", KEYS[2], "s")
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("hget", KEYS[2], "e")
 end
 if epoch == false or epoch == nil then
-  epoch = redis.call('time')[1]
+  epoch = ARGV[4]
   redis.call("hset", KEYS[2], "e", epoch)
 end
 if ARGV[3] ~= '0' then
@@ -246,15 +246,15 @@ return {offset, epoch, pubs}
 	// ARGV[3] - limit
 	// ARGV[4] - reverse
 	// ARGV[5] - stream meta hash key expiration time
+	// ARGV[6] - new epoch value if no epoch set yet
 	historyStreamSource = `
-redis.replicate_commands()
 local offset = redis.call("hget", KEYS[2], "s")
 local epoch
 if redis.call('exists', KEYS[2]) ~= 0 then
   epoch = redis.call("hget", KEYS[2], "e")
 end
 if epoch == false or epoch == nil then
-  epoch = redis.call('time')[1]
+  epoch = ARGV[6]
   redis.call("hset", KEYS[2], "e", epoch)
 end
 if ARGV[5] ~= '0' then
@@ -316,7 +316,7 @@ func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 		return nil
 	}
 	// Check whether Redis Streams supported.
-	dr := shard.newDataRequest("XINFO", nil, "", []interface{}{"HELP"})
+	dr := shard.newDataRequest("XRANGE", nil, "", []interface{}{"_", "0-0", "0-0"})
 	resp := shard.getDataResponse(dr)
 	if resp.err != nil {
 		if strings.Contains(resp.err.Error(), "ERR unknown command") {
@@ -399,7 +399,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 		size = opts.HistorySize - 1
 		script = b.addHistoryListScript
 	}
-	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds})
+	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds, time.Now().Unix()})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return StreamPosition{}, resp.err
@@ -797,11 +797,11 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 			// Add message to worker channel preserving message order - i.b. messages
 			// from the same channel will be processed in the same worker.
 			workers[index(n.Channel, numWorkers)] <- n
-		case redis.Subscription:
 		case error:
 			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
 			s.reloadPipeline()
 			return
+		default:
 		}
 	}
 }
@@ -1063,7 +1063,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 
 	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
-	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, filter.Reverse, historyMetaTTLSeconds})
+	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, filter.Reverse, historyMetaTTLSeconds, time.Now().Unix()})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
@@ -1090,7 +1090,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 
 	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
-	dr := s.newDataRequest("", b.historyListScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, historyMetaTTLSeconds})
+	dr := s.newDataRequest("", b.historyListScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, historyMetaTTLSeconds, time.Now().Unix()})
 	resp := s.getDataResponse(dr)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err

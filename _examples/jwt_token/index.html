@@ -31,7 +31,7 @@
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connect', function(ctx){
-                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
                     input.removeAttribute('disabled');
                 });
 
