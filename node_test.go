@@ -1235,7 +1235,7 @@ func TestSingleFlightPresence(t *testing.T) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
 				Options: SubscribeOptions{
-					Presence: true,
+					EmitPresence: true,
 				},
 			}, nil)
 		})

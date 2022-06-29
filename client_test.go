@@ -447,13 +447,14 @@ func TestClientSubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					JoinLeave:   true,
-					Presence:    true,
-					Position:    true,
-					Recover:     true,
-					ChannelInfo: []byte("{}"),
-					ExpireAt:    time.Now().Unix() + 3600,
-					Data:        []byte("{}"),
+					EmitJoinLeave:     true,
+					ConsumeJoinLeave:  true,
+					EmitPresence:      true,
+					EnablePositioning: true,
+					EnableRecovery:    true,
+					ChannelInfo:       []byte("{}"),
+					ExpireAt:          time.Now().Unix() + 3600,
+					Data:              []byte("{}"),
 				},
 			}, nil)
 		})
@@ -541,7 +542,7 @@ func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Options: SubscribeOptions{Recover: true},
+				Options: SubscribeOptions{EnableRecovery: true},
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
@@ -574,7 +575,7 @@ func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Options: SubscribeOptions{Recover: true},
+				Options: SubscribeOptions{EnableRecovery: true},
 			}, nil)
 		})
 	})
@@ -610,7 +611,7 @@ func TestClientSubscribePositionedError(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Options: SubscribeOptions{Position: true},
+				Options: SubscribeOptions{EnablePositioning: true},
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
@@ -642,7 +643,7 @@ func TestClientSubscribePositioned(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Options: SubscribeOptions{Position: true},
+				Options: SubscribeOptions{EnablePositioning: true},
 			}, nil)
 		})
 	})
@@ -674,7 +675,7 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
 			require.Equal(t, DisconnectServerError.Code, event.Code)
@@ -709,7 +710,7 @@ func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
 			require.Equal(t, DisconnectInsufficientState.Code, event.Code)
@@ -749,7 +750,7 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 		client.OnUnsubscribe(func(event UnsubscribeEvent) {
 			require.Equal(t, UnsubscribeCodeInsufficient, event.Code)
@@ -1271,7 +1272,7 @@ func TestClientSubscribeLast(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+			cb(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 	})
 
@@ -1727,7 +1728,7 @@ func TestClientPresence(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-		cb(SubscribeReply{Options: SubscribeOptions{Presence: true}}, nil)
+		cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
 	})
 
 	client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
@@ -1780,7 +1781,7 @@ func TestClientPresenceTakeover(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-		cb(SubscribeReply{Options: SubscribeOptions{Presence: true}}, nil)
+		cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
 	})
 
 	client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
@@ -2529,7 +2530,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
-				Options: SubscribeOptions{Presence: true},
+				Options: SubscribeOptions{EmitPresence: true},
 			}, nil)
 		})
 	})
@@ -2562,8 +2563,8 @@ func TestClientSubExpired(t *testing.T) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					ExpireAt: time.Now().Unix() + 1,
-					Presence: true,
+					ExpireAt:     time.Now().Unix() + 1,
+					EmitPresence: true,
 				},
 			}, nil)
 		})
@@ -3379,7 +3380,7 @@ func TestConcurrentSameChannelSubscribe(t *testing.T) {
 			go func() {
 				cb(SubscribeReply{
 					Options: SubscribeOptions{
-						Recover: true,
+						EnableRecovery: true,
 					},
 				}, nil)
 				close(onSubscribe)
@@ -3467,7 +3468,7 @@ func TestSubscribeWithBufferedPublications(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Recover: true,
+					EnableRecovery: true,
 				},
 			}, nil)
 		})
@@ -3599,7 +3600,7 @@ func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
 			go func() {
 				cb(SubscribeReply{
 					Options: SubscribeOptions{
-						Recover: true,
+						EnableRecovery: true,
 					},
 				}, nil)
 			}()
@@ -3649,7 +3650,7 @@ func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Recover: true,
+					EnableRecovery: true,
 				},
 			}, nil)
 		})

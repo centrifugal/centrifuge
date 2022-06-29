@@ -131,8 +131,9 @@ const (
 	// Until that moment channel exists in client Channels map only to track
 	// duplicate subscription requests.
 	flagSubscribed uint8 = 1 << iota
-	flagPresence
-	flagJoinLeave
+	flagEmitPresence
+	flagEmitJoinLeave
+	flagConsumeJoinLeave
 	flagPosition
 	flagServerSide
 	flagClientSideRefresh
@@ -577,7 +578,7 @@ func (c *Client) transportEnqueue(data []byte) error {
 // updateChannelPresence updates client presence info for channel so it
 // won't expire until client disconnect.
 func (c *Client) updateChannelPresence(ch string, chCtx channelContext) error {
-	if !channelHasFlag(chCtx.flags, flagPresence) {
+	if !channelHasFlag(chCtx.flags, flagEmitPresence) {
 		return nil
 	}
 	c.mu.RLock()
@@ -1704,7 +1705,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 			return
 		}
 
-		if channelHasFlag(ctx.channelContext.flags, flagJoinLeave) && ctx.clientInfo != nil {
+		if channelHasFlag(ctx.channelContext.flags, flagEmitJoinLeave) && ctx.clientInfo != nil {
 			go func() { _ = c.node.publishJoin(req.Channel, ctx.clientInfo) }()
 		}
 	}
@@ -2509,7 +2510,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	if len(subCtxMap) > 0 {
 		for channel, subCtx := range subCtxMap {
 			go func(channel string, subCtx subscribeContext) {
-				if channelHasFlag(subCtx.channelContext.flags, flagJoinLeave) && subCtx.clientInfo != nil {
+				if channelHasFlag(subCtx.channelContext.flags, flagEmitJoinLeave) && subCtx.clientInfo != nil {
 					_ = c.node.publishJoin(channel, subCtx.clientInfo)
 				}
 			}(channel, subCtx)
@@ -2739,7 +2740,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		ChanInfo: reply.Options.ChannelInfo,
 	}
 
-	needPubSubSync := reply.Options.Position || reply.Options.Recover
+	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
 		// Start syncing recovery and PUB/SUB.
 		// The important thing is to call StopBuffering for this channel
@@ -2758,7 +2759,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		return ctx
 	}
 
-	if reply.Options.Presence {
+	if reply.Options.EmitPresence {
 		err = c.node.addPresence(channel, c.uid, info)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error adding presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -2774,13 +2775,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		recoveredPubs []*protocol.Publication
 	)
 
-	if reply.Options.Position || reply.Options.Recover {
+	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
 		res.Positioned = true
-		if reply.Options.Recover {
+		if reply.Options.EnableRecovery {
 			res.Recoverable = true
 		}
 
-		if reply.Options.Recover && req.Recover {
+		if reply.Options.EnableRecovery && req.Recover {
 			cmdOffset := req.Offset
 			cmdEpoch := req.Epoch
 
@@ -2899,14 +2900,17 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	if reply.ClientSideRefresh {
 		channelFlags |= flagClientSideRefresh
 	}
-	if reply.Options.Position || reply.Options.Recover {
+	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
 		channelFlags |= flagPosition
 	}
-	if reply.Options.Presence {
-		channelFlags |= flagPresence
+	if reply.Options.EmitPresence {
+		channelFlags |= flagEmitPresence
 	}
-	if reply.Options.JoinLeave {
-		channelFlags |= flagJoinLeave
+	if reply.Options.EmitJoinLeave {
+		channelFlags |= flagEmitJoinLeave
+	}
+	if reply.Options.ConsumeJoinLeave {
+		channelFlags |= flagConsumeJoinLeave
 	}
 
 	channelContext := channelContext{
@@ -2918,7 +2922,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			Epoch:  latestEpoch,
 		},
 	}
-	if reply.Options.Recover || reply.Options.Position {
+	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {
 		channelContext.positionCheckTime = time.Now().Unix()
 	}
 
@@ -3047,17 +3051,39 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data []b
 	return nil
 }
 
-func (c *Client) writeJoin(_ string, data []byte) error {
+func (c *Client) writeJoin(ch string, data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
+	c.mu.RLock()
+	channelContext, ok := c.channels[ch]
+	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
+		c.mu.RUnlock()
+		return nil
+	}
+	if !channelHasFlag(channelContext.flags, flagConsumeJoinLeave) {
+		c.mu.RUnlock()
+		return nil
+	}
+	c.mu.RUnlock()
 	return c.transportEnqueue(data)
 }
 
-func (c *Client) writeLeave(_ string, data []byte) error {
+func (c *Client) writeLeave(ch string, data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
+	c.mu.RLock()
+	channelContext, ok := c.channels[ch]
+	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
+		c.mu.RUnlock()
+		return nil
+	}
+	if !channelHasFlag(channelContext.flags, flagConsumeJoinLeave) {
+		c.mu.RUnlock()
+		return nil
+	}
+	c.mu.RUnlock()
 	return c.transportEnqueue(data)
 }
 
@@ -3077,14 +3103,14 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	delete(c.channels, channel)
 	c.mu.Unlock()
 
-	if channelHasFlag(chCtx.flags, flagPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
+	if channelHasFlag(chCtx.flags, flagEmitPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
 		err := c.node.removePresence(channel, c.uid)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error removing channel presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 
-	if channelHasFlag(chCtx.flags, flagJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
+	if channelHasFlag(chCtx.flags, flagEmitJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
 		_ = c.node.publishLeave(channel, info)
 	}
 

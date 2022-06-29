@@ -527,7 +527,10 @@ func TestHubBroadcastJoin(t *testing.T) {
 			transport.setProtocolType(tc.protocolType)
 			transport.setProtocolVersion(tc.protocolVersion)
 			transport.setUnidirectional(tc.uni)
-			newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
+			c := newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
+			chCtx := c.channels["test_channel"]
+			chCtx.flags |= flagConsumeJoinLeave
+			c.channels["test_channel"] = chCtx
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
@@ -579,7 +582,10 @@ func TestHubBroadcastLeave(t *testing.T) {
 			transport.setProtocolType(tc.protocolType)
 			transport.setProtocolVersion(tc.protocolVersion)
 			transport.setUnidirectional(tc.uni)
-			newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
+			c := newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
+			chCtx := c.channels["test_channel"]
+			chCtx.flags |= flagConsumeJoinLeave
+			c.channels["test_channel"] = chCtx
 
 			// Broadcast to not existed channel.
 			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})

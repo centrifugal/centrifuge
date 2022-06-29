@@ -255,6 +255,16 @@ func (m *Subscribe) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if m.ConsumeJoinLeave {
+		i--
+		if m.ConsumeJoinLeave {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x68
+	}
 	if len(m.Session) > 0 {
 		i -= len(m.Session)
 		copy(dAtA[i:], m.Session)
@@ -318,9 +328,9 @@ func (m *Subscribe) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x28
 	}
-	if m.JoinLeave {
+	if m.EmitJoinLeave {
 		i--
-		if m.JoinLeave {
+		if m.EmitJoinLeave {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
@@ -328,9 +338,9 @@ func (m *Subscribe) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x20
 	}
-	if m.Presence {
+	if m.EmitPresence {
 		i--
-		if m.Presence {
+		if m.EmitPresence {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
@@ -901,10 +911,10 @@ func (m *Subscribe) SizeVT() (n int) {
 	if l > 0 {
 		n += 1 + l + sov(uint64(l))
 	}
-	if m.Presence {
+	if m.EmitPresence {
 		n += 2
 	}
-	if m.JoinLeave {
+	if m.EmitJoinLeave {
 		n += 2
 	}
 	if m.ExpireAt != 0 {
@@ -935,6 +945,9 @@ func (m *Subscribe) SizeVT() (n int) {
 	l = len(m.Session)
 	if l > 0 {
 		n += 1 + l + sov(uint64(l))
+	}
+	if m.ConsumeJoinLeave {
+		n += 2
 	}
 	if m.unknownFields != nil {
 		n += len(m.unknownFields)
@@ -1852,7 +1865,7 @@ func (m *Subscribe) UnmarshalVT(dAtA []byte) error {
 			iNdEx = postIndex
 		case 3:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Presence", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field EmitPresence", wireType)
 			}
 			var v int
 			for shift := uint(0); ; shift += 7 {
@@ -1869,10 +1882,10 @@ func (m *Subscribe) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-			m.Presence = bool(v != 0)
+			m.EmitPresence = bool(v != 0)
 		case 4:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field JoinLeave", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field EmitJoinLeave", wireType)
 			}
 			var v int
 			for shift := uint(0); ; shift += 7 {
@@ -1889,7 +1902,7 @@ func (m *Subscribe) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-			m.JoinLeave = bool(v != 0)
+			m.EmitJoinLeave = bool(v != 0)
 		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field ExpireAt", wireType)
@@ -2117,6 +2130,26 @@ func (m *Subscribe) UnmarshalVT(dAtA []byte) error {
 			}
 			m.Session = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
+		case 13:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ConsumeJoinLeave", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.ConsumeJoinLeave = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skip(dAtA[iNdEx:])

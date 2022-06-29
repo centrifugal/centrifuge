@@ -372,7 +372,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 			node.config.RecoveryMaxPublicationLimit = tt.Limit
 			node.OnConnect(func(client *Client) {
 				client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-					opts := SubscribeOptions{Recover: true}
+					opts := SubscribeOptions{EnableRecovery: true}
 					cb(SubscribeReply{Options: opts}, nil)
 				})
 			})
