@@ -1,3 +1,8 @@
+v0.23.1
+=======
+
+* Fix emitting Join message in `Client.Subscribe` call, [#231](https://github.com/centrifugal/centrifuge/issues/231).
+
 v0.23.0
 =======
 

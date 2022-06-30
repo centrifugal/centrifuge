@@ -2602,7 +2602,14 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if err != nil {
 		return err
 	}
-	return c.transportEnqueue(replyData)
+	err = c.transportEnqueue(replyData)
+	if err != nil {
+		return err
+	}
+	if channelHasFlag(subCtx.channelContext.flags, flagJoinLeave) && subCtx.clientInfo != nil {
+		_ = c.node.publishJoin(channel, subCtx.clientInfo)
+	}
+	return nil
 }
 
 func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeResult) ([]byte, error) {
