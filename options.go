@@ -34,25 +34,28 @@ type SubscribeOptions struct {
 	ExpireAt int64
 	// ChannelInfo defines custom channel information, zero value means no channel information.
 	ChannelInfo []byte
-	// EmitPresence turns on participating in channel presence - i.e. client subscription
-	// will be visible in a current channel presence.
+	// EmitPresence turns on participating in channel presence - i.e. client
+	// subscription will emit presence updates to PresenceManager and will be visible
+	// in a channel presence result.
 	EmitPresence bool
-	// EmitJoinLeave turns on emitting Join and Leave events for this client in channel.
+	// EmitJoinLeave turns on emitting Join and Leave events from the subscribing client.
 	EmitJoinLeave bool
-	// ConsumeJoinLeave turns on receiving channel Join and Leave events.
-	ConsumeJoinLeave bool
-	// When position is on client will additionally sync its position inside
-	// a stream to prevent message loss. The loss can happen due to at most once
-	// guarantees of PUB/SUB model. Make sure you are enabling EnablePositioning in channels
-	// that maintain Publication history stream. When EnablePositioning is on Centrifuge will
+	// PushJoinLeave turns on receiving channel Join and Leave events by the client.
+	PushJoinLeave bool
+	// When position is on client will additionally sync its position inside a stream
+	// to prevent publication loss. The loss can happen due to at most once guarantees
+	// of PUB/SUB model. Make sure you are enabling EnablePositioning in channels that
+	// maintain Publication history stream. When EnablePositioning is on Centrifuge will
 	// include StreamPosition information to subscribe response - for a client to be
 	// able to manually track its position inside a stream.
 	EnablePositioning bool
-	// EnableRecovery turns on automatic recovery for a channel. In this case client will try to
-	// recover missed messages upon resubscribe to a channel after reconnect to a server.
-	// This option also enables client position tracking inside a stream (i.e. enabling
-	// EnableRecovery will automatically enable EnablePositioning option) to prevent occasional message loss.
-	// Make sure you are using EnableRecovery in channels that maintain Publication history stream.
+	// EnableRecovery turns on automatic recovery for a channel. In this case
+	// client will try to recover missed messages upon resubscribe to a channel
+	// after reconnect to a server. This option also enables client position
+	// tracking inside a stream (i.e. enabling EnableRecovery will automatically
+	// enable EnablePositioning option) to prevent occasional publication loss.
+	// Make sure you are using EnableRecovery in channels that maintain Publication
+	// history stream.
 	EnableRecovery bool
 	// Data to send to a client with Subscribe Push.
 	Data []byte
@@ -95,10 +98,10 @@ func WithEmitJoinLeave(enabled bool) SubscribeOption {
 	}
 }
 
-// WithConsumeJoinLeave ...
-func WithConsumeJoinLeave(enabled bool) SubscribeOption {
+// WithPushJoinLeave ...
+func WithPushJoinLeave(enabled bool) SubscribeOption {
 	return func(opts *SubscribeOptions) {
-		opts.ConsumeJoinLeave = enabled
+		opts.PushJoinLeave = enabled
 	}
 }
 

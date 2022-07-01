@@ -64,10 +64,10 @@ func main() {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
-					EmitPresence:     true,
-					EmitJoinLeave:    true,
-					ConsumeJoinLeave: true,
-					EnableRecovery:   true,
+					EmitPresence:   true,
+					EmitJoinLeave:  true,
+					PushJoinLeave:  true,
+					EnableRecovery: true,
 				},
 			}, nil)
 		})

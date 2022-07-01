@@ -57,7 +57,7 @@ message Subscribe {
     bytes data = 10;
     StreamPosition recover_since = 11;
     string session = 12;
-    bool consume_join_leave = 13;
+    bool push_join_leave = 13;
 }
 
 message StreamPosition {

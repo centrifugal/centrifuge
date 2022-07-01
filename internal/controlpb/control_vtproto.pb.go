@@ -255,9 +255,9 @@ func (m *Subscribe) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
-	if m.ConsumeJoinLeave {
+	if m.PushJoinLeave {
 		i--
-		if m.ConsumeJoinLeave {
+		if m.PushJoinLeave {
 			dAtA[i] = 1
 		} else {
 			dAtA[i] = 0
@@ -946,7 +946,7 @@ func (m *Subscribe) SizeVT() (n int) {
 	if l > 0 {
 		n += 1 + l + sov(uint64(l))
 	}
-	if m.ConsumeJoinLeave {
+	if m.PushJoinLeave {
 		n += 2
 	}
 	if m.unknownFields != nil {
@@ -2132,7 +2132,7 @@ func (m *Subscribe) UnmarshalVT(dAtA []byte) error {
 			iNdEx = postIndex
 		case 13:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ConsumeJoinLeave", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field PushJoinLeave", wireType)
 			}
 			var v int
 			for shift := uint(0); ; shift += 7 {
@@ -2149,7 +2149,7 @@ func (m *Subscribe) UnmarshalVT(dAtA []byte) error {
 					break
 				}
 			}
-			m.ConsumeJoinLeave = bool(v != 0)
+			m.PushJoinLeave = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skip(dAtA[iNdEx:])

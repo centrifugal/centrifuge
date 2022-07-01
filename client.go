@@ -133,8 +133,8 @@ const (
 	flagSubscribed uint8 = 1 << iota
 	flagEmitPresence
 	flagEmitJoinLeave
-	flagConsumeJoinLeave
-	flagPosition
+	flagPushJoinLeave
+	flagPositioning
 	flagServerSide
 	flagClientSideRefresh
 )
@@ -699,7 +699,7 @@ func (c *Client) updatePresence() {
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channelContext) bool {
-	if !channelHasFlag(chCtx.flags, flagPosition) {
+	if !channelHasFlag(chCtx.flags, flagPositioning) {
 		return true
 	}
 	nowUnix := c.node.nowTimeGetter().Unix()
@@ -2606,7 +2606,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if err != nil {
 		return err
 	}
-	if channelHasFlag(subCtx.channelContext.flags, flagJoinLeave) && subCtx.clientInfo != nil {
+	if channelHasFlag(subCtx.channelContext.flags, flagEmitJoinLeave) && subCtx.clientInfo != nil {
 		_ = c.node.publishJoin(channel, subCtx.clientInfo)
 	}
 	return nil
@@ -2908,7 +2908,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		channelFlags |= flagClientSideRefresh
 	}
 	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
-		channelFlags |= flagPosition
+		channelFlags |= flagPositioning
 	}
 	if reply.Options.EmitPresence {
 		channelFlags |= flagEmitPresence
@@ -2916,8 +2916,8 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	if reply.Options.EmitJoinLeave {
 		channelFlags |= flagEmitJoinLeave
 	}
-	if reply.Options.ConsumeJoinLeave {
-		channelFlags |= flagConsumeJoinLeave
+	if reply.Options.PushJoinLeave {
+		channelFlags |= flagPushJoinLeave
 	}
 
 	channelContext := channelContext{
@@ -3004,7 +3004,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return nil
 	}
-	if !channelHasFlag(channelContext.flags, flagPosition) {
+	if !channelHasFlag(channelContext.flags, flagPositioning) {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			c.mu.Unlock()
 			return nil
@@ -3068,7 +3068,7 @@ func (c *Client) writeJoin(ch string, data []byte) error {
 		c.mu.RUnlock()
 		return nil
 	}
-	if !channelHasFlag(channelContext.flags, flagConsumeJoinLeave) {
+	if !channelHasFlag(channelContext.flags, flagPushJoinLeave) {
 		c.mu.RUnlock()
 		return nil
 	}
@@ -3086,7 +3086,7 @@ func (c *Client) writeLeave(ch string, data []byte) error {
 		c.mu.RUnlock()
 		return nil
 	}
-	if !channelHasFlag(channelContext.flags, flagConsumeJoinLeave) {
+	if !channelHasFlag(channelContext.flags, flagPushJoinLeave) {
 		c.mu.RUnlock()
 		return nil
 	}

@@ -529,7 +529,7 @@ func TestHubBroadcastJoin(t *testing.T) {
 			transport.setUnidirectional(tc.uni)
 			c := newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 			chCtx := c.channels["test_channel"]
-			chCtx.flags |= flagConsumeJoinLeave
+			chCtx.flags |= flagPushJoinLeave
 			c.channels["test_channel"] = chCtx
 
 			// Broadcast to not existed channel.
@@ -584,7 +584,7 @@ func TestHubBroadcastLeave(t *testing.T) {
 			transport.setUnidirectional(tc.uni)
 			c := newTestSubscribedClientWithTransport(t, ctx, n, transport, "42", "test_channel")
 			chCtx := c.channels["test_channel"]
-			chCtx.flags |= flagConsumeJoinLeave
+			chCtx.flags |= flagPushJoinLeave
 			c.channels["test_channel"] = chCtx
 
 			// Broadcast to not existed channel.

@@ -448,7 +448,7 @@ func TestClientSubscribe(t *testing.T) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
 					EmitJoinLeave:     true,
-					ConsumeJoinLeave:  true,
+					PushJoinLeave:     true,
 					EmitPresence:      true,
 					EnablePositioning: true,
 					EnableRecovery:    true,
@@ -3200,7 +3200,7 @@ func TestClientCheckPosition(t *testing.T) {
 	require.True(t, got)
 
 	// not initial, not time to check.
-	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPosition})
+	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPositioning})
 	require.True(t, got)
 }
 

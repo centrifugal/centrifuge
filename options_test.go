@@ -27,7 +27,7 @@ func TestSubscribeOptions(t *testing.T) {
 		WithExpireAt(1),
 		WithEmitPresence(true),
 		WithEmitJoinLeave(true),
-		WithConsumeJoinLeave(true),
+		WithPushJoinLeave(true),
 		WithPositioning(true),
 		WithRecovery(true),
 		WithChannelInfo([]byte(`test`)),
@@ -41,7 +41,7 @@ func TestSubscribeOptions(t *testing.T) {
 	require.Equal(t, int64(1), opts.ExpireAt)
 	require.True(t, opts.EmitPresence)
 	require.True(t, opts.EmitJoinLeave)
-	require.True(t, opts.ConsumeJoinLeave)
+	require.True(t, opts.PushJoinLeave)
 	require.True(t, opts.EnablePositioning)
 	require.True(t, opts.EnableRecovery)
 	require.Equal(t, []byte(`test`), opts.ChannelInfo)
