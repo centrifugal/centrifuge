@@ -173,7 +173,7 @@ func main() {
 					EnableRecovery:    e.Recoverable,
 					EmitPresence:      true,
 					EmitJoinLeave:     true,
-					PushJoinLeave:     true,
+					PushJoinLeave:     e.JoinLeave,
 					Data:              []byte(`{"msg": "welcome"}`),
 				},
 			}, nil)
