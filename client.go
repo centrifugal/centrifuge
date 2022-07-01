@@ -1679,6 +1679,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		Data:        req.Data,
 		Positioned:  req.Positioned,
 		Recoverable: req.Recoverable,
+		JoinLeave:   req.JoinLeave,
 	}
 
 	cb := func(reply SubscribeReply, err error) {
