@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -512,7 +513,7 @@ func (c *Client) sendPing() {
 	if appLevelPing.PongTimeout > 0 && !unidirectional {
 		c.nextPong = time.Now().Add(appLevelPing.PongTimeout).UnixNano()
 	}
-	c.addPingUpdate()
+	c.addPingUpdate(false)
 	c.mu.Unlock()
 }
 
@@ -532,8 +533,16 @@ func (c *Client) checkPong() {
 }
 
 // Lock must be held outside.
-func (c *Client) addPingUpdate() {
-	c.nextPing = time.Now().Add(c.transport.AppLevelPing().PingInterval).UnixNano()
+func (c *Client) addPingUpdate(isFirst bool) {
+	delay := c.transport.AppLevelPing().PingInterval
+	if isFirst {
+		// Send first ping in random interval between 0 and PingInterval to
+		// spread ping-pongs in time (useful when many connections reconnect
+		// almost immediately).
+		pingNanoseconds := c.transport.AppLevelPing().PingInterval.Nanoseconds()
+		delay = time.Duration(rand.Int63n(pingNanoseconds)) * time.Nanosecond
+	}
+	c.nextPing = time.Now().Add(delay).UnixNano()
 	c.scheduleNextTimer()
 }
 
@@ -1473,7 +1482,7 @@ func (c *Client) scheduleOnConnectTimers() {
 		c.addExpireUpdate(expireAfter)
 	}
 	if c.transport.ProtocolVersion() > ProtocolVersion1 && c.transport.AppLevelPing().PingInterval > 0 {
-		c.addPingUpdate()
+		c.addPingUpdate(true)
 	}
 	c.mu.Unlock()
 }
