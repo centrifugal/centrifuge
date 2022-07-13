@@ -3858,7 +3858,7 @@ func TestClient_HandleCommandV2_NoID(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
 
-	ok := clientV2.handleCommand(&protocol.Command{
+	ok := clientV2.HandleCommand(&protocol.Command{
 		Connect: &protocol.ConnectRequest{},
 	})
 	// Interpreted as PONG in ProtocolVersion2.
@@ -3871,7 +3871,7 @@ func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
 
-	ok := clientV2.handleCommand(&protocol.Command{
+	ok := clientV2.HandleCommand(&protocol.Command{
 		Id:        1,
 		Subscribe: &protocol.SubscribeRequest{},
 	})
@@ -3896,14 +3896,14 @@ func TestClient_HandleCommandV1(t *testing.T) {
 		})
 	})
 
-	ok := clientV1.handleCommand(&protocol.Command{
+	ok := clientV1.HandleCommand(&protocol.Command{
 		Id:     1,
 		Method: protocol.Command_CONNECT,
 		Params: getCommandParams(t, &protocol.ConnectRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     2,
 		Method: protocol.Command_SUBSCRIBE,
 		Params: getCommandParams(t, &protocol.SubscribeRequest{
@@ -3912,7 +3912,7 @@ func TestClient_HandleCommandV1(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     3,
 		Method: protocol.Command_UNSUBSCRIBE,
 		Params: getCommandParams(t, &protocol.UnsubscribeRequest{
@@ -3921,62 +3921,62 @@ func TestClient_HandleCommandV1(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     4,
 		Method: protocol.Command_RPC,
 		Params: getCommandParams(t, &protocol.RPCRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     4,
 		Method: protocol.Command_PING,
 		Params: getCommandParams(t, &protocol.PingRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     5,
 		Method: protocol.Command_PUBLISH,
 		Params: getCommandParams(t, &protocol.PublishRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Method: protocol.Command_SEND,
 		Send:   &protocol.SendRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     6,
 		Method: protocol.Command_PRESENCE,
 		Params: getCommandParams(t, &protocol.PresenceRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     7,
 		Method: protocol.Command_PRESENCE_STATS,
 		Params: getCommandParams(t, &protocol.PresenceStatsRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     8,
 		Method: protocol.Command_HISTORY,
 		Params: getCommandParams(t, &protocol.HistoryRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     9,
 		Method: protocol.Command_REFRESH,
 		Params: getCommandParams(t, &protocol.RefreshRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     10,
 		Method: protocol.Command_SUB_REFRESH,
 		Params: getCommandParams(t, &protocol.SubRefreshRequest{}),
@@ -3984,7 +3984,7 @@ func TestClient_HandleCommandV1(t *testing.T) {
 	require.True(t, ok)
 
 	// method not found results into an error, but not in a disconnect.
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     11,
 		Method: 10001,
 		Params: nil,
@@ -4003,13 +4003,13 @@ func TestClient_HandleCommandV2(t *testing.T) {
 		})
 	})
 
-	ok := clientV2.handleCommand(&protocol.Command{
+	ok := clientV2.HandleCommand(&protocol.Command{
 		Id:      1,
 		Connect: &protocol.ConnectRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id: 2,
 		Subscribe: &protocol.SubscribeRequest{
 			Channel: "test",
@@ -4017,7 +4017,7 @@ func TestClient_HandleCommandV2(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id: 3,
 		Unsubscribe: &protocol.UnsubscribeRequest{
 			Channel: "test",
@@ -4025,60 +4025,60 @@ func TestClient_HandleCommandV2(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:  4,
 		Rpc: &protocol.RPCRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:   4,
 		Ping: &protocol.PingRequest{},
 	})
 	require.True(t, ok)
 
 	// Special type of ping.
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id: 5,
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:      5,
 		Publish: &protocol.PublishRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Send: &protocol.SendRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:       6,
 		Presence: &protocol.PresenceRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:            7,
 		PresenceStats: &protocol.PresenceStatsRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:      8,
 		History: &protocol.HistoryRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:      9,
 		Refresh: &protocol.RefreshRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:         10,
 		SubRefresh: &protocol.SubRefreshRequest{},
 	})

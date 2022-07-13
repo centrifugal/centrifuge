@@ -116,7 +116,7 @@ func main() {
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
-		if err := http.ListenAndServe(":8000", nil); err != nil {
+		if err := http.ListenAndServe(":3000", nil); err != nil {
 			log.Fatal(err)
 		}
 	}()

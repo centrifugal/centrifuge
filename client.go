@@ -1073,7 +1073,7 @@ func (c *Client) Handle(data []byte) bool {
 			return false
 		}
 		if cmd != nil {
-			ok := c.handleCommand(cmd)
+			ok := c.HandleCommand(cmd)
 			if !ok {
 				return false
 			}
@@ -1085,8 +1085,15 @@ func (c *Client) Handle(data []byte) bool {
 	return true
 }
 
-// handleCommand processes a single protocol.Command.
-func (c *Client) handleCommand(cmd *protocol.Command) bool {
+// HandleCommand processes a single protocol.Command.
+func (c *Client) HandleCommand(cmd *protocol.Command) bool {
+	c.mu.Lock()
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		return false
+	}
+	c.mu.Unlock()
+
 	if c.transport.ProtocolVersion() == ProtocolVersion1 && cmd.Id == 0 && (cmd.Method != protocol.Command_SEND && cmd.Send == nil) {
 		// Only send command from client can be sent without incremental ID in ProtocolVersion1. For
 		// ProtocolVersion2 we treat empty commands as pongs.
