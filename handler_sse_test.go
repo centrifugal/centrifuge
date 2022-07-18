@@ -71,6 +71,8 @@ func TestSSEHandler_GET(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reply.Connect)
 		require.Equal(t, uint32(1), reply.Id)
+		require.NotZero(t, reply.Connect.Session)
+		require.NotZero(t, reply.Connect.Node)
 		break
 	}
 }
@@ -124,6 +126,8 @@ func TestSSEHandler_POST(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reply.Connect)
 		require.Equal(t, uint32(1), reply.Id)
+		require.NotZero(t, reply.Connect.Session)
+		require.NotZero(t, reply.Connect.Node)
 		break
 	}
 }
