@@ -126,7 +126,7 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 	options.WebsocketWriteTimeout = wsWriteTimeout
 
 	if config.ProtocolVersion == 0 {
-		config.ProtocolVersion = ProtocolVersion1
+		config.ProtocolVersion = ProtocolVersion2
 	}
 
 	s := &SockjsHandler{

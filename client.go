@@ -25,6 +25,7 @@ var protobufPingPush []byte
 func init() {
 	protobufPingReply, _ = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{})
 	protobufPingPush, _ = protocol.DefaultProtobufPushEncoder.Encode(&protocol.Push{})
+	rand.Seed(time.Now().Unix())
 }
 
 // clientEventHub allows dealing with client event handlers.

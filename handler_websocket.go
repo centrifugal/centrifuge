@@ -114,7 +114,7 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 		upgrade.CheckOrigin = sameHostOriginCheck(node)
 	}
 	if config.ProtocolVersion == 0 {
-		config.ProtocolVersion = ProtocolVersion1
+		config.ProtocolVersion = ProtocolVersion2
 	}
 	return &WebsocketHandler{
 		node:    node,
