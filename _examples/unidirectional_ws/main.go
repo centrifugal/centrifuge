@@ -220,13 +220,8 @@ func (t *websocketTransport) ping() {
 	case <-t.closeCh:
 		return
 	default:
-		err := t.writeData([]byte(""))
-		if err != nil {
-			_ = t.Close(centrifuge.DisconnectWriteError)
-			return
-		}
 		deadline := time.Now().Add(t.opts.pingInterval / 2)
-		err = t.conn.WriteControl(websocket.PingMessage, nil, deadline)
+		err := t.conn.WriteControl(websocket.PingMessage, nil, deadline)
 		if err != nil {
 			_ = t.Close(centrifuge.DisconnectWriteError)
 			return
@@ -257,7 +252,7 @@ func (t *websocketTransport) Protocol() centrifuge.ProtocolType {
 
 // ProtocolVersion returns transport ProtocolVersion.
 func (t *websocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
+	return centrifuge.ProtocolVersion2
 }
 
 // Unidirectional returns whether transport is unidirectional.
@@ -277,7 +272,10 @@ func (t *websocketTransport) DisabledPushFlags() uint64 {
 
 // AppLevelPing not implemented here, example only works over ProtocolVersion1.
 func (t *websocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+	return centrifuge.AppLevelPing{
+		PingInterval: DefaultWebsocketPingInterval,
+		PongTimeout:  DefaultWebsocketPingInterval / 3,
+	}
 }
 
 func (t *websocketTransport) writeData(data []byte) error {

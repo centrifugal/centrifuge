@@ -10,7 +10,6 @@ import (
 	"github.com/centrifugal/centrifuge/_examples/unidirectional_grpc/clientproto"
 
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -19,32 +18,13 @@ var (
 
 func handlePush(push *clientproto.Push) {
 	log.Printf("push received (type %d, channel %s, data %s", push.Type, push.Channel, fmt.Sprintf("%#v", string(push.Data)))
-	switch push.Type {
-	case clientproto.Push_CONNECT:
-		var connectPush clientproto.Connect
-		err := proto.Unmarshal(push.Data, &connectPush)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		log.Printf("connected to a server with ID: %s", connectPush.Client)
-	case clientproto.Push_PUBLICATION:
-		var publicationPush clientproto.Publication
-		err := proto.Unmarshal(push.Data, &publicationPush)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		log.Printf("new publication from channel %s: %s", push.Channel, fmt.Sprintf("%#v", string(publicationPush.Data)))
-	case clientproto.Push_DISCONNECT:
-		var disconnectPush clientproto.Disconnect
-		err := proto.Unmarshal(push.Data, &disconnectPush)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		log.Printf("disconnected from a server: %s", disconnectPush.Reason)
-	default:
+	if push.Connect != nil {
+		log.Printf("connected to a server with ID: %s", push.Connect.Client)
+	} else if push.Pub != nil {
+		log.Printf("new publication from channel %s: %s", push.Channel, fmt.Sprintf("%#v", string(push.Pub.Data)))
+	} else if push.Disconnect != nil {
+		log.Printf("disconnected from a server: %s", push.Disconnect.Reason)
+	} else {
 		log.Println("push type handling not implemented")
 	}
 }

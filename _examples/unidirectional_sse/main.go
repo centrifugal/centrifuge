@@ -268,7 +268,7 @@ func (t *eventsourceTransport) Protocol() centrifuge.ProtocolType {
 }
 
 func (t *eventsourceTransport) ProtocolVersion() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
+	return centrifuge.ProtocolVersion2
 }
 
 // Unidirectional returns whether transport is unidirectional.
@@ -288,7 +288,9 @@ func (t *eventsourceTransport) Emulation() bool {
 
 // AppLevelPing not implemented here, example only works over ProtocolVersion1.
 func (t *eventsourceTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+	return centrifuge.AppLevelPing{
+		PingInterval: 25 * time.Second,
+	}
 }
 
 func (t *eventsourceTransport) Write(message []byte) error {

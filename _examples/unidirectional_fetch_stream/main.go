@@ -277,7 +277,7 @@ func newStreamTransport(req *http.Request) *streamTransport {
 }
 
 func (t *streamTransport) Name() string {
-	return "stream"
+	return "http_stream"
 }
 
 func (t *streamTransport) Protocol() centrifuge.ProtocolType {
@@ -286,7 +286,7 @@ func (t *streamTransport) Protocol() centrifuge.ProtocolType {
 
 // ProtocolVersion ...
 func (t *streamTransport) ProtocolVersion() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
+	return centrifuge.ProtocolVersion2
 }
 
 // Unidirectional returns whether transport is unidirectional.

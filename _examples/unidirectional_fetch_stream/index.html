@@ -122,42 +122,36 @@
             connect();
 
             function processData(data) {
+                if (data === {}) {
+                    drawText("--> ping");
+                    return
+                }
                 drawText("--> " + JSON.stringify(data));
-                const pushType = data.type || 0;
-                switch (pushType) {
-                    case 0:
-                        drawText("✨ new data from a channel " + data.channel + ": " + JSON.stringify(data.data));
-                        break;
-                    case 6:
-                        clientID = data.data.client;
-                        let subscriptions = [];
-                        const subs = data.data.subs;
-                        if (subs) {
-                            for (const m in subs) {
-                                if (subs.hasOwnProperty(m)) {
-                                    subscriptions.push(m);
-                                }
+                if (data.connect) {
+                    clientID = data.connect.client;
+                    let subscriptions = [];
+                    const subs = data.connect.subs;
+                    if (subs) {
+                        for (const m in subs) {
+                            if (subs.hasOwnProperty(m)) {
+                                subscriptions.push(m);
                             }
                         }
-                        drawText("🟢 connected with client ID " + clientID + " and subscriptions: " + JSON.stringify(subscriptions));
-                        break;
-                    case 7:
-                        clientID = null;
-                        if (!data.data.reconnect) {
-                            reconnect = false;
-                            drawText("🔴 disconnected from a server, won't reconnect");
-                        } else {
-                            drawText("🔴 disconnected from a server, will reconnect");
-                        }
-                        break;
-                    case 3:
-                        drawText("🔓 unsubscribed from a channel " + data.channel);
-                        break;
-                    case 5:
-                        drawText("🔒 subscribed to a channel " + data.channel);
-                        break;
-                    default:
-                        drawText("😟 unsupported push type " + data.type);
+                    }
+                    drawText("🟢 connected with client ID " + clientID + " and subscriptions: " + JSON.stringify(subscriptions));
+                } else if (data.disconnect) {
+                    clientID = null;
+                    drawText("🔴 disconnected from a server");
+                    const code = data.disconnect.code;
+                    reconnect = !((code >= 3500 && code < 4000) || (code >= 4500 && code < 5000));
+                } else if (data.unsubscribe) {
+                    drawText("🔓 unsubscribed from a channel " + data.channel);
+                } else if (data.subscribe) {
+                    drawText("🔒 subscribed to a channel " + data.channel);
+                } else if (data.pub) {
+                    drawText("✨ new data from a channel " + data.channel + ": " + JSON.stringify(data.pub));
+                } else {
+                    drawText("😟 unsupported push type " + JSON.stringify(data));
                 }
             }
 
