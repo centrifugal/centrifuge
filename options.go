@@ -39,8 +39,10 @@ type SubscribeOptions struct {
 	// in a channel presence result.
 	EmitPresence bool
 	// EmitJoinLeave turns on emitting Join and Leave events from the subscribing client.
+	// See also PushJoinLeave if you want current client to receive join/leave messages.
 	EmitJoinLeave bool
 	// PushJoinLeave turns on receiving channel Join and Leave events by the client.
+	// Subscriptions which emit join/leave events should have EmitJoinLeave on.
 	PushJoinLeave bool
 	// When position is on client will additionally sync its position inside a stream
 	// to prevent publication loss. The loss can happen due to at most once guarantees
