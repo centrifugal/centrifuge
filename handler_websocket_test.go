@@ -556,7 +556,7 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 			}
 
 			var rep protocol.Reply
-			err = json.Unmarshal(firstNonPingMessage, &rep)
+			err := json.Unmarshal(firstNonPingMessage, &rep)
 			require.NoError(t, err)
 
 			require.NotNil(t, rep.Push)
