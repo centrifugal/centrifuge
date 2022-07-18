@@ -202,7 +202,7 @@ func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 
 // ProtocolVersion ...
 func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
+	return centrifuge.ProtocolVersion2
 }
 
 // Unidirectional implementation.

@@ -6,28 +6,29 @@ $(function(){
 		alert('Sorry, it looks like your browser does not support canvas!');
 		return false;
     }
-    var canvas = $('canvas')[0];
-    paper.setup(canvas);
+	const canvas = $('canvas')[0];
+	paper.setup(canvas);
 
-	var doc = $(document)
-	var color = randomColor();
-	var points = 5;
-	var length = 15;
-	var tool = new Tool();
+	const doc = $(document);
+	let color = randomColor();
+	const points = 5;
+	const length = 15;
+	const tool = new Tool();
 
 	// Generate an unique ID
-	var id = Math.round($.now()*Math.random());
+	const id = Math.round($.now() * Math.random());
 
-	var clients = [];
-	var worms = [];
-	
-    var centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+	const clients = [];
+	const worms = [];
 
-    centrifuge.subscribe("moving", function(message) {
-		data = message.data;
-        var path = data.path[1];
+	const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+
+	centrifuge.newSubscription("moving").on('publication', function (ctx) {
+		console.log(111);
+		const data = ctx.data;
+		const path = data.path[1];
 		if(!(data.id in clients)){
-			if (data.id != id) {
+			if (data.id !== id) {
 				// New user has joined – create new worm.
 				worms[data.id] = createWorm(data.color);
 			}
@@ -40,16 +41,16 @@ $(function(){
 		// Saving the current client state
 		clients[data.id] = data;
 		clients[data.id].updated = $.now();
-    });
+    }).subscribe();
 
     centrifuge.connect();
 
-	var initialized = false;
-	var myPath;
-	
+	let initialized = false;
+	let myPath;
+
 	// Remove inactive clients after 10 seconds of inactivity
 	setInterval(function(){
-		for(var ident in clients){
+		for(let ident in clients){
 			if($.now() - clients[ident].updated > 10000){
 				// Last update was more than 10 seconds ago. 
 				// This user has probably closed the page
@@ -61,14 +62,14 @@ $(function(){
 	}, 10000);
 
 	function createWorm(color){
-		var path = new paper.Path({
+		const path = new paper.Path({
 			strokeColor: color,
 			strokeWidth: 20,
 			strokeCap: 'round'
 		});
 
-		var start = new paper.Point(Math.random()*100,Math.random()*100);
-		for (var i = 0; i < points; i++) {
+		const start = new paper.Point(Math.random() * 100, Math.random() * 100);
+		for (let i = 0; i < points; i++) {
 			path.add(new paper.Point(i * length + start.x, 0 + start.y));
 		}
 
@@ -79,9 +80,9 @@ $(function(){
 		colors = ['#5C4B51', '#8CBEB2', '#F3B562', '#F06060']
 		return colors[Math.floor(Math.random()*colors.length)];
 	}
-	
 
-    var lastEmit = $.now();
+
+	let lastEmit = $.now();
 
 	paper.tool.onMouseMove = function(event) {
 		if (!initialized) {
@@ -90,32 +91,32 @@ $(function(){
 			initialized = true;
 		}
 		myPath.firstSegment.point = event.point;
-		for (var i = 0; i < points - 1; i++) {
-			var segment = myPath.segments[i];
-			var nextSegment = segment.next;
-			var vector = new paper.Point(segment.point.x - nextSegment.point.x,segment.point.y - nextSegment.point.y);
+		for (let i = 0; i < points - 1; i++) {
+			const segment = myPath.segments[i];
+			const nextSegment = segment.next;
+			const vector = new paper.Point(segment.point.x - nextSegment.point.x, segment.point.y - nextSegment.point.y);
 			vector.length = length;
 			nextSegment.point = new paper.Point(segment.point.x - vector.x,segment.point.y - vector.y);
 		}
 		myPath.smooth();
 
 		if ($.now() - lastEmit > 5) {
-            var data = {
-                'name': 'mousemove',
-                'payload': {
-                    'color'	: color,
-                    'path'	: myPath,
-                    'id': id
-                }
-            }
+			const data = {
+				'name': 'mousemove',
+				'payload': {
+					'color': color,
+					'path': myPath,
+					'id': id
+				}
+			};
 			centrifuge.send(data);
 			lastEmit = $.now();
 		}
     }
 
 	paper.tool.onMouseUp = function(event) {
-		var newColor = myPath.strokeColor;
-        while(newColor === myPath.strokeColor){
+		let newColor = myPath.strokeColor;
+		while(newColor === myPath.strokeColor){
             newColor = randomColor();
         }
         color = newColor;

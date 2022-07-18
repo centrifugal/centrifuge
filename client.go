@@ -1138,7 +1138,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		return c.dispatchCommandV1(cmd)
 	}
-	if cmd.Id == 0 {
+	if cmd.Id == 0 && cmd.Send == nil {
 		return nil
 	}
 	return c.dispatchCommandV2(cmd)

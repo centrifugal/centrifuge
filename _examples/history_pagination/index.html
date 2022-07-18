@@ -7,7 +7,7 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/centrifuge/3.0.0-beta.0/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -25,20 +25,28 @@
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
 
-                centrifuge.on('connect', function(ctx){
-                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
-                    input.removeAttribute("disabled");
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
                 });
 
-                centrifuge.on('disconnect', function(ctx){
-                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
-                    input.setAttribute("disabled", 'true');
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
                 });
 
-                const sub = centrifuge.subscribe(channel, handleMessage)
-                        .on("unsubscribe", handleUnsubscribe)
-                        .on("subscribe", handleSubscribe)
-                        .on("error", handleSubscribeError);
+                // bind listeners on centrifuge object instance events.
+                centrifuge.on('connected', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
+                    input.removeAttribute('disabled');
+                });
+
+                const sub = centrifuge.newSubscription(channel);
+                sub.on('publication', handlePublication)
+                    .on("subscribed", handleSubscribed)
+                    .on("error", handleSubscriptionError);
+
+                sub.subscribe();
 
                 centrifuge.connect();
 
@@ -62,7 +70,7 @@
                                 if (!pubs.hasOwnProperty(i)) {
                                     continue
                                 }
-                                handleMessage(pubs[i]);
+                                handlePublication(pubs[i]);
                                 if (pubs[i].offset === resp.offset) {
                                     recovered = true;
                                     break;
@@ -76,8 +84,8 @@
                     return recovered;
                 }
 
-                async function handleSubscribe(ctx) {
-                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ')');
+                async function handleSubscribed(ctx) {
+                    drawText('Subscribed on channel ' + ctx.channel);
                     if (streamPosition == null) {
                         streamPosition = ctx.streamPosition;
                     } else {
@@ -92,32 +100,28 @@
                     }
                 }
 
-                function handleSubscribeError(err) {
-                    drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
+                function handleSubscriptionError(ctx) {
+                    drawText('Subscription error in channel ' + err.channel + ': ' + JSON.stringify(ctx));
                 }
 
-                function handleMessage(message) {
-                    if (message.offset !== streamPosition.offset + 1) {
+                function handlePublication(ctx) {
+                    if (ctx.offset !== streamPosition.offset + 1) {
                         return;
                     }
-                    drawMessage(message)
-                    streamPosition.offset = message.offset;
+                    drawPublication(ctx)
+                    streamPosition.offset = ctx.offset;
                 }
 
-                function drawMessage(message) {
+                function drawPublication(ctx) {
                     let clientID;
-                    if (message.info){
-                        clientID = message.info.client;
+                    if (ctx.info){
+                        clientID = ctx.info.client;
                     } else {
                         clientID = null;
                     }
-                    const inputText = message.data["input"].toString();
+                    const inputText = ctx.data["input"].toString();
                     const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
-                }
-
-                function handleUnsubscribe(sub) {
-                    drawText('Unsubscribed from channel ' + sub.channel);
                 }
 
                 function drawText(text) {

@@ -6,7 +6,7 @@
     <style type="text/css">
         input[type="text"] { width: 300px; }
     </style>
-    <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/centrifuge/3.0.0-beta.0/centrifuge.js"></script>
     <script type="text/javascript">
         const channel = "blink182";
 
@@ -15,21 +15,29 @@
 
             const centrifuge = new Centrifuge('ws://' + window.location.host + '/connection/websocket');
 
+            centrifuge.on('connecting', function(ctx){
+                drawText('Connecting: ' + ctx.reason);
+            });
+
+            centrifuge.on('disconnected', function(ctx){
+                drawText('Disconnected: ' + ctx.reason);
+            });
+
             // bind listeners on centrifuge object instance events.
-            centrifuge.on('connect', function(ctx){
-                drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
+            centrifuge.on('connected', function(ctx){
+                drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
             });
 
-            centrifuge.on('subscribe', function(ctx) {
-                drawText('Subscribe to server-side channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
+            centrifuge.on('subscribed', function(ctx) {
+                drawText('Subscribe to server-side channel ' + ctx.channel);
             });
 
-            centrifuge.on('unsubscribe', function(ctx) {
+            centrifuge.on('subscribing', function(ctx) {
+                drawText('Subscribing to server-side channel ' + ctx.channel);
+            });
+
+            centrifuge.on('unsubscribed', function(ctx) {
                 drawText('Unsubscribe from server-side channel ' + ctx.channel);
-            });
-
-            centrifuge.on('disconnect', function(ctx){
-                drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
             });
 
             centrifuge.connect();
@@ -41,7 +49,7 @@
             }
 
             window.addEventListener('click', function () {
-                centrifuge.namedRPC('trigger_resubscribe', {});
+                centrifuge.rpc('trigger_resubscribe', {});
             });
         });
     </script>
