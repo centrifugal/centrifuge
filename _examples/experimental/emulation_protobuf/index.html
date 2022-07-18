@@ -24,9 +24,13 @@
 
                 const transports = [
                     {
-                        transport: 'http_stream',
-                        endpoint: 'http://localhost:8000/connection/http_stream'
-                    }
+                        transport: 'webtransport',
+                        endpoint: 'https://localhost:8000/connection/webtransport?cf_protocol=protobuf'
+                    },
+                    // {
+                    //     transport: 'http_stream',
+                    //     endpoint: 'http://localhost:8000/connection/http_stream'
+                    // }
                 ]
 
                 const centrifuge = new Centrifuge(transports, {

@@ -47,8 +47,8 @@ message Metrics {
 message Subscribe {
     string user = 1;
     string channel = 2;
-    bool presence = 3;
-    bool join_leave = 4;
+    bool emit_presence = 3;
+    bool emit_join_leave = 4;
     int64 expire_at = 5;
     bool position = 6;
     bool recover = 7;
@@ -57,6 +57,7 @@ message Subscribe {
     bytes data = 10;
     StreamPosition recover_since = 11;
     string session = 12;
+    bool push_join_leave = 13;
 }
 
 message StreamPosition {

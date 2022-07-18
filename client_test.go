@@ -447,13 +447,14 @@ func TestClientSubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					JoinLeave:   true,
-					Presence:    true,
-					Position:    true,
-					Recover:     true,
-					ChannelInfo: []byte("{}"),
-					ExpireAt:    time.Now().Unix() + 3600,
-					Data:        []byte("{}"),
+					EmitJoinLeave:     true,
+					PushJoinLeave:     true,
+					EmitPresence:      true,
+					EnablePositioning: true,
+					EnableRecovery:    true,
+					ChannelInfo:       []byte("{}"),
+					ExpireAt:          time.Now().Unix() + 3600,
+					Data:              []byte("{}"),
 				},
 			}, nil)
 		})
@@ -541,7 +542,7 @@ func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Options: SubscribeOptions{Recover: true},
+				Options: SubscribeOptions{EnableRecovery: true},
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
@@ -574,7 +575,7 @@ func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Options: SubscribeOptions{Recover: true},
+				Options: SubscribeOptions{EnableRecovery: true},
 			}, nil)
 		})
 	})
@@ -610,7 +611,7 @@ func TestClientSubscribePositionedError(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Options: SubscribeOptions{Position: true},
+				Options: SubscribeOptions{EnablePositioning: true},
 			}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
@@ -642,7 +643,7 @@ func TestClientSubscribePositioned(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
 			callback(SubscribeReply{
-				Options: SubscribeOptions{Position: true},
+				Options: SubscribeOptions{EnablePositioning: true},
 			}, nil)
 		})
 	})
@@ -674,7 +675,7 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
 			require.Equal(t, DisconnectServerError.Code, event.Code)
@@ -709,7 +710,7 @@ func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 		client.OnDisconnect(func(event DisconnectEvent) {
 			require.Equal(t, DisconnectInsufficientState.Code, event.Code)
@@ -749,7 +750,7 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 		client.OnUnsubscribe(func(event UnsubscribeEvent) {
 			require.Equal(t, UnsubscribeCodeInsufficient, event.Code)
@@ -1271,7 +1272,7 @@ func TestClientSubscribeLast(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{Options: SubscribeOptions{Recover: true}}, nil)
+			cb(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
 		})
 	})
 
@@ -1727,7 +1728,7 @@ func TestClientPresence(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-		cb(SubscribeReply{Options: SubscribeOptions{Presence: true}}, nil)
+		cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
 	})
 
 	client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
@@ -1780,7 +1781,7 @@ func TestClientPresenceTakeover(t *testing.T) {
 	client := newTestClient(t, node, "42")
 
 	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-		cb(SubscribeReply{Options: SubscribeOptions{Presence: true}}, nil)
+		cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true}}, nil)
 	})
 
 	client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
@@ -2529,7 +2530,7 @@ func TestClientPresenceUpdate(t *testing.T) {
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
-				Options: SubscribeOptions{Presence: true},
+				Options: SubscribeOptions{EmitPresence: true},
 			}, nil)
 		})
 	})
@@ -2562,8 +2563,8 @@ func TestClientSubExpired(t *testing.T) {
 		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					ExpireAt: time.Now().Unix() + 1,
-					Presence: true,
+					ExpireAt:     time.Now().Unix() + 1,
+					EmitPresence: true,
 				},
 			}, nil)
 		})
@@ -3199,7 +3200,7 @@ func TestClientCheckPosition(t *testing.T) {
 	require.True(t, got)
 
 	// not initial, not time to check.
-	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPosition})
+	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPositioning})
 	require.True(t, got)
 }
 
@@ -3379,7 +3380,7 @@ func TestConcurrentSameChannelSubscribe(t *testing.T) {
 			go func() {
 				cb(SubscribeReply{
 					Options: SubscribeOptions{
-						Recover: true,
+						EnableRecovery: true,
 					},
 				}, nil)
 				close(onSubscribe)
@@ -3467,7 +3468,7 @@ func TestSubscribeWithBufferedPublications(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Recover: true,
+					EnableRecovery: true,
 				},
 			}, nil)
 		})
@@ -3599,7 +3600,7 @@ func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
 			go func() {
 				cb(SubscribeReply{
 					Options: SubscribeOptions{
-						Recover: true,
+						EnableRecovery: true,
 					},
 				}, nil)
 			}()
@@ -3649,7 +3650,7 @@ func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					Recover: true,
+					EnableRecovery: true,
 				},
 			}, nil)
 		})
@@ -3857,7 +3858,7 @@ func TestClient_HandleCommandV2_NoID(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
 
-	ok := clientV2.handleCommand(&protocol.Command{
+	ok := clientV2.HandleCommand(&protocol.Command{
 		Connect: &protocol.ConnectRequest{},
 	})
 	// Interpreted as PONG in ProtocolVersion2.
@@ -3870,7 +3871,7 @@ func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
 
-	ok := clientV2.handleCommand(&protocol.Command{
+	ok := clientV2.HandleCommand(&protocol.Command{
 		Id:        1,
 		Subscribe: &protocol.SubscribeRequest{},
 	})
@@ -3895,14 +3896,14 @@ func TestClient_HandleCommandV1(t *testing.T) {
 		})
 	})
 
-	ok := clientV1.handleCommand(&protocol.Command{
+	ok := clientV1.HandleCommand(&protocol.Command{
 		Id:     1,
 		Method: protocol.Command_CONNECT,
 		Params: getCommandParams(t, &protocol.ConnectRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     2,
 		Method: protocol.Command_SUBSCRIBE,
 		Params: getCommandParams(t, &protocol.SubscribeRequest{
@@ -3911,7 +3912,7 @@ func TestClient_HandleCommandV1(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     3,
 		Method: protocol.Command_UNSUBSCRIBE,
 		Params: getCommandParams(t, &protocol.UnsubscribeRequest{
@@ -3920,62 +3921,62 @@ func TestClient_HandleCommandV1(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     4,
 		Method: protocol.Command_RPC,
 		Params: getCommandParams(t, &protocol.RPCRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     4,
 		Method: protocol.Command_PING,
 		Params: getCommandParams(t, &protocol.PingRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     5,
 		Method: protocol.Command_PUBLISH,
 		Params: getCommandParams(t, &protocol.PublishRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Method: protocol.Command_SEND,
 		Send:   &protocol.SendRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     6,
 		Method: protocol.Command_PRESENCE,
 		Params: getCommandParams(t, &protocol.PresenceRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     7,
 		Method: protocol.Command_PRESENCE_STATS,
 		Params: getCommandParams(t, &protocol.PresenceStatsRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     8,
 		Method: protocol.Command_HISTORY,
 		Params: getCommandParams(t, &protocol.HistoryRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     9,
 		Method: protocol.Command_REFRESH,
 		Params: getCommandParams(t, &protocol.RefreshRequest{}),
 	})
 	require.True(t, ok)
 
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     10,
 		Method: protocol.Command_SUB_REFRESH,
 		Params: getCommandParams(t, &protocol.SubRefreshRequest{}),
@@ -3983,7 +3984,7 @@ func TestClient_HandleCommandV1(t *testing.T) {
 	require.True(t, ok)
 
 	// method not found results into an error, but not in a disconnect.
-	ok = clientV1.handleCommand(&protocol.Command{
+	ok = clientV1.HandleCommand(&protocol.Command{
 		Id:     11,
 		Method: 10001,
 		Params: nil,
@@ -4002,13 +4003,13 @@ func TestClient_HandleCommandV2(t *testing.T) {
 		})
 	})
 
-	ok := clientV2.handleCommand(&protocol.Command{
+	ok := clientV2.HandleCommand(&protocol.Command{
 		Id:      1,
 		Connect: &protocol.ConnectRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id: 2,
 		Subscribe: &protocol.SubscribeRequest{
 			Channel: "test",
@@ -4016,7 +4017,7 @@ func TestClient_HandleCommandV2(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id: 3,
 		Unsubscribe: &protocol.UnsubscribeRequest{
 			Channel: "test",
@@ -4024,60 +4025,60 @@ func TestClient_HandleCommandV2(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:  4,
 		Rpc: &protocol.RPCRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:   4,
 		Ping: &protocol.PingRequest{},
 	})
 	require.True(t, ok)
 
 	// Special type of ping.
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id: 5,
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:      5,
 		Publish: &protocol.PublishRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Send: &protocol.SendRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:       6,
 		Presence: &protocol.PresenceRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:            7,
 		PresenceStats: &protocol.PresenceStatsRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:      8,
 		History: &protocol.HistoryRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:      9,
 		Refresh: &protocol.RefreshRequest{},
 	})
 	require.True(t, ok)
 
-	ok = clientV2.handleCommand(&protocol.Command{
+	ok = clientV2.HandleCommand(&protocol.Command{
 		Id:         10,
 		SubRefresh: &protocol.SubRefreshRequest{},
 	})

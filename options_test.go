@@ -25,10 +25,11 @@ func TestWithMeta(t *testing.T) {
 func TestSubscribeOptions(t *testing.T) {
 	subscribeOpts := []SubscribeOption{
 		WithExpireAt(1),
-		WithPresence(true),
-		WithJoinLeave(true),
-		WithPosition(true),
-		WithRecover(true),
+		WithEmitPresence(true),
+		WithEmitJoinLeave(true),
+		WithPushJoinLeave(true),
+		WithPositioning(true),
+		WithRecovery(true),
 		WithChannelInfo([]byte(`test`)),
 		WithSubscribeSession("session"),
 		WithSubscribeClient("test"),
@@ -38,10 +39,11 @@ func TestSubscribeOptions(t *testing.T) {
 		opt(opts)
 	}
 	require.Equal(t, int64(1), opts.ExpireAt)
-	require.True(t, opts.Presence)
-	require.True(t, opts.JoinLeave)
-	require.True(t, opts.Position)
-	require.True(t, opts.Recover)
+	require.True(t, opts.EmitPresence)
+	require.True(t, opts.EmitJoinLeave)
+	require.True(t, opts.PushJoinLeave)
+	require.True(t, opts.EnablePositioning)
+	require.True(t, opts.EnableRecovery)
 	require.Equal(t, []byte(`test`), opts.ChannelInfo)
 	require.Equal(t, "test", opts.clientID)
 	require.Equal(t, "session", opts.sessionID)

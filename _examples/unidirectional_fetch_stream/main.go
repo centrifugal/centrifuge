@@ -98,9 +98,9 @@ func main() {
 		return centrifuge.ConnectReply{
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
 				exampleChannel: {
-					Recover:  true,
-					Position: true,
-					Data:     []byte(`{"message": "welcome to a channel"}`),
+					EnableRecovery:    true,
+					EnablePositioning: true,
+					Data:              []byte(`{"message": "welcome to a channel"}`),
 				},
 			},
 		}, nil

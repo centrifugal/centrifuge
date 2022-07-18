@@ -670,7 +670,7 @@ func (n *Node) handleControl(data []byte) error {
 		if cmd.RecoverSince != nil {
 			recoverSince = &StreamPosition{Offset: cmd.RecoverSince.Offset, Epoch: cmd.RecoverSince.Epoch}
 		}
-		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithPresence(cmd.Presence), WithJoinLeave(cmd.JoinLeave), WithPosition(cmd.Position), WithRecover(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince))
+		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithEmitPresence(cmd.EmitPresence), WithEmitJoinLeave(cmd.EmitJoinLeave), WithPushJoinLeave(cmd.PushJoinLeave), WithPositioning(cmd.Position), WithRecovery(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince))
 	case controlpb.Command_DISCONNECT:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
@@ -914,17 +914,18 @@ func (n *Node) pubNode(nodeID string) error {
 
 func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error {
 	subscribe := &controlpb.Subscribe{
-		User:        user,
-		Channel:     ch,
-		Presence:    opts.Presence,
-		JoinLeave:   opts.JoinLeave,
-		ChannelInfo: opts.ChannelInfo,
-		Position:    opts.Position,
-		Recover:     opts.Recover,
-		ExpireAt:    opts.ExpireAt,
-		Client:      opts.clientID,
-		Session:     opts.sessionID,
-		Data:        opts.Data,
+		User:          user,
+		Channel:       ch,
+		EmitPresence:  opts.EmitPresence,
+		EmitJoinLeave: opts.EmitJoinLeave,
+		PushJoinLeave: opts.PushJoinLeave,
+		ChannelInfo:   opts.ChannelInfo,
+		Position:      opts.EnablePositioning,
+		Recover:       opts.EnableRecovery,
+		ExpireAt:      opts.ExpireAt,
+		Client:        opts.clientID,
+		Session:       opts.sessionID,
+		Data:          opts.Data,
 	}
 	if opts.RecoverSince != nil {
 		subscribe.RecoverSince = &controlpb.StreamPosition{

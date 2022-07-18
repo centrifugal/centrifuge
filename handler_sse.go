@@ -48,6 +48,8 @@ func NewSSEHandler(node *Node, config SSEConfig) *SSEHandler {
 // command(s) in Centrifuge protocol.
 const connectUrlParam = "cf_connect"
 
+const defaultMaxSSEBodySize = 64 * 1024
+
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportSSE)
 
@@ -62,8 +64,11 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if r.Method == http.MethodPost {
-		maxBytesSize := int64(h.config.MaxRequestBodySize)
-		r.Body = http.MaxBytesReader(w, r.Body, maxBytesSize)
+		maxBytesSize := h.config.MaxRequestBodySize
+		if maxBytesSize == 0 {
+			maxBytesSize = defaultMaxSSEBodySize
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytesSize))
 		var err error
 		requestData, err = io.ReadAll(r.Body)
 		if err != nil {

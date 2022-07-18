@@ -93,8 +93,8 @@ func main() {
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		subs := map[string]centrifuge.SubscribeOptions{
 			exampleChannel: {
-				Recover:  true,
-				Position: true,
+				EnableRecovery:    true,
+				EnablePositioning: true,
 			},
 		}
 		for _, ch := range e.Channels {

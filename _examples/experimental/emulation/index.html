@@ -102,7 +102,7 @@
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                const sub = centrifuge.newSubscription(channel, {recoverable: true})
+                const sub = centrifuge.newSubscription(channel, {recoverable: true, joinLeave: true})
                     .on('publication', handlePublication)
                     .on("join", handleJoin)
                     .on("leave", handleLeave)

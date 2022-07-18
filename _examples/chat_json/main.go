@@ -78,7 +78,12 @@ func main() {
 			Data: []byte(`{}`),
 			// Subscribe to a personal server-side channel.
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				"#" + cred.UserID: {Recover: true, Presence: true, JoinLeave: true},
+				"#" + cred.UserID: {
+					EnableRecovery: true,
+					EmitPresence:   true,
+					EmitJoinLeave:  true,
+					PushJoinLeave:  true,
+				},
 			},
 		}, nil
 	})
@@ -124,10 +129,11 @@ func main() {
 
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
-					Recover:   true,
-					Presence:  true,
-					JoinLeave: true,
-					Data:      []byte(`{"msg": "welcome"}`),
+					EnableRecovery: true,
+					EmitPresence:   true,
+					EmitJoinLeave:  true,
+					PushJoinLeave:  true,
+					Data:           []byte(`{"msg": "welcome"}`),
 				},
 			}, nil)
 		})

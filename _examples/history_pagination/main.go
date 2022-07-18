@@ -88,7 +88,7 @@ func main() {
 			}
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
-					Position: true,
+					EnablePositioning: true,
 				},
 			}, nil)
 		})

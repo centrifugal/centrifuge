@@ -45,6 +45,8 @@ func NewHTTPStreamHandler(node *Node, config HTTPStreamConfig) *HTTPStreamHandle
 	}
 }
 
+const defaultMaxHTTPStreamingBodySize = 64 * 1024
+
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportHTTPStream)
 
@@ -62,7 +64,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		maxBytesSize := h.config.MaxRequestBodySize
 		if maxBytesSize == 0 {
-			maxBytesSize = 64 * 1024
+			maxBytesSize = defaultMaxHTTPStreamingBodySize
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytesSize))
 		var err error

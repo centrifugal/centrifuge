@@ -138,10 +138,12 @@ type SubscribeEvent struct {
 	Token string
 	// Data received from client as part of Subscribe Command.
 	Data []byte
-	// Client wants to create subscription with positioned property.
+	// Positioned is true when Client wants to create subscription with positioned property.
 	Positioned bool
-	// Client wants to create subscription with recoverable property.
+	// Recoverable is true when Client wants to create subscription with recoverable property.
 	Recoverable bool
+	// JoinLeave is true when Client wants to receive join/leave messages.
+	JoinLeave bool
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do

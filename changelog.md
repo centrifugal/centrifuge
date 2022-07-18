@@ -1,3 +1,75 @@
+v0.24.0
+=======
+
+This release has some adjustments required for [Centrifugo v4](https://github.com/centrifugal/centrifugo/issues/500).
+
+Please take a look at example below which emphasizes the important migration step of your server-side code regarding join/leave messages.
+
+We are not switching to client protocol v2 here yet (in v0.23.0 we mentioned it could be the part of the next minor release, but turned out we need an additional intermediate step before we can do the switch).
+
+* change subscribe option names to be more meaningful
+* support asking for join/leave messages from the client side
+* send initial ping with random delay in client protocol v2 to smooth syscalls (and thus a CPU usage) after a massive reconnect scenario
+* make `client.handleCommand` public (`client.HandleCommand`) to have a possibility to handle protocol commands when decoding happens on Transport layer
+* fix SSEHandler default max body size (used in case of POST requests)
+
+The important thing is that `SubscribeOptions` now have 2 flags related to join/leave messages: `SubscribeOptions.EmitJoinLeave` and `SubscribeOptions.PushJoinLeave`. This means the program like this:
+
+```go
+client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+	cb(centrifuge.SubscribeReply{
+		Options: centrifuge.SubscribeOptions{
+			JoinLeave: true,
+		},
+	}, nil)
+})
+```
+
+Must be replaced with this code to inherit the previous behavior:
+
+```go
+client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
+	cb(centrifuge.SubscribeReply{
+		Options: centrifuge.SubscribeOptions{
+			EmitJoinLeave:     true,
+			PushJoinLeave:     true,
+		},
+	}, nil)
+})
+```
+
+I.e. we tell Centrifuge that it should emit join/leave messages for a particular channel subscription, and it should send (push) join/leave messages to this particular client connection. The same applies to server-side subscriptions also, see how we adopted our own examples in repo in [#233](https://github.com/centrifugal/centrifuge/pull/233/files) where the change was introduced.
+
+```
+gorelease -base v0.23.1 -version v0.24.0
+# github.com/centrifugal/centrifuge
+## incompatible changes
+SubscribeOptions.JoinLeave: removed
+SubscribeOptions.Position: removed
+SubscribeOptions.Presence: removed
+SubscribeOptions.Recover: removed
+WithJoinLeave: removed
+WithPosition: removed
+WithPresence: removed
+WithRecover: removed
+## compatible changes
+(*Client).HandleCommand: added
+SubscribeEvent.JoinLeave: added
+SubscribeOptions.EmitJoinLeave: added
+SubscribeOptions.EmitPresence: added
+SubscribeOptions.EnablePositioning: added
+SubscribeOptions.EnableRecovery: added
+SubscribeOptions.PushJoinLeave: added
+WithEmitJoinLeave: added
+WithEmitPresence: added
+WithPositioning: added
+WithPushJoinLeave: added
+WithRecovery: added
+
+# summary
+v0.24.0 is a valid semantic version for this release.
+```
+
 v0.23.1
 =======
 

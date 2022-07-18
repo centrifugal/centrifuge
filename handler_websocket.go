@@ -101,7 +101,7 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
 		ReadBufferSize:    config.ReadBufferSize,
 		EnableCompression: config.Compression,
-		Subprotocols:      []string{"centrifuge-protobuf"},
+		Subprotocols:      []string{"centrifuge-json", "centrifuge-protobuf"},
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool

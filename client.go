@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -131,9 +132,10 @@ const (
 	// Until that moment channel exists in client Channels map only to track
 	// duplicate subscription requests.
 	flagSubscribed uint8 = 1 << iota
-	flagPresence
-	flagJoinLeave
-	flagPosition
+	flagEmitPresence
+	flagEmitJoinLeave
+	flagPushJoinLeave
+	flagPositioning
 	flagServerSide
 	flagClientSideRefresh
 )
@@ -511,7 +513,7 @@ func (c *Client) sendPing() {
 	if appLevelPing.PongTimeout > 0 && !unidirectional {
 		c.nextPong = time.Now().Add(appLevelPing.PongTimeout).UnixNano()
 	}
-	c.addPingUpdate()
+	c.addPingUpdate(false)
 	c.mu.Unlock()
 }
 
@@ -531,8 +533,16 @@ func (c *Client) checkPong() {
 }
 
 // Lock must be held outside.
-func (c *Client) addPingUpdate() {
-	c.nextPing = time.Now().Add(c.transport.AppLevelPing().PingInterval).UnixNano()
+func (c *Client) addPingUpdate(isFirst bool) {
+	delay := c.transport.AppLevelPing().PingInterval
+	if isFirst {
+		// Send first ping in random interval between 0 and PingInterval to
+		// spread ping-pongs in time (useful when many connections reconnect
+		// almost immediately).
+		pingNanoseconds := c.transport.AppLevelPing().PingInterval.Nanoseconds()
+		delay = time.Duration(rand.Int63n(pingNanoseconds)) * time.Nanosecond
+	}
+	c.nextPing = time.Now().Add(delay).UnixNano()
 	c.scheduleNextTimer()
 }
 
@@ -577,7 +587,7 @@ func (c *Client) transportEnqueue(data []byte) error {
 // updateChannelPresence updates client presence info for channel so it
 // won't expire until client disconnect.
 func (c *Client) updateChannelPresence(ch string, chCtx channelContext) error {
-	if !channelHasFlag(chCtx.flags, flagPresence) {
+	if !channelHasFlag(chCtx.flags, flagEmitPresence) {
 		return nil
 	}
 	c.mu.RLock()
@@ -698,7 +708,7 @@ func (c *Client) updatePresence() {
 }
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx channelContext) bool {
-	if !channelHasFlag(chCtx.flags, flagPosition) {
+	if !channelHasFlag(chCtx.flags, flagPositioning) {
 		return true
 	}
 	nowUnix := c.node.nowTimeGetter().Unix()
@@ -1063,7 +1073,7 @@ func (c *Client) Handle(data []byte) bool {
 			return false
 		}
 		if cmd != nil {
-			ok := c.handleCommand(cmd)
+			ok := c.HandleCommand(cmd)
 			if !ok {
 				return false
 			}
@@ -1075,8 +1085,15 @@ func (c *Client) Handle(data []byte) bool {
 	return true
 }
 
-// handleCommand processes a single protocol.Command.
-func (c *Client) handleCommand(cmd *protocol.Command) bool {
+// HandleCommand processes a single protocol.Command.
+func (c *Client) HandleCommand(cmd *protocol.Command) bool {
+	c.mu.Lock()
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		return false
+	}
+	c.mu.Unlock()
+
 	if c.transport.ProtocolVersion() == ProtocolVersion1 && cmd.Id == 0 && (cmd.Method != protocol.Command_SEND && cmd.Send == nil) {
 		// Only send command from client can be sent without incremental ID in ProtocolVersion1. For
 		// ProtocolVersion2 we treat empty commands as pongs.
@@ -1472,7 +1489,7 @@ func (c *Client) scheduleOnConnectTimers() {
 		c.addExpireUpdate(expireAfter)
 	}
 	if c.transport.ProtocolVersion() > ProtocolVersion1 && c.transport.AppLevelPing().PingInterval > 0 {
-		c.addPingUpdate()
+		c.addPingUpdate(true)
 	}
 	c.mu.Unlock()
 }
@@ -1678,6 +1695,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		Data:        req.Data,
 		Positioned:  req.Positioned,
 		Recoverable: req.Recoverable,
+		JoinLeave:   req.JoinLeave,
 	}
 
 	cb := func(reply SubscribeReply, err error) {
@@ -1704,7 +1722,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 			return
 		}
 
-		if channelHasFlag(ctx.channelContext.flags, flagJoinLeave) && ctx.clientInfo != nil {
+		if channelHasFlag(ctx.channelContext.flags, flagEmitJoinLeave) && ctx.clientInfo != nil {
 			go func() { _ = c.node.publishJoin(req.Channel, ctx.clientInfo) }()
 		}
 	}
@@ -2509,7 +2527,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	if len(subCtxMap) > 0 {
 		for channel, subCtx := range subCtxMap {
 			go func(channel string, subCtx subscribeContext) {
-				if channelHasFlag(subCtx.channelContext.flags, flagJoinLeave) && subCtx.clientInfo != nil {
+				if channelHasFlag(subCtx.channelContext.flags, flagEmitJoinLeave) && subCtx.clientInfo != nil {
 					_ = c.node.publishJoin(channel, subCtx.clientInfo)
 				}
 			}(channel, subCtx)
@@ -2605,7 +2623,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if err != nil {
 		return err
 	}
-	if channelHasFlag(subCtx.channelContext.flags, flagJoinLeave) && subCtx.clientInfo != nil {
+	if channelHasFlag(subCtx.channelContext.flags, flagEmitJoinLeave) && subCtx.clientInfo != nil {
 		_ = c.node.publishJoin(channel, subCtx.clientInfo)
 	}
 	return nil
@@ -2746,7 +2764,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		ChanInfo: reply.Options.ChannelInfo,
 	}
 
-	needPubSubSync := reply.Options.Position || reply.Options.Recover
+	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
 		// Start syncing recovery and PUB/SUB.
 		// The important thing is to call StopBuffering for this channel
@@ -2765,7 +2783,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		return ctx
 	}
 
-	if reply.Options.Presence {
+	if reply.Options.EmitPresence {
 		err = c.node.addPresence(channel, c.uid, info)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error adding presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -2781,13 +2799,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		recoveredPubs []*protocol.Publication
 	)
 
-	if reply.Options.Position || reply.Options.Recover {
+	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
 		res.Positioned = true
-		if reply.Options.Recover {
+		if reply.Options.EnableRecovery {
 			res.Recoverable = true
 		}
 
-		if reply.Options.Recover && req.Recover {
+		if reply.Options.EnableRecovery && req.Recover {
 			cmdOffset := req.Offset
 			cmdEpoch := req.Epoch
 
@@ -2906,14 +2924,17 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	if reply.ClientSideRefresh {
 		channelFlags |= flagClientSideRefresh
 	}
-	if reply.Options.Position || reply.Options.Recover {
-		channelFlags |= flagPosition
+	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
+		channelFlags |= flagPositioning
 	}
-	if reply.Options.Presence {
-		channelFlags |= flagPresence
+	if reply.Options.EmitPresence {
+		channelFlags |= flagEmitPresence
 	}
-	if reply.Options.JoinLeave {
-		channelFlags |= flagJoinLeave
+	if reply.Options.EmitJoinLeave {
+		channelFlags |= flagEmitJoinLeave
+	}
+	if reply.Options.PushJoinLeave {
+		channelFlags |= flagPushJoinLeave
 	}
 
 	channelContext := channelContext{
@@ -2925,7 +2946,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			Epoch:  latestEpoch,
 		},
 	}
-	if reply.Options.Recover || reply.Options.Position {
+	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {
 		channelContext.positionCheckTime = time.Now().Unix()
 	}
 
@@ -3000,7 +3021,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return nil
 	}
-	if !channelHasFlag(channelContext.flags, flagPosition) {
+	if !channelHasFlag(channelContext.flags, flagPositioning) {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			c.mu.Unlock()
 			return nil
@@ -3054,17 +3075,39 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data []b
 	return nil
 }
 
-func (c *Client) writeJoin(_ string, data []byte) error {
+func (c *Client) writeJoin(ch string, data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
+	c.mu.RLock()
+	channelContext, ok := c.channels[ch]
+	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
+		c.mu.RUnlock()
+		return nil
+	}
+	if !channelHasFlag(channelContext.flags, flagPushJoinLeave) {
+		c.mu.RUnlock()
+		return nil
+	}
+	c.mu.RUnlock()
 	return c.transportEnqueue(data)
 }
 
-func (c *Client) writeLeave(_ string, data []byte) error {
+func (c *Client) writeLeave(ch string, data []byte) error {
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
+	c.mu.RLock()
+	channelContext, ok := c.channels[ch]
+	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
+		c.mu.RUnlock()
+		return nil
+	}
+	if !channelHasFlag(channelContext.flags, flagPushJoinLeave) {
+		c.mu.RUnlock()
+		return nil
+	}
+	c.mu.RUnlock()
 	return c.transportEnqueue(data)
 }
 
@@ -3084,14 +3127,14 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	delete(c.channels, channel)
 	c.mu.Unlock()
 
-	if channelHasFlag(chCtx.flags, flagPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
+	if channelHasFlag(chCtx.flags, flagEmitPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
 		err := c.node.removePresence(channel, c.uid)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error removing channel presence", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 
-	if channelHasFlag(chCtx.flags, flagJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
+	if channelHasFlag(chCtx.flags, flagEmitJoinLeave) && channelHasFlag(chCtx.flags, flagSubscribed) {
 		_ = c.node.publishLeave(channel, info)
 	}
 
