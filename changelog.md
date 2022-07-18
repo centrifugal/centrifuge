@@ -11,6 +11,7 @@ We are not switching to client protocol v2 here yet (in v0.23.0 we mentioned it 
 * support asking for join/leave messages from the client side
 * send initial ping with random delay in client protocol v2 to smooth syscalls (and thus a CPU usage) after a massive reconnect scenario
 * make `client.handleCommand` public (`client.HandleCommand`) to have a possibility to handle protocol commands when decoding happens on Transport layer
+* fix SSEHandler default max body size (used in case of POST requests)
 
 The important thing is that `SubscribeOptions` now have 2 flags related to join/leave messages: `SubscribeOptions.EmitJoinLeave` and `SubscribeOptions.PushJoinLeave`. This means the program like this:
 
