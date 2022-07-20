@@ -183,22 +183,26 @@ Also create file `index.html` near `main.go` with content:
     <body>
         <input type="text" id="input" />
         <script type="text/javascript">
-            // Create Centrifuge object with Websocket endpoint address set in main.go
-            const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
             function drawText(text) {
                 const div = document.createElement('div');
                 div.innerHTML = text + '<br>';
                 document.body.appendChild(div);
             }
-            centrifuge.on('connect', function(ctx){
+            
+            // Create Centrifuge object with Websocket endpoint address set in main.go
+            const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+
+            centrifuge.on('connected', function(ctx){
                 drawText('Connected over ' + ctx.transport);
             });
-            centrifuge.on('disconnect', function(ctx){
-                drawText('Disconnected: ' + ctx.reason);
-            });
-            const sub = centrifuge.subscribe("chat", function(ctx) {
+            
+            const sub = centrifuge.newSubscription("chat");
+            sub.on('publication', function(ctx) {
                 drawText(JSON.stringify(ctx.data));
-            })
+            });
+            // Move subscription to subscribing state.
+            sub.subscribe();
+            
             const input = document.getElementById("input");
             input.addEventListener('keyup', function(e) {
                 if (e.keyCode === 13) {
