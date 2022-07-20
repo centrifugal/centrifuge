@@ -1,3 +1,29 @@
+v0.25.0
+=======
+
+**Breaking changes**
+
+This release enables using client protocol v2.
+
+All SDKs in Centrifugal ecosystem now behave according to the client [SDK API specification](https://centrifugal.dev/docs/transports/client_api). The work has been done according to [Centrifugo v4 roadmap](https://github.com/centrifugal/centrifugo/issues/500).
+
+Check out [Centrifugo v4 release post](https://centrifugal.dev/blog/2022/07/19/centrifugo-v4-released) that covers the reasoning behind changes here.
+
+This means:
+
+* WebSocket handler will assume client connects over protocol v2. But we will still support client protocol v1 for some time (I believe half a year at least). Protocol v1 may be forced using `WebsocketConfig.ProtocolVersion` option (set it to `ProtocolVersion1`). Or client can provide `?cf_protocol_version=v1` in connection URL. Applications can smoothly migrate to new protocol, for example, see how [Centrifugo v4 migration guide](https://centrifugal.dev/docs/getting-started/migration_v4) provides steps to migrate apps to new client protocol.
+* The same applies to SockJS handler. SockJS is now DEPRECATED in Centrifugal ecosystem (we provide our own WebSocket emulation layer, which is faster, does not require sticky sessions, has less overhead in terms of network traffic and memory usage on server side)
+* All examples in this repo were adapted to use the latest client SDK API which works according to new [client SDK spec](https://centrifugal.dev/docs/next/transports/client_api)
+* Unidirectional transport examples were also updated and now use client protocol v2
+* New SDKs that work with new client protocol will be released in parallel with Centrifuge v0.25.0 and Centrifugo v4
+
+To summarise:
+
+1. Current SDKs will be able to work with Centrifuge v0.25.0 – but you will need to turn on using client protocol v1 on server side. This way you can update server side without changing client side code.
+2. New client SDKs which will be released will only work with new iteration of client protocol
+
+Please don't hesitate to join our Telegram and Discord communities in case of questions - we will try to help.
+
 v0.24.0
 =======
 
