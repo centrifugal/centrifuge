@@ -6,25 +6,35 @@
         <style type="text/css">
             input[type="text"] { width: 300px; }
         </style>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.0.0/dist/centrifuge.js"></script>
         <script type="text/javascript">
             window.addEventListener('load', function() {
                 const container = document.getElementById('messages');
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
-                    onRefresh: function(ctx, cb) {
-                        cb({"status": 200, "data": {"token": "I am 12"}});
+                    token: "I am 12",
+                    getToken: function() {
+                        return Promise.resolve("I am 12");
                     }
                 });
-                centrifuge.setToken("I am 12");
 
-                // bind listeners on centrifuge object instance events.
-                centrifuge.on('connect', function(ctx){
-                    drawText('Connected with client ID ' + ctx.client);
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
                 });
 
-                centrifuge.on('disconnect', function(ctx){
-                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
+                });
+
+                // bind listeners on centrifuge object instance events.
+                centrifuge.on('connected', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
+                });
+
+                centrifuge.on('message', function(ctx) {
+                    drawText(JSON.stringify(ctx.data));
+                    // echo data back to server.
+                    centrifuge.send(ctx.data);
                 });
 
                 function drawText(text) {

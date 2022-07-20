@@ -63,11 +63,9 @@ func TestSockjsHandler(t *testing.T) {
 	connectRequest := &protocol.ConnectRequest{
 		Token: "boom",
 	}
-	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		Id:     1,
-		Method: protocol.Command_CONNECT,
-		Params: params,
+		Id:      1,
+		Connect: connectRequest,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
 	err = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
@@ -140,11 +138,9 @@ func TestSockjsTransportWrite(t *testing.T) {
 	connectRequest := &protocol.ConnectRequest{
 		Token: "boom",
 	}
-	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		Id:     1,
-		Method: protocol.Command_CONNECT,
-		Params: params,
+		Id:      1,
+		Connect: connectRequest,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
 	err = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))
@@ -190,11 +186,9 @@ func TestSockjsTransportWriteMany(t *testing.T) {
 	connectRequest := &protocol.ConnectRequest{
 		Token: "boom",
 	}
-	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		Id:     1,
-		Method: protocol.Command_CONNECT,
-		Params: params,
+		Id:      1,
+		Connect: connectRequest,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
 	err = conn.WriteMessage(websocket.TextMessage, sockjsData(cmdBytes))

@@ -177,28 +177,32 @@ Also create file `index.html` near `main.go` with content:
 <html lang="en">
     <head>
         <meta charset="utf-8">
-        <script type="text/javascript" src="https://rawgit.com/centrifugal/centrifuge-js/master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.0.0/dist/centrifuge.js"></script>
         <title>Centrifuge library chat example</title>
     </head>
     <body>
         <input type="text" id="input" />
         <script type="text/javascript">
-            // Create Centrifuge object with Websocket endpoint address set in main.go
-            const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
             function drawText(text) {
                 const div = document.createElement('div');
                 div.innerHTML = text + '<br>';
                 document.body.appendChild(div);
             }
-            centrifuge.on('connect', function(ctx){
+            
+            // Create Centrifuge object with Websocket endpoint address set in main.go
+            const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+
+            centrifuge.on('connected', function(ctx){
                 drawText('Connected over ' + ctx.transport);
             });
-            centrifuge.on('disconnect', function(ctx){
-                drawText('Disconnected: ' + ctx.reason);
-            });
-            const sub = centrifuge.subscribe("chat", function(ctx) {
+            
+            const sub = centrifuge.newSubscription("chat");
+            sub.on('publication', function(ctx) {
                 drawText(JSON.stringify(ctx.data));
-            })
+            });
+            // Move subscription to subscribing state.
+            sub.subscribe();
+            
             const input = document.getElementById("input");
             input.addEventListener('keyup', function(e) {
                 if (e.keyCode === 13) {

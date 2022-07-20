@@ -181,7 +181,7 @@ func (t *grpcTransport) Protocol() centrifuge.ProtocolType {
 }
 
 func (t *grpcTransport) ProtocolVersion() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
+	return centrifuge.ProtocolVersion2
 }
 
 // Unidirectional returns whether transport is unidirectional.

@@ -124,5 +124,5 @@ var CentrifugeUni_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "client.proto",
+	Metadata: "uni.proto",
 }

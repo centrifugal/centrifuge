@@ -3,26 +3,24 @@
     <head>
         <meta charset="utf-8">
         <title></title>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.0.0/dist/centrifuge.js"></script>
         <script type="text/javascript">
             window.addEventListener('load', function() {
                 const container = document.getElementById('messages');
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
-                // var centrifuge = new Centrifuge('http://localhost:8000/connection/sockjs', {
-                //     sockjsTransports: [
-                //         "xhr-streaming",
-                //     ]
-                // });
 
                 // bind listeners on centrifuge object instance events.
-                centrifuge.on('connect', function(ctx){
+                centrifuge.on('connected', function(ctx){
                     drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
                 });
 
-                centrifuge.on('disconnect', function(ctx){
-                    drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
+                });
+
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
                 });
 
                 function drawText(text) {

@@ -224,14 +224,10 @@ func TestWebsocketTransportWriteMany(t *testing.T) {
 
 func getConnectCommandProtobuf(t *testing.T) []byte {
 	connectRequest := &protocol.ConnectRequest{}
-	paramsEncoder := protocol.NewProtobufParamsEncoder()
-	rawConnect, err := paramsEncoder.Encode(connectRequest)
-	require.NoError(t, err)
 	encoder := protocol.NewProtobufCommandEncoder()
 	cmd, err := encoder.Encode(&protocol.Command{
-		Id:     1,
-		Method: protocol.Command_CONNECT,
-		Params: rawConnect,
+		Id:      1,
+		Connect: connectRequest,
 	})
 	require.NoError(t, err)
 	return cmd
@@ -275,7 +271,7 @@ func TestWebsocketHandlerPing(t *testing.T) {
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
-		PingInterval: time.Second,
+		AppLevelPingInterval: time.Second,
 	}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -298,22 +294,18 @@ func TestWebsocketHandlerPing(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	closeCh := make(chan struct{})
-	var once sync.Once
 
-	conn.SetPingHandler(func(appData string) error {
-		once.Do(func() {
-			close(closeCh)
-		})
-		return nil
-	})
-
-	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"id": 1}`))
+	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"id": 1, "connect": {}}`))
 	require.NoError(t, err)
 
 	go func() {
 		for {
-			_, _, err = conn.ReadMessage()
+			_, msg, err := conn.ReadMessage()
 			if err != nil {
+				break
+			}
+			if strings.Contains(string(msg), "{}") {
+				close(closeCh)
 				break
 			}
 		}
@@ -351,11 +343,9 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	connectRequest := &protocol.ConnectRequest{
 		Token: "boom",
 	}
-	params, _ := json.Marshal(connectRequest)
 	cmd := &protocol.Command{
-		Id:     1,
-		Method: protocol.Command_CONNECT,
-		Params: params,
+		Id:      1,
+		Connect: connectRequest,
 	}
 	cmdBytes, _ := json.Marshal(cmd)
 
@@ -448,7 +438,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 
 	var conns []*websocket.Conn
 	for i := 0; i < numConns; i++ {
-		conn := newRealConnJSON(t, "test"+strconv.Itoa(i), url)
+		conn := newRealConnJSONV2(t, "test"+strconv.Itoa(i), url)
 		conns = append(conns, conn)
 	}
 	defer func() {
@@ -470,25 +460,34 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 				require.Fail(t, err.Error())
 			}
 
-			_, data, err := conns[i].ReadMessage()
-			if err != nil {
-				require.Fail(t, err.Error())
+			var firstNonPingMessage []byte
+			for {
+				_, data, err := conns[i].ReadMessage()
+				if err != nil {
+					require.Fail(t, err.Error())
+				}
+				messages := bytes.Split(data, []byte("\n"))
+				for _, msg := range messages {
+					if string(msg) == "{}" {
+						continue
+					}
+					firstNonPingMessage = msg
+				}
+				if string(firstNonPingMessage) == "" {
+					continue
+				}
+				break
 			}
 
 			var rep protocol.Reply
-			err = json.Unmarshal(data, &rep)
+			err = json.Unmarshal(firstNonPingMessage, &rep)
 			require.NoError(t, err)
 
-			var push protocol.Push
-			err = json.Unmarshal(rep.Result, &push)
-			require.NoError(t, err)
+			require.NotNil(t, rep.Push)
+			require.NotNil(t, rep.Push.Pub)
 
-			var pub protocol.Publication
-			err = json.Unmarshal(push.Data, &pub)
-			require.NoError(t, err)
-
-			if !strings.Contains(string(pub.Data), string(payload)) {
-				require.Fail(t, "where is our payload? %s %s", string(payload), string(pub.Data))
+			if !strings.Contains(string(rep.Push.Pub.Data), string(payload)) {
+				require.Fail(t, "where is our payload? %s %s", string(payload), string(rep.Push.Pub.Data))
 			}
 		}(i)
 	}
@@ -514,7 +513,7 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 
 	var conns []*websocket.Conn
 	for i := 0; i < numConns; i++ {
-		conn := newRealConnJSON(t, "test", url)
+		conn := newRealConnJSONV2(t, "test", url)
 		conns = append(conns, conn)
 	}
 	defer func() {
@@ -537,25 +536,34 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 
-			_, data, err := conns[i].ReadMessage()
-			if err != nil {
-				require.Fail(t, err.Error())
+			var firstNonPingMessage []byte
+			for {
+				_, data, err := conns[i].ReadMessage()
+				if err != nil {
+					require.Fail(t, err.Error())
+				}
+				messages := bytes.Split(data, []byte("\n"))
+				for _, msg := range messages {
+					if string(msg) == "{}" {
+						continue
+					}
+					firstNonPingMessage = msg
+				}
+				if string(firstNonPingMessage) == "" {
+					continue
+				}
+				break
 			}
 
 			var rep protocol.Reply
-			err = json.Unmarshal(data, &rep)
+			err := json.Unmarshal(firstNonPingMessage, &rep)
 			require.NoError(t, err)
 
-			var push protocol.Push
-			err = json.Unmarshal(rep.Result, &push)
-			require.NoError(t, err)
+			require.NotNil(t, rep.Push)
+			require.NotNil(t, rep.Push.Pub)
 
-			var pub protocol.Publication
-			err = json.Unmarshal(push.Data, &pub)
-			require.NoError(t, err)
-
-			if !strings.Contains(string(pub.Data), string(payload)) {
-				require.Fail(t, "where is our payload? %s %s", string(payload), string(pub.Data))
+			if !strings.Contains(string(rep.Push.Pub.Data), string(payload)) {
+				require.Fail(t, "where is our payload? %s %s", string(payload), string(rep.Push.Pub.Data))
 			}
 		}(i)
 	}

@@ -6,7 +6,7 @@
         <style type="text/css">
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.0.0/dist/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -18,40 +18,38 @@
             window.addEventListener('load', function() {
                 const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
-                    timeout: 5000,
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket');
+
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
                 });
 
-                centrifuge.setConnectData({"user-agent": navigator.userAgent});
-
-                // bind listeners on centrifuge object instance events.
-                centrifuge.on('connect', function(ctx){
-                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
-                });
-
-                centrifuge.on('disconnect', function(ctx){
+                centrifuge.on('disconnected', function(ctx){
                     drawText('Disconnected: ' + ctx.reason + (ctx.reconnect?", will try to reconnect":", won't try to reconnect"));
+                });
+
+                centrifuge.on('connected', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
                 });
 
                 for (let i = 0; i < 10; i++) {
                     // subscribe on channel and bind various event listeners. Actual
                     // subscription request will be sent after client connects to
                     // a server.
-                    centrifuge.subscribe(channel + i, handleMessage)
+                    const sub = centrifuge.newSubscription(channel + i);
+                    sub.on("publication", handlePublication)
                         .on("join", handleJoin)
                         .on("leave", handleLeave)
-                        .on("unsubscribe", handleUnsubscribe)
-                        .on("subscribe", handleSubscribe)
-                        .on("error", handleSubscribeError);
+                        .on("subscribed", handleSubscribed)
+                        .on("error", handleSubscriptionError);
+                    sub.subscribe();
                 }
 
                 setTimeout(function () {
-                    const rpcRequest = {"method": "getCurrentYear"};
-
                     for (let i = 0; i < 100; i++) {
                         // This can be whatever JSON you want.
                         const j = i;
-                        centrifuge.rpc(rpcRequest).then(function(data){
+                        centrifuge.rpc("getCurrentYear", {}).then(function(data){
                             drawText("RPC " + j + " response data: " + JSON.stringify(data));
                         }, function(err) {
                             drawText("RPC error: " + JSON.stringify(err));
@@ -64,22 +62,22 @@
                 // defined start subscribing etc.
                 centrifuge.connect();
 
-                function handleSubscribe(ctx) {
-                    drawText('Subscribed on channel ' + ctx.channel + ' (resubscribed: ' + ctx.isResubscribe + ', recovered: ' + ctx.recovered + ')');
+                function handleSubscribed(ctx) {
+                    drawText('Subscribed on channel ' + ctx.channel);
                 }
 
-                function handleSubscribeError(err) {
-                    drawText('Error subscribing on channel ' + err.channel + ': ' + err.message);
+                function handleSubscriptionError(ctx) {
+                    drawText('Subscription error in channel ' + err.channel + ': ' + JSON.stringify(ctx));
                 }
 
-                function handleMessage(message) {
+                function handlePublication(ctx) {
                     let clientID;
-                    if (message.info){
-                        clientID = message.info.client;
+                    if (ctx.info){
+                        clientID = ctx.info.client;
                     } else {
                         clientID = null;
                     }
-                    const inputText = message.data["input"].toString();
+                    const inputText = ctx.data["input"].toString();
                     const text = safeTagsReplace(inputText) + ' <span class="muted">from ' + clientID + '</span>';
                     drawText(text);
                 }
@@ -90,10 +88,6 @@
 
                 function handleLeave(message) {
                     drawText('Client left channel ' + this.channel + ' (uid ' + message.info["client"] + ', user '+ message.info["user"] +')');
-                }
-
-                function handleUnsubscribe(sub) {
-                    drawText('Unsubscribed from channel ' + sub.channel);
                 }
 
                 function drawText(text) {

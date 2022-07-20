@@ -2,12 +2,12 @@
 <html lang="en">
     <head>
         <meta charset="utf-8">
-        <title>Centrifuge + Oauth2</title>
-        <script type="text/javascript" src="https://cdn.jsdelivr.net/gh/centrifugal/centrifuge-js@master/dist/centrifuge.min.js"></script>
+        <title>Centrifuge + OAuth2</title>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.0.0/dist/centrifuge.js"></script>
     </head>
     <body>
         <div>
-            Go to <a href="/account"> account page</a>
+            Go to <a href="/account">account page</a>
         </div>
         <div style="margin-top: 20px;">
             <input type="text" id="input" />
@@ -21,17 +21,23 @@
                 document.body.appendChild(div);
             }
 
-            centrifuge.on('connect', function(ctx){
+            centrifuge.on('connected', function(ctx){
                 drawText('Connected over ' + ctx.transport + '<br>');
             });
 
-            centrifuge.on('disconnect', function(ctx){
+            centrifuge.on('connecting', function(ctx){
+                drawText('Connecting: ' + ctx.reason + '<br>');
+            });
+
+            centrifuge.on('disconnected', function(ctx){
                 drawText('Disconnected: ' + ctx.reason + '<br>');
             });
 
-            const sub = centrifuge.subscribe("chat", function(message) {
-                drawText(message.info.user + ": " + message.data + '<br>');
+            const sub = centrifuge.newSubscription("chat");
+            sub.on('publication', function(ctx) {
+                drawText(ctx.info.user + ": " + ctx.data + '<br>');
             })
+            sub.subscribe();
 
             const input = document.getElementById("input");
             input.addEventListener('keyup', function(e) {
