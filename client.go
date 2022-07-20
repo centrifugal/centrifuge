@@ -22,10 +22,12 @@ var protobufPingReply []byte
 var jsonPingPush = []byte(`{}`)
 var protobufPingPush []byte
 
+var randSource *rand.Rand
+
 func init() {
 	protobufPingReply, _ = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{})
 	protobufPingPush, _ = protocol.DefaultProtobufPushEncoder.Encode(&protocol.Push{})
-	rand.Seed(time.Now().Unix())
+	randSource = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
 // clientEventHub allows dealing with client event handlers.
@@ -541,7 +543,7 @@ func (c *Client) addPingUpdate(isFirst bool) {
 		// spread ping-pongs in time (useful when many connections reconnect
 		// almost immediately).
 		pingNanoseconds := c.transport.AppLevelPing().PingInterval.Nanoseconds()
-		delay = time.Duration(rand.Int63n(pingNanoseconds)) * time.Nanosecond
+		delay = time.Duration(randSource.Int63n(pingNanoseconds)) * time.Nanosecond
 	}
 	c.nextPing = time.Now().Add(delay).UnixNano()
 	c.scheduleNextTimer()
