@@ -21,7 +21,7 @@ require (
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
 	github.com/nats-io/nats-server/v2 v2.8.1 // indirect
 	github.com/nats-io/nats.go v1.14.0
-	github.com/prometheus/client_golang v1.12.1
+	github.com/prometheus/client_golang v1.12.2
 	github.com/stretchr/testify v1.7.0
 	github.com/vmihailenco/msgpack/v5 v5.3.1
 	golang.org/x/oauth2 v0.0.0-20220223155221-ee480838109b
