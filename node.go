@@ -299,7 +299,7 @@ func (n *Node) updateGauges() {
 	setNumUsers(float64(n.hub.NumUsers()))
 	setNumSubscriptions(float64(n.hub.NumSubscriptions()))
 	setNumChannels(float64(n.hub.NumChannels()))
-	setNumNodes(float64(len(n.nodes.list())))
+	setNumNodes(float64(n.nodes.size()))
 	version := n.config.Version
 	if version == "" {
 		version = "_"
@@ -482,7 +482,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 	if toNodeID != "" {
 		numNodes = 1
 	} else {
-		numNodes = len(n.nodes.list())
+		numNodes = n.nodes.size()
 	}
 
 	n.surveyMu.Lock()
@@ -1421,6 +1421,13 @@ func (r *nodeRegistry) list() []*controlpb.Node {
 	}
 	r.mu.RUnlock()
 	return nodes
+}
+
+func (r *nodeRegistry) size() int {
+	r.mu.RLock()
+	size := len(r.nodes)
+	r.mu.RUnlock()
+	return size
 }
 
 func (r *nodeRegistry) get(uid string) (*controlpb.Node, bool) {

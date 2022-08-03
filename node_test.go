@@ -248,6 +248,7 @@ func TestNode_shutdownCmd(t *testing.T) {
 	n := defaultNodeNoHandlers()
 	require.NoError(t, n.shutdownCmd(n.ID()))
 	require.True(t, len(n.nodes.list()) == 0)
+	require.True(t, n.nodes.size() == 0)
 }
 
 func TestClientEventHub(t *testing.T) {
@@ -265,6 +266,7 @@ func TestNodeRegistry(t *testing.T) {
 	registry.add(&nodeInfo1) // Make sure update works.
 	registry.add(&nodeInfo2)
 	require.Equal(t, 2, len(registry.list()))
+	require.Equal(t, 2, registry.size())
 	info, ok := registry.get("node1")
 	require.True(t, ok)
 	require.Equal(t, "node1", info.Uid)
@@ -273,6 +275,7 @@ func TestNodeRegistry(t *testing.T) {
 	registry.clean(time.Second)
 	// Current node info should still be in node registry - we never delete it.
 	require.Equal(t, 1, len(registry.list()))
+	require.Equal(t, 1, registry.size())
 }
 
 func TestNodeLogHandler(t *testing.T) {
