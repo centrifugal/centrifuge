@@ -40,6 +40,7 @@ const (
 
 type redisConnPool interface {
 	Get() redis.Conn
+	Close() error
 }
 
 type RedisShard struct {
