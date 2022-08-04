@@ -642,24 +642,19 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 	}
 
 	conn := redis.PubSubConn{Conn: poolConn}
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDoneOnce := func() {
 		doneOnce.Do(func() {
 			close(done)
+			_ = conn.Unsubscribe()
 		})
 	}
 	defer closeDoneOnce()
-
-	go func() {
-		select {
-		case <-b.closeCh:
-			closeDoneOnce()
-		case <-done:
-			return
-		}
-	}()
 
 	// Run subscriber goroutine.
 	go func() {
@@ -670,7 +665,6 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		for {
 			select {
 			case <-done:
-				_ = conn.Close()
 				return
 			case r := <-s.subCh:
 				isSubscribe := r.subscribe
@@ -717,9 +711,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 					if otherR != nil {
 						otherR.done(opErr)
 					}
-					// Close conn, this should cause Receive to return with err below
-					// and whole runPubSub method to restart.
-					_ = conn.Close()
+					closeDoneOnce()
 					return
 				}
 				for _, r := range channelBatch {
@@ -738,9 +730,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 					}
 					if opErr != nil {
 						otherR.done(opErr)
-						// Close conn, this should cause Receive to return with err below
-						// and whole runPubSub method to restart.
-						_ = conn.Close()
+						closeDoneOnce()
 						return
 					}
 					otherR.done(nil)
@@ -775,11 +765,16 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		}(workerCh)
 	}
 
-	go func() {
-		chIDs := make([]channelID, 1)
-		chIDs[0] = channelID(b.pingChannel)
+	err := conn.Subscribe(b.pingChannel)
+	if err != nil {
+		b.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
+		return
+	}
 
-		for _, ch := range b.node.Hub().Channels() {
+	go func() {
+		channels := b.node.Hub().Channels()
+		chIDs := make([]channelID, 0, len(channels)/len(b.shards))
+		for _, ch := range channels {
 			if b.getShard(ch) == s {
 				chIDs = append(chIDs, b.messageChannelID(ch))
 			}
@@ -811,6 +806,15 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		}
 	}()
 
+	go func() {
+		select {
+		case <-b.closeCh:
+			closeDoneOnce()
+		case <-done:
+			return
+		}
+	}()
+
 	for {
 		switch n := conn.ReceiveWithTimeout(10 * time.Second).(type) {
 		case redis.Message:
@@ -821,6 +825,10 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
 			s.reloadPipeline()
 			return
+		case redis.Subscription:
+			if n.Count == 0 {
+				return
+			}
 		default:
 		}
 	}
@@ -843,24 +851,17 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	}
 
 	conn := redis.PubSubConn{Conn: poolConn}
+	defer func() { _ = conn.Close() }()
 
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDoneOnce := func() {
 		doneOnce.Do(func() {
 			close(done)
+			_ = conn.Unsubscribe()
 		})
 	}
 	defer closeDoneOnce()
-
-	go func() {
-		select {
-		case <-b.closeCh:
-			closeDoneOnce()
-		case <-done:
-			return
-		}
-	}()
 
 	controlChannel := b.controlChannel
 	nodeChannel := b.nodeChannel
@@ -896,6 +897,15 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		return
 	}
 
+	go func() {
+		select {
+		case <-b.closeCh:
+			closeDoneOnce()
+		case <-done:
+			return
+		}
+	}()
+
 	for {
 		switch n := conn.ReceiveWithTimeout(10 * time.Second).(type) {
 		case redis.Message:
@@ -903,6 +913,9 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 			// from the same channel will be processed in the same worker.
 			workCh <- n
 		case redis.Subscription:
+			if n.Count == 0 {
+				return
+			}
 		case error:
 			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
 			return
