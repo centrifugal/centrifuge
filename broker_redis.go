@@ -769,15 +769,10 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		}(workerCh)
 	}
 
-	err := conn.Subscribe(b.pingChannel)
-	if err != nil {
-		b.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
-		return
-	}
-
 	go func() {
 		channels := b.node.Hub().Channels()
-		chIDs := make([]channelID, 0, len(channels)/len(b.shards))
+		chIDs := make([]channelID, 0, len(channels)/len(b.shards)+1)
+		chIDs = append(chIDs, channelID(b.pingChannel))
 		for _, ch := range channels {
 			if b.getShard(ch) == s {
 				chIDs = append(chIDs, b.messageChannelID(ch))
