@@ -651,11 +651,20 @@ func (s *RedisShard) readTimeout() time.Duration {
 // runForever keeps another function running indefinitely.
 // The reason this loop is not inside the function itself is
 // so that defer can be used to cleanup nicely.
-func runForever(fn func()) {
+func (b *RedisBroker) runForever(fn func()) {
 	for {
+		select {
+		case <-b.closeCh:
+			return
+		default:
+		}
 		fn()
-		// Sleep for a while to prevent busy loop when reconnecting to Redis.
-		time.Sleep(300 * time.Millisecond)
+		select {
+		case <-b.closeCh:
+			return
+		case <-time.After(300 * time.Millisecond):
+			// Wait for a while to prevent busy loop when reconnecting to Redis.
+		}
 	}
 }
 

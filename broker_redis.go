@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -60,6 +61,8 @@ type RedisBroker struct {
 	pingChannel            string
 	controlChannel         string
 	nodeChannel            string
+	closeOnce              sync.Once
+	closeCh                chan struct{}
 }
 
 // DefaultRedisBrokerPrefix is a default value for RedisBrokerConfig.Prefix.
@@ -128,6 +131,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		historyStreamScript:    redis.NewScript(2, historyStreamSource),
 		addHistoryListScript:   redis.NewScript(2, addHistorySource),
 		addHistoryStreamScript: redis.NewScript(2, addHistoryStreamSource),
+		closeCh:                make(chan struct{}),
 	}
 
 	for i := range config.Shards {
@@ -311,6 +315,13 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 	return nil
 }
 
+func (b *RedisBroker) Close(_ context.Context) error {
+	b.closeOnce.Do(func() {
+		close(b.closeCh)
+	})
+	return nil
+}
+
 func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 	if b.config.UseLists {
 		return nil
@@ -328,16 +339,16 @@ func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 }
 
 func (b *RedisBroker) runShard(shard *RedisShard, h BrokerEventHandler) error {
-	go runForever(func() {
+	go b.runForever(func() {
 		b.runPublishPipeline(shard)
 	})
-	go runForever(func() {
+	go b.runForever(func() {
 		b.runPubSubPing(shard)
 	})
-	go runForever(func() {
+	go b.runForever(func() {
 		b.runPubSub(shard, h)
 	})
-	go runForever(func() {
+	go b.runForever(func() {
 		b.runControlPubSub(shard, h)
 	})
 	return nil
@@ -641,6 +652,15 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 	}
 	defer closeDoneOnce()
 
+	go func() {
+		select {
+		case <-b.closeCh:
+			closeDoneOnce()
+		case <-done:
+			return
+		}
+	}()
+
 	// Run subscriber goroutine.
 	go func() {
 		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
@@ -833,6 +853,15 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	}
 	defer closeDoneOnce()
 
+	go func() {
+		select {
+		case <-b.closeCh:
+			closeDoneOnce()
+		case <-done:
+			return
+		}
+	}()
+
 	controlChannel := b.controlChannel
 	nodeChannel := b.nodeChannel
 	pingChannel := b.pingChannel
@@ -932,17 +961,22 @@ func (b *RedisBroker) runPubSubPing(s *RedisShard) {
 	pingTicker := time.NewTicker(time.Second)
 	defer pingTicker.Stop()
 	for {
-		<-pingTicker.C
-		// Publish periodically to maintain PUB/SUB connection alive and allow
-		// PUB/SUB connection to close early if no data received for a period of time.
-		conn := s.pool.Get()
-		err := conn.Send("PUBLISH", b.pingChannel, nil)
-		if err != nil {
-			b.node.Log(NewLogEntry(LogLevelError, "error publish ping to Redis channel", map[string]interface{}{"error": err.Error()}))
-			_ = conn.Close()
+		select {
+		case <-b.closeCh:
 			return
+		case <-pingTicker.C:
+			<-pingTicker.C
+			// Publish periodically to maintain PUB/SUB connection alive and allow
+			// PUB/SUB connection to close early if no data received for a period of time.
+			conn := s.pool.Get()
+			err := conn.Send("PUBLISH", b.pingChannel, nil)
+			if err != nil {
+				b.node.Log(NewLogEntry(LogLevelError, "error publish ping to Redis channel", map[string]interface{}{"error": err.Error()}))
+				_ = conn.Close()
+				return
+			}
+			_ = conn.Close()
 		}
-		_ = conn.Close()
 	}
 }
 
@@ -950,41 +984,44 @@ func (b *RedisBroker) runPublishPipeline(s *RedisShard) {
 	var prs []pubRequest
 
 	for {
-		pr := <-s.pubCh
-		prs = append(prs, pr)
-
-	loop:
-		for len(prs) < redisPublishBatchLimit {
-			select {
-			case pr := <-s.pubCh:
-				prs = append(prs, pr)
-			default:
-				break loop
+		select {
+		case <-b.closeCh:
+			return
+		case pr := <-s.pubCh:
+			prs = append(prs, pr)
+		loop:
+			for len(prs) < redisPublishBatchLimit {
+				select {
+				case pr := <-s.pubCh:
+					prs = append(prs, pr)
+				default:
+					break loop
+				}
 			}
-		}
-		conn := s.pool.Get()
-		for i := range prs {
-			_ = conn.Send("PUBLISH", prs[i].channel, prs[i].message)
-		}
-		err := conn.Flush()
-		if err != nil {
+			conn := s.pool.Get()
 			for i := range prs {
+				_ = conn.Send("PUBLISH", prs[i].channel, prs[i].message)
+			}
+			err := conn.Flush()
+			if err != nil {
+				for i := range prs {
+					prs[i].done(err)
+				}
+				b.node.Log(NewLogEntry(LogLevelError, "error flushing publish pipeline", map[string]interface{}{"error": err.Error()}))
+				_ = conn.Close()
+				return
+			}
+			for i := range prs {
+				_, err := conn.Receive()
 				prs[i].done(err)
 			}
-			b.node.Log(NewLogEntry(LogLevelError, "error flushing publish pipeline", map[string]interface{}{"error": err.Error()}))
+			if conn.Err() != nil {
+				_ = conn.Close()
+				return
+			}
 			_ = conn.Close()
-			return
+			prs = nil
 		}
-		for i := range prs {
-			_, err := conn.Receive()
-			prs[i].done(err)
-		}
-		if conn.Err() != nil {
-			_ = conn.Close()
-			return
-		}
-		_ = conn.Close()
-		prs = nil
 	}
 }
 
