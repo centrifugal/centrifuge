@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
+	"github.com/centrifugal/centrifuge/internal/saferand"
 
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
@@ -22,12 +22,12 @@ var protobufPingReply []byte
 var jsonPingPush = []byte(`{}`)
 var protobufPingPush []byte
 
-var randSource *rand.Rand
+var randSource *saferand.Rand
 
 func init() {
 	protobufPingReply, _ = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{})
 	protobufPingPush, _ = protocol.DefaultProtobufPushEncoder.Encode(&protocol.Push{})
-	randSource = rand.New(rand.NewSource(time.Now().UnixNano()))
+	randSource = saferand.New(time.Now().UnixNano())
 }
 
 // clientEventHub allows dealing with client event handlers.

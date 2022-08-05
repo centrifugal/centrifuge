@@ -645,9 +645,12 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		return
 	}
 
+	var connMu sync.Mutex
 	conn := redis.PubSubConn{Conn: poolConn}
 	defer func() {
+		connMu.Lock()
 		_ = conn.Close()
+		connMu.Unlock()
 	}()
 
 	done := make(chan struct{})
@@ -655,13 +658,17 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 	closeDoneOnce := func() {
 		doneOnce.Do(func() {
 			close(done)
-			_ = conn.Unsubscribe()
 		})
 	}
 	defer closeDoneOnce()
 
 	// Run subscriber goroutine.
 	go func() {
+		defer func() {
+			connMu.Lock()
+			_ = conn.Unsubscribe()
+			connMu.Unlock()
+		}()
 		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
 		defer func() {
 			b.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
@@ -849,15 +856,19 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		return
 	}
 
+	var connMu sync.Mutex
 	conn := redis.PubSubConn{Conn: poolConn}
-	defer func() { _ = conn.Close() }()
+	defer func() {
+		connMu.Lock()
+		_ = conn.Close()
+		connMu.Unlock()
+	}()
 
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDoneOnce := func() {
 		doneOnce.Do(func() {
 			close(done)
-			_ = conn.Unsubscribe()
 		})
 	}
 	defer closeDoneOnce()
@@ -890,13 +901,18 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		}()
 	}
 
-	err := conn.Subscribe(controlChannel, nodeChannel, pingChannel)
-	if err != nil {
-		b.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
-		return
-	}
-
 	go func() {
+		defer func() {
+			connMu.Lock()
+			_ = conn.Unsubscribe()
+			connMu.Unlock()
+		}()
+		err := conn.Subscribe(controlChannel, nodeChannel, pingChannel)
+		if err != nil {
+			b.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
+			closeDoneOnce()
+			return
+		}
 		select {
 		case <-b.closeCh:
 			closeDoneOnce()
