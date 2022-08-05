@@ -319,11 +319,30 @@ func (b *RedisBroker) Close(_ context.Context) error {
 	b.closeOnce.Do(func() {
 		close(b.closeCh)
 		for _, s := range b.shards {
-			_ = s.pool.Close()
+			s.close()
 		}
 	})
-
 	return nil
+}
+
+// runForever keeps another function running indefinitely.
+// The reason this loop is not inside the function itself is
+// so that defer can be used to cleanup nicely.
+func (b *RedisBroker) runForever(fn func()) {
+	for {
+		select {
+		case <-b.closeCh:
+			return
+		default:
+		}
+		fn()
+		select {
+		case <-b.closeCh:
+			return
+		case <-time.After(300 * time.Millisecond):
+			// Wait for a while to prevent busy loop when reconnecting to Redis.
+		}
+	}
 }
 
 func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
@@ -826,7 +845,11 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		case redis.Message:
 			// Add message to worker channel preserving message order - i.b. messages
 			// from the same channel will be processed in the same worker.
-			workers[index(n.Channel, numWorkers)] <- n
+			select {
+			case workers[index(n.Channel, numWorkers)] <- n:
+			case <-done:
+				return
+			}
 		case error:
 			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
 			s.reloadPipeline()
@@ -926,7 +949,11 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		case redis.Message:
 			// Add message to worker channel preserving message order - i.b. messages
 			// from the same channel will be processed in the same worker.
-			workCh <- n
+			select {
+			case workCh <- n:
+			case <-done:
+				return
+			}
 		case redis.Subscription:
 			if n.Count == 0 {
 				return

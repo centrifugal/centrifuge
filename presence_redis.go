@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -122,6 +123,13 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	}
 
 	return m, nil
+}
+
+func (m *RedisPresenceManager) Close(_ context.Context) error {
+	for _, s := range m.shards {
+		s.close()
+	}
+	return nil
 }
 
 func (m *RedisPresenceManager) getShard(channel string) *RedisShard {

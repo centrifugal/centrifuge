@@ -54,6 +54,8 @@ type RedisShard struct {
 	scripts          []*redis.Script
 	scriptsCh        chan struct{}
 	reloadPipelineCh chan struct{}
+	closeOnce        sync.Once
+	closeCh          chan struct{}
 }
 
 func confFromAddress(address string, conf RedisShardConfig) (RedisShardConfig, error) {
@@ -111,6 +113,7 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 		scriptsCh:        make(chan struct{}, 1),
 		useCluster:       len(conf.ClusterAddresses) > 0,
 		reloadPipelineCh: make(chan struct{}),
+		closeCh:          make(chan struct{}),
 	}
 	pool, err := newPool(shard, n, conf)
 	if err != nil {
@@ -125,10 +128,19 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 		// Only need data pipeline in non-cluster scenario.
 		go func() {
 			for {
+				select {
+				case <-shard.closeCh:
+					return
+				default:
+				}
 				err := shard.runDataPipeline()
 				if err != nil {
 					n.Log(NewLogEntry(LogLevelError, "data pipeline error", map[string]interface{}{"error": err.Error()}))
-					time.Sleep(300 * time.Millisecond)
+					select {
+					case <-shard.closeCh:
+						return
+					case <-time.After(300 * time.Millisecond):
+					}
 				}
 			}
 		}()
@@ -215,6 +227,13 @@ type dataRequest struct {
 	args       []interface{}
 	resp       chan *dataResponse
 	clusterKey string
+}
+
+func (s *RedisShard) close() {
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+		_ = s.pool.Close()
+	})
 }
 
 func (s *RedisShard) newDataRequest(command string, script *redis.Script, clusterKey channelID, args []interface{}) *dataRequest {
@@ -339,6 +358,8 @@ func (s *RedisShard) runDataPipeline() error {
 	for {
 		select {
 		case <-s.reloadPipelineCh:
+			return nil
+		case <-s.closeCh:
 			return nil
 		case <-s.scriptsCh:
 			s.scriptsMu.RLock()
@@ -647,26 +668,6 @@ func (s *RedisShard) readTimeout() time.Duration {
 		readTimeout = s.config.ReadTimeout
 	}
 	return readTimeout
-}
-
-// runForever keeps another function running indefinitely.
-// The reason this loop is not inside the function itself is
-// so that defer can be used to cleanup nicely.
-func (b *RedisBroker) runForever(fn func()) {
-	for {
-		select {
-		case <-b.closeCh:
-			return
-		default:
-		}
-		fn()
-		select {
-		case <-b.closeCh:
-			return
-		case <-time.After(300 * time.Millisecond):
-			// Wait for a while to prevent busy loop when reconnecting to Redis.
-		}
-	}
 }
 
 // consistentIndex is an adapted function from https://github.com/dgryski/go-jump
