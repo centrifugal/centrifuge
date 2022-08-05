@@ -1020,7 +1020,6 @@ func (b *RedisBroker) runPubSubPing(s *RedisShard) {
 		case <-b.closeCh:
 			return
 		case <-pingTicker.C:
-			<-pingTicker.C
 			// Publish periodically to maintain PUB/SUB connection alive and allow
 			// PUB/SUB connection to close early if no data received for a period of time.
 			conn := s.pool.Get()
