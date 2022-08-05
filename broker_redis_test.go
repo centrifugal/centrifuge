@@ -148,14 +148,6 @@ var redisTests = []struct {
 	{"streams_cluster", true, true},
 }
 
-var benchRedisTests = []struct {
-	Name       string
-	UseStreams bool
-}{
-	{"lists", false},
-	{"streams", true},
-}
-
 func TestRedisBroker(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
@@ -903,26 +895,37 @@ func waitAllNodes(tb testing.TB, node *Node, numNodes int) {
 	}
 }
 
-var benchSurveyTests = []struct {
+type testUnit struct {
 	Name          string
 	NumOtherNodes int
 	DataSize      int
-}{
-	{"1 node 512B", 0, 512},
-	{"2 nodes 512B", 1, 512},
-	{"3 nodes 512B", 2, 512},
-	{"4 nodes 512B", 3, 512},
-	{"5 nodes 512B", 4, 512},
-	{"10 nodes 512B", 9, 512},
-	{"100 nodes 512B", 99, 512},
-	{"1 node 4KB", 0, 4096},
-	{"2 nodes 4KB", 1, 4096},
-	{"3 nodes 4KB", 2, 4096},
-	{"4 nodes 4KB", 3, 4096},
-	{"5 nodes 4KB", 4, 4096},
-	{"10 nodes 4KB", 9, 4096},
-	{"100 nodes 4KB", 99, 4096},
+	UseCluster    bool
 }
+
+var benchSurveyTests = func() (units []testUnit) {
+	for _, useCluster := range []bool{false, true} {
+		for _, dataSize := range []int{512, 4096} {
+			for _, numOtherNodes := range []int{0, 1, 2, 3, 4, 9, 99} {
+				name := ""
+				if numOtherNodes+1 > 1 {
+					name += fmt.Sprintf("%d nodes %dB", numOtherNodes+1, dataSize)
+				} else {
+					name += fmt.Sprintf("%d node %dB", numOtherNodes+1, dataSize)
+				}
+				if useCluster {
+					name += " cluster"
+				}
+				units = append(units, testUnit{
+						Name:          name,
+						NumOtherNodes: numOtherNodes,
+						DataSize:      dataSize,
+						UseCluster:    useCluster,
+					})
+			}
+		}
+	}
+	return
+}()
 
 func BenchmarkRedisSurvey(b *testing.B) {
 	for _, tt := range benchSurveyTests {
@@ -1000,46 +1003,54 @@ func BenchmarkRedisIndex(b *testing.B) {
 }
 
 func BenchmarkRedisPublish_1Ch(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisBroker(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	rawData := []byte(`{"bench": true}`)
-	b.SetParallelism(128)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := e.Publish("channel", rawData, PublishOptions{})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	for _, tt := range redisTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			node := testNode(b)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			rawData := []byte(`{"bench": true}`)
+			b.SetParallelism(128)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					_, err := e.Publish("channel", rawData, PublishOptions{})
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
 }
 
 const benchmarkNumDifferentChannels = 1000
 
 func BenchmarkRedisPublish_ManyCh(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisBroker(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	rawData := []byte(`{"bench": true}`)
-	b.SetParallelism(128)
-	j := int32(0)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			jj := atomic.AddInt32(&j, 1)
-			channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
-			_, err := e.Publish(channel, rawData, PublishOptions{})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	for _, tt := range redisTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			node := testNode(b)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			rawData := []byte(`{"bench": true}`)
+			b.SetParallelism(128)
+			j := int32(0)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					jj := atomic.AddInt32(&j, 1)
+					channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
+					_, err := e.Publish(channel, rawData, PublishOptions{})
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
-	for _, tt := range benchRedisTests {
+	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, false)
@@ -1065,7 +1076,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 }
 
 func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
-	for _, tt := range benchRedisTests {
+	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, false)
@@ -1094,25 +1105,36 @@ func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 }
 
 func BenchmarkRedisSubscribe(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisBroker(b, node, false, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	i := int32(0)
-	b.SetParallelism(128)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			ii := atomic.AddInt32(&i, 1)
-			err := e.Subscribe("subscribe" + strconv.Itoa(int(ii)))
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	tests := []struct {
+		Name       string
+		UseCluster bool
+	}{
+		{"cluster", true},
+		{"non_cluster", false},
+	}
+	for _, tt := range tests {
+		b.Run(tt.Name, func(b *testing.B) {
+			node := testNode(b)
+			e := newTestRedisBroker(b, node, false, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			i := int32(0)
+			b.SetParallelism(128)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					ii := atomic.AddInt32(&i, 1)
+					err := e.Subscribe("subscribe" + strconv.Itoa(int(ii)))
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func BenchmarkRedisHistory_1Ch(b *testing.B) {
-	for _, tt := range benchRedisTests {
+	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, false)
@@ -1137,7 +1159,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 }
 
 func BenchmarkRedisRecover_1Ch(b *testing.B) {
-	for _, tt := range benchRedisTests {
+	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, false)
@@ -1280,7 +1302,7 @@ func TestRedisHistoryIterationReverse(t *testing.T) {
 }
 
 func BenchmarkRedisHistoryIteration(b *testing.B) {
-	for _, tt := range benchRedisTests {
+	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, false)
