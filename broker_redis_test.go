@@ -1053,7 +1053,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
@@ -1079,7 +1079,7 @@ func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
@@ -1137,7 +1137,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			for i := 0; i < 4; i++ {
@@ -1162,7 +1162,7 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			numMessages := 1000
@@ -1305,7 +1305,7 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 	for _, tt := range redisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, false)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{10000, 100}
 			startPosition := it.prepareHistoryIteration(b, e.node)
