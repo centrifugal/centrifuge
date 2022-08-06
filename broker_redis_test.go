@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1023,12 +1024,12 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	rawData := []byte(`{"bench": true}`)
 	b.SetParallelism(128)
-	j := 0
+	j := int32(0)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
-			j++
+			jj := atomic.AddInt32(&j, 1)
+			channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
 			_, err := e.Publish(channel, rawData, PublishOptions{})
 			if err != nil {
 				b.Fatal(err)
@@ -1072,12 +1073,12 @@ func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
 			b.SetParallelism(128)
-			j := 0
+			j := int32(0)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					j++
-					channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
+					jj := atomic.AddInt32(&j, 1)
+					channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
 					var err error
 					pos, err := e.Publish(channel, rawData, chOpts)
 					if err != nil {
@@ -1096,13 +1097,13 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 	node := testNode(b)
 	e := newTestRedisBroker(b, node, false, false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	i := 0
+	i := int32(0)
 	b.SetParallelism(128)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			i++
-			err := e.Subscribe("subscribe" + strconv.Itoa(i))
+			ii := atomic.AddInt32(&i, 1)
+			err := e.Subscribe("subscribe" + strconv.Itoa(int(ii)))
 			if err != nil {
 				b.Fatal(err)
 			}
