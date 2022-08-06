@@ -1121,17 +1121,14 @@ func TestNode_OnSurvey_Timeout(t *testing.T) {
 	done := make(chan struct{})
 
 	node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
-		go func() {
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-			}
-			time.Sleep(time.Second)
-			callback(SurveyReply{
-				Data: []byte("1"),
-				Code: 1,
-			})
-		}()
+		select {
+		case <-done:
+		case <-time.After(100 * time.Millisecond):
+		}
+		callback(SurveyReply{
+			Data: []byte("1"),
+			Code: 1,
+		})
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
