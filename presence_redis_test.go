@@ -5,6 +5,7 @@ package centrifuge
 import (
 	"context"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -137,12 +138,12 @@ func BenchmarkRedisPresence_ManyCh(b *testing.B) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	b.SetParallelism(128)
 	_ = e.AddPresence("channel", "uid", &ClientInfo{})
-	j := 0
+	j := int32(0)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			j++
-			channel := "channel" + strconv.Itoa(j%benchmarkNumDifferentChannels)
+			jj := atomic.AddInt32(&j, 1)
+			channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
 			_, err := e.Presence(channel)
 			if err != nil {
 				b.Fatal(err)
