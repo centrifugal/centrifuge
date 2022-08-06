@@ -59,7 +59,7 @@ type HistoryFilter struct {
 
 // StreamPosition contains fields to describe position in stream.
 // At moment this is used for automatic recovery mechanics. More info about stream
-// recovery in docs: https://centrifugal.github.io/centrifugo/server/recover/.
+// recovery in docs: https://centrifugal.dev/docs/server/history_and_recovery.
 type StreamPosition struct {
 	// Offset defines publication incremental offset inside a stream.
 	Offset uint64
