@@ -522,7 +522,7 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 		}
 	}()
 
-	payload := []byte(`{"input":"test"}`)
+	payload := []byte(`{"input":"payload"}`)
 
 	_, err := n.Publish("test", payload)
 	if err != nil {
@@ -536,7 +536,8 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 
-			var firstNonPingMessage []byte
+			var payloadMessage []byte
+		LOOP:
 			for {
 				_, data, err := conns[i].ReadMessage()
 				if err != nil {
@@ -544,19 +545,15 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 				}
 				messages := bytes.Split(data, []byte("\n"))
 				for _, msg := range messages {
-					if string(msg) == "{}" {
-						continue
+					if strings.Contains(string(msg), "payload") {
+						payloadMessage = msg
+						break LOOP
 					}
-					firstNonPingMessage = msg
 				}
-				if string(firstNonPingMessage) == "" {
-					continue
-				}
-				break
 			}
 
 			var rep protocol.Reply
-			err := json.Unmarshal(firstNonPingMessage, &rep)
+			err := json.Unmarshal(payloadMessage, &rep)
 			require.NoError(t, err)
 
 			require.NotNil(t, rep.Push)
