@@ -1440,19 +1440,21 @@ func (r *nodeRegistry) get(uid string) (*controlpb.Node, bool) {
 func (r *nodeRegistry) add(info *controlpb.Node) bool {
 	var isNewNode bool
 	r.mu.Lock()
-	if _, ok := r.nodes[info.Uid]; ok {
+	if node, ok := r.nodes[info.Uid]; ok {
 		if info.Metrics != nil {
 			r.nodes[info.Uid] = info
 		} else {
 			r.nodes[info.Uid] = &controlpb.Node{
 				Uid: info.Uid,
+				Name: info.Name,
 				Version: info.Version,
-				NumChannels: info.NumChannels,
 				NumClients: info.NumClients,
 				NumUsers: info.NumUsers,
-				NumSubs: info.NumSubs,
+				NumChannels: info.NumChannels,
 				Uptime: info.Uptime,
 				Data: info.Data,
+				NumSubs: info.NumSubs,
+				Metrics: node.Metrics,
 			}
 		}
 	} else {
