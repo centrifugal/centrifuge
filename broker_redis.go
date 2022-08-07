@@ -720,11 +720,8 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 	go func() {
 		defer func() {
 			connMu.Lock()
-			err := conn.Unsubscribe()
-			if err != nil {
-				b.node.Log(NewLogEntry(LogLevelError, "graceful unsubscribe error", map[string]interface{}{"error": err.Error()}))
-				_ = conn.Close()
-			}
+			// Error here automatically closes a connection in Redigo.
+			_ = conn.Unsubscribe()
 			connMu.Unlock()
 		}()
 		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
@@ -883,11 +880,12 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 				return
 			}
 		case error:
-			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
+			b.node.Log(NewLogEntry(LogLevelError, "Redis PUB/SUB error", map[string]interface{}{"error": n.Error()}))
 			s.reloadPipeline()
 			return
 		case redis.Subscription:
-			if n.Count == 0 {
+			// Zero count or unsubscribe from pingChannel signal exit from PUB/SUB routine.
+			if n.Count == 0 || (n.Kind == "unsubscribe" && n.Channel == b.pingChannel) {
 				return
 			}
 		default:
@@ -969,11 +967,8 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	go func() {
 		defer func() {
 			connMu.Lock()
-			err := conn.Unsubscribe()
-			if err != nil {
-				b.node.Log(NewLogEntry(LogLevelError, "graceful unsubscribe error", map[string]interface{}{"error": err.Error()}))
-				_ = conn.Close()
-			}
+			// Error here automatically closes a connection in Redigo.
+			_ = conn.Unsubscribe()
 			connMu.Unlock()
 		}()
 		select {
@@ -995,11 +990,12 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 				return
 			}
 		case redis.Subscription:
-			if n.Count == 0 {
+			// Zero count or unsubscribe from pingChannel signal exit from PUB/SUB routine.
+			if n.Count == 0 || (n.Kind == "unsubscribe" && n.Channel == b.pingChannel) {
 				return
 			}
 		case error:
-			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": n.Error()}))
+			b.node.Log(NewLogEntry(LogLevelError, "Redis control PUB/SUB error", map[string]interface{}{"error": n.Error()}))
 			return
 		}
 	}

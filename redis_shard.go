@@ -24,8 +24,8 @@ type (
 	channelID string
 )
 
-var errRedisOpTimeout = errors.New("operation timed out")
-var errRedisClosed = errors.New("closed")
+var errRedisOpTimeout = errors.New("redis: operation timed out")
+var errRedisClosed = errors.New("redis: closed")
 
 const (
 	DefaultRedisReadTimeout    = time.Second
