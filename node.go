@@ -1444,14 +1444,18 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 		if info.Metrics != nil {
 			r.nodes[info.Uid] = info
 		} else {
-			node.Version = info.Version
-			node.NumChannels = info.NumChannels
-			node.NumClients = info.NumClients
-			node.NumUsers = info.NumUsers
-			node.NumSubs = info.NumSubs
-			node.Uptime = info.Uptime
-			node.Data = info.Data
-			r.nodes[info.Uid] = node
+			r.nodes[info.Uid] = &controlpb.Node{
+				Uid: info.Uid,
+				Name: info.Name,
+				Version: info.Version,
+				NumClients: info.NumClients,
+				NumUsers: info.NumUsers,
+				NumChannels: info.NumChannels,
+				Uptime: info.Uptime,
+				Data: info.Data,
+				NumSubs: info.NumSubs,
+				Metrics: node.Metrics,
+			}
 		}
 	} else {
 		r.nodes[info.Uid] = info
