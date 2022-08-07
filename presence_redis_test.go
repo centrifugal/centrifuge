@@ -100,54 +100,66 @@ func TestRedisPresenceManager(t *testing.T) {
 }
 
 func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisPresenceManager(b, node, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	b.SetParallelism(128)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			err := e.AddPresence("channel", "uid", &ClientInfo{})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	for _, tt := range benchRedisTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			node := testNode(b)
+			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			b.SetParallelism(128)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					err := e.AddPresence("channel", "uid", &ClientInfo{})
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func BenchmarkRedisPresence_1Ch(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisPresenceManager(b, node, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	b.SetParallelism(128)
-	_ = e.AddPresence("channel", "uid", &ClientInfo{})
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := e.Presence("channel")
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	for _, tt := range benchRedisTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			node := testNode(b)
+			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			b.SetParallelism(128)
+			_ = e.AddPresence("channel", "uid", &ClientInfo{})
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					_, err := e.Presence("channel")
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
 }
 
 func BenchmarkRedisPresence_ManyCh(b *testing.B) {
-	node := testNode(b)
-	e := newTestRedisPresenceManager(b, node, false)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	b.SetParallelism(128)
-	_ = e.AddPresence("channel", "uid", &ClientInfo{})
-	j := int32(0)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			jj := atomic.AddInt32(&j, 1)
-			channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
-			_, err := e.Presence(channel)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	for _, tt := range benchRedisTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			node := testNode(b)
+			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			b.SetParallelism(128)
+			_ = e.AddPresence("channel", "uid", &ClientInfo{})
+			j := int32(0)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					jj := atomic.AddInt32(&j, 1)
+					channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
+					_, err := e.Presence(channel)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
 }
