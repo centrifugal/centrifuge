@@ -25,6 +25,7 @@ type (
 )
 
 var errRedisOpTimeout = errors.New("operation timed out")
+var errRedisClosed = errors.New("closed")
 
 const (
 	DefaultRedisReadTimeout    = time.Second
@@ -288,7 +289,7 @@ func (s *RedisShard) reloadPipeline() {
 	}
 }
 
-func (s *RedisShard) getDataResponse(r *dataRequest) *dataResponse {
+func (s *RedisShard) getDataResponse(r *dataRequest, closeCh chan struct{}) *dataResponse {
 	if s.useCluster {
 		reply, err := s.processClusterDataRequest(r)
 		return &dataResponse{
@@ -303,6 +304,8 @@ func (s *RedisShard) getDataResponse(r *dataRequest) *dataResponse {
 		defer timers.ReleaseTimer(timer)
 		select {
 		case s.dataCh <- r:
+		case <-closeCh:
+			return &dataResponse{nil, errRedisClosed}
 		case <-timer.C:
 			return &dataResponse{nil, errRedisOpTimeout}
 		}

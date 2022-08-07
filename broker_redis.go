@@ -339,7 +339,7 @@ func (b *RedisBroker) runForever(fn func()) {
 		select {
 		case <-b.closeCh:
 			return
-		case <-time.After(300 * time.Millisecond):
+		case <-time.After(250 * time.Millisecond):
 			// Wait for a while to prevent busy loop when reconnecting to Redis.
 		}
 	}
@@ -351,7 +351,7 @@ func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 	}
 	// Check whether Redis Streams supported.
 	dr := shard.newDataRequest("XRANGE", nil, "", []interface{}{"_", "0-0", "0-0"})
-	resp := shard.getDataResponse(dr)
+	resp := shard.getDataResponse(dr, b.closeCh)
 	if resp.err != nil {
 		if strings.Contains(resp.err.Error(), "ERR unknown command") {
 			return errors.New("STREAM only available since Redis >= 5, consider upgrading Redis or using LIST structure for history")
@@ -411,11 +411,18 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 			defer timers.ReleaseTimer(timer)
 			select {
 			case s.pubCh <- pr:
+			case <-b.closeCh:
+				return StreamPosition{}, errRedisClosed
 			case <-timer.C:
 				return StreamPosition{}, errRedisOpTimeout
 			}
 		}
-		return StreamPosition{}, <-eChan
+		select {
+		case err := <-eChan:
+			return StreamPosition{}, err
+		case <-b.closeCh:
+			return StreamPosition{}, errRedisClosed
+		}
 	}
 
 	historyMetaKey := b.historyMetaKey(s, ch)
@@ -434,7 +441,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 		script = b.addHistoryListScript
 	}
 	dr := s.newDataRequest("", script, streamKey, []interface{}{streamKey, historyMetaKey, byteMessage, size, int(opts.HistoryTTL.Seconds()), publishChannel, historyMetaTTLSeconds, time.Now().Unix()})
-	resp := s.getDataResponse(dr)
+	resp := s.getDataResponse(dr, b.closeCh)
 	if resp.err != nil {
 		return StreamPosition{}, resp.err
 	}
@@ -480,11 +487,18 @@ func (b *RedisBroker) publishJoin(s *RedisShard, ch string, info *ClientInfo) er
 		defer timers.ReleaseTimer(timer)
 		select {
 		case s.pubCh <- pr:
+		case <-b.closeCh:
+			return errRedisClosed
 		case <-timer.C:
 			return errRedisOpTimeout
 		}
 	}
-	return <-eChan
+	select {
+	case err := <-eChan:
+		return err
+	case <-b.closeCh:
+		return errRedisClosed
+	}
 }
 
 // PublishLeave - see Broker.PublishLeave.
@@ -514,11 +528,18 @@ func (b *RedisBroker) publishLeave(s *RedisShard, ch string, info *ClientInfo) e
 		defer timers.ReleaseTimer(timer)
 		select {
 		case s.pubCh <- pr:
+		case <-b.closeCh:
+			return errRedisClosed
 		case <-timer.C:
 			return errRedisOpTimeout
 		}
 	}
-	return <-eChan
+	select {
+	case err := <-eChan:
+		return err
+	case <-b.closeCh:
+		return errRedisClosed
+	}
 }
 
 // PublishControl - see Broker.PublishControl.
@@ -555,7 +576,12 @@ func (b *RedisBroker) publishControl(s *RedisShard, data []byte, nodeID string) 
 			return errRedisOpTimeout
 		}
 	}
-	return <-eChan
+	select {
+	case err := <-eChan:
+		return err
+	case <-b.closeCh:
+		return errRedisClosed
+	}
 }
 
 // Subscribe - see Broker.Subscribe.
@@ -568,7 +594,7 @@ func (b *RedisBroker) subscribe(s *RedisShard, ch string) error {
 		b.node.Log(NewLogEntry(LogLevelDebug, "subscribe node on channel", map[string]interface{}{"channel": ch}))
 	}
 	r := newSubRequest([]channelID{b.messageChannelID(ch)}, true)
-	return s.sendSubscribe(r)
+	return b.sendSubscribe(s, r)
 }
 
 // Unsubscribe - see Broker.Unsubscribe.
@@ -581,7 +607,7 @@ func (b *RedisBroker) unsubscribe(s *RedisShard, ch string) error {
 		b.node.Log(NewLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]interface{}{"channel": ch}))
 	}
 	r := newSubRequest([]channelID{b.messageChannelID(ch)}, false)
-	return s.sendSubscribe(r)
+	return b.sendSubscribe(s, r)
 }
 
 // History - see Broker.History.
@@ -609,7 +635,7 @@ func (b *RedisBroker) removeHistory(s *RedisShard, ch string) error {
 		key = b.historyListKey(s, ch)
 	}
 	dr := s.newDataRequest("DEL", nil, key, []interface{}{key})
-	resp := s.getDataResponse(dr)
+	resp := s.getDataResponse(dr, b.closeCh)
 	return resp.err
 }
 
@@ -681,11 +707,24 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 	}
 	defer closeDoneOnce()
 
+	connMu.Lock()
+	err := conn.Subscribe(b.pingChannel)
+	if err != nil {
+		connMu.Unlock()
+		b.node.Log(NewLogEntry(LogLevelError, "ping channel subscribe error", map[string]interface{}{"error": err.Error()}))
+		return
+	}
+	connMu.Unlock()
+
 	// Run subscriber goroutine.
 	go func() {
 		defer func() {
 			connMu.Lock()
-			_ = conn.Unsubscribe()
+			err := conn.Unsubscribe()
+			if err != nil {
+				b.node.Log(NewLogEntry(LogLevelError, "graceful unsubscribe error", map[string]interface{}{"error": err.Error()}))
+				_ = conn.Close()
+			}
 			connMu.Unlock()
 		}()
 		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
@@ -694,6 +733,9 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		}()
 		for {
 			select {
+			case <-b.closeCh:
+				closeDoneOnce()
+				return
 			case <-done:
 				return
 			case r := <-s.subCh:
@@ -797,8 +839,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 
 	go func() {
 		channels := b.node.Hub().Channels()
-		chIDs := make([]channelID, 0, len(channels)/len(b.shards)+1)
-		chIDs = append(chIDs, channelID(b.pingChannel))
+		chIDs := make([]channelID, 0, len(channels)/len(b.shards))
 		for _, ch := range channels {
 			if b.getShard(ch) == s {
 				chIDs = append(chIDs, b.messageChannelID(ch))
@@ -810,7 +851,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		for i, ch := range chIDs {
 			if len(batch) > 0 && i%redisSubscribeBatchLimit == 0 {
 				r := newSubRequest(batch, true)
-				err := s.sendSubscribe(r)
+				err := b.sendSubscribe(s, r)
 				if err != nil {
 					b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 					closeDoneOnce()
@@ -822,21 +863,12 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 		}
 		if len(batch) > 0 {
 			r := newSubRequest(batch, true)
-			err := s.sendSubscribe(r)
+			err := b.sendSubscribe(s, r)
 			if err != nil {
 				b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 				closeDoneOnce()
 				return
 			}
-		}
-	}()
-
-	go func() {
-		select {
-		case <-b.closeCh:
-			closeDoneOnce()
-		case <-done:
-			return
 		}
 	}()
 
@@ -924,18 +956,26 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		}()
 	}
 
+	connMu.Lock()
+	err := conn.Subscribe(controlChannel, nodeChannel, pingChannel)
+	if err != nil {
+		connMu.Unlock()
+		b.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
+		closeDoneOnce()
+		return
+	}
+	connMu.Unlock()
+
 	go func() {
 		defer func() {
 			connMu.Lock()
-			_ = conn.Unsubscribe()
+			err := conn.Unsubscribe()
+			if err != nil {
+				b.node.Log(NewLogEntry(LogLevelError, "graceful unsubscribe error", map[string]interface{}{"error": err.Error()}))
+				_ = conn.Close()
+			}
 			connMu.Unlock()
 		}()
-		err := conn.Subscribe(controlChannel, nodeChannel, pingChannel)
-		if err != nil {
-			b.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
-			closeDoneOnce()
-			return
-		}
 		select {
 		case <-b.closeCh:
 			closeDoneOnce()
@@ -1079,7 +1119,7 @@ func (b *RedisBroker) runPublishPipeline(s *RedisShard) {
 	}
 }
 
-func (s *RedisShard) sendSubscribe(r subRequest) error {
+func (b *RedisBroker) sendSubscribe(s *RedisShard, r subRequest) error {
 	select {
 	case s.subCh <- r:
 	default:
@@ -1087,6 +1127,8 @@ func (s *RedisShard) sendSubscribe(r subRequest) error {
 		defer timers.ReleaseTimer(timer)
 		select {
 		case s.subCh <- r:
+		case <-b.closeCh:
+			return errRedisClosed
 		case <-timer.C:
 			return errRedisOpTimeout
 		}
@@ -1155,7 +1197,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
 	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, filter.Reverse, historyMetaTTLSeconds, time.Now().Unix()})
-	resp := s.getDataResponse(dr)
+	resp := s.getDataResponse(dr, b.closeCh)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
 	}
@@ -1182,7 +1224,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
 	dr := s.newDataRequest("", b.historyListScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, historyMetaTTLSeconds, time.Now().Unix()})
-	resp := s.getDataResponse(dr)
+	resp := s.getDataResponse(dr, b.closeCh)
 	if resp.err != nil {
 		return nil, StreamPosition{}, resp.err
 	}
