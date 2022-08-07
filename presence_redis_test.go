@@ -100,7 +100,7 @@ func TestRedisPresenceManager(t *testing.T) {
 }
 
 func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
-	for _, tt := range redisPresenceTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
@@ -120,7 +120,7 @@ func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
 }
 
 func BenchmarkRedisPresence_1Ch(b *testing.B) {
-	for _, tt := range redisPresenceTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
@@ -141,7 +141,7 @@ func BenchmarkRedisPresence_1Ch(b *testing.B) {
 }
 
 func BenchmarkRedisPresence_ManyCh(b *testing.B) {
-	for _, tt := range redisPresenceTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)

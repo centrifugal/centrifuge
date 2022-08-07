@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -137,16 +138,43 @@ func TestRedisBrokerSentinel(t *testing.T) {
 	require.NoError(t, err)
 }
 
-var redisTests = []struct {
+type redisTest struct {
 	Name       string
 	UseStreams bool
 	UseCluster bool
-}{
+}
+
+var redisTests = []redisTest{
 	{"lists", false, false},
 	{"streams", true, false},
 	{"lists_cluster", false, true},
 	{"streams_cluster", true, true},
 }
+
+var benchRedisTests = func() (tests []redisTest) {
+	for _, useCluster := range []bool{false, true} {
+		if os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS") == "" && useCluster {
+			continue
+		}
+		for _, useStream := range []bool{false, true} {
+			var name string
+			if useStream {
+				name = "streams"
+			} else {
+				name = "lists"
+			}
+			if useCluster {
+				name += "_cluster"
+			}
+			tests = append(tests, redisTest{
+				Name:       name,
+				UseCluster: useCluster,
+				UseStreams: useStream,
+			})
+		}
+	}
+	return
+}()
 
 func TestRedisBroker(t *testing.T) {
 	for _, tt := range redisTests {
@@ -895,15 +923,18 @@ func waitAllNodes(tb testing.TB, node *Node, numNodes int) {
 	}
 }
 
-type testUnit struct {
+type benchSurveyTest struct {
 	Name          string
 	NumOtherNodes int
 	DataSize      int
 	UseCluster    bool
 }
 
-var benchSurveyTests = func() (units []testUnit) {
+var benchSurveyTests = func() (tests []benchSurveyTest) {
 	for _, useCluster := range []bool{false, true} {
+		if os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS") == "" && useCluster {
+			continue
+		}
 		for _, dataSize := range []int{512, 4096} {
 			for _, numOtherNodes := range []int{0, 1, 2, 3, 4, 9, 99} {
 				name := ""
@@ -915,12 +946,12 @@ var benchSurveyTests = func() (units []testUnit) {
 				if useCluster {
 					name += " cluster"
 				}
-				units = append(units, testUnit{
-						Name:          name,
-						NumOtherNodes: numOtherNodes,
-						DataSize:      dataSize,
-						UseCluster:    useCluster,
-					})
+				tests = append(tests, benchSurveyTest{
+					Name:          name,
+					NumOtherNodes: numOtherNodes,
+					DataSize:      dataSize,
+					UseCluster:    useCluster,
+				})
 			}
 		}
 	}
@@ -1003,7 +1034,7 @@ func BenchmarkRedisIndex(b *testing.B) {
 }
 
 func BenchmarkRedisPublish_1Ch(b *testing.B) {
-	for _, tt := range redisTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
@@ -1026,7 +1057,7 @@ func BenchmarkRedisPublish_1Ch(b *testing.B) {
 const benchmarkNumDifferentChannels = 1000
 
 func BenchmarkRedisPublish_ManyCh(b *testing.B) {
-	for _, tt := range redisTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
@@ -1050,7 +1081,7 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 }
 
 func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
-	for _, tt := range redisTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
@@ -1076,7 +1107,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 }
 
 func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
-	for _, tt := range redisTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
@@ -1105,13 +1136,17 @@ func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 }
 
 func BenchmarkRedisSubscribe(b *testing.B) {
-	tests := []struct {
+	type test struct {
 		Name       string
 		UseCluster bool
-	}{
-		{"cluster", true},
+	}
+	tests := []test{
 		{"non_cluster", false},
 	}
+	if os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS") != "" {
+		tests = append(tests, test{"with_cluster", true})
+	}
+
 	for _, tt := range tests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
@@ -1134,7 +1169,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 }
 
 func BenchmarkRedisHistory_1Ch(b *testing.B) {
-	for _, tt := range redisTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
@@ -1159,7 +1194,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 }
 
 func BenchmarkRedisRecover_1Ch(b *testing.B) {
-	for _, tt := range redisTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
@@ -1302,7 +1337,7 @@ func TestRedisHistoryIterationReverse(t *testing.T) {
 }
 
 func BenchmarkRedisHistoryIteration(b *testing.B) {
-	for _, tt := range redisTests {
+	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
