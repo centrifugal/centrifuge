@@ -1114,7 +1114,6 @@ func TestNode_OnSurvey_NoHandler(t *testing.T) {
 }
 
 func TestNode_OnSurvey_Timeout(t *testing.T) {
-	t.Parallel()
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
