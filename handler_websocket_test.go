@@ -637,6 +637,7 @@ func BenchmarkWsPubSubV1(b *testing.B) {
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
+		ProtocolVersion: ProtocolVersion1,
 	})))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -727,6 +728,7 @@ func BenchmarkWsConnectV1(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion1,
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -807,6 +809,7 @@ func BenchmarkWsCommandReplyV1(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion1,
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -889,7 +892,7 @@ func newRealConnJSONConnectV2(b testing.TB, url string) *websocket.Conn {
 	}
 	cmdBytes, _ := json.Marshal(cmd)
 
-	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	require.NoError(b, conn.WriteMessage(websocket.TextMessage, cmdBytes))
 	_, _, err = conn.ReadMessage()
 	require.NoError(b, err)
 	return conn
@@ -913,7 +916,7 @@ func newRealConnProtobufConnectV2(b testing.TB, url string) *websocket.Conn {
 	buf.Write(bs[:n])
 	buf.Write(cmdBytes)
 
-	_ = conn.WriteMessage(websocket.BinaryMessage, buf.Bytes())
+	require.NoError(b, conn.WriteMessage(websocket.BinaryMessage, buf.Bytes()))
 	_, _, err = conn.ReadMessage()
 	require.NoError(b, err)
 	return conn
@@ -929,7 +932,7 @@ func newRealConnJSONV2(b testing.TB, channel string, url string) *websocket.Conn
 		},
 	}
 	cmdBytes, _ := json.Marshal(cmd)
-	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
+	require.NoError(b, conn.WriteMessage(websocket.TextMessage, cmdBytes))
 	_, _, err := conn.ReadMessage()
 	require.NoError(b, err)
 	return conn
