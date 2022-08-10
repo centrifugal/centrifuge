@@ -269,3 +269,20 @@ cfg := centrifuge.DefaultConfig
 cfg.LogLevel = centrifuge.LogLevelDebug
 cfg.LogHandler = handleLog
 ```
+
+### For contributors
+
+#### Running integration tests locally
+
+To run integration tests over Redis, Redis + Sentinel, Redis Cluster:
+
+```
+docker compose up
+go test -tags integration ./...
+```
+
+To clean up container state:
+
+```
+docker compose down -v
+```
