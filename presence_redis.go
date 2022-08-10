@@ -132,9 +132,6 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 func (m *RedisPresenceManager) Close(_ context.Context) error {
 	m.closeOnce.Do(func() {
 		close(m.closeCh)
-		for _, s := range m.shards {
-			s.close()
-		}
 	})
 	return nil
 }

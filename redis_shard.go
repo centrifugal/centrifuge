@@ -230,7 +230,7 @@ type dataRequest struct {
 	clusterKey string
 }
 
-func (s *RedisShard) close() {
+func (s *RedisShard) Close() {
 	s.closeOnce.Do(func() {
 		close(s.closeCh)
 		_ = s.pool.Close()

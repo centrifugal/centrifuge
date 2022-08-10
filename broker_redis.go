@@ -318,9 +318,6 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 func (b *RedisBroker) Close(_ context.Context) error {
 	b.closeOnce.Do(func() {
 		close(b.closeCh)
-		for _, s := range b.shards {
-			s.close()
-		}
 	})
 	return nil
 }

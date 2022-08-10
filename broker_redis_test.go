@@ -932,20 +932,22 @@ func BenchmarkRedisSurvey(b *testing.B) {
 			data := make([]byte, tt.DataSize)
 
 			var nodes []*Node
+			var shards []*RedisShard
 
 			for i := 0; i < tt.NumOtherNodes; i++ {
 				node, _ := New(Config{})
-				s, err := NewRedisShard(node, redisConf)
+				shard, err := NewRedisShard(node, redisConf)
 				if err != nil {
 					b.Fatal(err)
 				}
 				broker, _ := NewRedisBroker(node, RedisBrokerConfig{
 					Prefix: prefix,
-					Shards: []*RedisShard{s},
+					Shards: []*RedisShard{shard},
 				})
 				node.SetBroker(broker)
 				_ = node.Run()
 				nodes = append(nodes, node)
+				shards = append(shards, shard)
 
 				node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
 					callback(SurveyReply{
@@ -956,17 +958,18 @@ func BenchmarkRedisSurvey(b *testing.B) {
 			}
 
 			node, _ := New(Config{})
-			s, err := NewRedisShard(node, redisConf)
+			shard, err := NewRedisShard(node, redisConf)
 			if err != nil {
 				b.Fatal(err)
 			}
 			broker, _ := NewRedisBroker(node, RedisBrokerConfig{
 				Prefix: prefix,
-				Shards: []*RedisShard{s},
+				Shards: []*RedisShard{shard},
 			})
 			node.SetBroker(broker)
 			_ = node.Run()
 			nodes = append(nodes, node)
+			shards = append(shards, shard)
 
 			node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
 				callback(SurveyReply{
@@ -989,6 +992,9 @@ func BenchmarkRedisSurvey(b *testing.B) {
 			b.StopTimer()
 			for _, n := range nodes {
 				_ = n.Shutdown(context.Background())
+			}
+			for _, s := range shards {
+				s.Close()
 			}
 		})
 	}
