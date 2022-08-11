@@ -1,8 +1,10 @@
 package centrifuge
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/centrifugal/protocol"
@@ -20,6 +22,8 @@ type RedisPresenceManager struct {
 	addPresenceScript *redis.Script
 	remPresenceScript *redis.Script
 	presenceScript    *redis.Script
+	closeOnce         sync.Once
+	closeCh           chan struct{}
 }
 
 const (
@@ -111,6 +115,7 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		addPresenceScript: redis.NewScript(2, addPresenceSource),
 		remPresenceScript: redis.NewScript(2, remPresenceSource),
 		presenceScript:    redis.NewScript(2, presenceSource),
+		closeCh:           make(chan struct{}),
 	}
 
 	for i := range config.Shards {
@@ -122,6 +127,13 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	}
 
 	return m, nil
+}
+
+func (m *RedisPresenceManager) Close(_ context.Context) error {
+	m.closeOnce.Do(func() {
+		close(m.closeCh)
+	})
+	return nil
 }
 
 func (m *RedisPresenceManager) getShard(channel string) *RedisShard {
@@ -146,7 +158,7 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
 	dr := s.newDataRequest("", m.addPresenceScript, setKey, []interface{}{setKey, hashKey, expire, expireAt, uid, infoBytes})
-	resp := s.getDataResponse(dr)
+	resp := s.getDataResponse(dr, m.closeCh)
 	return resp.err
 }
 
@@ -159,7 +171,7 @@ func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, uid stri
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
 	dr := s.newDataRequest("", m.remPresenceScript, setKey, []interface{}{setKey, hashKey, uid})
-	resp := s.getDataResponse(dr)
+	resp := s.getDataResponse(dr, m.closeCh)
 	return resp.err
 }
 
@@ -174,7 +186,7 @@ func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*C
 	setKey := m.presenceSetKey(s, ch)
 	now := int(time.Now().Unix())
 	dr := s.newDataRequest("", m.presenceScript, setKey, []interface{}{setKey, hashKey, now})
-	resp := s.getDataResponse(dr)
+	resp := s.getDataResponse(dr, m.closeCh)
 	if resp.err != nil {
 		return nil, resp.err
 	}

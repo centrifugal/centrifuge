@@ -180,6 +180,7 @@ func TestRedisBroker(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
+
 			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 
@@ -363,7 +364,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 		// Redis PUBSUB CHANNELS command looks like eventual consistent, so sometimes
 		// it returns wrong results, sleeping for a while helps in such situations.
 		// See https://gist.github.com/FZambia/80a5241e06b4662f7fe89cfaf24072c3
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		channels, err := pubSubChannels(t, e)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(channels), fmt.Sprintf("%#v", channels))
@@ -373,7 +374,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 0 {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		channels, _ := pubSubChannels(t, e)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
@@ -394,7 +395,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	require.NoError(t, err)
 
 	if len(channels) != 0 {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		channels, _ := pubSubChannels(t, e)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
@@ -412,7 +413,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	channels, err = pubSubChannels(t, e)
 	require.Equal(t, nil, err)
 	if len(channels) != 0 {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		channels, err := pubSubChannels(t, e)
 		require.NoError(t, err)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
@@ -426,7 +427,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 0 {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		channels, _ := pubSubChannels(t, e)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
@@ -440,7 +441,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 		channels, err = pubSubChannels(t, e)
 		require.NoError(t, err)
 		if len(channels) != 0 {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(2000 * time.Millisecond)
 			channels, err := pubSubChannels(t, e)
 			require.NoError(t, err)
 			require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
@@ -459,7 +460,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 100 {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		channels, err := pubSubChannels(t, e)
 		require.NoError(t, err)
 		require.Equal(t, 100, len(channels), fmt.Sprintf("%#v", channels))
@@ -477,7 +478,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 0 {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		channels, _ := pubSubChannels(t, e)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
@@ -501,7 +502,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	channels, err = pubSubChannels(t, e)
 	require.NoError(t, err)
 	if len(channels) != 0 {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		channels, err := pubSubChannels(t, e)
 		require.NoError(t, err)
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
@@ -965,18 +966,23 @@ func BenchmarkRedisSurvey(b *testing.B) {
 			redisConf := testRedisConf()
 			data := make([]byte, tt.DataSize)
 
+			var nodes []*Node
+			var shards []*RedisShard
+
 			for i := 0; i < tt.NumOtherNodes; i++ {
 				node, _ := New(Config{})
-				s, err := NewRedisShard(node, redisConf)
+				shard, err := NewRedisShard(node, redisConf)
 				if err != nil {
 					b.Fatal(err)
 				}
 				broker, _ := NewRedisBroker(node, RedisBrokerConfig{
 					Prefix: prefix,
-					Shards: []*RedisShard{s},
+					Shards: []*RedisShard{shard},
 				})
 				node.SetBroker(broker)
 				_ = node.Run()
+				nodes = append(nodes, node)
+				shards = append(shards, shard)
 
 				node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
 					callback(SurveyReply{
@@ -987,16 +993,18 @@ func BenchmarkRedisSurvey(b *testing.B) {
 			}
 
 			node, _ := New(Config{})
-			s, err := NewRedisShard(node, redisConf)
+			shard, err := NewRedisShard(node, redisConf)
 			if err != nil {
 				b.Fatal(err)
 			}
 			broker, _ := NewRedisBroker(node, RedisBrokerConfig{
 				Prefix: prefix,
-				Shards: []*RedisShard{s},
+				Shards: []*RedisShard{shard},
 			})
 			node.SetBroker(broker)
 			_ = node.Run()
+			nodes = append(nodes, node)
+			shards = append(shards, shard)
 
 			node.OnSurvey(func(event SurveyEvent, callback SurveyCallback) {
 				callback(SurveyReply{
@@ -1017,6 +1025,12 @@ func BenchmarkRedisSurvey(b *testing.B) {
 				}
 			})
 			b.StopTimer()
+			for _, n := range nodes {
+				_ = n.Shutdown(context.Background())
+			}
+			for _, s := range shards {
+				s.Close()
+			}
 		})
 	}
 }
@@ -1313,7 +1327,7 @@ func TestRedisHistoryIteration(t *testing.T) {
 			node := testNode(t)
 			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
-			it := historyIterationTest{10000, 100}
+			it := historyIterationTest{100, 5}
 			startPosition := it.prepareHistoryIteration(t, e.node)
 			it.testHistoryIteration(t, e.node, startPosition)
 		})
@@ -1329,7 +1343,7 @@ func TestRedisHistoryIterationReverse(t *testing.T) {
 			node := testNode(t)
 			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
-			it := historyIterationTest{10000, 100}
+			it := historyIterationTest{100, 5}
 			startPosition := it.prepareHistoryIteration(t, e.node)
 			it.testHistoryIterationReverse(t, e.node, startPosition)
 		})

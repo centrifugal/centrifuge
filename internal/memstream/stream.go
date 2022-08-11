@@ -2,11 +2,12 @@ package memstream
 
 import (
 	"container/list"
-	"math/rand"
 	"time"
+
+	"github.com/centrifugal/centrifuge/internal/saferand"
 )
 
-var random = rand.New(rand.NewSource(time.Now().UnixNano()))
+var random = saferand.New(time.Now().UnixNano())
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 

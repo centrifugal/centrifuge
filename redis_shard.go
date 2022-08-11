@@ -24,7 +24,8 @@ type (
 	channelID string
 )
 
-var errRedisOpTimeout = errors.New("operation timed out")
+var errRedisOpTimeout = errors.New("redis: operation timed out")
+var errRedisClosed = errors.New("redis: closed")
 
 const (
 	DefaultRedisReadTimeout    = time.Second
@@ -40,6 +41,7 @@ const (
 
 type redisConnPool interface {
 	Get() redis.Conn
+	Close() error
 }
 
 type RedisShard struct {
@@ -53,6 +55,8 @@ type RedisShard struct {
 	scripts          []*redis.Script
 	scriptsCh        chan struct{}
 	reloadPipelineCh chan struct{}
+	closeOnce        sync.Once
+	closeCh          chan struct{}
 }
 
 func confFromAddress(address string, conf RedisShardConfig) (RedisShardConfig, error) {
@@ -110,6 +114,7 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 		scriptsCh:        make(chan struct{}, 1),
 		useCluster:       len(conf.ClusterAddresses) > 0,
 		reloadPipelineCh: make(chan struct{}),
+		closeCh:          make(chan struct{}),
 	}
 	pool, err := newPool(shard, n, conf)
 	if err != nil {
@@ -124,10 +129,19 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 		// Only need data pipeline in non-cluster scenario.
 		go func() {
 			for {
+				select {
+				case <-shard.closeCh:
+					return
+				default:
+				}
 				err := shard.runDataPipeline()
 				if err != nil {
 					n.Log(NewLogEntry(LogLevelError, "data pipeline error", map[string]interface{}{"error": err.Error()}))
-					time.Sleep(300 * time.Millisecond)
+					select {
+					case <-shard.closeCh:
+						return
+					case <-time.After(300 * time.Millisecond):
+					}
 				}
 			}
 		}()
@@ -216,6 +230,13 @@ type dataRequest struct {
 	clusterKey string
 }
 
+func (s *RedisShard) Close() {
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+		_ = s.pool.Close()
+	})
+}
+
 func (s *RedisShard) newDataRequest(command string, script *redis.Script, clusterKey channelID, args []interface{}) *dataRequest {
 	dr := &dataRequest{command: command, script: script, args: args, resp: make(chan *dataResponse, 1)}
 	if s.useCluster {
@@ -268,7 +289,7 @@ func (s *RedisShard) reloadPipeline() {
 	}
 }
 
-func (s *RedisShard) getDataResponse(r *dataRequest) *dataResponse {
+func (s *RedisShard) getDataResponse(r *dataRequest, closeCh chan struct{}) *dataResponse {
 	if s.useCluster {
 		reply, err := s.processClusterDataRequest(r)
 		return &dataResponse{
@@ -283,6 +304,8 @@ func (s *RedisShard) getDataResponse(r *dataRequest) *dataResponse {
 		defer timers.ReleaseTimer(timer)
 		select {
 		case s.dataCh <- r:
+		case <-closeCh:
+			return &dataResponse{nil, errRedisClosed}
 		case <-timer.C:
 			return &dataResponse{nil, errRedisOpTimeout}
 		}
@@ -338,6 +361,8 @@ func (s *RedisShard) runDataPipeline() error {
 	for {
 		select {
 		case <-s.reloadPipelineCh:
+			return nil
+		case <-s.closeCh:
 			return nil
 		case <-s.scriptsCh:
 			s.scriptsMu.RLock()
@@ -646,17 +671,6 @@ func (s *RedisShard) readTimeout() time.Duration {
 		readTimeout = s.config.ReadTimeout
 	}
 	return readTimeout
-}
-
-// runForever keeps another function running indefinitely.
-// The reason this loop is not inside the function itself is
-// so that defer can be used to cleanup nicely.
-func runForever(fn func()) {
-	for {
-		fn()
-		// Sleep for a while to prevent busy loop when reconnecting to Redis.
-		time.Sleep(300 * time.Millisecond)
-	}
 }
 
 // consistentIndex is an adapted function from https://github.com/dgryski/go-jump
