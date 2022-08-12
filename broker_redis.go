@@ -684,31 +684,26 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 	}()
 
 	pubsub := s.client.Subscribe(context.Background())
-	defer func() { _ = pubsub.Close() }()
 
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDoneOnce := func() {
 		doneOnce.Do(func() {
 			close(done)
+			_ = pubsub.Close()
 		})
 	}
 	defer closeDoneOnce()
 
-	connMu.Lock()
-	err := conn.Subscribe(b.pingChannel)
+	err := pubsub.Subscribe(context.Background(), b.pingChannel)
 	if err != nil {
-		connMu.Unlock()
 		b.node.Log(NewLogEntry(LogLevelError, "ping channel subscribe error", map[string]interface{}{"error": err.Error()}))
+		closeDoneOnce()
 		return
 	}
-	connMu.Unlock()
 
 	// Run subscriber goroutine.
 	go func() {
-		defer func() {
-			_ = pubsub.Unsubscribe(context.Background())
-		}()
 		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
 		defer func() {
 			b.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
@@ -871,10 +866,6 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 				return
 			}
 		case *redis.Subscription:
-			// Zero count or unsubscribe from pingChannel signal exit from PUB/SUB routine.
-			if m.Count == 0 || (m.Kind == "unsubscribe" && m.Channel == b.pingChannel){
-				return
-			}
 		default:
 		}
 	}
@@ -888,11 +879,14 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", map[string]interface{}{"shard": s.string()}))
 	}()
 
+	pubsub := s.client.Subscribe(context.Background())
+
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDoneOnce := func() {
 		doneOnce.Do(func() {
 			close(done)
+			_ = pubsub.Close()
 		})
 	}
 	defer closeDoneOnce()
@@ -925,18 +919,13 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		}()
 	}
 
-	pubsub := s.client.Subscribe(context.Background())
 	err := pubsub.Subscribe(context.Background(), controlChannel, nodeChannel, pingChannel)
 	if err != nil {
 		b.node.Log(NewLogEntry(LogLevelError, "control channel subscribe error", map[string]interface{}{"error": err.Error()}))
 		closeDoneOnce()
 		return
 	}
-
 	go func() {
-		defer func() {
-			_ = pubsub.Unsubscribe(context.Background())
-		}()
 		select {
 		case <-b.closeCh:
 			closeDoneOnce()
@@ -948,8 +937,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	for {
 		m, err := pubsub.ReceiveTimeout(context.Background(), 10*time.Second)
 		if err != nil {
-			b.node.Log(NewLogEntry(LogLevelError, "Redis control PUB/SUB error", map[string]interface{}{"error": err}))
-			_ = pubsub.Close()
+			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": err}))
 			return
 		}
 		switch m := m.(type) {
@@ -962,10 +950,6 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 				return
 			}
 		case *redis.Subscription:
-			// Zero count or unsubscribe from pingChannel signal exit from PUB/SUB routine.
-			if m.Count == 0 || (m.Kind == "unsubscribe" && m.Channel == b.pingChannel){
-				return
-			}
 		case *redis.Pong:
 		}
 	}
