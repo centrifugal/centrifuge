@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
-	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/require"
 )
 
@@ -341,9 +340,8 @@ func TestRedisBrokerRecover(t *testing.T) {
 }
 
 func pubSubChannels(t *testing.T, e *RedisBroker) ([]string, error) {
-	conn := e.shards[0].pool.Get()
-	defer func() { require.NoError(t, conn.Close()) }()
-	return redis.Strings(conn.Do("PUBSUB", "channels", e.messagePrefix+"*"))
+	client := e.shards[0].client
+	return client.PubSubChannels(context.Background(), e.messagePrefix+"*").Result()
 }
 
 func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
@@ -1036,12 +1034,16 @@ func BenchmarkRedisSurvey(b *testing.B) {
 }
 
 func BenchmarkRedisConsistentIndex(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		consistentIndex(strconv.Itoa(i), 4)
 	}
 }
 
 func BenchmarkRedisIndex(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		index(strconv.Itoa(i), 4)
 	}

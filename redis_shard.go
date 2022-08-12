@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -13,10 +14,9 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/timers"
+	"github.com/centrifugal/centrifuge/internal/util"
 
-	"github.com/FZambia/sentinel"
-	"github.com/gomodule/redigo/redis"
-	"github.com/mna/redisc"
+	"github.com/go-redis/redis/v8"
 )
 
 type (
@@ -39,14 +39,17 @@ const (
 	redisDataBatchLimit = 64
 )
 
-type redisConnPool interface {
-	Get() redis.Conn
-	Close() error
+type redisLogger struct{}
+
+func (redisLogger) Printf(ctx context.Context, format string, v ...interface{}) {}
+
+func init() {
+	redis.SetLogger(redisLogger{})
 }
 
 type RedisShard struct {
 	config           RedisShardConfig
-	pool             redisConnPool
+	client           redis.UniversalClient
 	subCh            chan subRequest
 	pubCh            chan pubRequest
 	dataCh           chan *dataRequest
@@ -116,12 +119,12 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 		reloadPipelineCh: make(chan struct{}),
 		closeCh:          make(chan struct{}),
 	}
-	pool, err := newPool(shard, n, conf)
+	client, err := newRedisClient(shard, n, conf)
 	if err != nil {
 		return nil, err
 	}
 	shard.scripts = []*redis.Script{}
-	shard.pool = pool
+	shard.client = client
 	shard.subCh = make(chan subRequest)
 	shard.pubCh = make(chan pubRequest)
 	shard.dataCh = make(chan *dataRequest)
@@ -223,34 +226,31 @@ type dataResponse struct {
 }
 
 type dataRequest struct {
-	command    string
-	script     *redis.Script
-	args       []interface{}
-	resp       chan *dataResponse
-	clusterKey string
+	script *redis.Script
+	keys   []string
+	args   []interface{}
+	resp   chan *dataResponse
 }
 
 func (s *RedisShard) Close() {
 	s.closeOnce.Do(func() {
 		close(s.closeCh)
-		_ = s.pool.Close()
+		_ = s.client.Close()
 	})
 }
 
-func (s *RedisShard) newDataRequest(command string, script *redis.Script, clusterKey channelID, args []interface{}) *dataRequest {
-	dr := &dataRequest{command: command, script: script, args: args, resp: make(chan *dataResponse, 1)}
-	if s.useCluster {
-		dr.setClusterKey(string(clusterKey))
+func (s *RedisShard) newDataRequest(script *redis.Script, keys []string, args []interface{}) *dataRequest {
+	dr := &dataRequest{
+		script: script,
+		keys:   keys,
+		args:   args,
+		resp:   make(chan *dataResponse, 1),
 	}
 	return dr
 }
 
 func (s *RedisShard) string() string {
 	return s.config.address
-}
-
-func (dr *dataRequest) setClusterKey(key string) {
-	dr.clusterKey = key
 }
 
 func (dr *dataRequest) done(reply interface{}, err error) {
@@ -314,49 +314,28 @@ func (s *RedisShard) getDataResponse(r *dataRequest, closeCh chan struct{}) *dat
 }
 
 func (s *RedisShard) processClusterDataRequest(dr *dataRequest) (interface{}, error) {
-	conn := s.pool.Get()
-	defer func() { _ = conn.Close() }()
-
-	var err error
-
-	if dr.clusterKey != "" {
-		if c, ok := conn.(*redisc.Conn); ok {
-			err := c.Bind(dr.clusterKey)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// Handle redirects automatically.
-	conn, err = redisc.RetryConn(conn, 3, 50*time.Millisecond)
-	if err != nil {
-		return nil, err
-	}
-
+	client := s.client
 	if dr.script != nil {
-		return dr.script.Do(conn, dr.args...)
+		return dr.script.Run(context.Background(), client, dr.keys, dr.args...).Result()
 	}
-	return conn.Do(dr.command, dr.args...)
+	return client.Do(context.Background(), dr.args...).Result()
 }
 
 func (s *RedisShard) runDataPipeline() error {
-	conn := s.pool.Get()
 	s.scriptsMu.RLock()
 	scripts := make([]*redis.Script, len(s.scripts))
 	copy(scripts, s.scripts)
 	s.scriptsMu.RUnlock()
 	for _, script := range scripts {
-		err := script.Load(conn)
-		if err != nil {
+		cmd := script.Load(context.Background(), s.client)
+		if cmd.Err() != nil {
 			// Can not proceed if script has not been loaded.
-			_ = conn.Close()
-			return fmt.Errorf("error loading Lua script: %w", err)
+			return fmt.Errorf("error loading Lua script: %w", cmd.Err())
 		}
 	}
-	_ = conn.Close()
 
 	var drs []*dataRequest
+	client := s.client
 
 	for {
 		select {
@@ -383,50 +362,51 @@ func (s *RedisShard) runDataPipeline() error {
 					break loop
 				}
 			}
-
-			conn := s.pool.Get()
-
-			for i := range drs {
-				if drs[i].script != nil {
-					_ = drs[i].script.SendHash(conn, drs[i].args...)
-				} else {
-					_ = conn.Send(drs[i].command, drs[i].args...)
-				}
+			rs, err := client.Pipelined(
+				context.Background(),
+				func(pipe redis.Pipeliner) error {
+					for _, dr := range drs {
+						if dr.script != nil {
+							_ = pipe.EvalSha(context.Background(), dr.script.Hash(), dr.keys, dr.args...)
+						} else {
+							_ = pipe.Do(context.Background(), dr.args...)
+						}
+					}
+					return nil
+				},
+			)
+			if err == redis.Nil {
+				err = nil
 			}
-
-			err := conn.Flush()
 			if err != nil {
 				for i := range drs {
 					drs[i].done(nil, err)
 				}
-				_ = conn.Close()
-				return fmt.Errorf("error flushing data pipeline: %w", err)
+				return fmt.Errorf("error executing data pipeline: %w", err)
 			}
+
 			var noScriptError bool
-			for i := range drs {
-				reply, err := conn.Receive()
+			for i, r := range rs {
+				reply, err := r.(*redis.Cmd).Result()
+				if err == redis.Nil {
+					err = nil
+				}
 				if err != nil {
 					// Check for NOSCRIPT error. In normal circumstances this should never happen.
 					// The only possible situation is when Redis scripts were flushed. In this case
 					// we will return from this func and load publish script from scratch.
 					// Redigo does the same check but for single EVALSHA command: see
 					// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
-					if e, ok := err.(redis.Error); ok && strings.HasPrefix(string(e), "NOSCRIPT ") {
+					if e, ok := err.(redis.Error); ok && strings.HasPrefix(e.Error(), "NOSCRIPT ") {
 						noScriptError = true
 					}
 				}
 				drs[i].done(reply, err)
 			}
-			if conn.Err() != nil {
-				_ = conn.Close()
-				return nil
-			}
 			if noScriptError {
 				// Start this func from the beginning and LOAD missing script.
-				_ = conn.Close()
 				return nil
 			}
-			_ = conn.Close()
 			drs = nil
 		}
 	}
@@ -457,151 +437,26 @@ func (sr *subRequest) result() error {
 	return <-sr.err
 }
 
-func makePoolFactory(s *RedisShard, n *Node, conf RedisShardConfig) func(addr string, options ...redis.DialOption) (*redis.Pool, error) {
-	user := conf.User
-	password := conf.Password
-	db := conf.DB
-
-	useSentinel := conf.SentinelMasterName != "" && len(conf.SentinelAddresses) > 0
-
-	var lastMu sync.Mutex
-	var lastMaster string
+func getOptions(s *RedisShard, conf RedisShardConfig) *redis.UniversalOptions {
+	opt := &redis.UniversalOptions{
+		DB:               conf.DB,
+		Username:         conf.User,
+		Password:         conf.Password,
+		SentinelUsername: conf.SentinelUser,
+		SentinelPassword: conf.SentinelPassword,
+		MasterName:       conf.SentinelMasterName,
+	}
+	if s.useCluster {
+		opt.Addrs = conf.ClusterAddresses
+	} else if conf.SentinelMasterName != "" && len(conf.SentinelAddresses) > 0 {
+		opt.Addrs = conf.SentinelAddresses
+	} else {
+		opt.Addrs = []string{conf.address}
+	}
 
 	poolSize := defaultRedisPoolSize
-	maxIdle := poolSize
+	opt.PoolSize = poolSize
 
-	var sntnl *sentinel.Sentinel
-	if useSentinel {
-		sntnl = &sentinel.Sentinel{
-			Addrs:      conf.SentinelAddresses,
-			MasterName: conf.SentinelMasterName,
-			Dial: func(addr string) (redis.Conn, error) {
-				timeout := 300 * time.Millisecond
-				opts := []redis.DialOption{
-					redis.DialConnectTimeout(timeout),
-					redis.DialReadTimeout(timeout),
-					redis.DialWriteTimeout(timeout),
-				}
-				c, err := redis.Dial("tcp", addr, opts...)
-				if err != nil {
-					n.Log(NewLogEntry(LogLevelError, "error dialing to Sentinel", map[string]interface{}{"error": err.Error()}))
-					return nil, err
-				}
-				if conf.SentinelPassword != "" {
-					var err error
-					if conf.SentinelUser != "" {
-						_, err = c.Do("AUTH", conf.SentinelUser, conf.SentinelPassword)
-					} else {
-						_, err = c.Do("AUTH", conf.SentinelPassword)
-					}
-					if err != nil {
-						_ = c.Close()
-						n.Log(NewLogEntry(LogLevelError, "error auth in Redis Sentinel", map[string]interface{}{"error": err.Error()}))
-						return nil, err
-					}
-				}
-				return c, nil
-			},
-		}
-
-		// Periodically discover new Sentinels.
-		go func() {
-			if err := sntnl.Discover(); err != nil {
-				n.Log(NewLogEntry(LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
-			}
-			for {
-				<-time.After(30 * time.Second)
-				if err := sntnl.Discover(); err != nil {
-					n.Log(NewLogEntry(LogLevelError, "error discover Sentinel", map[string]interface{}{"error": err.Error()}))
-				}
-			}
-		}()
-	}
-
-	return func(serverAddr string, dialOpts ...redis.DialOption) (*redis.Pool, error) {
-		pool := &redis.Pool{
-			MaxIdle:     maxIdle,
-			MaxActive:   poolSize,
-			Wait:        true,
-			IdleTimeout: conf.IdleTimeout,
-			Dial: func() (redis.Conn, error) {
-				var c redis.Conn
-				if useSentinel {
-					masterAddr, err := sntnl.MasterAddr()
-					if err != nil {
-						return nil, err
-					}
-					lastMu.Lock()
-					if masterAddr != lastMaster {
-						n.Log(NewLogEntry(LogLevelInfo, "Redis master discovered", map[string]interface{}{"addr": masterAddr}))
-						lastMaster = masterAddr
-					}
-					lastMu.Unlock()
-					c, err = redis.Dial("tcp", masterAddr, dialOpts...)
-					if err != nil {
-						n.Log(NewLogEntry(LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error(), "addr": masterAddr}))
-						return nil, err
-					}
-				} else {
-					var err error
-					network := s.config.network
-					if network == "" {
-						// In case of Redis Cluster network can be empty since we don't set it.
-						network = "tcp"
-					}
-					c, err = redis.Dial(network, serverAddr, dialOpts...)
-					if err != nil {
-						n.Log(NewLogEntry(LogLevelError, "error dialing to Redis", map[string]interface{}{"error": err.Error(), "addr": serverAddr}))
-						return nil, err
-					}
-				}
-
-				if password != "" {
-					var err error
-					if user != "" {
-						_, err = c.Do("AUTH", user, password)
-					} else {
-						_, err = c.Do("AUTH", password)
-					}
-					if err != nil {
-						_ = c.Close()
-						n.Log(NewLogEntry(LogLevelError, "error auth in Redis", map[string]interface{}{"error": err.Error()}))
-						return nil, err
-					}
-				}
-
-				if db != 0 {
-					if _, err := c.Do("SELECT", db); err != nil {
-						_ = c.Close()
-						n.Log(NewLogEntry(LogLevelError, "error selecting Redis db", map[string]interface{}{"error": err.Error()}))
-						return nil, err
-					}
-				}
-				return c, nil
-			},
-			TestOnBorrow: func(c redis.Conn, t time.Time) error {
-				if useSentinel {
-					if !sentinel.TestRole(c, "master") {
-						return errors.New("failed master role check")
-					}
-					return nil
-				}
-				if s.useCluster {
-					// No need in this optimization outside cluster
-					// use case due to utilization of pipelining.
-					if time.Since(t) < time.Second {
-						return nil
-					}
-				}
-				_, err := c.Do("PING")
-				return err
-			},
-		}
-		return pool, nil
-	}
-}
-
-func getDialOpts(conf RedisShardConfig) []redis.DialOption {
 	var readTimeout = DefaultRedisReadTimeout
 	if conf.ReadTimeout != 0 {
 		readTimeout = conf.ReadTimeout
@@ -614,54 +469,46 @@ func getDialOpts(conf RedisShardConfig) []redis.DialOption {
 	if conf.ConnectTimeout != 0 {
 		connectTimeout = conf.ConnectTimeout
 	}
+	opt.ReadTimeout = readTimeout
+	opt.WriteTimeout = writeTimeout
+	opt.DialTimeout = connectTimeout
+	opt.IdleTimeout = conf.IdleTimeout
 
-	dialOpts := []redis.DialOption{
-		redis.DialConnectTimeout(connectTimeout),
-		redis.DialReadTimeout(readTimeout),
-		redis.DialWriteTimeout(writeTimeout),
-	}
 	if conf.UseTLS {
-		dialOpts = append(dialOpts, redis.DialUseTLS(true))
 		if conf.TLSConfig != nil {
-			dialOpts = append(dialOpts, redis.DialTLSConfig(conf.TLSConfig))
+			opt.TLSConfig = conf.TLSConfig
 		}
 		if conf.TLSSkipVerify {
-			dialOpts = append(dialOpts, redis.DialTLSSkipVerify(true))
+			opt.TLSConfig.InsecureSkipVerify = true
 		}
 	}
-	return dialOpts
+	return opt
 }
 
-func newPool(s *RedisShard, n *Node, conf RedisShardConfig) (redisConnPool, error) {
+func newRedisClient(s *RedisShard, n *Node, conf RedisShardConfig) (redis.UniversalClient, error) {
 	password := conf.Password
 	db := conf.DB
 
 	useSentinel := conf.SentinelMasterName != "" && len(conf.SentinelAddresses) > 0
 	usingPassword := password != ""
 
-	poolFactory := makePoolFactory(s, n, conf)
+	opts := getOptions(s, conf)
 
 	if !s.useCluster {
 		serverAddr := conf.address
 		if !useSentinel {
 			n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: %s/%d, using password: %v", serverAddr, db, usingPassword)))
+			return redis.NewClient(opts.Simple()), nil
 		} else {
 			n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: Sentinel for name: %s, db: %d, using password: %v", conf.SentinelMasterName, db, usingPassword)))
+			return redis.NewFailoverClient(opts.Failover()), nil
 		}
-		pool, _ := poolFactory(serverAddr, getDialOpts(conf)...)
-		return pool, nil
 	}
 	// OK, we should work with cluster.
 	n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: cluster addrs: %+v, using password: %v", conf.ClusterAddresses, usingPassword)))
-	cluster := &redisc.Cluster{
-		DialOptions:  getDialOpts(conf),
-		StartupNodes: conf.ClusterAddresses,
-		CreatePool:   poolFactory,
-	}
+	cluster := redis.NewClusterClient(opts.Cluster())
 	// Initialize cluster mapping.
-	if err := cluster.Refresh(); err != nil {
-		return nil, err
-	}
+	cluster.ReloadState(context.Background())
 	return cluster, nil
 }
 
@@ -678,7 +525,7 @@ func (s *RedisShard) readTimeout() time.Duration {
 // range [0, numBuckets) for the given string. numBuckets must be >= 1.
 func consistentIndex(s string, numBuckets int) int {
 	hash := fnv.New64a()
-	_, _ = hash.Write([]byte(s))
+	_, _ = hash.Write(util.StringToBytes(s))
 	key := hash.Sum64()
 
 	var (

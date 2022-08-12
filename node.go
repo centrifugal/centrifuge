@@ -15,6 +15,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/nowtime"
+	"github.com/centrifugal/centrifuge/internal/util"
 
 	"github.com/FZambia/eagle"
 	"github.com/centrifugal/protocol"
@@ -191,7 +192,7 @@ func index(s string, numBuckets int) int {
 		return 0
 	}
 	hash := fnv.New64a()
-	_, _ = hash.Write([]byte(s))
+	_, _ = hash.Write(util.StringToBytes(s))
 	return int(hash.Sum64() % uint64(numBuckets))
 }
 
