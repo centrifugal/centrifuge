@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
-	"github.com/go-redis/redis/v8"
+	"github.com/go-redis/redis/v9"
 
 	"github.com/centrifugal/centrifuge/internal/util"
 )

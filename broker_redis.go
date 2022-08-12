@@ -16,7 +16,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/util"
 
 	"github.com/centrifugal/protocol"
-	"github.com/go-redis/redis/v8"
+	"github.com/go-redis/redis/v9"
 )
 
 const (
@@ -937,7 +937,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	for {
 		m, err := pubsub.ReceiveTimeout(context.Background(), 10*time.Second)
 		if err != nil {
-			b.node.Log(NewLogEntry(LogLevelError, "Redis receiver error", map[string]interface{}{"error": err}))
+			b.node.Log(NewLogEntry(LogLevelError, "Redis control PUB/SUB error", map[string]interface{}{"error": err}))
 			return
 		}
 		switch m := m.(type) {

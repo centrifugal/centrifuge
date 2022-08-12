@@ -16,7 +16,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/timers"
 	"github.com/centrifugal/centrifuge/internal/util"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/go-redis/redis/v9"
 )
 
 type (
@@ -456,6 +456,7 @@ func getOptions(s *RedisShard, conf RedisShardConfig) *redis.UniversalOptions {
 
 	poolSize := defaultRedisPoolSize
 	opt.PoolSize = poolSize
+	opt.MaxIdleConns = poolSize
 
 	var readTimeout = DefaultRedisReadTimeout
 	if conf.ReadTimeout != 0 {
@@ -472,7 +473,7 @@ func getOptions(s *RedisShard, conf RedisShardConfig) *redis.UniversalOptions {
 	opt.ReadTimeout = readTimeout
 	opt.WriteTimeout = writeTimeout
 	opt.DialTimeout = connectTimeout
-	opt.IdleTimeout = conf.IdleTimeout
+	opt.ConnMaxIdleTime = conf.IdleTimeout
 
 	if conf.UseTLS {
 		if conf.TLSConfig != nil {
