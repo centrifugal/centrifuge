@@ -335,7 +335,7 @@ func (s *RedisShard) runDataPipeline() error {
 	}
 
 	var drs []*dataRequest
-	client := s.client
+	pipe := s.client.Pipeline()
 
 	for {
 		select {
@@ -362,53 +362,48 @@ func (s *RedisShard) runDataPipeline() error {
 					break loop
 				}
 			}
-			rs, err := client.Pipelined(
-				context.Background(),
-				func(pipe redis.Pipeliner) error {
-					for _, dr := range drs {
-						if dr.script != nil {
-							_ = pipe.EvalSha(context.Background(), dr.script.Hash(), dr.keys, dr.args...)
-						} else {
-							_ = pipe.Do(context.Background(), dr.args...)
-						}
-					}
-					return nil
-				},
-			)
+		}
+		for _, dr := range drs {
+			if dr.script != nil {
+				_ = pipe.EvalSha(context.Background(), dr.script.Hash(), dr.keys, dr.args...)
+			} else {
+				_ = pipe.Do(context.Background(), dr.args...)
+			}
+		}
+		cmds, err := pipe.Exec(context.Background())
+		if err == redis.Nil {
+			err = nil
+		}
+		if err != nil {
+			for i := range drs {
+				drs[i].done(nil, err)
+			}
+			return fmt.Errorf("error executing data pipeline: %w", err)
+		}
+
+		var noScriptError bool
+		for i, r := range cmds {
+			reply, err := r.(*redis.Cmd).Result()
 			if err == redis.Nil {
 				err = nil
 			}
 			if err != nil {
-				for i := range drs {
-					drs[i].done(nil, err)
+				// Check for NOSCRIPT error. In normal circumstances this should never happen.
+				// The only possible situation is when Redis scripts were flushed. In this case
+				// we will return from this func and load publish script from scratch.
+				// Redigo does the same check but for single EVALSHA command: see
+				// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
+				if e, ok := err.(redis.Error); ok && strings.HasPrefix(e.Error(), "NOSCRIPT ") {
+					noScriptError = true
 				}
-				return fmt.Errorf("error executing data pipeline: %w", err)
 			}
-
-			var noScriptError bool
-			for i, r := range rs {
-				reply, err := r.(*redis.Cmd).Result()
-				if err == redis.Nil {
-					err = nil
-				}
-				if err != nil {
-					// Check for NOSCRIPT error. In normal circumstances this should never happen.
-					// The only possible situation is when Redis scripts were flushed. In this case
-					// we will return from this func and load publish script from scratch.
-					// Redigo does the same check but for single EVALSHA command: see
-					// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
-					if e, ok := err.(redis.Error); ok && strings.HasPrefix(e.Error(), "NOSCRIPT ") {
-						noScriptError = true
-					}
-				}
-				drs[i].done(reply, err)
-			}
-			if noScriptError {
-				// Start this func from the beginning and LOAD missing script.
-				return nil
-			}
-			drs = nil
+			drs[i].done(reply, err)
 		}
+		if noScriptError {
+			// Start this func from the beginning and LOAD missing script.
+			return nil
+		}
+		drs = nil
 	}
 }
 

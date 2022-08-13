@@ -1024,7 +1024,7 @@ func (b *RedisBroker) runPubSubPing(s *RedisShard) {
 
 func (b *RedisBroker) runPublishPipeline(s *RedisShard) {
 	var prs []pubRequest
-	client := s.client
+	pipe := s.client.Pipeline()
 
 	for {
 		select {
@@ -1042,12 +1042,10 @@ func (b *RedisBroker) runPublishPipeline(s *RedisShard) {
 				}
 			}
 		}
-		cmds, err := client.Pipelined(context.Background(), func(pipe redis.Pipeliner) error {
-			for _, pr := range prs {
-				_ = pipe.Publish(context.Background(), string(pr.channel), pr.message)
-			}
-			return nil
-		})
+		for _, pr := range prs {
+			_ = pipe.Publish(context.Background(), string(pr.channel), pr.message)
+		}
+		cmds, err := pipe.Exec(context.Background())
 		if err != nil {
 			for i := range prs {
 				prs[i].done(err)
