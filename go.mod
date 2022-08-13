@@ -12,7 +12,7 @@ require (
 	github.com/igm/sockjs-go/v3 v3.0.2
 	github.com/mna/redisc v1.3.2
 	github.com/prometheus/client_golang v1.12.2
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.8.0
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 	google.golang.org/protobuf v1.28.1
 )
@@ -33,5 +33,5 @@ require (
 	github.com/segmentio/encoding v0.3.5 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	golang.org/x/sys v0.0.0-20220422013727-9388b58f7150 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
