@@ -2,11 +2,11 @@ version: "3.8"
 
 services:
   redis:
-    image: redis:7.0.2-alpine
+    image: redis:${REDIS_VERSION:-7}-alpine
     ports:
       - "6379:6379"
   sentinel:
-    image: redis:7.0.2-alpine
+    image: redis:${REDIS_VERSION:-7}-alpine
     entrypoint:
       - /bin/sh
       - -c
@@ -18,7 +18,7 @@ services:
       - "6380:6380"
       - "26379:26379"
   cluster:
-    image: redis:7.0.2-alpine
+    image: redis:${REDIS_VERSION:-7}-alpine
     entrypoint:
       - /bin/sh
       - -c
