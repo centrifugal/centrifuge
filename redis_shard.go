@@ -382,8 +382,8 @@ func (s *RedisShard) runDataPipeline() error {
 		}
 
 		var noScriptError bool
-		for i, r := range cmds {
-			reply, err := r.(*redis.Cmd).Result()
+		for i, cmd := range cmds {
+			reply, err := cmd.(*redis.Cmd).Result()
 			if err == redis.Nil {
 				err = nil
 			}

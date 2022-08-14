@@ -198,14 +198,11 @@ func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*C
 	if resp.err != nil && resp.err != redis.Nil {
 		return nil, resp.err
 	}
-	return mapStringClientInfo(resp.reply, nil)
+	return mapStringClientInfo(resp.reply)
 }
 
-func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {
-	if err != nil {
-		return nil, err
-	}
-	cmd := redis.NewCmdResult(result, err)
+func mapStringClientInfo(result interface{}) (map[string]*ClientInfo, error) {
+	cmd := redis.NewCmdResult(result, nil)
 	values, err := cmd.Slice()
 	if err != nil {
 		return nil, err
