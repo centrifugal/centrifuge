@@ -452,6 +452,7 @@ func getOptions(s *RedisShard, conf RedisShardConfig) *redis.UniversalOptions {
 	poolSize := defaultRedisPoolSize
 	opt.PoolSize = poolSize
 	opt.MaxIdleConns = poolSize
+	opt.MaxRetryBackoff = 50*time.Millisecond
 
 	var readTimeout = DefaultRedisReadTimeout
 	if conf.ReadTimeout != 0 {
