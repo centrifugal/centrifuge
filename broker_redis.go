@@ -865,7 +865,6 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 			case <-done:
 				return
 			}
-		case *redis.Subscription:
 		default:
 		}
 	}
@@ -949,8 +948,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 			case <-done:
 				return
 			}
-		case *redis.Subscription:
-		case *redis.Pong:
+		default:
 		}
 	}
 }

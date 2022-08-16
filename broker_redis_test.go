@@ -77,7 +77,7 @@ func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStre
 
 func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
 	redisConf := RedisShardConfig{
-		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		ClusterAddresses: []string{"127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"},
 		Password:         testRedisPassword,
 		ReadTimeout:      100 * time.Second,
 	}

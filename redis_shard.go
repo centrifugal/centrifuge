@@ -474,6 +474,8 @@ func getOptions(s *RedisShard, conf RedisShardConfig) *redis.UniversalOptions {
 	if conf.UseTLS {
 		if conf.TLSConfig != nil {
 			opt.TLSConfig = conf.TLSConfig
+		} else {
+			opt.TLSConfig = &tls.Config{}
 		}
 		if conf.TLSSkipVerify {
 			opt.TLSConfig.InsecureSkipVerify = true
@@ -504,8 +506,6 @@ func newRedisClient(s *RedisShard, n *Node, conf RedisShardConfig) (redis.Univer
 	// OK, we should work with cluster.
 	n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("Redis: cluster addrs: %+v, using password: %v", conf.ClusterAddresses, usingPassword)))
 	cluster := redis.NewClusterClient(opts.Cluster())
-	// Initialize cluster mapping.
-	cluster.ReloadState(context.Background())
 	return cluster, nil
 }
 
