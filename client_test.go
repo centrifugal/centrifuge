@@ -3108,7 +3108,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	}
 	node.mu.Unlock()
 
-	chanCtx := channelContext{expireAt: 100}
+	chanCtx := ChannelContext{expireAt: 100}
 
 	// not expired.
 	nowTime = time.Unix(100, 0)
@@ -3157,7 +3157,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	require.NotContains(t, client.channels, "channel")
 
 	// refreshed.
-	client.channels["channel"] = channelContext{}
+	client.channels["channel"] = ChannelContext{}
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
 		require.Equal(t, "channel", event.Channel)
 		cb(SubRefreshReply{
@@ -3171,7 +3171,7 @@ func TestClientCheckSubscriptionExpiration(t *testing.T) {
 	})
 	require.Contains(t, client.channels, "channel")
 	require.EqualValues(t, 250, client.channels["channel"].expireAt)
-	require.Equal(t, []byte("info"), client.channels["channel"].Info)
+	require.Equal(t, []byte("info"), client.channels["channel"].info)
 
 	// Error from handler.
 	client.eventHub.subRefreshHandler = func(event SubRefreshEvent, cb SubRefreshCallback) {
@@ -3196,11 +3196,11 @@ func TestClientCheckPosition(t *testing.T) {
 	node.mu.Unlock()
 
 	// no recover.
-	got := client.checkPosition(300*time.Second, "channel", channelContext{})
+	got := client.checkPosition(300*time.Second, "channel", ChannelContext{})
 	require.True(t, got)
 
 	// not initial, not time to check.
-	got = client.checkPosition(300*time.Second, "channel", channelContext{positionCheckTime: 50, flags: flagPositioning})
+	got = client.checkPosition(300*time.Second, "channel", ChannelContext{positionCheckTime: 50, flags: flagPositioning})
 	require.True(t, got)
 }
 
@@ -3216,7 +3216,7 @@ func TestClientIsValidPosition(t *testing.T) {
 	}
 	node.mu.Unlock()
 
-	client.channels = map[string]channelContext{
+	client.channels = map[string]ChannelContext{
 		"example": {
 			flags:             flagSubscribed,
 			positionCheckTime: 50,
@@ -3248,7 +3248,7 @@ func TestClientIsValidPosition(t *testing.T) {
 	require.False(t, got)
 	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
 
-	client.channels = map[string]channelContext{
+	client.channels = map[string]ChannelContext{
 		"example": {
 			positionCheckTime: 50,
 			streamPosition: StreamPosition{
