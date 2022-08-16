@@ -128,27 +128,24 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 	shard.subCh = make(chan subRequest)
 	shard.pubCh = make(chan pubRequest)
 	shard.dataCh = make(chan *dataRequest)
-	if !shard.useCluster {
-		// Only need data pipeline in non-cluster scenario.
-		go func() {
-			for {
+	go func() {
+		for {
+			select {
+			case <-shard.closeCh:
+				return
+			default:
+			}
+			err := shard.runDataPipeline()
+			if err != nil {
+				n.Log(NewLogEntry(LogLevelError, "data pipeline error", map[string]interface{}{"error": err.Error()}))
 				select {
 				case <-shard.closeCh:
 					return
-				default:
-				}
-				err := shard.runDataPipeline()
-				if err != nil {
-					n.Log(NewLogEntry(LogLevelError, "data pipeline error", map[string]interface{}{"error": err.Error()}))
-					select {
-					case <-shard.closeCh:
-						return
-					case <-time.After(300 * time.Millisecond):
-					}
+				case <-time.After(300 * time.Millisecond):
 				}
 			}
-		}()
-	}
+		}
+	}()
 	return shard, nil
 }
 
@@ -290,13 +287,6 @@ func (s *RedisShard) reloadPipeline() {
 }
 
 func (s *RedisShard) getDataResponse(r *dataRequest, closeCh chan struct{}) *dataResponse {
-	if s.useCluster {
-		reply, err := s.processClusterDataRequest(r)
-		return &dataResponse{
-			reply: reply,
-			err:   err,
-		}
-	}
 	select {
 	case s.dataCh <- r:
 	default:
@@ -313,13 +303,6 @@ func (s *RedisShard) getDataResponse(r *dataRequest, closeCh chan struct{}) *dat
 	return r.result()
 }
 
-func (s *RedisShard) processClusterDataRequest(dr *dataRequest) (interface{}, error) {
-	client := s.client
-	if dr.script != nil {
-		return dr.script.Run(context.Background(), client, dr.keys, dr.args...).Result()
-	}
-	return client.Do(context.Background(), dr.args...).Result()
-}
 
 func (s *RedisShard) runDataPipeline() error {
 	s.scriptsMu.RLock()
