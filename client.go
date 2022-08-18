@@ -151,6 +151,7 @@ type ChannelContext struct {
 	positionCheckTime int64
 	streamPosition    StreamPosition
 	flags             uint8
+	Source            uint8
 }
 
 func (ctx ChannelContext) IsServerSide() bool {
@@ -2952,6 +2953,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			Offset: latestOffset,
 			Epoch:  latestEpoch,
 		},
+		Source: reply.Options.Source,
 	}
 	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {
 		channelContext.positionCheckTime = time.Now().Unix()
