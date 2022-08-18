@@ -154,10 +154,6 @@ type ChannelContext struct {
 	Source            uint8
 }
 
-func (ctx ChannelContext) IsServerSide() bool {
-	return channelHasFlag(ctx.flags, flagServerSide)
-}
-
 func channelHasFlag(flags, flag uint8) bool {
 	return flags&flag != 0
 }

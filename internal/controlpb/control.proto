@@ -58,6 +58,7 @@ message Subscribe {
     StreamPosition recover_since = 11;
     string session = 12;
     bool push_join_leave = 13;
+    uint32 source = 14;
 }
 
 message StreamPosition {
