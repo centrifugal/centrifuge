@@ -70,23 +70,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var (
-		pingInterval time.Duration
-		pongTimeout  time.Duration
-	)
-
-	if h.config.PingInterval >= 0 {
-		pingInterval = h.config.PingInterval
-		if pingInterval == 0 {
-			pingInterval = 25 * time.Second
-		}
-		pongTimeout = h.config.PongTimeout
-		if pongTimeout < 0 {
-			pongTimeout = 0
-		} else if pongTimeout == 0 {
-			pongTimeout = pingInterval / 3
-		}
-	}
+	pingInterval, pongTimeout := getPingPongPeriodValues(h.config.PingPongConfig)
 
 	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
 		protocolType: protocolType,

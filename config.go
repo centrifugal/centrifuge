@@ -104,3 +104,19 @@ type PingPongConfig struct {
 	// To disable pong checks use -1.
 	PongTimeout time.Duration
 }
+
+func getPingPongPeriodValues(config PingPongConfig) (time.Duration, time.Duration) {
+	pingInterval := config.PingInterval
+	if pingInterval < 0 {
+		pingInterval = 0
+	} else if pingInterval == 0 {
+		pingInterval = 25 * time.Second
+	}
+	pongTimeout := config.PongTimeout
+	if pongTimeout < 0 {
+		pongTimeout = 0
+	} else if pongTimeout == 0 {
+		pongTimeout = pingInterval / 3
+	}
+	return pingInterval, pongTimeout
+}

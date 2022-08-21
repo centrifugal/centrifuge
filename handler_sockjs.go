@@ -128,7 +128,7 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 	s.handlerV1 = handlerV1
 
 	// Disable heartbeats for ProtocolVersion2 if we are using app-level pings.
-	if s.config.PingInterval >= 0 {
+	if s.config.PingPongConfig.PingInterval >= 0 {
 		options.HeartbeatDelay = 0
 	}
 	s.handlerV2 = sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV2)
@@ -178,18 +178,7 @@ func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.
 	)
 
 	if protoVersion > ProtocolVersion1 {
-		pingInterval = s.config.PingInterval
-		if pingInterval < 0 {
-			pingInterval = 0
-		} else if pingInterval == 0 {
-			pingInterval = 25 * time.Second
-		}
-		pongTimeout = s.config.PongTimeout
-		if pongTimeout < 0 {
-			pongTimeout = 0
-		} else if pongTimeout == 0 {
-			pongTimeout = pingInterval / 3
-		}
+		pingInterval, pongTimeout = getPingPongPeriodValues(s.config.PingPongConfig)
 	}
 
 	// Separate goroutine for better GC of caller's data.

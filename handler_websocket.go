@@ -159,7 +159,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		pongTimeout  time.Duration
 	)
 
-	appLevelPing := protoVersion > ProtocolVersion1 && s.config.PingInterval >= 0
+	appLevelPing := protoVersion > ProtocolVersion1 && s.config.PingPongConfig.PingInterval >= 0
 
 	if !appLevelPing {
 		pingInterval = s.config.PingInterval
@@ -171,16 +171,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pongTimeout = pingInterval / 3
 		}
 	} else {
-		pingInterval = s.config.PingInterval
-		if pingInterval == 0 {
-			pingInterval = 25 * time.Second
-		}
-		pongTimeout = s.config.PongTimeout
-		if pongTimeout < 0 {
-			pongTimeout = 0
-		} else if pongTimeout == 0 {
-			pongTimeout = pingInterval / 3
-		}
+		pingInterval, pongTimeout = getPingPongPeriodValues(s.config.PingPongConfig)
 	}
 
 	writeTimeout := s.config.WriteTimeout
