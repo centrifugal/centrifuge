@@ -10,34 +10,21 @@ import (
 )
 
 // HTTPStreamConfig represents config for HTTPStreamHandler.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type HTTPStreamConfig struct {
+	PingPongConfig
 	// MaxRequestBodySize limits request body size.
 	MaxRequestBodySize int
-	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
-	// AppLevelPingInterval is only used for clients with ProtocolVersion2.
-	// AppLevelPingInterval is EXPERIMENTAL and is a subject to change.
-	// For zero value 25 secs will be used. To disable sending app-level pings in ProtocolVersion2 use -1.
-	AppLevelPingInterval time.Duration
-	// AppLevelPongTimeout sets time for application-level pong check after issuing
-	// ping. AppLevelPongTimeout must be less than AppLevelPingInterval.
-	// AppLevelPongTimeout is only used for clients with ProtocolVersion2.
-	// AppLevelPongTimeout is EXPERIMENTAL and is a subject to change.
-	// For zero value AppLevelPingInterval / 3 will be used. To disable pong checks use -1.
-	AppLevelPongTimeout time.Duration
 }
 
 // HTTPStreamHandler handles WebSocket client connections. WebSocket protocol
 // is a bidirectional connection between a client and a server for low-latency
 // communication.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type HTTPStreamHandler struct {
 	node   *Node
 	config HTTPStreamConfig
 }
 
 // NewHTTPStreamHandler creates new HTTPStreamHandler.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 func NewHTTPStreamHandler(node *Node, config HTTPStreamConfig) *HTTPStreamHandler {
 	return &HTTPStreamHandler{
 		node:   node,
@@ -88,12 +75,12 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pongTimeout  time.Duration
 	)
 
-	if h.config.AppLevelPingInterval >= 0 {
-		pingInterval = h.config.AppLevelPingInterval
+	if h.config.PingInterval >= 0 {
+		pingInterval = h.config.PingInterval
 		if pingInterval == 0 {
 			pingInterval = 25 * time.Second
 		}
-		pongTimeout = h.config.AppLevelPongTimeout
+		pongTimeout = h.config.PongTimeout
 		if pongTimeout < 0 {
 			pongTimeout = 0
 		} else if pongTimeout == 0 {
