@@ -18,10 +18,7 @@ import (
 
 func TestSSEHandler_GET(t *testing.T) {
 	n, _ := New(Config{
-		//LogLevel: LogLevelTrace,
-		//LogHandler: func(entry LogEntry) {
-		//	fmt.Println(entry)
-		//},
+		LogLevel: LogLevelDebug,
 	})
 
 	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
@@ -47,14 +44,24 @@ func TestSSEHandler_GET(t *testing.T) {
 
 	netURL, err := url.Parse(server.URL + "/connection/sse")
 	require.NoError(t, err)
-	values := netURL.Query()
-	values.Add(connectUrlParam, string(jsonData))
-	netURL.RawQuery = values.Encode()
 
+	// Test bad request without connect param.
 	req, err := http.NewRequest(http.MethodGet, netURL.String(), nil)
 	require.NoError(t, err)
 
 	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	// And OK with connect param.
+	values := netURL.Query()
+	values.Add(connectUrlParam, string(jsonData))
+	netURL.RawQuery = values.Encode()
+
+	req, err = http.NewRequest(http.MethodGet, netURL.String(), nil)
+	require.NoError(t, err)
+
+	resp, err = client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	defer func() { _ = resp.Body.Close() }()
@@ -130,6 +137,33 @@ func TestSSEHandler_POST(t *testing.T) {
 		require.NotZero(t, reply.Connect.Node)
 		break
 	}
+}
+
+func TestSSEHandler_RequestTooLarge(t *testing.T) {
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/connection/sse", NewSSEHandler(n, SSEConfig{
+		MaxRequestBodySize: 2,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	command := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+	jsonData, err := json.Marshal(command)
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/connection/sse", bytes.NewBuffer(jsonData))
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
 func newSSEStreamDecoder(body io.Reader) *sseStreamDecoder {
