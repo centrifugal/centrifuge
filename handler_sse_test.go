@@ -17,6 +17,7 @@ import (
 )
 
 func TestSSEHandler_GET(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{
 		LogLevel: LogLevelDebug,
 	})
@@ -85,12 +86,8 @@ func TestSSEHandler_GET(t *testing.T) {
 }
 
 func TestSSEHandler_POST(t *testing.T) {
-	n, _ := New(Config{
-		//LogLevel: LogLevelTrace,
-		//LogHandler: func(entry LogEntry) {
-		//	fmt.Println(entry)
-		//},
-	})
+	t.Parallel()
+	n, _ := New(Config{})
 
 	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
 		return ConnectReply{Credentials: &Credentials{
@@ -140,6 +137,7 @@ func TestSSEHandler_POST(t *testing.T) {
 }
 
 func TestSSEHandler_RequestTooLarge(t *testing.T) {
+	t.Parallel()
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()

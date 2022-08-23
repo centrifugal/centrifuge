@@ -6,5 +6,3 @@ coverage:
     patch: off
 ignore:
   - "internal/controlpb/control*"  # generated code
-  - "emulation.go" # experimental code
-
