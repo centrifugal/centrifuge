@@ -37,17 +37,16 @@ const (
 type ProtocolVersion uint8
 
 const (
-	// ProtocolVersion1 is the current stable client protocol.
+	// ProtocolVersion1 is the legacy client protocol format. It will be
+	// removed at some point in the future.
 	ProtocolVersion1 ProtocolVersion = 1
-	// ProtocolVersion2 is currently EXPERIMENTAL. There could be still some
-	// backwards incompatible adjustments to it. But the plan is to make it
-	// default in the future.
+	// ProtocolVersion2 is the current stable client protocol.
 	ProtocolVersion2 ProtocolVersion = 2
 )
 
 // AppLevelPing is a configuration that describes desired application
-// level ping-pong behavior. AppLevelPing works only with clients that
-// use ProtocolVersion2.
+// level ping-pong behavior. AppLevelPing applied only to clients that
+// use protocol >= ProtocolVersion2.
 type AppLevelPing struct {
 	// PingInterval tells how often to issue application-level server-to-client pings.
 	// Zero value will disable pings.

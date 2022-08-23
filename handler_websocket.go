@@ -18,7 +18,7 @@ import (
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
 	// ProtocolVersion the handler will serve. If not set we are expecting
-	// client connected using ProtocolVersion1.
+	// client connected using ProtocolVersion2.
 	ProtocolVersion ProtocolVersion
 
 	// CompressionLevel sets a level for websocket compression.
@@ -63,25 +63,13 @@ type WebsocketConfig struct {
 	UseWriteBufferPool bool
 
 	// PingInterval sets interval server will send ping frames to clients.
-	// By default, 25 * time.Second is used. Only used for clients
-	// with ProtocolVersion1.
+	// By default, 25 * time.Second is used. Only used for clients with ProtocolVersion1.
 	PingInterval time.Duration
 	// PongTimeout sets the time to wait for pong messages from the client.
-	// By default, PingInterval / 3 is used. Only used for clients
-	// with ProtocolVersion1.
+	// By default, PingInterval / 3 is used. Only used for clients with ProtocolVersion1.
 	PongTimeout time.Duration
 
-	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
-	// AppLevelPingInterval is only used for clients with ProtocolVersion2.
-	// AppLevelPingInterval is EXPERIMENTAL and is a subject to change.
-	// For zero value 25 secs will be used. To disable sending app-level pings in ProtocolVersion2 use -1.
-	AppLevelPingInterval time.Duration
-	// AppLevelPongTimeout sets time for application-level pong check after issuing
-	// ping. AppLevelPongTimeout must be less than AppLevelPingInterval.
-	// AppLevelPongTimeout is only used for clients with ProtocolVersion2.
-	// AppLevelPongTimeout is EXPERIMENTAL and is a subject to change.
-	// For zero value AppLevelPingInterval / 3 will be used. To disable pong checks use -1.
-	AppLevelPongTimeout time.Duration
+	PingPongConfig
 }
 
 // WebsocketHandler handles WebSocket client connections. WebSocket protocol
@@ -171,7 +159,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		pongTimeout  time.Duration
 	)
 
-	appLevelPing := protoVersion > ProtocolVersion1 && s.config.AppLevelPingInterval >= 0
+	appLevelPing := protoVersion > ProtocolVersion1 && s.config.PingPongConfig.PingInterval >= 0
 
 	if !appLevelPing {
 		pingInterval = s.config.PingInterval
@@ -183,16 +171,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			pongTimeout = pingInterval / 3
 		}
 	} else {
-		pingInterval = s.config.AppLevelPingInterval
-		if pingInterval == 0 {
-			pingInterval = 25 * time.Second
-		}
-		pongTimeout = s.config.AppLevelPongTimeout
-		if pongTimeout < 0 {
-			pongTimeout = 0
-		} else if pongTimeout == 0 {
-			pongTimeout = pingInterval / 3
-		}
+		pingInterval, pongTimeout = getPingPongPeriodValues(s.config.PingPongConfig)
 	}
 
 	writeTimeout := s.config.WriteTimeout

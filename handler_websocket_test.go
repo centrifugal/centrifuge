@@ -271,7 +271,9 @@ func TestWebsocketHandlerPing(t *testing.T) {
 	defer func() { _ = n.Shutdown(context.Background()) }()
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{
-		AppLevelPingInterval: time.Second,
+		PingPongConfig: PingPongConfig{
+			PingInterval: time.Second,
+		},
 	}))
 	server := httptest.NewServer(mux)
 	defer server.Close()

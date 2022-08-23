@@ -91,3 +91,32 @@ const (
 	// considered actual.
 	nodeInfoMaxDelay = nodeInfoPublishInterval*2 + time.Second
 )
+
+// PingPongConfig allows configuring application level ping-pong behavior.
+type PingPongConfig struct {
+	// PingInterval tells how often to issue server-to-client pings.
+	// For zero value 25 secs will be used.
+	// To disable sending app-level pings use -1.
+	PingInterval time.Duration
+	// PongTimeout sets time for pong check after issuing a ping.
+	// PongTimeout must be less than PingInterval.
+	// For zero value PingInterval / 3 will be used.
+	// To disable pong checks use -1.
+	PongTimeout time.Duration
+}
+
+func getPingPongPeriodValues(config PingPongConfig) (time.Duration, time.Duration) {
+	pingInterval := config.PingInterval
+	if pingInterval < 0 {
+		pingInterval = 0
+	} else if pingInterval == 0 {
+		pingInterval = 25 * time.Second
+	}
+	pongTimeout := config.PongTimeout
+	if pongTimeout < 0 {
+		pongTimeout = 0
+	} else if pongTimeout == 0 {
+		pongTimeout = pingInterval / 3
+	}
+	return pingInterval, pongTimeout
+}

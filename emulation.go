@@ -11,7 +11,6 @@ import (
 )
 
 // EmulationConfig is a config for EmulationHandler.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type EmulationConfig struct {
 	// MaxRequestBodySize limits request body size (in bytes). By default we accept 64kb max.
 	MaxRequestBodySize int
@@ -22,7 +21,6 @@ type EmulationConfig struct {
 // unidirectional transports for server-to-clients data flow but still emulate
 // bidirectional connection - thanks to this handler. Redirection to the correct node
 // works over Survey.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type EmulationHandler struct {
 	node     *Node
 	config   EmulationConfig
@@ -30,7 +28,6 @@ type EmulationHandler struct {
 }
 
 // NewEmulationHandler creates new EmulationHandler.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 func NewEmulationHandler(node *Node, config EmulationConfig) *EmulationHandler {
 	return &EmulationHandler{
 		node:     node,
