@@ -8,34 +8,21 @@ import (
 )
 
 // SSEConfig represents config for SSEHandler.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type SSEConfig struct {
-	// MaxRequestBodySize limits request body size.
+	PingPongConfig
+	// MaxRequestBodySize limits initial request body size (when SSE starts with POST).
 	MaxRequestBodySize int
-	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
-	// AppLevelPingInterval is only used for clients with ProtocolVersion2.
-	// AppLevelPingInterval is EXPERIMENTAL and is a subject to change.
-	// For zero value 25 secs will be used. To disable sending app-level pings in ProtocolVersion2 use -1.
-	AppLevelPingInterval time.Duration
-	// AppLevelPongTimeout sets time for application-level pong check after issuing
-	// ping. AppLevelPongTimeout must be less than AppLevelPingInterval.
-	// AppLevelPongTimeout is only used for clients with ProtocolVersion2.
-	// AppLevelPongTimeout is EXPERIMENTAL and is a subject to change.
-	// For zero value AppLevelPingInterval / 3 will be used. To disable pong checks use -1.
-	AppLevelPongTimeout time.Duration
 }
 
 // SSEHandler handles WebSocket client connections. WebSocket protocol
 // is a bidirectional connection between a client and a server for low-latency
 // communication.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 type SSEHandler struct {
 	node   *Node
 	config SSEConfig
 }
 
 // NewSSEHandler creates new SSEHandler.
-// EXPERIMENTAL, this is still a subject to change, do not use in production.
 func NewSSEHandler(node *Node, config SSEConfig) *SSEHandler {
 	return &SSEHandler{
 		node:   node,
@@ -43,9 +30,9 @@ func NewSSEHandler(node *Node, config SSEConfig) *SSEHandler {
 	}
 }
 
-// Since SSE is a GET request (at least in browsers) we are looking
-// for connect request in URL params. This should be a properly encoded
-// command(s) in Centrifuge protocol.
+// Since SSE is usually starts with a GET request (at least in browsers) we are looking
+// for connect request in URL params. This should be a properly encoded command(s) in
+// Centrifuge protocol.
 const connectUrlParam = "cf_connect"
 
 const defaultMaxSSEBodySize = 64 * 1024
@@ -72,7 +59,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var err error
 		requestData, err = io.ReadAll(r.Body)
 		if err != nil {
-			if len(requestData) >= int(maxBytesSize) {
+			if len(requestData) >= maxBytesSize {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
@@ -85,23 +72,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var (
-		pingInterval time.Duration
-		pongTimeout  time.Duration
-	)
-
-	if h.config.AppLevelPingInterval >= 0 {
-		pingInterval = h.config.AppLevelPingInterval
-		if pingInterval == 0 {
-			pingInterval = 25 * time.Second
-		}
-		pongTimeout = h.config.AppLevelPongTimeout
-		if pongTimeout < 0 {
-			pongTimeout = 0
-		} else if pongTimeout == 0 {
-			pongTimeout = pingInterval / 3
-		}
-	}
+	pingInterval, pongTimeout := getPingPongPeriodValues(h.config.PingPongConfig)
 
 	transport := newSSETransport(r, sseTransportConfig{pingInterval: pingInterval, pongTimeout: pongTimeout})
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)

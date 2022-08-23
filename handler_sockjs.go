@@ -15,7 +15,7 @@ import (
 // SockjsConfig represents config for SockJS handler.
 type SockjsConfig struct {
 	// ProtocolVersion the handler will serve. If not set we are expecting
-	// client connected using ProtocolVersion1.
+	// client connected using ProtocolVersion2.
 	ProtocolVersion ProtocolVersion
 
 	// HandlerPrefix sets prefix for SockJS handler endpoint path.
@@ -26,9 +26,9 @@ type SockjsConfig struct {
 	// for connecting on the client side.
 	URL string
 
-	// HeartbeatDelay sets how often to send heartbeat frames to clients. Only used for
-	// ProtocolVersion1. For ProtocolVersion2 we are using application level server-to-client
-	// pings.
+	// HeartbeatDelay sets how often to send heartbeat frames to clients.
+	// Only used for ProtocolVersion1. For ProtocolVersion2 we are using application level
+	// server-to-client pings.
 	HeartbeatDelay time.Duration
 
 	// CheckOrigin allows deciding whether to use CORS or not in XHR case.
@@ -55,17 +55,7 @@ type SockjsConfig struct {
 	// By default, 1 * time.Second will be used.
 	WebsocketWriteTimeout time.Duration
 
-	// AppLevelPingInterval tells how often to issue application-level server-to-client pings.
-	// AppLevelPingInterval is only used for clients with ProtocolVersion2.
-	// AppLevelPingInterval is EXPERIMENTAL and is a subject to change.
-	// For zero value 25 secs will be used. To disable app-level pings use -1.
-	AppLevelPingInterval time.Duration
-	// AppLevelPongTimeout sets time for application-level pong check after issuing
-	// ping. AppLevelPongTimeout must be less than AppLevelPingInterval.
-	// AppLevelPongTimeout is only used for clients with ProtocolVersion2.
-	// AppLevelPongTimeout is EXPERIMENTAL and is a subject to change.
-	// For zero value AppLevelPingInterval / 3 will be used. To disable pong checks use -1.
-	AppLevelPongTimeout time.Duration
+	PingPongConfig
 }
 
 // SockjsHandler accepts SockJS connections. SockJS has a bunch of fallback
@@ -138,7 +128,7 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 	s.handlerV1 = handlerV1
 
 	// Disable heartbeats for ProtocolVersion2 if we are using app-level pings.
-	if s.config.AppLevelPingInterval >= 0 {
+	if s.config.PingPongConfig.PingInterval >= 0 {
 		options.HeartbeatDelay = 0
 	}
 	s.handlerV2 = sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV2)
@@ -188,18 +178,7 @@ func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.
 	)
 
 	if protoVersion > ProtocolVersion1 {
-		pingInterval = s.config.AppLevelPingInterval
-		if pingInterval < 0 {
-			pingInterval = 0
-		} else if pingInterval == 0 {
-			pingInterval = 25 * time.Second
-		}
-		pongTimeout = s.config.AppLevelPongTimeout
-		if pongTimeout < 0 {
-			pongTimeout = 0
-		} else if pongTimeout == 0 {
-			pongTimeout = pingInterval / 3
-		}
+		pingInterval, pongTimeout = getPingPongPeriodValues(s.config.PingPongConfig)
 	}
 
 	// Separate goroutine for better GC of caller's data.
