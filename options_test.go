@@ -33,6 +33,7 @@ func TestSubscribeOptions(t *testing.T) {
 		WithChannelInfo([]byte(`test`)),
 		WithSubscribeSession("session"),
 		WithSubscribeClient("test"),
+		WithSubscribeSource(4),
 	}
 	opts := &SubscribeOptions{}
 	for _, opt := range subscribeOpts {
@@ -47,6 +48,7 @@ func TestSubscribeOptions(t *testing.T) {
 	require.Equal(t, []byte(`test`), opts.ChannelInfo)
 	require.Equal(t, "test", opts.clientID)
 	require.Equal(t, "session", opts.sessionID)
+	require.Equal(t, uint8(4), opts.Source)
 }
 
 func TestWithDisconnect(t *testing.T) {
