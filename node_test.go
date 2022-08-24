@@ -797,7 +797,7 @@ func TestNode_handleControl(t *testing.T) {
 		require.NoError(t, err)
 
 		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
+		require.Error(t, err)
 		err = n.handleControl(cmdBytes)
 		require.NoError(t, err)
 		require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))

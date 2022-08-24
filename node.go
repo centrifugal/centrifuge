@@ -670,7 +670,7 @@ func (n *Node) handleControl(data []byte) error {
 		if cmd.RecoverSince != nil {
 			recoverSince = &StreamPosition{Offset: cmd.RecoverSince.Offset, Epoch: cmd.RecoverSince.Epoch}
 		}
-		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithEmitPresence(cmd.EmitPresence), WithEmitJoinLeave(cmd.EmitJoinLeave), WithPushJoinLeave(cmd.PushJoinLeave), WithPositioning(cmd.Position), WithRecovery(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince))
+		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithEmitPresence(cmd.EmitPresence), WithEmitJoinLeave(cmd.EmitJoinLeave), WithPushJoinLeave(cmd.PushJoinLeave), WithPositioning(cmd.Position), WithRecovery(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince), WithSubscribeSource(uint8(cmd.Source)))
 	case controlpb.Command_DISCONNECT:
 		cmd, err := n.controlDecoder.DecodeDisconnect(params)
 		if err != nil {
@@ -926,6 +926,7 @@ func (n *Node) pubSubscribe(user string, ch string, opts SubscribeOptions) error
 		Client:        opts.clientID,
 		Session:       opts.sessionID,
 		Data:          opts.Data,
+		Source:        uint32(opts.Source),
 	}
 	if opts.RecoverSince != nil {
 		subscribe.RecoverSince = &controlpb.StreamPosition{
@@ -1445,16 +1446,16 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 			r.nodes[info.Uid] = info
 		} else {
 			r.nodes[info.Uid] = &controlpb.Node{
-				Uid: info.Uid,
-				Name: info.Name,
-				Version: info.Version,
-				NumClients: info.NumClients,
-				NumUsers: info.NumUsers,
+				Uid:         info.Uid,
+				Name:        info.Name,
+				Version:     info.Version,
+				NumClients:  info.NumClients,
+				NumUsers:    info.NumUsers,
 				NumChannels: info.NumChannels,
-				Uptime: info.Uptime,
-				Data: info.Data,
-				NumSubs: info.NumSubs,
-				Metrics: node.Metrics,
+				Uptime:      info.Uptime,
+				Data:        info.Data,
+				NumSubs:     info.NumSubs,
+				Metrics:     node.Metrics,
 			}
 		}
 	} else {

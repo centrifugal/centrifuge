@@ -67,6 +67,9 @@ type SubscribeOptions struct {
 	clientID string
 	// sessionID to subscribe.
 	sessionID string
+	// Source is a way to mark the source of Subscription - i.e. where it comes from. May be useful
+	// for inspection of a connection during its lifetime.
+	Source uint8
 }
 
 // SubscribeOption is a type to represent various Subscribe options.
@@ -148,6 +151,13 @@ func WithSubscribeData(data []byte) SubscribeOption {
 func WithRecoverSince(since *StreamPosition) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.RecoverSince = since
+	}
+}
+
+// WithSubscribeSource allows setting SubscribeOptions.Source.
+func WithSubscribeSource(source uint8) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.Source = source
 	}
 }
 
