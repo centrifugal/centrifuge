@@ -39,14 +39,6 @@ const (
 	redisDataBatchLimit = 64
 )
 
-type redisLogger struct{}
-
-func (redisLogger) Printf(ctx context.Context, format string, v ...interface{}) {}
-
-func init() {
-	redis.SetLogger(redisLogger{})
-}
-
 type RedisShard struct {
 	config           RedisShardConfig
 	client           redis.UniversalClient
