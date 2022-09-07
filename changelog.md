@@ -1,9 +1,9 @@
 v0.26.0
 =======
 
-In this release we are finishing up a migration to client protocol v2: experimental marks removed, ping/pong configuration standardized.
+In this release we are finishing up a migration to client protocol v2: experimental marks removed, ping/pong configuration standardized. Most probably this is a last minor release that supports Go 1.17.
 
-* Standardize a way to configure server-to-client ping/pong using `PingPongConfig` struct
+* Standardize a way to configure server-to-client ping/pong using `PingPongConfig` struct - [#250](https://github.com/centrifugal/centrifuge/pull/250)
 * Add possibility to set subscription Source, which may be returned later when calling `Client.ChannelsWithContext` method - [#249](https://github.com/centrifugal/centrifuge/pull/249)
 * Refactor Redis Engine to avoid leaking connection in tests (and possibly in production in case of unstable network between application and Redis). See [#237](https://github.com/centrifugal/centrifuge/pull/237)
 * Add `nodeRegistry.size()` to improve nodes registry performance a bit [#236](https://github.com/centrifugal/centrifuge/pull/236)
