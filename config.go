@@ -93,15 +93,14 @@ const (
 )
 
 // PingPongConfig allows configuring application level ping-pong behavior.
+// Note that in current implementation PingPongConfig.PingInterval must be greater than PingPongConfig.PongTimeout.
 type PingPongConfig struct {
 	// PingInterval tells how often to issue server-to-client pings.
-	// For zero value 25 secs will be used.
-	// To disable sending app-level pings use -1.
+	// For zero value 25 secs will be used. To disable sending app-level pings use -1.
 	PingInterval time.Duration
 	// PongTimeout sets time for pong check after issuing a ping.
-	// PongTimeout must be less than PingInterval.
-	// For zero value PingInterval / 3 will be used.
-	// To disable pong checks use -1.
+	// For zero value 10 seconds will be used. To disable pong checks use -1.
+	// PongTimeout must be less than PingInterval in current implementation.
 	PongTimeout time.Duration
 }
 
@@ -116,7 +115,7 @@ func getPingPongPeriodValues(config PingPongConfig) (time.Duration, time.Duratio
 	if pongTimeout < 0 {
 		pongTimeout = 0
 	} else if pongTimeout == 0 {
-		pongTimeout = pingInterval / 3
+		pongTimeout = 10 * time.Second
 	}
 	return pingInterval, pongTimeout
 }

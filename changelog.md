@@ -1,3 +1,51 @@
+v0.26.0
+=======
+
+In this release we are finishing up a migration to client protocol v2: experimental marks removed, ping/pong configuration standardized.
+
+* Standardize a way to configure server-to-client ping/pong using `PingPongConfig` struct
+* Add possibility to set subscription Source, which may be returned later when calling `Client.ChannelsWithContext` method - [#249](https://github.com/centrifugal/centrifuge/pull/249)
+* Refactor Redis Engine to avoid leaking connection in tests (and possibly in production in case of unstable network between application and Redis). See [#237](https://github.com/centrifugal/centrifuge/pull/237)
+* Add `nodeRegistry.size()` to improve nodes registry performance a bit [#236](https://github.com/centrifugal/centrifuge/pull/236)
+* Fix some data races in tests [#240](https://github.com/centrifugal/centrifuge/pull/240) and avoid blinking tests [#241](https://github.com/centrifugal/centrifuge/pull/241)
+* Add Redis Cluster benchmarks [#238](https://github.com/centrifugal/centrifuge/pull/238)
+
+```
+gorelease -base v0.25.0 -version v0.26.0
+# github.com/centrifugal/centrifuge
+## incompatible changes
+HTTPStreamConfig.AppLevelPingInterval: removed
+HTTPStreamConfig.AppLevelPongTimeout: removed
+SSEConfig.AppLevelPingInterval: removed
+SSEConfig.AppLevelPongTimeout: removed
+SockjsConfig.AppLevelPingInterval: removed
+SockjsConfig.AppLevelPongTimeout: removed
+WebsocketConfig.AppLevelPingInterval: removed
+WebsocketConfig.AppLevelPongTimeout: removed
+## compatible changes
+(*Client).ChannelsWithContext: added
+(*RedisBroker).Close: added
+(*RedisPresenceManager).Close: added
+(*RedisShard).Close: added
+ChannelContext: added
+HTTPStreamConfig.PingInterval: added
+HTTPStreamConfig.PingPongConfig: added
+HTTPStreamConfig.PongTimeout: added
+PingPongConfig: added
+SSEConfig.PingInterval: added
+SSEConfig.PingPongConfig: added
+SSEConfig.PongTimeout: added
+SockjsConfig.PingInterval: added
+SockjsConfig.PingPongConfig: added
+SockjsConfig.PongTimeout: added
+SubscribeOptions.Source: added
+WebsocketConfig.PingPongConfig: added
+WithSubscribeSource: added
+
+# summary
+v0.26.0 is a valid semantic version for this release.
+```
+
 v0.25.0
 =======
 
