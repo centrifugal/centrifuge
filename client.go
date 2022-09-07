@@ -802,7 +802,22 @@ func (c *Client) Transport() TransportInfo {
 }
 
 // Channels returns a slice of channels client connection currently subscribed to.
-func (c *Client) Channels() map[string]ChannelContext {
+func (c *Client) Channels() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	channels := make([]string, 0, len(c.channels))
+	for ch, ctx := range c.channels {
+		if !channelHasFlag(ctx.flags, flagSubscribed) {
+			continue
+		}
+		channels = append(channels, ch)
+	}
+	return channels
+}
+
+// ChannelsWithContext returns a map of channels client connection currently subscribed to
+// with a ChannelContext.
+func (c *Client) ChannelsWithContext() map[string]ChannelContext {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	channels := make(map[string]ChannelContext, len(c.channels))

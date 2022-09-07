@@ -478,6 +478,7 @@ func TestClientSubscribe(t *testing.T) {
 	require.False(t, res.Recovered)
 	require.Empty(t, res.Publications)
 	require.Equal(t, 1, len(client.Channels()))
+	require.Equal(t, 1, len(client.ChannelsWithContext()))
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
