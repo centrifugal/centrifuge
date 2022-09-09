@@ -1,22 +1,26 @@
 package centrifuge
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func testMemoryPresenceManager() *MemoryPresenceManager {
+func testMemoryPresenceManager(t testing.TB) *MemoryPresenceManager {
 	n, _ := New(Config{
 		LogLevel:   LogLevelDebug,
 		LogHandler: func(entry LogEntry) {},
 	})
+	require.NoError(t, n.Run())
 	m, _ := NewMemoryPresenceManager(n, MemoryPresenceManagerConfig{})
 	return m
 }
 
 func TestNewMemoryPresenceManager_RemovePresence(t *testing.T) {
-	m := testMemoryPresenceManager()
+	m := testMemoryPresenceManager(t)
+	defer func() { _ = m.node.Shutdown(context.Background()) }()
+
 	require.NotEqual(t, nil, m.presenceHub)
 	require.NoError(t, m.AddPresence("channel", "uid", &ClientInfo{}))
 	p, err := m.Presence("channel")
@@ -81,7 +85,9 @@ func TestMemoryPresenceHub(t *testing.T) {
 }
 
 func BenchmarkMemoryAddPresence_OneChannel(b *testing.B) {
-	e := testMemoryPresenceManager()
+	e := testMemoryPresenceManager(b)
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		err := e.AddPresence("channel", "uid", &ClientInfo{})
@@ -92,7 +98,9 @@ func BenchmarkMemoryAddPresence_OneChannel(b *testing.B) {
 }
 
 func BenchmarkMemoryAddPresence_OneChannel_Parallel(b *testing.B) {
-	e := testMemoryPresenceManager()
+	e := testMemoryPresenceManager(b)
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -105,7 +113,9 @@ func BenchmarkMemoryAddPresence_OneChannel_Parallel(b *testing.B) {
 }
 
 func BenchmarkMemoryPresence_OneChannel(b *testing.B) {
-	e := testMemoryPresenceManager()
+	e := testMemoryPresenceManager(b)
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	_ = e.AddPresence("channel", "uid", &ClientInfo{})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -117,7 +127,9 @@ func BenchmarkMemoryPresence_OneChannel(b *testing.B) {
 }
 
 func BenchmarkMemoryPresence_OneChannel_Parallel(b *testing.B) {
-	e := testMemoryPresenceManager()
+	e := testMemoryPresenceManager(b)
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	_ = e.AddPresence("channel", "uid", &ClientInfo{})
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

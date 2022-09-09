@@ -34,6 +34,7 @@ func testPublicationData() []byte {
 
 func TestMemoryBrokerPublishHistory(t *testing.T) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
 	require.NotEqual(t, nil, e.historyHub)
 
@@ -90,6 +91,7 @@ func TestMemoryBrokerPublishHistory(t *testing.T) {
 
 func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
 	require.NoError(t, e.Subscribe("channel"))
 	require.NoError(t, e.Unsubscribe("channel"))
 }
@@ -201,6 +203,7 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 
 func TestMemoryBrokerRecover(t *testing.T) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
 	for i := 0; i < 5; i++ {
 		_, err := e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
@@ -253,6 +256,8 @@ func TestMemoryBrokerRecover(t *testing.T) {
 
 func BenchmarkMemoryPublish_1Ch(b *testing.B) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	rawData := protocol.Raw(`{"bench": true}`)
 	b.SetParallelism(128)
 	b.ResetTimer()
@@ -268,6 +273,8 @@ func BenchmarkMemoryPublish_1Ch(b *testing.B) {
 
 func BenchmarkMemoryPublish_History_1Ch(b *testing.B) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	rawData := protocol.Raw(`{"bench": true}`)
 	chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 60 * time.Second}
 	b.SetParallelism(128)
@@ -288,6 +295,8 @@ func BenchmarkMemoryPublish_History_1Ch(b *testing.B) {
 
 func BenchmarkMemoryHistory_1Ch(b *testing.B) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	rawData := protocol.Raw("{}")
 	for i := 0; i < 4; i++ {
 		_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
@@ -308,6 +317,8 @@ func BenchmarkMemoryHistory_1Ch(b *testing.B) {
 
 func BenchmarkMemoryRecover_1Ch(b *testing.B) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	rawData := protocol.Raw("{}")
 	numMessages := 1000
 	numMissing := 5
@@ -521,6 +532,8 @@ outer:
 
 func TestMemoryBrokerHistoryIteration(t *testing.T) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(t, e.node)
 	it.testHistoryIteration(t, e.node, startPosition)
@@ -528,6 +541,8 @@ func TestMemoryBrokerHistoryIteration(t *testing.T) {
 
 func TestMemoryBrokerHistoryIterationReverse(t *testing.T) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(t, e.node)
 	it.testHistoryIterationReverse(t, e.node, startPosition)
@@ -535,6 +550,8 @@ func TestMemoryBrokerHistoryIterationReverse(t *testing.T) {
 
 func BenchmarkMemoryBrokerHistoryIteration(b *testing.B) {
 	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
 	it := historyIterationTest{10000, 100}
 	startPosition := it.prepareHistoryIteration(b, e.node)
 	b.ResetTimer()
