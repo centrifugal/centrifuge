@@ -468,7 +468,7 @@ func (n *Node) Survey(ctx context.Context, op string, data []byte, toNodeID stri
 	incActionCount("survey")
 	started := time.Now()
 	defer func() {
-		surveyDurationSummary.WithLabelValues(op).Observe(time.Since(started).Seconds())
+		observeSurveyDuration(op, time.Since(started))
 	}()
 
 	if _, ok := ctx.Deadline(); !ok {

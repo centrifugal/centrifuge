@@ -317,6 +317,12 @@ func incActionCount(action string) {
 	}
 }
 
+func observeSurveyDuration(op string, d time.Duration) {
+	registryMu.RLock()
+	surveyDurationSummary.WithLabelValues(op).Observe(d.Seconds())
+	registryMu.RUnlock()
+}
+
 func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string) error {
 	registryMu.Lock()
 	defer registryMu.Unlock()
