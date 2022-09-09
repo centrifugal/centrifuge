@@ -547,17 +547,25 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 		protobufPushV1 []byte
 		jsonPushV2     []byte
 		protobufPushV2 []byte
+
+		jsonErr error
 	)
 
 	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
+			if jsonErr != nil {
+				go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+				continue
+			}
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
 				if c.transport.Unidirectional() {
 					if jsonPushV1 == nil {
 						pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 						jsonPushV1 = pushBytes
 					}
@@ -566,14 +574,18 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 					if jsonReplyV1 == nil {
 						pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 						reply := &protocol.Reply{
 							Result: pushBytes,
 						}
 						jsonReplyV1, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writePublication(channel, pub, jsonReplyV1, sp)
@@ -588,7 +600,9 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						var err error
 						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writePublication(channel, pub, jsonPushV2, sp)
@@ -601,7 +615,9 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						var err error
 						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writePublication(channel, pub, jsonReplyV2, sp)
@@ -688,17 +704,25 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 		protobufPushV1 []byte
 		jsonPushV2     []byte
 		protobufPushV2 []byte
+
+		jsonErr error
 	)
 
 	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
+			if jsonErr != nil {
+				go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+				continue
+			}
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
 				if c.transport.Unidirectional() {
 					if jsonPushV1 == nil {
 						pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 						jsonPushV1 = pushBytes
 					}
@@ -707,14 +731,18 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 					if jsonReplyV1 == nil {
 						pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 						reply := &protocol.Reply{
 							Result: pushBytes,
 						}
 						jsonReplyV1, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writeJoin(channel, jsonReplyV1)
@@ -729,7 +757,9 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						var err error
 						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writeJoin(channel, jsonPushV2)
@@ -742,7 +772,9 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						var err error
 						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
-							return err
+							jsonErr = err
+							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writeJoin(channel, jsonReplyV2)
@@ -829,11 +861,17 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 		protobufPushV1 []byte
 		jsonPushV2     []byte
 		protobufPushV2 []byte
+
+		jsonErr error
 	)
 
 	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
+			if jsonErr != nil {
+				go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+				continue
+			}
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
 				if c.transport.Unidirectional() {
 					pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)

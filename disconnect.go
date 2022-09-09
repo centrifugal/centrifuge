@@ -211,4 +211,10 @@ var (
 		Code:   3505,
 		Reason: "channel limit",
 	}
+	// DisconnectInsufficientProtocol can be issued when client connection format can not
+	// handle incoming payloads.
+	DisconnectInsufficientProtocol = Disconnect{
+		Code:   3506,
+		Reason: "insufficient protocol",
+	}
 )
