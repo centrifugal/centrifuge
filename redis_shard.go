@@ -295,7 +295,6 @@ func (s *RedisShard) getDataResponse(r *dataRequest, closeCh chan struct{}) *dat
 	return r.result()
 }
 
-
 func (s *RedisShard) runDataPipeline() error {
 	s.scriptsMu.RLock()
 	scripts := make([]*redis.Script, len(s.scripts))
@@ -345,29 +344,17 @@ func (s *RedisShard) runDataPipeline() error {
 				_ = pipe.Do(context.Background(), dr.args...)
 			}
 		}
-		cmds, err := pipe.Exec(context.Background())
-		if err == redis.Nil {
-			err = nil
-		}
-		if err != nil {
-			for i := range drs {
-				drs[i].done(nil, err)
-			}
-			return fmt.Errorf("error executing data pipeline: %w", err)
-		}
+		cmds, _ := pipe.Exec(context.Background())
 
 		var noScriptError bool
 		for i, cmd := range cmds {
 			reply, err := cmd.(*redis.Cmd).Result()
-			if err == redis.Nil {
-				err = nil
-			}
 			if err != nil {
 				// Check for NOSCRIPT error. In normal circumstances this should never happen.
 				// The only possible situation is when Redis scripts were flushed. In this case
 				// we will return from this func and load publish script from scratch.
-				// Redigo does the same check but for single EVALSHA command: see
-				// https://github.com/garyburd/redigo/blob/master/redis/script.go#L64
+				// go-redis does the same check but for single EVALSHA command: see
+				// https://github.com/go-redis/redis/blob/master/script.go#L61
 				if e, ok := err.(redis.Error); ok && strings.HasPrefix(e.Error(), "NOSCRIPT ") {
 					noScriptError = true
 				}
@@ -427,7 +414,7 @@ func getOptions(s *RedisShard, conf RedisShardConfig) *redis.UniversalOptions {
 	poolSize := defaultRedisPoolSize
 	opt.PoolSize = poolSize
 	opt.MaxIdleConns = poolSize
-	opt.MaxRetryBackoff = 50*time.Millisecond
+	opt.MaxRetryBackoff = 50 * time.Millisecond
 
 	var readTimeout = DefaultRedisReadTimeout
 	if conf.ReadTimeout != 0 {

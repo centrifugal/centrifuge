@@ -1043,14 +1043,7 @@ func (b *RedisBroker) runPublishPipeline(s *RedisShard) {
 		for _, pr := range prs {
 			_ = pipe.Publish(context.Background(), string(pr.channel), pr.message)
 		}
-		cmds, err := pipe.Exec(context.Background())
-		if err != nil {
-			for i := range prs {
-				prs[i].done(err)
-			}
-			b.node.Log(NewLogEntry(LogLevelError, "error flushing publish pipeline", map[string]interface{}{"error": err.Error()}))
-			return
-		}
+		cmds, _ := pipe.Exec(context.Background())
 		for i := range prs {
 			prs[i].done(cmds[i].Err())
 		}

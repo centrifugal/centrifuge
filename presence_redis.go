@@ -161,6 +161,7 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 	setKey := m.presenceSetKey(s, ch)
 	dr := s.newDataRequest(m.addPresenceScript, []string{string(setKey), string(hashKey)}, []interface{}{expire, expireAt, uid, infoBytes})
 	resp := s.getDataResponse(dr, m.closeCh)
+	// redis.Nil is expected, since addPresenceScript doesn't have a return value.
 	if resp.err == redis.Nil {
 		return nil
 	}
@@ -177,6 +178,7 @@ func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, uid stri
 	setKey := m.presenceSetKey(s, ch)
 	dr := s.newDataRequest(m.remPresenceScript, []string{string(setKey), string(hashKey)}, []interface{}{uid})
 	resp := s.getDataResponse(dr, m.closeCh)
+	// redis.Nil is expected, since remPresenceScript doesn't have a return value.
 	if resp.err == redis.Nil {
 		return nil
 	}
@@ -195,7 +197,7 @@ func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*C
 	now := int(time.Now().Unix())
 	dr := s.newDataRequest(m.presenceScript, []string{string(setKey), string(hashKey)}, []interface{}{now})
 	resp := s.getDataResponse(dr, m.closeCh)
-	if resp.err != nil && resp.err != redis.Nil {
+	if resp.err != nil {
 		return nil, resp.err
 	}
 	return mapStringClientInfo(resp.reply)
