@@ -246,6 +246,7 @@ func TestNode_Shutdown(t *testing.T) {
 func TestNode_shutdownCmd(t *testing.T) {
 	// Testing that shutdownCmd removes node from nodes registry.
 	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
 	require.NoError(t, n.shutdownCmd(n.ID()))
 	require.True(t, len(n.nodes.list()) == 0)
 	require.True(t, n.nodes.size() == 0)
@@ -347,7 +348,7 @@ func TestNode_RunPubControlError(t *testing.T) {
 
 func TestNode_SetPresenceManager(t *testing.T) {
 	n, _ := New(Config{})
-	presenceManager := testMemoryPresenceManager()
+	presenceManager := testMemoryPresenceManager(t)
 	n.SetPresenceManager(presenceManager)
 	require.Equal(t, n.presenceManager, presenceManager)
 }
