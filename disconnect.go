@@ -211,10 +211,12 @@ var (
 		Code:   3505,
 		Reason: "channel limit",
 	}
-	// DisconnectInsufficientProtocol can be issued when client connection format can not
-	// handle incoming payloads.
-	DisconnectInsufficientProtocol = Disconnect{
+	// DisconnectInappropriateProtocol can be issued when client connection format can not
+	// handle incoming data. For example, this happens when JSON-based clients receive
+	// binary data in a channel. This is usually an indicator of programmer error, JSON
+	// clients can not handle binary.
+	DisconnectInappropriateProtocol = Disconnect{
 		Code:   3506,
-		Reason: "insufficient protocol",
+		Reason: "inappropriate protocol",
 	}
 )

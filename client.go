@@ -1245,6 +1245,7 @@ func (c *Client) writeEncodedPush(rep *protocol.Reply, rw *replyWriter) {
 		data, err = encoder.Encode(rep.Push)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect push", map[string]interface{}{"push": fmt.Sprintf("%v", rep.Push), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+			go func() { _ = c.close(DisconnectInappropriateProtocol) }()
 			return
 		}
 	}
@@ -1272,6 +1273,7 @@ func (c *Client) writeEncodedCommandReply(method protocol.Command_MethodType, cm
 	replyData, err := replyEncoder.Encode(rep)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error encoding reply", map[string]interface{}{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+		go func() { _ = c.close(DisconnectInappropriateProtocol) }()
 		return
 	}
 	disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})

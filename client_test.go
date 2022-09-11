@@ -31,6 +31,13 @@ func newTestConnectedClient(t *testing.T, n *Node, userID string) *Client {
 	return client
 }
 
+func newTestConnectedClientV2(t *testing.T, n *Node, userID string) *Client {
+	client := newTestClientV2(t, n, userID)
+	connectClientV2(t, client)
+	require.True(t, len(n.hub.UserConnections(userID)) > 0)
+	return client
+}
+
 func newTestConnectedClientWithTransport(t *testing.T, ctx context.Context, n *Node, transport Transport, userID string) *Client {
 	client := newTestClientCustomTransport(t, ctx, n, transport, userID)
 	if transport.ProtocolVersion() == ProtocolVersion1 {
@@ -45,6 +52,14 @@ func newTestConnectedClientWithTransport(t *testing.T, ctx context.Context, n *N
 func newTestSubscribedClient(t *testing.T, n *Node, userID, chanID string) *Client {
 	client := newTestConnectedClient(t, n, userID)
 	subscribeClient(t, client, chanID)
+	require.True(t, n.hub.NumSubscribers(chanID) > 0)
+	require.Contains(t, client.channels, chanID)
+	return client
+}
+
+func newTestSubscribedClientV2(t *testing.T, n *Node, userID, chanID string) *Client {
+	client := newTestConnectedClientV2(t, n, userID)
+	subscribeClientV2(t, client, chanID)
 	require.True(t, n.hub.NumSubscribers(chanID) > 0)
 	require.Contains(t, client.channels, chanID)
 	return client

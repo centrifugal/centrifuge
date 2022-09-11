@@ -19,13 +19,13 @@ type Hub struct {
 }
 
 // newHub initializes Hub.
-func newHub() *Hub {
+func newHub(logger *logger) *Hub {
 	h := &Hub{
 		sessions: map[string]*Client{},
 	}
 	for i := 0; i < numHubShards; i++ {
 		h.connShards[i] = newConnShard()
-		h.subShards[i] = newSubShard()
+		h.subShards[i] = newSubShard(logger)
 	}
 	return h
 }
@@ -473,12 +473,14 @@ func (h *connShard) NumUsers() int {
 type subShard struct {
 	mu sync.RWMutex
 	// registry to hold active subscriptions of clients to channels.
-	subs map[string]map[string]*Client
+	subs   map[string]map[string]*Client
+	logger *logger
 }
 
-func newSubShard() *subShard {
+func newSubShard(logger *logger) *subShard {
 	return &subShard{
-		subs: make(map[string]map[string]*Client),
+		subs:   make(map[string]map[string]*Client),
+		logger: logger,
 	}
 }
 
@@ -527,6 +529,12 @@ func (h *subShard) removeSub(ch string, c *Client) (bool, error) {
 	return false, nil
 }
 
+type encodeError struct {
+	client string
+	user   string
+	error  error
+}
+
 // broadcastPublication sends message to all clients subscribed on channel.
 func (h *subShard) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
 	h.mu.RLock()
@@ -548,14 +556,14 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 		jsonPushV2     []byte
 		protobufPushV2 []byte
 
-		jsonErr error
+		jsonEncodeErr *encodeError
 	)
 
 	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
-			if jsonErr != nil {
-				go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+			if jsonEncodeErr != nil {
+				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				continue
 			}
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
@@ -563,8 +571,8 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 					if jsonPushV1 == nil {
 						pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
 						jsonPushV1 = pushBytes
@@ -574,17 +582,15 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 					if jsonReplyV1 == nil {
 						pushBytes, err := protocol.EncodePublicationPush(protoType, channel, pub)
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
-						reply := &protocol.Reply{
-							Result: pushBytes,
-						}
+						reply := &protocol.Reply{Result: pushBytes}
 						jsonReplyV1, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
 					}
@@ -593,30 +599,24 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 			} else {
 				if c.transport.Unidirectional() {
 					if jsonPushV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Pub:     pub,
-						}
+						push := &protocol.Push{Channel: channel, Pub: pub}
 						var err error
 						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
 					}
 					_ = c.writePublication(channel, pub, jsonPushV2, sp)
 				} else {
 					if jsonReplyV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Pub:     pub,
-						}
+						push := &protocol.Push{Channel: channel, Pub: pub}
 						var err error
 						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
 					}
@@ -640,9 +640,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						if err != nil {
 							return err
 						}
-						reply := &protocol.Reply{
-							Result: pushBytes,
-						}
+						reply := &protocol.Reply{Result: pushBytes}
 						protobufReplyV1, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
@@ -653,10 +651,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 			} else {
 				if c.transport.Unidirectional() {
 					if protobufPushV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Pub:     pub,
-						}
+						push := &protocol.Push{Channel: channel, Pub: pub}
 						var err error
 						protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 						if err != nil {
@@ -666,10 +661,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 					_ = c.writePublication(channel, pub, protobufPushV2, sp)
 				} else {
 					if protobufReplyV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Pub:     pub,
-						}
+						push := &protocol.Push{Channel: channel, Pub: pub}
 						var err error
 						protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
@@ -680,6 +672,15 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 				}
 			}
 		}
+	}
+	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
+		// Log that we had clients with inappropriate protocol, and point to the first such client.
+		h.logger.log(NewLogEntry(LogLevelWarn, "inappropriate protocol publication", map[string]interface{}{
+			"channel": channel,
+			"user":    jsonEncodeErr.user,
+			"client":  jsonEncodeErr.client,
+			"error":   jsonEncodeErr.error,
+		}))
 	}
 	return nil
 }
@@ -705,14 +706,14 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 		jsonPushV2     []byte
 		protobufPushV2 []byte
 
-		jsonErr error
+		jsonEncodeErr *encodeError
 	)
 
 	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
-			if jsonErr != nil {
-				go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+			if jsonEncodeErr != nil {
+				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				continue
 			}
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
@@ -720,8 +721,8 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 					if jsonPushV1 == nil {
 						pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
 						jsonPushV1 = pushBytes
@@ -731,17 +732,15 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 					if jsonReplyV1 == nil {
 						pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
-						reply := &protocol.Reply{
-							Result: pushBytes,
-						}
+						reply := &protocol.Reply{Result: pushBytes}
 						jsonReplyV1, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
 					}
@@ -750,30 +749,24 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 			} else {
 				if c.transport.Unidirectional() {
 					if jsonPushV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Join:    join,
-						}
+						push := &protocol.Push{Channel: channel, Join: join}
 						var err error
 						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
 					}
 					_ = c.writeJoin(channel, jsonPushV2)
 				} else {
 					if jsonReplyV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Join:    join,
-						}
+						push := &protocol.Push{Channel: channel, Join: join}
 						var err error
 						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
-							jsonErr = err
-							go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 							continue
 						}
 					}
@@ -797,9 +790,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						if err != nil {
 							return err
 						}
-						reply := &protocol.Reply{
-							Result: pushBytes,
-						}
+						reply := &protocol.Reply{Result: pushBytes}
 						protobufReplyV1, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
@@ -810,10 +801,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 			} else {
 				if c.transport.Unidirectional() {
 					if protobufPushV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Join:    join,
-						}
+						push := &protocol.Push{Channel: channel, Join: join}
 						var err error
 						protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 						if err != nil {
@@ -823,10 +811,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 					_ = c.writeJoin(channel, protobufPushV2)
 				} else {
 					if protobufReplyV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Join:    join,
-						}
+						push := &protocol.Push{Channel: channel, Join: join}
 						var err error
 						protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
@@ -837,6 +822,15 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 				}
 			}
 		}
+	}
+	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
+		// Log that we had clients with inappropriate protocol, and point to the first such client.
+		h.logger.log(NewLogEntry(LogLevelWarn, "inappropriate protocol join", map[string]interface{}{
+			"channel": channel,
+			"user":    jsonEncodeErr.user,
+			"client":  jsonEncodeErr.client,
+			"error":   jsonEncodeErr.error,
+		}))
 	}
 	return nil
 }
@@ -862,21 +856,23 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 		jsonPushV2     []byte
 		protobufPushV2 []byte
 
-		jsonErr error
+		jsonEncodeErr *encodeError
 	)
 
 	for _, c := range channelSubscribers {
 		protoType := c.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
-			if jsonErr != nil {
-				go func(c *Client) { c.Disconnect(DisconnectInsufficientProtocol) }(c)
+			if jsonEncodeErr != nil {
+				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				continue
 			}
 			if c.transport.ProtocolVersion() == ProtocolVersion1 {
 				if c.transport.Unidirectional() {
 					pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
 					if err != nil {
-						return err
+						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+						continue
 					}
 					if jsonPushV1 == nil {
 						jsonPushV1 = pushBytes
@@ -886,14 +882,16 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 					if jsonReplyV1 == nil {
 						pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
 						if err != nil {
-							return err
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+							continue
 						}
-						reply := &protocol.Reply{
-							Result: pushBytes,
-						}
+						reply := &protocol.Reply{Result: pushBytes}
 						jsonReplyV1, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
 						if err != nil {
-							return err
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writeLeave(channel, jsonReplyV1)
@@ -901,27 +899,25 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 			} else {
 				if c.transport.Unidirectional() {
 					if jsonPushV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Leave:   leave,
-						}
+						push := &protocol.Push{Channel: channel, Leave: leave}
 						var err error
 						jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
 						if err != nil {
-							return err
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writeLeave(channel, jsonPushV2)
 				} else {
 					if jsonReplyV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Leave:   leave,
-						}
+						push := &protocol.Push{Channel: channel, Leave: leave}
 						var err error
 						jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
-							return err
+							jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
+							go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+							continue
 						}
 					}
 					_ = c.writeLeave(channel, jsonReplyV2)
@@ -944,9 +940,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						if err != nil {
 							return err
 						}
-						reply := &protocol.Reply{
-							Result: pushBytes,
-						}
+						reply := &protocol.Reply{Result: pushBytes}
 						protobufReplyV1, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
 						if err != nil {
 							return err
@@ -957,10 +951,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 			} else {
 				if c.transport.Unidirectional() {
 					if protobufPushV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Leave:   leave,
-						}
+						push := &protocol.Push{Channel: channel, Leave: leave}
 						var err error
 						protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 						if err != nil {
@@ -970,10 +961,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 					_ = c.writeLeave(channel, protobufPushV2)
 				} else {
 					if protobufReplyV2 == nil {
-						push := &protocol.Push{
-							Channel: channel,
-							Leave:   leave,
-						}
+						push := &protocol.Push{Channel: channel, Leave: leave}
 						var err error
 						protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 						if err != nil {
@@ -984,6 +972,15 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 				}
 			}
 		}
+	}
+	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
+		// Log that we had clients with inappropriate protocol, and point to the first such client.
+		h.logger.log(NewLogEntry(LogLevelWarn, "inappropriate protocol leave", map[string]interface{}{
+			"channel": channel,
+			"user":    jsonEncodeErr.user,
+			"client":  jsonEncodeErr.client,
+			"error":   jsonEncodeErr.error,
+		}))
 	}
 	return nil
 }

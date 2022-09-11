@@ -137,14 +137,19 @@ func New(c Config) (*Node, error) {
 		c.Name = hostname
 	}
 
+	var lg *logger
+	if c.LogHandler != nil {
+		lg = newLogger(c.LogLevel, c.LogHandler)
+	}
+
 	n := &Node{
 		uid:            uid,
 		nodes:          newNodeRegistry(uid),
 		config:         c,
-		hub:            newHub(),
+		hub:            newHub(lg),
 		startedAt:      time.Now().Unix(),
 		shutdownCh:     make(chan struct{}),
-		logger:         nil,
+		logger:         lg,
 		controlEncoder: controlproto.NewProtobufEncoder(),
 		controlDecoder: controlproto.NewProtobufDecoder(),
 		clientEvents:   &eventHub{},
@@ -153,12 +158,7 @@ func New(c Config) (*Node, error) {
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
 	}
-
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
-
-	if c.LogHandler != nil {
-		n.logger = newLogger(c.LogLevel, c.LogHandler)
-	}
 
 	b, err := NewMemoryBroker(n, MemoryBrokerConfig{})
 	if err != nil {
