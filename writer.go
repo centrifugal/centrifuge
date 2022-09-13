@@ -122,6 +122,10 @@ func (w *writer) enqueue(item queue.Item) *Disconnect {
 	return nil
 }
 
+func (w *writer) size() int {
+	return w.messages.Size()
+}
+
 func (w *writer) close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

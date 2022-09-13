@@ -391,6 +391,11 @@ func (c *Client) Connect(req ConnectRequest) {
 	}
 }
 
+// QueueSize returns the current size in bytes of Client's message buffer.
+func (c *Client) QueueSize() int {
+	return c.messageWriter.size()
+}
+
 func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
 	disconnect := &protocol.Disconnect{
 		Code:   d.Code,

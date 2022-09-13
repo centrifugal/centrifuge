@@ -4085,3 +4085,10 @@ func TestClient_HandleCommandV2(t *testing.T) {
 	})
 	require.True(t, ok)
 }
+
+func TestClient_QueueSize(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	require.Zero(t, client.QueueSize()) // Always zero since no messages sent yet.
+}
