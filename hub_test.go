@@ -148,7 +148,7 @@ func (t *testTransport) Close(disconnect Disconnect) error {
 }
 
 func TestHub(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	c.user = "test"
@@ -610,10 +610,10 @@ func TestHubBroadcastLeave(t *testing.T) {
 }
 
 func TestHubShutdown(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	err := h.shutdown(context.Background())
 	require.NoError(t, err)
-	h = newHub()
+	h = newHub(nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	_ = h.add(c)
@@ -628,7 +628,7 @@ func TestHubShutdown(t *testing.T) {
 }
 
 func TestHubSubscriptions(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 
@@ -669,7 +669,7 @@ func TestHubSubscriptions(t *testing.T) {
 }
 
 func TestUserConnections(t *testing.T) {
-	h := newHub()
+	h := newHub(nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	_ = h.add(c)
@@ -824,4 +824,106 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestHubBroadcastInappropriateProtocol_Publication(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+
+	testFunc := func(client *Client) {
+		done := make(chan struct{})
+		client.eventHub.disconnectHandler = func(e DisconnectEvent) {
+			require.Equal(t, DisconnectInappropriateProtocol.Code, e.Disconnect.Code)
+			close(done)
+		}
+		err := n.hub.BroadcastPublication("test_channel", &Publication{
+			Data: []byte(`{111`),
+		}, StreamPosition{})
+		require.NoError(t, err)
+		waitWithTimeout(t, done)
+	}
+
+	t.Run("protocol_v1", func(t *testing.T) {
+		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		testFunc(client)
+	})
+
+	t.Run("protocol_v2", func(t *testing.T) {
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
+		testFunc(client)
+	})
+}
+
+func TestHubBroadcastInappropriateProtocol_Join(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+
+	testFunc := func(client *Client) {
+		done := make(chan struct{})
+		client.eventHub.disconnectHandler = func(e DisconnectEvent) {
+			require.Equal(t, DisconnectInappropriateProtocol.Code, e.Disconnect.Code)
+			close(done)
+		}
+		err := n.hub.broadcastJoin("test_channel", &ClientInfo{
+			ChanInfo: []byte(`{111`),
+		})
+		require.NoError(t, err)
+		waitWithTimeout(t, done)
+	}
+
+	t.Run("protocol_v1", func(t *testing.T) {
+		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		testFunc(client)
+	})
+
+	t.Run("protocol_v2", func(t *testing.T) {
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
+		testFunc(client)
+	})
+}
+
+func TestHubBroadcastInappropriateProtocol_Leave(t *testing.T) {
+	n := defaultNodeNoHandlers()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{}, nil)
+		})
+	})
+
+	testFunc := func(client *Client) {
+		done := make(chan struct{})
+		client.eventHub.disconnectHandler = func(e DisconnectEvent) {
+			require.Equal(t, DisconnectInappropriateProtocol.Code, e.Disconnect.Code)
+			close(done)
+		}
+		err := n.hub.broadcastLeave("test_channel", &ClientInfo{
+			ChanInfo: []byte(`{111`),
+		})
+		require.NoError(t, err)
+		waitWithTimeout(t, done)
+	}
+
+	t.Run("protocol_v1", func(t *testing.T) {
+		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		testFunc(client)
+	})
+
+	t.Run("protocol_v2", func(t *testing.T) {
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
+		testFunc(client)
+	})
 }
