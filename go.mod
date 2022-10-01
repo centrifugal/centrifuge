@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/FZambia/eagle v0.0.2
-	github.com/FZambia/sentinel v1.1.0
+	github.com/FZambia/sentinel v1.1.1
 	github.com/centrifugal/protocol v0.8.11
 	github.com/gomodule/redigo v1.8.9
 	github.com/google/uuid v1.3.0
