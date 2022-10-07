@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"context"
+
+	"github.com/centrifugal/protocol"
 )
 
 // ConnectEvent contains fields related to connecting event (when a server
@@ -373,3 +375,9 @@ type TransportWriteEvent struct {
 // false from a handler. The main purpose of this handler is not a message
 // filtering based on data content but rather tracing stuff.
 type TransportWriteHandler func(*Client, TransportWriteEvent) bool
+
+type CommandReadEvent struct {
+	Command *protocol.Command
+}
+
+type CommandReadHandler func(*Client, CommandReadEvent)

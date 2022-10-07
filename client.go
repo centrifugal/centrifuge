@@ -420,6 +420,13 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) 
 	if err != nil {
 		return err
 	}
+	if c.node.clientEvents.commandReadHandler != nil {
+		c.node.clientEvents.commandReadHandler(c, CommandReadEvent{
+			Command: &protocol.Command{
+				Connect: connectRequest,
+			},
+		})
+	}
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
 	return nil
@@ -1127,7 +1134,22 @@ func (c *Client) HandleCommand(cmd *protocol.Command) bool {
 	default:
 	}
 
+	var commandReadIssued bool
+	if c.node.clientEvents.commandReadHandler != nil {
+		// For authenticated clients we issue CommandReadEvent before processing
+		// the command. For non-authenticated – after processing - since this seems
+		// the only way to properly capture command in per-user tracing.
+		c.node.clientEvents.commandReadHandler(c, CommandReadEvent{Command: cmd})
+		commandReadIssued = true
+	}
+
 	disconnect := c.dispatchCommand(cmd)
+
+	if !commandReadIssued && c.node.clientEvents.commandReadHandler != nil {
+		// This is required to capture connect command for non-authenticated
+		// clients in per-user tracing.
+		c.node.clientEvents.commandReadHandler(c, CommandReadEvent{Command: cmd})
+	}
 
 	select {
 	case <-c.ctx.Done():

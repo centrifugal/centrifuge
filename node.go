@@ -1518,6 +1518,7 @@ type eventHub struct {
 	connectingHandler     ConnectingHandler
 	connectHandler        ConnectHandler
 	transportWriteHandler TransportWriteHandler
+	commandReadHandler    CommandReadHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1538,6 +1539,11 @@ func (n *Node) OnConnect(handler ConnectHandler) {
 // OnTransportWrite allows setting TransportWriteHandler. This should be done before Node.Run called.
 func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
 	n.clientEvents.transportWriteHandler = handler
+}
+
+// OnCommandRead allows setting CommandReadHandler. This should be done before Node.Run called.
+func (n *Node) OnCommandRead(handler CommandReadHandler) {
+	n.clientEvents.commandReadHandler = handler
 }
 
 type brokerEventHandler struct {
