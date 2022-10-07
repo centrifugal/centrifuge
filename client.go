@@ -415,18 +415,21 @@ func hasFlag(flags, flag uint64) bool {
 	return flags&flag != 0
 }
 
+func (c *Client) issueCommandReadEvent(cmd *protocol.Command) {
+	if c.node.clientEvents.commandReadHandler != nil {
+		c.node.clientEvents.commandReadHandler(c, CommandReadEvent{
+			Command: cmd,
+		})
+	}
+}
+
 func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) error {
 	_, err := c.connectCmd(connectRequest, nil, time.Time{}, true, nil)
 	if err != nil {
+		c.issueCommandReadEvent(&protocol.Command{Connect: connectRequest})
 		return err
 	}
-	if c.node.clientEvents.commandReadHandler != nil {
-		c.node.clientEvents.commandReadHandler(c, CommandReadEvent{
-			Command: &protocol.Command{
-				Connect: connectRequest,
-			},
-		})
-	}
+	c.issueCommandReadEvent(&protocol.Command{Connect: connectRequest})
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
 	return nil
@@ -1135,11 +1138,11 @@ func (c *Client) HandleCommand(cmd *protocol.Command) bool {
 	}
 
 	var commandReadIssued bool
-	if c.node.clientEvents.commandReadHandler != nil {
+	if c.authenticated && c.node.clientEvents.commandReadHandler != nil {
 		// For authenticated clients we issue CommandReadEvent before processing
-		// the command. For non-authenticated – after processing - since this seems
-		// the only way to properly capture command in per-user tracing.
-		c.node.clientEvents.commandReadHandler(c, CommandReadEvent{Command: cmd})
+		// the command. For non-authenticated – after processing - as this seems
+		// the only way to properly capture connect command in per-user tracing.
+		c.issueCommandReadEvent(cmd)
 		commandReadIssued = true
 	}
 
@@ -1148,7 +1151,7 @@ func (c *Client) HandleCommand(cmd *protocol.Command) bool {
 	if !commandReadIssued && c.node.clientEvents.commandReadHandler != nil {
 		// This is required to capture connect command for non-authenticated
 		// clients in per-user tracing.
-		c.node.clientEvents.commandReadHandler(c, CommandReadEvent{Command: cmd})
+		c.issueCommandReadEvent(cmd)
 	}
 
 	select {
