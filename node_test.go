@@ -1388,3 +1388,53 @@ func TestNode_OnTransportWriteSkip(t *testing.T) {
 	case <-time.After(time.Second):
 	}
 }
+
+func TestNode_OnCommandRead(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials: &Credentials{
+				UserID: "12",
+			},
+		}, nil
+	})
+
+	doneConnect := make(chan struct{})
+	doneSubscribe := make(chan struct{})
+
+	node.OnCommandRead(func(client *Client, event CommandReadEvent) {
+		if event.Command.Connect != nil && event.Command.Connect.Token == "123" {
+			close(doneConnect)
+		}
+		if event.Command.Subscribe != nil && event.Command.Subscribe.Channel == "channel" {
+			close(doneSubscribe)
+		}
+	})
+
+	client := newTestClientV2(t, node, "42")
+	client.HandleCommand(&protocol.Command{
+		Id: 1,
+		Connect: &protocol.ConnectRequest{
+			Token: "123",
+		},
+	})
+	select {
+	case <-doneConnect:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout connect")
+	}
+
+	client.HandleCommand(&protocol.Command{
+		Id: 2,
+		Subscribe: &protocol.SubscribeRequest{
+			Channel: "channel",
+		},
+	})
+	select {
+	case <-doneSubscribe:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout subscribe")
+	}
+}
