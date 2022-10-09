@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"context"
+
+	"github.com/centrifugal/protocol"
 )
 
 // ConnectEvent contains fields related to connecting event (when a server
@@ -373,3 +375,16 @@ type TransportWriteEvent struct {
 // false from a handler. The main purpose of this handler is not a message
 // filtering based on data content but rather tracing stuff.
 type TransportWriteHandler func(*Client, TransportWriteEvent) bool
+
+// CommandReadEvent contains protocol.Command processed by Client.
+type CommandReadEvent struct {
+	Command *protocol.Command
+}
+
+// CommandReadHandler allows setting a callback which will be called after
+// Client processed a protocol.Command. This exists mostly for real-time connection
+// tracing purposes. Theoretically CommandReadHandler may be called after the
+// corresponding Reply written to connection and TransportWriteHandler called. But
+// for tracing purposes this seems tolerable as commands and replies may be matched
+// by id.
+type CommandReadHandler func(*Client, CommandReadEvent)
