@@ -1024,7 +1024,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 
 	// close writer and send messages remaining in writer queue if any.
-	_ = c.messageWriter.close()
+	_ = c.messageWriter.close(disconnect != DisconnectConnectionClosed && disconnect != DisconnectSlow)
 
 	_ = c.transport.Close(disconnect)
 

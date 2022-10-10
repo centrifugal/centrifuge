@@ -171,11 +171,11 @@ func TestWriter(t *testing.T) {
 	require.Nil(t, disconnect)
 	<-transport.ch
 	require.Equal(t, transport.count, 1)
-	err := w.close()
+	err := w.close(true)
 	require.NoError(t, err)
 	require.True(t, w.closed)
 	// Close already deactivated Writer.
-	err = w.close()
+	err = w.close(true)
 	require.NoError(t, err)
 }
 
@@ -208,7 +208,7 @@ func TestWriterWriteMany(t *testing.T) {
 
 	require.Equal(t, transport.count, numMessages)
 	require.Equal(t, numMessages/w.config.MaxMessagesInFrame, transport.writeManyCalls)
-	err := w.close()
+	err := w.close(true)
 	require.NoError(t, err)
 
 	select {
@@ -235,7 +235,7 @@ func TestWriterWriteRemaining(t *testing.T) {
 	}
 
 	go func() {
-		err := w.close()
+		err := w.close(true)
 		require.NoError(t, err)
 	}()
 
@@ -255,7 +255,7 @@ func TestWriterDisconnectSlow(t *testing.T) {
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
 	})
-	defer func() { _ = w.close() }()
+	defer func() { _ = w.close(true) }()
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.Equal(t, DisconnectSlow.Code, disconnect.Code)
@@ -270,7 +270,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 		WriteManyFn:  transport.writeMany,
 	})
 	go w.run()
-	_ = w.close()
+	_ = w.close(true)
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.Equal(t, DisconnectConnectionClosed.Code, disconnect.Code)
@@ -293,7 +293,7 @@ func TestWriterWriteError(t *testing.T) {
 		w.run()
 	}()
 
-	defer func() { _ = w.close() }()
+	defer func() { _ = w.close(true) }()
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.NotNil(t, disconnect)
