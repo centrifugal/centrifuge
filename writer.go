@@ -122,7 +122,7 @@ func (w *writer) enqueue(item queue.Item) *Disconnect {
 	return nil
 }
 
-func (w *writer) close() error {
+func (w *writer) close(flushRemaining bool) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
@@ -130,10 +130,12 @@ func (w *writer) close() error {
 	}
 	w.closed = true
 
-	remaining := w.messages.CloseRemaining()
-	if len(remaining) > 0 {
-		// TODO: make it respect MaxMessagesInFrame option.
-		_ = w.config.WriteManyFn(remaining...)
+	if flushRemaining {
+		remaining := w.messages.CloseRemaining()
+		if len(remaining) > 0 {
+			// TODO: make it respect MaxMessagesInFrame option.
+			_ = w.config.WriteManyFn(remaining...)
+		}
 	}
 
 	return nil
