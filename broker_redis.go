@@ -136,7 +136,9 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		config:                 config,
 		sharding:               len(config.Shards) > 1,
 		historyStreamScript:    rueidis.NewLuaScript(historyStreamSource),
+		historyListScript:      rueidis.NewLuaScript(historyListSource),
 		addHistoryStreamScript: rueidis.NewLuaScript(addHistoryStreamSource),
+		addHistoryListScript:   rueidis.NewLuaScript(addHistoryListSource),
 		closeCh:                make(chan struct{}),
 	}
 
@@ -149,6 +151,39 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 }
 
 const (
+	// Add to history and optionally publish.
+	// KEYS[1] - history list key
+	// KEYS[2] - sequence meta hash key
+	// ARGV[1] - message payload
+	// ARGV[2] - history size ltrim right bound
+	// ARGV[3] - history lifetime
+	// ARGV[4] - channel to publish message to if needed
+	// ARGV[5] - history meta key expiration time
+	// ARGV[6] - new epoch value if no epoch set yet
+	// ARGV[7] - command to publish (publish or spublish)
+	addHistoryListSource = `
+local epoch
+if redis.call('exists', KEYS[2]) ~= 0 then
+  epoch = redis.call("hget", KEYS[2], "e")
+end
+if epoch == false or epoch == nil then
+  epoch = ARGV[6]
+  redis.call("hset", KEYS[2], "e", epoch)
+end
+local offset = redis.call("hincrby", KEYS[2], "s", 1)
+if ARGV[5] ~= '0' then
+	redis.call("expire", KEYS[2], ARGV[5])
+end
+local payload = "__" .. "p1:" .. offset .. ":" .. epoch .. "__" .. ARGV[1]
+redis.call("lpush", KEYS[1], payload)
+redis.call("ltrim", KEYS[1], 0, ARGV[2])
+redis.call("expire", KEYS[1], ARGV[3])
+if ARGV[4] ~= '' then
+	redis.call(ARGV[7], ARGV[4], payload)
+end
+return {offset, epoch}
+		`
+
 	// addHistoryStreamSource contains a Lua script to save data to Redis stream and
 	// publish it into channel.
 	// KEYS[1] - history stream key
@@ -180,6 +215,33 @@ if ARGV[4] ~= '' then
 	redis.call(ARGV[7], ARGV[4], payload)
 end
 return {offset, epoch}
+	`
+
+	// Retrieve channel history information.
+	// KEYS[1] - history list key
+	// KEYS[2] - list meta hash key
+	// ARGV[1] - include publications into response
+	// ARGV[2] - publications list right bound
+	// ARGV[3] - list meta hash key expiration time
+	// ARGV[4] - new epoch value if no epoch set yet
+	historyListSource = `
+local offset = redis.call("hget", KEYS[2], "s")
+local epoch
+if redis.call('exists', KEYS[2]) ~= 0 then
+  epoch = redis.call("hget", KEYS[2], "e")
+end
+if epoch == false or epoch == nil then
+  epoch = ARGV[4]
+  redis.call("hset", KEYS[2], "e", epoch)
+end
+if ARGV[3] ~= '0' then
+	redis.call("expire", KEYS[2], ARGV[3])
+end
+local pubs = nil
+if ARGV[1] ~= "0" then
+	pubs = redis.call("lrange", KEYS[1], 0, ARGV[2])
+end
+return {offset, epoch, pubs}
 	`
 
 	// historyStreamSource ...
