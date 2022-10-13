@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
+	"strconv"
 	"time"
 
 	"github.com/centrifugal/protocol"
-	"github.com/gomodule/redigo/redis"
+	"github.com/rueian/rueidis"
 )
 
 var _ PresenceManager = (*RedisPresenceManager)(nil)
@@ -19,11 +19,9 @@ type RedisPresenceManager struct {
 	sharding          bool
 	config            RedisPresenceManagerConfig
 	shards            []*RedisShard
-	addPresenceScript *redis.Script
-	remPresenceScript *redis.Script
-	presenceScript    *redis.Script
-	closeOnce         sync.Once
-	closeCh           chan struct{}
+	addPresenceScript *rueidis.Lua
+	remPresenceScript *rueidis.Lua
+	presenceScript    *rueidis.Lua
 }
 
 const (
@@ -112,28 +110,12 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		shards:            config.Shards,
 		config:            config,
 		sharding:          len(config.Shards) > 1,
-		addPresenceScript: redis.NewScript(2, addPresenceSource),
-		remPresenceScript: redis.NewScript(2, remPresenceSource),
-		presenceScript:    redis.NewScript(2, presenceSource),
-		closeCh:           make(chan struct{}),
-	}
-
-	for i := range config.Shards {
-		config.Shards[i].registerScripts(
-			m.addPresenceScript,
-			m.remPresenceScript,
-			m.presenceScript,
-		)
+		addPresenceScript: rueidis.NewLuaScript(addPresenceSource),
+		remPresenceScript: rueidis.NewLuaScript(remPresenceSource),
+		presenceScript:    rueidis.NewLuaScript(presenceSource),
 	}
 
 	return m, nil
-}
-
-func (m *RedisPresenceManager) Close(_ context.Context) error {
-	m.closeOnce.Do(func() {
-		close(m.closeCh)
-	})
-	return nil
 }
 
 func (m *RedisPresenceManager) getShard(channel string) *RedisShard {
@@ -157,9 +139,11 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 	expireAt := time.Now().Unix() + int64(expire)
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
-	dr := s.newDataRequest("", m.addPresenceScript, setKey, []interface{}{setKey, hashKey, expire, expireAt, uid, infoBytes})
-	resp := s.getDataResponse(dr, m.closeCh)
-	return resp.err
+	resp := m.addPresenceScript.Exec(context.Background(), s.client, []string{string(setKey), string(hashKey)}, []string{strconv.Itoa(expire), strconv.FormatInt(expireAt, 10), uid, string(infoBytes)})
+	if rueidis.IsRedisNil(resp.Error()) {
+		return nil
+	}
+	return resp.Error()
 }
 
 // RemovePresence - see PresenceManager interface description.
@@ -170,9 +154,11 @@ func (m *RedisPresenceManager) RemovePresence(ch string, uid string) error {
 func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, uid string) error {
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
-	dr := s.newDataRequest("", m.remPresenceScript, setKey, []interface{}{setKey, hashKey, uid})
-	resp := s.getDataResponse(dr, m.closeCh)
-	return resp.err
+	resp := m.remPresenceScript.Exec(context.Background(), s.client, []string{string(setKey), string(hashKey)}, []string{uid})
+	if rueidis.IsRedisNil(resp.Error()) {
+		return nil
+	}
+	return resp.Error()
 }
 
 // Presence - see PresenceManager interface description.
@@ -185,35 +171,33 @@ func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*C
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
 	now := int(time.Now().Unix())
-	dr := s.newDataRequest("", m.presenceScript, setKey, []interface{}{setKey, hashKey, now})
-	resp := s.getDataResponse(dr, m.closeCh)
-	if resp.err != nil {
-		return nil, resp.err
-	}
-	return mapStringClientInfo(resp.reply, nil)
-}
-
-func mapStringClientInfo(result interface{}, err error) (map[string]*ClientInfo, error) {
-	values, err := redis.Values(result, err)
+	resp, err := m.presenceScript.Exec(context.Background(), s.client, []string{string(setKey), string(hashKey)}, []string{strconv.Itoa(now)}).ToArray()
 	if err != nil {
 		return nil, err
 	}
-	if len(values)%2 != 0 {
+	return mapStringClientInfo(resp)
+}
+
+func mapStringClientInfo(result []rueidis.RedisMessage) (map[string]*ClientInfo, error) {
+	if len(result)%2 != 0 {
 		return nil, errors.New("mapStringClientInfo expects even number of values result")
 	}
-	m := make(map[string]*ClientInfo, len(values)/2)
-	for i := 0; i < len(values); i += 2 {
-		key, okKey := values[i].([]byte)
-		value, okValue := values[i+1].([]byte)
-		if !okKey || !okValue {
-			return nil, errors.New("scanMap key not a bulk string value")
+	m := make(map[string]*ClientInfo, len(result)/2)
+	for i := 0; i < len(result); i += 2 {
+		key, err := result[i].ToString()
+		if err != nil {
+			return nil, errors.New("key is not string")
+		}
+		value, err := result[i+1].ToString()
+		if err != nil {
+			return nil, errors.New("value is not string")
 		}
 		var f protocol.ClientInfo
-		err = f.UnmarshalVT(value)
+		err = f.UnmarshalVT([]byte(value))
 		if err != nil {
 			return nil, errors.New("can not unmarshal value to ClientInfo")
 		}
-		m[string(key)] = infoFromProto(&f)
+		m[key] = infoFromProto(&f)
 	}
 	return m, nil
 }

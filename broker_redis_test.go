@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
-	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/require"
 )
 
@@ -341,9 +340,9 @@ func TestRedisBrokerRecover(t *testing.T) {
 }
 
 func pubSubChannels(t *testing.T, e *RedisBroker) ([]string, error) {
-	conn := e.shards[0].pool.Get()
-	defer func() { require.NoError(t, conn.Close()) }()
-	return redis.Strings(conn.Do("PUBSUB", "channels", e.messagePrefix+"*"))
+	t.Helper()
+	client := e.shards[0].client
+	return client.Do(context.Background(), client.B().PubsubChannels().Pattern(e.messagePrefix+"*").Build()).AsStrSlice()
 }
 
 func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
@@ -580,12 +579,12 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.messageChannelID("test"), []byte("__p1:16901:xyz__dsdsd"))
+	}}, e.messageChannelID(e.shards[0], "test"), []byte("__p1:16901:xyz__dsdsd"))
 	require.Error(t, err)
 
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		return nil
-	}}, e.messageChannelID("test"), []byte("__p1:16901"))
+	}}, e.messageChannelID(e.shards[0], "test"), []byte("__p1:16901"))
 	require.Error(t, err)
 
 	pub := &protocol.Publication{
@@ -600,7 +599,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.messageChannelID("test"), []byte("__p1:16901:xyz__"+string(data)))
+	}}, e.messageChannelID(e.shards[0], "test"), []byte("__p1:16901:xyz__"+string(data)))
 	require.NoError(t, err)
 	require.True(t, publicationHandlerCalled)
 
@@ -615,7 +614,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, "test", ch)
 		require.Equal(t, "12", info.UserID)
 		return nil
-	}}, e.messageChannelID("test"), append(joinTypePrefix, data...))
+	}}, e.messageChannelID(e.shards[0], "test"), append(joinTypePrefix, data...))
 	require.NoError(t, err)
 	require.True(t, joinHandlerCalled)
 
@@ -625,7 +624,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, "test", ch)
 		require.Equal(t, "12", info.UserID)
 		return nil
-	}}, e.messageChannelID("test"), append(leaveTypePrefix, data...))
+	}}, e.messageChannelID(e.shards[0], "test"), append(leaveTypePrefix, data...))
 	require.NoError(t, err)
 	require.True(t, leaveHandlerCalled)
 }
