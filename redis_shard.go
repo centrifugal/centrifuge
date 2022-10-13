@@ -28,7 +28,6 @@ const (
 
 type RedisShard struct {
 	config           RedisShardConfig
-	scriptsMu        sync.RWMutex
 	subCh            chan subRequest
 	shardedSubCh     []chan subRequest
 	scriptsCh        chan struct{}
