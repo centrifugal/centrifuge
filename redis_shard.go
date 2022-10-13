@@ -104,16 +104,19 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		TLSConfig:        conf.TLSConfig,
 		Username:         conf.User,
 		Password:         conf.Password,
+		ClientName:       conf.ClientName,
+		ShuffleInit:      true,
 		DisableCache:     true,
 	}
 
 	if len(conf.SentinelAddresses) > 0 {
 		options.InitAddress = conf.SentinelAddresses
 		options.Sentinel = rueidis.SentinelOption{
-			TLSConfig: conf.TLSConfig,
-			MasterSet: conf.SentinelMasterName,
-			Username:  conf.SentinelUser,
-			Password:  conf.SentinelPassword,
+			TLSConfig:  conf.TLSConfig,
+			MasterSet:  conf.SentinelMasterName,
+			Username:   conf.SentinelUser,
+			Password:   conf.SentinelPassword,
+			ClientName: conf.SentinelClientName,
 		}
 	} else if len(conf.ClusterAddresses) > 0 {
 		options.InitAddress = conf.ClusterAddresses
@@ -159,23 +162,23 @@ type RedisShardConfig struct {
 	SentinelUser string
 	// SentinelPassword is a password for Sentinel. Works with Sentinel >= 5.0.1.
 	SentinelPassword string
+	// SentinelClientName is a client name for established connections to Sentinel.
+	SentinelClientName string
 
-	// DB is Redis database number. If not set then database 0 used.
+	// DB is Redis database number. If not set then database 0 used. Does not make sense in Redis Cluster case.
 	DB int
-	// User for Redis ACL-based auth.
+
+	// User is a username for Redis ACL-based auth.
 	User string
 	// Password is password to use when connecting to Redis database.
 	// If zero then password not used.
 	Password string
-	// Whether to use TLS connection or not.
-	UseTLS bool
-	// Whether to skip hostname verification as part of TLS handshake.
-	TLSSkipVerify bool
+	// ClientName for established connections. See https://redis.io/commands/client-setname/
+	ClientName string
+
 	// Connection TLS configuration.
 	TLSConfig *tls.Config
-	// IdleTimeout is timeout after which idle connections to Redis will be closed.
-	// If the value is zero, then idle connections are not closed.
-	IdleTimeout time.Duration
+
 	// ReadTimeout is a timeout on read operations. Note that at moment it should be greater
 	// than node ping publish interval in order to prevent timing out Pub/Sub connection's
 	// Receive call.
