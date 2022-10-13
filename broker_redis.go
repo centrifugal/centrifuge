@@ -107,13 +107,13 @@ type RedisBrokerConfig struct {
 	// Shards is a list of Redis shards to use. At least one shard must be provided.
 	Shards []*RedisShard
 
-	// NumClusterShards when greater than zero allows turning on a mode when broker
+	// NumClusterPubSubShards when greater than zero allows turning on a mode when broker
 	// will use Redis Cluster sharded PUB/SUB feature. To achieve subscribe efficiency broker
-	// reduces possible slots to NumClusterShards value and starts separate PUB/SUB
+	// reduces possible slots to NumClusterPubSubShards value and starts separate PUB/SUB
 	// routines for each shard. By default, sharded PUB/SUB is not used - i.e. we are using
 	// globally distributed PUBLISH commands.
 	// Requires Redis >= 7.
-	NumClusterShards int
+	NumClusterPubSubShards int
 }
 
 // NewRedisBroker initializes Redis Broker.
@@ -307,9 +307,9 @@ func (b *RedisBroker) getShard(channel string) *RedisShard {
 func (b *RedisBroker) Run(h BrokerEventHandler) error {
 	startChannels := make([]chan error, 0, len(b.shards))
 	for shardNum, shard := range b.shards {
-		if shard.useCluster && b.config.NumClusterShards > 0 {
-			shard.shardedSubCh = make([]chan subRequest, b.config.NumClusterShards)
-			for i := 0; i < b.config.NumClusterShards; i++ {
+		if shard.useCluster && b.config.NumClusterPubSubShards > 0 {
+			shard.shardedSubCh = make([]chan subRequest, b.config.NumClusterPubSubShards)
+			for i := 0; i < b.config.NumClusterPubSubShards; i++ {
 				shard.shardedSubCh[i] = make(chan subRequest)
 			}
 		}
@@ -378,8 +378,8 @@ func (b *RedisBroker) runShard(s *RedisShard, h BrokerEventHandler, startCh chan
 			})
 		})
 	})
-	if s.useCluster && b.config.NumClusterShards > 0 {
-		for i := 0; i < b.config.NumClusterShards; i++ {
+	if s.useCluster && b.config.NumClusterPubSubShards > 0 {
+		for i := 0; i < b.config.NumClusterPubSubShards; i++ {
 			i := i
 			go b.runForever(func() {
 				select {
@@ -611,7 +611,7 @@ func (b *RedisBroker) runShardedPubSub(s *RedisShard, eventHandler BrokerEventHa
 		chIDs[0] = shardChannel
 
 		for _, ch := range b.node.Hub().Channels() {
-			if b.getShard(ch) == s && consistentIndex(ch, b.config.NumClusterShards) == shardIndex {
+			if b.getShard(ch) == s && consistentIndex(ch, b.config.NumClusterPubSubShards) == shardIndex {
 				chIDs = append(chIDs, b.messageChannelID(s, ch))
 			}
 		}
@@ -946,7 +946,7 @@ func (b *RedisBroker) PublishJoin(ch string, info *ClientInfo) error {
 }
 
 func (b *RedisBroker) useShardedPubSub(s *RedisShard) bool {
-	return s.useCluster && b.config.NumClusterShards > 0
+	return s.useCluster && b.config.NumClusterPubSubShards > 0
 }
 
 func (b *RedisBroker) publishJoin(s *RedisShard, ch string, info *ClientInfo) error {
@@ -1024,7 +1024,7 @@ func (b *RedisBroker) subscribe(s *RedisShard, ch string) error {
 	}
 	r := newSubRequest([]channelID{b.messageChannelID(s, ch)}, true)
 	if b.useShardedPubSub(s) {
-		return b.sendSubscribeSharded(s, r, consistentIndex(ch, b.config.NumClusterShards))
+		return b.sendSubscribeSharded(s, r, consistentIndex(ch, b.config.NumClusterPubSubShards))
 	}
 	return b.sendSubscribe(s, r)
 }
@@ -1040,7 +1040,7 @@ func (b *RedisBroker) unsubscribe(s *RedisShard, ch string) error {
 	}
 	r := newSubRequest([]channelID{b.messageChannelID(s, ch)}, false)
 	if b.useShardedPubSub(s) {
-		return b.sendSubscribeSharded(s, r, consistentIndex(ch, b.config.NumClusterShards))
+		return b.sendSubscribeSharded(s, r, consistentIndex(ch, b.config.NumClusterPubSubShards))
 	}
 	return b.sendSubscribe(s, r)
 }
@@ -1076,7 +1076,7 @@ func (b *RedisBroker) removeHistory(s *RedisShard, ch string) error {
 
 func (b *RedisBroker) messageChannelID(s *RedisShard, ch string) channelID {
 	if b.useShardedPubSub(s) {
-		ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumClusterShards)) + "}." + ch
+		ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumClusterPubSubShards)) + "}." + ch
 	}
 	return channelID(b.messagePrefix + ch)
 }
@@ -1094,8 +1094,8 @@ func (b *RedisBroker) nodeChannelID(nodeID string) channelID {
 
 func (b *RedisBroker) historyListKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
-		if b.config.NumClusterShards > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumClusterShards)) + "}." + ch
+		if b.config.NumClusterPubSubShards > 0 {
+			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumClusterPubSubShards)) + "}." + ch
 		} else {
 			ch = "{" + ch + "}"
 		}
@@ -1105,8 +1105,8 @@ func (b *RedisBroker) historyListKey(s *RedisShard, ch string) channelID {
 
 func (b *RedisBroker) historyStreamKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
-		if b.config.NumClusterShards > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumClusterShards)) + "}." + ch
+		if b.config.NumClusterPubSubShards > 0 {
+			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumClusterPubSubShards)) + "}." + ch
 		} else {
 			ch = "{" + ch + "}"
 		}
@@ -1116,8 +1116,8 @@ func (b *RedisBroker) historyStreamKey(s *RedisShard, ch string) channelID {
 
 func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
-		if b.config.NumClusterShards > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumClusterShards)) + "}." + ch
+		if b.config.NumClusterPubSubShards > 0 {
+			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumClusterPubSubShards)) + "}." + ch
 		} else {
 			ch = "{" + ch + "}"
 		}
@@ -1130,7 +1130,7 @@ func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 
 func (b *RedisBroker) extractChannel(chID channelID) string {
 	ch := strings.TrimPrefix(string(chID), b.messagePrefix)
-	if b.config.NumClusterShards == 0 {
+	if b.config.NumClusterPubSubShards == 0 {
 		return ch
 	}
 	if strings.HasPrefix(ch, "{") {
