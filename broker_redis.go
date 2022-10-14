@@ -510,7 +510,10 @@ func (b *RedisBroker) runShardedPubSub(s *RedisShard, eventHandler BrokerEventHa
 
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
 		OnMessage: func(msg rueidis.PubSubMessage) {
-			workers[index(msg.Channel, numWorkers)] <- msg
+			select {
+			case workers[index(msg.Channel, numWorkers)] <- msg:
+			case <-done:
+			}
 		},
 		OnSubscription: func(s rueidis.PubSubSubscription) {
 			if s.Kind == "sunsubscribe" && s.Channel == string(shardChannel) {
