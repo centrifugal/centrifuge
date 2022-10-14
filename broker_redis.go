@@ -1281,9 +1281,22 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 			if err != nil {
 				return nil, StreamPosition{}, err
 			}
-			fieldValues, err := values[1].AsStrMap()
+			fieldValues, err := values[1].ToArray()
 			if err != nil {
 				return nil, StreamPosition{}, err
+			}
+			var pushData []byte
+			for i := 0; i < len(fieldValues); i += 2 {
+				k, _ := fieldValues[i].ToString()
+				if k != "d" {
+					continue
+				}
+				v, _ := fieldValues[i+1].ToString()
+				pushData = convert.StringToBytes(v)
+				break
+			}
+			if pushData == nil {
+				return nil, StreamPosition{}, errors.New("no push data found in entry")
 			}
 			hyphenPos := strings.Index(id, "-") // ex. "4-0", 4 is our offset.
 			if hyphenPos <= 0 {
@@ -1293,12 +1306,8 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 			if err != nil {
 				return nil, StreamPosition{}, err
 			}
-			pushData, ok := fieldValues["d"]
-			if !ok {
-				return nil, StreamPosition{}, errors.New("no element data")
-			}
 			var pub protocol.Publication
-			err = pub.UnmarshalVT([]byte(pushData))
+			err = pub.UnmarshalVT(pushData)
 			if err != nil {
 				return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 			}
