@@ -1296,7 +1296,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 				return nil, StreamPosition{}, errors.New("no element data")
 			}
 			var pub protocol.Publication
-			err = pub.UnmarshalVT(convert.StringToBytes(pushData))
+			err = pub.UnmarshalVT([]byte(pushData))
 			if err != nil {
 				return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 			}
