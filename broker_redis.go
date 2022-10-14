@@ -33,7 +33,7 @@ const (
 	redisPingChannelSuffix = ".ping"
 	// redisClientChannelPrefix is a prefix before channel name for client messages.
 	redisClientChannelPrefix = ".client."
-	// redisShardChannelPrefix is a prefix before channel name which we use to establish shared PUB/SUB connection.
+	// redisPubSubShardChannelSuffix is a suffix in channel name which we use to establish a sharded PUB/SUB connection.
 	redisPubSubShardChannelSuffix = ".shard"
 )
 
@@ -47,7 +47,7 @@ var _ Broker = (*RedisBroker)(nil)
 // Redis Clusters to scale PUB/SUB).
 // By default, Redis >= 5 required (due to the fact Broker uses STREAM data structure).
 type RedisBroker struct {
-	controlRound           uint64 // Keep atomic on struct top for 32-bit architectures.
+	controlRound           uint64
 	node                   *Node
 	sharding               bool
 	config                 RedisBrokerConfig
