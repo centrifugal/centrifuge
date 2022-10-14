@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/centrifugal/protocol"
@@ -24,7 +25,7 @@ var errRedisClosed = errors.New("redis: closed")
 const (
 	// redisSubscribeBatchLimit is a maximum number of channels to include in a single
 	// batch subscribe call.
-	redisSubscribeBatchLimit = 512
+	redisSubscribeBatchLimit = 128
 	// redisControlChannelSuffix is a suffix for control channel.
 	redisControlChannelSuffix = ".control"
 	// redisNodeChannelPrefix is a suffix for node channel.
@@ -439,7 +440,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
 		OnMessage: func(msg rueidis.PubSubMessage) {
-			err := eventHandler.HandleControl([]byte(msg.Message))
+			err := eventHandler.HandleControl(convert.StringToBytes(msg.Message))
 			if err != nil {
 				b.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
 			}
@@ -491,7 +492,7 @@ func (b *RedisBroker) runShardedPubSub(s *RedisShard, eventHandler BrokerEventHa
 				case <-done:
 					return
 				case msg := <-ch:
-					err := b.handleRedisClientMessage(eventHandler, channelID(msg.Channel), []byte(msg.Message))
+					err := b.handleRedisClientMessage(eventHandler, channelID(msg.Channel), convert.StringToBytes(msg.Message))
 					if err != nil {
 						b.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
 						continue
@@ -682,7 +683,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 				case <-done:
 					return
 				case msg := <-ch:
-					err := b.handleRedisClientMessage(eventHandler, channelID(msg.Channel), []byte(msg.Message))
+					err := b.handleRedisClientMessage(eventHandler, channelID(msg.Channel), convert.StringToBytes(msg.Message))
 					if err != nil {
 						b.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
 						continue
@@ -922,7 +923,7 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 		script = b.addHistoryListScript
 	}
 
-	replies, err := script.Exec(context.Background(), s.client, []string{string(streamKey), string(historyMetaKey)}, []string{string(byteMessage), strconv.Itoa(size), strconv.Itoa(int(opts.HistoryTTL.Seconds())), string(publishChannel), strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10), publishCommand}).ToArray()
+	replies, err := script.Exec(context.Background(), s.client, []string{string(streamKey), string(historyMetaKey)}, []string{convert.BytesToString(byteMessage), strconv.Itoa(size), strconv.Itoa(int(opts.HistoryTTL.Seconds())), string(publishChannel), strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10), publishCommand}).ToArray()
 	if err != nil {
 		return StreamPosition{}, err
 	}
@@ -959,10 +960,10 @@ func (b *RedisBroker) publishJoin(s *RedisShard, ch string, info *ClientInfo) er
 
 	var resp rueidis.RedisResult
 	if b.useShardedPubSub(s) {
-		cmd := s.client.B().Spublish().Channel(string(chID)).Message(string(append(joinTypePrefix, byteMessage...))).Build()
+		cmd := s.client.B().Spublish().Channel(string(chID)).Message(convert.BytesToString(append(joinTypePrefix, byteMessage...))).Build()
 		resp = s.client.Do(context.Background(), cmd)
 	} else {
-		cmd := s.client.B().Publish().Channel(string(chID)).Message(string(append(joinTypePrefix, byteMessage...))).Build()
+		cmd := s.client.B().Publish().Channel(string(chID)).Message(convert.BytesToString(append(joinTypePrefix, byteMessage...))).Build()
 		resp = s.client.Do(context.Background(), cmd)
 	}
 	return resp.Error()
@@ -983,10 +984,10 @@ func (b *RedisBroker) publishLeave(s *RedisShard, ch string, info *ClientInfo) e
 
 	var resp rueidis.RedisResult
 	if b.useShardedPubSub(s) {
-		cmd := s.client.B().Spublish().Channel(string(chID)).Message(string(append(leaveTypePrefix, byteMessage...))).Build()
+		cmd := s.client.B().Spublish().Channel(string(chID)).Message(convert.BytesToString(append(leaveTypePrefix, byteMessage...))).Build()
 		resp = s.client.Do(context.Background(), cmd)
 	} else {
-		cmd := s.client.B().Publish().Channel(string(chID)).Message(string(append(leaveTypePrefix, byteMessage...))).Build()
+		cmd := s.client.B().Publish().Channel(string(chID)).Message(convert.BytesToString(append(leaveTypePrefix, byteMessage...))).Build()
 		resp = s.client.Do(context.Background(), cmd)
 	}
 	return resp.Error()
@@ -1008,7 +1009,7 @@ func (b *RedisBroker) publishControl(s *RedisShard, data []byte, nodeID string) 
 		chID = b.nodeChannelID(nodeID)
 	}
 
-	cmd := s.client.B().Publish().Channel(string(chID)).Message(string(data)).Build()
+	cmd := s.client.B().Publish().Channel(string(chID)).Message(convert.BytesToString(data)).Build()
 	resp := s.client.Do(context.Background(), cmd)
 	return resp.Error()
 }
@@ -1295,7 +1296,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 				return nil, StreamPosition{}, errors.New("no element data")
 			}
 			var pub protocol.Publication
-			err = pub.UnmarshalVT([]byte(pushData))
+			err = pub.UnmarshalVT(convert.StringToBytes(pushData))
 			if err != nil {
 				return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 			}
@@ -1359,7 +1360,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 			return nil, StreamPosition{}, errors.New("error getting value")
 		}
 
-		pushData, _, sp, ok := extractPushData([]byte(value))
+		pushData, _, sp, ok := extractPushData(convert.StringToBytes(value))
 		if !ok {
 			return nil, StreamPosition{}, fmt.Errorf("malformed publication value: %s", value)
 		}
@@ -1463,7 +1464,7 @@ func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool) {
 		return rest, leavePushType, StreamPosition{}, true
 	}
 
-	stringContent := string(content)
+	stringContent := convert.BytesToString(content)
 
 	if contentType == 'p' {
 		// new format p1:offset:epoch

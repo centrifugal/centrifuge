@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
+
 	"github.com/centrifugal/protocol"
 	"github.com/rueian/rueidis"
 )
@@ -139,7 +141,7 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 	expireAt := time.Now().Unix() + int64(expire)
 	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
-	resp := m.addPresenceScript.Exec(context.Background(), s.client, []string{string(setKey), string(hashKey)}, []string{strconv.Itoa(expire), strconv.FormatInt(expireAt, 10), uid, string(infoBytes)})
+	resp := m.addPresenceScript.Exec(context.Background(), s.client, []string{string(setKey), string(hashKey)}, []string{strconv.Itoa(expire), strconv.FormatInt(expireAt, 10), uid, convert.BytesToString(infoBytes)})
 	if rueidis.IsRedisNil(resp.Error()) {
 		return nil
 	}
@@ -193,7 +195,7 @@ func mapStringClientInfo(result []rueidis.RedisMessage) (map[string]*ClientInfo,
 			return nil, errors.New("value is not string")
 		}
 		var f protocol.ClientInfo
-		err = f.UnmarshalVT([]byte(value))
+		err = f.UnmarshalVT(convert.StringToBytes(value))
 		if err != nil {
 			return nil, errors.New("can not unmarshal value to ClientInfo")
 		}
