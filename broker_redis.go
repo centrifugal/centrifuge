@@ -75,6 +75,9 @@ type RedisBrokerConfig struct {
 	// DefaultRedisBrokerPrefix will be used.
 	Prefix string
 
+	// Shards is a list of Redis shards to use. At least one shard must be provided.
+	Shards []*RedisShard
+
 	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
 	// meta key is a Redis HASH that contains top offset in channel and epoch value.
 	// By default stream meta keys do not expire.
@@ -102,18 +105,19 @@ type RedisBrokerConfig struct {
 	UseLists bool
 
 	// PubSubNumWorkers sets how many PUB/SUB message processing workers will
-	// be started. By default, runtime.NumCPU() workers used.
+	// be started. By default, runtime.NumCPU() workers used. This does not have
+	// any effect in case NumClusterShards is used.
 	PubSubNumWorkers int
 
-	// Shards is a list of Redis shards to use. At least one shard must be provided.
-	Shards []*RedisShard
-
 	// NumClusterShards when greater than zero allows turning on a mode when broker
-	// will use Redis Cluster with sharded PUB/SUB feature. To achieve subscribe efficiency
-	// broker reduces possible cluster slots to NumClusterShards value and starts a separate
-	// PUB/SUB routine for each shard. By default, sharded PUB/SUB is not used - i.e. we are
-	// using globally distributed PUBLISH commands.
-	// Requires Redis >= 7.
+	// will use Redis Cluster with sharded PUB/SUB feature. To achieve subscribe
+	// efficiency broker reduces possible cluster slots to NumClusterShards value and
+	// starts a separate PUB/SUB routine for each shard. By default, sharded PUB/SUB is
+	// not used - i.e. we are using globally distributed PUBLISH commands. Turning on
+	// NumClusterShards will cause Centrifuge to generate different keys and Redis channels
+	// than in the base Redis Cluster mode since we need to control slots and be sure our
+	// subscriber routines work with the same Redis Cluster slot.
+	// This feature requires Redis >= 7.
 	NumClusterShards int
 }
 
@@ -412,14 +416,9 @@ func (b *RedisBroker) Close(_ context.Context) error {
 }
 
 func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHandler, startOnce func(error)) {
-	numWorkers := b.config.PubSubNumWorkers
-	if numWorkers == 0 {
-		numWorkers = runtime.NumCPU()
-	}
-
-	b.node.Log(NewLogEntry(LogLevelDebug, fmt.Sprintf("running Redis PUB/SUB, num workers: %d", numWorkers), map[string]interface{}{"shard": s.string()}))
+	b.node.Log(NewLogEntry(LogLevelDebug, fmt.Sprintf("running Redis control PUB/SUB"), map[string]interface{}{"shard": s.string()}))
 	defer func() {
-		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis PUB/SUB", map[string]interface{}{"shard": s.string()}))
+		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", map[string]interface{}{"shard": s.string()}))
 	}()
 
 	controlChannel := b.controlChannel
@@ -524,9 +523,9 @@ func (b *RedisBroker) runShardedPubSub(s *RedisShard, eventHandler BrokerEventHa
 
 	// Run subscriber goroutine.
 	go func() {
-		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
+		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker subscriber", map[string]interface{}{"shard": s.string()}))
 		defer func() {
-			b.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
+			b.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisBroker subscriber", map[string]interface{}{"shard": s.string()}))
 		}()
 		for {
 			select {
@@ -712,9 +711,9 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler) 
 
 	// Run subscriber goroutine.
 	go func() {
-		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
+		b.node.Log(NewLogEntry(LogLevelDebug, "starting RedisBroker subscriber", map[string]interface{}{"shard": s.string()}))
 		defer func() {
-			b.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisBroker Subscriber", map[string]interface{}{"shard": s.string()}))
+			b.node.Log(NewLogEntry(LogLevelDebug, "stopping RedisBroker subscriber", map[string]interface{}{"shard": s.string()}))
 		}()
 		for {
 			select {
