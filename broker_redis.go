@@ -901,10 +901,10 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {
 		var resp rueidis.RedisResult
 		if useShardedPublish {
-			cmd := s.client.B().Spublish().Channel(string(publishChannel)).Message(string(byteMessage)).Build()
+			cmd := s.client.B().Spublish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
 			resp = s.client.Do(context.Background(), cmd)
 		} else {
-			cmd := s.client.B().Publish().Channel(string(publishChannel)).Message(string(byteMessage)).Build()
+			cmd := s.client.B().Publish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
 			resp = s.client.Do(context.Background(), cmd)
 		}
 		return StreamPosition{}, resp.Error()
@@ -1316,15 +1316,15 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 	historyMetaKey := b.historyMetaKey(s, ch)
 
 	var includePubs = "1"
-	var rightBound = -1
+	var rightBound = "-1"
 	if filter.Limit == 0 {
-		rightBound = 0
+		rightBound = "0"
 		includePubs = "0"
 	}
 
 	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
 
-	replies, err := b.historyListScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, strconv.FormatInt(int64(rightBound), 10), strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10)}).ToArray()
+	replies, err := b.historyListScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, rightBound, strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10)}).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
