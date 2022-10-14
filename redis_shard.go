@@ -198,6 +198,7 @@ type RedisShardConfig struct {
 func (s *RedisShard) Close() {
 	s.closeOnce.Do(func() {
 		close(s.closeCh)
+		s.client.Close()
 	})
 }
 
