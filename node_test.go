@@ -703,40 +703,6 @@ func TestNode_handleControl(t *testing.T) {
 
 		err := n.handleControl([]byte("random"))
 		require.EqualError(t, err, "unexpected EOF")
-
-		enc := controlproto.NewProtobufEncoder()
-
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_SURVEY_REQUEST,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
-
-		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_SURVEY_RESPONSE,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
-
-		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_NOTIFICATION,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
-
-		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_REFRESH,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
 	})
 
 	t.Run("Node", func(t *testing.T) {
@@ -746,18 +712,11 @@ func TestNode_handleControl(t *testing.T) {
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_NODE,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeNode(&controlpb.Node{
-			Name: "new_node",
-		})
-		require.NoError(t, err)
+		brokenCmdBytes := []byte("random")
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_NODE,
-			Params: paramsBytes,
+			Node: &controlpb.Node{
+				Name: "new_node",
+			},
 		})
 		require.NoError(t, err)
 
@@ -777,28 +736,17 @@ func TestNode_handleControl(t *testing.T) {
 		newTestConnectedClient(t, n, "42")
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_SUBSCRIBE,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeSubscribe(&controlpb.Subscribe{
-			Channel: "test_channel",
-			User:    "42",
-			RecoverSince: &controlpb.StreamPosition{
-				Offset: 0,
-				Epoch:  "test",
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Subscribe: &controlpb.Subscribe{
+				Channel: "test_channel",
+				User:    "42",
+				RecoverSince: &controlpb.StreamPosition{
+					Offset: 0,
+					Epoch:  "test",
+				},
 			},
 		})
 		require.NoError(t, err)
-		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_SUBSCRIBE,
-			Params: paramsBytes,
-		})
-		require.NoError(t, err)
-
-		err = n.handleControl(brokenCmdBytes)
-		require.Error(t, err)
 		err = n.handleControl(cmdBytes)
 		require.NoError(t, err)
 		require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
@@ -823,26 +771,14 @@ func TestNode_handleControl(t *testing.T) {
 		client := newTestSubscribedClient(t, n, "42", "test_channel")
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: controlpb.Command_UNSUBSCRIBE,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeUnsubscribe(&controlpb.Unsubscribe{
-			Channel: "test_channel",
-			User:    "42",
-		})
-		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: controlpb.Command_UNSUBSCRIBE,
-			Params: paramsBytes,
+			Uid: client.uid,
+			Unsubscribe: &controlpb.Unsubscribe{
+				Channel: "test_channel",
+				User:    "42",
+			},
 		})
 		require.NoError(t, err)
-
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
 		err = n.handleControl(cmdBytes)
 		select {
 		case <-done:
@@ -860,11 +796,9 @@ func TestNode_handleControl(t *testing.T) {
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		enc := controlproto.NewProtobufEncoder()
-
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    "",
-			Method: controlpb.Command_SHUTDOWN,
-			Params: nil,
+			Uid:      "",
+			Shutdown: &controlpb.Shutdown{},
 		})
 		require.NoError(t, err)
 
@@ -891,25 +825,14 @@ func TestNode_handleControl(t *testing.T) {
 		client := newTestSubscribedClient(t, n, "42", "test_channel")
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: controlpb.Command_DISCONNECT,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeDisconnect(&controlpb.Disconnect{
-			User: "42",
-		})
-		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: controlpb.Command_DISCONNECT,
-			Params: paramsBytes,
+			Uid: client.uid,
+			Disconnect: &controlpb.Disconnect{
+				User: "42",
+			},
 		})
 		require.NoError(t, err)
 
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
 		err = n.handleControl(cmdBytes)
 		select {
 		case <-done:
@@ -928,25 +851,13 @@ func TestNode_handleControl(t *testing.T) {
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    "",
-			Method: controlpb.Command_REFRESH,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeRefresh(&controlpb.Refresh{
-			User: "42",
-		})
-		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    "",
-			Method: controlpb.Command_REFRESH,
-			Params: paramsBytes,
+			Uid: "",
+			Refresh: &controlpb.Refresh{
+				User: "42",
+			},
 		})
 		require.NoError(t, err)
-
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
 		err = n.handleControl(cmdBytes)
 		require.NoError(t, err)
 	})
@@ -961,14 +872,12 @@ func TestNode_handleControl(t *testing.T) {
 
 		enc := controlproto.NewProtobufEncoder()
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: -1,
-			Params: nil,
+			Uid: client.uid,
 		})
 		require.NoError(t, err)
 
 		err = n.handleControl(cmdBytes)
-		require.EqualError(t, err, "control method not found: -1")
+		require.NoError(t, err)
 	})
 }
 
