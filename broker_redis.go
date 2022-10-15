@@ -437,11 +437,31 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	defer cancel()
 	defer conn.Close()
 
+	numWorkers := runtime.NumCPU()
+
+	// Run workers to spread message processing work over worker goroutines.
+	workCh := make(chan rueidis.PubSubMessage)
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			for {
+				select {
+				case <-done:
+					return
+				case msg := <-workCh:
+					err := eventHandler.HandleControl(convert.StringToBytes(msg.Message))
+					if err != nil {
+						b.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
+					}
+				}
+			}
+		}()
+	}
+
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
 		OnMessage: func(msg rueidis.PubSubMessage) {
-			err := eventHandler.HandleControl(convert.StringToBytes(msg.Message))
-			if err != nil {
-				b.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
+			select {
+			case workCh <- msg:
+			case <-done:
 			}
 		},
 	})
