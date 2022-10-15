@@ -74,24 +74,6 @@ type RedisBrokerConfig struct {
 	// DefaultRedisBrokerPrefix will be used.
 	Prefix string
 
-	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
-	// meta key is a Redis HASH that contains top offset in channel and epoch value.
-	// By default stream meta keys do not expire.
-	//
-	// Though in some cases – when channels created for а short time and then
-	// not used anymore – created stream meta keys can stay in memory while
-	// not actually useful. For example you can have a personal user channel but
-	// after using your app for a while user left it forever. In long-term
-	// perspective this can be an unwanted memory leak. Setting a reasonable
-	// value to this option (usually much bigger than history retention period)
-	// can help. In this case unused channel stream meta data will eventually expire.
-	//
-	// TODO v1: since we have epoch, things should also properly work without meta
-	// information at all (but we loose possibility of long-term recover in stream
-	// without new messages). We can make this optional and disabled by default at
-	// least.
-	HistoryMetaTTL time.Duration
-
 	// UseLists allows enabling usage of Redis LIST instead of STREAM data
 	// structure to keep history. LIST support exist mostly for backward
 	// compatibility since STREAM seems superior. If you have a use case
@@ -423,7 +405,13 @@ func (b *RedisBroker) publish(s *RedisShard, ch string, data []byte, opts Publis
 	}
 
 	historyMetaKey := b.historyMetaKey(s, ch)
-	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
+
+	historyMetaTTL := opts.HistoryMetaTTL
+	if historyMetaTTL == 0 {
+		historyMetaTTL = b.node.config.DefaultHistoryMetaTTL
+	}
+
+	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
 	var streamKey channelID
 	var size int
@@ -608,15 +596,15 @@ func (b *RedisBroker) unsubscribe(s *RedisShard, ch string) error {
 }
 
 // History - see Broker.History.
-func (b *RedisBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	return b.history(b.getShard(ch), ch, filter)
+func (b *RedisBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	return b.history(b.getShard(ch), ch, opts)
 }
 
-func (b *RedisBroker) history(s *RedisShard, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (b *RedisBroker) history(s *RedisShard, ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	if !b.config.UseLists {
-		return b.historyStream(s, ch, filter)
+		return b.historyStream(s, ch, opts)
 	}
-	return b.historyList(s, ch, filter)
+	return b.historyList(s, ch, opts.Filter)
 }
 
 // RemoveHistory - see Broker.RemoveHistory.
@@ -1163,9 +1151,11 @@ func extractHistoryResponse(reply interface{}, useStreams bool, includePubs bool
 	return streamPosition, nil, nil
 }
 
-func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	historyKey := b.historyStreamKey(s, ch)
 	historyMetaKey := b.historyMetaKey(s, ch)
+
+	filter := opts.Filter
 
 	var includePubs = true
 	var offset uint64
@@ -1187,7 +1177,12 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 		limit = filter.Limit
 	}
 
-	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
+	historyMetaTTL := opts.MetaTTL
+	if historyMetaTTL == 0 {
+		historyMetaTTL = b.node.config.DefaultHistoryMetaTTL
+	}
+
+	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
 	dr := s.newDataRequest("", b.historyStreamScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, offset, limit, filter.Reverse, historyMetaTTLSeconds, time.Now().Unix()})
 	resp := s.getDataResponse(dr, b.closeCh)
@@ -1214,7 +1209,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		includePubs = false
 	}
 
-	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
+	historyMetaTTLSeconds := int(b.node.config.DefaultHistoryMetaTTL.Seconds())
 
 	dr := s.newDataRequest("", b.historyListScript, historyKey, []interface{}{historyKey, historyMetaKey, includePubs, rightBound, historyMetaTTLSeconds, time.Now().Unix()})
 	resp := s.getDataResponse(dr, b.closeCh)

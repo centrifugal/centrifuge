@@ -78,6 +78,24 @@ type Config struct {
 	// UseSingleFlight allows turning on mode where singleflight will be automatically used for
 	// Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
 	UseSingleFlight bool
+
+	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
+	// meta key is a Redis HASH that contains top offset in channel and epoch value.
+	// By default stream meta keys do not expire.
+	//
+	// Though in some cases – when channels created for а short time and then
+	// not used anymore – created stream meta keys can stay in memory while
+	// not actually useful. For example you can have a personal user channel but
+	// after using your app for a while user left it forever. In long-term
+	// perspective this can be an unwanted memory leak. Setting a reasonable
+	// value to this option (usually much bigger than history retention period)
+	// can help. In this case unused channel stream meta data will eventually expire.
+	//
+	// TODO v1: since we have epoch, things should also properly work without meta
+	// information at all (but we loose possibility of long-term recover in stream
+	// without new messages). We can make this optional and disabled by default at
+	// least.
+	DefaultHistoryMetaTTL time.Duration
 }
 
 const (

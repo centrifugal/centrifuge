@@ -35,30 +35,19 @@ type MemoryBroker struct {
 var _ Broker = (*MemoryBroker)(nil)
 
 // MemoryBrokerConfig is a memory broker config.
-type MemoryBrokerConfig struct {
-	// HistoryMetaTTL sets a time of inactive stream meta information expiration.
-	// This information contains an epoch and offset of each stream. Having this
-	// meta information helps in message recovery process.
-	// Must have a reasonable value for application.
-	// At moment works with seconds precision.
-	// TODO v1: since we have epoch, things should also properly work without meta
-	// information at all (but we loose possibility of long-term recover in stream
-	// without new messages). We can make this optional and disabled by default at
-	// least.
-	HistoryMetaTTL time.Duration
-}
+type MemoryBrokerConfig struct{}
 
 const numPubLocks = 4096
 
 // NewMemoryBroker initializes MemoryBroker.
-func NewMemoryBroker(n *Node, c MemoryBrokerConfig) (*MemoryBroker, error) {
+func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 	pubLocks := make(map[int]*sync.Mutex, numPubLocks)
 	for i := 0; i < numPubLocks; i++ {
 		pubLocks[i] = &sync.Mutex{}
 	}
 	b := &MemoryBroker{
 		node:       n,
-		historyHub: newHistoryHub(c.HistoryMetaTTL),
+		historyHub: newHistoryHub(n.config.DefaultHistoryMetaTTL),
 		pubLocks:   pubLocks,
 	}
 	return b, nil
@@ -129,8 +118,8 @@ func (b *MemoryBroker) Unsubscribe(_ string) error {
 }
 
 // History - see Broker interface description.
-func (b *MemoryBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	return b.historyHub.get(ch, filter)
+func (b *MemoryBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	return b.historyHub.get(ch, opts)
 }
 
 // RemoveHistory - see Broker interface description.
@@ -140,30 +129,30 @@ func (b *MemoryBroker) RemoveHistory(ch string) error {
 
 type historyHub struct {
 	sync.RWMutex
-	streams         map[string]*memstream.Stream
-	nextExpireCheck int64
-	expireQueue     priority.Queue
-	expires         map[string]int64
-	historyMetaTTL  time.Duration
-	nextRemoveCheck int64
-	removeQueue     priority.Queue
-	removes         map[string]int64
+	streams               map[string]*memstream.Stream
+	nextExpireCheck       int64
+	expireQueue           priority.Queue
+	expires               map[string]int64
+	defaultHistoryMetaTTL time.Duration
+	nextRemoveCheck       int64
+	removeQueue           priority.Queue
+	removes               map[string]int64
 }
 
 func newHistoryHub(historyMetaTTL time.Duration) *historyHub {
 	return &historyHub{
-		streams:        make(map[string]*memstream.Stream),
-		expireQueue:    priority.MakeQueue(),
-		expires:        make(map[string]int64),
-		historyMetaTTL: historyMetaTTL,
-		removeQueue:    priority.MakeQueue(),
-		removes:        make(map[string]int64),
+		streams:               make(map[string]*memstream.Stream),
+		expireQueue:           priority.MakeQueue(),
+		expires:               make(map[string]int64),
+		defaultHistoryMetaTTL: historyMetaTTL,
+		removeQueue:           priority.MakeQueue(),
+		removes:               make(map[string]int64),
 	}
 }
 
 func (h *historyHub) runCleanups() {
 	go h.expireStreams()
-	if h.historyMetaTTL > 0 {
+	if h.defaultHistoryMetaTTL > 0 {
 		go h.removeStreams()
 	}
 }
@@ -256,8 +245,8 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 		h.nextExpireCheck = expireAt
 	}
 
-	if h.historyMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
+	if h.defaultHistoryMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.defaultHistoryMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
@@ -298,12 +287,14 @@ func getPosition(stream *memstream.Stream) StreamPosition {
 	return streamPosition
 }
 
-func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (h *historyHub) get(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	h.Lock()
 	defer h.Unlock()
 
-	if h.historyMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
+	filter := opts.Filter
+
+	if h.defaultHistoryMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.defaultHistoryMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
