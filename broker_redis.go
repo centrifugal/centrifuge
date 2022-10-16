@@ -706,7 +706,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler, 
 	select {
 	case err := <-wait:
 		if err != nil {
-			b.node.Log(NewLogEntry(LogLevelError, "sharded pub/sub error", map[string]interface{}{"error": err.Error()}))
+			b.node.Log(NewLogEntry(LogLevelError, "pub/sub error", map[string]interface{}{"error": err.Error()}))
 		}
 	case <-s.closeCh:
 	}
