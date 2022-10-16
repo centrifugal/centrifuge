@@ -21,9 +21,8 @@ type (
 )
 
 const (
-	DefaultRedisReadTimeout    = 5 * time.Second
-	DefaultRedisWriteTimeout   = time.Second
-	DefaultRedisConnectTimeout = time.Second
+	defaultRedisIOTimeout      = 3 * time.Second
+	defaultRedisConnectTimeout = time.Second
 )
 
 type RedisShard struct {
@@ -87,6 +86,14 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 			return nil, err
 		}
 	}
+
+	if conf.ConnectTimeout == 0 {
+		conf.ConnectTimeout = defaultRedisConnectTimeout
+	}
+	if conf.IOTimeout == 0 {
+		conf.IOTimeout = defaultRedisIOTimeout
+	}
+
 	shard := &RedisShard{
 		config:           conf,
 		scriptsCh:        make(chan struct{}, 1),
@@ -98,7 +105,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 
 	options := rueidis.ClientOption{
 		SelectDB:         conf.DB,
-		ConnWriteTimeout: DefaultRedisWriteTimeout,
+		ConnWriteTimeout: conf.IOTimeout,
 		TLSConfig:        conf.TLSConfig,
 		Username:         conf.User,
 		Password:         conf.Password,
@@ -110,7 +117,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	if len(conf.SentinelAddresses) > 0 {
 		options.InitAddress = conf.SentinelAddresses
 		options.Sentinel = rueidis.SentinelOption{
-			TLSConfig:  conf.TLSConfig,
+			TLSConfig:  conf.SentinelTLSConfig,
 			MasterSet:  conf.SentinelMasterName,
 			Username:   conf.SentinelUser,
 			Password:   conf.SentinelPassword,
@@ -123,7 +130,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	options.Dialer = net.Dialer{
-		Timeout: DefaultRedisConnectTimeout,
+		Timeout: conf.ConnectTimeout,
 	}
 
 	client, err := rueidis.NewClient(options)
@@ -162,10 +169,11 @@ type RedisShardConfig struct {
 	SentinelPassword string
 	// SentinelClientName is a client name for established connections to Sentinel.
 	SentinelClientName string
+	// SentinelTLSConfig is a TLS configuration for Sentinel connections.
+	SentinelTLSConfig *tls.Config
 
 	// DB is Redis database number. If not set then database 0 used. Does not make sense in Redis Cluster case.
 	DB int
-
 	// User is a username for Redis ACL-based auth.
 	User string
 	// Password is password to use when connecting to Redis database.
@@ -173,21 +181,15 @@ type RedisShardConfig struct {
 	Password string
 	// ClientName for established connections. See https://redis.io/commands/client-setname/
 	ClientName string
-
-	// Connection TLS configuration.
+	// TLSConfig contains connection TLS configuration.
 	TLSConfig *tls.Config
 
-	// ReadTimeout is a timeout on read operations. Note that at moment it should be greater
-	// than node ping publish interval in order to prevent timing out Pub/Sub connection's
-	// Receive call.
-	// By default, DefaultRedisReadTimeout used.
-	ReadTimeout time.Duration
-	// WriteTimeout is a timeout on write operations.
-	// By default, DefaultRedisWriteTimeout used.
-	WriteTimeout time.Duration
 	// ConnectTimeout is a timeout on connect operation.
-	// By default, DefaultRedisConnectTimeout used.
+	// By default, 1 second is used.
 	ConnectTimeout time.Duration
+	// IOTimeout is a timeout on Redis connection operations.
+	// By default, 3 seconds is used.
+	IOTimeout time.Duration
 
 	network string
 	address string
@@ -202,14 +204,6 @@ func (s *RedisShard) Close() {
 
 func (s *RedisShard) string() string {
 	return s.config.address
-}
-
-func (s *RedisShard) readTimeout() time.Duration {
-	var readTimeout = DefaultRedisReadTimeout
-	if s.config.ReadTimeout != 0 {
-		readTimeout = s.config.ReadTimeout
-	}
-	return readTimeout
 }
 
 // consistentIndex is an adapted function from https://github.com/dgryski/go-jump

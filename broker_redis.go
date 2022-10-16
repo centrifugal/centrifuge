@@ -682,7 +682,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler, 
 		for i, ch := range chIDs {
 			if len(batch) > 0 && i%redisSubscribeBatchLimit == 0 {
 				r := newSubRequest(batch, true)
-				err := b.sendSubscribeSharded(s, r, shardIndex)
+				err := b.sendSubscribe(s, r, shardIndex)
 				if err != nil {
 					b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 					closeDoneOnce()
@@ -694,7 +694,7 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler, 
 		}
 		if len(batch) > 0 {
 			r := newSubRequest(batch, true)
-			err := b.sendSubscribeSharded(s, r, shardIndex)
+			err := b.sendSubscribe(s, r, shardIndex)
 			if err != nil {
 				b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 				closeDoneOnce()
@@ -712,11 +712,11 @@ func (b *RedisBroker) runPubSub(s *RedisShard, eventHandler BrokerEventHandler, 
 	}
 }
 
-func (b *RedisBroker) sendSubscribeSharded(s *RedisShard, r subRequest, shardIndex int) error {
+func (b *RedisBroker) sendSubscribe(s *RedisShard, r subRequest, shardIndex int) error {
 	select {
 	case s.subChannels[shardIndex] <- r:
 	default:
-		timer := timers.AcquireTimer(s.readTimeout())
+		timer := timers.AcquireTimer(s.config.IOTimeout)
 		defer timers.ReleaseTimer(timer)
 		select {
 		case s.subChannels[shardIndex] <- r:
@@ -880,9 +880,9 @@ func (b *RedisBroker) subscribe(s *RedisShard, ch string) error {
 	}
 	r := newSubRequest([]channelID{b.messageChannelID(s, ch)}, true)
 	if b.useShardedPubSub(s) {
-		return b.sendSubscribeSharded(s, r, consistentIndex(ch, b.config.NumClusterShards))
+		return b.sendSubscribe(s, r, consistentIndex(ch, b.config.NumClusterShards))
 	}
-	return b.sendSubscribeSharded(s, r, index(ch, b.config.NumPubSubShards))
+	return b.sendSubscribe(s, r, index(ch, b.config.NumPubSubShards))
 }
 
 // Unsubscribe - see Broker.Unsubscribe.
@@ -896,9 +896,9 @@ func (b *RedisBroker) unsubscribe(s *RedisShard, ch string) error {
 	}
 	r := newSubRequest([]channelID{b.messageChannelID(s, ch)}, false)
 	if b.useShardedPubSub(s) {
-		return b.sendSubscribeSharded(s, r, consistentIndex(ch, b.config.NumClusterShards))
+		return b.sendSubscribe(s, r, consistentIndex(ch, b.config.NumClusterShards))
 	}
-	return b.sendSubscribeSharded(s, r, index(ch, b.config.NumPubSubShards))
+	return b.sendSubscribe(s, r, index(ch, b.config.NumPubSubShards))
 }
 
 // History - see Broker.History.

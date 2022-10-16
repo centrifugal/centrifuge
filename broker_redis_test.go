@@ -1,5 +1,4 @@
 //go:build integration
-// +build integration
 
 package centrifuge
 
@@ -49,9 +48,8 @@ func testRedisConf() RedisShardConfig {
 		Address:        testRedisAddress,
 		DB:             testRedisDB,
 		Password:       testRedisPassword,
-		ReadTimeout:    100 * time.Second,
+		IOTimeout:      10 * time.Second,
 		ConnectTimeout: 10 * time.Second,
-		WriteTimeout:   10 * time.Second,
 	}
 }
 
@@ -80,7 +78,7 @@ func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, 
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
 		Password:         testRedisPassword,
-		ReadTimeout:      100 * time.Second,
+		IOTimeout:        10 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -106,7 +104,7 @@ func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
 	redisConf := RedisShardConfig{
 		SentinelAddresses:  []string{"127.0.0.1:26379"},
 		SentinelMasterName: "mymaster",
-		ReadTimeout:        100 * time.Second,
+		IOTimeout:          10 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
