@@ -1245,12 +1245,7 @@ func nodeWithRedisBroker(tb testing.TB, useStreams bool, useCluster bool) *Node 
 	if err != nil {
 		tb.Fatal(err)
 	}
-	e := newTestRedisBroker(tb, n, useStreams, useCluster)
-	n.SetBroker(e)
-	err = n.Run()
-	if err != nil {
-		tb.Fatal(err)
-	}
+	newTestRedisBroker(tb, n, useStreams, useCluster)
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{}, nil)
