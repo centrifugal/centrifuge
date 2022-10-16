@@ -28,8 +28,7 @@ const (
 
 type RedisShard struct {
 	config           RedisShardConfig
-	subCh            chan subRequest
-	shardedSubCh     []chan subRequest
+	subChannels      []chan subRequest
 	scriptsCh        chan struct{}
 	reloadPipelineCh chan struct{}
 	client           rueidis.Client
@@ -93,8 +92,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		scriptsCh:        make(chan struct{}, 1),
 		useCluster:       len(conf.ClusterAddresses) > 0,
 		reloadPipelineCh: make(chan struct{}),
-		subCh:            make(chan subRequest),
-		shardedSubCh:     make([]chan subRequest, 0),
+		subChannels:      make([]chan subRequest, 0),
 		closeCh:          make(chan struct{}),
 	}
 

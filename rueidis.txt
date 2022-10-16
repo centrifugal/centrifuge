@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/centrifugal/centrifuge
+BenchmarkRedisPublish_1Ch/lists-8     	 1867363	       639.1 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/lists-8     	 1877688	       638.0 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/lists-8     	 1879212	       636.6 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/lists-8     	 1695234	       645.7 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/lists-8     	 1888666	       635.8 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/streams-8   	 1864803	       675.6 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/streams-8   	 1886775	       634.6 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/streams-8   	 1890384	       638.8 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/streams-8   	 1903450	       701.3 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_1Ch/streams-8   	 1889460	       640.2 ns/op	     168 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/lists-8  	 1626288	       660.5 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/lists-8  	 1682757	       707.2 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/lists-8  	 1810810	       667.5 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/lists-8  	 1772317	       680.9 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/lists-8  	 1763796	       685.6 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/streams-8         	 1739564	       693.4 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/streams-8         	 1715211	       695.0 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/streams-8         	 1725416	       704.0 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/streams-8         	 1704015	       704.4 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_ManyCh/streams-8         	 1592918	       747.9 ns/op	     171 B/op	       3 allocs/op
+BenchmarkRedisPublish_History_1Ch/lists-8      	  149036	      8004 ns/op	     552 B/op	      11 allocs/op
+BenchmarkRedisPublish_History_1Ch/lists-8      	  138235	      8018 ns/op	     553 B/op	      11 allocs/op
+BenchmarkRedisPublish_History_1Ch/lists-8      	  141470	      7979 ns/op	     553 B/op	      11 allocs/op
+BenchmarkRedisPublish_History_1Ch/lists-8      	  136303	      8013 ns/op	     553 B/op	      11 allocs/op
+BenchmarkRedisPublish_History_1Ch/lists-8      	  143006	      7990 ns/op	     552 B/op	      11 allocs/op
+BenchmarkRedisPublish_History_1Ch/streams-8    	  120745	      9808 ns/op	     546 B/op	      12 allocs/op
+BenchmarkRedisPublish_History_1Ch/streams-8    	  122112	      9772 ns/op	     557 B/op	      12 allocs/op
+BenchmarkRedisPublish_History_1Ch/streams-8    	  117459	      9778 ns/op	     546 B/op	      12 allocs/op
+BenchmarkRedisPublish_History_1Ch/streams-8    	  118531	      9782 ns/op	     546 B/op	      12 allocs/op
+BenchmarkRedisPublish_History_1Ch/streams-8    	  118418	      9819 ns/op	     557 B/op	      12 allocs/op
+PASS
+ok  	github.com/centrifugal/centrifuge	53.283s
