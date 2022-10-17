@@ -63,9 +63,7 @@ func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStre
 		HistoryMetaTTL: 3600 * time.Second,
 		Shards:         []*RedisShard{s},
 	})
-	if err != nil {
-		tb.Fatal(err)
-	}
+	require.NoError(tb, err)
 	n.SetBroker(e)
 	err = n.Run()
 	if err != nil {
@@ -340,7 +338,7 @@ func TestRedisBrokerRecover(t *testing.T) {
 
 func pubSubChannels(t *testing.T, e *RedisBroker) ([]string, error) {
 	t.Helper()
-	client := e.shards[0].client
+	client := e.shards[0].shard.client
 	return client.Do(context.Background(), client.B().PubsubChannels().Pattern(e.messagePrefix+"*").Build()).AsStrSlice()
 }
 
@@ -350,7 +348,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	if e.shards[0].useCluster {
+	if e.shards[0].shard.useCluster {
 		t.Skip("Channels command is not supported when Redis Cluster is used")
 	}
 
@@ -578,12 +576,12 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.messageChannelID(e.shards[0], "test"), []byte("__p1:16901:xyz__dsdsd"))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), []byte("__p1:16901:xyz__dsdsd"))
 	require.Error(t, err)
 
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		return nil
-	}}, e.messageChannelID(e.shards[0], "test"), []byte("__p1:16901"))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), []byte("__p1:16901"))
 	require.Error(t, err)
 
 	pub := &protocol.Publication{
@@ -598,7 +596,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.messageChannelID(e.shards[0], "test"), []byte("__p1:16901:xyz__"+string(data)))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), []byte("__p1:16901:xyz__"+string(data)))
 	require.NoError(t, err)
 	require.True(t, publicationHandlerCalled)
 
@@ -613,7 +611,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, "test", ch)
 		require.Equal(t, "12", info.UserID)
 		return nil
-	}}, e.messageChannelID(e.shards[0], "test"), append(joinTypePrefix, data...))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), append(joinTypePrefix, data...))
 	require.NoError(t, err)
 	require.True(t, joinHandlerCalled)
 
@@ -623,7 +621,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, "test", ch)
 		require.Equal(t, "12", info.UserID)
 		return nil
-	}}, e.messageChannelID(e.shards[0], "test"), append(leaveTypePrefix, data...))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), append(leaveTypePrefix, data...))
 	require.NoError(t, err)
 	require.True(t, leaveHandlerCalled)
 }
