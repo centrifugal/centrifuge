@@ -26,13 +26,11 @@ const (
 )
 
 type RedisShard struct {
-	config           RedisShardConfig
-	scriptsCh        chan struct{}
-	reloadPipelineCh chan struct{}
-	client           rueidis.Client
-	closeCh          chan struct{}
-	closeOnce        sync.Once
-	useCluster       bool
+	config     RedisShardConfig
+	client     rueidis.Client
+	closeCh    chan struct{}
+	closeOnce  sync.Once
+	useCluster bool
 }
 
 func confFromAddress(address string, conf RedisShardConfig) (RedisShardConfig, error) {
@@ -94,11 +92,9 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	shard := &RedisShard{
-		config:           conf,
-		scriptsCh:        make(chan struct{}, 1),
-		useCluster:       len(conf.ClusterAddresses) > 0,
-		reloadPipelineCh: make(chan struct{}),
-		closeCh:          make(chan struct{}),
+		config:     conf,
+		useCluster: len(conf.ClusterAddresses) > 0,
+		closeCh:    make(chan struct{}),
 	}
 
 	options := rueidis.ClientOption{
