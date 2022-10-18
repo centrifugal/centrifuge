@@ -147,8 +147,8 @@ var redisTests = []redisTest{
 	{"streams_cluster", true, true, testRedisAddress},
 	{"lists_kdb", false, false, "localhost:6344"},
 	{"streams_kdb", true, false, "localhost:6344"},
-	{"lists_df", false, false, "localhost:6333"},
-	{"streams_df", true, false, "localhost:6333"},
+	//{"lists_df", false, false, "localhost:6333"},
+	//{"streams_df", true, false, "localhost:6333"},
 }
 
 var benchRedisTests = func() (tests []redisTest) {
