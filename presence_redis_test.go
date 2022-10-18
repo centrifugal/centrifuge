@@ -20,7 +20,7 @@ func newTestRedisPresenceManager(tb testing.TB, n *Node, useCluster bool) *Redis
 }
 
 func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string) *RedisPresenceManager {
-	redisConf := testRedisConf()
+	redisConf := testRedisConf(testRedisAddress)
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
 	e, err := NewRedisPresenceManager(n, RedisPresenceManagerConfig{
@@ -41,7 +41,6 @@ func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string
 func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix string) *RedisPresenceManager {
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
-		Password:         testRedisPassword,
 
 		ReadTimeout: 100 * time.Second,
 	}

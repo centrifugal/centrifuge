@@ -19,20 +19,18 @@ import (
 )
 
 const (
-	testRedisAddress  = "127.0.0.1:6379"
-	testRedisPassword = ""
-	testRedisDB       = 9
+	testRedisAddress = "127.0.0.1:6379"
 )
 
 func getUniquePrefix() string {
 	return "centrifuge-test-" + randString(3) + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-func newTestRedisBroker(tb testing.TB, n *Node, useStreams bool, useCluster bool) *RedisBroker {
+func newTestRedisBroker(tb testing.TB, n *Node, useStreams bool, useCluster bool, redisAddress string) *RedisBroker {
 	if useCluster {
 		return NewTestRedisBrokerClusterWithPrefix(tb, n, getUniquePrefix(), useStreams)
 	}
-	return NewTestRedisBrokerWithPrefix(tb, n, getUniquePrefix(), useStreams)
+	return NewTestRedisBrokerWithPrefix(tb, n, getUniquePrefix(), useStreams, redisAddress)
 }
 
 func testNode(tb testing.TB) *Node {
@@ -44,19 +42,17 @@ func testNode(tb testing.TB) *Node {
 	return node
 }
 
-func testRedisConf() RedisShardConfig {
+func testRedisConf(redisAddress string) RedisShardConfig {
 	return RedisShardConfig{
-		Address:        testRedisAddress,
-		DB:             testRedisDB,
-		Password:       testRedisPassword,
+		Address:        redisAddress,
 		ReadTimeout:    100 * time.Second,
 		ConnectTimeout: 10 * time.Second,
 		WriteTimeout:   10 * time.Second,
 	}
 }
 
-func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
-	redisConf := testRedisConf()
+func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool, redisAddress string) *RedisBroker {
+	redisConf := testRedisConf(redisAddress)
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
@@ -79,7 +75,6 @@ func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStre
 func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
-		Password:         testRedisPassword,
 		ReadTimeout:      100 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
@@ -139,16 +134,21 @@ func TestRedisBrokerSentinel(t *testing.T) {
 }
 
 type redisTest struct {
-	Name       string
-	UseStreams bool
-	UseCluster bool
+	Name         string
+	UseStreams   bool
+	UseCluster   bool
+	RedisAddress string
 }
 
 var redisTests = []redisTest{
-	{"lists", false, false},
-	{"streams", true, false},
-	{"lists_cluster", false, true},
-	{"streams_cluster", true, true},
+	{"lists", false, false, testRedisAddress},
+	{"streams", true, false, testRedisAddress},
+	{"lists_cluster", false, true, testRedisAddress},
+	{"streams_cluster", true, true, testRedisAddress},
+	{"lists_kdb", false, false, "localhost:6344"},
+	{"streams_kdb", true, false, "localhost:6344"},
+	{"lists_df", false, false, "localhost:6333"},
+	{"streams_df", true, false, "localhost:6333"},
 }
 
 var benchRedisTests = func() (tests []redisTest) {
@@ -181,7 +181,7 @@ func TestRedisBroker(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
 
-			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			_, err := e.Publish("channel", testPublicationData(), PublishOptions{})
@@ -256,7 +256,7 @@ func TestRedisCurrentPosition(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			channel := "test-current-position"
@@ -284,7 +284,7 @@ func TestRedisBrokerRecover(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 
 			rawData := []byte("{}")
@@ -349,7 +349,7 @@ func pubSubChannels(t *testing.T, e *RedisBroker) ([]string, error) {
 func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	// Custom prefix to not collide with other tests.
 	node := testNode(t)
-	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
+	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false, testRedisAddress)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	if e.shards[0].useCluster {
@@ -573,7 +573,7 @@ func TestRedisConsistentIndex(t *testing.T) {
 
 func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	node := testNode(t)
-	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
+	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false, testRedisAddress)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		require.Equal(t, "test", ch)
@@ -703,7 +703,7 @@ func TestRedisExtractPushData(t *testing.T) {
 }
 
 func TestNode_OnSurvey_TwoNodes(t *testing.T) {
-	redisConf := testRedisConf()
+	redisConf := testRedisConf(testRedisAddress)
 
 	node1, _ := New(Config{})
 
@@ -766,7 +766,7 @@ func TestNode_OnSurvey_TwoNodes(t *testing.T) {
 }
 
 func TestNode_OnNotification_TwoNodes(t *testing.T) {
-	redisConf := testRedisConf()
+	redisConf := testRedisConf(testRedisAddress)
 
 	node1, _ := New(Config{})
 
@@ -832,7 +832,7 @@ func TestNode_OnNotification_TwoNodes(t *testing.T) {
 }
 
 func TestRedisPubSubTwoNodes(t *testing.T) {
-	redisConf := testRedisConf()
+	redisConf := testRedisConf(testRedisAddress)
 
 	node1, _ := New(Config{})
 
@@ -963,7 +963,7 @@ func BenchmarkRedisSurvey(b *testing.B) {
 	for _, tt := range benchSurveyTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			prefix := getUniquePrefix()
-			redisConf := testRedisConf()
+			redisConf := testRedisConf(testRedisAddress)
 			data := make([]byte, tt.DataSize)
 
 			var nodes []*Node
@@ -1051,7 +1051,7 @@ func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			b.SetParallelism(128)
@@ -1074,7 +1074,7 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			b.SetParallelism(128)
@@ -1098,7 +1098,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
@@ -1124,7 +1124,7 @@ func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
@@ -1164,7 +1164,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 	for _, tt := range tests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, false, tt.UseCluster)
+			e := newTestRedisBroker(b, node, false, tt.UseCluster, testRedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			i := int32(0)
 			b.SetParallelism(128)
@@ -1186,7 +1186,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			for i := 0; i < 4; i++ {
@@ -1211,7 +1211,7 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			numMessages := 1000
@@ -1245,7 +1245,7 @@ func nodeWithRedisBroker(tb testing.TB, useStreams bool, useCluster bool) *Node 
 	if err != nil {
 		tb.Fatal(err)
 	}
-	e := newTestRedisBroker(tb, n, useStreams, useCluster)
+	e := newTestRedisBroker(tb, n, useStreams, useCluster, testRedisAddress)
 	n.SetBroker(e)
 	err = n.Run()
 	if err != nil {
@@ -1325,7 +1325,7 @@ func TestRedisHistoryIteration(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{100, 5}
 			startPosition := it.prepareHistoryIteration(t, e.node)
@@ -1341,7 +1341,7 @@ func TestRedisHistoryIterationReverse(t *testing.T) {
 				t.Skip()
 			}
 			node := testNode(t)
-			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{100, 5}
 			startPosition := it.prepareHistoryIteration(t, e.node)
@@ -1354,7 +1354,7 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := testNode(b)
-			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
+			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.RedisAddress)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{10000, 100}
 			startPosition := it.prepareHistoryIteration(b, e.node)
