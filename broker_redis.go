@@ -178,7 +178,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 			return nil, errors.New("can use sharded PUB/SUB feature (NumClusterShards > 0) only with Redis Cluster")
 		}
 		subChannels := make([][]chan subRequest, 0)
-		if shard.useCluster && b.config.NumClusterShards > 0 {
+		if b.useShardedPubSub(shard) {
 			for i := 0; i < b.config.NumClusterShards; i++ {
 				subChannels = append(subChannels, make([]chan subRequest, 0))
 			}
@@ -431,7 +431,7 @@ func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler, startCh ch
 					return
 				default:
 				}
-				b.runPubSub(s, h, clusterShardIndex, pubSubShardIndex, s.shard.useCluster && b.config.NumClusterShards > 0)
+				b.runPubSub(s, h, clusterShardIndex, pubSubShardIndex, b.useShardedPubSub(s.shard))
 			})
 		}
 	}
