@@ -71,7 +71,7 @@ type RedisBroker struct {
 }
 
 // DefaultRedisBrokerPrefix is a default value for RedisBrokerConfig.Prefix.
-const DefaultRedisBrokerPrefix = "centrifugo"
+const DefaultRedisBrokerPrefix = "centrifuge"
 
 // RedisBrokerConfig is a config for Broker.
 type RedisBrokerConfig struct {
