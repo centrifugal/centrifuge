@@ -29,8 +29,6 @@ const (
 	redisControlChannelSuffix = ".control"
 	// redisNodeChannelPrefix is a suffix for node channel.
 	redisNodeChannelPrefix = ".node."
-	// redisPingChannelSuffix is a suffix for ping channel.
-	redisPingChannelSuffix = ".ping"
 	// redisClientChannelPrefix is a prefix before channel name for client messages.
 	redisClientChannelPrefix = ".client."
 	// redisPubSubShardChannelSuffix is a suffix in channel name which we use to establish a sharded PUB/SUB connection.
@@ -63,7 +61,6 @@ type RedisBroker struct {
 	addHistoryStreamScript *rueidis.Lua
 	shardChannel           string
 	messagePrefix          string
-	pingChannel            string
 	controlChannel         string
 	nodeChannel            string
 	closeOnce              sync.Once
@@ -171,11 +168,10 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	}
 	b.shardChannel = config.Prefix + redisPubSubShardChannelSuffix
 	b.messagePrefix = config.Prefix + redisClientChannelPrefix
-	b.pingChannel = config.Prefix + redisPingChannelSuffix
 	b.nodeChannel = string(b.nodeChannelID(n.ID()))
 	b.controlChannel = config.Prefix + redisControlChannelSuffix
 
-	// Configure PUB/SUB fpr all shards.
+	// Configure PUB/SUB channels for all shards.
 	for _, shardWrapper := range b.shards {
 		shard := shardWrapper.shard
 		if !shard.useCluster && b.config.NumClusterShards > 0 {
@@ -589,6 +585,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 				return
 			}
 			if s.Kind == "sunsubscribe" && s.Channel == string(shardChannel) {
+				// Helps to handle slot migration.
 				closeDoneOnce()
 			}
 		},
@@ -634,16 +631,16 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 
 				var opErr error
 				if isSubscribe {
-					if !useShardedPubSub {
-						opErr = conn.Do(context.Background(), conn.B().Subscribe().Channel(chIDs...).Build()).Error()
-					} else {
+					if useShardedPubSub {
 						opErr = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(chIDs...).Build()).Error()
+					} else {
+						opErr = conn.Do(context.Background(), conn.B().Subscribe().Channel(chIDs...).Build()).Error()
 					}
 				} else {
-					if !useShardedPubSub {
-						opErr = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
-					} else {
+					if useShardedPubSub {
 						opErr = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+					} else {
+						opErr = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
 					}
 				}
 
@@ -669,16 +666,16 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 					}
 					var opErr error
 					if otherR.subscribe {
-						if !useShardedPubSub {
-							opErr = conn.Do(context.Background(), conn.B().Subscribe().Channel(chIDs...).Build()).Error()
-						} else {
+						if useShardedPubSub {
 							opErr = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(chIDs...).Build()).Error()
+						} else {
+							opErr = conn.Do(context.Background(), conn.B().Subscribe().Channel(chIDs...).Build()).Error()
 						}
 					} else {
-						if !useShardedPubSub {
-							opErr = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
-						} else {
+						if useShardedPubSub {
 							opErr = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
+						} else {
+							opErr = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
 						}
 					}
 					if opErr != nil {
@@ -795,17 +792,30 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	var streamKey channelID
 	var size int
 	var script *rueidis.Lua
-	if !b.config.UseLists {
-		streamKey = b.historyStreamKey(s.shard, ch)
-		size = opts.HistorySize
-		script = b.addHistoryStreamScript
-	} else {
+	if b.config.UseLists {
 		streamKey = b.historyListKey(s.shard, ch)
 		size = opts.HistorySize - 1
 		script = b.addHistoryListScript
+	} else {
+		streamKey = b.historyStreamKey(s.shard, ch)
+		size = opts.HistorySize
+		script = b.addHistoryStreamScript
 	}
 
-	replies, err := script.Exec(context.Background(), s.shard.client, []string{string(streamKey), string(historyMetaKey)}, []string{convert.BytesToString(byteMessage), strconv.Itoa(size), strconv.Itoa(int(opts.HistoryTTL.Seconds())), string(publishChannel), strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10), publishCommand}).ToArray()
+	replies, err := script.Exec(
+		context.Background(),
+		s.shard.client,
+		[]string{string(streamKey), string(historyMetaKey)},
+		[]string{
+			convert.BytesToString(byteMessage),
+			strconv.Itoa(size),
+			strconv.Itoa(int(opts.HistoryTTL.Seconds())),
+			string(publishChannel),
+			strconv.Itoa(historyMetaTTLSeconds),
+			strconv.FormatInt(time.Now().Unix(), 10),
+			publishCommand,
+		},
+	).ToArray()
 	if err != nil {
 		return StreamPosition{}, err
 	}
@@ -890,7 +900,6 @@ func (b *RedisBroker) publishControl(s *shardWrapper, data []byte, nodeID string
 	} else {
 		chID = b.nodeChannelID(nodeID)
 	}
-
 	cmd := s.shard.client.B().Publish().Channel(string(chID)).Message(convert.BytesToString(data)).Build()
 	resp := s.shard.client.Do(context.Background(), cmd)
 	return resp.Error()
@@ -938,10 +947,10 @@ func (b *RedisBroker) History(ch string, filter HistoryFilter) ([]*Publication, 
 }
 
 func (b *RedisBroker) history(s *shardWrapper, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	if !b.config.UseLists {
-		return b.historyStream(s.shard, ch, filter)
+	if b.config.UseLists {
+		return b.historyList(s.shard, ch, filter)
 	}
-	return b.historyList(s.shard, ch, filter)
+	return b.historyStream(s.shard, ch, filter)
 }
 
 // RemoveHistory - see Broker.RemoveHistory.
@@ -951,10 +960,10 @@ func (b *RedisBroker) RemoveHistory(ch string) error {
 
 func (b *RedisBroker) removeHistory(s *shardWrapper, ch string) error {
 	var key channelID
-	if !b.config.UseLists {
-		key = b.historyStreamKey(s.shard, ch)
-	} else {
+	if b.config.UseLists {
 		key = b.historyListKey(s.shard, ch)
+	} else {
+		key = b.historyStreamKey(s.shard, ch)
 	}
 	cmd := s.shard.client.B().Del().Key(string(key)).Build()
 	resp := s.shard.client.Do(context.Background(), cmd)
@@ -1009,10 +1018,10 @@ func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 			ch = "{" + ch + "}"
 		}
 	}
-	if !b.config.UseLists {
-		return channelID(b.config.Prefix + ".stream.meta." + ch)
+	if b.config.UseLists {
+		return channelID(b.config.Prefix + ".list.meta." + ch)
 	}
-	return channelID(b.config.Prefix + ".list.meta." + ch)
+	return channelID(b.config.Prefix + ".stream.meta." + ch)
 }
 
 func (b *RedisBroker) extractChannel(chID channelID) string {
