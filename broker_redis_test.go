@@ -1379,16 +1379,28 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 }
 
 type throughputTest struct {
+	NumPubSubShards  int
 	NumPubSubWorkers int
 }
 
 var throughputTests = []throughputTest{
-	{1}, {2}, {4}, {8},
+	{1, 1},
+	{1, 2},
+	{1, 4},
+	{1, 8},
+	{2, 1},
+	{2, 2},
+	{2, 4},
+	{2, 8},
+	{4, 1},
+	{4, 2},
+	{4, 4},
+	{4, 8},
 }
 
 func BenchmarkPubSubThroughput(b *testing.B) {
 	for _, tt := range throughputTests {
-		b.Run(fmt.Sprintf("%dwrk", tt.NumPubSubWorkers), func(b *testing.B) {
+		b.Run(fmt.Sprintf("%dsh_%dwrk", tt.NumPubSubShards, tt.NumPubSubWorkers), func(b *testing.B) {
 			redisConf := testRedisConf()
 
 			node1, _ := New(Config{})
@@ -1401,6 +1413,7 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 			e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:           prefix,
 				Shards:           []*RedisShard{s},
+				NumPubSubShards:  tt.NumPubSubShards,
 				NumPubSubWorkers: tt.NumPubSubWorkers,
 			})
 
