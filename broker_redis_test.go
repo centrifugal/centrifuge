@@ -838,10 +838,17 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	prefix := getUniquePrefix()
 
 	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
-		Prefix: prefix,
-		Shards: []*RedisShard{s},
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s},
+		NumPubSubShards:  4,
+		NumPubSubWorkers: 2,
 	})
-	messageCh := make(chan struct{})
+
+	msgNum := 10
+	var numPublications int
+	var numJoins int
+	var numLeaves int
+	pubCh := make(chan struct{})
 	joinCh := make(chan struct{})
 	leaveCh := make(chan struct{})
 	brokerEventHandler := &testBrokerEventHandler{
@@ -849,20 +856,32 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 			return nil
 		},
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
-			close(messageCh)
+			numPublications++
+			if numPublications == msgNum {
+				close(pubCh)
+			}
 			return nil
 		},
 		HandleJoinFunc: func(ch string, info *ClientInfo) error {
-			close(joinCh)
+			numJoins++
+			if numJoins == msgNum {
+				close(joinCh)
+			}
 			return nil
 		},
 		HandleLeaveFunc: func(ch string, info *ClientInfo) error {
-			close(leaveCh)
+			numLeaves++
+			if numLeaves == msgNum {
+				close(leaveCh)
+			}
 			return nil
 		},
 	}
 	_ = e1.Run(brokerEventHandler)
-	require.NoError(t, e1.Subscribe("test"))
+
+	for i := 0; i < msgNum; i++ {
+		require.NoError(t, e1.Subscribe("test"+strconv.Itoa(i)))
+	}
 
 	node2, _ := New(Config{})
 	s2, err := NewRedisShard(node2, redisConf)
@@ -876,15 +895,17 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	_ = node2.Run()
 	defer func() { _ = node2.Shutdown(context.Background()) }()
 
-	_, err = node2.Publish("test", []byte("123"))
-	require.NoError(t, err)
-	err = e2.PublishJoin("test", &ClientInfo{})
-	require.NoError(t, err)
-	err = e2.PublishLeave("test", &ClientInfo{})
-	require.NoError(t, err)
+	for i := 0; i < msgNum; i++ {
+		_, err = node2.Publish("test"+strconv.Itoa(i), []byte("123"))
+		require.NoError(t, err)
+		err = e2.PublishJoin("test"+strconv.Itoa(i), &ClientInfo{})
+		require.NoError(t, err)
+		err = e2.PublishLeave("test"+strconv.Itoa(i), &ClientInfo{})
+		require.NoError(t, err)
+	}
 
 	select {
-	case <-messageCh:
+	case <-pubCh:
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for PUB/SUB message")
 	}
@@ -1353,6 +1374,92 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				it.testHistoryIteration(b, e.node, startPosition)
 			}
+		})
+	}
+}
+
+type throughputTest struct {
+	NumPubSubShards  int
+	NumPubSubWorkers int
+}
+
+var throughputTests = []throughputTest{
+	{1, 0},
+	{2, 0},
+	{4, 0},
+	{8, 0},
+	{1, 8},
+	{2, 4},
+	{4, 2},
+	{8, 1},
+	{1, 1},
+	{2, 2},
+	{4, 4},
+	{8, 8},
+}
+
+func BenchmarkPubSubThroughput(b *testing.B) {
+	for _, tt := range throughputTests {
+		b.Run(fmt.Sprintf("%dsh_%dwrk", tt.NumPubSubShards, tt.NumPubSubWorkers), func(b *testing.B) {
+			redisConf := testRedisConf()
+
+			node1, _ := New(Config{})
+
+			s, err := NewRedisShard(node1, redisConf)
+			require.NoError(b, err)
+
+			prefix := getUniquePrefix()
+
+			e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+				Prefix:           prefix,
+				Shards:           []*RedisShard{s},
+				NumPubSubShards:  tt.NumPubSubShards,
+				NumPubSubWorkers: tt.NumPubSubWorkers,
+			})
+
+			numChannels := 1024
+			pubCh := make(chan struct{}, 1024)
+			brokerEventHandler := &testBrokerEventHandler{
+				HandleControlFunc: func(bytes []byte) error {
+					return nil
+				},
+				HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+					pubCh <- struct{}{}
+					return nil
+				},
+			}
+			_ = e1.Run(brokerEventHandler)
+
+			for i := 0; i < numChannels; i++ {
+				require.NoError(b, e1.Subscribe("test"+strconv.Itoa(i)))
+			}
+
+			node2, _ := New(Config{})
+			s2, err := NewRedisShard(node2, redisConf)
+			require.NoError(b, err)
+
+			e2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+				Prefix: prefix,
+				Shards: []*RedisShard{s2},
+			})
+			node2.SetBroker(e2)
+			_ = node2.Run()
+			defer func() { _ = node2.Shutdown(context.Background()) }()
+
+			b.ReportAllocs()
+			b.SetParallelism(128)
+			b.ResetTimer()
+			var i int64
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					currentI := atomic.AddInt64(&i, 1) % int64(numChannels)
+					_, err = node2.Publish("test"+strconv.FormatInt(currentI, 10), []byte("123"))
+					if err != nil {
+						b.Fatal(err)
+					}
+					<-pubCh
+				}
+			})
 		})
 	}
 }
