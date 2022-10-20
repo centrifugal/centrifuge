@@ -845,9 +845,9 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	})
 
 	msgNum := 10
-	var numPublications int
-	var numJoins int
-	var numLeaves int
+	var numPublications int64
+	var numJoins int64
+	var numLeaves int64
 	pubCh := make(chan struct{})
 	joinCh := make(chan struct{})
 	leaveCh := make(chan struct{})
@@ -856,22 +856,22 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 			return nil
 		},
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
-			numPublications++
-			if numPublications == msgNum {
+			c := atomic.AddInt64(&numPublications, 1)
+			if c == int64(msgNum) {
 				close(pubCh)
 			}
 			return nil
 		},
 		HandleJoinFunc: func(ch string, info *ClientInfo) error {
-			numJoins++
-			if numJoins == msgNum {
+			c := atomic.AddInt64(&numJoins, 1)
+			if c == int64(msgNum) {
 				close(joinCh)
 			}
 			return nil
 		},
 		HandleLeaveFunc: func(ch string, info *ClientInfo) error {
-			numLeaves++
-			if numLeaves == msgNum {
+			c := atomic.AddInt64(&numLeaves, 1)
+			if c == int64(msgNum) {
 				close(leaveCh)
 			}
 			return nil
@@ -1379,28 +1379,16 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 }
 
 type throughputTest struct {
-	NumPubSubShards  int
 	NumPubSubWorkers int
 }
 
 var throughputTests = []throughputTest{
-	{1, 0},
-	{2, 0},
-	{4, 0},
-	{8, 0},
-	{1, 8},
-	{2, 4},
-	{4, 2},
-	{8, 1},
-	{1, 1},
-	{2, 2},
-	{4, 4},
-	{8, 8},
+	{1}, {2}, {4}, {8},
 }
 
 func BenchmarkPubSubThroughput(b *testing.B) {
 	for _, tt := range throughputTests {
-		b.Run(fmt.Sprintf("%dsh_%dwrk", tt.NumPubSubShards, tt.NumPubSubWorkers), func(b *testing.B) {
+		b.Run(fmt.Sprintf("%dwrk", tt.NumPubSubWorkers), func(b *testing.B) {
 			redisConf := testRedisConf()
 
 			node1, _ := New(Config{})
@@ -1413,7 +1401,6 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 			e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:           prefix,
 				Shards:           []*RedisShard{s},
-				NumPubSubShards:  tt.NumPubSubShards,
 				NumPubSubWorkers: tt.NumPubSubWorkers,
 			})
 
