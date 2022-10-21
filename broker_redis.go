@@ -712,8 +712,9 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 			}
 		}(i)
 
+		channels := b.node.Hub().Channels()
+
 		go func(subscriberIndex int) {
-			channels := b.node.Hub().Channels()
 			estimatedCap := len(channels) / b.config.NumPubSubSubscribers / b.config.NumPubSubShards
 			if useShardedPubSub {
 				estimatedCap /= b.config.NumClusterShards
