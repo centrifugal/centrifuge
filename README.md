@@ -270,6 +270,21 @@ cfg.LogLevel = centrifuge.LogLevelDebug
 cfg.LogHandler = handleLog
 ```
 
+#### Connecting from `localhost`
+
+When using [centrifuge-js](https://github.com/centrifugal/centrifuge-js) to connect to a Centrifuge-powered service from JS code running on `localhost` you might experience some difficulties.
+
+This is most likely caused by a strict default `CheckOrigin`, that will ensure that connection request originates from same domain as your service.
+To override this behaviour use the approach outlined below. Note, that it's not recommended for production environments.
+
+```go
+centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+})
+```
+
 ### For contributors
 
 #### Running integration tests locally
