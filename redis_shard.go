@@ -19,6 +19,14 @@ import (
 	"github.com/go-redis/redis/v9"
 )
 
+type redisLogger struct{}
+
+func (redisLogger) Printf(ctx context.Context, format string, v ...interface{}) {}
+
+func init() {
+	redis.SetLogger(redisLogger{})
+}
+
 type (
 	// channelID is unique channel identifier in Redis.
 	channelID string
