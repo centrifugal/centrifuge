@@ -1213,7 +1213,7 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
 			numMessages := 1000
-			numMissing := 5
+			numMissing := 0
 			for i := 1; i <= numMessages; i++ {
 				_, err := e.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
