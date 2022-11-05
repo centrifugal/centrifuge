@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -923,6 +924,13 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	require.NoError(t, err)
 
 	prefix := getUniquePrefix()
+
+	result := s.client.Do(context.Background(), s.client.B().Spublish().Channel(prefix+"._").Message("").Build())
+	if result.Error() != nil && strings.Contains(result.Error().Error(), "ERR unknown command") {
+		t.Skip("sharded PUB/SUB not supported by this Redis version, skipping test")
+	} else {
+		require.NoError(t, result.Error())
+	}
 
 	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 		Prefix:           prefix,
