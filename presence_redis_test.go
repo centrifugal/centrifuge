@@ -41,7 +41,6 @@ func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string
 func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix string) *RedisPresenceManager {
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
-		Password:         testRedisPassword,
 		IOTimeout:        10 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)

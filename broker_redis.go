@@ -778,6 +778,10 @@ func (b *RedisBroker) sendSubscribe(s *shardWrapper, r subRequest, clusterShardI
 	return r.result()
 }
 
+func (b *RedisBroker) useShardedPubSub(s *RedisShard) bool {
+	return s.useCluster && b.config.NumClusterShards > 0
+}
+
 // Publish - see Broker.Publish.
 func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, error) {
 	return b.publish(b.getShard(ch), ch, data, opts)
@@ -863,10 +867,6 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 // PublishJoin - see Broker.PublishJoin.
 func (b *RedisBroker) PublishJoin(ch string, info *ClientInfo) error {
 	return b.publishJoin(b.getShard(ch), ch, info)
-}
-
-func (b *RedisBroker) useShardedPubSub(s *RedisShard) bool {
-	return s.useCluster && b.config.NumClusterShards > 0
 }
 
 func (b *RedisBroker) publishJoin(s *shardWrapper, ch string, info *ClientInfo) error {
