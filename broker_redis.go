@@ -19,7 +19,10 @@ import (
 	"github.com/rueian/rueidis"
 )
 
-var errRedisOpTimeout = errors.New("redis: operation timed out")
+var (
+	errRedisTimeout = errors.New("redis: operation timed out")
+	errRedisClosed  = errors.New("redis: broker closed")
+)
 
 const (
 	// redisSubscribeBatchLimit is a maximum number of channels to include in a single
@@ -44,11 +47,12 @@ type shardWrapper struct {
 
 // RedisBroker uses Redis to implement Broker functionality. This broker allows
 // scaling Centrifuge-based server to many instances and load balance client
-// connections between them.
-// Broker additionally supports Redis Sentinel, client-side consistent sharding
-// and can work with Redis Cluster (including client-side sharding between different
-// Redis Clusters to scale PUB/SUB).
-// By default, Redis >= 5 required (due to the fact Broker uses STREAM data structure).
+// connections between them. Centrifuge nodes will be connected over Redis PUB/SUB.
+// RedisBroker supports standalone Redis, Redis in master-replica setup with Sentinel,
+// Redis Cluster. Also, it supports client-side consistent sharding between isolated
+// Redis setups.
+// By default, Redis >= 5 required (due to the fact RedisBroker uses STREAM data structure
+// to keep publication history for a channel).
 type RedisBroker struct {
 	controlRound           uint64
 	node                   *Node
@@ -67,16 +71,14 @@ type RedisBroker struct {
 	closeCh                chan struct{}
 }
 
-// DefaultRedisBrokerPrefix is a default value for RedisBrokerConfig.Prefix.
-const DefaultRedisBrokerPrefix = "centrifuge"
-
 // RedisBrokerConfig is a config for Broker.
 type RedisBrokerConfig struct {
 	// Prefix to use before every channel name and key in Redis. By default,
-	// DefaultRedisBrokerPrefix will be used.
+	// RedisBroker will use prefix "centrifuge".
 	Prefix string
 
-	// Shards is a list of Redis shards to use. At least one shard must be provided.
+	// Shards is a slice of RedisShard to use. At least one shard must be provided.
+	// Data will be consistently sharded by channel over provided Redis shards.
 	Shards []*RedisShard
 
 	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
@@ -114,21 +116,27 @@ type RedisBrokerConfig struct {
 	// subscriber goroutines per PUB/SUB shard.
 	NumPubSubSubscribers int
 
-	// NumPubSubProcessors allows configuring number of workers which will process messages
-	// coming from Redis PUB/SUB. Zero value tells Centrifuge to use the number calculated as
+	// NumPubSubProcessors allows configuring number of workers which will process
+	// messages coming from Redis PUB/SUB. Zero value tells Centrifuge to use the
+	// number calculated as:
 	// runtime.NumCPU / NumPubSubShards / NumClusterShards (if used) (minimum 1).
 	NumPubSubProcessors int
 
-	// NumClusterShards when greater than zero allows turning on a mode when broker
-	// will use Redis Cluster with sharded PUB/SUB feature. To achieve PUB/SUB
-	// efficiency RedisBroker reduces possible Redis Cluster slots to the NumClusterShards
-	// value and starts a separate PUB/SUB for each shard. By default, sharded PUB/SUB is
-	// not used - i.e. we use globally distributed PUBLISH commands in Redis Cluster.
-	// Note, that turning on NumClusterShards will cause Centrifuge to generate different
-	// keys and Redis channels than in the base Redis Cluster mode since we need to control
-	// slots and be sure our subscriber routines work with the same Redis Cluster slot - thus
-	// making it possible to subscribe over a single connection.
-	// This feature requires Redis >= 7.
+	// NumClusterShards when greater than zero allows turning on a mode in which
+	// broker will use Redis Cluster with sharded PUB/SUB feature available in
+	// Redis >= 7: https://redis.io/docs/manual/pubsub/#sharded-pubsub
+	//
+	// To achieve PUB/SUB efficiency RedisBroker reduces possible Redis Cluster
+	// slots to the NumClusterShards value and starts a separate PUB/SUB for each
+	// shard (i.e. for each slot). By default, sharded PUB/SUB is not used in
+	// Redis Cluster case - Centrifuge uses globally distributed PUBLISH commands
+	// in Redis Cluster where each publish is distributed to all nodes in Redis Cluster.
+	//
+	// Note (!), that turning on NumClusterShards will cause Centrifuge to generate
+	// different keys and Redis channels than in the base Redis Cluster mode since
+	// we need to control slots and be sure our subscriber routines work with the
+	// same Redis Cluster slot - thus making it possible to subscribe over a single
+	// connection.
 	NumClusterShards int
 }
 
@@ -143,7 +151,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	}
 
 	if config.Prefix == "" {
-		config.Prefix = DefaultRedisBrokerPrefix
+		config.Prefix = "centrifuge"
 	}
 
 	if config.NumPubSubShards == 0 {
@@ -396,16 +404,23 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 }
 
 func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
-	if b.config.UseLists {
-		return nil
-	}
-	// Check whether Redis Streams supported.
-	resp := shard.client.Do(context.Background(), shard.client.B().Xrange().Key("_").Start("0-0").End("0-0").Build())
-	if resp.Error() != nil {
-		if strings.Contains(resp.Error().Error(), "ERR unknown command") {
-			return errors.New("STREAM only available since Redis >= 5, consider upgrading Redis or using LIST structure for history")
+	if !b.config.UseLists {
+		// Check whether Redis Streams supported.
+		if result := shard.client.Do(context.Background(), shard.client.B().Xrange().Key("_").Start("0-0").End("0-0").Build()); result.Error() != nil {
+			if strings.Contains(result.Error().Error(), "ERR unknown command") {
+				return errors.New("STREAM only available since Redis >= 5, consider upgrading Redis or using LIST structure for history")
+			}
+			return result.Error()
 		}
-		return resp.Error()
+	}
+	if b.useShardedPubSub(shard) {
+		// Check whether Redis Cluster sharded PUB/SUB supported.
+		if result := shard.client.Do(context.Background(), shard.client.B().Spublish().Channel(b.config.Prefix+"._").Message("").Build()); result.Error() != nil {
+			if strings.Contains(result.Error().Error(), "ERR unknown command") {
+				return errors.New("this Redis version does not support cluster sharded PUB/SUB feature")
+			}
+			return result.Error()
+		}
 	}
 	return nil
 }
@@ -523,6 +538,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 
 	err := conn.Do(context.Background(), conn.B().Subscribe().Channel(controlChannel, nodeChannel).Build()).Error()
 	if err != nil {
+		startOnce(err)
 		b.node.Log(NewLogEntry(LogLevelError, "control pub/sub error", map[string]interface{}{"error": err.Error()}))
 		return
 	}
@@ -766,13 +782,17 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 func (b *RedisBroker) sendSubscribe(s *shardWrapper, r subRequest, clusterShardIndex, psShardIndex, subscriberShardIndex int) error {
 	select {
 	case s.subChannels[clusterShardIndex][psShardIndex][subscriberShardIndex] <- r:
+	case <-b.closeCh:
+		return errRedisClosed
 	default:
 		timer := timers.AcquireTimer(s.shard.config.IOTimeout)
 		defer timers.ReleaseTimer(timer)
 		select {
 		case s.subChannels[clusterShardIndex][psShardIndex][subscriberShardIndex] <- r:
+		case <-b.closeCh:
+			return errRedisClosed
 		case <-timer.C:
-			return errRedisOpTimeout
+			return errRedisTimeout
 		}
 	}
 	return r.result()
@@ -944,11 +964,11 @@ func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
 	r := newSubRequest([]channelID{b.messageChannelID(s.shard, ch)}, true)
 	psShardIndex := index(ch, b.config.NumPubSubShards)
 	subscriberShardIndex := index(ch, b.config.NumPubSubSubscribers)
+	var clusterShardIndex int
 	if b.useShardedPubSub(s.shard) {
-		clusterShardIndex := consistentIndex(ch, b.config.NumClusterShards)
-		return b.sendSubscribe(s, r, clusterShardIndex, psShardIndex, subscriberShardIndex)
+		clusterShardIndex = consistentIndex(ch, b.config.NumClusterShards)
 	}
-	return b.sendSubscribe(s, r, 0, psShardIndex, subscriberShardIndex)
+	return b.sendSubscribe(s, r, clusterShardIndex, psShardIndex, subscriberShardIndex)
 }
 
 // Unsubscribe - see Broker.Unsubscribe.
@@ -963,11 +983,11 @@ func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
 	r := newSubRequest([]channelID{b.messageChannelID(s.shard, ch)}, false)
 	psShardIndex := index(ch, b.config.NumPubSubShards)
 	subscriberShardIndex := index(ch, b.config.NumPubSubSubscribers)
+	var clusterShardIndex int
 	if b.useShardedPubSub(s.shard) {
-		clusterShardIndex := consistentIndex(ch, b.config.NumClusterShards)
-		return b.sendSubscribe(s, r, clusterShardIndex, psShardIndex, subscriberShardIndex)
+		clusterShardIndex = consistentIndex(ch, b.config.NumClusterShards)
 	}
-	return b.sendSubscribe(s, r, 0, psShardIndex, subscriberShardIndex)
+	return b.sendSubscribe(s, r, clusterShardIndex, psShardIndex, subscriberShardIndex)
 }
 
 // History - see Broker.History.

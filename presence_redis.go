@@ -26,26 +26,20 @@ type RedisPresenceManager struct {
 	presenceScript    *rueidis.Lua
 }
 
-const (
-	// DefaultRedisPresenceTTL is a default value for presence TTL in Redis.
-	DefaultRedisPresenceTTL = 60 * time.Second
-	// DefaultRedisPresenceManagerPrefix is a default value for RedisPresenceManagerConfig.Prefix.
-	DefaultRedisPresenceManagerPrefix = "centrifuge"
-)
-
 // RedisPresenceManagerConfig is a config for RedisPresenceManager.
 type RedisPresenceManagerConfig struct {
 	// Prefix to use before every channel name and key in Redis. By default,
-	// DefaultRedisPresenceManagerPrefix will be used.
+	// "centrifuge" prefix will be used.
 	Prefix string
 
 	// PresenceTTL is an interval how long to consider presence info
 	// valid after receiving presence update. This allows to automatically
 	// clean up unnecessary presence entries after TTL passed. Zero value
-	// means that DefaultRedisPresenceTTL will be used.
+	// means 60 seconds.
 	PresenceTTL time.Duration
 
-	// Shards is a list of Redis shards to use. At least one shard must be provided.
+	// Shards is a slice of RedisShard to use. At least one shard must be provided.
+	// Data will be consistently sharded by channel over provided Redis shards.
 	Shards []*RedisShard
 }
 
@@ -100,11 +94,11 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	}
 
 	if config.Prefix == "" {
-		config.Prefix = DefaultRedisPresenceManagerPrefix
+		config.Prefix = "centrifuge"
 	}
 
 	if config.PresenceTTL == 0 {
-		config.PresenceTTL = DefaultRedisPresenceTTL
+		config.PresenceTTL = 60 * time.Second
 	}
 
 	m := &RedisPresenceManager{
