@@ -279,10 +279,10 @@ By default, `CheckOrigin` function of WebSocket handler will ensure that connect
 ```go
 centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 	CheckOrigin: func(r *http.Request) bool {
-        originHeader := r.Header.Get("Origin")
-        if originHeader == "" {
-            return true
-        }
+		originHeader := r.Header.Get("Origin")
+		if originHeader == "" {
+			return true
+		}
 		return originHeader == "http://localhost:3000"
 	},
 })
