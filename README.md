@@ -270,20 +270,25 @@ cfg.LogLevel = centrifuge.LogLevelDebug
 cfg.LogHandler = handleLog
 ```
 
-#### Connecting from `localhost`
+#### Allowed origin for WebSocket
 
-When using [centrifuge-js](https://github.com/centrifugal/centrifuge-js) to connect to a Centrifuge-powered service from JS code running on `localhost` you might experience some difficulties.
+When connecting to Centrifuge WebSocket endpoint from web browsers you need to configure allowed Origin. This is important to prevent CSRF-like/WebSocket hijacking attacks. See [this post for example](https://portswigger.net/web-security/websockets/cross-site-websocket-hijacking).
 
-This is most likely caused by a strict default `CheckOrigin`, that will ensure that connection request originates from same domain as your service.
-To override this behaviour use the approach outlined below. Note, that it's not recommended for production environments.
+By default, `CheckOrigin` function of WebSocket handler will ensure that connection request originates from same host as your service. To override this behaviour you can provide your own implementation of `CheckOrigin` function to allow origins you trust. For example, your Centrifuge runs on `http://localhost:8000` but you want it to allow WebSocket connections from `http://localhost:3000`:
 
 ```go
 centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+        originHeader := r.Header.Get("Origin")
+        if originHeader == "" {
+            return true
+        }
+		return originHeader == "http://localhost:3000"
 	},
 })
 ```
+
+Note, that if WebSocket Upgrade does not contain Origin header – it means it does not come from web browser and security concerns outlined above are not applied in that case. So we can safely return `true` in this case in the example above.
 
 ### For contributors
 
