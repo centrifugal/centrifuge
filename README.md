@@ -290,6 +290,30 @@ centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 
 Note, that if WebSocket Upgrade does not contain Origin header – it means it does not come from web browser and security concerns outlined above are not applied in that case. So we can safely return `true` in this case in the example above.
 
+#### CORS for HTTP-based transports
+
+Centrifuge has two HTTP-based fallback transports for WebSocket – see `HTTPStreamHandler` and `SSEHandler`. To connect to those from web browser from the domain which is different from your transport endpoint domain you may need to wrap handlers with CORS middleware:
+
+```go
+func CORS(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := w.Header()
+		if originAllowed(r) {
+			header.Set("Access-Control-Allow-Origin", r.Header.Get("origin"))
+			if allowHeaders := r.Header.Get("Access-Control-Request-Headers"); allowHeaders != "" && allowHeaders != "null" {
+				header.Add("Access-Control-Allow-Headers", allowHeaders)
+			}
+			header.Set("Access-Control-Allow-Credentials", "true")
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+http.Handle("/connection/http_stream", CORS(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamHandlerConfig{})))
+```
+
+You can also configure CORS on load-balancer/reverse-proxy level.
+
 ### For contributors
 
 #### Running integration tests locally
