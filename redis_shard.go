@@ -146,6 +146,60 @@ func NewRedisShard(n *Node, conf RedisShardConfig) (*RedisShard, error) {
 			}
 		}
 	}()
+	go func() {
+		for {
+			select {
+			case <-shard.closeCh:
+				return
+			default:
+			}
+			err := shard.runDataPipeline()
+			if err != nil {
+				n.Log(NewLogEntry(LogLevelError, "data pipeline error", map[string]interface{}{"error": err.Error()}))
+				select {
+				case <-shard.closeCh:
+					return
+				case <-time.After(300 * time.Millisecond):
+				}
+			}
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case <-shard.closeCh:
+				return
+			default:
+			}
+			err := shard.runDataPipeline()
+			if err != nil {
+				n.Log(NewLogEntry(LogLevelError, "data pipeline error", map[string]interface{}{"error": err.Error()}))
+				select {
+				case <-shard.closeCh:
+					return
+				case <-time.After(300 * time.Millisecond):
+				}
+			}
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case <-shard.closeCh:
+				return
+			default:
+			}
+			err := shard.runDataPipeline()
+			if err != nil {
+				n.Log(NewLogEntry(LogLevelError, "data pipeline error", map[string]interface{}{"error": err.Error()}))
+				select {
+				case <-shard.closeCh:
+					return
+				case <-time.After(300 * time.Millisecond):
+				}
+			}
+		}
+	}()
 	return shard, nil
 }
 

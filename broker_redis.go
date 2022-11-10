@@ -25,10 +25,10 @@ const (
 	redisPubSubWorkerChannelSize = 512
 	// redisSubscribeBatchLimit is a maximum number of channels to include in a single
 	// batch subscribe call.
-	redisSubscribeBatchLimit = 512
+	redisSubscribeBatchLimit = 64
 	// redisPublishBatchLimit is a maximum limit of publish requests one batched publish
 	// operation can contain.
-	redisPublishBatchLimit = 512
+	redisPublishBatchLimit = 64
 	// redisControlChannelSuffix is a suffix for control channel.
 	redisControlChannelSuffix = ".control"
 	// redisNodeChannelPrefix is a suffix for node channel.
@@ -360,6 +360,21 @@ func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 }
 
 func (b *RedisBroker) runShard(shard *RedisShard, h BrokerEventHandler) error {
+	go b.runForever(func() {
+		b.runPublishPipeline(shard)
+	})
+	go b.runForever(func() {
+		b.runPublishPipeline(shard)
+	})
+	go b.runForever(func() {
+		b.runPublishPipeline(shard)
+	})
+	go b.runForever(func() {
+		b.runPublishPipeline(shard)
+	})
+	go b.runForever(func() {
+		b.runPublishPipeline(shard)
+	})
 	go b.runForever(func() {
 		b.runPublishPipeline(shard)
 	})
