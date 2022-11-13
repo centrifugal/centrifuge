@@ -43,6 +43,15 @@ func testNode(tb testing.TB) *Node {
 	return node
 }
 
+func testBenchmarkNode(tb testing.TB) *Node {
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(entry LogEntry) {},
+	})
+	require.NoError(tb, err)
+	return node
+}
+
 func testRedisConf() RedisShardConfig {
 	return RedisShardConfig{
 		Address:        testRedisAddress,
@@ -1048,7 +1057,7 @@ func BenchmarkRedisIndex(b *testing.B) {
 func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := testBenchmarkNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
@@ -1071,7 +1080,7 @@ const benchmarkNumDifferentChannels = 1000
 func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := testBenchmarkNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
@@ -1095,7 +1104,7 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := testBenchmarkNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
@@ -1121,7 +1130,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := testBenchmarkNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
@@ -1161,7 +1170,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 
 	for _, tt := range tests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := testBenchmarkNode(b)
 			e := newTestRedisBroker(b, node, false, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			i := int32(0)
@@ -1183,7 +1192,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 func BenchmarkRedisHistory_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := testBenchmarkNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
@@ -1208,7 +1217,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 func BenchmarkRedisRecover_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := testBenchmarkNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
@@ -1351,7 +1360,7 @@ func TestRedisHistoryIterationReverse(t *testing.T) {
 func BenchmarkRedisHistoryIteration(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := testBenchmarkNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{10000, 100}
