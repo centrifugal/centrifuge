@@ -369,8 +369,8 @@ github.com/prometheus/procfs v0.8.0 h1:ODq8ZFEaYeCaZOJlZZdJA2AbQR98dSHSM1KW/You5
 github.com/prometheus/procfs v0.8.0/go.mod h1:z7EfXMXOkbkqb9IINtpCn86r/to3BnA0uaxHdg830/4=
 github.com/quasoft/memstore v0.0.0-20180925164028-84a050167438/go.mod h1:wTPjTepVu7uJBYgZ0SdWHQlIas582j6cn2jgk4DDdlg=
 github.com/rogpeppe/go-internal v1.3.0/go.mod h1:M8bDsm7K2OlrFYOpmOWEs/qY81heoFRclV5y23lUDJ4=
-github.com/rueian/rueidis v0.0.84 h1:051zL2fRxgWDv5NMltzt6+SuaGLmXPu8ai90CK6dTZQ=
-github.com/rueian/rueidis v0.0.84/go.mod h1:LiKWMM/QnILwRfDZIhSIXi4vQqZ/UZy4+/aNkSCt8XA=
+github.com/rueian/rueidis v0.0.85 h1:u81ZivB2oMaLmagI+EPVwg5YdJcZBM+NdQcznucsPtU=
+github.com/rueian/rueidis v0.0.85/go.mod h1:LiKWMM/QnILwRfDZIhSIXi4vQqZ/UZy4+/aNkSCt8XA=
 github.com/russross/blackfriday v1.5.2/go.mod h1:JO/DiYxRf+HjHt06OyowR9PTA263kcR/rfWxYHBV53g=
 github.com/segmentio/asm v1.1.3/go.mod h1:Ld3L4ZXGNcSLRg4JBsZ3//1+f/TjYl0Mzen/DQy1EJg=
 github.com/segmentio/asm v1.1.4 h1:Q/FKBtrgnmDc0YMrurLROqG9mXE6Ndn276EtDnoWtMM=

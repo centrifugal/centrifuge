@@ -9,7 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
 	github.com/prometheus/client_golang v1.13.0
-	github.com/rueian/rueidis v0.0.84
+	github.com/rueian/rueidis v0.0.85
 	github.com/stretchr/testify v1.8.1
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 	google.golang.org/protobuf v1.28.1
