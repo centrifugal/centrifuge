@@ -839,8 +839,8 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 		Prefix:               prefix,
 		Shards:               []*RedisShard{s},
-		NumPubSubSubscribers: 4,
-		NumPubSubProcessors:  2,
+		numPubSubSubscribers: 4,
+		numPubSubProcessors:  2,
 	})
 
 	msgNum := 10
@@ -944,8 +944,8 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 		Prefix:           prefix,
 		Shards:           []*RedisShard{s},
-		NumPubSubShards:  2,
-		NumClusterShards: 9,
+		numPubSubShards:  2,
+		numClusterShards: 9,
 	})
 
 	msgNum := 50
@@ -994,8 +994,8 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	e2, _ := NewRedisBroker(node2, RedisBrokerConfig{
 		Prefix:           prefix,
 		Shards:           []*RedisShard{s2},
-		NumPubSubShards:  2,
-		NumClusterShards: 9,
+		numPubSubShards:  2,
+		numClusterShards: 9,
 	})
 	node2.SetBroker(e2)
 	_ = node2.Run()
@@ -1511,9 +1511,9 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 			e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
-				NumPubSubShards:      tt.NumPubSubShards,
-				NumPubSubSubscribers: tt.NumPubSubSubscribers,
-				NumPubSubProcessors:  tt.NumPubSubProcessors,
+				numPubSubShards:      tt.NumPubSubShards,
+				numPubSubSubscribers: tt.NumPubSubSubscribers,
+				numPubSubProcessors:  tt.NumPubSubProcessors,
 			})
 
 			numChannels := 1024
