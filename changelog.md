@@ -1,3 +1,25 @@
+v0.27.0
+=======
+
+* Disconnect clients in case of inappropriate protocol [#256](https://github.com/centrifugal/centrifuge/pull/256)
+* Avoid flushing remaining in some cases [#260](https://github.com/centrifugal/centrifuge/pull/260)
+* Command read handler to set callback called upon processing Command received from client connection [#259](https://github.com/centrifugal/centrifuge/pull/259)
+* Shutdown nodes in tests [#252](https://github.com/centrifugal/centrifuge/pull/252)
+* Better Origin check documentation
+
+```
+gorelease -base v0.26.0 -version v0.27.0
+# github.com/centrifugal/centrifuge
+## compatible changes
+(*Node).OnCommandRead: added
+CommandReadEvent: added
+CommandReadHandler: added
+DisconnectInappropriateProtocol: added
+
+# summary
+v0.27.0 is a valid semantic version for this release.
+```
+
 v0.26.0
 =======
 
