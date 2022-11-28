@@ -181,7 +181,9 @@ type RedisShardConfig struct {
 	// ConnectTimeout is a timeout on connect operation.
 	// By default, 1 second is used.
 	ConnectTimeout time.Duration
-	// IOTimeout is a timeout on Redis connection operations.
+	// IOTimeout is a timeout on Redis connection operations. This is used as a write deadline
+	// for connection, also Redis client we use internally periodically (once in a second) PINGs
+	// Redis with this timeout for PING operation to find out stale/broken/blocked connections.
 	// By default, 3 seconds is used.
 	IOTimeout time.Duration
 
