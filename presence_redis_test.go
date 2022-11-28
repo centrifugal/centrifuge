@@ -41,9 +41,7 @@ func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string
 func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix string) *RedisPresenceManager {
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
-		Password:         testRedisPassword,
-
-		ReadTimeout: 100 * time.Second,
+		IOTimeout:        10 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -102,7 +100,7 @@ func TestRedisPresenceManager(t *testing.T) {
 func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			b.SetParallelism(128)
@@ -122,7 +120,7 @@ func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
 func BenchmarkRedisPresence_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			b.SetParallelism(128)
@@ -143,7 +141,7 @@ func BenchmarkRedisPresence_1Ch(b *testing.B) {
 func BenchmarkRedisPresence_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			b.SetParallelism(128)

@@ -1,17 +1,15 @@
 module github.com/centrifugal/centrifuge
 
-go 1.17
+go 1.18
 
 require (
 	github.com/FZambia/eagle v0.0.2
-	github.com/FZambia/sentinel v1.1.0
 	github.com/centrifugal/protocol v0.8.11
-	github.com/gomodule/redigo v1.8.9
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
-	github.com/mna/redisc v1.3.2
 	github.com/prometheus/client_golang v1.13.0
+	github.com/rueian/rueidis v0.0.86
 	github.com/stretchr/testify v1.8.1
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 	google.golang.org/protobuf v1.28.1
@@ -32,6 +30,6 @@ require (
 	github.com/segmentio/asm v1.1.4 // indirect
 	github.com/segmentio/encoding v0.3.5 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
+	golang.org/x/sys v0.0.0-20220704084225-05e143d24a9e // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

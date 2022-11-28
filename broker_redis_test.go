@@ -8,20 +8,14 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/centrifugal/protocol"
-	"github.com/gomodule/redigo/redis"
 	"github.com/stretchr/testify/require"
-)
-
-const (
-	testRedisAddress  = "127.0.0.1:6379"
-	testRedisPassword = ""
-	testRedisDB       = 9
 )
 
 func getUniquePrefix() string {
@@ -30,9 +24,9 @@ func getUniquePrefix() string {
 
 func newTestRedisBroker(tb testing.TB, n *Node, useStreams bool, useCluster bool) *RedisBroker {
 	if useCluster {
-		return NewTestRedisBrokerClusterWithPrefix(tb, n, getUniquePrefix(), useStreams)
+		return NewTestRedisBrokerCluster(tb, n, getUniquePrefix(), useStreams)
 	}
-	return NewTestRedisBrokerWithPrefix(tb, n, getUniquePrefix(), useStreams)
+	return NewTestRedisBroker(tb, n, getUniquePrefix(), useStreams)
 }
 
 func testNode(tb testing.TB) *Node {
@@ -44,18 +38,25 @@ func testNode(tb testing.TB) *Node {
 	return node
 }
 
+func benchNode(tb testing.TB) *Node {
+	node, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(entry LogEntry) {},
+	})
+	require.NoError(tb, err)
+	return node
+}
+
 func testRedisConf() RedisShardConfig {
 	return RedisShardConfig{
-		Address:        testRedisAddress,
-		DB:             testRedisDB,
-		Password:       testRedisPassword,
-		ReadTimeout:    100 * time.Second,
+		Address:        "127.0.0.1:6379",
+		IOTimeout:      10 * time.Second,
 		ConnectTimeout: 10 * time.Second,
-		WriteTimeout:   10 * time.Second,
 	}
 }
 
-func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
+func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
+	tb.Helper()
 	redisConf := testRedisConf()
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -65,22 +66,18 @@ func NewTestRedisBrokerWithPrefix(tb testing.TB, n *Node, prefix string, useStre
 		HistoryMetaTTL: 3600 * time.Second,
 		Shards:         []*RedisShard{s},
 	})
-	if err != nil {
-		tb.Fatal(err)
-	}
+	require.NoError(tb, err)
 	n.SetBroker(e)
 	err = n.Run()
-	if err != nil {
-		tb.Fatal(err)
-	}
+	require.NoError(tb, err)
 	return e
 }
 
-func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
+func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
+	tb.Helper()
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
-		Password:         testRedisPassword,
-		ReadTimeout:      100 * time.Second,
+		IOTimeout:        10 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -95,18 +92,18 @@ func NewTestRedisBrokerClusterWithPrefix(tb testing.TB, n *Node, prefix string, 
 	}
 	n.SetBroker(e)
 	err = n.Run()
-	if err != nil {
-		tb.Fatal(err)
-	}
+	require.NoError(tb, err)
 	return e
 }
 
 func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
+	tb.Helper()
 	n, _ := New(Config{})
 	redisConf := RedisShardConfig{
 		SentinelAddresses:  []string{"127.0.0.1:26379"},
 		SentinelMasterName: "mymaster",
-		ReadTimeout:        100 * time.Second,
+		IOTimeout:          10 * time.Second,
+		ConnectTimeout:     10 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -118,9 +115,7 @@ func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
 	}
 	n.SetBroker(e)
 	err = n.Run()
-	if err != nil {
-		tb.Fatal(err)
-	}
+	require.NoError(tb, err)
 	return e
 }
 
@@ -341,18 +336,18 @@ func TestRedisBrokerRecover(t *testing.T) {
 }
 
 func pubSubChannels(t *testing.T, e *RedisBroker) ([]string, error) {
-	conn := e.shards[0].pool.Get()
-	defer func() { require.NoError(t, conn.Close()) }()
-	return redis.Strings(conn.Do("PUBSUB", "channels", e.messagePrefix+"*"))
+	t.Helper()
+	client := e.shards[0].shard.client
+	return client.Do(context.Background(), client.B().PubsubChannels().Pattern(e.messagePrefix+"*").Build()).AsStrSlice()
 }
 
 func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	// Custom prefix to not collide with other tests.
 	node := testNode(t)
-	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
+	e := NewTestRedisBroker(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	if e.shards[0].useCluster {
+	if e.shards[0].shard.useCluster {
 		t.Skip("Channels command is not supported when Redis Cluster is used")
 	}
 
@@ -573,19 +568,19 @@ func TestRedisConsistentIndex(t *testing.T) {
 
 func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	node := testNode(t)
-	e := NewTestRedisBrokerWithPrefix(t, node, getUniquePrefix(), false)
+	e := NewTestRedisBroker(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	err := e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		require.Equal(t, "test", ch)
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.messageChannelID("test"), []byte("__p1:16901:xyz__dsdsd"))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), []byte("__p1:16901:xyz__dsdsd"))
 	require.Error(t, err)
 
 	err = e.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
 		return nil
-	}}, e.messageChannelID("test"), []byte("__p1:16901"))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), []byte("__p1:16901"))
 	require.Error(t, err)
 
 	pub := &protocol.Publication{
@@ -600,7 +595,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
 		return nil
-	}}, e.messageChannelID("test"), []byte("__p1:16901:xyz__"+string(data)))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), []byte("__p1:16901:xyz__"+string(data)))
 	require.NoError(t, err)
 	require.True(t, publicationHandlerCalled)
 
@@ -615,7 +610,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, "test", ch)
 		require.Equal(t, "12", info.UserID)
 		return nil
-	}}, e.messageChannelID("test"), append(joinTypePrefix, data...))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), append(joinTypePrefix, data...))
 	require.NoError(t, err)
 	require.True(t, joinHandlerCalled)
 
@@ -625,7 +620,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 		require.Equal(t, "test", ch)
 		require.Equal(t, "12", info.UserID)
 		return nil
-	}}, e.messageChannelID("test"), append(leaveTypePrefix, data...))
+	}}, e.messageChannelID(e.shards[0].shard, "test"), append(leaveTypePrefix, data...))
 	require.NoError(t, err)
 	require.True(t, leaveHandlerCalled)
 }
@@ -842,10 +837,17 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	prefix := getUniquePrefix()
 
 	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
-		Prefix: prefix,
-		Shards: []*RedisShard{s},
+		Prefix:               prefix,
+		Shards:               []*RedisShard{s},
+		numPubSubSubscribers: 4,
+		numPubSubProcessors:  2,
 	})
-	messageCh := make(chan struct{})
+
+	msgNum := 10
+	var numPublications int64
+	var numJoins int64
+	var numLeaves int64
+	pubCh := make(chan struct{})
 	joinCh := make(chan struct{})
 	leaveCh := make(chan struct{})
 	brokerEventHandler := &testBrokerEventHandler{
@@ -853,20 +855,32 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 			return nil
 		},
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
-			close(messageCh)
+			c := atomic.AddInt64(&numPublications, 1)
+			if c == int64(msgNum) {
+				close(pubCh)
+			}
 			return nil
 		},
 		HandleJoinFunc: func(ch string, info *ClientInfo) error {
-			close(joinCh)
+			c := atomic.AddInt64(&numJoins, 1)
+			if c == int64(msgNum) {
+				close(joinCh)
+			}
 			return nil
 		},
 		HandleLeaveFunc: func(ch string, info *ClientInfo) error {
-			close(leaveCh)
+			c := atomic.AddInt64(&numLeaves, 1)
+			if c == int64(msgNum) {
+				close(leaveCh)
+			}
 			return nil
 		},
 	}
 	_ = e1.Run(brokerEventHandler)
-	require.NoError(t, e1.Subscribe("test"))
+
+	for i := 0; i < msgNum; i++ {
+		require.NoError(t, e1.Subscribe("test"+strconv.Itoa(i)))
+	}
 
 	node2, _ := New(Config{})
 	s2, err := NewRedisShard(node2, redisConf)
@@ -880,15 +894,124 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	_ = node2.Run()
 	defer func() { _ = node2.Shutdown(context.Background()) }()
 
-	_, err = node2.Publish("test", []byte("123"))
-	require.NoError(t, err)
-	err = e2.PublishJoin("test", &ClientInfo{})
-	require.NoError(t, err)
-	err = e2.PublishLeave("test", &ClientInfo{})
-	require.NoError(t, err)
+	for i := 0; i < msgNum; i++ {
+		_, err = node2.Publish("test"+strconv.Itoa(i), []byte("123"))
+		require.NoError(t, err)
+		err = e2.PublishJoin("test"+strconv.Itoa(i), &ClientInfo{})
+		require.NoError(t, err)
+		err = e2.PublishLeave("test"+strconv.Itoa(i), &ClientInfo{})
+		require.NoError(t, err)
+	}
 
 	select {
-	case <-messageCh:
+	case <-pubCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB message")
+	}
+	select {
+	case <-joinCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB join message")
+	}
+	select {
+	case <-leaveCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB leave message")
+	}
+}
+
+func TestRedisClusterShardedPubSub(t *testing.T) {
+	redisConf := RedisShardConfig{
+		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		IOTimeout:        10 * time.Second,
+		ConnectTimeout:   10 * time.Second,
+	}
+
+	node1, _ := New(Config{})
+
+	s, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+
+	prefix := getUniquePrefix()
+
+	result := s.client.Do(context.Background(), s.client.B().Spublish().Channel(prefix+"._").Message("").Build())
+	if result.Error() != nil && strings.Contains(result.Error().Error(), "ERR unknown command") {
+		t.Skip("sharded PUB/SUB not supported by this Redis version, skipping test")
+	} else {
+		require.NoError(t, result.Error())
+	}
+
+	e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s},
+		numPubSubShards:  2,
+		numClusterShards: 9,
+	})
+
+	msgNum := 50
+	var numPublications int64
+	var numJoins int64
+	var numLeaves int64
+	pubCh := make(chan struct{})
+	joinCh := make(chan struct{})
+	leaveCh := make(chan struct{})
+	brokerEventHandler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error {
+			return nil
+		},
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+			c := atomic.AddInt64(&numPublications, 1)
+			if c == int64(msgNum) {
+				close(pubCh)
+			}
+			return nil
+		},
+		HandleJoinFunc: func(ch string, info *ClientInfo) error {
+			c := atomic.AddInt64(&numJoins, 1)
+			if c == int64(msgNum) {
+				close(joinCh)
+			}
+			return nil
+		},
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error {
+			c := atomic.AddInt64(&numLeaves, 1)
+			if c == int64(msgNum) {
+				close(leaveCh)
+			}
+			return nil
+		},
+	}
+	_ = e1.Run(brokerEventHandler)
+
+	for i := 0; i < msgNum; i++ {
+		require.NoError(t, e1.Subscribe("test"+strconv.Itoa(i)))
+	}
+
+	node2, _ := New(Config{})
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+
+	e2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s2},
+		numPubSubShards:  2,
+		numClusterShards: 9,
+	})
+	node2.SetBroker(e2)
+	_ = node2.Run()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+
+	for i := 0; i < msgNum; i++ {
+		_, err = node2.Publish("test"+strconv.Itoa(i), []byte("123"))
+		require.NoError(t, err)
+		err = e2.PublishJoin("test"+strconv.Itoa(i), &ClientInfo{})
+		require.NoError(t, err)
+		err = e2.PublishLeave("test"+strconv.Itoa(i), &ClientInfo{})
+		require.NoError(t, err)
+	}
+
+	select {
+	case <-pubCh:
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for PUB/SUB message")
 	}
@@ -1050,7 +1173,7 @@ func BenchmarkRedisIndex(b *testing.B) {
 func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
@@ -1073,7 +1196,7 @@ const benchmarkNumDifferentChannels = 1000
 func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
@@ -1097,7 +1220,7 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
@@ -1123,7 +1246,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
@@ -1163,7 +1286,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 
 	for _, tt := range tests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisBroker(b, node, false, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			i := int32(0)
@@ -1185,7 +1308,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 func BenchmarkRedisHistory_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
@@ -1210,7 +1333,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 func BenchmarkRedisRecover_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
@@ -1245,12 +1368,7 @@ func nodeWithRedisBroker(tb testing.TB, useStreams bool, useCluster bool) *Node 
 	if err != nil {
 		tb.Fatal(err)
 	}
-	e := newTestRedisBroker(tb, n, useStreams, useCluster)
-	n.SetBroker(e)
-	err = n.Run()
-	if err != nil {
-		tb.Fatal(err)
-	}
+	newTestRedisBroker(tb, n, useStreams, useCluster)
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{}, nil)
@@ -1353,7 +1471,7 @@ func TestRedisHistoryIterationReverse(t *testing.T) {
 func BenchmarkRedisHistoryIteration(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
-			node := testNode(b)
+			node := benchNode(b)
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			it := historyIterationTest{10000, 100}
@@ -1362,6 +1480,85 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				it.testHistoryIteration(b, e.node, startPosition)
 			}
+		})
+	}
+}
+
+type throughputTest struct {
+	NumPubSubShards      int
+	NumPubSubSubscribers int
+	NumPubSubProcessors  int
+}
+
+var throughputTests = []throughputTest{
+	{1, 0, 0},
+	{2, 0, 0},
+	{4, 0, 0},
+}
+
+func BenchmarkPubSubThroughput(b *testing.B) {
+	for _, tt := range throughputTests {
+		b.Run(fmt.Sprintf("%dsh_%dsub_%dproc", tt.NumPubSubShards, tt.NumPubSubSubscribers, tt.NumPubSubProcessors), func(b *testing.B) {
+			redisConf := testRedisConf()
+
+			node1, _ := New(Config{})
+
+			s, err := NewRedisShard(node1, redisConf)
+			require.NoError(b, err)
+
+			prefix := getUniquePrefix()
+
+			e1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+				Prefix:               prefix,
+				Shards:               []*RedisShard{s},
+				numPubSubShards:      tt.NumPubSubShards,
+				numPubSubSubscribers: tt.NumPubSubSubscribers,
+				numPubSubProcessors:  tt.NumPubSubProcessors,
+			})
+
+			numChannels := 1024
+			pubCh := make(chan struct{}, 1024)
+			brokerEventHandler := &testBrokerEventHandler{
+				HandleControlFunc: func(bytes []byte) error {
+					return nil
+				},
+				HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+					pubCh <- struct{}{}
+					return nil
+				},
+			}
+			_ = e1.Run(brokerEventHandler)
+
+			for i := 0; i < numChannels; i++ {
+				require.NoError(b, e1.Subscribe("test"+strconv.Itoa(i)))
+			}
+
+			node2, _ := New(Config{})
+			s2, err := NewRedisShard(node2, redisConf)
+			require.NoError(b, err)
+
+			e2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+				Prefix: prefix,
+				Shards: []*RedisShard{s2},
+			})
+			node2.SetBroker(e2)
+			_ = node2.Run()
+			defer func() { _ = node2.Shutdown(context.Background()) }()
+
+			b.ReportAllocs()
+			b.SetParallelism(128)
+			b.ResetTimer()
+			var i int64
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					currentI := atomic.AddInt64(&i, 1) % int64(numChannels)
+					_, err = node2.Publish("test"+strconv.FormatInt(currentI, 10), []byte("123"))
+					if err != nil {
+						b.Fatal(err)
+					}
+					<-pubCh
+				}
+			})
 		})
 	}
 }
