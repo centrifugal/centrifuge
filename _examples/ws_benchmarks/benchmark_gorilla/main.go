@@ -95,15 +95,8 @@ func main() {
 		panic(err)
 	}
 
-	protocolVersion := centrifuge.ProtocolVersion1
-	if os.Getenv("CF_PROTOCOL_V2") != "" {
-		log.Println("using client protocol v2")
-		protocolVersion = centrifuge.ProtocolVersion2
-	}
-
 	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		ProtocolVersion: protocolVersion,
-		WriteTimeout:    time.Second,
+		WriteTimeout: time.Second,
 	}))
 
 	go func() {
