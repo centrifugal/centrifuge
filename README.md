@@ -11,7 +11,7 @@ Library highlights:
 
 * Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.dev/blog/2020/02/10/million-connections-with-centrifugo)
 * Builtin bidirectional transports: WebSocket (JSON or binary Protobuf), WebSocket emulation over HTTP-streaming, Eventsource (JSON only) or SockJS (JSON only)
-* Possibility to use unidirectional transports without using custom Centrifuge client library: see examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws)  
+* Possibility to use unidirectional transports without using custom Centrifuge client library: see examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws)
 * Built-in horizontal scalability with Redis PUB/SUB, consistent Redis sharding, Sentinel and Redis Cluster for HA
 * Native authentication over HTTP middleware or custom token-based
 * Channel concept to broadcast message to all active subscribers
@@ -33,7 +33,7 @@ For **bidirectional** communication between a client and a Centrifuge-based serv
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 
-If you opt for a **unidirectional** communication then you may leverage Centrifuge possibilities without any specific library on client-side - simply by using native browser API or GRPC-generated code. See examples of unidirectional communication over [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws).
+If you opt for a **unidirectional** communication then you may leverage Centrifuge possibilities without any specific library on client-side - simply by using native browser API or GRPC-generated code. See examples of unidirectional communication over [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws).
 
 ### Explore Centrifuge
 
