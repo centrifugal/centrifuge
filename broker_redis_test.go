@@ -415,7 +415,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 	}
 
 	// The same channel sequential.
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 1000; i++ {
 		require.NoError(t, e.Subscribe("4-test"))
 		require.NoError(t, e.Unsubscribe("4-test"))
 	}
@@ -429,7 +429,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 
 	// Different channels sequential.
 	for j := 0; j < 10; j++ {
-		for i := 0; i < 10000; i++ {
+		for i := 0; i < 100; i++ {
 			require.NoError(t, e.Subscribe("5-test-"+strconv.Itoa(i)))
 			require.NoError(t, e.Unsubscribe("5-test-"+strconv.Itoa(i)))
 		}
@@ -478,7 +478,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 		require.Equal(t, 0, len(channels), fmt.Sprintf("%#v", channels))
 	}
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
