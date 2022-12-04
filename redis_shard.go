@@ -106,6 +106,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		ClientName:       conf.ClientName,
 		ShuffleInit:      true,
 		DisableCache:     true,
+		AlwaysPipelining: true,
 	}
 
 	if len(conf.SentinelAddresses) > 0 {
