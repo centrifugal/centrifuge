@@ -953,10 +953,10 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	s, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
 	b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
-		Prefix:               prefix,
-		Shards:               []*RedisShard{s},
-		numPubSubSubscribers: 2,
-		numPubSubProcessors:  9,
+		Prefix:           prefix,
+		Shards:           []*RedisShard{s},
+		numPubSubShards:  2,
+		numClusterShards: 9,
 	})
 	node1.SetBroker(b1)
 	defer func() { _ = node1.Shutdown(context.Background()) }()
