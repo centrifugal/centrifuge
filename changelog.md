@@ -1,3 +1,34 @@
+v0.28.0
+=======
+
+In v0.28.0 we are updating our built-in Redis Engine implementation improving its allocation efficiency and throughput in both standalone and Cluster Redis setups. See [#262](https://github.com/centrifugal/centrifuge/pull/262) and [pr with blog post we are preparing](https://github.com/centrifugal/centrifugal.dev/pull/18) for reasoning and numbers behind.
+
+```
+gorelease -base v0.27.0 -version v0.28.0
+# github.com/centrifugal/centrifuge
+## incompatible changes
+DefaultRedisBrokerPrefix: removed
+DefaultRedisConnectTimeout: removed
+DefaultRedisPresenceManagerPrefix: removed
+DefaultRedisPresenceTTL: removed
+DefaultRedisReadTimeout: removed
+DefaultRedisWriteTimeout: removed
+RedisBrokerConfig.PubSubNumWorkers: removed
+RedisShardConfig.IdleTimeout: removed
+RedisShardConfig.ReadTimeout: removed
+RedisShardConfig.TLSSkipVerify: removed
+RedisShardConfig.UseTLS: removed
+RedisShardConfig.WriteTimeout: removed
+## compatible changes
+RedisShardConfig.ClientName: added
+RedisShardConfig.IOTimeout: added
+RedisShardConfig.SentinelClientName: added
+RedisShardConfig.SentinelTLSConfig: added
+
+# summary
+v0.28.0 is a valid semantic version for this release.
+```
+
 v0.27.0
 =======
 

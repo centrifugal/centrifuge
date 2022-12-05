@@ -114,6 +114,10 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	return m, nil
 }
 
+func (m *RedisPresenceManager) Close(_ context.Context) error {
+	return nil
+}
+
 func (m *RedisPresenceManager) getShard(channel string) *RedisShard {
 	if !m.sharding {
 		return m.shards[0]
