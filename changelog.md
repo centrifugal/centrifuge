@@ -1,7 +1,7 @@
 v0.28.0
 =======
 
-In v0.28.0 we are updating our built-in Redis Engine implementation improving its allocation efficiency and throughput in both standalone and Cluster Redis setups. See [#262](https://github.com/centrifugal/centrifuge/pull/262) and [pr with blog post we are preparing](https://github.com/centrifugal/centrifugal.dev/pull/18) for reasoning and numbers behind.
+Centrifuge v0.28.0 comes with an updated Redis Engine implementation based on [rueian/rueidis](https://github.com/rueian/rueidis) library. Allocation efficiency and throughput of Redis `Broker` and `PresenceManager` were improved in both standalone and Cluster Redis setups. See [#262](https://github.com/centrifugal/centrifuge/pull/262) and [pr with blog post we are preparing](https://github.com/centrifugal/centrifugal.dev/pull/18) for the reasoning and numbers behind.
 
 ```
 gorelease -base v0.27.0 -version v0.28.0
