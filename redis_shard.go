@@ -107,6 +107,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		ShuffleInit:      true,
 		DisableCache:     true,
 		AlwaysPipelining: true,
+		MaxFlushDelay:    100 * time.Microsecond,
 	}
 
 	if len(conf.SentinelAddresses) > 0 {
