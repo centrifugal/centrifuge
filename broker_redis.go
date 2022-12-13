@@ -39,10 +39,22 @@ const (
 
 var _ Broker = (*RedisBroker)(nil)
 
+type pubSubStart struct {
+	once  sync.Once
+	errCh chan error
+}
+
+type controlPubSubStart struct {
+	once  sync.Once
+	errCh chan error
+}
+
 type shardWrapper struct {
-	shard        *RedisShard
-	subClientsMu sync.Mutex
-	subClients   [][]rueidis.DedicatedClient
+	shard               *RedisShard
+	subClientsMu        sync.Mutex
+	subClients          [][]rueidis.DedicatedClient
+	pubSubStartChannels [][]*pubSubStart
+	controlPubSubStart  *controlPubSubStart
 }
 
 // RedisBroker uses Redis to implement Broker functionality. This broker allows
@@ -200,22 +212,28 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 			return nil, errors.New("can use sharded PUB/SUB feature (numClusterShards > 0) only with Redis Cluster")
 		}
 		subChannels := make([][]rueidis.DedicatedClient, 0)
+		pubSubStartChannels := make([][]*pubSubStart, 0)
 
 		if b.useShardedPubSub(shard) {
 			for i := 0; i < b.config.numClusterShards; i++ {
 				subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
+				pubSubStartChannels = append(pubSubStartChannels, make([]*pubSubStart, 0))
 			}
 		} else {
 			subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
+			pubSubStartChannels = append(pubSubStartChannels, make([]*pubSubStart, 0))
 		}
 
 		for i := 0; i < len(subChannels); i++ {
 			for j := 0; j < b.config.numPubSubShards; j++ {
 				subChannels[i] = append(subChannels[i], nil)
+				pubSubStartChannels[i] = append(pubSubStartChannels[i], &pubSubStart{errCh: make(chan error, 1)})
 			}
 		}
 
 		shardWrapper.subClients = subChannels
+		shardWrapper.pubSubStartChannels = pubSubStartChannels
+		shardWrapper.controlPubSubStart = &controlPubSubStart{errCh: make(chan error, 1)}
 	}
 
 	return b, nil
@@ -377,11 +395,8 @@ func (b *RedisBroker) getShard(channel string) *shardWrapper {
 // Run – see Broker.Run.
 func (b *RedisBroker) Run(h BrokerEventHandler) error {
 	// Run all shards.
-	startChannels := make([]chan error, 0, len(b.shards))
 	for shardNum, shardWrapper := range b.shards {
-		startCh := make(chan error, 1)
-		startChannels = append(startChannels, startCh)
-		err := b.runShard(shardWrapper, h, startCh)
+		err := b.runShard(shardWrapper, h)
 		if err != nil {
 			return err
 		}
@@ -390,7 +405,12 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 		}
 	}
 	for i := 0; i < len(b.shards); i++ {
-		<-startChannels[i]
+		<-b.shards[i].controlPubSubStart.errCh
+		for j := 0; j < len(b.shards[i].pubSubStartChannels); j++ {
+			for k := 0; k < len(b.shards[i].pubSubStartChannels[j]); k++ {
+				<-b.shards[i].pubSubStartChannels[j][k].errCh
+			}
+		}
 	}
 	return nil
 }
@@ -437,8 +457,8 @@ func (b *RedisBroker) runForever(fn func()) {
 	}
 }
 
-func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler, startCh chan error) error {
-	var startOnce sync.Once
+func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
+	var controlPubSubStartOnce sync.Once
 
 	go b.runForever(func() {
 		select {
@@ -447,8 +467,8 @@ func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler, startCh ch
 		default:
 		}
 		b.runControlPubSub(s.shard, h, func(err error) {
-			startOnce.Do(func() {
-				startCh <- err
+			controlPubSubStartOnce.Do(func() {
+				s.controlPubSubStart.errCh <- err
 			})
 		})
 	})
@@ -463,7 +483,11 @@ func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler, startCh ch
 					return
 				default:
 				}
-				b.runPubSub(s, h, clusterShardIndex, pubSubShardIndex, b.useShardedPubSub(s.shard))
+				b.runPubSub(s, h, clusterShardIndex, pubSubShardIndex, b.useShardedPubSub(s.shard), func(err error) {
+					s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].once.Do(func() {
+						s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].errCh <- err
+					})
+				})
 			})
 		}
 	}
@@ -546,7 +570,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	}
 }
 
-func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool) {
+func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
 	numProcessors := b.config.numPubSubProcessors
 	numSubscribers := b.config.numPubSubSubscribers
 
@@ -680,6 +704,8 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 			}
 		}(i)
 	}
+
+	startOnce(nil)
 
 	select {
 	case err := <-wait:
