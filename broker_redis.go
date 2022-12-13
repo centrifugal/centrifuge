@@ -458,8 +458,6 @@ func (b *RedisBroker) runForever(fn func()) {
 }
 
 func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
-	var controlPubSubStartOnce sync.Once
-
 	go b.runForever(func() {
 		select {
 		case <-b.closeCh:
@@ -467,7 +465,7 @@ func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
 		default:
 		}
 		b.runControlPubSub(s.shard, h, func(err error) {
-			controlPubSubStartOnce.Do(func() {
+			s.controlPubSubStart.once.Do(func() {
 				s.controlPubSubStart.errCh <- err
 			})
 		})
