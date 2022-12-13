@@ -21,7 +21,7 @@ type (
 )
 
 const (
-	defaultRedisIOTimeout      = 3 * time.Second
+	defaultRedisIOTimeout      = 4 * time.Second
 	defaultRedisConnectTimeout = time.Second
 )
 

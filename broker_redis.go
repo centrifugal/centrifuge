@@ -11,17 +11,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
-	"github.com/centrifugal/centrifuge/internal/timers"
 
 	"github.com/centrifugal/protocol"
 	"github.com/rueian/rueidis"
 )
 
 var (
-	errRedisTimeout = errors.New("redis: operation timed out")
-	errRedisClosed  = errors.New("redis: broker closed")
+	errPubSubConnUnavailable = errors.New("redis: pub/sub connection temporary unavailable")
 )
 
 const (
@@ -41,8 +40,9 @@ const (
 var _ Broker = (*RedisBroker)(nil)
 
 type shardWrapper struct {
-	shard       *RedisShard
-	subChannels [][][]chan subRequest
+	shard        *RedisShard
+	subClientsMu sync.Mutex
+	subClients   [][]rueidis.DedicatedClient
 }
 
 // RedisBroker uses Redis to implement Broker functionality. This broker allows
@@ -199,31 +199,23 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		if !shard.useCluster && b.config.numClusterShards > 0 {
 			return nil, errors.New("can use sharded PUB/SUB feature (numClusterShards > 0) only with Redis Cluster")
 		}
-		subChannels := make([][][]chan subRequest, 0)
+		subChannels := make([][]rueidis.DedicatedClient, 0)
 
 		if b.useShardedPubSub(shard) {
 			for i := 0; i < b.config.numClusterShards; i++ {
-				subChannels = append(subChannels, make([][]chan subRequest, 0))
+				subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
 			}
 		} else {
-			subChannels = append(subChannels, make([][]chan subRequest, 0))
+			subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
 		}
 
 		for i := 0; i < len(subChannels); i++ {
 			for j := 0; j < b.config.numPubSubShards; j++ {
-				subChannels[i] = append(subChannels[i], make([]chan subRequest, 0))
+				subChannels[i] = append(subChannels[i], nil)
 			}
 		}
 
-		for i := 0; i < len(subChannels); i++ {
-			for j := 0; j < b.config.numPubSubShards; j++ {
-				for k := 0; k < b.config.numPubSubSubscribers; k++ {
-					subChannels[i][j] = append(subChannels[i][j], make(chan subRequest))
-				}
-			}
-		}
-
-		shardWrapper.subChannels = subChannels
+		shardWrapper.subClients = subChannels
 	}
 
 	return b, nil
@@ -461,9 +453,9 @@ func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler, startCh ch
 		})
 	})
 
-	for i := 0; i < len(s.subChannels); i++ { // Cluster shards.
+	for i := 0; i < len(s.subClients); i++ { // Cluster shards.
 		clusterShardIndex := i
-		for j := 0; j < len(s.subChannels[i]); j++ { // PUB/SUB shards.
+		for j := 0; j < len(s.subClients[i]); j++ { // PUB/SUB shards.
 			pubSubShardIndex := j
 			go b.runForever(func() {
 				select {
@@ -605,6 +597,14 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	}
 
 	conn, cancel := s.shard.client.Dedicate()
+	s.subClientsMu.Lock()
+	s.subClients[clusterShardIndex][psShardIndex] = conn
+	s.subClientsMu.Unlock()
+	defer func() {
+		s.subClientsMu.Lock()
+		s.subClients[clusterShardIndex][psShardIndex] = nil
+		s.subClientsMu.Unlock()
+	}()
 	defer cancel()
 	defer conn.Close()
 
@@ -628,108 +628,9 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 		},
 	})
 
+	channels := b.node.Hub().Channels()
+
 	for i := 0; i < numSubscribers; i++ {
-		go func(subscriberIndex int) {
-			for {
-				select {
-				case <-done:
-					conn.Close()
-					return
-				case r := <-s.subChannels[clusterShardIndex][psShardIndex][subscriberIndex]:
-					isSubscribe := r.subscribe
-					channelBatch := []subRequest{r}
-
-					chIDs := make([]string, 0, len(r.channels))
-					for _, ch := range r.channels {
-						chIDs = append(chIDs, string(ch))
-					}
-
-					var otherR *subRequest
-
-				loop:
-					for len(chIDs) < redisSubscribeBatchLimit {
-						select {
-						case r := <-s.subChannels[clusterShardIndex][psShardIndex][subscriberIndex]:
-							if r.subscribe != isSubscribe {
-								// We can not mix subscribe and unsubscribe request into one batch
-								// so must stop here. As we consumed a subRequest value from channel
-								// we should take care of it later.
-								otherR = &r
-								break loop
-							}
-							channelBatch = append(channelBatch, r)
-							for _, ch := range r.channels {
-								chIDs = append(chIDs, string(ch))
-							}
-						default:
-							break loop
-						}
-					}
-
-					var opErr error
-					if isSubscribe {
-						if useShardedPubSub {
-							opErr = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(chIDs...).Build()).Error()
-						} else {
-							opErr = conn.Do(context.Background(), conn.B().Subscribe().Channel(chIDs...).Build()).Error()
-						}
-					} else {
-						if useShardedPubSub {
-							opErr = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
-						} else {
-							opErr = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
-						}
-					}
-
-					if opErr != nil {
-						for _, r := range channelBatch {
-							r.done(opErr)
-						}
-						if otherR != nil {
-							otherR.done(opErr)
-						}
-						// Close conn, this should cause Receive to return with err below
-						// and whole runPubSub method to restart.
-						conn.Close()
-						return
-					}
-					for _, r := range channelBatch {
-						r.done(nil)
-					}
-					if otherR != nil {
-						chIDs := make([]string, 0, len(otherR.channels))
-						for _, ch := range otherR.channels {
-							chIDs = append(chIDs, string(ch))
-						}
-						var opErr error
-						if otherR.subscribe {
-							if useShardedPubSub {
-								opErr = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(chIDs...).Build()).Error()
-							} else {
-								opErr = conn.Do(context.Background(), conn.B().Subscribe().Channel(chIDs...).Build()).Error()
-							}
-						} else {
-							if useShardedPubSub {
-								opErr = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(chIDs...).Build()).Error()
-							} else {
-								opErr = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(chIDs...).Build()).Error()
-							}
-						}
-						if opErr != nil {
-							otherR.done(opErr)
-							// Close conn, this should cause Receive to return with err below
-							// and whole runPubSub method to restart.
-							conn.Close()
-							return
-						}
-						otherR.done(nil)
-					}
-				}
-			}
-		}(i)
-
-		channels := b.node.Hub().Channels()
-
 		go func(subscriberIndex int) {
 			estimatedCap := len(channels) / b.config.numPubSubSubscribers / b.config.numPubSubShards
 			if useShardedPubSub {
@@ -747,8 +648,13 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 
 			for i, ch := range chIDs {
 				if len(batch) > 0 && i%redisSubscribeBatchLimit == 0 {
-					r := newSubRequest(batch, true)
-					err := b.sendSubscribe(s, r, clusterShardIndex, psShardIndex, subscriberIndex)
+					channelsToSubscribe := *(*[]string)(unsafe.Pointer(&batch))
+					var err error
+					if useShardedPubSub {
+						err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(channelsToSubscribe...).Build()).Error()
+					} else {
+						err = conn.Do(context.Background(), conn.B().Subscribe().Channel(channelsToSubscribe...).Build()).Error()
+					}
 					if err != nil {
 						b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 						closeDoneOnce()
@@ -759,8 +665,13 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 				batch = append(batch, ch)
 			}
 			if len(batch) > 0 {
-				r := newSubRequest(batch, true)
-				err := b.sendSubscribe(s, r, clusterShardIndex, psShardIndex, subscriberIndex)
+				channelsToSubscribe := *(*[]string)(unsafe.Pointer(&batch))
+				var err error
+				if useShardedPubSub {
+					err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(channelsToSubscribe...).Build()).Error()
+				} else {
+					err = conn.Do(context.Background(), conn.B().Subscribe().Channel(channelsToSubscribe...).Build()).Error()
+				}
 				if err != nil {
 					b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
 					closeDoneOnce()
@@ -777,25 +688,6 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 		}
 	case <-s.shard.closeCh:
 	}
-}
-
-func (b *RedisBroker) sendSubscribe(s *shardWrapper, r subRequest, clusterShardIndex, psShardIndex, subscriberShardIndex int) error {
-	select {
-	case s.subChannels[clusterShardIndex][psShardIndex][subscriberShardIndex] <- r:
-	case <-b.closeCh:
-		return errRedisClosed
-	default:
-		timer := timers.AcquireTimer(s.shard.config.IOTimeout)
-		defer timers.ReleaseTimer(timer)
-		select {
-		case s.subChannels[clusterShardIndex][psShardIndex][subscriberShardIndex] <- r:
-		case <-b.closeCh:
-			return errRedisClosed
-		case <-timer.C:
-			return errRedisTimeout
-		}
-	}
-	return r.result()
 }
 
 func (b *RedisBroker) useShardedPubSub(s *RedisShard) bool {
@@ -961,14 +853,25 @@ func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
 	if b.node.LogEnabled(LogLevelDebug) {
 		b.node.Log(NewLogEntry(LogLevelDebug, "subscribe node on channel", map[string]interface{}{"channel": ch}))
 	}
-	r := newSubRequest([]channelID{b.messageChannelID(s.shard, ch)}, true)
 	psShardIndex := index(ch, b.config.numPubSubShards)
-	subscriberShardIndex := index(ch, b.config.numPubSubSubscribers)
 	var clusterShardIndex int
 	if b.useShardedPubSub(s.shard) {
 		clusterShardIndex = consistentIndex(ch, b.config.numClusterShards)
 	}
-	return b.sendSubscribe(s, r, clusterShardIndex, psShardIndex, subscriberShardIndex)
+	s.subClientsMu.Lock()
+	conn := s.subClients[clusterShardIndex][psShardIndex]
+	if conn == nil {
+		s.subClientsMu.Unlock()
+		return errPubSubConnUnavailable
+	}
+	s.subClientsMu.Unlock()
+	var err error
+	if b.useShardedPubSub(s.shard) {
+		err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+	} else {
+		err = conn.Do(context.Background(), conn.B().Subscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+	}
+	return err
 }
 
 // Unsubscribe - see Broker.Unsubscribe.
@@ -980,14 +883,25 @@ func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
 	if b.node.LogEnabled(LogLevelDebug) {
 		b.node.Log(NewLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]interface{}{"channel": ch}))
 	}
-	r := newSubRequest([]channelID{b.messageChannelID(s.shard, ch)}, false)
 	psShardIndex := index(ch, b.config.numPubSubShards)
-	subscriberShardIndex := index(ch, b.config.numPubSubSubscribers)
 	var clusterShardIndex int
 	if b.useShardedPubSub(s.shard) {
 		clusterShardIndex = consistentIndex(ch, b.config.numClusterShards)
 	}
-	return b.sendSubscribe(s, r, clusterShardIndex, psShardIndex, subscriberShardIndex)
+	s.subClientsMu.Lock()
+	conn := s.subClients[clusterShardIndex][psShardIndex]
+	if conn == nil {
+		s.subClientsMu.Unlock()
+		return errPubSubConnUnavailable
+	}
+	s.subClientsMu.Unlock()
+	var err error
+	if b.useShardedPubSub(s.shard) {
+		err = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+	} else {
+		err = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+	}
+	return err
 }
 
 // History - see Broker.History.
@@ -1126,31 +1040,6 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 		_ = eventHandler.HandleLeave(channel, infoFromProto(&info))
 	}
 	return nil
-}
-
-// subRequest is an internal request to subscribe or unsubscribe from one or more channels.
-type subRequest struct {
-	channels  []channelID
-	subscribe bool
-	err       chan error
-}
-
-// newSubRequest creates a new request to subscribe or unsubscribe form a channel.
-func newSubRequest(chIDs []channelID, subscribe bool) subRequest {
-	return subRequest{
-		channels:  chIDs,
-		subscribe: subscribe,
-		err:       make(chan error, 1),
-	}
-}
-
-// done should only be called once for subRequest.
-func (sr *subRequest) done(err error) {
-	sr.err <- err
-}
-
-func (sr *subRequest) result() error {
-	return <-sr.err
 }
 
 func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
