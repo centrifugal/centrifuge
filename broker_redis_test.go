@@ -1552,6 +1552,8 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 			})
 			defer stopRedisBroker(b1)
 
+			node1.SetBroker(b1)
+
 			numChannels := 1024
 			pubCh := make(chan struct{}, 1024)
 			brokerEventHandler := &testBrokerEventHandler{
