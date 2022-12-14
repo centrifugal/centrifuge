@@ -638,7 +638,12 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 		},
 	})
 
-	err := conn.Do(context.Background(), conn.B().Subscribe().Channel(shardChannel).Build()).Error()
+	var err error
+	if useShardedPubSub {
+		err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(shardChannel).Build()).Error()
+	} else {
+		err = conn.Do(context.Background(), conn.B().Subscribe().Channel(shardChannel).Build()).Error()
+	}
 	if err != nil {
 		startOnce(err)
 		b.node.Log(NewLogEntry(LogLevelError, "pub/sub error", map[string]interface{}{"error": err.Error()}))
