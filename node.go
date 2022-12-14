@@ -391,7 +391,7 @@ func (n *Node) handleNotification(fromNodeID string, req *controlpb.Notification
 }
 
 func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyRequest) error {
-	if n.surveyHandler == nil {
+	if n.surveyHandler == nil && n.emulationSurveyHandler == nil {
 		return nil
 	}
 	cb := func(reply SurveyReply) {
@@ -408,6 +408,13 @@ func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyReque
 			Params: params,
 		}
 		_ = n.publishControl(cmd, fromNodeID)
+	}
+	if req.Op == emulationOp && n.emulationSurveyHandler != nil {
+		n.emulationSurveyHandler.HandleEmulation(SurveyEvent{Op: req.Op, Data: req.Data}, cb)
+		return nil
+	}
+	if n.surveyHandler == nil {
+		return nil
 	}
 	n.surveyHandler(SurveyEvent{Op: req.Op, Data: req.Data}, cb)
 	return nil
