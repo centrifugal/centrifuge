@@ -29,6 +29,11 @@ RedisShardConfig.SentinelTLSConfig: added
 v0.28.0 is a valid semantic version for this release.
 ```
 
+v0.27.2
+=======
+
+* Fix emulation layer in multi-node scenario [#269](https://github.com/centrifugal/centrifuge/pull/269)
+
 v0.27.0
 =======
 
