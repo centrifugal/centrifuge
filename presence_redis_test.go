@@ -105,7 +105,7 @@ func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
@@ -125,7 +125,7 @@ func BenchmarkRedisPresence_1Ch(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			_ = e.AddPresence("channel", "uid", &ClientInfo{})
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
@@ -146,7 +146,7 @@ func BenchmarkRedisPresence_ManyCh(b *testing.B) {
 			node := testNode(b)
 			e := newTestRedisPresenceManager(b, node, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			_ = e.AddPresence("channel", "uid", &ClientInfo{})
 			j := int32(0)
 			b.ResetTimer()

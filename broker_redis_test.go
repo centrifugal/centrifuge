@@ -1056,6 +1056,8 @@ func BenchmarkRedisIndex(b *testing.B) {
 	}
 }
 
+const benchParallelism = 128
+
 func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
@@ -1063,7 +1065,7 @@ func BenchmarkRedisPublish_1Ch(b *testing.B) {
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
@@ -1086,7 +1088,7 @@ func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			j := int32(0)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
@@ -1111,7 +1113,7 @@ func BenchmarkRedisPublish_History_1Ch(b *testing.B) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
@@ -1137,7 +1139,7 @@ func BenchmarkRedisPub_History_ManyCh(b *testing.B) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte(`{"bench": true}`)
 			chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 100 * time.Second}
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			j := int32(0)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
@@ -1176,7 +1178,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 			e := newTestRedisBroker(b, node, false, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			i := int32(0)
-			b.SetParallelism(64)
+			b.SetParallelism(benchParallelism)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
@@ -1202,7 +1204,7 @@ func BenchmarkRedisHistory_1Ch(b *testing.B) {
 				_, err := e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
 			}
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
@@ -1223,13 +1225,13 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 			e := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			rawData := []byte("{}")
-			numMessages := 1000
+			numMessages := 5
 			numMissing := 0
 			for i := 1; i <= numMessages; i++ {
 				_, err := e.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
 			}
-			b.SetParallelism(128)
+			b.SetParallelism(benchParallelism)
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
