@@ -1,4 +1,5 @@
 //go:build integration
+// +build integration
 
 package centrifuge
 
@@ -1550,6 +1551,8 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 				numPubSubProcessors:  tt.NumPubSubProcessors,
 			})
 			defer stopRedisBroker(b1)
+
+			node1.SetBroker(b1)
 
 			numChannels := 1024
 			pubCh := make(chan struct{}, 1024)

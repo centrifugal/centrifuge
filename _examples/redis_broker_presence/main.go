@@ -161,7 +161,7 @@ func main() {
 					centrifuge.WithHistory(10, time.Minute),
 				)
 				if err != nil {
-					log.Println(err.Error())
+					log.Printf("error publishing: %v", err)
 				}
 				_, err = node.History("chat:" + strconv.Itoa(i))
 				if err != nil {
