@@ -253,6 +253,8 @@ type Client struct {
 	lastPing          int64
 	eventHub          *clientEventHub
 	timer             *time.Timer
+	startWriterOnce   sync.Once
+	usesPushDelay     bool
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -287,8 +289,9 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		eventHub:   &clientEventHub{},
 	}
 
+	var writeMu sync.Mutex
 	messageWriterConf := writerConfig{
-		MaxQueueSize: n.config.ClientQueueMaxSize,
+		MaxQueueSize: client.node.config.ClientQueueMaxSize,
 		WriteFn: func(item queue.Item) error {
 			if client.node.clientEvents.transportWriteHandler != nil {
 				pass := client.node.clientEvents.transportWriteHandler(client, TransportWriteEvent(item))
@@ -299,7 +302,9 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 			if client.node.LogEnabled(LogLevelTrace) {
 				client.trace("-->", item.Data)
 			}
-			if err := t.Write(item.Data); err != nil {
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			if err := client.transport.Write(item.Data); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
 					go func() { _ = client.close(*v) }()
@@ -310,7 +315,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 				}
 				return err
 			}
-			incTransportMessagesSent(t.Name())
+			incTransportMessagesSent(client.transport.Name())
 			return nil
 		},
 		WriteManyFn: func(items ...queue.Item) error {
@@ -327,7 +332,9 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 				}
 				messages = append(messages, items[i].Data)
 			}
-			if err := t.WriteMany(messages...); err != nil {
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			if err := client.transport.WriteMany(messages...); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
 					go func() { _ = client.close(*v) }()
@@ -338,13 +345,12 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 				}
 				return err
 			}
-			addTransportMessagesSent(t.Name(), float64(len(messages)))
+			addTransportMessagesSent(client.transport.Name(), float64(len(messages)))
 			return nil
 		},
 	}
 
 	client.messageWriter = newWriter(messageWriterConf)
-	go client.messageWriter.run()
 
 	staleCloseDelay := n.config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !client.authenticated {
@@ -975,6 +981,7 @@ func (c *Client) Disconnect(disconnect ...Disconnect) {
 }
 
 func (c *Client) close(disconnect Disconnect) error {
+	c.startWriter(0, 0)
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.connectMu.Lock()
@@ -1301,9 +1308,17 @@ func (c *Client) writeEncodedCommandReply(method protocol.Command_MethodType, cm
 		go func() { _ = c.close(DisconnectInappropriateProtocol) }()
 		return
 	}
-	disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
-	if disconnect != nil {
-		go func() { _ = c.close(*disconnect) }()
+
+	if c.usesPushDelay {
+		err = c.messageWriter.config.WriteFn(queue.Item{Data: replyData})
+		if err != nil {
+			go func() { _ = c.close(DisconnectWriteError) }()
+		}
+	} else {
+		disconnect := c.messageWriter.enqueue(queue.Item{Data: replyData})
+		if disconnect != nil {
+			go func() { _ = c.close(*disconnect) }()
+		}
 	}
 	if rw != nil {
 		rw.write(rep)
@@ -2358,8 +2373,14 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 		reply, err := c.node.clientEvents.connectingHandler(c.ctx, e)
 		if err != nil {
+			c.startWriter(0, 0)
 			return nil, err
 		}
+		if reply.PushDelay > 0 {
+			c.usesPushDelay = true
+		}
+		c.startWriter(reply.PushDelay, reply.MaxMessagesInFrame)
+
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
 		}
@@ -2381,6 +2402,8 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				subscriptions[ch] = opts
 			}
 		}
+	} else {
+		c.startWriter(0, 0)
 	}
 
 	if channelLimit > 0 && len(subscriptions) > channelLimit {
@@ -2608,6 +2631,12 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 			Connect: p,
 		},
 	}, nil
+}
+
+func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int) {
+	c.startWriterOnce.Do(func() {
+		go c.messageWriter.run(batchDelay, maxMessagesInFrame)
+	})
 }
 
 func (c *Client) getConnectCommandReply(res *protocol.ConnectResult) (*protocol.Reply, error) {

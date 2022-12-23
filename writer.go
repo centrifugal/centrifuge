@@ -1,16 +1,16 @@
 package centrifuge
 
 import (
-	"sync"
-
 	"github.com/centrifugal/centrifuge/internal/queue"
+	"github.com/centrifugal/centrifuge/internal/timers"
+	"sync"
+	"time"
 )
 
 type writerConfig struct {
-	WriteManyFn        func(...queue.Item) error
-	WriteFn            func(item queue.Item) error
-	MaxQueueSize       int
-	MaxMessagesInFrame int
+	WriteManyFn  func(...queue.Item) error
+	WriteFn      func(item queue.Item) error
+	MaxQueueSize int
 }
 
 // writer helps to manage per-connection message byte queue.
@@ -19,25 +19,38 @@ type writer struct {
 	config   writerConfig
 	messages *queue.Queue
 	closed   bool
+	closeCh  chan struct{}
 }
 
 func newWriter(config writerConfig) *writer {
 	w := &writer{
 		config:   config,
 		messages: queue.New(),
+		closeCh:  make(chan struct{}),
 	}
 	return w
 }
 
 const (
-	defaultMaxMessagesInFrame = 4
+	defaultMaxMessagesInFrame = 16
 )
 
-func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
+func (w *writer) waitSendMessage(maxMessagesInFrame int, batchDelay time.Duration) bool {
 	// Wait for message from queue.
 	ok := w.messages.Wait()
 	if !ok {
 		return false
+	}
+
+	if batchDelay > 0 {
+		tm := timers.AcquireTimer(batchDelay)
+		if batchDelay > 0 {
+			select {
+			case <-tm.C:
+			case <-w.closeCh:
+			}
+		}
+		timers.ReleaseTimer(tm)
 	}
 
 	w.mu.Lock()
@@ -98,14 +111,12 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 
 // run supposed to be run in goroutine, this goroutine will be closed as
 // soon as queue is closed.
-func (w *writer) run() {
-	maxMessagesInFrame := w.config.MaxMessagesInFrame
+func (w *writer) run(batchDelay time.Duration, maxMessagesInFrame int) {
 	if maxMessagesInFrame == 0 {
 		maxMessagesInFrame = defaultMaxMessagesInFrame
 	}
-
 	for {
-		if ok := w.waitSendMessage(maxMessagesInFrame); !ok {
+		if ok := w.waitSendMessage(maxMessagesInFrame, batchDelay); !ok {
 			return
 		}
 	}
@@ -139,6 +150,6 @@ func (w *writer) close(flushRemaining bool) error {
 	} else {
 		w.messages.Close()
 	}
-
+	close(w.closeCh)
 	return nil
 }

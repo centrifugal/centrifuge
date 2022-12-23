@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"time"
 
 	"github.com/centrifugal/protocol"
 )
@@ -45,6 +46,11 @@ type ConnectReply struct {
 	// i.e. send refresh commands with new connection token. If not set
 	// then server-side refresh mechanism will be used.
 	ClientSideRefresh bool
+
+	// Delay ...
+	PushDelay time.Duration
+	// MaxMessagesInFrame ...
+	MaxMessagesInFrame int
 }
 
 // ConnectingHandler called when new client authenticates on server.
