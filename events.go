@@ -53,7 +53,7 @@ type ConnectReply struct {
 	// number of system calls to execute. By default, Centrifuge tries to send messages as soon
 	// as possible. Enabling PushDelay limits the maximum throughput of pushes towards the
 	// connection which may be achieved. For example, if PushDelay is 100ms then the max throughput
-	// per second will be (1000 / 100) * MaxMessagesInFrame (16 by default), i.e. 1600 pushes per
+	// per second will be (1000 / 100) * MaxMessagesInFrame (16 by default), i.e. 160 pushes per
 	// second. This should be more than enough for target Centrifuge use cases (frontend apps) though.
 	PushDelay time.Duration
 	// MaxMessagesInFrame is the maximum number of messages (replies and pushes) which Centrifuge
