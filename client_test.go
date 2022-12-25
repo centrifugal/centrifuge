@@ -1052,6 +1052,8 @@ func TestServerSideSubscriptions(t *testing.T) {
 
 			node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
 				return ConnectReply{
+					WriteDelay:        50 * time.Millisecond,
+					ReplyWithoutQueue: true,
 					Subscriptions: map[string]SubscribeOptions{
 						"server-side-1":  {},
 						"$server-side-2": {},

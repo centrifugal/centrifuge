@@ -196,7 +196,7 @@ func TestWriterWriteMany(t *testing.T) {
 
 	go func() {
 		defer close(doneCh)
-		w.run(0, maxMessagesInFrame)
+		w.run(10*time.Millisecond, maxMessagesInFrame)
 	}()
 
 	for i := 0; i < numMessages; i++ {
