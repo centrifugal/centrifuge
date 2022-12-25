@@ -57,7 +57,7 @@ type ConnectReply struct {
 	// happens due to the lesser number of system calls to execute. Enabling WriteDelay
 	// limits the maximum throughput of messages towards the connection which may be achieved.
 	// For example, if WriteDelay is 100ms then the max throughput per second will be
-	// (1000 / 100) * MaxMessagesInFrame (16 by default), i.e. 160 pushes per second. This
+	// (1000 / 100) * MaxMessagesInFrame (16 by default), i.e. 160 messages per second. This
 	// should be more than enough for target Centrifuge use cases (frontend apps) though.
 	WriteDelay time.Duration
 	// ReplyWithoutQueue when enabled will force Centrifuge to avoid using Client's write
