@@ -241,41 +241,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}(time.Now())
 		}
 
-		var dec protocol.StreamCommandDecoder
-
-	outer:
 		for {
 			_, r, err := conn.NextReader()
 			if err != nil {
-				break outer
+				break
 			}
-			if protoType == ProtocolTypeJSON {
-				dec = protocol.NewJSONStreamCommandDecoder(r)
-			} else {
-				dec = protocol.NewProtobufStreamCommandDecoder(r)
-			}
-		inner:
-			for {
-				cmd, _, err := dec.Decode()
-				if err != nil {
-					if err == io.EOF {
-						if cmd != nil {
-							closed := !c.HandleCommand(cmd)
-							if closed {
-								break outer
-							}
-						} else {
-							break inner
-						}
-					} else {
-						break outer
-					}
-				} else {
-					closed := !c.HandleCommand(cmd)
-					if closed {
-						break outer
-					}
-				}
+			proceed := s.handleRead(c, protoType.toProto(), r)
+			if !proceed {
+				break
 			}
 		}
 
@@ -292,6 +265,29 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+}
+
+func (s *WebsocketHandler) handleRead(c *Client, protoType protocol.Type, r io.Reader) bool {
+	decoder := protocol.GetStreamCommandDecoder(protoType, r)
+	defer protocol.PutStreamCommandDecoder(protoType, decoder)
+
+	for {
+		cmd, _, err := decoder.Decode()
+		if cmd != nil {
+			proceed := c.HandleCommand(cmd)
+			if !proceed {
+				return false
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			} else {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 const (
