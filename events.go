@@ -55,7 +55,7 @@ type ConnectReply struct {
 	// before sending them towards the connection. Enabling this may reduce CPU usage of both
 	// server and client in case of high message rate inside individual connections. The reduction
 	// happens due to the lesser number of system calls to execute. Enabling WriteDelay
-	// limits the maximum throughput of pushes towards the connection which may be achieved.
+	// limits the maximum throughput of messages towards the connection which may be achieved.
 	// For example, if WriteDelay is 100ms then the max throughput per second will be
 	// (1000 / 100) * MaxMessagesInFrame (16 by default), i.e. 160 pushes per second. This
 	// should be more than enough for target Centrifuge use cases (frontend apps) though.
