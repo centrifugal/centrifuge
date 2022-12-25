@@ -35,17 +35,17 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
-	var pushDelay time.Duration
-	if os.Getenv("PUSH_DELAY") != "" {
-		v, _ := strconv.Atoi(os.Getenv("PUSH_DELAY"))
-		pushDelay = time.Duration(v) * time.Millisecond
+	var writeDelay time.Duration
+	if os.Getenv("WRITE_DELAY") != "" {
+		v, _ := strconv.Atoi(os.Getenv("WRITE_DELAY"))
+		writeDelay = time.Duration(v) * time.Millisecond
 	}
 	var maxMessagesInFrame int
 	if os.Getenv("MAX_FRAME_MESSAGES") != "" {
 		v, _ := strconv.Atoi(os.Getenv("MAX_FRAME_MESSAGES"))
 		maxMessagesInFrame = v
 	}
-	log.Printf("NumCPU: %d, Push Delay: %s, Max messages in frame: %d\n", runtime.NumCPU(), pushDelay, maxMessagesInFrame)
+	log.Printf("NumCPU: %d, Write Delay: %s, Max messages in frame: %d\n", runtime.NumCPU(), writeDelay, maxMessagesInFrame)
 
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:           centrifuge.LogLevelError,
@@ -77,7 +77,7 @@ func main() {
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
-			PushDelay:          pushDelay,
+			WriteDelay:         writeDelay,
 			MaxMessagesInFrame: maxMessagesInFrame,
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",

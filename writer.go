@@ -1,10 +1,11 @@
 package centrifuge
 
 import (
-	"github.com/centrifugal/centrifuge/internal/queue"
-	"github.com/centrifugal/centrifuge/internal/timers"
 	"sync"
 	"time"
+
+	"github.com/centrifugal/centrifuge/internal/queue"
+	"github.com/centrifugal/centrifuge/internal/timers"
 )
 
 type writerConfig struct {
@@ -35,19 +36,21 @@ const (
 	defaultMaxMessagesInFrame = 16
 )
 
-func (w *writer) waitSendMessage(maxMessagesInFrame int, batchDelay time.Duration) bool {
-	// Wait for message from queue.
+func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duration) bool {
+	// Wait for message from the queue.
 	ok := w.messages.Wait()
 	if !ok {
 		return false
 	}
 
-	if batchDelay > 0 {
-		tm := timers.AcquireTimer(batchDelay)
-		if batchDelay > 0 {
+	if writeDelay > 0 {
+		tm := timers.AcquireTimer(writeDelay)
+		if writeDelay > 0 {
 			select {
 			case <-tm.C:
 			case <-w.closeCh:
+				timers.ReleaseTimer(tm)
+				return false
 			}
 		}
 		timers.ReleaseTimer(tm)
@@ -111,12 +114,12 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, batchDelay time.Duratio
 
 // run supposed to be run in goroutine, this goroutine will be closed as
 // soon as queue is closed.
-func (w *writer) run(batchDelay time.Duration, maxMessagesInFrame int) {
+func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int) {
 	if maxMessagesInFrame == 0 {
 		maxMessagesInFrame = defaultMaxMessagesInFrame
 	}
 	for {
-		if ok := w.waitSendMessage(maxMessagesInFrame, batchDelay); !ok {
+		if ok := w.waitSendMessage(maxMessagesInFrame, writeDelay); !ok {
 			return
 		}
 	}

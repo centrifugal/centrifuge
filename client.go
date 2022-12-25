@@ -254,7 +254,7 @@ type Client struct {
 	eventHub          *clientEventHub
 	timer             *time.Timer
 	startWriterOnce   sync.Once
-	usesPushDelay     bool
+	replyWithoutQueue bool
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -1309,7 +1309,7 @@ func (c *Client) writeEncodedCommandReply(method protocol.Command_MethodType, cm
 		return
 	}
 
-	if c.usesPushDelay {
+	if c.replyWithoutQueue {
 		err = c.messageWriter.config.WriteFn(queue.Item{Data: replyData})
 		if err != nil {
 			go func() { _ = c.close(DisconnectWriteError) }()
@@ -2376,10 +2376,8 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			c.startWriter(0, 0)
 			return nil, err
 		}
-		if reply.PushDelay > 0 {
-			c.usesPushDelay = true
-		}
-		c.startWriter(reply.PushDelay, reply.MaxMessagesInFrame)
+		c.replyWithoutQueue = reply.ReplyWithoutQueue
+		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame)
 
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
