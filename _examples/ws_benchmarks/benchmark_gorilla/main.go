@@ -35,6 +35,11 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
+	var queueInitialCap int
+	if os.Getenv("QUEUE_INITIAL_CAP") != "" {
+		v, _ := strconv.Atoi(os.Getenv("QUEUE_INITIAL_CAP"))
+		queueInitialCap = v
+	}
 	var writeDelay time.Duration
 	if os.Getenv("WRITE_DELAY") != "" {
 		v, _ := strconv.Atoi(os.Getenv("WRITE_DELAY"))
@@ -45,12 +50,14 @@ func main() {
 		v, _ := strconv.Atoi(os.Getenv("MAX_FRAME_MESSAGES"))
 		maxMessagesInFrame = v
 	}
-	log.Printf("NumCPU: %d, Write Delay: %s, Max messages in frame: %d\n", runtime.NumCPU(), writeDelay, maxMessagesInFrame)
+	log.Printf("NumCPU: %d, Write Delay: %s, Max messages in frame: %d, Queue init cap: %d\n",
+		runtime.NumCPU(), writeDelay, maxMessagesInFrame, queueInitialCap)
 
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:           centrifuge.LogLevelError,
-		LogHandler:         handleLog,
-		ClientQueueMaxSize: 10 * 1024 * 1024,
+		LogLevel:              centrifuge.LogLevelError,
+		LogHandler:            handleLog,
+		ClientQueueMaxSize:    10 * 1024 * 1024,
+		ClientQueueInitialCap: queueInitialCap,
 	})
 
 	if os.Getenv("CENTRIFUGE_BROKER") == "redis" {

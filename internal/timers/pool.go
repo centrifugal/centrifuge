@@ -13,7 +13,6 @@ func AcquireTimer(d time.Duration) *time.Timer {
 	if v == nil {
 		return time.NewTimer(d)
 	}
-
 	tm := v.(*time.Timer)
 	if tm.Reset(d) {
 		panic("Received an active timer from the pool!")
@@ -24,9 +23,12 @@ func AcquireTimer(d time.Duration) *time.Timer {
 // ReleaseTimer to pool.
 func ReleaseTimer(tm *time.Timer) {
 	if !tm.Stop() {
-		// Do not reuse timer that has been already stopped.
-		// See https://groups.google.com/forum/#!topic/golang-nuts/-8O3AknKpwk
-		return
+		// Collect possibly added time from the channel
+		// If timer has been stopped and nobody collected its value.
+		select {
+		case <-tm.C:
+		default:
+		}
 	}
 	timerPool.Put(tm)
 }

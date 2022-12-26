@@ -350,7 +350,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		},
 	}
 
-	client.messageWriter = newWriter(messageWriterConf)
+	client.messageWriter = newWriter(messageWriterConf, client.node.config.ClientQueueInitialCap)
 
 	staleCloseDelay := n.config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !client.authenticated {

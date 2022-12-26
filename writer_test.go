@@ -93,7 +93,7 @@ func BenchmarkWriteMerge(b *testing.B) {
 	writer := newWriter(writerConfig{
 		WriteFn:     transport.writeSingle,
 		WriteManyFn: transport.writeCombined,
-	})
+	}, 0)
 	go writer.run(0, 4)
 
 	b.ResetTimer()
@@ -109,7 +109,7 @@ func BenchmarkWriteMergeDisabled(b *testing.B) {
 	writer := newWriter(writerConfig{
 		WriteFn:     transport.writeSingle,
 		WriteManyFn: transport.writeCombined,
-	})
+	}, 0)
 	go writer.run(0, 1)
 
 	b.ResetTimer()
@@ -161,7 +161,7 @@ func TestWriter(t *testing.T) {
 	w := newWriter(writerConfig{
 		WriteFn:     transport.write,
 		WriteManyFn: transport.writeMany,
-	})
+	}, 0)
 	go w.run(0, 4)
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
@@ -183,7 +183,7 @@ func TestWriterWriteMany(t *testing.T) {
 		MaxQueueSize: 10 * 1024,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
-	})
+	}, 0)
 
 	maxMessagesInFrame := 4
 	numMessages := 4 * maxMessagesInFrame
@@ -222,7 +222,7 @@ func TestWriterWriteRemaining(t *testing.T) {
 		MaxQueueSize: 10 * 1024,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
-	})
+	}, 0)
 
 	maxMessagesInFrame := 4
 	numMessages := 4 * maxMessagesInFrame
@@ -251,7 +251,7 @@ func TestWriterDisconnectSlow(t *testing.T) {
 		MaxQueueSize: 1,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
-	})
+	}, 0)
 	defer func() { _ = w.close(true) }()
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
@@ -265,7 +265,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 		MaxQueueSize: 1,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
-	})
+	}, 0)
 	go w.run(0, 0)
 	_ = w.close(true)
 
@@ -281,7 +281,7 @@ func TestWriterWriteError(t *testing.T) {
 		MaxQueueSize: 1,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
-	})
+	}, 0)
 
 	doneCh := make(chan struct{})
 

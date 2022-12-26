@@ -23,10 +23,13 @@ type writer struct {
 	closeCh  chan struct{}
 }
 
-func newWriter(config writerConfig) *writer {
+func newWriter(config writerConfig, queueInitialCap int) *writer {
+	if queueInitialCap == 0 {
+		queueInitialCap = 2
+	}
 	w := &writer{
 		config:   config,
-		messages: queue.New(),
+		messages: queue.New(queueInitialCap),
 		closeCh:  make(chan struct{}),
 	}
 	return w
