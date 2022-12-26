@@ -67,14 +67,14 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 	var writeErr error
 
 	messageCount := w.messages.Len()
-	if maxMessagesInFrame > 1 && messageCount > 0 {
+	if (maxMessagesInFrame == -1 || maxMessagesInFrame > 1) && messageCount > 0 {
 		// There are several more messages left in queue, try to send them in single frame,
 		// but no more than maxMessagesInFrame.
 
 		// Limit message count to get from queue with (maxMessagesInFrame - 1)
 		// (as we already have one message received from queue above).
 		messagesCap := messageCount + 1
-		if messagesCap > maxMessagesInFrame {
+		if messagesCap > maxMessagesInFrame && maxMessagesInFrame > -1 {
 			messagesCap = maxMessagesInFrame
 		}
 
@@ -83,7 +83,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 
 		for messageCount > 0 {
 			messageCount--
-			if len(messages) >= maxMessagesInFrame {
+			if maxMessagesInFrame > -1 && len(messages) >= maxMessagesInFrame {
 				break
 			}
 			m, ok := w.messages.Remove()
