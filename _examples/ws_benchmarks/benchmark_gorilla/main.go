@@ -79,6 +79,7 @@ func main() {
 		return centrifuge.ConnectReply{
 			WriteDelay:         writeDelay,
 			MaxMessagesInFrame: maxMessagesInFrame,
+			ReplyWithoutQueue:  true,
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
 			},
