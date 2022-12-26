@@ -14,6 +14,7 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
+	"github.com/segmentio/encoding/json"
 )
 
 // Empty Replies/Pushes for pings.
@@ -296,9 +297,6 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 					return nil
 				}
 			}
-			if client.node.LogEnabled(LogLevelTrace) {
-				client.trace("-->", item.Data)
-			}
 			if err := t.Write(item.Data); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
@@ -321,9 +319,6 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 					if !pass {
 						continue
 					}
-				}
-				if client.node.LogEnabled(LogLevelTrace) {
-					client.trace("-->", items[i].Data)
 				}
 				messages = append(messages, items[i].Data)
 			}
@@ -424,6 +419,9 @@ func (c *Client) issueCommandReadEvent(cmd *protocol.Command) {
 }
 
 func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) error {
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceInCmd(&protocol.Command{Connect: connectRequest})
+	}
 	_, err := c.connectCmd(connectRequest, nil, time.Time{}, true, nil)
 	if err != nil {
 		c.issueCommandReadEvent(&protocol.Command{Connect: connectRequest})
@@ -522,6 +520,9 @@ func (c *Client) sendPing() {
 	c.mu.Unlock()
 	unidirectional := c.transport.Unidirectional()
 	_ = c.transportEnqueue(getPingData(unidirectional, c.transport.Protocol()))
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutReply(emptyReply)
+	}
 	c.mu.Lock()
 	appLevelPing := c.transport.AppLevelPing()
 	if appLevelPing.PongTimeout > 0 && !unidirectional {
@@ -1042,11 +1043,28 @@ func (c *Client) close(disconnect Disconnect) error {
 	return nil
 }
 
-func (c *Client) trace(msg string, data []byte) {
+func (c *Client) traceInCmd(cmd *protocol.Command) {
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
-	c.node.logger.log(newLogEntry(LogLevelTrace, msg, map[string]interface{}{"client": c.ID(), "user": user, "data": fmt.Sprintf("%#v", string(data))}))
+	jsonBytes, _ := json.Marshal(cmd)
+	c.node.logger.log(newLogEntry(LogLevelTrace, "<--", map[string]interface{}{"client": c.ID(), "user": user, "command": string(jsonBytes)}))
+}
+
+func (c *Client) traceOutReply(rep *protocol.Reply) {
+	c.mu.RLock()
+	user := c.user
+	c.mu.RUnlock()
+	jsonBytes, _ := json.Marshal(rep)
+	c.node.logger.log(newLogEntry(LogLevelTrace, "-->", map[string]interface{}{"client": c.ID(), "user": user, "reply": string(jsonBytes)}))
+}
+
+func (c *Client) traceOutPush(push *protocol.Push) {
+	c.mu.RLock()
+	user := c.user
+	c.mu.RUnlock()
+	jsonBytes, _ := json.Marshal(push)
+	c.node.logger.log(newLogEntry(LogLevelTrace, "-->", map[string]interface{}{"client": c.ID(), "user": user, "push": string(jsonBytes)}))
 }
 
 // Lock must be held outside.
@@ -1086,10 +1104,6 @@ func (c *Client) Handle(data []byte) bool {
 		return false
 	}
 
-	if c.node.LogEnabled(LogLevelTrace) {
-		c.trace("<--", data)
-	}
-
 	protoType := c.transport.Protocol().toProto()
 	decoder := protocol.GetCommandDecoder(protoType, data)
 	defer protocol.PutCommandDecoder(protoType, decoder)
@@ -1122,6 +1136,10 @@ func (c *Client) HandleCommand(cmd *protocol.Command) bool {
 		return false
 	}
 	c.mu.Unlock()
+
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceInCmd(cmd)
+	}
 
 	if c.transport.ProtocolVersion() == ProtocolVersion1 && cmd.Id == 0 && (cmd.Method != protocol.Command_SEND && cmd.Send == nil) {
 		// Only send command from client can be sent without incremental ID in ProtocolVersion1. For
@@ -1307,6 +1325,9 @@ func (c *Client) writeEncodedCommandReply(method protocol.Command_MethodType, cm
 	}
 	if rw != nil {
 		rw.write(rep)
+	}
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutReply(rep)
 	}
 }
 
@@ -1609,6 +1630,12 @@ func (c *Client) getRefreshPushReply(res *protocol.Refresh) ([]byte, error) {
 	})
 }
 
+func (c *Client) putRefreshCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseRefreshReply(reply)
+	}
+}
+
 func (c *Client) getRefreshCommandReply(res *protocol.RefreshResult) (*protocol.Reply, error) {
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeRefreshResult(res)
@@ -1619,9 +1646,7 @@ func (c *Client) getRefreshCommandReply(res *protocol.RefreshResult) (*protocol.
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Refresh: res,
-	}, nil
+	return protocol.ReplyPool.AcquireRefreshReply(res), nil
 }
 
 func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -1702,8 +1727,8 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 			c.logWriteInternalErrorFlush(protocol.Command_REFRESH, cmd, err, "error encoding refresh", rw)
 			return
 		}
-
 		c.writeEncodedCommandReply(protocol.Command_REFRESH, cmd, rep, rw)
+		c.putRefreshCommandReply(rep)
 	}
 
 	c.eventHub.refreshHandler(event, cb)
@@ -1858,10 +1883,17 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		}
 
 		c.writeEncodedCommandReply(protocol.Command_SUB_REFRESH, cmd, rep, rw)
+		c.putSubRefreshCommandReply(rep)
 	}
 
 	c.eventHub.subRefreshHandler(event, cb)
 	return nil
+}
+
+func (c *Client) putSubRefreshCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseSubRefreshReply(reply)
+	}
 }
 
 func (c *Client) getSubRefreshCommandReply(res *protocol.SubRefreshResult) (*protocol.Reply, error) {
@@ -1874,9 +1906,7 @@ func (c *Client) getSubRefreshCommandReply(res *protocol.SubRefreshResult) (*pro
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		SubRefresh: res,
-	}, nil
+	return protocol.ReplyPool.AcquireSubRefreshReply(res), nil
 }
 
 func (c *Client) handleUnsubscribe(req *protocol.UnsubscribeRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -1895,8 +1925,15 @@ func (c *Client) handleUnsubscribe(req *protocol.UnsubscribeRequest, cmd *protoc
 		return DisconnectServerError
 	}
 	c.writeEncodedCommandReply(protocol.Command_UNSUBSCRIBE, cmd, rep, rw)
+	c.putUnsubscribeCommandReply(rep)
 	observeCommandDuration(protocol.Command_UNSUBSCRIBE, time.Since(started))
 	return nil
+}
+
+func (c *Client) putUnsubscribeCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseUnsubscribeReply(reply)
+	}
 }
 
 func (c *Client) getUnsubscribeCommandReply(res *protocol.UnsubscribeResult) (*protocol.Reply, error) {
@@ -1909,9 +1946,7 @@ func (c *Client) getUnsubscribeCommandReply(res *protocol.UnsubscribeResult) (*p
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Unsubscribe: res,
-	}, nil
+	return protocol.ReplyPool.AcquireUnsubscribeReply(res), nil
 }
 
 func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -1964,10 +1999,17 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 			return
 		}
 		c.writeEncodedCommandReply(protocol.Command_PUBLISH, cmd, rep, rw)
+		c.putPublishCommandReply(rep)
 	}
 
 	c.eventHub.publishHandler(event, cb)
 	return nil
+}
+
+func (c *Client) putPublishCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleasePublishReply(reply)
+	}
 }
 
 func (c *Client) getPublishCommandReply(res *protocol.PublishResult) (*protocol.Reply, error) {
@@ -1980,9 +2022,7 @@ func (c *Client) getPublishCommandReply(res *protocol.PublishResult) (*protocol.
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Publish: res,
-	}, nil
+	return protocol.ReplyPool.AcquirePublishReply(res), nil
 }
 
 func (c *Client) handlePresence(req *protocol.PresenceRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -2033,10 +2073,17 @@ func (c *Client) handlePresence(req *protocol.PresenceRequest, cmd *protocol.Com
 			return
 		}
 		c.writeEncodedCommandReply(protocol.Command_PRESENCE, cmd, rep, rw)
+		c.putPresenceCommandReply(rep)
 	}
 
 	c.eventHub.presenceHandler(event, cb)
 	return nil
+}
+
+func (c *Client) putPresenceCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleasePresenceReply(reply)
+	}
 }
 
 func (c *Client) getPresenceCommandReply(res *protocol.PresenceResult) (*protocol.Reply, error) {
@@ -2049,9 +2096,7 @@ func (c *Client) getPresenceCommandReply(res *protocol.PresenceResult) (*protoco
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Presence: res,
-	}, nil
+	return protocol.ReplyPool.AcquirePresenceReply(res), nil
 }
 
 func (c *Client) handlePresenceStats(req *protocol.PresenceStatsRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -2098,10 +2143,17 @@ func (c *Client) handlePresenceStats(req *protocol.PresenceStatsRequest, cmd *pr
 			return
 		}
 		c.writeEncodedCommandReply(protocol.Command_PRESENCE_STATS, cmd, rep, rw)
+		c.putPresenceStatsCommandReply(rep)
 	}
 
 	c.eventHub.presenceStatsHandler(event, cb)
 	return nil
+}
+
+func (c *Client) putPresenceStatsCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleasePresenceStatsReply(reply)
+	}
 }
 
 func (c *Client) getPresenceStatsCommandReply(res *protocol.PresenceStatsResult) (*protocol.Reply, error) {
@@ -2114,9 +2166,7 @@ func (c *Client) getPresenceStatsCommandReply(res *protocol.PresenceStatsResult)
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		PresenceStats: res,
-	}, nil
+	return protocol.ReplyPool.AcquirePresenceStatsReply(res), nil
 }
 
 func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -2193,10 +2243,17 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 			return
 		}
 		c.writeEncodedCommandReply(protocol.Command_HISTORY, cmd, rep, rw)
+		c.putHistoryCommandReply(rep)
 	}
 
 	c.eventHub.historyHandler(event, cb)
 	return nil
+}
+
+func (c *Client) putHistoryCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseHistoryReply(reply)
+	}
 }
 
 func (c *Client) getHistoryCommandReply(res *protocol.HistoryResult) (*protocol.Reply, error) {
@@ -2209,13 +2266,13 @@ func (c *Client) getHistoryCommandReply(res *protocol.HistoryResult) (*protocol.
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		History: res,
-	}, nil
+	return protocol.ReplyPool.AcquireHistoryReply(res), nil
 }
 
+var emptyReply = &protocol.Reply{}
+
 func (c *Client) handlePing(cmd *protocol.Command, started time.Time, rw *replyWriter) error {
-	c.writeEncodedCommandReply(protocol.Command_PING, cmd, &protocol.Reply{}, rw)
+	c.writeEncodedCommandReply(protocol.Command_PING, cmd, emptyReply, rw)
 	observeCommandDuration(protocol.Command_PING, time.Since(started))
 	return nil
 }
@@ -2268,10 +2325,17 @@ func (c *Client) handleRPC(req *protocol.RPCRequest, cmd *protocol.Command, star
 			return
 		}
 		c.writeEncodedCommandReply(protocol.Command_RPC, cmd, rep, rw)
+		c.putRPCCommandReply(rep)
 	}
 
 	c.eventHub.rpcHandler(event, cb)
 	return nil
+}
+
+func (c *Client) putRPCCommandReply(r *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseRPCReply(r)
+	}
 }
 
 func (c *Client) getRPCCommandReply(res *protocol.RPCResult) (*protocol.Reply, error) {
@@ -2284,9 +2348,7 @@ func (c *Client) getRPCCommandReply(res *protocol.RPCResult) (*protocol.Reply, e
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Rpc: res,
-	}, nil
+	return protocol.ReplyPool.AcquireRPCReply(res), nil
 }
 
 func (c *Client) handleSend(req *protocol.SendRequest, started time.Time) error {
@@ -2554,6 +2616,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			return nil, DisconnectServerError
 		}
 		c.writeEncodedCommandReply(protocol.Command_CONNECT, cmd, reply, rw)
+		c.putConnectCommandReply(reply)
 	}
 
 	if !uni {
@@ -2610,6 +2673,12 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 	}, nil
 }
 
+func (c *Client) putConnectCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseConnectReply(reply)
+	}
+}
+
 func (c *Client) getConnectCommandReply(res *protocol.ConnectResult) (*protocol.Reply, error) {
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeConnectResult(res)
@@ -2618,7 +2687,7 @@ func (c *Client) getConnectCommandReply(res *protocol.ConnectResult) (*protocol.
 		}
 		return &protocol.Reply{Result: result}, nil
 	}
-	return &protocol.Reply{Connect: res}, nil
+	return protocol.ReplyPool.AcquireConnectReply(res), nil
 }
 
 // Subscribe client to a channel.
@@ -2960,6 +3029,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		// Need to flush data from writer so subscription response is
 		// sent before any subscription publication.
 		c.writeEncodedCommandReply(protocol.Command_SUBSCRIBE, cmd, rep, rw)
+		c.putSubscribeCommandReply(rep)
 	}
 
 	var channelFlags uint8
@@ -3017,6 +3087,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	return ctx
 }
 
+func (c *Client) putSubscribeCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseSubscribeReply(reply)
+	}
+}
+
 func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*protocol.Reply, error) {
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeSubscribeResult(res)
@@ -3027,9 +3103,7 @@ func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*proto
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Subscribe: res,
-	}, nil
+	return protocol.ReplyPool.AcquireSubscribeReply(res), nil
 }
 
 func (c *Client) handleInsufficientState(ch string, serverSide bool) {
@@ -3110,6 +3184,9 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+	}
 	if pub.Offset == 0 {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
@@ -3122,7 +3199,10 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data []b
 	return nil
 }
 
-func (c *Client) writeJoin(ch string, data []byte) error {
+func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte) error {
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Join: join})
+	}
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
@@ -3140,7 +3220,10 @@ func (c *Client) writeJoin(ch string, data []byte) error {
 	return c.transportEnqueue(data)
 }
 
-func (c *Client) writeLeave(ch string, data []byte) error {
+func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte) error {
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Leave: leave})
+	}
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
