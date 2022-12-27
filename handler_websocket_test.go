@@ -1196,9 +1196,11 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 
 	n.OnConnect(func(client *Client) {
 		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
-			callback(RPCReply{
-				Data: []byte(`{"test_response": 1}`),
-			}, nil)
+			go func() {
+				callback(RPCReply{
+					Data: []byte(`{"test_response": 1}`),
+				}, nil)
+			}()
 		})
 	})
 
