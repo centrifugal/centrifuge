@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1262,44 +1263,74 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 	protobufCommand := buf.Bytes()
 
 	for _, bm := range benchmarks {
-		b.RunParallel(func(pb *testing.PB) {
-			b.ReportAllocs()
-			conn := bm.getConn(b, url)
-			defer func() { _ = conn.Close() }()
-			for pb.Next() {
+		b.Run(bm.name, func(b *testing.B) {
+			b.RunParallel(func(pb *testing.PB) {
+				conn := bm.getConn(b, url)
+				defer func() { _ = conn.Close() }()
 				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					var err error
-					if bm.name == "JSON" {
-						err = conn.WriteMessage(websocket.TextMessage, jsonCommand)
-					} else {
-						err = conn.WriteMessage(websocket.BinaryMessage, protobufCommand)
-					}
-					if err != nil {
-						b.Fatal(err)
-					}
-					var n int
-					for {
-						_, d, err := conn.ReadMessage()
+				b.ReportAllocs()
+				for pb.Next() {
+					for i := 0; i < b.N; i++ {
+						var err error
+						if bm.name == "JSON" {
+							err = conn.WriteMessage(websocket.TextMessage, jsonCommand)
+						} else {
+							err = conn.WriteMessage(websocket.BinaryMessage, protobufCommand)
+						}
 						if err != nil {
 							b.Fatal(err)
 						}
-						var x protocol.Reply
-						if bm.name == "JSON" {
-							err = json.Unmarshal(d, &x)
-						} else {
-							err = x.UnmarshalVT(d)
-						}
-						if err != nil {
-							b.Fatal(err, string(d))
-						}
-						n += strings.Count(string(d), "test_response")
-						if n == 4 {
-							break
+						var n int
+						for {
+							_, d, err := conn.ReadMessage()
+							if err != nil {
+								b.Fatal(err)
+							}
+							if bm.name == "JSON" {
+								dec := protocol.NewJSONReplyDecoder(d)
+								for {
+									reply, err := dec.Decode()
+									if reply != nil {
+										if reply.Rpc == nil {
+											continue
+										}
+										var x interface{}
+										err := json.Unmarshal(reply.Rpc.Data, &x)
+										if err != nil {
+											b.Fatal(err, string(reply.Rpc.Data))
+										}
+										if bytes.Equal(reply.Rpc.Data, []byte(`{"test_response": 1}`)) {
+											n += 1
+										}
+									}
+									if err == io.EOF {
+										break
+									}
+								}
+							} else {
+								dec := protocol.NewProtobufReplyDecoder(d)
+								for {
+									reply, err := dec.Decode()
+									if reply != nil {
+										if reply.Rpc == nil {
+											continue
+										}
+										if bytes.Equal(reply.Rpc.Data, []byte(`{"test_response": 1}`)) {
+											n += 1
+										}
+									}
+									if err == io.EOF {
+										break
+									}
+								}
+							}
+							if n == 4 {
+								break
+							}
 						}
 					}
 				}
-			}
+			})
 		})
 	}
 }
