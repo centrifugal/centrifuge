@@ -49,7 +49,7 @@ type ConnectReply struct {
 
 	// MaxMessagesInFrame is the maximum number of messages (replies and pushes) which
 	// Centrifuge Client message writer will collect from the client's queue before sending
-	// to the connection. By default, it's 16.
+	// to the connection. By default, it's 16. Use -1 to disable the limit.
 	MaxMessagesInFrame int
 	// WriteDelay is a time Centrifuge will try to collect messages inside message writer loop
 	// before sending them towards this connection. Enabling WriteDelay may reduce CPU usage of
@@ -65,6 +65,9 @@ type ConnectReply struct {
 	// the Client's transport thus avoiding possible delays caused by writer loop, but replies
 	// lose a chance to be batched.
 	ReplyWithoutQueue bool
+	// QueueInitialCap set an initial capacity for client's message queue, the size of queue
+	// can grow further, but won't be reduced below QueueInitialCap. By default, it's 2.
+	QueueInitialCap int
 }
 
 // ConnectingHandler called when new client authenticates on server.

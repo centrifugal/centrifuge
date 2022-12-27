@@ -289,69 +289,6 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 		eventHub:   &clientEventHub{},
 	}
 
-	var writeMu sync.Mutex
-	messageWriterConf := writerConfig{
-		MaxQueueSize: client.node.config.ClientQueueMaxSize,
-		WriteFn: func(item queue.Item) error {
-			if client.node.clientEvents.transportWriteHandler != nil {
-				pass := client.node.clientEvents.transportWriteHandler(client, TransportWriteEvent(item))
-				if !pass {
-					return nil
-				}
-			}
-			if client.node.LogEnabled(LogLevelTrace) {
-				client.trace("-->", item.Data)
-			}
-			writeMu.Lock()
-			defer writeMu.Unlock()
-			if err := client.transport.Write(item.Data); err != nil {
-				switch v := err.(type) {
-				case *Disconnect:
-					go func() { _ = client.close(*v) }()
-				case Disconnect:
-					go func() { _ = client.close(v) }()
-				default:
-					go func() { _ = client.close(DisconnectWriteError) }()
-				}
-				return err
-			}
-			incTransportMessagesSent(client.transport.Name())
-			return nil
-		},
-		WriteManyFn: func(items ...queue.Item) error {
-			messages := make([][]byte, 0, len(items))
-			for i := 0; i < len(items); i++ {
-				if client.node.clientEvents.transportWriteHandler != nil {
-					pass := client.node.clientEvents.transportWriteHandler(client, TransportWriteEvent(items[i]))
-					if !pass {
-						continue
-					}
-				}
-				if client.node.LogEnabled(LogLevelTrace) {
-					client.trace("-->", items[i].Data)
-				}
-				messages = append(messages, items[i].Data)
-			}
-			writeMu.Lock()
-			defer writeMu.Unlock()
-			if err := client.transport.WriteMany(messages...); err != nil {
-				switch v := err.(type) {
-				case *Disconnect:
-					go func() { _ = client.close(*v) }()
-				case Disconnect:
-					go func() { _ = client.close(v) }()
-				default:
-					go func() { _ = client.close(DisconnectWriteError) }()
-				}
-				return err
-			}
-			addTransportMessagesSent(client.transport.Name(), float64(len(messages)))
-			return nil
-		},
-	}
-
-	client.messageWriter = newWriter(messageWriterConf, client.node.config.ClientQueueInitialCap)
-
 	staleCloseDelay := n.config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 && !client.authenticated {
 		client.mu.Lock()
@@ -981,7 +918,7 @@ func (c *Client) Disconnect(disconnect ...Disconnect) {
 }
 
 func (c *Client) close(disconnect Disconnect) error {
-	c.startWriter(0, 0)
+	c.startWriter(0, 0, 0)
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.connectMu.Lock()
@@ -2373,11 +2310,11 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 		reply, err := c.node.clientEvents.connectingHandler(c.ctx, e)
 		if err != nil {
-			c.startWriter(0, 0)
+			c.startWriter(0, 0, 0)
 			return nil, err
 		}
 		c.replyWithoutQueue = reply.ReplyWithoutQueue
-		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame)
+		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap)
 
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
@@ -2401,7 +2338,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			}
 		}
 	} else {
-		c.startWriter(0, 0)
+		c.startWriter(0, 0, 0)
 	}
 
 	if channelLimit > 0 && len(subscriptions) > channelLimit {
@@ -2631,8 +2568,70 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 	}, nil
 }
 
-func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int) {
+func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, queueInitialCap int) {
 	c.startWriterOnce.Do(func() {
+		var writeMu sync.Mutex
+		messageWriterConf := writerConfig{
+			MaxQueueSize: c.node.config.ClientQueueMaxSize,
+			WriteFn: func(item queue.Item) error {
+				if c.node.clientEvents.transportWriteHandler != nil {
+					pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(item))
+					if !pass {
+						return nil
+					}
+				}
+				if c.node.LogEnabled(LogLevelTrace) {
+					c.trace("-->", item.Data)
+				}
+				writeMu.Lock()
+				defer writeMu.Unlock()
+				if err := c.transport.Write(item.Data); err != nil {
+					switch v := err.(type) {
+					case *Disconnect:
+						go func() { _ = c.close(*v) }()
+					case Disconnect:
+						go func() { _ = c.close(v) }()
+					default:
+						go func() { _ = c.close(DisconnectWriteError) }()
+					}
+					return err
+				}
+				incTransportMessagesSent(c.transport.Name())
+				return nil
+			},
+			WriteManyFn: func(items ...queue.Item) error {
+				messages := make([][]byte, 0, len(items))
+				for i := 0; i < len(items); i++ {
+					if c.node.clientEvents.transportWriteHandler != nil {
+						pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(items[i]))
+						if !pass {
+							continue
+						}
+					}
+					if c.node.LogEnabled(LogLevelTrace) {
+						c.trace("-->", items[i].Data)
+					}
+					messages = append(messages, items[i].Data)
+				}
+				writeMu.Lock()
+				defer writeMu.Unlock()
+				if err := c.transport.WriteMany(messages...); err != nil {
+					switch v := err.(type) {
+					case *Disconnect:
+						go func() { _ = c.close(*v) }()
+					case Disconnect:
+						go func() { _ = c.close(v) }()
+					default:
+						go func() { _ = c.close(DisconnectWriteError) }()
+					}
+					return err
+				}
+				addTransportMessagesSent(c.transport.Name(), float64(len(messages)))
+				return nil
+			},
+		}
+
+		c.messageWriter = newWriter(messageWriterConf, queueInitialCap)
 		go c.messageWriter.run(batchDelay, maxMessagesInFrame)
 	})
 }

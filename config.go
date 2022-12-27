@@ -48,10 +48,6 @@ type Config struct {
 	// After this queue size exceeded Centrifuge closes client's connection.
 	// Zero value means 1048576 bytes (1MB).
 	ClientQueueMaxSize int
-	// ClientQueueInitialCap set an initial size for client's queue, the size
-	// of queue can grow further, but won't be reduced below ClientQueueInitialCap.
-	// By default, it's 2.
-	ClientQueueInitialCap int
 	// ClientChannelLimit sets upper limit of client-side channels each client
 	// can subscribe to. Client-side subscriptions attempts will get an ErrorLimitExceeded
 	// in subscribe reply. Server-side subscriptions above limit will result into

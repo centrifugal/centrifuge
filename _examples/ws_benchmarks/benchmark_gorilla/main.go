@@ -54,10 +54,9 @@ func main() {
 		runtime.NumCPU(), writeDelay, maxMessagesInFrame, queueInitialCap)
 
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:              centrifuge.LogLevelError,
-		LogHandler:            handleLog,
-		ClientQueueMaxSize:    10 * 1024 * 1024,
-		ClientQueueInitialCap: queueInitialCap,
+		LogLevel:           centrifuge.LogLevelError,
+		LogHandler:         handleLog,
+		ClientQueueMaxSize: 10 * 1024 * 1024,
 	})
 
 	if os.Getenv("CENTRIFUGE_BROKER") == "redis" {
@@ -87,6 +86,7 @@ func main() {
 			WriteDelay:         writeDelay,
 			MaxMessagesInFrame: maxMessagesInFrame,
 			ReplyWithoutQueue:  true,
+			QueueInitialCap:    queueInitialCap,
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
 			},
