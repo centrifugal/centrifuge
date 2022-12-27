@@ -1198,7 +1198,7 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
 			go func() {
 				callback(RPCReply{
-					Data: []byte(`{"test_response": 1}`),
+					Data: event.Data,
 				}, nil)
 			}()
 		})
@@ -1215,8 +1215,6 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 
 	url := "ws" + server.URL[4:]
 
-	payload := []byte(`{"input": "test"}`)
-
 	benchmarks := []struct {
 		name    string
 		getConn func(b testing.TB, url string) *websocket.Conn
@@ -1225,43 +1223,50 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 		{"PB", newRealConnProtobufConnectV2},
 	}
 
-	rpcRequest := &protocol.RPCRequest{
-		Data: payload,
+	cmd1 := &protocol.Command{
+		Id: 1,
+		Rpc: &protocol.RPCRequest{
+			Data: []byte(`{"input":"test1"}`),
+		},
+	}
+	cmd2 := &protocol.Command{
+		Id: 2,
+		Rpc: &protocol.RPCRequest{
+			Data: []byte(`{"input":"test2"}`),
+		},
+	}
+	cmd3 := &protocol.Command{
+		Id: 3,
+		Rpc: &protocol.RPCRequest{
+			Data: []byte(`{"input":"test3"}`),
+		},
 	}
 
-	cmd := &protocol.Command{
-		Id:  1,
-		Rpc: rpcRequest,
-	}
-	jsonBytes, _ := json.Marshal(cmd)
-	jsonCommand := append([]byte{}, jsonBytes...)
+	jsonBytes1, _ := json.Marshal(cmd1)
+	jsonCommand := append([]byte{}, jsonBytes1...)
 	jsonCommand = append(jsonCommand, []byte("\n")...)
-	jsonCommand = append(jsonCommand, jsonBytes...)
+	jsonBytes2, _ := json.Marshal(cmd2)
+	jsonCommand = append(jsonCommand, jsonBytes2...)
 	jsonCommand = append(jsonCommand, []byte("\n")...)
-	jsonCommand = append(jsonCommand, jsonBytes...)
-	jsonCommand = append(jsonCommand, []byte("\n")...)
-	jsonCommand = append(jsonCommand, jsonBytes...)
+	jsonBytes3, _ := json.Marshal(cmd3)
+	jsonCommand = append(jsonCommand, jsonBytes3...)
 
-	cmdBytes, _ := cmd.MarshalVT()
-
+	cmdBytes1, _ := cmd1.MarshalVT()
+	cmdBytes2, _ := cmd2.MarshalVT()
+	cmdBytes3, _ := cmd3.MarshalVT()
 	var buf bytes.Buffer
 	bs := make([]byte, 8)
-	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes1)))
 	buf.Write(bs[:nBytes])
-	buf.Write(cmdBytes)
+	buf.Write(cmdBytes1)
 	bs = make([]byte, 8)
-	nBytes = binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	nBytes = binary.PutUvarint(bs, uint64(len(cmdBytes2)))
 	buf.Write(bs[:nBytes])
-	buf.Write(cmdBytes)
+	buf.Write(cmdBytes2)
 	bs = make([]byte, 8)
-	nBytes = binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	nBytes = binary.PutUvarint(bs, uint64(len(cmdBytes3)))
 	buf.Write(bs[:nBytes])
-	buf.Write(cmdBytes)
-	bs = make([]byte, 8)
-	nBytes = binary.PutUvarint(bs, uint64(len(cmdBytes)))
-	buf.Write(bs[:nBytes])
-	buf.Write(cmdBytes)
-
+	buf.Write(cmdBytes3)
 	protobufCommand := buf.Bytes()
 
 	for _, bm := range benchmarks {
@@ -1272,63 +1277,50 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 				b.ResetTimer()
 				b.ReportAllocs()
 				for pb.Next() {
-					for i := 0; i < b.N; i++ {
-						var err error
-						if bm.name == "JSON" {
-							err = conn.WriteMessage(websocket.TextMessage, jsonCommand)
-						} else {
-							err = conn.WriteMessage(websocket.BinaryMessage, protobufCommand)
-						}
+					var err error
+					if bm.name == "JSON" {
+						err = conn.WriteMessage(websocket.TextMessage, jsonCommand)
+					} else {
+						err = conn.WriteMessage(websocket.BinaryMessage, protobufCommand)
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+					var n int
+					for {
+						_, d, err := conn.ReadMessage()
 						if err != nil {
 							b.Fatal(err)
 						}
-						var n int
+						var dec protocol.ReplyDecoder
+						if bm.name == "JSON" {
+							dec = protocol.NewJSONReplyDecoder(d)
+						} else {
+							dec = protocol.NewProtobufReplyDecoder(d)
+						}
 						for {
-							_, d, err := conn.ReadMessage()
-							if err != nil {
-								b.Fatal(err)
-							}
-							if bm.name == "JSON" {
-								dec := protocol.NewJSONReplyDecoder(d)
-								for {
-									reply, err := dec.Decode()
-									if reply != nil {
-										if reply.Rpc == nil {
-											continue
-										}
-										var x interface{}
-										err := json.Unmarshal(reply.Rpc.Data, &x)
-										if err != nil {
-											b.Fatal(err, string(reply.Rpc.Data))
-										}
-										if bytes.Equal(reply.Rpc.Data, []byte(`{"test_response": 1}`)) {
-											n += 1
-										}
-									}
-									if err == io.EOF {
-										break
-									}
+							reply, err := dec.Decode()
+							if reply != nil {
+								if reply.Rpc == nil {
+									continue
 								}
-							} else {
-								dec := protocol.NewProtobufReplyDecoder(d)
-								for {
-									reply, err := dec.Decode()
-									if reply != nil {
-										if reply.Rpc == nil {
-											continue
-										}
-										if bytes.Equal(reply.Rpc.Data, []byte(`{"test_response": 1}`)) {
-											n += 1
-										}
-									}
-									if err == io.EOF {
-										break
-									}
+								if reply.Id == 1 && !bytes.Equal(reply.Rpc.Data, []byte(`{"input":"test1"}`)) {
+									b.Fatal("unexpected payload")
 								}
+								if reply.Id == 2 && !bytes.Equal(reply.Rpc.Data, []byte(`{"input":"test2"}`)) {
+									b.Fatal("unexpected payload")
+								}
+								if reply.Id == 3 && !bytes.Equal(reply.Rpc.Data, []byte(`{"input":"test3"}`)) {
+									b.Fatal("unexpected payload")
+								}
+								n += 1
 							}
-							if n == 4 {
+							if err == io.EOF {
 								break
 							}
+						}
+						if n == 3 {
+							break
 						}
 					}
 				}
