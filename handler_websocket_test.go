@@ -1188,3 +1188,118 @@ func BenchmarkWsCommandReplyV2Multiple(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	n.OnConnect(func(client *Client) {
+		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
+			callback(RPCReply{
+				Data: []byte(`{"test_response": 1}`),
+			}, nil)
+		})
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+		ProtocolVersion: ProtocolVersion2,
+		WriteBufferSize: 0,
+		ReadBufferSize:  0,
+	})))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+
+	payload := []byte(`{"input": "test"}`)
+
+	benchmarks := []struct {
+		name    string
+		getConn func(b testing.TB, url string) *websocket.Conn
+	}{
+		{"JSON", newRealConnJSONConnectV2},
+		{"PB", newRealConnProtobufConnectV2},
+	}
+
+	rpcRequest := &protocol.RPCRequest{
+		Data: payload,
+	}
+
+	cmd := &protocol.Command{
+		Id:  1,
+		Rpc: rpcRequest,
+	}
+	jsonBytes, _ := json.Marshal(cmd)
+	jsonCommand := append([]byte{}, jsonBytes...)
+	jsonCommand = append(jsonCommand, []byte("\n")...)
+	jsonCommand = append(jsonCommand, jsonBytes...)
+	jsonCommand = append(jsonCommand, []byte("\n")...)
+	jsonCommand = append(jsonCommand, jsonBytes...)
+	jsonCommand = append(jsonCommand, []byte("\n")...)
+	jsonCommand = append(jsonCommand, jsonBytes...)
+
+	cmdBytes, _ := cmd.MarshalVT()
+
+	var buf bytes.Buffer
+	bs := make([]byte, 8)
+	nBytes := binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
+	buf.Write(cmdBytes)
+	bs = make([]byte, 8)
+	nBytes = binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
+	buf.Write(cmdBytes)
+	bs = make([]byte, 8)
+	nBytes = binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
+	buf.Write(cmdBytes)
+	bs = make([]byte, 8)
+	nBytes = binary.PutUvarint(bs, uint64(len(cmdBytes)))
+	buf.Write(bs[:nBytes])
+	buf.Write(cmdBytes)
+
+	protobufCommand := buf.Bytes()
+
+	for _, bm := range benchmarks {
+		b.RunParallel(func(pb *testing.PB) {
+			b.ReportAllocs()
+			conn := bm.getConn(b, url)
+			defer func() { _ = conn.Close() }()
+			for pb.Next() {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					var err error
+					if bm.name == "JSON" {
+						err = conn.WriteMessage(websocket.TextMessage, jsonCommand)
+					} else {
+						err = conn.WriteMessage(websocket.BinaryMessage, protobufCommand)
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+					var n int
+					for {
+						_, d, err := conn.ReadMessage()
+						if err != nil {
+							b.Fatal(err)
+						}
+						var x protocol.Reply
+						if bm.name == "JSON" {
+							err = json.Unmarshal(d, &x)
+						} else {
+							err = x.UnmarshalVT(d)
+						}
+						if err != nil {
+							b.Fatal(err, string(d))
+						}
+						n += strings.Count(string(d), "test_response")
+						if n == 4 {
+							break
+						}
+					}
+				}
+			}
+		})
+	}
+}
