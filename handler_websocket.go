@@ -271,7 +271,7 @@ func (s *WebsocketHandler) handleRead(c *Client, protoType protocol.Type, r io.R
 	defer protocol.PutStreamCommandDecoder(protoType, decoder)
 
 	for {
-		cmd, err := decoder.Decode()
+		cmd, _, err := decoder.Decode()
 		if cmd != nil {
 			proceed := c.HandleCommand(cmd)
 			if !proceed {
