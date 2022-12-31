@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -149,7 +150,7 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 		data = req.Data
 	}
 	go func() {
-		_ = client.Handle(data)
+		_ = HandleReadFrame(client, bytes.NewReader(data))
 		cb(SurveyReply{})
 	}()
 }

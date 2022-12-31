@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"io"
@@ -164,7 +165,7 @@ func main() {
 					_ = closeFn()
 				} else {
 					if !isControl {
-						ok := client.Handle(data)
+						ok := centrifuge.HandleReadFrame(client, bytes.NewReader(data))
 						if !ok {
 							_ = poller.Stop(desc)
 							return

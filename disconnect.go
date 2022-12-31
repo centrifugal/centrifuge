@@ -181,8 +181,7 @@ var (
 		Code:   3500,
 		Reason: "invalid token",
 	}
-	// DisconnectBadRequest issued when client uses malformed protocol
-	// frames or wrong order of commands.
+	// DisconnectBadRequest issued when client uses malformed protocol frames.
 	DisconnectBadRequest = Disconnect{
 		Code:   3501,
 		Reason: "bad request",
@@ -218,5 +217,22 @@ var (
 	DisconnectInappropriateProtocol = Disconnect{
 		Code:   3506,
 		Reason: "inappropriate protocol",
+	}
+	// DisconnectTooManyRequests may be issued when client sends too many commands to a server.
+	DisconnectTooManyRequests = Disconnect{
+		Code:   3507,
+		Reason: "too many requests",
+	}
+	// DisconnectNotAvailable may be issued when client attempts accessing server features which
+	// are not available.
+	DisconnectNotAvailable = Disconnect{
+		Code:   3508,
+		Reason: "not available",
+	}
+	// DisconnectPermissionDenied may be issued when client attempts accessing a server without
+	// enough permissions.
+	DisconnectPermissionDenied = Disconnect{
+		Code:   3509,
+		Reason: "permission denied",
 	}
 )

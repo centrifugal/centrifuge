@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,10 +148,18 @@ func (s *SockjsHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				protoVersion = ProtocolVersion2
 			default:
 				s.node.logger.log(newLogEntry(LogLevelInfo, "unknown protocol version", map[string]interface{}{"transport": transportSockJS, "version": queryProtocolVersion}))
+				http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
 		}
 	}
+
+	if !s.node.config.ProtocolVersionSupported(protoVersion) {
+		s.node.logger.log(newLogEntry(LogLevelInfo, "unsupported protocol version", map[string]interface{}{"transport": transportWebsocket, "version": protoVersion}))
+		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
 	if protoVersion == ProtocolVersion1 {
 		s.handlerV1.ServeHTTP(rw, r)
 	} else {
@@ -216,7 +225,7 @@ func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.
 
 		for {
 			if msg, err := sess.Recv(); err == nil {
-				if ok := c.Handle([]byte(msg)); !ok {
+				if ok := HandleReadFrame(c, strings.NewReader(msg)); !ok {
 					needWaitLoop = true
 					break
 				}

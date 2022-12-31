@@ -37,7 +37,7 @@ type Config struct {
 	// ClientStaleCloseDelay is a timeout after which connection will be
 	// closed if still not authenticated (i.e. no valid connect command
 	// received yet).
-	// Zero value means 25 * time.Second.
+	// Zero value means 15 * time.Second.
 	ClientStaleCloseDelay time.Duration
 	// ClientChannelPositionCheckDelay defines minimal time from previous
 	// client position check in channel. If client does not pass check it will
@@ -78,6 +78,21 @@ type Config struct {
 	// UseSingleFlight allows turning on mode where singleflight will be automatically used for
 	// Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
 	UseSingleFlight bool
+	// SupportedProtocolVersions allows limiting versions of Protocol server supports. By default
+	// both ProtocolVersion1 and ProtocolVersion2 may be served.
+	SupportedProtocolVersions []ProtocolVersion
+}
+
+func (c Config) ProtocolVersionSupported(protoVersion ProtocolVersion) bool {
+	if len(c.SupportedProtocolVersions) == 0 {
+		return true
+	}
+	for _, v := range c.SupportedProtocolVersions {
+		if protoVersion == v {
+			return true
+		}
+	}
+	return false
 }
 
 const (

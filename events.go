@@ -378,13 +378,24 @@ type TransportWriteHandler func(*Client, TransportWriteEvent) bool
 
 // CommandReadEvent contains protocol.Command processed by Client.
 type CommandReadEvent struct {
-	Command *protocol.Command
+	Command             *protocol.Command
+	CommandProtocolSize int
 }
 
-// CommandReadHandler allows setting a callback which will be called after
+// CommandReadHandler allows setting a callback which will be called before
+// Client processed a protocol.Command read from the connection. Return an error
+// if you want to prevent command execution.
+type CommandReadHandler func(*Client, CommandReadEvent) error
+
+// CommandProcessedEvent contains protocol.Command processed by Client.
+type CommandProcessedEvent struct {
+	Command             *protocol.Command
+	CommandProtocolSize int
+}
+
+// CommandProcessedHandler allows setting a callback which will be called after
 // Client processed a protocol.Command. This exists mostly for real-time connection
-// tracing purposes. Theoretically CommandReadHandler may be called after the
-// corresponding Reply written to connection and TransportWriteHandler called. But
-// for tracing purposes this seems tolerable as commands and replies may be matched
-// by id.
-type CommandReadHandler func(*Client, CommandReadEvent)
+// tracing purposes. CommandProcessedHandler may be called after the corresponding
+// Reply written to connection and TransportWriteHandler called. But for tracing
+// purposes this seems tolerable as commands and replies may be matched by id.
+type CommandProcessedHandler func(*Client, CommandProcessedEvent)

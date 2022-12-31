@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -328,7 +329,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 		if err != nil {
 			return
 		}
-		ok := c.Handle(data)
+		ok := centrifuge.HandleReadFrame(c, bytes.NewReader(data))
 		if !ok {
 			return
 		}

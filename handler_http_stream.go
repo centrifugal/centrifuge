@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"sync"
@@ -108,7 +109,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = c.Handle(requestData)
+	_ = HandleReadFrame(c, bytes.NewReader(requestData))
 
 	for {
 		select {
