@@ -286,7 +286,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, DisconnectBadRequest, err)
 }
 
@@ -303,7 +303,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
 	require.Equal(t, false, result.Expires)
@@ -333,7 +333,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	client.triggerConnect()
 	client.expire()
@@ -363,7 +363,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	client.expire()
 	require.False(t, client.status == statusClosed)
@@ -389,13 +389,13 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 }
 
 func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
 	rwWrapper := testReplyWriterWrapper()
-	result, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{Id: 1}, time.Now(), false, rwWrapper.rw)
+	result, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
@@ -883,7 +883,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, SubscribeReply{}, &protocol.Command{}, false, rwWrapper.rw)
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -923,7 +923,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, SubscribeReply{}, &protocol.Command{}, false, rwWrapper.rw)
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -989,7 +989,7 @@ func TestUserConnectionLimit(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	anotherClient, _ := newClient(newCtx, node, transport)
-	_, err := anotherClient.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
+	_, err := anotherClient.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, DisconnectConnectionLimit, err)
 }
 
@@ -1081,7 +1081,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 							Offset:  0,
 						},
 					},
-				}, 0)
+				})
 			}
 
 			_ = client.Subscribe("server-side-3")
@@ -1139,7 +1139,7 @@ func TestClientRefresh(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", ExpireAt: expireAt1})
 	client, _ := newClient(newCtx, node, transport)
 
-	client.Connect(ConnectRequest{}, 0)
+	client.Connect(ConnectRequest{})
 
 	require.Equal(t, expireAt1, client.exp)
 	err := client.Refresh()
@@ -1243,7 +1243,7 @@ func TestClientRefreshExpireAtInThePast(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", ExpireAt: expireAt1})
 	client, _ := newClient(newCtx, node, transport)
 
-	client.Connect(ConnectRequest{}, 0)
+	client.Connect(ConnectRequest{})
 
 	require.Equal(t, expireAt1, client.exp)
 
@@ -1494,7 +1494,7 @@ func TestClientRefreshNotAvailable(t *testing.T) {
 
 	cmd := &protocol.RefreshRequest{}
 	err := client.handleRefresh(cmd, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectNotAvailable, err)
+	require.Equal(t, ErrorNotAvailable, err)
 }
 
 func TestClientRefreshEmptyToken(t *testing.T) {
@@ -1559,7 +1559,7 @@ func TestClientPublishNotAvailable(t *testing.T) {
 		Data:    []byte(`{}`),
 	}
 	err := client.handlePublish(cmd, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectNotAvailable, err)
+	require.Equal(t, ErrorNotAvailable, err)
 }
 
 type testBrokerEventHandler struct {
@@ -1747,7 +1747,7 @@ func TestClientPing(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePing(&protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Error(t, DisconnectNotAvailable, err)
+	require.Error(t, ErrorNotAvailable, err)
 }
 
 func TestClientPresence(t *testing.T) {
@@ -1889,7 +1889,7 @@ func TestClientPresenceNotAvailable(t *testing.T) {
 	err := client.handlePresence(&protocol.PresenceRequest{
 		Channel: "test",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectNotAvailable, err)
+	require.Equal(t, ErrorNotAvailable, err)
 }
 
 func TestClientSubscribeNotAvailable(t *testing.T) {
@@ -1904,7 +1904,7 @@ func TestClientSubscribeNotAvailable(t *testing.T) {
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "test",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectNotAvailable, err)
+	require.Equal(t, ErrorNotAvailable, err)
 }
 
 func TestClientPresenceStatsNotAvailable(t *testing.T) {
@@ -1920,7 +1920,7 @@ func TestClientPresenceStatsNotAvailable(t *testing.T) {
 	err := client.handlePresenceStats(&protocol.PresenceStatsRequest{
 		Channel: "test",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectNotAvailable, err)
+	require.Equal(t, ErrorNotAvailable, err)
 }
 
 func TestClientPresenceStatsError(t *testing.T) {
@@ -2178,7 +2178,7 @@ func TestClientHistoryNotAvailable(t *testing.T) {
 	err := client.handleHistory(&protocol.HistoryRequest{
 		Channel: "test",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectNotAvailable, err)
+	require.Equal(t, ErrorNotAvailable, err)
 }
 
 func TestClientCloseUnauthenticated(t *testing.T) {
@@ -2533,7 +2533,7 @@ func TestClientConnectExpiredError(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 	require.False(t, client.authenticated)
 }
@@ -2646,7 +2646,7 @@ func TestClientHandleRPCNotAvailable(t *testing.T) {
 	err := client.handleRPC(&protocol.RPCRequest{
 		Method: "xxx",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectNotAvailable, err)
+	require.Equal(t, ErrorNotAvailable, err)
 }
 
 func TestClientHandleRPC(t *testing.T) {
@@ -2685,8 +2685,8 @@ func TestClientHandleSendNoHandlerSet(t *testing.T) {
 	connectClient(t, client)
 	err := client.handleSend(&protocol.SendRequest{
 		Data: []byte(`{"data":"hello"}`),
-	}, time.Now())
-	require.Error(t, DisconnectNotAvailable, err)
+	}, &protocol.Command{}, time.Now())
+	require.Error(t, ErrorNotAvailable, err)
 }
 
 func TestClientHandleSend(t *testing.T) {
@@ -2706,7 +2706,7 @@ func TestClientHandleSend(t *testing.T) {
 
 	err := client.handleSend(&protocol.SendRequest{
 		Data: []byte(`{"data":"hello"}`),
-	}, time.Now())
+	}, &protocol.Command{}, time.Now())
 	require.NoError(t, err)
 	require.True(t, messageHandlerCalled)
 }
@@ -3000,7 +3000,7 @@ func TestClientSideSubRefresh(t *testing.T) {
 		Channel: "test",
 		Token:   "test_token",
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectNotAvailable, err)
+	require.Equal(t, ErrorNotAvailable, err)
 
 	client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
 		require.Equal(t, "test_token", e.Token)
@@ -3346,7 +3346,7 @@ func TestClientTransportWriteError(t *testing.T) {
 			rwWrapper := testReplyWriterWrapper()
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: "test",
-			}, SubscribeReply{}, &protocol.Command{}, false, rwWrapper.rw)
+			}, SubscribeReply{}, &protocol.Command{}, false, time.Time{}, rwWrapper.rw)
 			require.Nil(t, subCtx.disconnect)
 			require.Nil(t, subCtx.err)
 			require.Nil(t, rwWrapper.replies[0].Error)
@@ -3706,7 +3706,7 @@ func TestClientOnStateSnapshot(t *testing.T) {
 
 func connectClientV2(t testing.TB, client *Client) {
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), false, rwWrapper.rw)
+	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
@@ -4217,7 +4217,7 @@ func TestClient_HandleCommandV2(t *testing.T) {
 		Id:   4,
 		Ping: &protocol.PingRequest{},
 	}, 0)
-	require.False(t, ok)
+	require.True(t, ok)
 
 	// Only with Id set - should result into a disconnect.
 	ok = clientV2.HandleCommand(&protocol.Command{

@@ -54,7 +54,7 @@ func (d Disconnect) Error() string {
 	return d.String()
 }
 
-func (d *Disconnect) isReconnect(protoVersion ProtocolVersion) bool {
+func (d Disconnect) isReconnect(protoVersion ProtocolVersion) bool {
 	if protoVersion == ProtocolVersion1 {
 		return d.Reconnect
 	}
@@ -172,6 +172,16 @@ var (
 		Reason:    "no pong",
 		Reconnect: true,
 	}
+	// DisconnectTooManyRequests may be issued when client sends too many commands to a server.
+	DisconnectTooManyRequests = Disconnect{
+		Code:   3013,
+		Reason: "too many requests",
+	}
+	// DisconnectTooManyErrors may be issued when client generates too many errors on the server.
+	DisconnectTooManyErrors = Disconnect{
+		Code:   3014,
+		Reason: "too many errors",
+	}
 )
 
 // The codes below are built-in terminal codes.
@@ -218,21 +228,10 @@ var (
 		Code:   3506,
 		Reason: "inappropriate protocol",
 	}
-	// DisconnectTooManyRequests may be issued when client sends too many commands to a server.
-	DisconnectTooManyRequests = Disconnect{
-		Code:   3507,
-		Reason: "too many requests",
-	}
-	// DisconnectNotAvailable may be issued when client attempts accessing server features which
-	// are not available.
-	DisconnectNotAvailable = Disconnect{
-		Code:   3508,
-		Reason: "not available",
-	}
 	// DisconnectPermissionDenied may be issued when client attempts accessing a server without
 	// enough permissions.
 	DisconnectPermissionDenied = Disconnect{
-		Code:   3509,
+		Code:   3508,
 		Reason: "permission denied",
 	}
 )

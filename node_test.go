@@ -608,7 +608,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, SubscribeReply{}, &protocol.Command{}, false, rwWrapper.rw)
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(b, subCtx.disconnect)
 }
 
