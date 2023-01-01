@@ -1,11 +1,12 @@
 package centrifuge
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/centrifugal/centrifuge/internal/readerpool"
 
 	"github.com/centrifugal/protocol"
 )
@@ -78,6 +79,13 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pingInterval: pingInterval,
 		pongTimeout:  pongTimeout,
 	})
+
+	if !h.node.config.ProtocolVersionSupported(transport.ProtocolVersion()) {
+		h.node.logger.log(newLogEntry(LogLevelInfo, "unsupported protocol version", map[string]interface{}{"transport": transportHTTPStream, "version": transport.ProtocolVersion()}))
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
 		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": transportHTTPStream}))
@@ -109,7 +117,9 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = HandleReadFrame(c, bytes.NewReader(requestData))
+	reader := readerpool.GetBytesReader(requestData)
+	_ = HandleReadFrame(c, reader)
+	readerpool.PutBytesReader(reader)
 
 	for {
 		select {

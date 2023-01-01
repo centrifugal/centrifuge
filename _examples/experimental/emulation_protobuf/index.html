@@ -57,9 +57,6 @@
                 centrifuge.on('message', function(ctx) {
                     const str = new TextDecoder("utf-8").decode(ctx.data);
                     drawText(str);
-                    // Echo data back to server with 'ack' prefix.
-                    const echoData = new TextEncoder("utf-8").encode("ack " + str);
-                    centrifuge.send(echoData);
                 });
 
                 centrifuge.on('publication', function(ctx) {

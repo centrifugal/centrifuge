@@ -40,8 +40,6 @@
 
                 centrifuge.on('message', function(ctx) {
                     drawText(JSON.stringify(ctx.data));
-                    // echo data back to server.
-                    centrifuge.send(ctx.data);
                 });
 
                 // subscribe on channel and bind various event listeners. Actual

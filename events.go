@@ -263,7 +263,10 @@ type MessageEvent struct {
 	Data []byte
 }
 
-// MessageHandler must handle incoming async message from client.
+// MessageHandler must handle incoming async message from client. So Centrifuge
+// feels similar to pure WebSocket API. Though in general, we recommend using RPC
+// where possible to send data to a server  from a client as it provides a better
+// flow control.
 type MessageHandler func(MessageEvent)
 
 // PresenceEvent has channel operation called for.
@@ -405,10 +408,10 @@ type CommandProcessedEvent struct {
 	Disconnect *Disconnect
 	// Reply to the command. Reply may be pooled - see comment of CommandProcessedEvent.
 	// This Reply may be nil in the following cases:
-	// * for Send command since send commands do not require replies
-	// * when Disconnect field of CommandProcessedEvent is not nil
-	// * when unidirectional transport connects (we create Connect Command artificially
-	// with id: 1 and we don't send replies to unidirectional transport. Only pushes.
+	// 1. For Send command since send commands do not have replies
+	// 2. When Disconnect field of CommandProcessedEvent is not nil
+	// 3. When unidirectional transport connects (we create Connect Command artificially
+	// with id: 1 and we never send replies to unidirectional transport, only pushes).
 	Reply *protocol.Reply
 	// Started is a time command was passed to Client for processing.
 	Started time.Time

@@ -1,12 +1,13 @@
 package centrifuge
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+
+	"github.com/centrifugal/centrifuge/internal/readerpool"
 
 	"github.com/centrifugal/protocol"
 )
@@ -150,7 +151,9 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 		data = req.Data
 	}
 	go func() {
-		_ = HandleReadFrame(client, bytes.NewReader(data))
+		reader := readerpool.GetBytesReader(data)
+		_ = HandleReadFrame(client, reader)
+		readerpool.PutBytesReader(reader)
 		cb(SurveyReply{})
 	}()
 }

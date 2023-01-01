@@ -231,14 +231,14 @@ var (
 	// DisconnectPermissionDenied may be issued when client attempts accessing a server without
 	// enough permissions.
 	DisconnectPermissionDenied = Disconnect{
-		Code:   3508,
+		Code:   3507,
 		Reason: "permission denied",
 	}
 	// DisconnectNotAvailable may be issued when ErrorNotAvailable does not fit message type, for example
 	// we issue DisconnectNotAvailable when client sends asynchronous message without MessageHandler set
 	// on server side.
 	DisconnectNotAvailable = Disconnect{
-		Code:   3509,
+		Code:   3508,
 		Reason: "not available",
 	}
 )

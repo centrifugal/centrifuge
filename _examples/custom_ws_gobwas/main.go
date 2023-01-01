@@ -94,10 +94,6 @@ func main() {
 			cb(centrifuge.PublishReply{}, nil)
 		})
 
-		client.OnMessage(func(e centrifuge.MessageEvent) {
-			log.Printf("Message from user: %s, data: %s", client.UserID(), string(e.Data))
-		})
-
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			log.Printf("user %s disconnected, disconnect: %s", client.UserID(), e.Disconnect)
 		})

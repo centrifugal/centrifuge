@@ -4219,7 +4219,7 @@ func TestClient_HandleCommandV2(t *testing.T) {
 	}, 0)
 	require.True(t, ok)
 
-	// Only with Id set - should result into a disconnect.
+	// Only with id set - should result into a disconnect.
 	ok = clientV2.HandleCommand(&protocol.Command{
 		Id: 5,
 	}, 0)
