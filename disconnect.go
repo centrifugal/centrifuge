@@ -234,4 +234,11 @@ var (
 		Code:   3508,
 		Reason: "permission denied",
 	}
+	// DisconnectNotAvailable may be issued when ErrorNotAvailable does not fit message type, for example
+	// we issue DisconnectNotAvailable when client sends asynchronous message without MessageHandler set
+	// on server side.
+	DisconnectNotAvailable = Disconnect{
+		Code:   3509,
+		Reason: "not available",
+	}
 )

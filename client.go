@@ -2419,7 +2419,9 @@ func (c *Client) handleSend(req *protocol.SendRequest, cmd *protocol.Command, st
 	// Send handler is a bit special since it's a one way command: client does not expect any reply.
 	if c.eventHub.messageHandler == nil {
 		observeCommandDuration(protocol.Command_SEND, time.Since(started))
-		return ErrorNotAvailable
+		// Return DisconnectNotAvailable here since otherwise client won't even know
+		// server does not have asynchronous message handler set.
+		return DisconnectNotAvailable
 	}
 	c.eventHub.messageHandler(MessageEvent{
 		Data: req.Data,
