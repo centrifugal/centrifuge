@@ -460,7 +460,6 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, 
 	}
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
-	return
 }
 
 func (c *Client) onTimerOp() {
