@@ -177,11 +177,6 @@ var (
 		Code:   3013,
 		Reason: "too many requests",
 	}
-	// DisconnectTooManyErrors may be issued when client generates too many errors on the server.
-	DisconnectTooManyErrors = Disconnect{
-		Code:   3014,
-		Reason: "too many errors",
-	}
 )
 
 // The codes below are built-in terminal codes.
