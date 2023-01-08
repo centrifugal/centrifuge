@@ -236,4 +236,9 @@ var (
 		Code:   3508,
 		Reason: "not available",
 	}
+	// DisconnectTooManyErrors may be issued when client generates too many errors.
+	DisconnectTooManyErrors = Disconnect{
+		Code:   3509,
+		Reason: "too many errors",
+	}
 )
