@@ -103,11 +103,7 @@ type RedisBrokerConfig struct {
 	// perspective this can be an unwanted memory leak. Setting a reasonable
 	// value to this option (usually much bigger than history retention period)
 	// can help. In this case unused channel stream meta data will eventually expire.
-	//
-	// TODO v1: since we have epoch, things should also properly work without meta
-	// information at all (but we loose possibility of long-term recover in stream
-	// without new messages). We can make this optional and disabled by default at
-	// least.
+	// TODO: make it configurable on per-channel level.
 	HistoryMetaTTL time.Duration
 
 	// UseLists allows enabling usage of Redis LIST instead of STREAM data

@@ -14,6 +14,7 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
+	"github.com/segmentio/encoding/json"
 )
 
 // Empty Replies/Pushes for pings.
@@ -253,6 +254,7 @@ type Client struct {
 	lastPing          int64
 	eventHub          *clientEventHub
 	timer             *time.Timer
+	unusable          bool
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -296,9 +298,6 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 					return nil
 				}
 			}
-			if client.node.LogEnabled(LogLevelTrace) {
-				client.trace("-->", item.Data)
-			}
 			if err := t.Write(item.Data); err != nil {
 				switch v := err.(type) {
 				case *Disconnect:
@@ -322,9 +321,6 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 						continue
 					}
 				}
-				if client.node.LogEnabled(LogLevelTrace) {
-					client.trace("-->", items[i].Data)
-				}
 				messages = append(messages, items[i].Data)
 			}
 			if err := t.WriteMany(messages...); err != nil {
@@ -347,7 +343,7 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	go client.messageWriter.run()
 
 	staleCloseDelay := n.config.ClientStaleCloseDelay
-	if staleCloseDelay > 0 && !client.authenticated {
+	if staleCloseDelay > 0 {
 		client.mu.Lock()
 		client.timerOp = timerOpStale
 		client.timer = time.AfterFunc(staleCloseDelay, client.onTimerOp)
@@ -356,26 +352,27 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	return client, func() error { return client.close(DisconnectConnectionClosed) }, nil
 }
 
+var uniErrorCodeToDisconnect = map[uint32]Disconnect{
+	ErrorExpired.Code:          DisconnectExpired,
+	ErrorTokenExpired.Code:     DisconnectExpired,
+	ErrorTooManyRequests.Code:  DisconnectTooManyRequests,
+	ErrorPermissionDenied.Code: DisconnectPermissionDenied,
+}
+
 func extractUnidirectionalDisconnect(err error) Disconnect {
-	var d Disconnect
 	switch t := err.(type) {
 	case *Disconnect:
-		d = *t
+		return *t
 	case Disconnect:
-		d = t
+		return t
 	case *Error:
-		switch t.Code {
-		case ErrorExpired.Code:
-			d = DisconnectExpired
-		case ErrorTokenExpired.Code:
-			d = DisconnectExpired
-		default:
-			d = DisconnectServerError
+		if d, ok := uniErrorCodeToDisconnect[t.Code]; ok {
+			return d
 		}
+		return DisconnectServerError
 	default:
-		d = DisconnectServerError
+		return DisconnectServerError
 	}
-	return d
 }
 
 // Connect supposed to be called from unidirectional transport layer to pass
@@ -384,11 +381,7 @@ func extractUnidirectionalDisconnect(err error) Disconnect {
 // since client passes Connect command upon successful connection establishment
 // with a server.
 func (c *Client) Connect(req ConnectRequest) {
-	err := c.unidirectionalConnect(req.toProto())
-	if err != nil {
-		d := extractUnidirectionalDisconnect(err)
-		go func() { _ = c.close(d) }()
-	}
+	c.unidirectionalConnect(req.toProto(), 0)
 }
 
 func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
@@ -415,24 +408,58 @@ func hasFlag(flags, flag uint64) bool {
 	return flags&flag != 0
 }
 
-func (c *Client) issueCommandReadEvent(cmd *protocol.Command) {
+func (c *Client) issueCommandReadEvent(cmd *protocol.Command, size int) error {
 	if c.node.clientEvents.commandReadHandler != nil {
-		c.node.clientEvents.commandReadHandler(c, CommandReadEvent{
-			Command: cmd,
+		return c.node.clientEvents.commandReadHandler(c, CommandReadEvent{
+			Command:     cmd,
+			CommandSize: size,
 		})
+	}
+	return nil
+}
+
+func (c *Client) issueCommandProcessedEvent(event CommandProcessedEvent) {
+	if c.node.clientEvents.commandProcessedHandler != nil {
+		c.node.clientEvents.commandProcessedHandler(c, event)
 	}
 }
 
-func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest) error {
-	_, err := c.connectCmd(connectRequest, nil, time.Time{}, true, nil)
-	if err != nil {
-		c.issueCommandReadEvent(&protocol.Command{Connect: connectRequest})
-		return err
+func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, connectCmdSize int) {
+	started := time.Now()
+
+	var cmd *protocol.Command
+
+	if c.node.LogEnabled(LogLevelTrace) {
+		cmd = &protocol.Command{Id: 1, Connect: connectRequest}
+		c.traceInCmd(cmd)
 	}
-	c.issueCommandReadEvent(&protocol.Command{Connect: connectRequest})
+
+	if c.node.clientEvents.commandReadHandler != nil {
+		cmd = &protocol.Command{Id: 1, Connect: connectRequest}
+		err := c.issueCommandReadEvent(cmd, connectCmdSize)
+		if err != nil {
+			d := extractUnidirectionalDisconnect(err)
+			go func() { _ = c.close(d) }()
+			if c.node.clientEvents.commandProcessedHandler != nil {
+				c.handleCommandFinished(cmd, protocol.Command_CONNECT, &d, nil, started)
+			}
+			return
+		}
+	}
+	_, err := c.connectCmd(connectRequest, nil, time.Time{}, nil)
+	if err != nil {
+		d := extractUnidirectionalDisconnect(err)
+		go func() { _ = c.close(d) }()
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			c.handleCommandFinished(cmd, protocol.Command_CONNECT, &d, nil, started)
+		}
+		return
+	}
+	if c.node.clientEvents.commandProcessedHandler != nil {
+		c.handleCommandFinished(cmd, protocol.Command_CONNECT, nil, nil, started)
+	}
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
-	return nil
 }
 
 func (c *Client) onTimerOp() {
@@ -445,7 +472,7 @@ func (c *Client) onTimerOp() {
 	c.mu.Unlock()
 	switch timerOp {
 	case timerOpStale:
-		c.closeUnauthenticated()
+		c.closeStale()
 	case timerOpPresence:
 		c.updatePresence()
 	case timerOpExpire:
@@ -522,6 +549,9 @@ func (c *Client) sendPing() {
 	c.mu.Unlock()
 	unidirectional := c.transport.Unidirectional()
 	_ = c.transportEnqueue(getPingData(unidirectional, c.transport.Protocol()))
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutReply(emptyReply)
+	}
 	c.mu.Lock()
 	appLevelPing := c.transport.AppLevelPing()
 	if appLevelPing.PongTimeout > 0 && !unidirectional {
@@ -534,6 +564,9 @@ func (c *Client) sendPing() {
 func (c *Client) checkPong() {
 	c.mu.RLock()
 	lastPing := c.lastPing
+	if lastPing < 0 {
+		lastPing = -lastPing
+	}
 	lastSeen := c.lastSeen
 	c.mu.RUnlock()
 	if lastSeen < lastPing {
@@ -572,16 +605,17 @@ func (c *Client) addExpireUpdate(after time.Duration) {
 	c.scheduleNextTimer()
 }
 
-// closeUnauthenticated closes connection if it's not authenticated yet.
-// At moment used to close client connections which have not sent valid
-// connect command in a reasonable time interval after established connection
-// with server.
-func (c *Client) closeUnauthenticated() {
+// closeStale closes connection if it's not authenticated yet, or it's
+// unusable but still not closed. At moment used to close client connections
+// which have not sent valid connect command in a reasonable time interval after
+// establishing connection with a server.
+func (c *Client) closeStale() {
 	c.mu.RLock()
 	authenticated := c.authenticated
+	unusable := c.unusable
 	closed := c.status == statusClosed
 	c.mu.RUnlock()
-	if !authenticated && !closed {
+	if (!authenticated || unusable) && !closed {
 		_ = c.close(DisconnectStale)
 	}
 }
@@ -671,6 +705,7 @@ func (c *Client) updatePresence() {
 	defer c.presenceMu.Unlock()
 	config := c.node.config
 	c.mu.Lock()
+	unusable := c.unusable
 	if c.status == statusClosed {
 		c.mu.Unlock()
 		return
@@ -683,9 +718,16 @@ func (c *Client) updatePresence() {
 		channels[channel] = channelContext
 	}
 	c.mu.Unlock()
+
+	if unusable {
+		go c.closeStale()
+		return
+	}
+
 	if c.eventHub.aliveHandler != nil {
 		c.eventHub.aliveHandler()
 	}
+
 	for channel, channelContext := range channels {
 		err := c.updateChannelPresence(channel, channelContext)
 		if err != nil {
@@ -1042,11 +1084,28 @@ func (c *Client) close(disconnect Disconnect) error {
 	return nil
 }
 
-func (c *Client) trace(msg string, data []byte) {
+func (c *Client) traceInCmd(cmd *protocol.Command) {
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
-	c.node.logger.log(newLogEntry(LogLevelTrace, msg, map[string]interface{}{"client": c.ID(), "user": user, "data": fmt.Sprintf("%#v", string(data))}))
+	jsonBytes, _ := json.Marshal(cmd)
+	c.node.logger.log(newLogEntry(LogLevelTrace, "<--", map[string]interface{}{"client": c.ID(), "user": user, "command": string(jsonBytes)}))
+}
+
+func (c *Client) traceOutReply(rep *protocol.Reply) {
+	c.mu.RLock()
+	user := c.user
+	c.mu.RUnlock()
+	jsonBytes, _ := json.Marshal(rep)
+	c.node.logger.log(newLogEntry(LogLevelTrace, "-->", map[string]interface{}{"client": c.ID(), "user": user, "reply": string(jsonBytes)}))
+}
+
+func (c *Client) traceOutPush(push *protocol.Push) {
+	c.mu.RLock()
+	user := c.user
+	c.mu.RUnlock()
+	jsonBytes, _ := json.Marshal(push)
+	c.node.logger.log(newLogEntry(LogLevelTrace, "-->", map[string]interface{}{"client": c.ID(), "user": user, "push": string(jsonBytes)}))
 }
 
 // Lock must be held outside.
@@ -1064,64 +1123,25 @@ func (c *Client) clientInfo(ch string) *ClientInfo {
 	}
 }
 
-// Handle raw data encoded with Centrifuge protocol.
-// Not goroutine-safe. Supposed to be called only from a transport connection reader.
-func (c *Client) Handle(data []byte) bool {
+// HandleCommand processes a single protocol.Command. Supposed to be called only
+// from a transport connection reader.
+func (c *Client) HandleCommand(cmd *protocol.Command, cmdProtocolSize int) bool {
 	c.mu.Lock()
 	if c.status == statusClosed {
 		c.mu.Unlock()
 		return false
 	}
+	unusable := c.unusable
 	c.mu.Unlock()
 
-	if c.transport.Unidirectional() {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "can't handle data for unidirectional client", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-		go func() { _ = c.close(DisconnectBadRequest) }()
-		return false
-	}
-
-	if len(data) == 0 {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "empty client request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
-		go func() { _ = c.close(DisconnectBadRequest) }()
+	if unusable {
+		go func() { _ = c.close(DisconnectInsufficientState) }()
 		return false
 	}
 
 	if c.node.LogEnabled(LogLevelTrace) {
-		c.trace("<--", data)
+		c.traceInCmd(cmd)
 	}
-
-	protoType := c.transport.Protocol().toProto()
-	decoder := protocol.GetCommandDecoder(protoType, data)
-	defer protocol.PutCommandDecoder(protoType, decoder)
-
-	for {
-		cmd, err := decoder.Decode()
-		if err != nil && err != io.EOF {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "error decoding command", map[string]interface{}{"data": string(data), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-			go func() { _ = c.close(DisconnectBadRequest) }()
-			return false
-		}
-		if cmd != nil {
-			ok := c.HandleCommand(cmd)
-			if !ok {
-				return false
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-	}
-	return true
-}
-
-// HandleCommand processes a single protocol.Command.
-func (c *Client) HandleCommand(cmd *protocol.Command) bool {
-	c.mu.Lock()
-	if c.status == statusClosed {
-		c.mu.Unlock()
-		return false
-	}
-	c.mu.Unlock()
 
 	if c.transport.ProtocolVersion() == ProtocolVersion1 && cmd.Id == 0 && (cmd.Method != protocol.Command_SEND && cmd.Send == nil) {
 		// Only send command from client can be sent without incremental ID in ProtocolVersion1. For
@@ -1137,22 +1157,7 @@ func (c *Client) HandleCommand(cmd *protocol.Command) bool {
 	default:
 	}
 
-	var commandReadIssued bool
-	if c.authenticated && c.node.clientEvents.commandReadHandler != nil {
-		// For authenticated clients we issue CommandReadEvent before processing
-		// the command. For non-authenticated – after processing - as this seems
-		// the only way to properly capture connect command in per-user tracing.
-		c.issueCommandReadEvent(cmd)
-		commandReadIssued = true
-	}
-
-	disconnect := c.dispatchCommand(cmd)
-
-	if !commandReadIssued && c.node.clientEvents.commandReadHandler != nil {
-		// This is required to capture connect command for non-authenticated
-		// clients in per-user tracing.
-		c.issueCommandReadEvent(cmd)
-	}
+	disconnect, proceed := c.dispatchCommand(cmd, cmdProtocolSize)
 
 	select {
 	case <-c.ctx.Done():
@@ -1166,98 +1171,172 @@ func (c *Client) HandleCommand(cmd *protocol.Command) bool {
 		go func() { _ = c.close(*disconnect) }()
 		return false
 	}
-	return true
+	return proceed
 }
 
 // dispatchCommand dispatches Command into correct command handler.
-func (c *Client) dispatchCommand(cmd *protocol.Command) *Disconnect {
+func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnect, bool) {
 	c.mu.Lock()
 	if c.status == statusClosed {
 		c.mu.Unlock()
-		return nil
+		return nil, false
 	}
-	c.lastSeen = time.Now().Unix()
 	c.mu.Unlock()
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		return c.dispatchCommandV1(cmd)
 	}
-	if cmd.Id == 0 && cmd.Send == nil {
-		return nil
-	}
-	return c.dispatchCommandV2(cmd)
+	return c.dispatchCommandV2(cmd, cmdSize)
 }
 
-func (c *Client) dispatchCommandV2(cmd *protocol.Command) *Disconnect {
+// isPong is a helper method to check whether the command from the client
+// is a pong to server ping. It's actually an empty command.
+func isPong(cmd *protocol.Command) bool {
+	return cmd.Id == 0 && cmd.Send == nil
+}
+
+func (c *Client) handleCommandFinished(cmd *protocol.Command, method protocol.Command_MethodType, disconnect *Disconnect, reply *protocol.Reply, started time.Time) {
+	defer func() {
+		observeCommandDuration(method, time.Since(started))
+	}()
+	if c.node.clientEvents.commandProcessedHandler != nil {
+		event := newCommandProcessedEvent(cmd, disconnect, reply, started)
+		c.issueCommandProcessedEvent(event)
+	}
+}
+
+func (c *Client) handleCommandDispatchError(cmd *protocol.Command, method protocol.Command_MethodType, err error, started time.Time) (*Disconnect, bool) {
+	defer func() {
+		observeCommandDuration(method, time.Since(started))
+	}()
+	switch t := err.(type) {
+	case *Disconnect:
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			event := newCommandProcessedEvent(cmd, t, nil, started)
+			c.issueCommandProcessedEvent(event)
+		}
+		return t, false
+	case Disconnect:
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			event := newCommandProcessedEvent(cmd, &t, nil, started)
+			c.issueCommandProcessedEvent(event)
+		}
+		return &t, false
+	default:
+		if cmd.Connect != nil {
+			c.mu.Lock()
+			c.unusable = true
+			c.mu.Unlock()
+		}
+		errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
+		c.writeError(method, cmd, errorReply, nil)
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			event := newCommandProcessedEvent(cmd, nil, errorReply, started)
+			c.issueCommandProcessedEvent(event)
+		}
+		return nil, cmd.Connect == nil
+	}
+}
+
+func (c *Client) dispatchCommandV2(cmd *protocol.Command, cmdSize int) (*Disconnect, bool) {
 	isConnect := cmd.Connect != nil
 	if !c.authenticated && !isConnect {
-		// Client must send connect command to authenticate itself first. Till that moment we ignore
-		// all other commands. Ignoring and not disconnecting here is important since client could send
-		// optimistic subscription commands but got an error upon handling connect command. Client
-		// which is not authenticated in a configured time will be eventually disconnected with a stale
-		// reason.
-		return nil
+		return &DisconnectBadRequest, false
 	}
 
-	var method protocol.Command_MethodType
+	if isPong(cmd) {
+		c.mu.Lock()
+		if c.status == statusClosed {
+			c.mu.Unlock()
+			return nil, false
+		}
+		if c.lastPing <= 0 {
+			// No ping was issued, unnecessary pong.
+			c.mu.Unlock()
+			return &DisconnectBadRequest, false
+		}
+		// upon receiving pong we change a sign of lastPing value. This way we can handle
+		// unnecessary pongs sent by the client and still use lastPing value in Client.checkPong.
+		c.lastPing = -c.lastPing
+		c.lastSeen = time.Now().Unix()
+		c.mu.Unlock()
+		return nil, true
+	}
+
+	if cmd.Id == 0 && cmd.Send == nil {
+		// Now as pong processed make sure that command has id > 0 (except Send).
+		return &DisconnectBadRequest, false
+	}
 
 	started := time.Now()
 
-	var handleErr error
+	var method protocol.Command_MethodType
 
 	if cmd.Connect != nil {
 		method = protocol.Command_CONNECT
-		handleErr = c.handleConnect(cmd.Connect, cmd, started, nil)
 	} else if cmd.Ping != nil {
 		method = protocol.Command_PING
-		handleErr = c.handlePing(cmd, started, nil)
 	} else if cmd.Subscribe != nil {
 		method = protocol.Command_SUBSCRIBE
-		handleErr = c.handleSubscribe(cmd.Subscribe, cmd, started, nil)
 	} else if cmd.Unsubscribe != nil {
 		method = protocol.Command_UNSUBSCRIBE
-		handleErr = c.handleUnsubscribe(cmd.Unsubscribe, cmd, started, nil)
 	} else if cmd.Publish != nil {
 		method = protocol.Command_PUBLISH
-		handleErr = c.handlePublish(cmd.Publish, cmd, started, nil)
 	} else if cmd.Presence != nil {
 		method = protocol.Command_PRESENCE
-		handleErr = c.handlePresence(cmd.Presence, cmd, started, nil)
 	} else if cmd.PresenceStats != nil {
 		method = protocol.Command_PRESENCE_STATS
-		handleErr = c.handlePresenceStats(cmd.PresenceStats, cmd, started, nil)
 	} else if cmd.History != nil {
 		method = protocol.Command_HISTORY
-		handleErr = c.handleHistory(cmd.History, cmd, started, nil)
 	} else if cmd.Rpc != nil {
 		method = protocol.Command_RPC
-		handleErr = c.handleRPC(cmd.Rpc, cmd, started, nil)
 	} else if cmd.Send != nil {
 		method = protocol.Command_SEND
-		handleErr = c.handleSend(cmd.Send, started)
 	} else if cmd.Refresh != nil {
 		method = protocol.Command_REFRESH
-		handleErr = c.handleRefresh(cmd.Refresh, cmd, started, nil)
 	} else if cmd.SubRefresh != nil {
 		method = protocol.Command_SUB_REFRESH
+	} else {
+		return &DisconnectBadRequest, false
+	}
+
+	var handleErr error
+
+	handleErr = c.issueCommandReadEvent(cmd, cmdSize)
+	if handleErr != nil {
+		return c.handleCommandDispatchError(cmd, method, handleErr, started)
+	}
+
+	if cmd.Connect != nil {
+		handleErr = c.handleConnect(cmd.Connect, cmd, started, nil)
+	} else if cmd.Ping != nil {
+		handleErr = c.handlePing(cmd, started, nil)
+	} else if cmd.Subscribe != nil {
+		handleErr = c.handleSubscribe(cmd.Subscribe, cmd, started, nil)
+	} else if cmd.Unsubscribe != nil {
+		handleErr = c.handleUnsubscribe(cmd.Unsubscribe, cmd, started, nil)
+	} else if cmd.Publish != nil {
+		handleErr = c.handlePublish(cmd.Publish, cmd, started, nil)
+	} else if cmd.Presence != nil {
+		handleErr = c.handlePresence(cmd.Presence, cmd, started, nil)
+	} else if cmd.PresenceStats != nil {
+		handleErr = c.handlePresenceStats(cmd.PresenceStats, cmd, started, nil)
+	} else if cmd.History != nil {
+		handleErr = c.handleHistory(cmd.History, cmd, started, nil)
+	} else if cmd.Rpc != nil {
+		handleErr = c.handleRPC(cmd.Rpc, cmd, started, nil)
+	} else if cmd.Send != nil {
+		handleErr = c.handleSend(cmd.Send, cmd, started)
+	} else if cmd.Refresh != nil {
+		handleErr = c.handleRefresh(cmd.Refresh, cmd, started, nil)
+	} else if cmd.SubRefresh != nil {
 		handleErr = c.handleSubRefresh(cmd.SubRefresh, cmd, started, nil)
 	} else {
-		method = protocol.Command_PING
-		handleErr = c.handlePing(cmd, started, nil)
+		return &DisconnectBadRequest, false
 	}
 	if handleErr != nil {
-		defer func() {
-			observeCommandDuration(method, time.Since(started))
-		}()
-		switch t := handleErr.(type) {
-		case *Disconnect:
-			return t
-		case Disconnect:
-			return &t
-		default:
-			c.writeError(method, cmd, toClientErr(handleErr), nil)
-		}
+		return c.handleCommandDispatchError(cmd, method, handleErr, started)
 	}
-	return nil
+	return nil, true
 }
 
 func (c *Client) writeEncodedPush(rep *protocol.Reply, rw *replyWriter) {
@@ -1308,14 +1387,17 @@ func (c *Client) writeEncodedCommandReply(method protocol.Command_MethodType, cm
 	if rw != nil {
 		rw.write(rep)
 	}
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutReply(rep)
+	}
 }
 
-func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
+func (c *Client) dispatchCommandV1(cmd *protocol.Command) (*Disconnect, bool) {
 	isConnect := cmd.Method == protocol.Command_CONNECT
 	if !c.authenticated && !isConnect {
 		// Client must send connect command to authenticate itself first.
 		c.node.logger.log(newLogEntry(LogLevelInfo, "client not authenticated to handle command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "command": fmt.Sprintf("%v", cmd)}))
-		return &DisconnectBadRequest
+		return &DisconnectBadRequest, false
 	}
 
 	method := cmd.Method
@@ -1334,7 +1416,7 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 			handleErr = c.handleConnect(req, cmd, started, nil)
 		}
 	case protocol.Command_PING:
-		handleErr = c.handlePing(cmd, started, nil)
+		handleErr = c.handlePingV1(cmd, started, nil)
 	case protocol.Command_SUBSCRIBE:
 		req, err := protocol.GetParamsDecoder(c.transport.Protocol().toProto()).DecodeSubscribe(params)
 		if err != nil {
@@ -1389,7 +1471,7 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 		if err != nil {
 			handleErr = c.logDisconnectBadRequestWithError(err, "error decoding message")
 		} else {
-			handleErr = c.handleSend(req, started)
+			handleErr = c.handleSend(req, cmd, started)
 		}
 	case protocol.Command_REFRESH:
 		req, err := protocol.GetParamsDecoder(c.transport.Protocol().toProto()).DecodeRefresh(params)
@@ -1414,14 +1496,15 @@ func (c *Client) dispatchCommandV1(cmd *protocol.Command) *Disconnect {
 		}()
 		switch t := handleErr.(type) {
 		case *Disconnect:
-			return t
+			return t, false
 		case Disconnect:
-			return &t
+			return &t, false
 		default:
-			c.writeError(method, cmd, toClientErr(handleErr), nil)
+			c.writeError(method, cmd, &protocol.Reply{Error: toClientErr(handleErr).toProto()}, nil)
+			return nil, false
 		}
 	}
-	return nil
+	return nil, true
 }
 
 func (c *Client) checkExpired() {
@@ -1499,7 +1582,7 @@ func (c *Client) expire() {
 }
 
 func (c *Client) handleConnect(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
-	_, err := c.connectCmd(req, cmd, started, false, rw)
+	_, err := c.connectCmd(req, cmd, started, rw)
 	if err != nil {
 		return err
 	}
@@ -1609,6 +1692,12 @@ func (c *Client) getRefreshPushReply(res *protocol.Refresh) ([]byte, error) {
 	})
 }
 
+func (c *Client) releaseRefreshCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseRefreshReply(reply)
+	}
+}
+
 func (c *Client) getRefreshCommandReply(res *protocol.RefreshResult) (*protocol.Reply, error) {
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeRefreshResult(res)
@@ -1619,9 +1708,7 @@ func (c *Client) getRefreshCommandReply(res *protocol.RefreshResult) (*protocol.
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Refresh: res,
-	}, nil
+	return protocol.ReplyPool.AcquireRefreshReply(res), nil
 }
 
 func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -1648,17 +1735,13 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 	}
 
 	cb := func(reply RefreshReply, err error) {
-		defer func() {
-			observeCommandDuration(protocol.Command_REFRESH, time.Since(started))
-		}()
-
 		if err != nil {
-			c.writeDisconnectOrErrorFlush(protocol.Command_REFRESH, cmd, err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_REFRESH, cmd, err, started, rw)
 			return
 		}
 
 		if reply.Expired {
-			c.Disconnect(DisconnectExpired)
+			c.writeDisconnectOrErrorFlush(protocol.Command_REFRESH, cmd, DisconnectExpired, started, rw)
 			return
 		}
 
@@ -1692,18 +1775,19 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 				c.addExpireUpdate(duration)
 				c.mu.Unlock()
 			} else {
-				c.writeError(protocol.Command_REFRESH, cmd, ErrorExpired, rw)
+				c.writeDisconnectOrErrorFlush(protocol.Command_REFRESH, cmd, ErrorExpired, started, rw)
 				return
 			}
 		}
 
-		rep, err := c.getRefreshCommandReply(res)
+		protoReply, err := c.getRefreshCommandReply(res)
 		if err != nil {
-			c.logWriteInternalErrorFlush(protocol.Command_REFRESH, cmd, err, "error encoding refresh", rw)
+			c.logWriteInternalErrorFlush(protocol.Command_REFRESH, cmd, err, "error encoding refresh", started, rw)
 			return
 		}
-
-		c.writeEncodedCommandReply(protocol.Command_REFRESH, cmd, rep, rw)
+		c.writeEncodedCommandReply(protocol.Command_REFRESH, cmd, protoReply, rw)
+		c.handleCommandFinished(cmd, protocol.Command_REFRESH, nil, protoReply, started)
+		c.releaseRefreshCommandReply(protoReply)
 	}
 
 	c.eventHub.refreshHandler(event, cb)
@@ -1745,26 +1829,22 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	}
 
 	cb := func(reply SubscribeReply, err error) {
-		defer func() {
-			observeCommandDuration(protocol.Command_SUBSCRIBE, time.Since(started))
-		}()
-
 		if err != nil {
 			c.onSubscribeError(req.Channel)
-			c.writeDisconnectOrErrorFlush(protocol.Command_SUBSCRIBE, cmd, err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_SUBSCRIBE, cmd, err, started, rw)
 			return
 		}
 
-		ctx := c.subscribeCmd(req, reply, cmd, false, rw)
+		ctx := c.subscribeCmd(req, reply, cmd, false, started, rw)
 
 		if ctx.disconnect != nil {
 			c.onSubscribeError(req.Channel)
-			c.Disconnect(*ctx.disconnect)
+			c.writeDisconnectOrErrorFlush(protocol.Command_SUBSCRIBE, cmd, ctx.disconnect, started, rw)
 			return
 		}
 		if ctx.err != nil {
 			c.onSubscribeError(req.Channel)
-			c.writeDisconnectOrErrorFlush(protocol.Command_SUBSCRIBE, cmd, ctx.err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_SUBSCRIBE, cmd, ctx.err, started, rw)
 			return
 		}
 
@@ -1821,12 +1901,8 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 	}
 
 	cb := func(reply SubRefreshReply, err error) {
-		defer func() {
-			observeCommandDuration(protocol.Command_SUB_REFRESH, time.Since(started))
-		}()
-
 		if err != nil {
-			c.writeDisconnectOrErrorFlush(protocol.Command_SUB_REFRESH, cmd, err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_SUB_REFRESH, cmd, err, started, rw)
 			return
 		}
 
@@ -1836,7 +1912,7 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 			res.Expires = true
 			now := time.Now().Unix()
 			if reply.ExpireAt < now {
-				c.writeError(protocol.Command_SUB_REFRESH, cmd, ErrorExpired, rw)
+				c.writeDisconnectOrErrorFlush(protocol.Command_SUB_REFRESH, cmd, ErrorExpired, started, rw)
 				return
 			}
 			res.Ttl = uint32(reply.ExpireAt - now)
@@ -1851,17 +1927,25 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 		}
 		c.mu.Unlock()
 
-		rep, err := c.getSubRefreshCommandReply(res)
+		protoReply, err := c.getSubRefreshCommandReply(res)
 		if err != nil {
-			c.logWriteInternalErrorFlush(protocol.Command_SUB_REFRESH, cmd, err, "error encoding sub refresh", rw)
+			c.logWriteInternalErrorFlush(protocol.Command_SUB_REFRESH, cmd, err, "error encoding sub refresh", started, rw)
 			return
 		}
 
-		c.writeEncodedCommandReply(protocol.Command_SUB_REFRESH, cmd, rep, rw)
+		c.writeEncodedCommandReply(protocol.Command_SUB_REFRESH, cmd, protoReply, rw)
+		c.handleCommandFinished(cmd, protocol.Command_SUB_REFRESH, nil, protoReply, started)
+		c.releaseSubRefreshCommandReply(protoReply)
 	}
 
 	c.eventHub.subRefreshHandler(event, cb)
 	return nil
+}
+
+func (c *Client) releaseSubRefreshCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseSubRefreshReply(reply)
+	}
 }
 
 func (c *Client) getSubRefreshCommandReply(res *protocol.SubRefreshResult) (*protocol.Reply, error) {
@@ -1874,9 +1958,7 @@ func (c *Client) getSubRefreshCommandReply(res *protocol.SubRefreshResult) (*pro
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		SubRefresh: res,
-	}, nil
+	return protocol.ReplyPool.AcquireSubRefreshReply(res), nil
 }
 
 func (c *Client) handleUnsubscribe(req *protocol.UnsubscribeRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -1889,14 +1971,21 @@ func (c *Client) handleUnsubscribe(req *protocol.UnsubscribeRequest, cmd *protoc
 		return err
 	}
 
-	rep, err := c.getUnsubscribeCommandReply(&protocol.UnsubscribeResult{})
+	protoReply, err := c.getUnsubscribeCommandReply(&protocol.UnsubscribeResult{})
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error encoding unsubscribe", map[string]interface{}{"error": err.Error()}))
 		return DisconnectServerError
 	}
-	c.writeEncodedCommandReply(protocol.Command_UNSUBSCRIBE, cmd, rep, rw)
-	observeCommandDuration(protocol.Command_UNSUBSCRIBE, time.Since(started))
+	c.writeEncodedCommandReply(protocol.Command_UNSUBSCRIBE, cmd, protoReply, rw)
+	c.handleCommandFinished(cmd, protocol.Command_UNSUBSCRIBE, nil, protoReply, started)
+	c.releaseUnsubscribeCommandReply(protoReply)
 	return nil
+}
+
+func (c *Client) releaseUnsubscribeCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseUnsubscribeReply(reply)
+	}
 }
 
 func (c *Client) getUnsubscribeCommandReply(res *protocol.UnsubscribeResult) (*protocol.Reply, error) {
@@ -1909,9 +1998,7 @@ func (c *Client) getUnsubscribeCommandReply(res *protocol.UnsubscribeResult) (*p
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Unsubscribe: res,
-	}, nil
+	return protocol.ReplyPool.AcquireUnsubscribeReply(res), nil
 }
 
 func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -1937,12 +2024,8 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 	}
 
 	cb := func(reply PublishReply, err error) {
-		defer func() {
-			observeCommandDuration(protocol.Command_PUBLISH, time.Since(started))
-		}()
-
 		if err != nil {
-			c.writeDisconnectOrErrorFlush(protocol.Command_PUBLISH, cmd, err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_PUBLISH, cmd, err, started, rw)
 			return
 		}
 
@@ -1953,21 +2036,29 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 				WithClientInfo(reply.Options.ClientInfo),
 			)
 			if err != nil {
-				c.logWriteInternalErrorFlush(protocol.Command_PUBLISH, cmd, err, "error publish", rw)
+				c.logWriteInternalErrorFlush(protocol.Command_PUBLISH, cmd, err, "error publish", started, rw)
 				return
 			}
 		}
 
-		rep, err := c.getPublishCommandReply(&protocol.PublishResult{})
+		protoReply, err := c.getPublishCommandReply(&protocol.PublishResult{})
 		if err != nil {
-			c.logWriteInternalErrorFlush(protocol.Command_PUBLISH, cmd, err, "error encoding publish", rw)
+			c.logWriteInternalErrorFlush(protocol.Command_PUBLISH, cmd, err, "error encoding publish", started, rw)
 			return
 		}
-		c.writeEncodedCommandReply(protocol.Command_PUBLISH, cmd, rep, rw)
+		c.writeEncodedCommandReply(protocol.Command_PUBLISH, cmd, protoReply, rw)
+		c.handleCommandFinished(cmd, protocol.Command_PUBLISH, nil, protoReply, started)
+		c.releasePublishCommandReply(protoReply)
 	}
 
 	c.eventHub.publishHandler(event, cb)
 	return nil
+}
+
+func (c *Client) releasePublishCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleasePublishReply(reply)
+	}
 }
 
 func (c *Client) getPublishCommandReply(res *protocol.PublishResult) (*protocol.Reply, error) {
@@ -1980,9 +2071,7 @@ func (c *Client) getPublishCommandReply(res *protocol.PublishResult) (*protocol.
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Publish: res,
-	}, nil
+	return protocol.ReplyPool.AcquirePublishReply(res), nil
 }
 
 func (c *Client) handlePresence(req *protocol.PresenceRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -2000,11 +2089,8 @@ func (c *Client) handlePresence(req *protocol.PresenceRequest, cmd *protocol.Com
 	}
 
 	cb := func(reply PresenceReply, err error) {
-		defer func() {
-			observeCommandDuration(protocol.Command_PRESENCE, time.Since(started))
-		}()
 		if err != nil {
-			c.writeDisconnectOrErrorFlush(protocol.Command_PRESENCE, cmd, err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_PRESENCE, cmd, err, started, rw)
 			return
 		}
 
@@ -2012,7 +2098,7 @@ func (c *Client) handlePresence(req *protocol.PresenceRequest, cmd *protocol.Com
 		if reply.Result == nil {
 			result, err := c.node.Presence(event.Channel)
 			if err != nil {
-				c.logWriteInternalErrorFlush(protocol.Command_PRESENCE, cmd, err, "error getting presence", rw)
+				c.logWriteInternalErrorFlush(protocol.Command_PRESENCE, cmd, err, "error getting presence", started, rw)
 				return
 			}
 			presence = result.Presence
@@ -2025,18 +2111,26 @@ func (c *Client) handlePresence(req *protocol.PresenceRequest, cmd *protocol.Com
 			protoPresence[k] = infoToProto(v)
 		}
 
-		rep, err := c.getPresenceCommandReply(&protocol.PresenceResult{
+		protoReply, err := c.getPresenceCommandReply(&protocol.PresenceResult{
 			Presence: protoPresence,
 		})
 		if err != nil {
-			c.logWriteInternalErrorFlush(protocol.Command_PRESENCE, cmd, err, "error encoding presence", rw)
+			c.logWriteInternalErrorFlush(protocol.Command_PRESENCE, cmd, err, "error encoding presence", started, rw)
 			return
 		}
-		c.writeEncodedCommandReply(protocol.Command_PRESENCE, cmd, rep, rw)
+		c.writeEncodedCommandReply(protocol.Command_PRESENCE, cmd, protoReply, rw)
+		c.handleCommandFinished(cmd, protocol.Command_PRESENCE, nil, protoReply, started)
+		c.releasePresenceCommandReply(protoReply)
 	}
 
 	c.eventHub.presenceHandler(event, cb)
 	return nil
+}
+
+func (c *Client) releasePresenceCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleasePresenceReply(reply)
+	}
 }
 
 func (c *Client) getPresenceCommandReply(res *protocol.PresenceResult) (*protocol.Reply, error) {
@@ -2049,9 +2143,7 @@ func (c *Client) getPresenceCommandReply(res *protocol.PresenceResult) (*protoco
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Presence: res,
-	}, nil
+	return protocol.ReplyPool.AcquirePresenceReply(res), nil
 }
 
 func (c *Client) handlePresenceStats(req *protocol.PresenceStatsRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -2069,11 +2161,8 @@ func (c *Client) handlePresenceStats(req *protocol.PresenceStatsRequest, cmd *pr
 	}
 
 	cb := func(reply PresenceStatsReply, err error) {
-		defer func() {
-			observeCommandDuration(protocol.Command_PRESENCE_STATS, time.Since(started))
-		}()
 		if err != nil {
-			c.writeDisconnectOrErrorFlush(protocol.Command_PRESENCE_STATS, cmd, err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_PRESENCE_STATS, cmd, err, started, rw)
 			return
 		}
 
@@ -2081,7 +2170,7 @@ func (c *Client) handlePresenceStats(req *protocol.PresenceStatsRequest, cmd *pr
 		if reply.Result == nil {
 			result, err := c.node.PresenceStats(event.Channel)
 			if err != nil {
-				c.logWriteInternalErrorFlush(protocol.Command_PRESENCE_STATS, cmd, err, "error getting presence stats", rw)
+				c.logWriteInternalErrorFlush(protocol.Command_PRESENCE_STATS, cmd, err, "error getting presence stats", started, rw)
 				return
 			}
 			presenceStats = result.PresenceStats
@@ -2089,19 +2178,27 @@ func (c *Client) handlePresenceStats(req *protocol.PresenceStatsRequest, cmd *pr
 			presenceStats = reply.Result.PresenceStats
 		}
 
-		rep, err := c.getPresenceStatsCommandReply(&protocol.PresenceStatsResult{
+		protoReply, err := c.getPresenceStatsCommandReply(&protocol.PresenceStatsResult{
 			NumClients: uint32(presenceStats.NumClients),
 			NumUsers:   uint32(presenceStats.NumUsers),
 		})
 		if err != nil {
-			c.logWriteInternalErrorFlush(protocol.Command_PRESENCE_STATS, cmd, err, "error encoding presence stats", rw)
+			c.logWriteInternalErrorFlush(protocol.Command_PRESENCE_STATS, cmd, err, "error encoding presence stats", started, rw)
 			return
 		}
-		c.writeEncodedCommandReply(protocol.Command_PRESENCE_STATS, cmd, rep, rw)
+		c.writeEncodedCommandReply(protocol.Command_PRESENCE_STATS, cmd, protoReply, rw)
+		c.handleCommandFinished(cmd, protocol.Command_PRESENCE_STATS, nil, protoReply, started)
+		c.releasePresenceStatsCommandReply(protoReply)
 	}
 
 	c.eventHub.presenceStatsHandler(event, cb)
 	return nil
+}
+
+func (c *Client) releasePresenceStatsCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleasePresenceStatsReply(reply)
+	}
 }
 
 func (c *Client) getPresenceStatsCommandReply(res *protocol.PresenceStatsResult) (*protocol.Reply, error) {
@@ -2114,9 +2211,7 @@ func (c *Client) getPresenceStatsCommandReply(res *protocol.PresenceStatsResult)
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		PresenceStats: res,
-	}, nil
+	return protocol.ReplyPool.AcquirePresenceStatsReply(res), nil
 }
 
 func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
@@ -2151,11 +2246,8 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 	}
 
 	cb := func(reply HistoryReply, err error) {
-		defer func() {
-			observeCommandDuration(protocol.Command_HISTORY, time.Since(started))
-		}()
 		if err != nil {
-			c.writeDisconnectOrErrorFlush(protocol.Command_HISTORY, cmd, err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_HISTORY, cmd, err, started, rw)
 			return
 		}
 
@@ -2165,7 +2257,7 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 		if reply.Result == nil {
 			result, err := c.node.History(event.Channel, WithLimit(event.Filter.Limit), WithSince(event.Filter.Since), WithReverse(event.Filter.Reverse))
 			if err != nil {
-				c.logWriteInternalErrorFlush(protocol.Command_HISTORY, cmd, err, "error getting history", rw)
+				c.logWriteInternalErrorFlush(protocol.Command_HISTORY, cmd, err, "error getting history", started, rw)
 				return
 			}
 			pubs = result.Publications
@@ -2183,20 +2275,28 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 			protoPubs = append(protoPubs, protoPub)
 		}
 
-		rep, err := c.getHistoryCommandReply(&protocol.HistoryResult{
+		protoReply, err := c.getHistoryCommandReply(&protocol.HistoryResult{
 			Publications: protoPubs,
 			Offset:       offset,
 			Epoch:        epoch,
 		})
 		if err != nil {
-			c.logWriteInternalErrorFlush(protocol.Command_HISTORY, cmd, err, "error encoding history", rw)
+			c.logWriteInternalErrorFlush(protocol.Command_HISTORY, cmd, err, "error encoding history", started, rw)
 			return
 		}
-		c.writeEncodedCommandReply(protocol.Command_HISTORY, cmd, rep, rw)
+		c.writeEncodedCommandReply(protocol.Command_HISTORY, cmd, protoReply, rw)
+		c.handleCommandFinished(cmd, protocol.Command_HISTORY, nil, protoReply, started)
+		c.releaseHistoryCommandReply(protoReply)
 	}
 
 	c.eventHub.historyHandler(event, cb)
 	return nil
+}
+
+func (c *Client) releaseHistoryCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseHistoryReply(reply)
+	}
 }
 
 func (c *Client) getHistoryCommandReply(res *protocol.HistoryResult) (*protocol.Reply, error) {
@@ -2209,31 +2309,53 @@ func (c *Client) getHistoryCommandReply(res *protocol.HistoryResult) (*protocol.
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		History: res,
-	}, nil
+	return protocol.ReplyPool.AcquireHistoryReply(res), nil
 }
 
-func (c *Client) handlePing(cmd *protocol.Command, started time.Time, rw *replyWriter) error {
-	c.writeEncodedCommandReply(protocol.Command_PING, cmd, &protocol.Reply{}, rw)
+var emptyReply = &protocol.Reply{}
+
+func (c *Client) handlePingV1(cmd *protocol.Command, started time.Time, rw *replyWriter) error {
+	c.writeEncodedCommandReply(protocol.Command_PING, cmd, emptyReply, rw)
 	observeCommandDuration(protocol.Command_PING, time.Since(started))
 	return nil
 }
 
-func (c *Client) writeError(method protocol.Command_MethodType, cmd *protocol.Command, error *Error, rw *replyWriter) {
-	c.writeEncodedCommandReply(method, cmd, &protocol.Reply{Error: error.toProto()}, rw)
+func (c *Client) handlePing(_ *protocol.Command, _ time.Time, _ *replyWriter) error {
+	// Ping not supported by protocol v2 at the moment. Supporting it requires adding
+	// ping method to SDKs first. But nobody asked yet.
+	return ErrorNotAvailable
 }
 
-func (c *Client) writeDisconnectOrErrorFlush(method protocol.Command_MethodType, cmd *protocol.Command, replyError error, rw *replyWriter) {
+func (c *Client) writeError(method protocol.Command_MethodType, cmd *protocol.Command, errorReply *protocol.Reply, rw *replyWriter) {
+	c.writeEncodedCommandReply(method, cmd, errorReply, rw)
+}
+
+func (c *Client) writeDisconnectOrErrorFlush(method protocol.Command_MethodType, cmd *protocol.Command, replyError error, started time.Time, rw *replyWriter) {
+	defer func() {
+		observeCommandDuration(method, time.Since(started))
+	}()
 	switch t := replyError.(type) {
 	case *Disconnect:
 		go func() { _ = c.close(*t) }()
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			event := newCommandProcessedEvent(cmd, t, nil, started)
+			c.issueCommandProcessedEvent(event)
+		}
 		return
 	case Disconnect:
 		go func() { _ = c.close(t) }()
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			event := newCommandProcessedEvent(cmd, &t, nil, started)
+			c.issueCommandProcessedEvent(event)
+		}
 		return
 	default:
-		c.writeError(method, cmd, toClientErr(replyError), rw)
+		errorReply := &protocol.Reply{Error: toClientErr(replyError).toProto()}
+		c.writeError(method, cmd, errorReply, rw)
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			event := newCommandProcessedEvent(cmd, nil, errorReply, started)
+			c.issueCommandProcessedEvent(event)
+		}
 	}
 }
 
@@ -2252,26 +2374,31 @@ func (c *Client) handleRPC(req *protocol.RPCRequest, cmd *protocol.Command, star
 	}
 
 	cb := func(reply RPCReply, err error) {
-		defer func() {
-			observeCommandDuration(protocol.Command_RPC, time.Since(started))
-		}()
 		if err != nil {
-			c.writeDisconnectOrErrorFlush(protocol.Command_RPC, cmd, err, rw)
+			c.writeDisconnectOrErrorFlush(protocol.Command_RPC, cmd, err, started, rw)
 			return
 		}
 		result := &protocol.RPCResult{
 			Data: reply.Data,
 		}
-		rep, err := c.getRPCCommandReply(result)
+		protoReply, err := c.getRPCCommandReply(result)
 		if err != nil {
-			c.logWriteInternalErrorFlush(protocol.Command_RPC, cmd, err, "error encoding rpc", rw)
+			c.logWriteInternalErrorFlush(protocol.Command_RPC, cmd, err, "error encoding rpc", started, rw)
 			return
 		}
-		c.writeEncodedCommandReply(protocol.Command_RPC, cmd, rep, rw)
+		c.writeEncodedCommandReply(protocol.Command_RPC, cmd, protoReply, rw)
+		c.handleCommandFinished(cmd, protocol.Command_RPC, nil, protoReply, started)
+		c.releaseRPCCommandReply(protoReply)
 	}
 
 	c.eventHub.rpcHandler(event, cb)
 	return nil
+}
+
+func (c *Client) releaseRPCCommandReply(r *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseRPCReply(r)
+	}
 }
 
 func (c *Client) getRPCCommandReply(res *protocol.RPCResult) (*protocol.Reply, error) {
@@ -2284,25 +2411,21 @@ func (c *Client) getRPCCommandReply(res *protocol.RPCResult) (*protocol.Reply, e
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Rpc: res,
-	}, nil
+	return protocol.ReplyPool.AcquireRPCReply(res), nil
 }
 
-func (c *Client) handleSend(req *protocol.SendRequest, started time.Time) error {
+func (c *Client) handleSend(req *protocol.SendRequest, cmd *protocol.Command, started time.Time) error {
+	// Send handler is a bit special since it's a one way command: client does not expect any reply.
 	if c.eventHub.messageHandler == nil {
-		// send handler is a bit special since it is only one way
-		// request: client does not expect any reply.
 		observeCommandDuration(protocol.Command_SEND, time.Since(started))
-		return nil
+		// Return DisconnectNotAvailable here since otherwise client won't even know
+		// server does not have asynchronous message handler set.
+		return DisconnectNotAvailable
 	}
-
-	defer func() {
-		observeCommandDuration(protocol.Command_SEND, time.Since(started))
-	}()
 	c.eventHub.messageHandler(MessageEvent{
 		Data: req.Data,
 	})
+	c.handleCommandFinished(cmd, protocol.Command_SEND, nil, nil, started)
 	return nil
 }
 
@@ -2314,7 +2437,7 @@ func (c *Client) unlockServerSideSubscriptions(subCtxMap map[string]subscribeCon
 
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
-func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, uni bool, rw *replyWriter) (*protocol.ConnectResult, error) {
+func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) (*protocol.ConnectResult, error) {
 	c.mu.RLock()
 	authenticated := c.authenticated
 	closed := c.status == statusClosed
@@ -2508,7 +2631,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					subCmd.Offset = subReq.Offset
 					subCmd.Epoch = subReq.Epoch
 				}
-				subCtx := c.subscribeCmd(subCmd, SubscribeReply{Options: opts}, nil, true, nil)
+				subCtx := c.subscribeCmd(subCmd, SubscribeReply{Options: opts}, nil, true, started, nil)
 				subMu.Lock()
 				subs[ch] = subCtx.result
 				subCtxMap[ch] = subCtx
@@ -2538,28 +2661,24 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	if c.transport.Unidirectional() {
 		if !hasFlag(c.transport.DisabledPushFlags(), PushFlagConnect) {
-			reply, err := c.getConnectPushReply(res)
+			protoReply, err := c.getConnectPushReply(res)
 			if err != nil {
 				c.unlockServerSideSubscriptions(subCtxMap)
 				c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
 				return nil, DisconnectServerError
 			}
-			c.writeEncodedPush(reply, rw)
+			c.writeEncodedPush(protoReply, rw)
 		}
 	} else {
-		reply, err := c.getConnectCommandReply(res)
+		protoReply, err := c.getConnectCommandReply(res)
 		if err != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding connect", map[string]interface{}{"error": err.Error()}))
 			return nil, DisconnectServerError
 		}
-		c.writeEncodedCommandReply(protocol.Command_CONNECT, cmd, reply, rw)
-	}
-
-	if !uni {
-		defer func() {
-			observeCommandDuration(protocol.Command_CONNECT, time.Since(started))
-		}()
+		c.writeEncodedCommandReply(protocol.Command_CONNECT, cmd, protoReply, rw)
+		defer c.releaseConnectCommandReply(protoReply)
+		defer c.handleCommandFinished(cmd, protocol.Command_CONNECT, nil, protoReply, started)
 	}
 
 	c.mu.Lock()
@@ -2610,6 +2729,12 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 	}, nil
 }
 
+func (c *Client) releaseConnectCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseConnectReply(reply)
+	}
+}
+
 func (c *Client) getConnectCommandReply(res *protocol.ConnectResult) (*protocol.Reply, error) {
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeConnectResult(res)
@@ -2618,7 +2743,7 @@ func (c *Client) getConnectCommandReply(res *protocol.ConnectResult) (*protocol.
 		}
 		return &protocol.Reply{Result: result}, nil
 	}
-	return &protocol.Reply{Connect: res}, nil
+	return protocol.ReplyPool.AcquireConnectReply(res), nil
 }
 
 // Subscribe client to a channel.
@@ -2649,7 +2774,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	}
 	subCtx := c.subscribeCmd(subCmd, SubscribeReply{
 		Options: *subscribeOpts,
-	}, nil, true, nil)
+	}, nil, true, time.Time{}, nil)
 	if subCtx.err != nil {
 		c.onSubscribeError(subCmd.Channel)
 		return subCtx.err
@@ -2780,7 +2905,7 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 // on channel, if channel is private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
-func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeReply, cmd *protocol.Command, serverSide bool, rw *replyWriter) subscribeContext {
+func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeReply, cmd *protocol.Command, serverSide bool, started time.Time, rw *replyWriter) subscribeContext {
 
 	ctx := subscribeContext{}
 	res := &protocol.SubscribeResult{}
@@ -2946,7 +3071,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	if !serverSide {
 		// Write subscription reply only if initiated by client.
-		rep, err := c.getSubscribeCommandReply(res)
+		protoReply, err := c.getSubscribeCommandReply(res)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]interface{}{"error": err.Error()}))
 			if !serverSide {
@@ -2959,7 +3084,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 		// Need to flush data from writer so subscription response is
 		// sent before any subscription publication.
-		c.writeEncodedCommandReply(protocol.Command_SUBSCRIBE, cmd, rep, rw)
+		c.writeEncodedCommandReply(protocol.Command_SUBSCRIBE, cmd, protoReply, rw)
+		defer c.releaseSubscribeCommandReply(protoReply)
+		defer c.handleCommandFinished(cmd, protocol.Command_SUBSCRIBE, nil, protoReply, started)
 	}
 
 	var channelFlags uint8
@@ -3017,6 +3144,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	return ctx
 }
 
+func (c *Client) releaseSubscribeCommandReply(reply *protocol.Reply) {
+	if c.transport.ProtocolVersion() == ProtocolVersion2 {
+		protocol.ReplyPool.ReleaseSubscribeReply(reply)
+	}
+}
+
 func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*protocol.Reply, error) {
 	if c.transport.ProtocolVersion() == ProtocolVersion1 {
 		result, err := protocol.GetResultEncoder(c.transport.Protocol().toProto()).EncodeSubscribeResult(res)
@@ -3027,9 +3160,7 @@ func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*proto
 			Result: result,
 		}, nil
 	}
-	return &protocol.Reply{
-		Subscribe: res,
-	}, nil
+	return protocol.ReplyPool.AcquireSubscribeReply(res), nil
 }
 
 func (c *Client) handleInsufficientState(ch string, serverSide bool) {
@@ -3110,6 +3241,9 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+	}
 	if pub.Offset == 0 {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
@@ -3122,7 +3256,10 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data []b
 	return nil
 }
 
-func (c *Client) writeJoin(ch string, data []byte) error {
+func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte) error {
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Join: join})
+	}
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagJoin) {
 		return nil
 	}
@@ -3140,7 +3277,10 @@ func (c *Client) writeJoin(ch string, data []byte) error {
 	return c.transportEnqueue(data)
 }
 
-func (c *Client) writeLeave(ch string, data []byte) error {
+func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte) error {
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Leave: leave})
+	}
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagLeave) {
 		return nil
 	}
@@ -3218,13 +3358,23 @@ func (c *Client) logDisconnectBadRequestWithError(err error, message string) err
 	return DisconnectBadRequest
 }
 
-func (c *Client) logWriteInternalErrorFlush(method protocol.Command_MethodType, cmd *protocol.Command, err error, message string, rw *replyWriter) {
+func (c *Client) logWriteInternalErrorFlush(method protocol.Command_MethodType, cmd *protocol.Command, err error, message string, started time.Time, rw *replyWriter) {
+	defer func() {
+		observeCommandDuration(method, time.Since(started))
+	}()
 	if clientErr, ok := err.(*Error); ok {
-		c.writeError(method, cmd, clientErr, rw)
+		errorReply := &protocol.Reply{Error: clientErr.toProto()}
+		c.writeError(method, cmd, errorReply, rw)
 		return
 	}
 	c.node.logger.log(newLogEntry(LogLevelError, message, map[string]interface{}{"error": err.Error()}))
-	c.writeError(method, cmd, ErrorInternal, rw)
+
+	errorReply := &protocol.Reply{Error: ErrorInternal.toProto()}
+	c.writeError(method, cmd, errorReply, rw)
+	if c.node.clientEvents.commandProcessedHandler != nil {
+		event := newCommandProcessedEvent(cmd, nil, errorReply, started)
+		c.issueCommandProcessedEvent(event)
+	}
 }
 
 func toClientErr(err error) *Error {

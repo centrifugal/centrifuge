@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/readerpool"
+
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
 
 	"github.com/centrifugal/protocol"
@@ -147,10 +149,18 @@ func (s *SockjsHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				protoVersion = ProtocolVersion2
 			default:
 				s.node.logger.log(newLogEntry(LogLevelInfo, "unknown protocol version", map[string]interface{}{"transport": transportSockJS, "version": queryProtocolVersion}))
+				http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return
 			}
 		}
 	}
+
+	if !s.node.config.ProtocolVersionSupported(protoVersion) {
+		s.node.logger.log(newLogEntry(LogLevelInfo, "unsupported protocol version", map[string]interface{}{"transport": transportSockJS, "version": protoVersion}))
+		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
 	if protoVersion == ProtocolVersion1 {
 		s.handlerV1.ServeHTTP(rw, r)
 	} else {
@@ -216,10 +226,13 @@ func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.
 
 		for {
 			if msg, err := sess.Recv(); err == nil {
-				if ok := c.Handle([]byte(msg)); !ok {
+				reader := readerpool.GetStringReader(msg)
+				if ok := HandleReadFrame(c, reader); !ok {
+					readerpool.PutStringReader(reader)
 					needWaitLoop = true
 					break
 				}
+				readerpool.PutStringReader(reader)
 				continue
 			}
 			break

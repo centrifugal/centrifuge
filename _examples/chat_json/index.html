@@ -42,8 +42,6 @@
 
                 centrifuge.on('message', function(ctx) {
                     drawText('Message: ' + JSON.stringify(ctx.data));
-                    // Echo data back to server.
-                    centrifuge.send(ctx.data);
                 });
 
                 centrifuge.on('publication', function(ctx) {
