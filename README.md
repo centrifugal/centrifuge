@@ -177,7 +177,7 @@ Also create file `index.html` near `main.go` with content:
 <html lang="en">
     <head>
         <meta charset="utf-8">
-        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.0.0/dist/centrifuge.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.1.0/dist/centrifuge.js"></script>
         <title>Centrifuge library chat example</title>
     </head>
     <body>

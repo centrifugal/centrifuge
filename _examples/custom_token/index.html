@@ -6,7 +6,7 @@
         <style type="text/css">
             input[type="text"] { width: 300px; }
         </style>
-        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.0.0/dist/centrifuge.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.1.0/dist/centrifuge.js"></script>
         <script type="text/javascript">
             window.addEventListener('load', function() {
                 const container = document.getElementById('messages');
@@ -33,8 +33,6 @@
 
                 centrifuge.on('message', function(ctx) {
                     drawText(JSON.stringify(ctx.data));
-                    // echo data back to server.
-                    centrifuge.send(ctx.data);
                 });
 
                 function drawText(text) {

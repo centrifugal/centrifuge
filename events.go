@@ -285,7 +285,10 @@ type MessageEvent struct {
 	Data []byte
 }
 
-// MessageHandler must handle incoming async message from client.
+// MessageHandler must handle incoming async message from client. So Centrifuge
+// feels similar to pure WebSocket API. Though in general, we recommend using RPC
+// where possible to send data to a server  from a client as it provides a better
+// flow control.
 type MessageHandler func(MessageEvent)
 
 // PresenceEvent has channel operation called for.
@@ -399,15 +402,52 @@ type TransportWriteEvent struct {
 // filtering based on data content but rather tracing stuff.
 type TransportWriteHandler func(*Client, TransportWriteEvent) bool
 
-// CommandReadEvent contains protocol.Command processed by Client.
+// CommandReadEvent contains protocol.Command processed by Client. Command
+// type and its fields in the event MAY BE POOLED by Centrifuge, so code
+// which wants to use Command AFTER CommandReadHandler handler returns MUST
+// MAKE A COPY.
 type CommandReadEvent struct {
+	// Command which was read from the connection. May be pooled - see comment of CommandReadEvent.
 	Command *protocol.Command
+	// CommandSize is a size of command in bytes in its protocol representation.
+	CommandSize int
 }
 
-// CommandReadHandler allows setting a callback which will be called after
+// CommandReadHandler allows setting a callback which will be called before
+// Client processed a protocol.Command read from the connection. Return an error
+// if you want to prevent command execution.
+// Also, carefully read docs for CommandReadEvent to avoid possible bugs.
+type CommandReadHandler func(*Client, CommandReadEvent) error
+
+// CommandProcessedEvent contains protocol.Command processed by Client. Command and
+// Reply types and their fields in the event MAY BE POOLED by Centrifuge, so code
+// which wants to use them AFTER CommandProcessedHandler handler returns MUST MAKE A
+// COPY.
+type CommandProcessedEvent struct {
+	// Command which was processed. May be pooled - see comment of CommandProcessedEvent.
+	Command *protocol.Command
+	// Disconnect may be set if Command processing resulted into disconnection.
+	Disconnect *Disconnect
+	// Reply to the command. Reply may be pooled - see comment of CommandProcessedEvent.
+	// This Reply may be nil in the following cases:
+	// 1. For Send command since send commands do not have replies
+	// 2. When Disconnect field of CommandProcessedEvent is not nil
+	// 3. When unidirectional transport connects (we create Connect Command artificially
+	// with id: 1 and we never send replies to unidirectional transport, only pushes).
+	Reply *protocol.Reply
+	// Started is a time command was passed to Client for processing.
+	Started time.Time
+}
+
+// newCommandProcessedEvent is a helper to create CommandProcessedEvent.
+func newCommandProcessedEvent(command *protocol.Command, disconnect *Disconnect, reply *protocol.Reply, started time.Time) CommandProcessedEvent {
+	return CommandProcessedEvent{Command: command, Disconnect: disconnect, Reply: reply, Started: started}
+}
+
+// CommandProcessedHandler allows setting a callback which will be called after
 // Client processed a protocol.Command. This exists mostly for real-time connection
-// tracing purposes. Theoretically CommandReadHandler may be called after the
-// corresponding Reply written to connection and TransportWriteHandler called. But
-// for tracing purposes this seems tolerable as commands and replies may be matched
-// by id.
-type CommandReadHandler func(*Client, CommandReadEvent)
+// tracing purposes. CommandProcessedHandler may be called after the corresponding
+// Reply written to the connection and TransportWriteHandler called. But for tracing
+// purposes this seems tolerable as commands and replies may be matched by id.
+// Also, carefully read docs for CommandProcessedEvent to avoid possible bugs.
+type CommandProcessedHandler func(*Client, CommandProcessedEvent)

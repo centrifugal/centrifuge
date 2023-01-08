@@ -608,7 +608,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, SubscribeReply{}, &protocol.Command{}, false, rwWrapper.rw)
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(b, subCtx.disconnect)
 }
 
@@ -1404,13 +1404,14 @@ func TestNode_OnCommandRead(t *testing.T) {
 	doneConnect := make(chan struct{})
 	doneSubscribe := make(chan struct{})
 
-	node.OnCommandRead(func(client *Client, event CommandReadEvent) {
+	node.OnCommandRead(func(client *Client, event CommandReadEvent) error {
 		if event.Command.Connect != nil && event.Command.Connect.Token == "123" {
 			close(doneConnect)
 		}
 		if event.Command.Subscribe != nil && event.Command.Subscribe.Channel == "channel" {
 			close(doneSubscribe)
 		}
+		return nil
 	})
 
 	client := newTestClientV2(t, node, "42")
@@ -1419,7 +1420,7 @@ func TestNode_OnCommandRead(t *testing.T) {
 		Connect: &protocol.ConnectRequest{
 			Token: "123",
 		},
-	})
+	}, 0)
 	select {
 	case <-doneConnect:
 	case <-time.After(time.Second):
@@ -1431,7 +1432,7 @@ func TestNode_OnCommandRead(t *testing.T) {
 		Subscribe: &protocol.SubscribeRequest{
 			Channel: "channel",
 		},
-	})
+	}, 0)
 	select {
 	case <-doneSubscribe:
 	case <-time.After(time.Second):

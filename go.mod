@@ -4,12 +4,13 @@ go 1.18
 
 require (
 	github.com/FZambia/eagle v0.0.2
-	github.com/centrifugal/protocol v0.8.11
+	github.com/centrifugal/protocol v0.9.1-0.20221229170909-b599c453f37f
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
 	github.com/prometheus/client_golang v1.14.0
 	github.com/rueian/rueidis v0.0.90
+	github.com/segmentio/encoding v0.3.6
 	github.com/stretchr/testify v1.8.1
 	golang.org/x/sync v0.1.0
 	google.golang.org/protobuf v1.28.1
@@ -27,9 +28,8 @@ require (
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.37.0 // indirect
 	github.com/prometheus/procfs v0.8.0 // indirect
-	github.com/segmentio/asm v1.1.4 // indirect
-	github.com/segmentio/encoding v0.3.5 // indirect
+	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	golang.org/x/sys v0.0.0-20220704084225-05e143d24a9e // indirect
+	golang.org/x/sys v0.3.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

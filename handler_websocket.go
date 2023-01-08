@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,7 +18,7 @@ import (
 
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
-	// ProtocolVersion the handler will serve. If not set we are expecting
+	// ProtocolVersion the handler will serve by default. If not set we are expecting
 	// client connected using ProtocolVersion2.
 	ProtocolVersion ProtocolVersion
 
@@ -137,6 +138,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !s.node.config.ProtocolVersionEnabled(protoVersion) {
+		s.node.logger.log(newLogEntry(LogLevelInfo, "unsupported protocol version", map[string]interface{}{"transport": transportWebsocket, "version": protoVersion}))
+		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
 	compression := s.config.Compression
 	compressionLevel := s.config.CompressionLevel
 	compressionMinSize := s.config.CompressionMinSize
@@ -240,12 +247,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 
 		for {
-			_, data, err := conn.ReadMessage()
+			_, r, err := conn.NextReader()
 			if err != nil {
 				break
 			}
-			closed := !c.Handle(data)
-			if closed {
+			proceed := HandleReadFrame(c, r)
+			if !proceed {
 				break
 			}
 		}
@@ -263,6 +270,43 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+}
+
+// HandleReadFrame is a helper to read Centrifuge commands from frame-based io.Reader and
+// process them. Frame-based means that EOF treated as the end of the frame, not the entire
+// connection close.
+func HandleReadFrame(c *Client, r io.Reader) bool {
+	protoType := c.Transport().Protocol().toProto()
+	decoder := protocol.GetStreamCommandDecoder(protoType, r)
+	defer protocol.PutStreamCommandDecoder(protoType, decoder)
+
+	hadCommands := false
+
+	for {
+		cmd, cmdProtocolSize, err := decoder.Decode()
+		if cmd != nil {
+			hadCommands = true
+			proceed := c.HandleCommand(cmd, cmdProtocolSize)
+			if !proceed {
+				return false
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				if !hadCommands {
+					c.node.logger.log(newLogEntry(LogLevelInfo, "empty request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
+					c.Disconnect(DisconnectBadRequest)
+					return false
+				}
+				break
+			} else {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "error reading command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+				c.Disconnect(DisconnectBadRequest)
+				return false
+			}
+		}
+	}
+	return true
 }
 
 const (

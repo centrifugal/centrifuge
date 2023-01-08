@@ -38,13 +38,9 @@ var _ Broker = (*MemoryBroker)(nil)
 type MemoryBrokerConfig struct {
 	// HistoryMetaTTL sets a time of inactive stream meta information expiration.
 	// This information contains an epoch and offset of each stream. Having this
-	// meta information helps in message recovery process.
-	// Must have a reasonable value for application.
-	// At moment works with seconds precision.
-	// TODO v1: since we have epoch, things should also properly work without meta
-	// information at all (but we loose possibility of long-term recover in stream
-	// without new messages). We can make this optional and disabled by default at
-	// least.
+	// meta information helps in message recovery process. Must have a reasonable
+	// value for application. At moment works with seconds precision.
+	// TODO: make it configurable on per-channel level.
 	HistoryMetaTTL time.Duration
 }
 

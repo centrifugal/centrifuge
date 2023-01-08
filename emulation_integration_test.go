@@ -83,7 +83,7 @@ func TestEmulation_DifferentNodes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for {
-		info, err := n1.Info()
+		info, err := n2.Info()
 		require.NoError(t, err)
 		if len(info.Nodes) == 2 {
 			break

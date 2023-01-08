@@ -727,7 +727,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						}
 						jsonPushV1 = pushBytes
 					}
-					_ = c.writeJoin(channel, jsonPushV1)
+					_ = c.writeJoin(channel, join, jsonPushV1)
 				} else {
 					if jsonReplyV1 == nil {
 						pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
@@ -744,7 +744,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							continue
 						}
 					}
-					_ = c.writeJoin(channel, jsonReplyV1)
+					_ = c.writeJoin(channel, join, jsonReplyV1)
 				}
 			} else {
 				if c.transport.Unidirectional() {
@@ -758,7 +758,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							continue
 						}
 					}
-					_ = c.writeJoin(channel, jsonPushV2)
+					_ = c.writeJoin(channel, join, jsonPushV2)
 				} else {
 					if jsonReplyV2 == nil {
 						push := &protocol.Push{Channel: channel, Join: join}
@@ -770,7 +770,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							continue
 						}
 					}
-					_ = c.writeJoin(channel, jsonReplyV2)
+					_ = c.writeJoin(channel, join, jsonReplyV2)
 				}
 			}
 		} else if protoType == protocol.TypeProtobuf {
@@ -783,7 +783,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 					if protobufPushV1 == nil {
 						protobufPushV1 = pushBytes
 					}
-					_ = c.writeJoin(channel, protobufPushV1)
+					_ = c.writeJoin(channel, join, protobufPushV1)
 				} else {
 					if protobufReplyV1 == nil {
 						pushBytes, err := protocol.EncodeJoinPush(protoType, channel, join)
@@ -796,7 +796,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							return err
 						}
 					}
-					_ = c.writeJoin(channel, protobufReplyV1)
+					_ = c.writeJoin(channel, join, protobufReplyV1)
 				}
 			} else {
 				if c.transport.Unidirectional() {
@@ -808,7 +808,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							return err
 						}
 					}
-					_ = c.writeJoin(channel, protobufPushV2)
+					_ = c.writeJoin(channel, join, protobufPushV2)
 				} else {
 					if protobufReplyV2 == nil {
 						push := &protocol.Push{Channel: channel, Join: join}
@@ -818,7 +818,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 							return err
 						}
 					}
-					_ = c.writeJoin(channel, protobufReplyV2)
+					_ = c.writeJoin(channel, join, protobufReplyV2)
 				}
 			}
 		}
@@ -877,7 +877,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 					if jsonPushV1 == nil {
 						jsonPushV1 = pushBytes
 					}
-					_ = c.writeLeave(channel, jsonPushV1)
+					_ = c.writeLeave(channel, leave, jsonPushV1)
 				} else {
 					if jsonReplyV1 == nil {
 						pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
@@ -894,7 +894,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							continue
 						}
 					}
-					_ = c.writeLeave(channel, jsonReplyV1)
+					_ = c.writeLeave(channel, leave, jsonReplyV1)
 				}
 			} else {
 				if c.transport.Unidirectional() {
@@ -908,7 +908,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							continue
 						}
 					}
-					_ = c.writeLeave(channel, jsonPushV2)
+					_ = c.writeLeave(channel, leave, jsonPushV2)
 				} else {
 					if jsonReplyV2 == nil {
 						push := &protocol.Push{Channel: channel, Leave: leave}
@@ -920,7 +920,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							continue
 						}
 					}
-					_ = c.writeLeave(channel, jsonReplyV2)
+					_ = c.writeLeave(channel, leave, jsonReplyV2)
 				}
 			}
 		} else if protoType == protocol.TypeProtobuf {
@@ -933,7 +933,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 					if protobufPushV1 == nil {
 						protobufPushV1 = pushBytes
 					}
-					_ = c.writeLeave(channel, protobufPushV1)
+					_ = c.writeLeave(channel, leave, protobufPushV1)
 				} else {
 					if protobufReplyV1 == nil {
 						pushBytes, err := protocol.EncodeLeavePush(protoType, channel, leave)
@@ -946,7 +946,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							return err
 						}
 					}
-					_ = c.writeLeave(channel, protobufReplyV1)
+					_ = c.writeLeave(channel, leave, protobufReplyV1)
 				}
 			} else {
 				if c.transport.Unidirectional() {
@@ -958,7 +958,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							return err
 						}
 					}
-					_ = c.writeLeave(channel, protobufPushV2)
+					_ = c.writeLeave(channel, leave, protobufPushV2)
 				} else {
 					if protobufReplyV2 == nil {
 						push := &protocol.Push{Channel: channel, Leave: leave}
@@ -968,7 +968,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 							return err
 						}
 					}
-					_ = c.writeLeave(channel, protobufReplyV2)
+					_ = c.writeLeave(channel, leave, protobufReplyV2)
 				}
 			}
 		}

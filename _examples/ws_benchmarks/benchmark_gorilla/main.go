@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -100,15 +99,6 @@ func main() {
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			cb(centrifuge.PublishReply{}, nil)
-		})
-
-		client.OnMessage(func(e centrifuge.MessageEvent) {
-			err := client.Send(e.Data)
-			if err != nil {
-				if err != io.EOF {
-					log.Fatalln("error sending to client:", err.Error())
-				}
-			}
 		})
 	})
 

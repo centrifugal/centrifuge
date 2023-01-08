@@ -106,7 +106,7 @@ func New(c Config) (*Node, error) {
 		c.ClientExpiredSubCloseDelay = 25 * time.Second
 	}
 	if c.ClientStaleCloseDelay == 0 {
-		c.ClientStaleCloseDelay = 25 * time.Second
+		c.ClientStaleCloseDelay = 15 * time.Second
 	}
 	if c.ClientQueueMaxSize == 0 {
 		c.ClientQueueMaxSize = 1048576 // 1MB by default.
@@ -1527,10 +1527,11 @@ func (n *Node) OnNodeInfoSend(handler NodeInfoSendHandler) {
 // All eventHub methods are not goroutine-safe and supposed
 // to be called once before Node Run called.
 type eventHub struct {
-	connectingHandler     ConnectingHandler
-	connectHandler        ConnectHandler
-	transportWriteHandler TransportWriteHandler
-	commandReadHandler    CommandReadHandler
+	connectingHandler       ConnectingHandler
+	connectHandler          ConnectHandler
+	transportWriteHandler   TransportWriteHandler
+	commandReadHandler      CommandReadHandler
+	commandProcessedHandler CommandProcessedHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1556,6 +1557,11 @@ func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
 // OnCommandRead allows setting CommandReadHandler. This should be done before Node.Run called.
 func (n *Node) OnCommandRead(handler CommandReadHandler) {
 	n.clientEvents.commandReadHandler = handler
+}
+
+// OnCommandProcessed allows setting CommandProcessedHandler. This should be done before Node.Run called.
+func (n *Node) OnCommandProcessed(handler CommandProcessedHandler) {
+	n.clientEvents.commandProcessedHandler = handler
 }
 
 type brokerEventHandler struct {
