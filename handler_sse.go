@@ -78,7 +78,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	transport := newSSETransport(r, sseTransportConfig{pingInterval: pingInterval, pongTimeout: pongTimeout})
 
-	if !h.node.config.ProtocolVersionSupported(transport.ProtocolVersion()) {
+	if !h.node.config.ProtocolVersionEnabled(transport.ProtocolVersion()) {
 		h.node.logger.log(newLogEntry(LogLevelInfo, "unsupported protocol version", map[string]interface{}{"transport": transportSSE, "version": transport.ProtocolVersion()}))
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return

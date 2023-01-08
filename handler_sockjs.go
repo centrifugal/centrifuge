@@ -155,7 +155,7 @@ func (s *SockjsHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !s.node.config.ProtocolVersionSupported(protoVersion) {
+	if !s.node.config.ProtocolVersionEnabled(protoVersion) {
 		s.node.logger.log(newLogEntry(LogLevelInfo, "unsupported protocol version", map[string]interface{}{"transport": transportSockJS, "version": protoVersion}))
 		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return

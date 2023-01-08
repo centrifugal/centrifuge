@@ -80,7 +80,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pongTimeout:  pongTimeout,
 	})
 
-	if !h.node.config.ProtocolVersionSupported(transport.ProtocolVersion()) {
+	if !h.node.config.ProtocolVersionEnabled(transport.ProtocolVersion()) {
 		h.node.logger.log(newLogEntry(LogLevelInfo, "unsupported protocol version", map[string]interface{}{"transport": transportHTTPStream, "version": transport.ProtocolVersion()}))
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return

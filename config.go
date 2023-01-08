@@ -78,17 +78,18 @@ type Config struct {
 	// UseSingleFlight allows turning on mode where singleflight will be automatically used
 	// for Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
 	UseSingleFlight bool
-	// SupportedProtocolVersions allows limiting versions of Protocol server supports.
+	// EnabledProtocolVersions allows limiting versions of Protocol server may serve.
 	// By default, both ProtocolVersion1 and ProtocolVersion2 may be served at the moment.
 	// Note that ProtocolVersion1 is deprecated and will be completely removed soon.
-	SupportedProtocolVersions []ProtocolVersion
+	EnabledProtocolVersions []ProtocolVersion
 }
 
-func (c Config) ProtocolVersionSupported(protoVersion ProtocolVersion) bool {
-	if len(c.SupportedProtocolVersions) == 0 {
+func (c Config) ProtocolVersionEnabled(protoVersion ProtocolVersion) bool {
+	if len(c.EnabledProtocolVersions) == 0 {
+		// All by default.
 		return true
 	}
-	for _, v := range c.SupportedProtocolVersions {
+	for _, v := range c.EnabledProtocolVersions {
 		if protoVersion == v {
 			return true
 		}

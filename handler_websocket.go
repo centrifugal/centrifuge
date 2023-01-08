@@ -138,7 +138,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !s.node.config.ProtocolVersionSupported(protoVersion) {
+	if !s.node.config.ProtocolVersionEnabled(protoVersion) {
 		s.node.logger.log(newLogEntry(LogLevelInfo, "unsupported protocol version", map[string]interface{}{"transport": transportWebsocket, "version": protoVersion}))
 		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
