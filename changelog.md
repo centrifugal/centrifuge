@@ -2,11 +2,11 @@ v0.28.0
 =======
 
 * Centrifuge v0.28.0 comes with an updated Redis Engine implementation based on [rueian/rueidis](https://github.com/rueian/rueidis) library. Allocation efficiency and throughput of Redis `Broker` and `PresenceManager` were improved in both standalone and Cluster Redis setups. See [#262](https://github.com/centrifugal/centrifuge/pull/262) and blog post [Improving Centrifugo Redis Engine throughput and allocation efficiency with Rueidis Go library](https://centrifugal.dev/blog/2022/12/20/improving-redis-engine-performance) for the reasoning and numbers behind.
-* Work on a better observability and possibility to protect client protocol from misusing: Centrifuge now has `CommandReadHandler` and `CommandProcessedHandler`. These handlers are only available for client protocol v2, client protocol v1 [will be removed soon](https://github.com/centrifugal/centrifuge/issues/275).
+* Work on a better observability and possibility to protect client protocol from misusing: Centrifuge now has `CommandReadHandler` and `CommandProcessedHandler`. These handlers are only available for client protocol v2, client protocol v1 [will be removed soon](https://github.com/centrifugal/centrifuge/issues/275). While it's not removed `DisableProtocolVersion1` global var may be used to disable possibility for clients to connect to server with `ProtocolVersion1`.
 * Client now can't send infinite number of pongs to the server, only one pong after receiving ping is allowed
 * Client now can't send any command to the server after getting error in Connect command
 * Disconnect client if it sends async message (using `Send` method) to the server while `MessageHandler` not set
-* Possibility to dramatically reduce server CPU usage (it may be up to 5x reduction depending on message rate) in case of sending many messages towards individual connections. This is possible with new options of `ConnectReply`: `WriteDelay`, `ReplyWithoutQueue`, `MaxMessagesInFrame` which allow tweaking Centrifuge message write loop. See [#270](https://github.com/centrifugal/centrifuge/pull/270) for more details.
+* Possibility to dramatically reduce server CPU usage in case of sending many messages towards individual connections (it may be up to 5x reduction depending on message rate). This is possible with new options of `ConnectReply`: `WriteDelay`, `ReplyWithoutQueue`, `MaxMessagesInFrame`, `QueueInitialCap` which allow tweaking Centrifuge message write loop. See [#270](https://github.com/centrifugal/centrifuge/pull/270) for more details.
 * Several internal optimizations in client protocol to reduce memory allocations a bit.
 * More human-readable tracing logging output (especially in Protobuf protocol case). On the other hand, tracing log level is much more expensive now. We never assumed it will be used in production – so seems an acceptable trade-off.
 * Update centrifuge-js version in all examples
@@ -36,12 +36,11 @@ RedisShardConfig.WriteTimeout: removed
 CommandProcessedEvent: added
 CommandProcessedHandler: added
 CommandReadEvent.CommandSize: added
-Config.EnabledProtocolVersions: added
-Config.ProtocolVersionEnabled: added
 ConnectReply.MaxMessagesInFrame: added
 ConnectReply.QueueInitialCap: added
 ConnectReply.ReplyWithoutQueue: added
 ConnectReply.WriteDelay: added
+DisableProtocolVersion1: added
 DisconnectNotAvailable: added
 DisconnectPermissionDenied: added
 DisconnectTooManyErrors: added
