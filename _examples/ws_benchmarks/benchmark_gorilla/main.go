@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -33,7 +34,23 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
-	log.Printf("NumCPU: %d", runtime.NumCPU())
+	var queueInitialCap int
+	if os.Getenv("QUEUE_INITIAL_CAP") != "" {
+		v, _ := strconv.Atoi(os.Getenv("QUEUE_INITIAL_CAP"))
+		queueInitialCap = v
+	}
+	var writeDelay time.Duration
+	if os.Getenv("WRITE_DELAY") != "" {
+		v, _ := strconv.Atoi(os.Getenv("WRITE_DELAY"))
+		writeDelay = time.Duration(v) * time.Millisecond
+	}
+	var maxMessagesInFrame int
+	if os.Getenv("MAX_FRAME_MESSAGES") != "" {
+		v, _ := strconv.Atoi(os.Getenv("MAX_FRAME_MESSAGES"))
+		maxMessagesInFrame = v
+	}
+	log.Printf("NumCPU: %d, Write Delay: %s, Max messages in frame: %d, Queue init cap: %d\n",
+		runtime.NumCPU(), writeDelay, maxMessagesInFrame, queueInitialCap)
 
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:           centrifuge.LogLevelError,
@@ -65,6 +82,10 @@ func main() {
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		return centrifuge.ConnectReply{
+			WriteDelay:         writeDelay,
+			MaxMessagesInFrame: maxMessagesInFrame,
+			ReplyWithoutQueue:  true,
+			QueueInitialCap:    queueInitialCap,
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
 			},

@@ -1053,6 +1053,8 @@ func TestServerSideSubscriptions(t *testing.T) {
 
 			node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
 				return ConnectReply{
+					WriteDelay:        50 * time.Millisecond,
+					ReplyWithoutQueue: true,
 					Subscriptions: map[string]SubscribeOptions{
 						"server-side-1":  {},
 						"$server-side-2": {},
@@ -3885,6 +3887,7 @@ func TestClient_HandleCommandV2_Pong(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
 
+	clientV2.startWriter(0, 0, 0)
 	clientV2.sendPing()
 	ok := clientV2.HandleCommand(&protocol.Command{
 		Connect: &protocol.ConnectRequest{},

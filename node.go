@@ -1066,7 +1066,12 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			defer mu.Unlock()
 			empty := n.hub.NumSubscribers(ch) == 0
 			if empty {
-				return n.broker.Unsubscribe(ch)
+				err := n.broker.Unsubscribe(ch)
+				if err != nil {
+					// Cool down a bit since broker is not ready to process unsubscription.
+					time.Sleep(500 * time.Millisecond)
+				}
+				return err
 			}
 			return nil
 		})

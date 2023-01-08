@@ -23,10 +23,8 @@ type Queue struct {
 	initCap int
 }
 
-var initialCapacity = 2
-
 // New Queue returns a new Item queue with initial capacity.
-func New() *Queue {
+func New(initialCapacity int) *Queue {
 	sq := &Queue{
 		initCap: initialCapacity,
 		nodes:   make([]Item, initialCapacity),

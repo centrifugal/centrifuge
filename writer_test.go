@@ -91,11 +91,10 @@ func BenchmarkWriteMerge(b *testing.B) {
 	transport := newBenchmarkTransport()
 	defer func() { _ = transport.close() }()
 	writer := newWriter(writerConfig{
-		MaxMessagesInFrame: 4,
-		WriteFn:            transport.writeSingle,
-		WriteManyFn:        transport.writeCombined,
-	})
-	go writer.run()
+		WriteFn:     transport.writeSingle,
+		WriteManyFn: transport.writeCombined,
+	}, 0)
+	go writer.run(0, 4)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -108,11 +107,10 @@ func BenchmarkWriteMergeDisabled(b *testing.B) {
 	transport := newBenchmarkTransport()
 	defer func() { _ = transport.close() }()
 	writer := newWriter(writerConfig{
-		MaxMessagesInFrame: 1,
-		WriteFn:            transport.writeSingle,
-		WriteManyFn:        transport.writeCombined,
-	})
-	go writer.run()
+		WriteFn:     transport.writeSingle,
+		WriteManyFn: transport.writeCombined,
+	}, 0)
+	go writer.run(0, 1)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -161,11 +159,10 @@ func (t *fakeTransport) write(_ queue.Item) error {
 func TestWriter(t *testing.T) {
 	transport := newFakeTransport(nil)
 	w := newWriter(writerConfig{
-		MaxMessagesInFrame: 4,
-		WriteFn:            transport.write,
-		WriteManyFn:        transport.writeMany,
-	})
-	go w.run()
+		WriteFn:     transport.write,
+		WriteManyFn: transport.writeMany,
+	}, 0)
+	go w.run(0, 4)
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.Nil(t, disconnect)
@@ -183,13 +180,13 @@ func TestWriterWriteMany(t *testing.T) {
 	transport := newFakeTransport(nil)
 
 	w := newWriter(writerConfig{
-		MaxQueueSize:       10 * 1024,
-		MaxMessagesInFrame: 4,
-		WriteFn:            transport.write,
-		WriteManyFn:        transport.writeMany,
-	})
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
 
-	numMessages := 4 * w.config.MaxMessagesInFrame
+	maxMessagesInFrame := 4
+	numMessages := 4 * maxMessagesInFrame
 	for i := 0; i < numMessages; i++ {
 		disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 		require.Nil(t, disconnect)
@@ -199,7 +196,7 @@ func TestWriterWriteMany(t *testing.T) {
 
 	go func() {
 		defer close(doneCh)
-		w.run()
+		w.run(10*time.Millisecond, maxMessagesInFrame)
 	}()
 
 	for i := 0; i < numMessages; i++ {
@@ -207,7 +204,7 @@ func TestWriterWriteMany(t *testing.T) {
 	}
 
 	require.Equal(t, transport.count, numMessages)
-	require.Equal(t, numMessages/w.config.MaxMessagesInFrame, transport.writeManyCalls)
+	require.Equal(t, numMessages/maxMessagesInFrame, transport.writeManyCalls)
 	err := w.close(true)
 	require.NoError(t, err)
 
@@ -222,13 +219,13 @@ func TestWriterWriteRemaining(t *testing.T) {
 	transport := newFakeTransport(nil)
 
 	w := newWriter(writerConfig{
-		MaxQueueSize:       10 * 1024,
-		MaxMessagesInFrame: 4,
-		WriteFn:            transport.write,
-		WriteManyFn:        transport.writeMany,
-	})
+		MaxQueueSize: 10 * 1024,
+		WriteFn:      transport.write,
+		WriteManyFn:  transport.writeMany,
+	}, 0)
 
-	numMessages := 4 * w.config.MaxMessagesInFrame
+	maxMessagesInFrame := 4
+	numMessages := 4 * maxMessagesInFrame
 	for i := 0; i < numMessages; i++ {
 		disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 		require.Nil(t, disconnect)
@@ -254,7 +251,7 @@ func TestWriterDisconnectSlow(t *testing.T) {
 		MaxQueueSize: 1,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
-	})
+	}, 0)
 	defer func() { _ = w.close(true) }()
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
@@ -268,8 +265,8 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 		MaxQueueSize: 1,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
-	})
-	go w.run()
+	}, 0)
+	go w.run(0, 0)
 	_ = w.close(true)
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
@@ -284,13 +281,13 @@ func TestWriterWriteError(t *testing.T) {
 		MaxQueueSize: 1,
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
-	})
+	}, 0)
 
 	doneCh := make(chan struct{})
 
 	go func() {
 		defer close(doneCh)
-		w.run()
+		w.run(0, 0)
 	}()
 
 	defer func() { _ = w.close(true) }()
