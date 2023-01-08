@@ -33,6 +33,11 @@ const (
 	PushFlagMessage
 )
 
+// DisableProtocolVersion1 is a temporary global flag which may be set to
+// disabling usage of ProtocolVersion1. This flag will be removed soon together
+// with ProtocolVersion1.
+var DisableProtocolVersion1 bool
+
 // ProtocolVersion defines protocol behavior.
 type ProtocolVersion uint8
 

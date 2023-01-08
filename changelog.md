@@ -1,12 +1,24 @@
 v0.28.0
 =======
 
-Centrifuge v0.28.0 comes with an updated Redis Engine implementation based on [rueian/rueidis](https://github.com/rueian/rueidis) library. Allocation efficiency and throughput of Redis `Broker` and `PresenceManager` were improved in both standalone and Cluster Redis setups. See [#262](https://github.com/centrifugal/centrifuge/pull/262) and [pr with blog post we are preparing](https://github.com/centrifugal/centrifugal.dev/pull/18) for the reasoning and numbers behind.
+* Centrifuge v0.28.0 comes with an updated Redis Engine implementation based on [rueian/rueidis](https://github.com/rueian/rueidis) library. Allocation efficiency and throughput of Redis `Broker` and `PresenceManager` were improved in both standalone and Cluster Redis setups. See [#262](https://github.com/centrifugal/centrifuge/pull/262) and blog post [Improving Centrifugo Redis Engine throughput and allocation efficiency with Rueidis Go library](https://centrifugal.dev/blog/2022/12/20/improving-redis-engine-performance) for the reasoning and numbers behind.
+* Work on a better observability and possibility to protect client protocol from misusing: Centrifuge now has `CommandReadHandler` and `CommandProcessedHandler`. These handlers are only available for client protocol v2, client protocol v1 [will be removed soon](https://github.com/centrifugal/centrifuge/issues/275).
+* Client now can't send infinite number of pongs to the server, only one pong after receiving ping is allowed
+* Client now can't send any command to the server after getting error in Connect command
+* Disconnect client if it sends async message (using `Send` method) to the server while `MessageHandler` not set
+* Possibility to dramatically reduce server CPU usage (it may be up to 5x reduction depending on message rate) in case of sending many messages towards individual connections. This is possible with new options of `ConnectReply`: `WriteDelay`, `ReplyWithoutQueue`, `MaxMessagesInFrame` which allow tweaking Centrifuge message write loop. See [#270](https://github.com/centrifugal/centrifuge/pull/270) for more details.
+* Several internal optimizations in client protocol to reduce memory allocations a bit.
+* More human-readable tracing logging output (especially in Protobuf protocol case). On the other hand, tracing log level is much more expensive now. We never assumed it will be used in production – so seems an acceptable trade-off.
+* Update centrifuge-js version in all examples
 
 ```
-gorelease -base v0.27.0 -version v0.28.0
+gorelease -base v0.27.2 -version v0.28.0
+
 # github.com/centrifugal/centrifuge
 ## incompatible changes
+(*Client).Handle: removed
+(*Client).HandleCommand: changed from func(*github.com/centrifugal/protocol.Command) bool to func(*github.com/centrifugal/protocol.Command, int) bool
+CommandReadHandler: changed from func(*Client, CommandReadEvent) to func(*Client, CommandReadEvent) error
 DefaultRedisBrokerPrefix: removed
 DefaultRedisConnectTimeout: removed
 DefaultRedisPresenceManagerPrefix: removed
@@ -20,6 +32,21 @@ RedisShardConfig.TLSSkipVerify: removed
 RedisShardConfig.UseTLS: removed
 RedisShardConfig.WriteTimeout: removed
 ## compatible changes
+(*Node).OnCommandProcessed: added
+CommandProcessedEvent: added
+CommandProcessedHandler: added
+CommandReadEvent.CommandSize: added
+Config.EnabledProtocolVersions: added
+Config.ProtocolVersionEnabled: added
+ConnectReply.MaxMessagesInFrame: added
+ConnectReply.QueueInitialCap: added
+ConnectReply.ReplyWithoutQueue: added
+ConnectReply.WriteDelay: added
+DisconnectNotAvailable: added
+DisconnectPermissionDenied: added
+DisconnectTooManyErrors: added
+DisconnectTooManyRequests: added
+HandleReadFrame: added
 RedisShardConfig.ClientName: added
 RedisShardConfig.IOTimeout: added
 RedisShardConfig.SentinelClientName: added
