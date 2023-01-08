@@ -9,7 +9,7 @@
         </style>
         <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding-indexes.js"></script>
         <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding.js"></script>
-        <script type="text/javascript" src="http://localhost:2000/centrifuge.protobuf.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.1.0/dist/centrifuge.protobuf.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -24,13 +24,9 @@
 
                 const transports = [
                     {
-                        transport: 'webtransport',
-                        endpoint: 'https://localhost:8000/connection/webtransport?cf_protocol=protobuf'
-                    },
-                    // {
-                    //     transport: 'http_stream',
-                    //     endpoint: 'http://localhost:8000/connection/http_stream'
-                    // }
+                        transport: 'http_stream',
+                        endpoint: 'http://localhost:8000/connection/http_stream'
+                    }
                 ]
 
                 const centrifuge = new Centrifuge(transports, {
@@ -61,9 +57,6 @@
                 centrifuge.on('message', function(ctx) {
                     const str = new TextDecoder("utf-8").decode(ctx.data);
                     drawText(str);
-                    // Echo data back to server with 'ack' prefix.
-                    const echoData = new TextEncoder("utf-8").encode("ack " + str);
-                    centrifuge.send(echoData);
                 });
 
                 centrifuge.on('publication', function(ctx) {
