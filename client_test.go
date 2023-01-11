@@ -39,7 +39,7 @@ func newTestConnectedClientV2(t *testing.T, n *Node, userID string) *Client {
 	return client
 }
 
-func newTestConnectedClientWithTransport(t *testing.T, ctx context.Context, n *Node, transport Transport, userID string) *Client {
+func newTestConnectedClientWithTransport(t testing.TB, ctx context.Context, n *Node, transport Transport, userID string) *Client {
 	client := newTestClientCustomTransport(t, ctx, n, transport, userID)
 	if transport.ProtocolVersion() == ProtocolVersion1 {
 		connectClient(t, client)

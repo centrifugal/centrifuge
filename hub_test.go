@@ -733,8 +733,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 	}
 
 	for i := 0; i < numClients; i++ {
-		c, err := newClient(context.Background(), n, newTestTransport(func() {}))
-		require.NoError(b, err)
+		c := newTestConnectedClientWithTransport(b, context.Background(), n, newTestTransport(func() {}), "12")
 		_ = n.hub.add(c)
 		clients = append(clients, c)
 		for _, ch := range channels {
@@ -796,8 +795,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 			for i := 0; i < numSubscribers; i++ {
 				t := newTestTransport(func() {})
 				t.setSink(sink)
-				c, err := newClient(context.Background(), n, t)
-				require.NoError(b, err)
+				c := newTestConnectedClientWithTransport(b, context.Background(), n, t, "12")
 				_ = n.hub.add(c)
 				for _, ch := range channels {
 					_, _ = n.hub.addSub(ch, c)
