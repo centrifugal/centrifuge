@@ -1085,7 +1085,7 @@ func (c *Client) HandleCommand(cmd *protocol.Command, cmdProtocolSize int) bool 
 	c.mu.Unlock()
 
 	if unusable {
-		go func() { _ = c.close(DisconnectInsufficientState) }()
+		go func() { _ = c.close(DisconnectBadRequest) }()
 		return false
 	}
 

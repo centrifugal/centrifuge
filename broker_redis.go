@@ -702,7 +702,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	go func() {
 		wg.Wait()
 		if len(channels) > 0 && b.node.LogEnabled(LogLevelDebug) {
-			b.node.Log(NewLogEntry(LogLevelError, "resubscribed to channels", map[string]interface{}{"elapsed": time.Since(started).String(), "numChannels": len(channels)}))
+			b.node.Log(NewLogEntry(LogLevelDebug, "resubscribed to channels", map[string]interface{}{"elapsed": time.Since(started).String(), "numChannels": len(channels)}))
 		}
 		select {
 		case <-done:
