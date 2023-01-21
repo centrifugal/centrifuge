@@ -3017,10 +3017,6 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestEpoch = historyResult.Epoch
 					res.Recovered = false
 					incRecover(res.Recovered)
-					//if c.transport.ProtocolVersion() > ProtocolVersion1 {
-					//	c.pubSubSync.StopBuffering(channel)
-					//	return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
-					//}
 				} else {
 					c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					c.pubSubSync.StopBuffering(channel)
@@ -3247,7 +3243,12 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return nil
 	}
-	if pubOffset != nextExpectedOffset {
+	if pubOffset < nextExpectedOffset {
+		// Messages from PUB/SUB come with delay, this client has a position forward, safe to skip.
+		c.mu.Unlock()
+		return nil
+	}
+	if pubOffset > nextExpectedOffset {
 		if c.node.logger.enabled(LogLevelDebug) {
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]interface{}{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
 		}

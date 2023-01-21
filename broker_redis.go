@@ -500,8 +500,12 @@ func (b *RedisBroker) Close(_ context.Context) error {
 	return nil
 }
 
+const maxPubSubQueueSize = 4 * 1024 * 1024
+
 func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHandler, startOnce func(error)) {
-	b.node.Log(NewLogEntry(LogLevelDebug, "running Redis control PUB/SUB", map[string]interface{}{"shard": s.string()}))
+	numProcessors := runtime.NumCPU()
+
+	b.node.Log(NewLogEntry(LogLevelDebug, "running Redis control PUB/SUB", map[string]interface{}{"shard": s.string(), "numProcessors": numProcessors}))
 	defer func() {
 		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", map[string]interface{}{"shard": s.string()}))
 	}()
@@ -517,8 +521,6 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		})
 	}
 	defer closeDoneOnce()
-
-	numProcessors := runtime.NumCPU()
 
 	// Run PUB/SUB message processors to spread received message processing work over worker goroutines.
 	processors := make(map[int]*psqueue.Queue)
@@ -566,7 +568,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 				Channel: msg.Channel,
 				Data:    convert.StringToBytes(msg.Message),
 			})
-			if processors[idx].Size() >= 16*1024*1024 {
+			if processors[idx].Size() > maxPubSubQueueSize {
 				closeDoneOnce()
 				return
 			}
@@ -670,7 +672,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 				Channel: msg.Channel,
 				Data:    convert.StringToBytes(msg.Message),
 			})
-			if processors[idx].Size() >= 16*1024*1024 {
+			if processors[idx].Size() > maxPubSubQueueSize {
 				closeDoneOnce()
 				return
 			}

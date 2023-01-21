@@ -141,14 +141,14 @@ func main() {
 		for {
 			_, err := node.Publish(
 				"chat:index", []byte(`{"input": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(10, time.Minute),
+				centrifuge.WithHistory(100, time.Minute),
 			)
 			if err != nil {
 				log.Printf("error publishing to channel: %s", err)
 			} else {
 				i++
 			}
-			time.Sleep(5000 * time.Millisecond)
+			time.Sleep(1000 * time.Millisecond)
 		}
 	}()
 
