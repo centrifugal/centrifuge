@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
+	"github.com/centrifugal/centrifuge/internal/psqueue"
 
 	"github.com/centrifugal/protocol"
 	"github.com/rueian/rueidis"
@@ -48,10 +50,15 @@ type controlPubSubStart struct {
 	errCh chan error
 }
 
+type pubSubClient struct {
+	conn          rueidis.DedicatedClient
+	closeDoneOnce func()
+}
+
 type shardWrapper struct {
 	shard               *RedisShard
 	subClientsMu        sync.Mutex
-	subClients          [][]rueidis.DedicatedClient
+	subClients          [][]*pubSubClient
 	pubSubStartChannels [][]*pubSubStart
 	controlPubSubStart  *controlPubSubStart
 }
@@ -205,16 +212,16 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		if !shard.useCluster && b.config.numClusterShards > 0 {
 			return nil, errors.New("can use sharded PUB/SUB feature (numClusterShards > 0) only with Redis Cluster")
 		}
-		subChannels := make([][]rueidis.DedicatedClient, 0)
+		subChannels := make([][]*pubSubClient, 0)
 		pubSubStartChannels := make([][]*pubSubStart, 0)
 
 		if b.useShardedPubSub(shard) {
 			for i := 0; i < b.config.numClusterShards; i++ {
-				subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
+				subChannels = append(subChannels, make([]*pubSubClient, 0))
 				pubSubStartChannels = append(pubSubStartChannels, make([]*pubSubStart, 0))
 			}
 		} else {
-			subChannels = append(subChannels, make([]rueidis.DedicatedClient, 0))
+			subChannels = append(subChannels, make([]*pubSubClient, 0))
 			pubSubStartChannels = append(pubSubStartChannels, make([]*pubSubStart, 0))
 		}
 
@@ -511,35 +518,57 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	}
 	defer closeDoneOnce()
 
+	numProcessors := runtime.NumCPU()
+
+	// Run PUB/SUB message processors to spread received message processing work over worker goroutines.
+	processors := make(map[int]*psqueue.Queue)
+	for i := 0; i < numProcessors; i++ {
+		q := psqueue.New(1024)
+		processors[i] = q
+		go func(q *psqueue.Queue) {
+			for {
+				ok := q.Wait()
+				if !ok {
+					return
+				}
+				item, ok := q.Remove()
+				if !ok {
+					if q.Closed() {
+						return
+					}
+					continue
+				}
+				err := eventHandler.HandleControl(item.Data)
+				if err != nil {
+					b.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
+				}
+			}
+		}(q)
+	}
+
 	conn, cancel := s.client.Dedicate()
 	defer cancel()
 	defer conn.Close()
-
-	numProcessors := runtime.NumCPU()
-
-	// Run workers to spread message processing work over worker goroutines.
-	workCh := make(chan rueidis.PubSubMessage)
-	for i := 0; i < numProcessors; i++ {
-		go func() {
-			for {
-				select {
-				case <-done:
-					return
-				case msg := <-workCh:
-					err := eventHandler.HandleControl(convert.StringToBytes(msg.Message))
-					if err != nil {
-						b.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
-					}
-				}
-			}
-		}()
-	}
+	defer func() {
+		for i := 0; i < numProcessors; i++ {
+			processors[i].Close()
+		}
+	}()
 
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
 		OnMessage: func(msg rueidis.PubSubMessage) {
 			select {
-			case workCh <- msg:
 			case <-done:
+			default:
+			}
+			idx := rand.Intn(numProcessors)
+			processors[idx].Add(psqueue.Item{
+				Channel: msg.Channel,
+				Data:    convert.StringToBytes(msg.Message),
+			})
+			if processors[idx].Size() >= 16*1024*1024 {
+				closeDoneOnce()
+				return
 			}
 		},
 	})
@@ -554,6 +583,8 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	startOnce(nil)
 
 	select {
+	case <-done:
+		b.node.Log(NewLogEntry(LogLevelError, "control pub/sub done", map[string]interface{}{}))
 	case err := <-wait:
 		if err != nil {
 			b.node.Log(NewLogEntry(LogLevelError, "control pub/sub error", map[string]interface{}{"error": err.Error()}))
@@ -590,40 +621,66 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	defer closeDoneOnce()
 
 	// Run PUB/SUB message processors to spread received message processing work over worker goroutines.
-	processors := make(map[int]chan rueidis.PubSubMessage)
+	processors := make(map[int]*psqueue.Queue)
 	for i := 0; i < numProcessors; i++ {
-		processingCh := make(chan rueidis.PubSubMessage)
-		processors[i] = processingCh
-		go func(ch chan rueidis.PubSubMessage) {
+		q := psqueue.New(1024)
+		processors[i] = q
+		go func(q *psqueue.Queue) {
 			for {
-				select {
-				case <-done:
+				ok := q.Wait()
+				if !ok {
 					return
-				case msg := <-ch:
-					err := b.handleRedisClientMessage(eventHandler, channelID(msg.Channel), convert.StringToBytes(msg.Message))
-					if err != nil {
-						b.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
-						continue
+				}
+				item, ok := q.Remove()
+				if !ok {
+					if q.Closed() {
+						return
 					}
+					continue
+				}
+				err := b.handleRedisClientMessage(eventHandler, channelID(item.Channel), item.Data)
+				if err != nil {
+					b.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
+					continue
 				}
 			}
-		}(processingCh)
+		}(q)
 	}
 
 	conn, cancel := s.shard.client.Dedicate()
 	defer cancel()
 	defer conn.Close()
+	defer func() {
+		for i := 0; i < numProcessors; i++ {
+			processors[i].Close()
+		}
+	}()
 
 	shardChannel := string(b.pubSubShardChannelID(clusterShardIndex, psShardIndex, useShardedPubSub))
 
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
 		OnMessage: func(msg rueidis.PubSubMessage) {
 			select {
-			case processors[index(msg.Channel, numProcessors)] <- msg:
 			case <-done:
+				return
+			default:
+			}
+			idx := index(msg.Channel, numProcessors)
+			processors[idx].Add(psqueue.Item{
+				Channel: msg.Channel,
+				Data:    convert.StringToBytes(msg.Message),
+			})
+			if processors[idx].Size() >= 16*1024*1024 {
+				closeDoneOnce()
+				return
 			}
 		},
 		OnSubscription: func(s rueidis.PubSubSubscription) {
+			select {
+			case <-done:
+				return
+			default:
+			}
 			if !useShardedPubSub {
 				return
 			}
@@ -709,7 +766,10 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 			startOnce(errors.New("error resubscribing"))
 		default:
 			s.subClientsMu.Lock()
-			s.subClients[clusterShardIndex][psShardIndex] = conn
+			s.subClients[clusterShardIndex][psShardIndex] = &pubSubClient{
+				conn:          conn,
+				closeDoneOnce: closeDoneOnce,
+			}
 			s.subClientsMu.Unlock()
 			defer func() {
 				s.subClientsMu.Lock()
@@ -722,6 +782,8 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	}()
 
 	select {
+	case <-done:
+		b.node.Log(NewLogEntry(LogLevelError, "pub/sub done", map[string]interface{}{}))
 	case err := <-wait:
 		startOnce(err)
 		if err != nil {
@@ -901,8 +963,8 @@ func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
 	}
 
 	s.subClientsMu.Lock()
-	conn := s.subClients[clusterShardIndex][psShardIndex]
-	if conn == nil {
+	psClient := s.subClients[clusterShardIndex][psShardIndex]
+	if psClient == nil {
 		s.subClientsMu.Unlock()
 		return errPubSubConnUnavailable
 	}
@@ -910,9 +972,12 @@ func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
 
 	var err error
 	if b.useShardedPubSub(s.shard) {
-		err = conn.Do(context.Background(), conn.B().Ssubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+		err = psClient.conn.Do(context.Background(), psClient.conn.B().Ssubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
 	} else {
-		err = conn.Do(context.Background(), conn.B().Subscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+		err = psClient.conn.Do(context.Background(), psClient.conn.B().Subscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+	}
+	if err != nil {
+		psClient.closeDoneOnce()
 	}
 	return err
 }
@@ -933,8 +998,8 @@ func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
 	}
 
 	s.subClientsMu.Lock()
-	conn := s.subClients[clusterShardIndex][psShardIndex]
-	if conn == nil {
+	psClient := s.subClients[clusterShardIndex][psShardIndex]
+	if psClient == nil {
 		s.subClientsMu.Unlock()
 		return errPubSubConnUnavailable
 	}
@@ -942,9 +1007,12 @@ func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
 
 	var err error
 	if b.useShardedPubSub(s.shard) {
-		err = conn.Do(context.Background(), conn.B().Sunsubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+		err = psClient.conn.Do(context.Background(), psClient.conn.B().Sunsubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
 	} else {
-		err = conn.Do(context.Background(), conn.B().Unsubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+		err = psClient.conn.Do(context.Background(), psClient.conn.B().Unsubscribe().Channel(string(b.messageChannelID(s.shard, ch))).Build()).Error()
+	}
+	if err != nil {
+		psClient.closeDoneOnce()
 	}
 	return err
 }
