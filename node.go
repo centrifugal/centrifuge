@@ -633,7 +633,11 @@ func (n *Node) Info() (Info, error) {
 // handleControl handles messages from control channel - control messages used for internal
 // communication between nodes to share state or proto.
 func (n *Node) handleControl(data []byte) error {
+	started := time.Now()
 	incMessagesReceived("control")
+	defer func() {
+		observeBroadcastDuration("control", time.Since(started))
+	}()
 
 	cmd, err := n.controlDecoder.DecodeCommand(data)
 	if err != nil {
@@ -723,7 +727,11 @@ func (n *Node) handleControl(data []byte) error {
 // coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
 func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition) error {
+	started := time.Now()
 	incMessagesReceived("publication")
+	defer func() {
+		observeBroadcastDuration("publication", time.Since(started))
+	}()
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
@@ -735,7 +743,11 @@ func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition)
 // handleJoin handles join messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
 func (n *Node) handleJoin(ch string, info *ClientInfo) error {
+	started := time.Now()
 	incMessagesReceived("join")
+	defer func() {
+		observeBroadcastDuration("join", time.Since(started))
+	}()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
 		return nil
@@ -746,7 +758,11 @@ func (n *Node) handleJoin(ch string, info *ClientInfo) error {
 // handleLeave handles leave messages - i.e. broadcasts it to
 // interested local clients subscribed to channel.
 func (n *Node) handleLeave(ch string, info *ClientInfo) error {
+	started := time.Now()
 	incMessagesReceived("leave")
+	defer func() {
+		observeBroadcastDuration("leave", time.Since(started))
+	}()
 	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
 	if !hasCurrentSubscribers {
 		return nil

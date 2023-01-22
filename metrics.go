@@ -17,22 +17,23 @@ var defaultMetricsNamespace = "centrifuge"
 var registryMu sync.RWMutex
 
 var (
-	messagesSentCount      *prometheus.CounterVec
-	messagesReceivedCount  *prometheus.CounterVec
-	actionCount            *prometheus.CounterVec
-	buildInfoGauge         *prometheus.GaugeVec
-	numClientsGauge        prometheus.Gauge
-	numUsersGauge          prometheus.Gauge
-	numSubsGauge           prometheus.Gauge
-	numChannelsGauge       prometheus.Gauge
-	numNodesGauge          prometheus.Gauge
-	replyErrorCount        *prometheus.CounterVec
-	serverDisconnectCount  *prometheus.CounterVec
-	commandDurationSummary *prometheus.SummaryVec
-	surveyDurationSummary  *prometheus.SummaryVec
-	recoverCount           *prometheus.CounterVec
-	transportConnectCount  *prometheus.CounterVec
-	transportMessagesSent  *prometheus.CounterVec
+	messagesSentCount        *prometheus.CounterVec
+	messagesReceivedCount    *prometheus.CounterVec
+	actionCount              *prometheus.CounterVec
+	buildInfoGauge           *prometheus.GaugeVec
+	numClientsGauge          prometheus.Gauge
+	numUsersGauge            prometheus.Gauge
+	numSubsGauge             prometheus.Gauge
+	numChannelsGauge         prometheus.Gauge
+	numNodesGauge            prometheus.Gauge
+	replyErrorCount          *prometheus.CounterVec
+	serverDisconnectCount    *prometheus.CounterVec
+	commandDurationSummary   *prometheus.SummaryVec
+	surveyDurationSummary    *prometheus.SummaryVec
+	broadcastDurationSummary *prometheus.SummaryVec
+	recoverCount             *prometheus.CounterVec
+	transportConnectCount    *prometheus.CounterVec
+	transportMessagesSent    *prometheus.CounterVec
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -85,6 +86,11 @@ var (
 	commandDurationRefresh       prometheus.Observer
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
+
+	broadcastDurationPublication prometheus.Observer
+	broadcastDurationJoin        prometheus.Observer
+	broadcastDurationLeave       prometheus.Observer
+	broadcastDurationControl     prometheus.Observer
 )
 
 func observeCommandDuration(method protocol.Command_MethodType, d time.Duration) {
@@ -263,6 +269,23 @@ func incMessagesSent(msgType string) {
 	}
 }
 
+func observeBroadcastDuration(msgType string, d time.Duration) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	switch msgType {
+	case "publication":
+		broadcastDurationPublication.Observe(d.Seconds())
+	case "join":
+		broadcastDurationJoin.Observe(d.Seconds())
+	case "leave":
+		broadcastDurationLeave.Observe(d.Seconds())
+	case "control":
+		broadcastDurationControl.Observe(d.Seconds())
+	default:
+		broadcastDurationSummary.WithLabelValues(msgType).Observe(d.Seconds())
+	}
+}
+
 func incMessagesReceived(msgType string) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
@@ -405,6 +428,14 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:       "Survey duration summary.",
 	}, []string{"op"})
 
+	broadcastDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace:  metricsNamespace,
+		Subsystem:  "node",
+		Name:       "broadcast_duration_seconds",
+		Objectives: map[float64]float64{0.5: 0.05, 0.99: 0.001, 0.999: 0.0001},
+		Help:       "Broadcast duration summary.",
+	}, []string{"type"})
+
 	replyErrorCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
@@ -457,6 +488,11 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	messagesSentCountJoin = messagesSentCount.WithLabelValues("join")
 	messagesSentCountLeave = messagesSentCount.WithLabelValues("leave")
 	messagesSentCountControl = messagesSentCount.WithLabelValues("control")
+
+	broadcastDurationPublication = broadcastDurationSummary.WithLabelValues("publication")
+	broadcastDurationJoin = broadcastDurationSummary.WithLabelValues("join")
+	broadcastDurationLeave = broadcastDurationSummary.WithLabelValues("leave")
+	broadcastDurationControl = broadcastDurationSummary.WithLabelValues("control")
 
 	actionCountAddClient = actionCount.WithLabelValues("add_client")
 	actionCountRemoveClient = actionCount.WithLabelValues("remove_client")
@@ -550,6 +586,9 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		return err
 	}
 	if err := registry.Register(surveyDurationSummary); err != nil {
+		return err
+	}
+	if err := registry.Register(broadcastDurationSummary); err != nil {
 		return err
 	}
 	return nil
