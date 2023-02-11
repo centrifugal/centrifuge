@@ -11,7 +11,7 @@ require (
 	github.com/cristalhq/jwt/v3 v3.0.0
 	github.com/dchest/uniuri v0.0.0-20200228104902-7aecb25e1fe5
 	github.com/gin-contrib/sessions v0.0.3
-	github.com/gin-gonic/gin v1.7.3
+	github.com/gin-gonic/gin v1.7.7
 	github.com/gobwas/ws v1.0.3
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/mux v1.7.4
