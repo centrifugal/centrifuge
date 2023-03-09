@@ -106,7 +106,7 @@ func New(c Config) (*Node, error) {
 		c.ClientExpiredSubCloseDelay = 25 * time.Second
 	}
 	if c.ClientStaleCloseDelay == 0 {
-		c.ClientStaleCloseDelay = 25 * time.Second
+		c.ClientStaleCloseDelay = 15 * time.Second
 	}
 	if c.ClientQueueMaxSize == 0 {
 		c.ClientQueueMaxSize = 1048576 // 1MB by default.
@@ -399,7 +399,7 @@ func (n *Node) handleNotification(fromNodeID string, req *controlpb.Notification
 }
 
 func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyRequest) error {
-	if n.surveyHandler == nil {
+	if n.surveyHandler == nil && n.emulationSurveyHandler == nil {
 		return nil
 	}
 	cb := func(reply SurveyReply) {
@@ -416,6 +416,13 @@ func (n *Node) handleSurveyRequest(fromNodeID string, req *controlpb.SurveyReque
 			Params: params,
 		}
 		_ = n.publishControl(cmd, fromNodeID)
+	}
+	if req.Op == emulationOp && n.emulationSurveyHandler != nil {
+		n.emulationSurveyHandler.HandleEmulation(SurveyEvent{Op: req.Op, Data: req.Data}, cb)
+		return nil
+	}
+	if n.surveyHandler == nil {
+		return nil
 	}
 	n.surveyHandler(SurveyEvent{Op: req.Op, Data: req.Data}, cb)
 	return nil
@@ -1067,7 +1074,12 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			defer mu.Unlock()
 			empty := n.hub.NumSubscribers(ch) == 0
 			if empty {
-				return n.broker.Unsubscribe(ch)
+				err := n.broker.Unsubscribe(ch)
+				if err != nil {
+					// Cool down a bit since broker is not ready to process unsubscription.
+					time.Sleep(500 * time.Millisecond)
+				}
+				return err
 			}
 			return nil
 		})
@@ -1524,10 +1536,11 @@ func (n *Node) OnNodeInfoSend(handler NodeInfoSendHandler) {
 // All eventHub methods are not goroutine-safe and supposed
 // to be called once before Node Run called.
 type eventHub struct {
-	connectingHandler     ConnectingHandler
-	connectHandler        ConnectHandler
-	transportWriteHandler TransportWriteHandler
-	commandReadHandler    CommandReadHandler
+	connectingHandler       ConnectingHandler
+	connectHandler          ConnectHandler
+	transportWriteHandler   TransportWriteHandler
+	commandReadHandler      CommandReadHandler
+	commandProcessedHandler CommandProcessedHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1553,6 +1566,11 @@ func (n *Node) OnTransportWrite(handler TransportWriteHandler) {
 // OnCommandRead allows setting CommandReadHandler. This should be done before Node.Run called.
 func (n *Node) OnCommandRead(handler CommandReadHandler) {
 	n.clientEvents.commandReadHandler = handler
+}
+
+// OnCommandProcessed allows setting CommandProcessedHandler. This should be done before Node.Run called.
+func (n *Node) OnCommandProcessed(handler CommandProcessedHandler) {
+	n.clientEvents.commandProcessedHandler = handler
 }
 
 type brokerEventHandler struct {

@@ -7,7 +7,7 @@
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
         </style>
-        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.1.0/dist/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -21,10 +21,10 @@
                 const container = document.getElementById('messages');
 
                 const transports = [
-                    {
-                        transport: 'websocket',
-                        endpoint: `ws://${window.location.host}/connection/websocket`
-                    },
+                    // {
+                    //     transport: 'websocket',
+                    //     endpoint: `ws://${window.location.host}/connection/websocket`
+                    // },
                     {
                         transport: 'http_stream',
                         endpoint: `//${window.location.host}/connection/http_stream`
@@ -58,8 +58,6 @@
 
                 centrifuge.on('message', function(data) {
                     drawText('Message: ' + JSON.stringify(data));
-                    // Echo data back to server.
-                    centrifuge.send(data);
                 });
 
                 centrifuge.on('publication', function(ctx) {

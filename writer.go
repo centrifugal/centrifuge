@@ -2,15 +2,16 @@ package centrifuge
 
 import (
 	"sync"
+	"time"
 
 	"github.com/centrifugal/centrifuge/internal/queue"
+	"github.com/centrifugal/centrifuge/internal/timers"
 )
 
 type writerConfig struct {
-	WriteManyFn        func(...queue.Item) error
-	WriteFn            func(item queue.Item) error
-	MaxQueueSize       int
-	MaxMessagesInFrame int
+	WriteManyFn  func(...queue.Item) error
+	WriteFn      func(item queue.Item) error
+	MaxQueueSize int
 }
 
 // writer helps to manage per-connection message byte queue.
@@ -19,25 +20,43 @@ type writer struct {
 	config   writerConfig
 	messages *queue.Queue
 	closed   bool
+	closeCh  chan struct{}
 }
 
-func newWriter(config writerConfig) *writer {
+func newWriter(config writerConfig, queueInitialCap int) *writer {
+	if queueInitialCap == 0 {
+		queueInitialCap = 2
+	}
 	w := &writer{
 		config:   config,
-		messages: queue.New(),
+		messages: queue.New(queueInitialCap),
+		closeCh:  make(chan struct{}),
 	}
 	return w
 }
 
 const (
-	defaultMaxMessagesInFrame = 4
+	defaultMaxMessagesInFrame = 16
 )
 
-func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
-	// Wait for message from queue.
+func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duration) bool {
+	// Wait for message from the queue.
 	ok := w.messages.Wait()
 	if !ok {
 		return false
+	}
+
+	if writeDelay > 0 {
+		tm := timers.AcquireTimer(writeDelay)
+		if writeDelay > 0 {
+			select {
+			case <-tm.C:
+			case <-w.closeCh:
+				timers.ReleaseTimer(tm)
+				return false
+			}
+		}
+		timers.ReleaseTimer(tm)
 	}
 
 	w.mu.Lock()
@@ -51,14 +70,14 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 	var writeErr error
 
 	messageCount := w.messages.Len()
-	if maxMessagesInFrame > 1 && messageCount > 0 {
+	if (maxMessagesInFrame == -1 || maxMessagesInFrame > 1) && messageCount > 0 {
 		// There are several more messages left in queue, try to send them in single frame,
 		// but no more than maxMessagesInFrame.
 
 		// Limit message count to get from queue with (maxMessagesInFrame - 1)
 		// (as we already have one message received from queue above).
 		messagesCap := messageCount + 1
-		if messagesCap > maxMessagesInFrame {
+		if messagesCap > maxMessagesInFrame && maxMessagesInFrame > -1 {
 			messagesCap = maxMessagesInFrame
 		}
 
@@ -67,7 +86,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 
 		for messageCount > 0 {
 			messageCount--
-			if len(messages) >= maxMessagesInFrame {
+			if maxMessagesInFrame > -1 && len(messages) >= maxMessagesInFrame {
 				break
 			}
 			m, ok := w.messages.Remove()
@@ -98,14 +117,12 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int) bool {
 
 // run supposed to be run in goroutine, this goroutine will be closed as
 // soon as queue is closed.
-func (w *writer) run() {
-	maxMessagesInFrame := w.config.MaxMessagesInFrame
+func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int) {
 	if maxMessagesInFrame == 0 {
 		maxMessagesInFrame = defaultMaxMessagesInFrame
 	}
-
 	for {
-		if ok := w.waitSendMessage(maxMessagesInFrame); !ok {
+		if ok := w.waitSendMessage(maxMessagesInFrame, writeDelay); !ok {
 			return
 		}
 	}
@@ -136,7 +153,9 @@ func (w *writer) close(flushRemaining bool) error {
 			// TODO: make it respect MaxMessagesInFrame option.
 			_ = w.config.WriteManyFn(remaining...)
 		}
+	} else {
+		w.messages.Close()
 	}
-
+	close(w.closeCh)
 	return nil
 }

@@ -11,8 +11,10 @@ func testItem(data []byte) Item {
 	return Item{Data: data}
 }
 
+var initialCapacity = 2
+
 func TestByteQueueResize(t *testing.T) {
-	q := New()
+	q := New(initialCapacity)
 	require.Equal(t, 0, q.Len())
 	require.Equal(t, false, q.Closed())
 
@@ -32,7 +34,7 @@ func TestByteQueueResize(t *testing.T) {
 }
 
 func TestByteQueueSize(t *testing.T) {
-	q := New()
+	q := New(initialCapacity)
 	require.Equal(t, 0, q.Size())
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
@@ -42,7 +44,7 @@ func TestByteQueueSize(t *testing.T) {
 }
 
 func TestByteQueueWait(t *testing.T) {
-	q := New()
+	q := New(initialCapacity)
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
 
@@ -70,7 +72,7 @@ func TestByteQueueWait(t *testing.T) {
 }
 
 func TestByteQueueClose(t *testing.T) {
-	q := New()
+	q := New(initialCapacity)
 
 	// test removing from empty queue
 	_, ok := q.Remove()
@@ -93,7 +95,7 @@ func TestByteQueueClose(t *testing.T) {
 }
 
 func TestByteQueueCloseRemaining(t *testing.T) {
-	q := New()
+	q := New(initialCapacity)
 	q.Add(testItem([]byte("1")))
 	q.Add(testItem([]byte("2")))
 	messages := q.CloseRemaining()
@@ -106,7 +108,7 @@ func TestByteQueueCloseRemaining(t *testing.T) {
 }
 
 func BenchmarkQueueAdd(b *testing.B) {
-	q := New()
+	q := New(initialCapacity)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		q.Add(testItem([]byte("test")))
@@ -140,7 +142,7 @@ func addAndConsume(q *Queue, n int) {
 }
 
 func BenchmarkQueueAddConsume(b *testing.B) {
-	q := New()
+	q := New(initialCapacity)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		addAndConsume(q, 10000)

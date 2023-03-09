@@ -208,10 +208,13 @@ func main() {
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
-			log.Printf("RPC from user: %s, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
-			cb(centrifuge.RPCReply{
-				Data: []byte(`{"year": "2020"}`),
-			}, nil)
+			log.Printf("[user %s] sent RPC, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
+			switch e.Method {
+			case "getCurrentYear":
+				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+			default:
+				cb(centrifuge.RPCReply{}, centrifuge.ErrorMethodNotFound)
+			}
 		})
 
 		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
@@ -221,10 +224,6 @@ func main() {
 				return
 			}
 			cb(centrifuge.PresenceReply{}, nil)
-		})
-
-		client.OnMessage(func(e centrifuge.MessageEvent) {
-			log.Printf("message from user: %s, data: %s", client.UserID(), string(e.Data))
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {

@@ -6,8 +6,8 @@ import (
 
 // Config contains Node configuration options.
 type Config struct {
-	// Version of server – if set will be sent to a client on connection establishment
-	// phase in reply to connect command from a client.
+	// Version of server – if set will be sent to a client on connection
+	// establishment phase in reply to connect command from a client.
 	Version string
 	// Name is a unique name of the current server Node. Name used as human-readable
 	// and meaningful node identifier. If not set then os.Hostname will be used.
@@ -37,15 +37,15 @@ type Config struct {
 	// ClientStaleCloseDelay is a timeout after which connection will be
 	// closed if still not authenticated (i.e. no valid connect command
 	// received yet).
-	// Zero value means 25 * time.Second.
+	// Zero value means 15 * time.Second.
 	ClientStaleCloseDelay time.Duration
 	// ClientChannelPositionCheckDelay defines minimal time from previous
-	// client position check in channel. If client does not pass check it will
-	// be disconnected with DisconnectInsufficientState.
+	// client position check in channel. If client does not pass check it
+	// will be disconnected with DisconnectInsufficientState.
 	// Zero value means 40 * time.Second.
 	ClientChannelPositionCheckDelay time.Duration
-	// ClientQueueMaxSize is a maximum size of client's message queue in bytes.
-	// After this queue size exceeded Centrifuge closes client's connection.
+	// ClientQueueMaxSize is a maximum size of client's message queue in
+	// bytes. After this queue size exceeded Centrifuge closes client's connection.
 	// Zero value means 1048576 bytes (1MB).
 	ClientQueueMaxSize int
 	// ClientChannelLimit sets upper limit of client-side channels each client
@@ -75,8 +75,8 @@ type Config struct {
 	// restored during the automatic recovery process. See also HistoryMaxPublicationLimit.
 	// By default, no limit used.
 	RecoveryMaxPublicationLimit int
-	// UseSingleFlight allows turning on mode where singleflight will be automatically used for
-	// Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
+	// UseSingleFlight allows turning on mode where singleflight will be automatically used
+	// for Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
 	UseSingleFlight bool
 
 	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream

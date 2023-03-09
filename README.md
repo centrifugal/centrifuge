@@ -10,8 +10,8 @@ Centrifuge library is a real-time core of [Centrifugo](https://github.com/centri
 Library highlights:
 
 * Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.dev/blog/2020/02/10/million-connections-with-centrifugo)
-* Builtin bidirectional transports: WebSocket (JSON or binary Protobuf) and SockJS (JSON only)
-* Possibility to use unidirectional transports without using custom Centrifuge client library: see examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws)  
+* Builtin bidirectional transports: WebSocket (JSON or binary Protobuf), WebSocket emulation over HTTP-streaming, Eventsource (JSON only) or SockJS (JSON only)
+* Possibility to use unidirectional transports without using custom Centrifuge client library: see examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws)
 * Built-in horizontal scalability with Redis PUB/SUB, consistent Redis sharding, Sentinel and Redis Cluster for HA
 * Native authentication over HTTP middleware or custom token-based
 * Channel concept to broadcast message to all active subscribers
@@ -33,7 +33,7 @@ For **bidirectional** communication between a client and a Centrifuge-based serv
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 
-If you opt for a **unidirectional** communication then you may leverage Centrifuge possibilities without any specific library on client-side - simply by using native browser API or GRPC-generated code. See examples of unidirectional communication over [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws).
+If you opt for a **unidirectional** communication then you may leverage Centrifuge possibilities without any specific library on client-side - simply by using native browser API or GRPC-generated code. See examples of unidirectional communication over [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws).
 
 ### Explore Centrifuge
 
@@ -177,7 +177,7 @@ Also create file `index.html` near `main.go` with content:
 <html lang="en">
     <head>
         <meta charset="utf-8">
-        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.0.0/dist/centrifuge.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.1.0/dist/centrifuge.js"></script>
         <title>Centrifuge library chat example</title>
     </head>
     <body>
@@ -269,6 +269,50 @@ cfg := centrifuge.DefaultConfig
 cfg.LogLevel = centrifuge.LogLevelDebug
 cfg.LogHandler = handleLog
 ```
+
+#### Allowed origin for WebSocket
+
+When connecting to Centrifuge WebSocket endpoint from web browsers you need to configure allowed Origin. This is important to prevent CSRF-like/WebSocket hijacking attacks. See [this post for example](https://portswigger.net/web-security/websockets/cross-site-websocket-hijacking).
+
+By default, `CheckOrigin` function of WebSocket handler will ensure that connection request originates from same host as your service. To override this behaviour you can provide your own implementation of `CheckOrigin` function to allow origins you trust. For example, your Centrifuge runs on `http://localhost:8000` but you want it to allow WebSocket connections from `http://localhost:3000`:
+
+```go
+centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+	CheckOrigin: func(r *http.Request) bool {
+		originHeader := r.Header.Get("Origin")
+		if originHeader == "" {
+			return true
+		}
+		return originHeader == "http://localhost:3000"
+	},
+})
+```
+
+Note, that if WebSocket Upgrade does not contain Origin header – it means it does not come from web browser and security concerns outlined above are not applied in that case. So we can safely return `true` in this case in the example above.
+
+#### CORS for HTTP-based transports
+
+Centrifuge has two HTTP-based fallback transports for WebSocket – see `HTTPStreamHandler` and `SSEHandler`. To connect to those from web browser from the domain which is different from your transport endpoint domain you may need to wrap handlers with CORS middleware:
+
+```go
+func CORS(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := w.Header()
+		if originAllowed(r) {
+			header.Set("Access-Control-Allow-Origin", r.Header.Get("origin"))
+			if allowHeaders := r.Header.Get("Access-Control-Request-Headers"); allowHeaders != "" && allowHeaders != "null" {
+				header.Add("Access-Control-Allow-Headers", allowHeaders)
+			}
+			header.Set("Access-Control-Allow-Credentials", "true")
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+http.Handle("/connection/http_stream", CORS(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamHandlerConfig{})))
+```
+
+You can also configure CORS on load-balancer/reverse-proxy level.
 
 ### For contributors
 

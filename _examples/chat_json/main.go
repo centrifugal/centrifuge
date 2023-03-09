@@ -62,14 +62,13 @@ func channelSubscribeAllowed(channel string) bool {
 
 func main() {
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelInfo,
-		LogHandler: handleLog,
+		LogLevel:              centrifuge.LogLevelInfo,
+		LogHandler:            handleLog,
+		DefaultHistoryMetaTTL: 24 * time.Hour,
 	})
 
 	// Override default broker which does not use HistoryMetaTTL.
-	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{
-		HistoryMetaTTL: 120 * time.Second,
-	})
+	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{})
 	node.SetBroker(broker)
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
@@ -157,7 +156,7 @@ func main() {
 
 			result, err := node.Publish(
 				e.Channel, data,
-				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithHistory(300, time.Minute, time.Hour),
 				centrifuge.WithClientInfo(e.ClientInfo),
 			)
 
@@ -166,10 +165,12 @@ func main() {
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
 			log.Printf("[user %s] sent RPC, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
-
-			cb(centrifuge.RPCReply{
-				Data: []byte(`{"year": "2020"}`),
-			}, nil)
+			switch e.Method {
+			case "getCurrentYear":
+				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+			default:
+				cb(centrifuge.RPCReply{}, centrifuge.ErrorMethodNotFound)
+			}
 		})
 
 		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
@@ -180,10 +181,6 @@ func main() {
 				return
 			}
 			cb(centrifuge.PresenceReply{}, nil)
-		})
-
-		client.OnMessage(func(e centrifuge.MessageEvent) {
-			log.Printf("[user %s] sent message, data: %s", client.UserID(), string(e.Data))
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -210,7 +207,7 @@ func main() {
 			_, err := node.Publish(
 				"#42",
 				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithHistory(300, time.Minute, time.Hour),
 			)
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
@@ -227,7 +224,7 @@ func main() {
 			_, err := node.Publish(
 				"chat:index",
 				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithHistory(300, time.Minute, time.Hour),
 			)
 			if err != nil {
 				log.Printf("error publishing to channel: %s", err)

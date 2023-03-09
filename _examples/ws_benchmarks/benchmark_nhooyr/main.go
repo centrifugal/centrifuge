@@ -1,8 +1,8 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -199,7 +199,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 		if err != nil {
 			return
 		}
-		ok := c.Handle(data)
+		ok := centrifuge.HandleReadFrame(c, bytes.NewReader(data))
 		if !ok {
 			return
 		}
@@ -229,15 +229,6 @@ func main() {
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			cb(centrifuge.PublishReply{}, nil)
-		})
-
-		client.OnMessage(func(e centrifuge.MessageEvent) {
-			err := client.Send(e.Data)
-			if err != nil {
-				if err != io.EOF {
-					log.Fatalln("error sending to client:", err.Error())
-				}
-			}
 		})
 	})
 

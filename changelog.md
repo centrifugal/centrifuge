@@ -1,3 +1,87 @@
+v0.28.0
+=======
+
+* Centrifuge v0.28.0 comes with an updated Redis Engine implementation based on [rueian/rueidis](https://github.com/rueian/rueidis) library. Allocation efficiency and throughput of Redis `Broker` and `PresenceManager` were improved in both standalone and Cluster Redis setups. See [#262](https://github.com/centrifugal/centrifuge/pull/262) and blog post [Improving Centrifugo Redis Engine throughput and allocation efficiency with Rueidis Go library](https://centrifugal.dev/blog/2022/12/20/improving-redis-engine-performance) for the reasoning and numbers behind.
+* Work on a better observability and possibility to protect client protocol from misusing: Centrifuge now has `CommandReadHandler` and `CommandProcessedHandler`. These handlers are only available for client protocol v2, client protocol v1 [will be removed soon](https://github.com/centrifugal/centrifuge/issues/275). While it's not removed `DisableProtocolVersion1` global var may be used to disable possibility for clients to connect to server with `ProtocolVersion1`.
+* Client now can't send infinite number of pongs to the server, only one pong after receiving ping is allowed
+* Client now can't send any command to the server after getting error in Connect command
+* Disconnect client if it sends async message (using `Send` method) to the server while `MessageHandler` not set
+* Possibility to dramatically reduce server CPU usage in case of sending many messages towards individual connections (it may be up to 5x reduction depending on message rate). This is possible with new options of `ConnectReply`: `WriteDelay`, `ReplyWithoutQueue`, `MaxMessagesInFrame`, `QueueInitialCap` which allow tweaking Centrifuge message write loop. See [#270](https://github.com/centrifugal/centrifuge/pull/270) for more details.
+* Several internal optimizations in client protocol to reduce memory allocations a bit.
+* More human-readable tracing logging output (especially in Protobuf protocol case). On the other hand, tracing log level is much more expensive now. We never assumed it will be used in production – so seems an acceptable trade-off.
+* Update centrifuge-js version in all examples
+
+```
+gorelease -base v0.27.2 -version v0.28.0
+
+# github.com/centrifugal/centrifuge
+## incompatible changes
+(*Client).Handle: removed
+(*Client).HandleCommand: changed from func(*github.com/centrifugal/protocol.Command) bool to func(*github.com/centrifugal/protocol.Command, int) bool
+CommandReadHandler: changed from func(*Client, CommandReadEvent) to func(*Client, CommandReadEvent) error
+DefaultRedisBrokerPrefix: removed
+DefaultRedisConnectTimeout: removed
+DefaultRedisPresenceManagerPrefix: removed
+DefaultRedisPresenceTTL: removed
+DefaultRedisReadTimeout: removed
+DefaultRedisWriteTimeout: removed
+RedisBrokerConfig.PubSubNumWorkers: removed
+RedisShardConfig.IdleTimeout: removed
+RedisShardConfig.ReadTimeout: removed
+RedisShardConfig.TLSSkipVerify: removed
+RedisShardConfig.UseTLS: removed
+RedisShardConfig.WriteTimeout: removed
+## compatible changes
+(*Node).OnCommandProcessed: added
+CommandProcessedEvent: added
+CommandProcessedHandler: added
+CommandReadEvent.CommandSize: added
+ConnectReply.MaxMessagesInFrame: added
+ConnectReply.QueueInitialCap: added
+ConnectReply.ReplyWithoutQueue: added
+ConnectReply.WriteDelay: added
+DisableProtocolVersion1: added
+DisconnectNotAvailable: added
+DisconnectPermissionDenied: added
+DisconnectTooManyErrors: added
+DisconnectTooManyRequests: added
+HandleReadFrame: added
+RedisShardConfig.ClientName: added
+RedisShardConfig.IOTimeout: added
+RedisShardConfig.SentinelClientName: added
+RedisShardConfig.SentinelTLSConfig: added
+
+# summary
+v0.28.0 is a valid semantic version for this release.
+```
+
+v0.27.2
+=======
+
+* Fix emulation layer in multi-node scenario [#269](https://github.com/centrifugal/centrifuge/pull/269)
+
+v0.27.0
+=======
+
+* Disconnect clients in case of inappropriate protocol [#256](https://github.com/centrifugal/centrifuge/pull/256)
+* Avoid flushing remaining in some cases [#260](https://github.com/centrifugal/centrifuge/pull/260)
+* Command read handler to set callback called upon processing Command received from client connection [#259](https://github.com/centrifugal/centrifuge/pull/259)
+* Shutdown nodes in tests [#252](https://github.com/centrifugal/centrifuge/pull/252)
+* Better Origin check documentation
+
+```
+gorelease -base v0.26.0 -version v0.27.0
+# github.com/centrifugal/centrifuge
+## compatible changes
+(*Node).OnCommandRead: added
+CommandReadEvent: added
+CommandReadHandler: added
+DisconnectInappropriateProtocol: added
+
+# summary
+v0.27.0 is a valid semantic version for this release.
+```
+
 v0.26.0
 =======
 
@@ -543,7 +627,7 @@ This release is huge. The list of changes may look scary - but most changes shou
 
 Highlights:
 
-* Support for unidirectional clients, this opens a road to more adoption of Centrifuge for cases where bidirectional communication is not really needed. **Unidirectional support is still a subject to change in future versions** as soon as more feedback appears – for now Centrifuge has examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [Fetch Streams](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_fetch_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws) transports. **The beauty here is that you don't need to use any Centrifuge client library to receive real-time updates** - just use native browser APIs or GRPC generated code with simple decoding step. 
+* Support for unidirectional clients, this opens a road to more adoption of Centrifuge for cases where bidirectional communication is not really needed. **Unidirectional support is still a subject to change in future versions** as soon as more feedback appears – for now Centrifuge has examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws) transports. **The beauty here is that you don't need to use any Centrifuge client library to receive real-time updates** - just use native browser APIs or GRPC generated code with simple decoding step.
 * The introduction of unidirectional transport required to change `Transport` interface a bit. The important thing is that it's now a responsibility of `Transport.Write` to properly encode data to JSON-streaming or Protobuf length-delimited format
 * **Centrifuge now uses [same-origin policy](https://en.wikipedia.org/wiki/Same-origin_policy) by default when checking incoming WebSocket or SockJS request due to security considerations** (prevent CSRF attack), previously default check allowed all connections. If you want to mimic previous behavior then pass custom check functions to handler configurations – see example below.
 * New `Subscribe` method of `Node` - to subscribe user to server-side channels cluster-wide - see [example that demonstrates new API](https://github.com/centrifugal/centrifuge/tree/master/_examples/user_subscribe_unsubscribe)
