@@ -30,6 +30,9 @@ type MemoryBroker struct {
 	// errors.
 	// TODO: maybe replace with sharded pool of workers with buffered channels.
 	pubLocks map[int]*sync.Mutex
+
+	closeOnce sync.Once
+	closeCh   chan struct{}
 }
 
 var _ Broker = (*MemoryBroker)(nil)
@@ -45,10 +48,12 @@ func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 	for i := 0; i < numPubLocks; i++ {
 		pubLocks[i] = &sync.Mutex{}
 	}
+	closeCh := make(chan struct{})
 	b := &MemoryBroker{
 		node:       n,
-		historyHub: newHistoryHub(n.config.HistoryMetaTTL),
+		historyHub: newHistoryHub(n.config.HistoryMetaTTL, closeCh),
 		pubLocks:   pubLocks,
+		closeCh:    closeCh,
 	}
 	return b, nil
 }
@@ -62,6 +67,9 @@ func (b *MemoryBroker) Run(h BrokerEventHandler) error {
 
 // Close is noop for now.
 func (b *MemoryBroker) Close(_ context.Context) error {
+	b.closeOnce.Do(func() {
+		close(b.closeCh)
+	})
 	return nil
 }
 
@@ -129,38 +137,42 @@ func (b *MemoryBroker) RemoveHistory(ch string) error {
 
 type historyHub struct {
 	sync.RWMutex
-	streams               map[string]*memstream.Stream
-	nextExpireCheck       int64
-	expireQueue           priority.Queue
-	expires               map[string]int64
-	defaultHistoryMetaTTL time.Duration
-	nextRemoveCheck       int64
-	removeQueue           priority.Queue
-	removes               map[string]int64
+	streams         map[string]*memstream.Stream
+	nextExpireCheck int64
+	expireQueue     priority.Queue
+	expires         map[string]int64
+	historyMetaTTL  time.Duration
+	nextRemoveCheck int64
+	removeQueue     priority.Queue
+	removes         map[string]int64
+	closeCh         chan struct{}
 }
 
-func newHistoryHub(historyMetaTTL time.Duration) *historyHub {
+func newHistoryHub(historyMetaTTL time.Duration, closeCh chan struct{}) *historyHub {
 	return &historyHub{
-		streams:               make(map[string]*memstream.Stream),
-		expireQueue:           priority.MakeQueue(),
-		expires:               make(map[string]int64),
-		defaultHistoryMetaTTL: historyMetaTTL,
-		removeQueue:           priority.MakeQueue(),
-		removes:               make(map[string]int64),
+		streams:        make(map[string]*memstream.Stream),
+		expireQueue:    priority.MakeQueue(),
+		expires:        make(map[string]int64),
+		historyMetaTTL: historyMetaTTL,
+		removeQueue:    priority.MakeQueue(),
+		removes:        make(map[string]int64),
+		closeCh:        closeCh,
 	}
 }
 
 func (h *historyHub) runCleanups() {
 	go h.expireStreams()
-	if h.defaultHistoryMetaTTL > 0 {
-		go h.removeStreams()
-	}
+	go h.removeStreams()
 }
 
 func (h *historyHub) removeStreams() {
 	var nextRemoveCheck int64
 	for {
-		time.Sleep(time.Second)
+		select {
+		case <-time.After(time.Second):
+		case <-h.closeCh:
+			return
+		}
 		h.Lock()
 		if h.nextRemoveCheck == 0 || h.nextRemoveCheck > time.Now().Unix() {
 			h.Unlock()
@@ -195,7 +207,11 @@ func (h *historyHub) removeStreams() {
 func (h *historyHub) expireStreams() {
 	var nextExpireCheck int64
 	for {
-		time.Sleep(time.Second)
+		select {
+		case <-time.After(time.Second):
+		case <-h.closeCh:
+			return
+		}
 		h.Lock()
 		if h.nextExpireCheck == 0 || h.nextExpireCheck > time.Now().Unix() {
 			h.Unlock()
@@ -245,8 +261,8 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 		h.nextExpireCheck = expireAt
 	}
 
-	if h.defaultHistoryMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.defaultHistoryMetaTTL.Seconds())
+	if h.historyMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
@@ -293,8 +309,8 @@ func (h *historyHub) get(ch string, opts HistoryOptions) ([]*Publication, Stream
 
 	filter := opts.Filter
 
-	if h.defaultHistoryMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.defaultHistoryMetaTTL.Seconds())
+	if h.historyMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}

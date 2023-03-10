@@ -104,7 +104,7 @@ func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
 
 func TestMemoryHistoryHub(t *testing.T) {
 	t.Parallel()
-	h := newHistoryHub(0)
+	h := newHistoryHub(0, make(chan struct{}))
 	h.runCleanups()
 	h.RLock()
 	require.Equal(t, 0, len(h.streams))
@@ -186,7 +186,7 @@ func TestMemoryHistoryHub(t *testing.T) {
 }
 
 func TestMemoryHistoryHubMetaTTL(t *testing.T) {
-	h := newHistoryHub(1 * time.Second)
+	h := newHistoryHub(1*time.Second, make(chan struct{}))
 	h.runCleanups()
 
 	ch1 := "channel1"
