@@ -5,9 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/centrifuge/internal/readerpool"
-
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
+	"github.com/centrifugal/centrifuge/internal/readerpool"
 
 	"github.com/centrifugal/protocol"
 	"github.com/gorilla/websocket"
@@ -70,7 +69,6 @@ type SockjsConfig struct {
 type SockjsHandler struct {
 	node      *Node
 	config    SockjsConfig
-	handlerV1 http.Handler
 	handlerV2 http.Handler
 }
 
@@ -126,9 +124,6 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 		config: config,
 	}
 
-	handlerV1 := sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV1)
-	s.handlerV1 = handlerV1
-
 	// Disable heartbeats for ProtocolVersion2 if we are using app-level pings.
 	if s.config.PingPongConfig.PingInterval >= 0 {
 		options.HeartbeatDelay = 0
@@ -138,38 +133,7 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 }
 
 func (s *SockjsHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	protoVersion := s.config.ProtocolVersion
-	if r.URL.RawQuery != "" {
-		query := r.URL.Query()
-		if queryProtocolVersion := query.Get("cf_protocol_version"); queryProtocolVersion != "" {
-			switch queryProtocolVersion {
-			case "v1":
-				protoVersion = ProtocolVersion1
-			case "v2":
-				protoVersion = ProtocolVersion2
-			default:
-				s.node.logger.log(newLogEntry(LogLevelInfo, "unknown protocol version", map[string]interface{}{"transport": transportSockJS, "version": queryProtocolVersion}))
-				http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-				return
-			}
-		}
-	}
-
-	if DisableProtocolVersion1 && protoVersion == ProtocolVersion1 {
-		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	if protoVersion == ProtocolVersion1 {
-		s.handlerV1.ServeHTTP(rw, r)
-	} else {
-		s.handlerV2.ServeHTTP(rw, r)
-	}
-}
-
-// sockJSHandler called when new client connection comes to SockJS endpoint.
-func (s *SockjsHandler) sockJSHandlerV1(sess sockjs.Session) {
-	s.handleSession(ProtocolVersion1, sess)
+	s.handlerV2.ServeHTTP(rw, r)
 }
 
 // sockJSHandler called when new client connection comes to SockJS endpoint.
@@ -180,15 +144,7 @@ func (s *SockjsHandler) sockJSHandlerV2(sess sockjs.Session) {
 // sockJSHandler called when new client connection comes to SockJS endpoint.
 func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.Session) {
 	incTransportConnect(transportSockJS)
-
-	var (
-		pingInterval time.Duration
-		pongTimeout  time.Duration
-	)
-
-	if protoVersion > ProtocolVersion1 {
-		pingInterval, pongTimeout = getPingPongPeriodValues(s.config.PingPongConfig)
-	}
+	pingInterval, pongTimeout := getPingPongPeriodValues(s.config.PingPongConfig)
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
@@ -356,5 +312,5 @@ func (t *sockjsTransport) Close(disconnect Disconnect) error {
 	t.closed = true
 	close(t.closeCh)
 	t.mu.Unlock()
-	return t.session.Close(disconnect.Code, disconnect.CloseText(t.ProtocolVersion()))
+	return t.session.Close(disconnect.Code, disconnect.Reason)
 }

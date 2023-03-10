@@ -33,25 +33,16 @@ const (
 	PushFlagMessage
 )
 
-// DisableProtocolVersion1 is a temporary global flag which may be set to
-// disabling usage of ProtocolVersion1. This flag will be removed soon together
-// with ProtocolVersion1.
-var DisableProtocolVersion1 bool
-
 // ProtocolVersion defines protocol behavior.
 type ProtocolVersion uint8
 
 const (
-	// ProtocolVersion1 is the legacy client protocol format. It will be
-	// removed at some point in the future.
-	ProtocolVersion1 ProtocolVersion = 1
 	// ProtocolVersion2 is the current stable client protocol.
 	ProtocolVersion2 ProtocolVersion = 2
 )
 
 // AppLevelPing is a configuration that describes desired application
-// level ping-pong behavior. AppLevelPing applied only to clients that
-// use protocol >= ProtocolVersion2.
+// level ping-pong behavior.
 type AppLevelPing struct {
 	// PingInterval tells how often to issue application-level server-to-client pings.
 	// Zero value will disable pings.

@@ -664,7 +664,7 @@ func (n *Node) handleControl(data []byte) error {
 		return n.hub.subscribe(cmd.User, cmd.Channel, cmd.Client, cmd.Session, WithExpireAt(cmd.ExpireAt), WithChannelInfo(cmd.ChannelInfo), WithEmitPresence(cmd.EmitPresence), WithEmitJoinLeave(cmd.EmitJoinLeave), WithPushJoinLeave(cmd.PushJoinLeave), WithPositioning(cmd.Position), WithRecovery(cmd.Recover), WithSubscribeData(cmd.Data), WithRecoverSince(recoverSince), WithSubscribeSource(uint8(cmd.Source)))
 	} else if cmd.Disconnect != nil {
 		cmd := cmd.Disconnect
-		return n.hub.disconnect(cmd.User, Disconnect{Code: cmd.Code, Reason: cmd.Reason, Reconnect: cmd.Reconnect}, cmd.Client, cmd.Session, cmd.Whitelist)
+		return n.hub.disconnect(cmd.User, Disconnect{Code: cmd.Code, Reason: cmd.Reason}, cmd.Client, cmd.Session, cmd.Whitelist)
 	} else if cmd.SurveyRequest != nil {
 		cmd := cmd.SurveyRequest
 		return n.handleSurveyRequest(uid, cmd)
@@ -945,7 +945,6 @@ func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string
 		Whitelist: whitelist,
 		Code:      disconnect.Code,
 		Reason:    disconnect.Reason,
-		Reconnect: disconnect.Reconnect,
 		Client:    clientID,
 		Session:   sessionID,
 	}

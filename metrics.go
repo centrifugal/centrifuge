@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/centrifugal/protocol"
-
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -87,36 +85,70 @@ var (
 	commandDurationUnknown       prometheus.Observer
 )
 
-func observeCommandDuration(method protocol.Command_MethodType, d time.Duration) {
+type commandMethodType int32
+
+const (
+	commandConnect       commandMethodType = 0
+	commandSubscribe     commandMethodType = 1
+	commandUnsubscribe   commandMethodType = 2
+	commandPublish       commandMethodType = 3
+	commandPresence      commandMethodType = 4
+	commandPresenceStats commandMethodType = 5
+	commandHistory       commandMethodType = 6
+	commandPing          commandMethodType = 7
+	commandSend          commandMethodType = 8
+	commandRpc           commandMethodType = 9
+	commandRefresh       commandMethodType = 10
+	commandSubRefresh    commandMethodType = 11
+)
+
+var (
+	commandMethodTypeName = map[int32]string{
+		0:  "connect",
+		1:  "subscribe",
+		2:  "unsubscribe",
+		3:  "publish",
+		4:  "presence",
+		5:  "presence_stats",
+		6:  "history",
+		7:  "ping",
+		8:  "send",
+		9:  "rpc",
+		10: "refresh",
+		11: "sub_refresh",
+	}
+)
+
+func observeCommandDuration(method commandMethodType, d time.Duration) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 
 	var observer prometheus.Observer
 
 	switch method {
-	case protocol.Command_CONNECT:
+	case commandConnect:
 		observer = commandDurationConnect
-	case protocol.Command_SUBSCRIBE:
+	case commandSubscribe:
 		observer = commandDurationSubscribe
-	case protocol.Command_UNSUBSCRIBE:
+	case commandUnsubscribe:
 		observer = commandDurationUnsubscribe
-	case protocol.Command_PUBLISH:
+	case commandPublish:
 		observer = commandDurationPublish
-	case protocol.Command_PRESENCE:
+	case commandPresence:
 		observer = commandDurationPresence
-	case protocol.Command_PRESENCE_STATS:
+	case commandPresenceStats:
 		observer = commandDurationPresenceStats
-	case protocol.Command_HISTORY:
+	case commandHistory:
 		observer = commandDurationHistory
-	case protocol.Command_PING:
+	case commandPing:
 		observer = commandDurationPing
-	case protocol.Command_SEND:
+	case commandSend:
 		observer = commandDurationSend
-	case protocol.Command_RPC:
+	case commandRpc:
 		observer = commandDurationRPC
-	case protocol.Command_REFRESH:
+	case commandRefresh:
 		observer = commandDurationRefresh
-	case protocol.Command_SUB_REFRESH:
+	case commandSubRefresh:
 		observer = commandDurationSubRefresh
 	default:
 		observer = commandDurationUnknown
@@ -166,11 +198,11 @@ func setNumNodes(n float64) {
 	numNodesGauge.Set(n)
 }
 
-func incReplyError(method protocol.Command_MethodType, code uint32) {
+func incReplyError(method commandMethodType, code uint32) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 
-	replyErrorCount.WithLabelValues(strings.ToLower(protocol.Command_MethodType_name[int32(method)]), strconv.FormatUint(uint64(code), 10)).Inc()
+	replyErrorCount.WithLabelValues(commandMethodTypeName[int32(method)], strconv.FormatUint(uint64(code), 10)).Inc()
 }
 
 func incRecover(success bool) {
@@ -486,22 +518,22 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	transportMessagesSentSSE = transportMessagesSent.WithLabelValues(transportSSE)
 	transportMessagesSentHTTPStream = transportMessagesSent.WithLabelValues(transportHTTPStream)
 
-	labelForMethod := func(methodType protocol.Command_MethodType) string {
-		return strings.ToLower(protocol.Command_MethodType_name[int32(methodType)])
+	labelForMethod := func(methodType commandMethodType) string {
+		return strings.ToLower(commandMethodTypeName[int32(methodType)])
 	}
 
-	commandDurationConnect = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_CONNECT))
-	commandDurationSubscribe = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_SUBSCRIBE))
-	commandDurationUnsubscribe = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_UNSUBSCRIBE))
-	commandDurationPublish = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_PUBLISH))
-	commandDurationPresence = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_PRESENCE))
-	commandDurationPresenceStats = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_PRESENCE_STATS))
-	commandDurationHistory = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_HISTORY))
-	commandDurationPing = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_PING))
-	commandDurationSend = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_SEND))
-	commandDurationRPC = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_RPC))
-	commandDurationRefresh = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_REFRESH))
-	commandDurationSubRefresh = commandDurationSummary.WithLabelValues(labelForMethod(protocol.Command_SUB_REFRESH))
+	commandDurationConnect = commandDurationSummary.WithLabelValues(labelForMethod(commandConnect))
+	commandDurationSubscribe = commandDurationSummary.WithLabelValues(labelForMethod(commandSubscribe))
+	commandDurationUnsubscribe = commandDurationSummary.WithLabelValues(labelForMethod(commandUnsubscribe))
+	commandDurationPublish = commandDurationSummary.WithLabelValues(labelForMethod(commandPublish))
+	commandDurationPresence = commandDurationSummary.WithLabelValues(labelForMethod(commandPresence))
+	commandDurationPresenceStats = commandDurationSummary.WithLabelValues(labelForMethod(commandPresenceStats))
+	commandDurationHistory = commandDurationSummary.WithLabelValues(labelForMethod(commandHistory))
+	commandDurationPing = commandDurationSummary.WithLabelValues(labelForMethod(commandPing))
+	commandDurationSend = commandDurationSummary.WithLabelValues(labelForMethod(commandSend))
+	commandDurationRPC = commandDurationSummary.WithLabelValues(labelForMethod(commandRpc))
+	commandDurationRefresh = commandDurationSummary.WithLabelValues(labelForMethod(commandRefresh))
+	commandDurationSubRefresh = commandDurationSummary.WithLabelValues(labelForMethod(commandSubRefresh))
 	commandDurationUnknown = commandDurationSummary.WithLabelValues("unknown")
 
 	if err := registry.Register(messagesSentCount); err != nil {

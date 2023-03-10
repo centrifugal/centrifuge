@@ -390,12 +390,12 @@ type recoverTest struct {
 	Recovered         bool
 }
 
-var recoverTests = []recoverTest{
+var clientRecoverTests = []recoverTest{
 	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true},
 	{"from_position", 10, 60, 10, 8, 2, 0, 0, true},
-	{"from_position_limited", 10, 60, 10, 5, 2, 0, 2, false},
-	{"from_position_with_server_limit", 10, 60, 10, 5, 1, 0, 1, false},
-	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, 0, false},
+	{"from_position_limited", 10, 60, 10, 5, 0, 0, 2, false},
+	{"from_position_with_server_limit", 10, 60, 10, 5, 0, 0, 1, false},
+	{"from_position_that_already_gone", 10, 60, 20, 8, 0, 0, 0, false},
 	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false},
 	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true},
 	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true},
@@ -411,9 +411,9 @@ var recoverTestChannels = []recoverTestChannel{
 	{"test_recovery_memory_offset_"},
 }
 
-func TestMemoryClientSubscribeRecover(t *testing.T) {
+func TestClientSubscribeRecover(t *testing.T) {
 	t.Parallel()
-	for _, tt := range recoverTests {
+	for _, tt := range clientRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := defaultNodeNoHandlers()
 			node.config.RecoveryMaxPublicationLimit = tt.Limit
@@ -435,7 +435,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 
 				time.Sleep(time.Duration(tt.Sleep) * time.Second)
 
-				connectClient(t, client)
+				connectClientV2(t, client)
 
 				_, streamTop, err := node.broker.History(channel, HistoryOptions{
 					Filter: HistoryFilter{
@@ -457,7 +457,7 @@ func TestMemoryClientSubscribeRecover(t *testing.T) {
 				disconnect := client.handleSubscribe(subscribeCmd, &protocol.Command{}, time.Now(), rwWrapper.rw)
 				require.Nil(t, disconnect)
 				require.Nil(t, rwWrapper.replies[0].Error)
-				res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
+				res := extractSubscribeResult(rwWrapper.replies)
 				require.Equal(t, tt.NumRecovered, len(res.Publications))
 				require.Equal(t, tt.Recovered, res.Recovered)
 				if len(res.Publications) > 1 {

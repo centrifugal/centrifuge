@@ -1,10 +1,10 @@
 module github.com/centrifugal/centrifuge
 
-go 1.18
+go 1.19
 
 require (
 	github.com/FZambia/eagle v0.0.2
-	github.com/centrifugal/protocol v0.9.1
+	github.com/centrifugal/protocol v0.9.2-0.20230310202324-ecc93967396b
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
