@@ -150,6 +150,7 @@ type ChannelContext struct {
 	info              []byte
 	expireAt          int64
 	positionCheckTime int64
+	metaTTLSeconds    int64
 	streamPosition    StreamPosition
 	flags             uint8
 	Source            uint8
@@ -726,7 +727,12 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 		return true
 	}
 
-	streamTop, err := c.node.streamTop(ch)
+	var historyMetaTTL time.Duration
+	if chCtx.metaTTLSeconds > 0 {
+		historyMetaTTL = time.Duration(chCtx.metaTTLSeconds) * time.Second
+	}
+
+	streamTop, err := c.node.streamTop(ch, historyMetaTTL)
 	if err != nil {
 		// Check later.
 		return true
@@ -1990,7 +1996,7 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 		if reply.Result == nil {
 			_, err := c.node.Publish(
 				event.Channel, event.Data,
-				WithHistory(reply.Options.HistorySize, reply.Options.HistoryTTL),
+				WithHistory(reply.Options.HistorySize, reply.Options.HistoryTTL, reply.Options.HistoryMetaTTL),
 				WithClientInfo(reply.Options.ClientInfo),
 			)
 			if err != nil {
@@ -2213,7 +2219,9 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 		var offset uint64
 		var epoch string
 		if reply.Result == nil {
-			result, err := c.node.History(event.Channel, WithLimit(event.Filter.Limit), WithSince(event.Filter.Since), WithReverse(event.Filter.Reverse))
+			result, err := c.node.History(event.Channel,
+				WithHistoryFilter(event.Filter),
+			)
 			if err != nil {
 				c.logWriteInternalErrorFlush(protocol.Command_HISTORY, cmd, err, "error getting history", started, rw)
 				return
@@ -3008,7 +3016,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmdOffset, cmdEpoch})
+			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmdOffset, cmdEpoch}, reply.Options.HistoryMetaTTL)
 			if err != nil {
 				if errors.Is(err, ErrorUnrecoverablePosition) {
 					// Result contains stream position in case of ErrorUnrecoverablePosition
@@ -3039,7 +3047,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				incRecover(res.Recovered)
 			}
 		} else {
-			streamTop, err := c.node.streamTop(channel)
+			streamTop, err := c.node.streamTop(channel, reply.Options.HistoryMetaTTL)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting stream state for channel", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 				c.pubSubSync.StopBuffering(channel)
@@ -3144,7 +3152,8 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			Offset: latestOffset,
 			Epoch:  latestEpoch,
 		},
-		Source: reply.Options.Source,
+		metaTTLSeconds: int64(reply.Options.HistoryMetaTTL.Seconds()),
+		Source:         reply.Options.Source,
 	}
 	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {
 		channelContext.positionCheckTime = time.Now().Unix()

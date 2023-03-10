@@ -6,10 +6,13 @@ import "time"
 type PublishOption func(*PublishOptions)
 
 // WithHistory tells Broker to save message to history stream with provided size and ttl.
-func WithHistory(size int, ttl time.Duration) PublishOption {
+func WithHistory(size int, ttl time.Duration, metaTTL ...time.Duration) PublishOption {
 	return func(opts *PublishOptions) {
 		opts.HistorySize = size
 		opts.HistoryTTL = ttl
+		if len(metaTTL) > 0 {
+			opts.HistoryMetaTTL = metaTTL[0]
+		}
 	}
 }
 
@@ -63,6 +66,11 @@ type SubscribeOptions struct {
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
 	RecoverSince *StreamPosition
+
+	// HistoryMetaTTL allows to override default (set in Config.HistoryMetaTTL) history
+	// meta information expiration time.
+	HistoryMetaTTL time.Duration
+
 	// clientID to subscribe.
 	clientID string
 	// sessionID to subscribe.
@@ -158,6 +166,13 @@ func WithRecoverSince(since *StreamPosition) SubscribeOption {
 func WithSubscribeSource(source uint8) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.Source = source
+	}
+}
+
+// WithSubscribeHistoryMetaTTL allows setting SubscribeOptions.HistoryMetaTTL.
+func WithSubscribeHistoryMetaTTL(metaTTL time.Duration) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.HistoryMetaTTL = metaTTL
 	}
 }
 
@@ -295,20 +310,6 @@ func WithDisconnectClientWhitelist(whitelist []string) DisconnectOption {
 	}
 }
 
-// HistoryOptions define some fields to alter History method behaviour.
-type HistoryOptions struct {
-	// Since used to extract publications from stream since provided StreamPosition.
-	Since *StreamPosition
-	// Limit number of publications to return.
-	// -1 means no limit - i.e. return all publications currently in stream.
-	// 0 means that caller only interested in current stream top position so
-	// Broker should not return any publications in result.
-	// Positive integer does what it should.
-	Limit int
-	// Reverse direction
-	Reverse bool
-}
-
 // HistoryOption is a type to represent various History options.
 type HistoryOption func(options *HistoryOptions)
 
@@ -318,20 +319,32 @@ const NoLimit = -1
 // WithLimit allows setting HistoryOptions.Limit.
 func WithLimit(limit int) HistoryOption {
 	return func(opts *HistoryOptions) {
-		opts.Limit = limit
+		opts.Filter.Limit = limit
 	}
 }
 
 // WithSince allows setting HistoryOptions.Since option.
 func WithSince(sp *StreamPosition) HistoryOption {
 	return func(opts *HistoryOptions) {
-		opts.Since = sp
+		opts.Filter.Since = sp
 	}
 }
 
 // WithReverse allows setting HistoryOptions.Reverse option.
 func WithReverse(reverse bool) HistoryOption {
 	return func(opts *HistoryOptions) {
-		opts.Reverse = reverse
+		opts.Filter.Reverse = reverse
+	}
+}
+
+func WithHistoryFilter(filter HistoryFilter) HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.Filter = filter
+	}
+}
+
+func WithHistoryMetaTTL(metaTTL time.Duration) HistoryOption {
+	return func(opts *HistoryOptions) {
+		opts.MetaTTL = metaTTL
 	}
 }

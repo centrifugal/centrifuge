@@ -30,32 +30,30 @@ type MemoryBroker struct {
 	// errors.
 	// TODO: maybe replace with sharded pool of workers with buffered channels.
 	pubLocks map[int]*sync.Mutex
+
+	closeOnce sync.Once
+	closeCh   chan struct{}
 }
 
 var _ Broker = (*MemoryBroker)(nil)
 
 // MemoryBrokerConfig is a memory broker config.
-type MemoryBrokerConfig struct {
-	// HistoryMetaTTL sets a time of inactive stream meta information expiration.
-	// This information contains an epoch and offset of each stream. Having this
-	// meta information helps in message recovery process. Must have a reasonable
-	// value for application. At moment works with seconds precision.
-	// TODO: make it configurable on per-channel level.
-	HistoryMetaTTL time.Duration
-}
+type MemoryBrokerConfig struct{}
 
 const numPubLocks = 4096
 
 // NewMemoryBroker initializes MemoryBroker.
-func NewMemoryBroker(n *Node, c MemoryBrokerConfig) (*MemoryBroker, error) {
+func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 	pubLocks := make(map[int]*sync.Mutex, numPubLocks)
 	for i := 0; i < numPubLocks; i++ {
 		pubLocks[i] = &sync.Mutex{}
 	}
+	closeCh := make(chan struct{})
 	b := &MemoryBroker{
 		node:       n,
-		historyHub: newHistoryHub(c.HistoryMetaTTL),
+		historyHub: newHistoryHub(n.config.HistoryMetaTTL, closeCh),
 		pubLocks:   pubLocks,
+		closeCh:    closeCh,
 	}
 	return b, nil
 }
@@ -69,6 +67,9 @@ func (b *MemoryBroker) Run(h BrokerEventHandler) error {
 
 // Close is noop for now.
 func (b *MemoryBroker) Close(_ context.Context) error {
+	b.closeOnce.Do(func() {
+		close(b.closeCh)
+	})
 	return nil
 }
 
@@ -125,8 +126,8 @@ func (b *MemoryBroker) Unsubscribe(_ string) error {
 }
 
 // History - see Broker interface description.
-func (b *MemoryBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	return b.historyHub.get(ch, filter)
+func (b *MemoryBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	return b.historyHub.get(ch, opts)
 }
 
 // RemoveHistory - see Broker interface description.
@@ -144,9 +145,10 @@ type historyHub struct {
 	nextRemoveCheck int64
 	removeQueue     priority.Queue
 	removes         map[string]int64
+	closeCh         chan struct{}
 }
 
-func newHistoryHub(historyMetaTTL time.Duration) *historyHub {
+func newHistoryHub(historyMetaTTL time.Duration, closeCh chan struct{}) *historyHub {
 	return &historyHub{
 		streams:        make(map[string]*memstream.Stream),
 		expireQueue:    priority.MakeQueue(),
@@ -154,20 +156,23 @@ func newHistoryHub(historyMetaTTL time.Duration) *historyHub {
 		historyMetaTTL: historyMetaTTL,
 		removeQueue:    priority.MakeQueue(),
 		removes:        make(map[string]int64),
+		closeCh:        closeCh,
 	}
 }
 
 func (h *historyHub) runCleanups() {
 	go h.expireStreams()
-	if h.historyMetaTTL > 0 {
-		go h.removeStreams()
-	}
+	go h.removeStreams()
 }
 
 func (h *historyHub) removeStreams() {
 	var nextRemoveCheck int64
 	for {
-		time.Sleep(time.Second)
+		select {
+		case <-time.After(time.Second):
+		case <-h.closeCh:
+			return
+		}
 		h.Lock()
 		if h.nextRemoveCheck == 0 || h.nextRemoveCheck > time.Now().Unix() {
 			h.Unlock()
@@ -202,7 +207,11 @@ func (h *historyHub) removeStreams() {
 func (h *historyHub) expireStreams() {
 	var nextExpireCheck int64
 	for {
-		time.Sleep(time.Second)
+		select {
+		case <-time.After(time.Second):
+		case <-h.closeCh:
+			return
+		}
 		h.Lock()
 		if h.nextExpireCheck == 0 || h.nextExpireCheck > time.Now().Unix() {
 			h.Unlock()
@@ -294,9 +303,11 @@ func getPosition(stream *memstream.Stream) StreamPosition {
 	return streamPosition
 }
 
-func (h *historyHub) get(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (h *historyHub) get(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	h.Lock()
 	defer h.Unlock()
+
+	filter := opts.Filter
 
 	if h.historyMetaTTL > 0 {
 		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())

@@ -117,6 +117,9 @@ func New(c Config) (*Node, error) {
 	if c.ChannelMaxLength == 0 {
 		c.ChannelMaxLength = 255
 	}
+	if c.HistoryMetaTTL == 0 {
+		c.HistoryMetaTTL = 30 * 24 * time.Hour // 30 days by default.
+	}
 
 	uidObj, err := uuid.NewRandom()
 	if err != nil {
@@ -193,6 +196,11 @@ func index(s string, numBuckets int) int {
 	hash := fnv.New64a()
 	_, _ = hash.Write([]byte(s))
 	return int(hash.Sum64() % uint64(numBuckets))
+}
+
+// Config returns Node's Config.
+func (n *Node) Config() Config {
+	return n.config
 }
 
 // ID returns unique Node identifier. This is a UUID v4 value.
@@ -1319,19 +1327,15 @@ type HistoryResult struct {
 }
 
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
-	if opts.Reverse && opts.Since != nil && opts.Since.Offset == 0 {
+	if opts.Filter.Reverse && opts.Filter.Since != nil && opts.Filter.Since.Offset == 0 {
 		return HistoryResult{}, ErrorBadRequest
 	}
-	pubs, streamTop, err := n.broker.History(ch, HistoryFilter{
-		Limit:   opts.Limit,
-		Since:   opts.Since,
-		Reverse: opts.Reverse,
-	})
+	pubs, streamTop, err := n.broker.History(ch, *opts)
 	if err != nil {
 		return HistoryResult{}, err
 	}
-	if opts.Since != nil {
-		sinceEpoch := opts.Since.Epoch
+	if opts.Filter.Since != nil {
+		sinceEpoch := opts.Filter.Since.Epoch
 		epochOK := sinceEpoch == "" || sinceEpoch == streamTop.Epoch
 		if !epochOK {
 			return HistoryResult{
@@ -1358,16 +1362,18 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 		var builder strings.Builder
 		builder.WriteString("channel:")
 		builder.WriteString(ch)
-		if historyOpts.Since != nil {
+		if historyOpts.Filter.Since != nil {
 			builder.WriteString(",offset:")
-			builder.WriteString(strconv.FormatUint(historyOpts.Since.Offset, 10))
+			builder.WriteString(strconv.FormatUint(historyOpts.Filter.Since.Offset, 10))
 			builder.WriteString(",epoch:")
-			builder.WriteString(historyOpts.Since.Epoch)
+			builder.WriteString(historyOpts.Filter.Since.Epoch)
 		}
 		builder.WriteString(",limit:")
-		builder.WriteString(strconv.Itoa(historyOpts.Limit))
+		builder.WriteString(strconv.Itoa(historyOpts.Filter.Limit))
 		builder.WriteString(",reverse:")
-		builder.WriteString(strconv.FormatBool(historyOpts.Reverse))
+		builder.WriteString(strconv.FormatBool(historyOpts.Filter.Reverse))
+		builder.WriteString(",meta_ttl:")
+		builder.WriteString(historyOpts.MetaTTL.String())
 		key := builder.String()
 
 		result, err, _ := historyGroup.Do(key, func() (interface{}, error) {
@@ -1379,20 +1385,23 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 }
 
 // recoverHistory recovers publications since StreamPosition last seen by client.
-func (n *Node) recoverHistory(ch string, since StreamPosition) (HistoryResult, error) {
+func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL time.Duration) (HistoryResult, error) {
 	incActionCount("history_recover")
 	limit := NoLimit
 	maxPublicationLimit := n.config.RecoveryMaxPublicationLimit
 	if maxPublicationLimit > 0 {
 		limit = maxPublicationLimit
 	}
-	return n.History(ch, WithLimit(limit), WithSince(&since))
+	return n.History(ch, WithHistoryFilter(HistoryFilter{
+		Limit: limit,
+		Since: &since,
+	}), WithHistoryMetaTTL(historyMetaTTL))
 }
 
 // streamTop returns current stream top StreamPosition for a channel.
-func (n *Node) streamTop(ch string) (StreamPosition, error) {
+func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 	incActionCount("history_stream_top")
-	historyResult, err := n.History(ch)
+	historyResult, err := n.History(ch, WithHistoryMetaTTL(historyMetaTTL))
 	if err != nil {
 		return StreamPosition{}, err
 	}

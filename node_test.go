@@ -91,7 +91,7 @@ func (e *TestBroker) Unsubscribe(_ string) error {
 	return nil
 }
 
-func (e *TestBroker) History(_ string, _ HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (e *TestBroker) History(_ string, _ HistoryOptions) ([]*Publication, StreamPosition, error) {
 	if e.errorOnHistory {
 		return nil, StreamPosition{}, errors.New("boom")
 	}

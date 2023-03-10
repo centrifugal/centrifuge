@@ -3454,9 +3454,9 @@ func (b *slowHistoryBroker) setError(err error) {
 	b.err = err
 }
 
-func (b *slowHistoryBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (b *slowHistoryBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	close(b.startPublishingCh)
-	res, sp, err := b.MemoryBroker.History(ch, filter)
+	res, sp, err := b.MemoryBroker.History(ch, opts)
 	<-b.stopPublishingCh
 	if b.err != nil {
 		return nil, StreamPosition{}, b.err

@@ -92,20 +92,6 @@ type RedisBrokerConfig struct {
 	// Data will be consistently sharded by channel over provided Redis shards.
 	Shards []*RedisShard
 
-	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
-	// meta key is a Redis HASH that contains top offset in channel and epoch value.
-	// By default stream meta keys do not expire.
-	//
-	// Though in some cases – when channels created for а short time and then
-	// not used anymore – created stream meta keys can stay in memory while
-	// not actually useful. For example you can have a personal user channel but
-	// after using your app for a while user left it forever. In long-term
-	// perspective this can be an unwanted memory leak. Setting a reasonable
-	// value to this option (usually much bigger than history retention period)
-	// can help. In this case unused channel stream meta data will eventually expire.
-	// TODO: make it configurable on per-channel level.
-	HistoryMetaTTL time.Duration
-
 	// UseLists allows enabling usage of Redis LIST instead of STREAM data
 	// structure to keep history. LIST support exist mostly for backward
 	// compatibility since STREAM seems superior. If you have a use case
@@ -771,7 +757,13 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	}
 
 	historyMetaKey := b.historyMetaKey(s.shard, ch)
-	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
+
+	historyMetaTTL := opts.HistoryMetaTTL
+	if historyMetaTTL == 0 {
+		historyMetaTTL = b.node.config.HistoryMetaTTL
+	}
+
+	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
 	var streamKey channelID
 	var size int
@@ -950,15 +942,15 @@ func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
 }
 
 // History - see Broker.History.
-func (b *RedisBroker) History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
-	return b.history(b.getShard(ch), ch, filter)
+func (b *RedisBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	return b.history(b.getShard(ch), ch, opts)
 }
 
-func (b *RedisBroker) history(s *shardWrapper, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (b *RedisBroker) history(s *shardWrapper, ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	if b.config.UseLists {
-		return b.historyList(s.shard, ch, filter)
+		return b.historyList(s.shard, ch, opts.Filter)
 	}
-	return b.historyStream(s.shard, ch, filter)
+	return b.historyStream(s.shard, ch, opts)
 }
 
 // RemoveHistory - see Broker.RemoveHistory.
@@ -1087,9 +1079,11 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 	return nil
 }
 
-func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	historyKey := b.historyStreamKey(s, ch)
 	historyMetaKey := b.historyMetaKey(s, ch)
+
+	filter := opts.Filter
 
 	var includePubs = "1"
 	var offset uint64
@@ -1116,7 +1110,12 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, filter HistoryFilt
 		reverse = "1"
 	}
 
-	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
+	historyMetaTTL := opts.MetaTTL
+	if historyMetaTTL == 0 {
+		historyMetaTTL = b.node.config.HistoryMetaTTL
+	}
+
+	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
 
 	replies, err := b.historyStreamScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, strconv.FormatUint(offset, 10), strconv.Itoa(limit), reverse, strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10)}).ToArray()
 	if err != nil {
@@ -1206,7 +1205,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		includePubs = "0"
 	}
 
-	historyMetaTTLSeconds := int(b.config.HistoryMetaTTL.Seconds())
+	historyMetaTTLSeconds := int(b.node.config.HistoryMetaTTL.Seconds())
 
 	replies, err := b.historyListScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, rightBound, strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10)}).ToArray()
 	if err != nil {
