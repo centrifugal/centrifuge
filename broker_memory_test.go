@@ -457,7 +457,7 @@ func TestClientSubscribeRecover(t *testing.T) {
 				disconnect := client.handleSubscribe(subscribeCmd, &protocol.Command{}, time.Now(), rwWrapper.rw)
 				require.Nil(t, disconnect)
 				require.Nil(t, rwWrapper.replies[0].Error)
-				res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
+				res := extractSubscribeResult(rwWrapper.replies)
 				require.Equal(t, tt.NumRecovered, len(res.Publications))
 				require.Equal(t, tt.Recovered, res.Recovered)
 				if len(res.Publications) > 1 {

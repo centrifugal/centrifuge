@@ -369,7 +369,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	require.Equal(t, ErrorExpired, err)
 }
 
-func extractSubscribeResult(replies []*protocol.Reply, protoType ProtocolType) *protocol.SubscribeResult {
+func extractSubscribeResult(replies []*protocol.Reply) *protocol.SubscribeResult {
 	return replies[0].Subscribe
 }
 
@@ -421,7 +421,7 @@ func TestClientSubscribe(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(rwWrapper.replies))
 	require.Nil(t, rwWrapper.replies[0].Error)
-	res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
+	res := extractSubscribeResult(rwWrapper.replies)
 	require.Empty(t, res.Offset)
 	require.False(t, res.Recovered)
 	require.Empty(t, res.Publications)
@@ -541,7 +541,7 @@ func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(rwWrapper.replies))
 	require.Nil(t, rwWrapper.replies[0].Error)
-	res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
+	res := extractSubscribeResult(rwWrapper.replies)
 	require.Empty(t, res.Offset)
 	require.Empty(t, res.Epoch)
 	require.False(t, res.Recovered)
@@ -1203,13 +1203,6 @@ func newTestClientV2(t testing.TB, node *Node, userID string) *Client {
 	return client
 }
 
-func getJSONEncodedParams(t testing.TB, request interface{}) []byte {
-	paramsEncoder := protocol.NewJSONParamsEncoder()
-	params, err := paramsEncoder.Encode(request)
-	require.NoError(t, err)
-	return params
-}
-
 func TestClientUnsubscribeClientSide(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
@@ -1596,20 +1589,6 @@ func TestClientPublishError(t *testing.T) {
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Equal(t, ErrorInternal.toProto(), rwWrapper.replies[0].Error)
-}
-
-func TestClientPingV1(t *testing.T) {
-	node := defaultTestNode()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	client := newTestClient(t, node, "42")
-
-	connectClientV2(t, client)
-
-	rwWrapper := testReplyWriterWrapper()
-	err := client.handlePingV1(&protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.NoError(t, err)
-	require.Nil(t, rwWrapper.replies[0].Error)
-	require.Empty(t, rwWrapper.replies[0].Result)
 }
 
 func TestClientPing(t *testing.T) {
@@ -2116,10 +2095,9 @@ func TestClientHandleCommandNotAuthenticated(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
+	cmd := &protocol.Command{Id: 1, Subscribe: &protocol.SubscribeRequest{
 		Channel: "test",
-	})
-	cmd := &protocol.Command{Id: 1, Method: protocol.Command_SUBSCRIBE, Params: params}
+	}}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := HandleReadFrame(client, bytes.NewReader(data))
@@ -2141,129 +2119,6 @@ func TestClientHandleUnknownMethod(t *testing.T) {
 	disconnect, proceed := client.dispatchCommand(cmd, 0)
 	require.Equal(t, DisconnectBadRequest.Code, disconnect.Code)
 	require.False(t, proceed)
-}
-
-func TestClientHandleCommandWithBrokenParams(t *testing.T) {
-	t.Parallel()
-	node := defaultTestNode()
-	defer func() {
-		_ = node.Shutdown(context.Background())
-	}()
-
-	var counterMu sync.Mutex
-	var numDisconnectCalls int
-	var numConnectCalls int
-	var wg sync.WaitGroup
-	wg.Add(10)
-
-	node.OnConnect(func(client *Client) {
-		counterMu.Lock()
-		numConnectCalls++
-		counterMu.Unlock()
-
-		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
-			cb(SubscribeReply{}, nil)
-		})
-
-		client.OnRPC(func(e RPCEvent, cb RPCCallback) {
-			cb(RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
-		})
-
-		client.OnMessage(func(event MessageEvent) {})
-
-		client.OnHistory(func(e HistoryEvent, cb HistoryCallback) {
-			cb(HistoryReply{}, nil)
-		})
-
-		client.OnPresence(func(e PresenceEvent, cb PresenceCallback) {
-			cb(PresenceReply{}, nil)
-		})
-
-		client.OnPresenceStats(func(e PresenceStatsEvent, cb PresenceStatsCallback) {
-			cb(PresenceStatsReply{}, nil)
-		})
-
-		client.OnRefresh(func(e RefreshEvent, cb RefreshCallback) {
-			cb(RefreshReply{}, nil)
-		})
-
-		client.OnSubRefresh(func(e SubRefreshEvent, cb SubRefreshCallback) {
-			cb(SubRefreshReply{}, nil)
-		})
-
-		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
-			cb(PublishReply{}, nil)
-		})
-
-		client.OnDisconnect(func(event DisconnectEvent) {
-			counterMu.Lock()
-			numDisconnectCalls++
-			counterMu.Unlock()
-			require.Equal(t, DisconnectBadRequest.Code, event.Code)
-			wg.Done()
-		})
-	})
-
-	client := newTestClient(t, node, "42")
-
-	data, err := json.Marshal(&protocol.Command{
-		Id: 1, Method: protocol.Command_CONNECT, Params: []byte("[]"),
-	})
-	require.NoError(t, err)
-	proceed := HandleReadFrame(client, bytes.NewReader(data))
-	require.False(t, proceed)
-	select {
-	case <-client.Context().Done():
-	case <-time.After(time.Second):
-		require.Fail(t, "client not closed")
-	}
-	// Check no connect and no disconnect event called.
-	counterMu.Lock()
-	require.Equal(t, 0, numDisconnectCalls)
-	require.Equal(t, 0, numConnectCalls)
-	counterMu.Unlock()
-
-	// Now check other methods.
-	methods := []protocol.Command_MethodType{
-		protocol.Command_SUBSCRIBE,
-		protocol.Command_PUBLISH,
-		protocol.Command_UNSUBSCRIBE,
-		protocol.Command_PRESENCE,
-		protocol.Command_PRESENCE_STATS,
-		protocol.Command_HISTORY,
-		protocol.Command_REFRESH,
-		protocol.Command_RPC,
-		protocol.Command_SEND,
-		protocol.Command_SUB_REFRESH,
-	}
-
-	for _, method := range methods {
-		client = newTestClient(t, node, "42")
-		connectClientV2(t, client)
-		data, err := json.Marshal(&protocol.Command{
-			Id: 1, Method: method, Params: []byte("[]"),
-		})
-		require.NoError(t, err)
-		proceed := HandleReadFrame(client, bytes.NewReader(data))
-		require.False(t, proceed, method)
-		select {
-		case <-client.Context().Done():
-		case <-time.After(time.Second):
-			require.Fail(t, "client not closed")
-		}
-	}
-
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting wait group done")
-	}
 }
 
 func TestClientOnAlive(t *testing.T) {
@@ -2299,8 +2154,7 @@ func TestClientHandleCommandWithoutID(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
-	cmd := &protocol.Command{Method: protocol.Command_CONNECT, Params: params}
+	cmd := &protocol.Command{}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := HandleReadFrame(client, bytes.NewReader(data))
@@ -2334,8 +2188,7 @@ func TestClientAlreadyAuthenticated(t *testing.T) {
 	client := newTestClient(t, node, "42")
 	connectClientV2(t, client)
 
-	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
-	cmd := &protocol.Command{Id: 2, Method: protocol.Command_CONNECT, Params: params}
+	cmd := &protocol.Command{Id: 2, Connect: &protocol.ConnectRequest{}}
 	data, err := json.Marshal(cmd)
 	require.NoError(t, err)
 	proceed := HandleReadFrame(client, bytes.NewReader(data))
@@ -3369,7 +3222,7 @@ func TestSubscribeWithBufferedPublications(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(rwWrapper.replies))
 	require.Nil(t, rwWrapper.replies[0].Error)
-	res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
+	res := extractSubscribeResult(rwWrapper.replies)
 	require.Equal(t, uint64(0), res.Offset)
 	require.True(t, res.Recovered)
 	require.Len(t, res.Publications, 5)
