@@ -124,23 +124,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		if query.Get("format") == "protobuf" || query.Get("cf_protocol") == "protobuf" {
 			protoType = ProtocolTypeProtobuf
 		}
-		if queryProtocolVersion := query.Get("cf_protocol_version"); queryProtocolVersion != "" {
-			switch queryProtocolVersion {
-			case "v1":
-				protoVersion = ProtocolVersion1
-			case "v2":
-				protoVersion = ProtocolVersion2
-			default:
-				s.node.logger.log(newLogEntry(LogLevelInfo, "unknown protocol version", map[string]interface{}{"transport": transportWebsocket, "version": queryProtocolVersion}))
-				http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-				return
-			}
-		}
-	}
-
-	if DisableProtocolVersion1 && protoVersion == ProtocolVersion1 {
-		http.Error(rw, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
 	}
 
 	compression := s.config.Compression
@@ -165,7 +148,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		pongTimeout  time.Duration
 	)
 
-	appLevelPing := protoVersion > ProtocolVersion1 && s.config.PingPongConfig.PingInterval >= 0
+	appLevelPing := s.config.PingPongConfig.PingInterval >= 0
 
 	if !appLevelPing {
 		pingInterval = s.config.PingInterval
@@ -258,7 +241,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		// https://github.com/gorilla/websocket/issues/448
 		// We only set custom pong handler in proto v1.
-		if protoVersion == ProtocolVersion1 {
+		if !appLevelPing && pingInterval > 0 {
 			conn.SetPongHandler(nil)
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
@@ -483,7 +466,7 @@ func (t *websocketTransport) Close(disconnect Disconnect) error {
 	t.mu.Unlock()
 
 	if disconnect.Code != DisconnectConnectionClosed.Code {
-		msg := websocket.FormatCloseMessage(int(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
+		msg := websocket.FormatCloseMessage(int(disconnect.Code), disconnect.Reason)
 		err := t.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
 		if err != nil {
 			return t.conn.Close()

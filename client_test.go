@@ -41,11 +41,7 @@ func newTestConnectedClientV2(t *testing.T, n *Node, userID string) *Client {
 
 func newTestConnectedClientWithTransport(t testing.TB, ctx context.Context, n *Node, transport Transport, userID string) *Client {
 	client := newTestClientCustomTransport(t, ctx, n, transport, userID)
-	if transport.ProtocolVersion() == ProtocolVersion1 {
-		connectClient(t, client)
-	} else {
-		connectClientV2(t, client)
-	}
+	connectClientV2(t, client)
 	require.True(t, len(n.hub.UserConnections(userID)) > 0)
 	return client
 }
@@ -68,11 +64,7 @@ func newTestSubscribedClientV2(t *testing.T, n *Node, userID, chanID string) *Cl
 
 func newTestSubscribedClientWithTransport(t *testing.T, ctx context.Context, n *Node, transport Transport, userID, chanID string) *Client {
 	client := newTestConnectedClientWithTransport(t, ctx, n, transport, userID)
-	if transport.ProtocolVersion() == ProtocolVersion1 {
-		subscribeClient(t, client, chanID)
-	} else {
-		subscribeClientV2(t, client, chanID)
-	}
+	subscribeClientV2(t, client, chanID)
 	require.True(t, n.hub.NumSubscribers(chanID) > 0)
 	require.Contains(t, client.channels, chanID)
 	return client
@@ -1040,8 +1032,6 @@ func TestServerSideSubscriptions(t *testing.T) {
 		Unidirectional bool
 		ProtoVersion   ProtocolVersion
 	}{
-		{"bidi-v1", false, ProtocolVersion1},
-		{"uni-v1", true, ProtocolVersion1},
 		{"bidi-v2", false, ProtocolVersion2},
 		{"uni-v2", true, ProtocolVersion2},
 	}
@@ -1069,11 +1059,7 @@ func TestServerSideSubscriptions(t *testing.T) {
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 			client, _ := newClient(newCtx, node, transport)
 			if !tt.Unidirectional {
-				if tt.ProtoVersion == ProtocolVersion1 {
-					connectClient(t, client)
-				} else {
-					connectClientV2(t, client)
-				}
+				connectClientV2(t, client)
 			} else {
 				client.Connect(ConnectRequest{
 					Subs: map[string]SubscribeRequest{

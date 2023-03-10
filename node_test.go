@@ -600,11 +600,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	transport.setSink(sink)
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "test"})
 	client, _ := newClient(newCtx, node, transport)
-	if protoVersion == ProtocolVersion1 {
-		connectClient(b, client)
-	} else {
-		connectClientV2(b, client)
-	}
+	connectClientV2(b, client)
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
@@ -627,14 +623,14 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 		numSubscribers int
 		protoVersion   ProtocolVersion
 	}{
-		{"JSON-V1", newFakeConnJSON, 1, ProtocolVersion1},
-		{"Protobuf-V1", newFakeConnProtobuf, 1, ProtocolVersion1},
-		{"JSON-V1", newFakeConnJSON, 10000, ProtocolVersion1},
-		{"Protobuf-V1", newFakeConnProtobuf, 10000, ProtocolVersion1},
-		{"JSON-V2", newFakeConnJSON, 1, ProtocolVersion1},
-		{"Protobuf-V2", newFakeConnProtobuf, 1, ProtocolVersion1},
-		{"JSON-V2", newFakeConnJSON, 10000, ProtocolVersion1},
-		{"Protobuf-V2", newFakeConnProtobuf, 10000, ProtocolVersion1},
+		{"JSON-V1", newFakeConnJSON, 1, ProtocolVersion2},
+		{"Protobuf-V1", newFakeConnProtobuf, 1, ProtocolVersion2},
+		{"JSON-V1", newFakeConnJSON, 10000, ProtocolVersion2},
+		{"Protobuf-V1", newFakeConnProtobuf, 10000, ProtocolVersion2},
+		{"JSON-V2", newFakeConnJSON, 1, ProtocolVersion2},
+		{"Protobuf-V2", newFakeConnProtobuf, 1, ProtocolVersion2},
+		{"JSON-V2", newFakeConnJSON, 10000, ProtocolVersion2},
+		{"Protobuf-V2", newFakeConnProtobuf, 10000, ProtocolVersion2},
 	}
 
 	for _, bm := range benchmarks {

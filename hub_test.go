@@ -35,7 +35,7 @@ func newTestTransport(cancelFn func()) *testTransport {
 		protoType:       ProtocolTypeJSON,
 		closeCh:         make(chan struct{}),
 		unidirectional:  false,
-		protocolVersion: ProtocolVersion1,
+		protocolVersion: ProtocolVersion2,
 		pingInterval:    10 * time.Second,
 		pongTimeout:     3 * time.Second,
 	}
@@ -227,13 +227,11 @@ func TestHubDisconnect(t *testing.T) {
 
 	client.eventHub.disconnectHandler = func(e DisconnectEvent) {
 		defer wg.Done()
-		require.False(t, e.Disconnect.Reconnect)
 		require.Equal(t, DisconnectForceNoReconnect.Code, e.Disconnect.Code)
 	}
 
 	clientWithReconnect.eventHub.disconnectHandler = func(e DisconnectEvent) {
 		defer wg.Done()
-		require.True(t, e.Disconnect.Reconnect)
 		require.Equal(t, DisconnectForceReconnect.Code, e.Disconnect.Code)
 	}
 
@@ -446,13 +444,9 @@ func TestHubBroadcastPublication(t *testing.T) {
 		protocolVersion ProtocolVersion
 		uni             bool
 	}{
-		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
 		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
-		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
 		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
-		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
 		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
-		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
 		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
@@ -506,13 +500,9 @@ func TestHubBroadcastJoin(t *testing.T) {
 		protocolVersion ProtocolVersion
 		uni             bool
 	}{
-		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
 		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
-		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
 		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
-		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
 		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
-		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
 		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
@@ -561,13 +551,9 @@ func TestHubBroadcastLeave(t *testing.T) {
 		protocolVersion ProtocolVersion
 		uni             bool
 	}{
-		{name: "JSON-V1", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1},
 		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
-		{name: "Protobuf-V1", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1},
 		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
-		{name: "JSON-V1-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion1, uni: true},
 		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
-		{name: "Protobuf-V1-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion1, uni: true},
 		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
