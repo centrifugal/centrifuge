@@ -117,8 +117,8 @@ func New(c Config) (*Node, error) {
 	if c.ChannelMaxLength == 0 {
 		c.ChannelMaxLength = 255
 	}
-	if c.DefaultHistoryMetaTTL == 0 {
-		c.DefaultHistoryMetaTTL = 90 * 24 * time.Hour // 90 days by default.
+	if c.HistoryMetaTTL == 0 {
+		c.HistoryMetaTTL = 30 * 24 * time.Hour // 30 days by default.
 	}
 
 	uidObj, err := uuid.NewRandom()

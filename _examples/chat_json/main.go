@@ -62,9 +62,9 @@ func channelSubscribeAllowed(channel string) bool {
 
 func main() {
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:              centrifuge.LogLevelInfo,
-		LogHandler:            handleLog,
-		DefaultHistoryMetaTTL: 24 * time.Hour,
+		LogLevel:       centrifuge.LogLevelInfo,
+		LogHandler:     handleLog,
+		HistoryMetaTTL: 24 * time.Hour,
 	})
 
 	// Override default broker which does not use HistoryMetaTTL.
@@ -156,7 +156,7 @@ func main() {
 
 			result, err := node.Publish(
 				e.Channel, data,
-				centrifuge.WithHistory(300, time.Minute, time.Hour),
+				centrifuge.WithHistory(300, time.Minute),
 				centrifuge.WithClientInfo(e.ClientInfo),
 			)
 
@@ -207,7 +207,7 @@ func main() {
 			_, err := node.Publish(
 				"#42",
 				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute, time.Hour),
+				centrifuge.WithHistory(300, time.Minute),
 			)
 			if err != nil {
 				log.Printf("error publishing to personal channel: %s", err)
@@ -224,7 +224,7 @@ func main() {
 			_, err := node.Publish(
 				"chat:index",
 				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute, time.Hour),
+				centrifuge.WithHistory(300, time.Minute),
 			)
 			if err != nil {
 				log.Printf("error publishing to channel: %s", err)

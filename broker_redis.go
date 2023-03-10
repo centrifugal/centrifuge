@@ -760,7 +760,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 
 	historyMetaTTL := opts.HistoryMetaTTL
 	if historyMetaTTL == 0 {
-		historyMetaTTL = b.node.config.DefaultHistoryMetaTTL
+		historyMetaTTL = b.node.config.HistoryMetaTTL
 	}
 
 	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
@@ -1112,7 +1112,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 
 	historyMetaTTL := opts.MetaTTL
 	if historyMetaTTL == 0 {
-		historyMetaTTL = b.node.config.DefaultHistoryMetaTTL
+		historyMetaTTL = b.node.config.HistoryMetaTTL
 	}
 
 	historyMetaTTLSeconds := int(historyMetaTTL.Seconds())
@@ -1205,7 +1205,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		includePubs = "0"
 	}
 
-	historyMetaTTLSeconds := int(b.node.config.DefaultHistoryMetaTTL.Seconds())
+	historyMetaTTLSeconds := int(b.node.config.HistoryMetaTTL.Seconds())
 
 	replies, err := b.historyListScript.Exec(context.Background(), s.client, []string{string(historyKey), string(historyMetaKey)}, []string{includePubs, rightBound, strconv.Itoa(historyMetaTTLSeconds), strconv.FormatInt(time.Now().Unix(), 10)}).ToArray()
 	if err != nil {

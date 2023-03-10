@@ -47,7 +47,7 @@ func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 	}
 	b := &MemoryBroker{
 		node:       n,
-		historyHub: newHistoryHub(n.config.DefaultHistoryMetaTTL),
+		historyHub: newHistoryHub(n.config.HistoryMetaTTL),
 		pubLocks:   pubLocks,
 	}
 	return b, nil

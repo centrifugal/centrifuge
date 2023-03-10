@@ -61,7 +61,7 @@ type HistoryFilter struct {
 type HistoryOptions struct {
 	// Filter for history publications.
 	Filter HistoryFilter
-	// MetaTTL allows overriding default (set in Config.DefaultHistoryMetaTTL) history
+	// MetaTTL allows overriding default (set in Config.HistoryMetaTTL) history
 	// meta information expiration time.
 	MetaTTL time.Duration
 }
@@ -96,7 +96,7 @@ type PublishOptions struct {
 	HistoryTTL time.Duration
 	// HistorySize sets history size limit to prevent infinite stream growth.
 	HistorySize int
-	// HistoryMetaTTL allows overriding default (set in Config.DefaultHistoryMetaTTL)
+	// HistoryMetaTTL allows overriding default (set in Config.HistoryMetaTTL)
 	// history meta information expiration time upon publish.
 	HistoryMetaTTL time.Duration
 	// ClientInfo to include into Publication. By default, no ClientInfo will be appended.

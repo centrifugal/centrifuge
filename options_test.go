@@ -69,7 +69,7 @@ func TestWithLimit(t *testing.T) {
 	opt := WithLimit(NoLimit)
 	opts := &HistoryOptions{}
 	opt(opts)
-	require.Equal(t, NoLimit, opts.Limit)
+	require.Equal(t, NoLimit, opts.Filter.Limit)
 }
 
 func TestWithSubscribeClient(t *testing.T) {
