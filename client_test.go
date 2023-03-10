@@ -648,46 +648,6 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 	}
 }
 
-func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
-	t.Parallel()
-	broker := NewTestBroker()
-	node := nodeWithBroker(broker)
-	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	done := make(chan struct{})
-
-	node.OnConnect(func(client *Client) {
-		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
-		})
-		client.OnDisconnect(func(event DisconnectEvent) {
-			require.Equal(t, DisconnectInsufficientState.Code, event.Code)
-			close(done)
-		})
-	})
-
-	client := newTestClient(t, node, "42")
-	connectClientV2(t, client)
-
-	rwWrapper := testReplyWriterWrapper()
-	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel: "test",
-		Recover: true,
-	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
-	require.NoError(t, err)
-
-	err = node.handlePublication("test", &Publication{
-		Offset: offset,
-	}, StreamPosition{offset, epoch})
-	require.NoError(t, err)
-
-	select {
-	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for channel close")
-	case <-done:
-	}
-}
-
 func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch string) {
 	t.Parallel()
 	broker := NewTestBroker()
@@ -3735,13 +3695,6 @@ func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
 		Subscribe: &protocol.SubscribeRequest{},
 	}, 0)
 	require.False(t, ok)
-}
-
-func getCommandParams(t *testing.T, p interface{}) []byte {
-	t.Helper()
-	data, err := json.Marshal(p)
-	require.NoError(t, err)
-	return data
 }
 
 func TestClient_HandleCommandV2(t *testing.T) {
