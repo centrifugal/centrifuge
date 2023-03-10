@@ -1464,7 +1464,7 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 }
 
 func TestRedisClientSubscribeRecoverStreams(t *testing.T) {
-	for _, tt := range recoverTests {
+	for _, tt := range brokerRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testRedisClientSubscribeRecover(t, tt, true, false)
 		})
@@ -1472,7 +1472,7 @@ func TestRedisClientSubscribeRecoverStreams(t *testing.T) {
 }
 
 func TestRedisClientSubscribeRecoverLists(t *testing.T) {
-	for _, tt := range recoverTests {
+	for _, tt := range brokerRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testRedisClientSubscribeRecover(t, tt, false, false)
 		})
@@ -1480,7 +1480,7 @@ func TestRedisClientSubscribeRecoverLists(t *testing.T) {
 }
 
 func TestRedisClientSubscribeRecoverStreamsCluster(t *testing.T) {
-	for _, tt := range recoverTests {
+	for _, tt := range brokerRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testRedisClientSubscribeRecover(t, tt, true, true)
 		})
@@ -1488,7 +1488,7 @@ func TestRedisClientSubscribeRecoverStreamsCluster(t *testing.T) {
 }
 
 func TestRedisClientSubscribeRecoverListsCluster(t *testing.T) {
-	for _, tt := range recoverTests {
+	for _, tt := range brokerRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testRedisClientSubscribeRecover(t, tt, false, true)
 		})

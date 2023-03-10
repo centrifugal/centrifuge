@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,13 +22,6 @@ func newClient(ctx context.Context, n *Node, t Transport) (*Client, error) {
 		return nil, err
 	}
 	return c, nil
-}
-
-func newTestConnectedClient(t *testing.T, n *Node, userID string) *Client {
-	client := newTestClient(t, n, userID)
-	connectClient(t, client)
-	require.True(t, len(n.hub.UserConnections(userID)) > 0)
-	return client
 }
 
 func newTestConnectedClientV2(t *testing.T, n *Node, userID string) *Client {
@@ -43,14 +35,6 @@ func newTestConnectedClientWithTransport(t testing.TB, ctx context.Context, n *N
 	client := newTestClientCustomTransport(t, ctx, n, transport, userID)
 	connectClientV2(t, client)
 	require.True(t, len(n.hub.UserConnections(userID)) > 0)
-	return client
-}
-
-func newTestSubscribedClient(t *testing.T, n *Node, userID, chanID string) *Client {
-	client := newTestConnectedClient(t, n, userID)
-	subscribeClient(t, client, chanID)
-	require.True(t, n.hub.NumSubscribers(chanID) > 0)
-	require.Contains(t, client.channels, chanID)
 	return client
 }
 
@@ -152,8 +136,8 @@ func TestClientUnsubscribeClosedClient(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
 	client.Unsubscribe("test")
@@ -297,7 +281,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
-	result := extractConnectReply(rwWrapper.replies, client.Transport().Protocol())
+	result := extractConnectReply(rwWrapper.replies)
 	require.Equal(t, false, result.Expires)
 	require.Equal(t, uint32(0), result.Ttl)
 	require.True(t, client.authenticated)
@@ -385,66 +369,22 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	require.Equal(t, ErrorExpired, err)
 }
 
-func connectClient(t testing.TB, client *Client) *protocol.ConnectResult {
-	rwWrapper := testReplyWriterWrapper()
-	result, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
-	require.NoError(t, err)
-	require.Nil(t, rwWrapper.replies[0].Error)
-	require.True(t, client.authenticated)
-	client.triggerConnect()
-	client.scheduleOnConnectTimers()
-	return result
-}
-
 func extractSubscribeResult(replies []*protocol.Reply, protoType ProtocolType) *protocol.SubscribeResult {
-	var res protocol.SubscribeResult
-	if protoType == ProtocolTypeJSON {
-		err := json.Unmarshal(replies[0].Result, &res)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		err := res.UnmarshalVT(replies[0].Result)
-		if err != nil {
-			panic(err)
-		}
-	}
-	return &res
+	return replies[0].Subscribe
 }
 
-func extractConnectReply(replies []*protocol.Reply, protoType ProtocolType) *protocol.ConnectResult {
-	var res protocol.ConnectResult
-	if protoType == ProtocolTypeJSON {
-		err := json.Unmarshal(replies[0].Result, &res)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		err := res.UnmarshalVT(replies[0].Result)
-		if err != nil {
-			panic(err)
-		}
-	}
-	return &res
+func extractConnectReply(replies []*protocol.Reply) *protocol.ConnectResult {
+	return replies[0].Connect
 }
 
-func subscribeClient(t testing.TB, client *Client, ch string) *protocol.SubscribeResult {
+func subscribeClientV2(t testing.TB, client *Client, ch string) *protocol.SubscribeResult {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: ch,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
-	return extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
-}
-
-func subscribeClientV2(t testing.TB, client *Client, ch string) {
-	rwWrapper := testReplyWriterWrapper()
-	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel: ch,
-	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
-	require.NoError(t, err)
-	require.Nil(t, rwWrapper.replies[0].Error)
+	return rwWrapper.replies[0].Subscribe
 }
 
 func TestClientSubscribe(t *testing.T) {
@@ -469,7 +409,7 @@ func TestClientSubscribe(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	require.Equal(t, 0, len(client.Channels()))
 
@@ -524,7 +464,7 @@ func TestClientSubscribeBrokerErrorOnSubscribe(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -561,7 +501,7 @@ func TestClientSubscribeBrokerErrorOnStreamTop(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -590,7 +530,7 @@ func TestClientSubscribeUnrecoverablePosition(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -630,7 +570,7 @@ func TestClientSubscribePositionedError(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -658,7 +598,7 @@ func TestClientSubscribePositioned(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -666,9 +606,8 @@ func TestClientSubscribePositioned(t *testing.T) {
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 
-	var result protocol.SubscribeResult
 	require.Nil(t, rwWrapper.replies[0].Error)
-	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
+	result := rwWrapper.replies[0].Subscribe
 	require.NoError(t, err)
 	require.True(t, result.Positioned)
 }
@@ -693,7 +632,7 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -728,7 +667,7 @@ func testUnexpectedOffsetEpoch(t *testing.T, offset uint64, epoch string) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -789,23 +728,6 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 	}
 }
 
-func TestClientUnexpectedOffsetEpoch(t *testing.T) {
-	tests := []struct {
-		Name   string
-		Offset uint64
-		Epoch  string
-	}{
-		{"wrong_offset", 2, ""},
-		{"wrong_epoch", 1, "xyz"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.Name, func(t *testing.T) {
-			testUnexpectedOffsetEpoch(t, tt.Offset, tt.Epoch)
-		})
-	}
-}
-
 func TestClientUnexpectedOffsetEpochClientV2(t *testing.T) {
 	tests := []struct {
 		Name   string
@@ -836,7 +758,7 @@ func TestClientSubscribeValidateErrors(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -844,7 +766,7 @@ func TestClientSubscribeValidateErrors(t *testing.T) {
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorBadRequest, err)
 
-	subscribeClient(t, client, "test1")
+	subscribeClientV2(t, client, "test1")
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
@@ -869,7 +791,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 
@@ -909,7 +831,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 	client, _ := newClient(newCtx, node, transport)
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 
@@ -927,9 +849,10 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 				dec := json.NewDecoder(strings.NewReader(string(data)))
 				for {
 					var push struct {
-						Result struct {
+						Push struct {
 							Channel string
-							Data    struct {
+							Pub     struct {
+								Data   struct{}
 								Offset uint64
 							}
 						}
@@ -939,8 +862,8 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 						break
 					}
 					require.NoError(t, err)
-					if push.Result.Data.Offset != offset {
-						require.Fail(t, fmt.Sprintf("wrong offset: %d != %d", push.Result.Data.Offset, offset))
+					if push.Push.Pub.Offset != offset {
+						require.Fail(t, fmt.Sprintf("wrong offset: %d != %d", push.Push.Pub.Offset, offset))
 					}
 					offset++
 					if offset > 3 {
@@ -977,7 +900,7 @@ func TestUserConnectionLimit(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 
 	client, _ := newClient(newCtx, node, transport)
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	anotherClient, _ := newClient(newCtx, node, transport)
@@ -1016,7 +939,7 @@ func TestConnectingReply(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	select {
 	case <-time.After(time.Second):
@@ -1137,7 +1060,7 @@ func TestClientRefresh(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for data := range transport.sink {
-			if strings.Contains(string(data), `"type":8`) {
+			if strings.Contains(string(data), `"refresh"`) {
 				close(done)
 				return
 			}
@@ -1153,7 +1076,7 @@ func TestClientRefresh(t *testing.T) {
 	done = make(chan struct{})
 	go func() {
 		for data := range transport.sink {
-			if strings.Contains(string(data), `"type":8`) && strings.Contains(string(data), `"ttl":`) && strings.Contains(string(data), `"expires":true`) {
+			if strings.Contains(string(data), `"refresh"`) && strings.Contains(string(data), `"ttl":`) && strings.Contains(string(data), `"expires":true`) {
 				close(done)
 				return
 			}
@@ -1167,14 +1090,14 @@ func TestClientRefresh(t *testing.T) {
 
 	select {
 	case <-time.After(time.Second):
-		require.Fail(t, "timeout waiting for done channel closed")
+		require.Fail(t, "timeout waiting for done channel closed 1")
 	case <-done:
 	}
 
 	done = make(chan struct{})
 	go func() {
 		for data := range transport.sink {
-			if strings.Contains(string(data), `"type":8`) && strings.Contains(string(data), `"ttl":`) && strings.Contains(string(data), `"expires":true`) {
+			if strings.Contains(string(data), `"refresh"`) && strings.Contains(string(data), `"ttl":`) && strings.Contains(string(data), `"expires":true`) {
 				close(done)
 				return
 			}
@@ -1264,10 +1187,10 @@ func TestClient_IsSubscribed(t *testing.T) {
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 
 	client, _ := newClient(newCtx, node, transport)
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	require.False(t, client.IsSubscribed("test"))
-	_ = subscribeClient(t, client, "test")
+	subscribeClientV2(t, client, "test")
 	require.True(t, client.IsSubscribed("test"))
 }
 
@@ -1282,9 +1205,9 @@ func TestClientSubscribeLast(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
-	result := subscribeClient(t, client, "test")
+	result := subscribeClientV2(t, client, "test")
 	require.Equal(t, uint64(0), result.Offset)
 
 	for i := 0; i < 10; i++ {
@@ -1292,8 +1215,8 @@ func TestClientSubscribeLast(t *testing.T) {
 	}
 
 	client = newTestClient(t, node, "42")
-	connectClient(t, client)
-	result = subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	result = subscribeClientV2(t, client, "test")
 	require.Equal(t, uint64(10), result.Offset, fmt.Sprintf("expected: 10, got %d", result.Offset))
 }
 
@@ -1347,8 +1270,8 @@ func TestClientUnsubscribeClientSide(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	params := &protocol.UnsubscribeRequest{Channel: ""}
@@ -1390,8 +1313,8 @@ func TestClientUnsubscribeServerSide(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 	require.Equal(t, 1, len(client.Channels()))
 
 	client.Unsubscribe("test")
@@ -1439,7 +1362,7 @@ func TestClientAliveHandler(t *testing.T) {
 
 	})
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 	client.triggerConnect()
 	client.scheduleOnConnectTimers()
 
@@ -1467,7 +1390,10 @@ func testReplyWriterWrapper() *sliceReplyWriter {
 	}
 	wrapper.rw = &replyWriter{
 		write: func(rep *protocol.Reply) {
-			wrapper.replies = append(wrapper.replies, rep)
+			d, _ := rep.MarshalVT()
+			var r protocol.Reply
+			_ = r.UnmarshalVT(d)
+			wrapper.replies = append(wrapper.replies, &r)
 		},
 	}
 	return wrapper
@@ -1477,7 +1403,7 @@ func TestClientRefreshNotAvailable(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 	rwWrapper := testReplyWriterWrapper()
 
 	cmd := &protocol.RefreshRequest{}
@@ -1502,7 +1428,7 @@ func TestClientRefreshEmptyToken(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 	rwWrapper := testReplyWriterWrapper()
 
 	cmd := &protocol.RefreshRequest{Token: ""}
@@ -1527,7 +1453,7 @@ func TestClientRefreshUnexpected(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 	rwWrapper := testReplyWriterWrapper()
 
 	cmd := &protocol.RefreshRequest{Token: "xxx"}
@@ -1539,7 +1465,7 @@ func TestClientPublishNotAvailable(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 	rwWrapper := testReplyWriterWrapper()
 
 	cmd := &protocol.PublishRequest{
@@ -1606,7 +1532,7 @@ func TestClientPublishHandler(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	node.broker.(*MemoryBroker).eventHandler = &testBrokerEventHandler{
 		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
@@ -1622,7 +1548,7 @@ func TestClientPublishHandler(t *testing.T) {
 		},
 	}
 
-	subscribeClient(t, client, "test")
+	subscribeClientV2(t, client, "test")
 
 	client.eventHub.publishHandler = func(e PublishEvent, cb PublishCallback) {
 		var msg testClientMessage
@@ -1701,7 +1627,7 @@ func TestClientPublishError(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePublish(&protocol.PublishRequest{
@@ -1717,7 +1643,7 @@ func TestClientPingV1(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePingV1(&protocol.Command{}, time.Now(), rwWrapper.rw)
@@ -1755,8 +1681,8 @@ func TestClientPresence(t *testing.T) {
 		cb(PresenceStatsReply{}, nil)
 	})
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePresence(&protocol.PresenceRequest{
@@ -1771,9 +1697,8 @@ func TestClientPresence(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
-	var result protocol.PresenceResult
-	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
-	require.NoError(t, err)
+
+	result := rwWrapper.replies[0].Presence
 	require.Equal(t, 1, len(result.Presence))
 
 	rwWrapper = testReplyWriterWrapper()
@@ -1816,8 +1741,8 @@ func TestClientPresenceTakeover(t *testing.T) {
 		}, nil)
 	})
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePresence(&protocol.PresenceRequest{
@@ -1826,9 +1751,7 @@ func TestClientPresenceTakeover(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
-	var result protocol.PresenceResult
-	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
-	require.NoError(t, err)
+	result := rwWrapper.replies[0].Presence
 	require.Equal(t, 1, len(result.Presence))
 
 	rwWrapper = testReplyWriterWrapper()
@@ -1854,7 +1777,7 @@ func TestClientPresenceError(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePresence(&protocol.PresenceRequest{
@@ -1870,8 +1793,8 @@ func TestClientPresenceNotAvailable(t *testing.T) {
 
 	client := newTestClient(t, node, "42")
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePresence(&protocol.PresenceRequest{
@@ -1886,7 +1809,7 @@ func TestClientSubscribeNotAvailable(t *testing.T) {
 
 	client := newTestClient(t, node, "42")
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -1901,8 +1824,8 @@ func TestClientPresenceStatsNotAvailable(t *testing.T) {
 
 	client := newTestClient(t, node, "42")
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePresenceStats(&protocol.PresenceStatsRequest{
@@ -1925,7 +1848,7 @@ func TestClientPresenceStatsError(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePresenceStats(&protocol.PresenceStatsRequest{
@@ -1951,8 +1874,8 @@ func TestClientHistoryNoFilter(t *testing.T) {
 		_, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
 	}
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(&protocol.HistoryRequest{
@@ -1967,9 +1890,7 @@ func TestClientHistoryNoFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
-	var result protocol.HistoryResult
-	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
-	require.NoError(t, err)
+	result := rwWrapper.replies[0].History
 	require.Equal(t, 0, len(result.Publications))
 	require.Equal(t, uint64(10), result.Offset)
 	require.NotZero(t, result.Epoch)
@@ -1991,8 +1912,8 @@ func TestClientHistoryWithLimit(t *testing.T) {
 		_, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
 	}
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(&protocol.HistoryRequest{
@@ -2002,9 +1923,7 @@ func TestClientHistoryWithLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
-	var result protocol.HistoryResult
-	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
-	require.NoError(t, err)
+	result := rwWrapper.replies[0].History
 	require.Equal(t, 3, len(result.Publications))
 	require.Equal(t, uint64(10), result.Offset)
 	require.NotZero(t, result.Epoch)
@@ -2027,8 +1946,8 @@ func TestClientHistoryWithSinceAndLimit(t *testing.T) {
 		pubRes, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
 	}
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(&protocol.HistoryRequest{
@@ -2042,9 +1961,7 @@ func TestClientHistoryWithSinceAndLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
-	var result protocol.HistoryResult
-	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
-	require.NoError(t, err)
+	result := rwWrapper.replies[0].History
 	require.Equal(t, 2, len(result.Publications))
 	require.Equal(t, uint64(4), result.Publications[1].Offset)
 	require.Equal(t, uint64(10), result.Offset)
@@ -2073,8 +1990,8 @@ func TestClientHistoryTakeover(t *testing.T) {
 		_, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
 	}
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(&protocol.HistoryRequest{
@@ -2084,9 +2001,7 @@ func TestClientHistoryTakeover(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rwWrapper.replies, 1)
 	require.Nil(t, rwWrapper.replies[0].Error)
-	var result protocol.HistoryResult
-	err = json.Unmarshal(rwWrapper.replies[0].Result, &result)
-	require.NoError(t, err)
+	result := rwWrapper.replies[0].History
 	require.Equal(t, 3, len(result.Publications))
 	require.Equal(t, uint64(10), result.Offset)
 	require.NotZero(t, result.Epoch)
@@ -2113,8 +2028,8 @@ func TestClientHistoryUnrecoverablePositionEpoch(t *testing.T) {
 		_, _ = node.Publish("test", []byte(`{}`), WithHistory(10, time.Minute))
 	}
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(&protocol.HistoryRequest{
@@ -2143,7 +2058,7 @@ func TestClientHistoryBrokerError(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(&protocol.HistoryRequest{
@@ -2159,8 +2074,8 @@ func TestClientHistoryNotAvailable(t *testing.T) {
 
 	client := newTestClient(t, node, "42")
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleHistory(&protocol.HistoryRequest{
@@ -2261,13 +2176,10 @@ func TestClientHandleUnknownMethod(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
-	params := getJSONEncodedParams(t, &protocol.SubscribeRequest{
-		Channel: "test",
-	})
-	cmd := &protocol.Command{Id: 1, Method: 10000, Params: params}
+	connectClientV2(t, client)
+	cmd := &protocol.Command{Id: 1}
 	disconnect, proceed := client.dispatchCommand(cmd, 0)
-	require.Nil(t, disconnect)
+	require.Equal(t, DisconnectBadRequest.Code, disconnect.Code)
 	require.False(t, proceed)
 }
 
@@ -2367,7 +2279,7 @@ func TestClientHandleCommandWithBrokenParams(t *testing.T) {
 
 	for _, method := range methods {
 		client = newTestClient(t, node, "42")
-		connectClient(t, client)
+		connectClientV2(t, client)
 		data, err := json.Marshal(&protocol.Command{
 			Id: 1, Method: method, Params: []byte("[]"),
 		})
@@ -2412,7 +2324,7 @@ func TestClientOnAlive(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	select {
 	case <-done:
@@ -2460,7 +2372,7 @@ func TestClientAlreadyAuthenticated(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	params := getJSONEncodedParams(t, &protocol.ConnectRequest{})
 	cmd := &protocol.Command{Id: 2, Method: protocol.Command_CONNECT, Params: params}
@@ -2484,7 +2396,7 @@ func TestClientCloseExpired(t *testing.T) {
 	transport := newTestTransport(cancelFn)
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", ExpireAt: time.Now().Unix() + 2})
 	client, _ := newClient(newCtx, node, transport)
-	connectClient(t, client)
+	connectClientV2(t, client)
 	client.scheduleOnConnectTimers()
 	client.mu.RLock()
 	require.False(t, client.status == statusClosed)
@@ -2507,7 +2419,7 @@ func TestClientInfo(t *testing.T) {
 	transport := newTestTransport(cancelFn)
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "42", Info: []byte("info")})
 	client, _ := newClient(newCtx, node, transport)
-	connectClient(t, client)
+	connectClientV2(t, client)
 	require.Equal(t, []byte("info"), client.Info())
 }
 
@@ -2540,8 +2452,8 @@ func TestClientPresenceUpdate(t *testing.T) {
 
 	client := newTestClient(t, node, "42")
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	client.mu.RLock()
 	chCtx, ok := client.channels["test"]
@@ -2572,16 +2484,16 @@ func TestClientSubExpired(t *testing.T) {
 			}, nil)
 		})
 
-		client.OnDisconnect(func(event DisconnectEvent) {
-			if event.Disconnect == DisconnectSubExpired {
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			if event.Code == UnsubscribeCodeExpired {
 				close(doneCh)
 			}
 		})
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	select {
 	case <-doneCh:
@@ -2596,7 +2508,7 @@ func TestClientSend(t *testing.T) {
 
 	client := newTestClient(t, node, "42")
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	err := client.Send([]byte(`{}`))
 	require.NoError(t, err)
@@ -2614,7 +2526,7 @@ func TestClientClose(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	err := client.close(DisconnectShutdown)
 	require.NoError(t, err)
@@ -2627,7 +2539,7 @@ func TestClientHandleRPCNotAvailable(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 
@@ -2654,7 +2566,7 @@ func TestClientHandleRPC(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 
@@ -2670,7 +2582,7 @@ func TestClientHandleSendNoHandlerSet(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 	err := client.handleSend(&protocol.SendRequest{
 		Data: []byte(`{"data":"hello"}`),
 	}, &protocol.Command{}, time.Now())
@@ -2690,7 +2602,7 @@ func TestClientHandleSend(t *testing.T) {
 		expectedData := []byte(`{"data":"hello"}`)
 		require.Equal(t, expectedData, event.Data)
 	})
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	err := client.handleSend(&protocol.SendRequest{
 		Data: []byte(`{"data":"hello"}`),
@@ -2711,7 +2623,7 @@ func TestClientHandlePublishNotAllowed(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 
@@ -2738,7 +2650,7 @@ func TestClientHandlePublish(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handlePublish(&protocol.PublishRequest{
@@ -2785,7 +2697,7 @@ func TestClientSideRefresh(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 
@@ -2833,7 +2745,7 @@ func TestServerSideRefresh(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	select {
 	case <-time.After(5 * time.Second):
@@ -2882,7 +2794,7 @@ func TestServerSideRefreshDisconnect(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	select {
 	case <-time.After(5 * time.Second):
@@ -2934,7 +2846,7 @@ func TestServerSideRefreshCustomError(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	select {
 	case <-time.After(5 * time.Second):
@@ -2980,8 +2892,8 @@ func TestClientSideSubRefresh(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
@@ -3062,8 +2974,8 @@ func TestClientSideSubRefreshUnexpected(t *testing.T) {
 		})
 	})
 
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubRefresh(&protocol.SubRefreshRequest{
@@ -3089,7 +3001,7 @@ func TestCloseNoRace(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	select {
 	case <-time.After(time.Second):
@@ -3329,7 +3241,7 @@ func TestClientTransportWriteError(t *testing.T) {
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 			client, _ := newClient(newCtx, node, transport)
 
-			connectClient(t, client)
+			connectClientV2(t, client)
 
 			rwWrapper := testReplyWriterWrapper()
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
@@ -3392,7 +3304,7 @@ func TestConcurrentSameChannelSubscribe(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	var subscribeErrors []string
 	var mu sync.Mutex
@@ -3478,7 +3390,7 @@ func TestSubscribeWithBufferedPublications(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	go func() {
@@ -3498,7 +3410,7 @@ func TestSubscribeWithBufferedPublications(t *testing.T) {
 	require.Equal(t, 1, len(rwWrapper.replies))
 	require.Nil(t, rwWrapper.replies[0].Error)
 	res := extractSubscribeResult(rwWrapper.replies, client.Transport().Protocol())
-	require.Equal(t, uint64(5), res.Offset)
+	require.Equal(t, uint64(0), res.Offset)
 	require.True(t, res.Recovered)
 	require.Len(t, res.Publications, 5)
 	require.Equal(t, 1, len(client.Channels()))
@@ -3524,7 +3436,7 @@ func TestClientChannelsWhileSubscribing(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -3549,7 +3461,7 @@ func TestClientChannelsCleanupOnSubscribeError(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -3570,7 +3482,7 @@ func TestClientChannelsCleanupOnSubscribeDisconnect(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
@@ -3615,7 +3527,7 @@ func TestClientSubscribingChannelsCleanupOnClientClose(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
@@ -3660,7 +3572,7 @@ func TestClientSubscribingChannelsCleanupOnHistoryError(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	close(stopPublishingCh)
 
@@ -3683,7 +3595,7 @@ func TestClientOnStateSnapshot(t *testing.T) {
 	})
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
+	connectClientV2(t, client)
 
 	result, err := client.StateSnapshot()
 	require.NoError(t, err)
@@ -3714,76 +3626,6 @@ func decodeReply(t *testing.T, protoType protocol.Type, data []byte) *protocol.R
 	reply, err := decoder.Decode()
 	require.NoError(t, err)
 	return reply
-}
-
-func TestClientV1ReplyConstruction(t *testing.T) {
-	node := defaultNodeNoHandlers()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-	clientV1 := newTestClient(t, node, "42")
-
-	data, err := clientV1.getRefreshPushReply(&protocol.Refresh{})
-	require.NoError(t, err)
-	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
-
-	data, err = clientV1.getUnsubscribePushReply("test", unsubscribeServer)
-	require.NoError(t, err)
-	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
-
-	data, err = clientV1.getSendPushReply([]byte("{}"))
-	require.NoError(t, err)
-	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
-
-	data, err = clientV1.getSubscribePushReply("test", &protocol.SubscribeResult{})
-	require.NoError(t, err)
-	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
-
-	data, err = clientV1.getDisconnectPushReply(DisconnectForceNoReconnect)
-	require.NoError(t, err)
-	require.NotNil(t, decodeReply(t, protocol.TypeJSON, data).Result)
-
-	reply, err := clientV1.getRPCCommandReply(&protocol.RPCResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getSubscribeCommandReply(&protocol.SubscribeResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getHistoryCommandReply(&protocol.HistoryResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getPresenceStatsCommandReply(&protocol.PresenceStatsResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getPresenceCommandReply(&protocol.PresenceResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getPublishCommandReply(&protocol.PublishResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getUnsubscribeCommandReply(&protocol.UnsubscribeResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getSubRefreshCommandReply(&protocol.SubRefreshResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getRefreshCommandReply(&protocol.RefreshResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getConnectCommandReply(&protocol.ConnectResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
-
-	reply, err = clientV1.getConnectPushReply(&protocol.ConnectResult{})
-	require.NoError(t, err)
-	require.NotNil(t, reply.Result)
 }
 
 func TestClientV2ReplyConstruction(t *testing.T) {
@@ -3900,169 +3742,6 @@ func getCommandParams(t *testing.T, p interface{}) []byte {
 	data, err := json.Marshal(p)
 	require.NoError(t, err)
 	return data
-}
-
-func TestClient_HandleCommandV1(t *testing.T) {
-	node := defaultNodeNoHandlers()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
-		return ConnectReply{
-			ClientSideRefresh: true,
-		}, nil
-	})
-
-	node.OnConnect(func(client *Client) {
-		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
-			callback(SubscribeReply{
-				ClientSideRefresh: true,
-			}, nil)
-		})
-		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
-			callback(RPCReply{}, nil)
-		})
-		client.OnPublish(func(event PublishEvent, callback PublishCallback) {
-			callback(PublishReply{}, nil)
-		})
-		client.OnMessage(func(event MessageEvent) {
-
-		})
-		client.OnPresence(func(event PresenceEvent, callback PresenceCallback) {
-			callback(PresenceReply{}, nil)
-		})
-		client.OnPresenceStats(func(event PresenceStatsEvent, callback PresenceStatsCallback) {
-			callback(PresenceStatsReply{}, nil)
-		})
-		client.OnHistory(func(event HistoryEvent, callback HistoryCallback) {
-			callback(HistoryReply{}, nil)
-		})
-		client.OnRefresh(func(event RefreshEvent, callback RefreshCallback) {
-			callback(RefreshReply{}, nil)
-		})
-		client.OnSubRefresh(func(event SubRefreshEvent, callback SubRefreshCallback) {
-			callback(SubRefreshReply{}, nil)
-		})
-	})
-
-	clientV1 := newTestClient(t, node, "42")
-
-	ok := clientV1.HandleCommand(&protocol.Command{
-		Id:     1,
-		Method: protocol.Command_CONNECT,
-		Params: getCommandParams(t, &protocol.ConnectRequest{}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     2,
-		Method: protocol.Command_SUBSCRIBE,
-		Params: getCommandParams(t, &protocol.SubscribeRequest{
-			Channel: "test",
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     3,
-		Method: protocol.Command_UNSUBSCRIBE,
-		Params: getCommandParams(t, &protocol.UnsubscribeRequest{
-			Channel: "test",
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     2,
-		Method: protocol.Command_SUBSCRIBE,
-		Params: getCommandParams(t, &protocol.SubscribeRequest{
-			Channel: "test",
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     4,
-		Method: protocol.Command_RPC,
-		Params: getCommandParams(t, &protocol.RPCRequest{}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     4,
-		Method: protocol.Command_PING,
-		Params: getCommandParams(t, &protocol.PingRequest{}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     5,
-		Method: protocol.Command_PUBLISH,
-		Params: getCommandParams(t, &protocol.PublishRequest{
-			Channel: "test",
-			Data:    []byte("{}"),
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Method: protocol.Command_SEND,
-		Send:   &protocol.SendRequest{},
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     6,
-		Method: protocol.Command_PRESENCE,
-		Params: getCommandParams(t, &protocol.PresenceRequest{
-			Channel: "test",
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     7,
-		Method: protocol.Command_PRESENCE_STATS,
-		Params: getCommandParams(t, &protocol.PresenceStatsRequest{
-			Channel: "test",
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     8,
-		Method: protocol.Command_HISTORY,
-		Params: getCommandParams(t, &protocol.HistoryRequest{
-			Channel: "test",
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     9,
-		Method: protocol.Command_REFRESH,
-		Params: getCommandParams(t, &protocol.RefreshRequest{
-			Token: "test",
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     10,
-		Method: protocol.Command_SUB_REFRESH,
-		Params: getCommandParams(t, &protocol.SubRefreshRequest{
-			Channel: "test",
-			Token:   "test",
-		}),
-	}, 0)
-	require.True(t, ok)
-
-	// method not found results into a disconnect.
-	ok = clientV1.HandleCommand(&protocol.Command{
-		Id:     11,
-		Method: 10001,
-		Params: nil,
-	}, 0)
-	require.False(t, ok)
 }
 
 func TestClient_HandleCommandV2(t *testing.T) {

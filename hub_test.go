@@ -194,7 +194,7 @@ LOOP:
 	for {
 		select {
 		case data := <-transport.sink:
-			if string(data) == "{\"result\":{\"type\":3,\"channel\":\"test_channel\",\"data\":{\"code\":2000,\"reason\":\"server unsubscribe\"}}}" {
+			if string(data) == `{"push":{"channel":"test_channel","unsubscribe":{"code":2000,"reason":"server unsubscribe"}}}` {
 				break LOOP
 			}
 		case <-time.After(2 * time.Second):
@@ -215,8 +215,8 @@ func TestHubDisconnect(t *testing.T) {
 		})
 	})
 
-	client := newTestSubscribedClient(t, n, "42", "test_channel")
-	clientWithReconnect := newTestSubscribedClient(t, n, "24", "test_channel_reconnect")
+	client := newTestSubscribedClientV2(t, n, "42", "test_channel")
+	clientWithReconnect := newTestSubscribedClientV2(t, n, "24", "test_channel_reconnect")
 	require.Len(t, n.hub.UserConnections("42"), 1)
 	require.Len(t, n.hub.UserConnections("24"), 1)
 	require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
@@ -279,8 +279,8 @@ func TestHubDisconnect_ClientWhitelist(t *testing.T) {
 		})
 	})
 
-	client := newTestSubscribedClient(t, n, "12", "test_channel")
-	clientToKeep := newTestSubscribedClient(t, n, "12", "test_channel")
+	client := newTestSubscribedClientV2(t, n, "12", "test_channel")
+	clientToKeep := newTestSubscribedClientV2(t, n, "12", "test_channel")
 
 	require.Len(t, n.hub.UserConnections("12"), 2)
 	require.Equal(t, 2, n.hub.NumSubscribers("test_channel"))
@@ -328,8 +328,8 @@ func TestHubOperationsWithClientID(t *testing.T) {
 		})
 	})
 
-	client := newTestSubscribedClient(t, n, "12", "test_channel")
-	clientToKeep := newTestSubscribedClient(t, n, "12", "test_channel")
+	client := newTestSubscribedClientV2(t, n, "12", "test_channel")
+	clientToKeep := newTestSubscribedClientV2(t, n, "12", "test_channel")
 
 	require.Len(t, n.hub.UserConnections("12"), 2)
 	require.Equal(t, 2, n.hub.NumSubscribers("test_channel"))
@@ -833,11 +833,6 @@ func TestHubBroadcastInappropriateProtocol_Publication(t *testing.T) {
 		waitWithTimeout(t, done)
 	}
 
-	t.Run("protocol_v1", func(t *testing.T) {
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
-		testFunc(client)
-	})
-
 	t.Run("protocol_v2", func(t *testing.T) {
 		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 		testFunc(client)
@@ -867,11 +862,6 @@ func TestHubBroadcastInappropriateProtocol_Join(t *testing.T) {
 		waitWithTimeout(t, done)
 	}
 
-	t.Run("protocol_v1", func(t *testing.T) {
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
-		testFunc(client)
-	})
-
 	t.Run("protocol_v2", func(t *testing.T) {
 		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 		testFunc(client)
@@ -900,11 +890,6 @@ func TestHubBroadcastInappropriateProtocol_Leave(t *testing.T) {
 		require.NoError(t, err)
 		waitWithTimeout(t, done)
 	}
-
-	t.Run("protocol_v1", func(t *testing.T) {
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
-		testFunc(client)
-	})
 
 	t.Run("protocol_v2", func(t *testing.T) {
 		client := newTestSubscribedClientV2(t, n, "42", "test_channel")

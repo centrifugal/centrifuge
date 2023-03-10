@@ -390,7 +390,7 @@ func TestNode_Subscribe(t *testing.T) {
 		})
 	})
 
-	newTestConnectedClient(t, n, "42")
+	newTestConnectedClientV2(t, n, "42")
 
 	err := n.Subscribe("42", "test_channel", WithRecoverSince(&StreamPosition{0, "test"}))
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 		})
 	})
 
-	client := newTestSubscribedClient(t, n, "42", "test_channel")
+	client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 
 	err = n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
@@ -453,7 +453,7 @@ func TestNode_Disconnect(t *testing.T) {
 		})
 	})
 
-	newTestConnectedClient(t, n, "42")
+	newTestConnectedClientV2(t, n, "42")
 
 	err = n.Disconnect("42", WithCustomDisconnect(DisconnectBadRequest))
 	require.NoError(t, err)
@@ -729,7 +729,7 @@ func TestNode_handleControl(t *testing.T) {
 		n := defaultNodeNoHandlers()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		newTestConnectedClient(t, n, "42")
+		newTestConnectedClientV2(t, n, "42")
 
 		enc := controlproto.NewProtobufEncoder()
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
@@ -764,7 +764,7 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 
 		enc := controlproto.NewProtobufEncoder()
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
@@ -818,7 +818,7 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 
 		enc := controlproto.NewProtobufEncoder()
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
@@ -864,7 +864,7 @@ func TestNode_handleControl(t *testing.T) {
 		n := defaultTestNode()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 
 		enc := controlproto.NewProtobufEncoder()
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
@@ -1152,8 +1152,8 @@ func TestSingleFlightPresence(t *testing.T) {
 	require.Len(t, result.Presence, 0)
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	result, err = node.Presence("test")
 	require.NoError(t, err)
@@ -1216,7 +1216,7 @@ func TestNode_OnTransportWrite(t *testing.T) {
 	done := make(chan struct{})
 
 	node.OnTransportWrite(func(_ *Client, event TransportWriteEvent) bool {
-		if string(event.Data) == "{\"result\":{\"type\":4,\"data\":{\"data\":{}}}}" {
+		if string(event.Data) == `{"push":{"message":{"data":{}}}}` {
 			close(done)
 		}
 		return true
@@ -1229,7 +1229,7 @@ func TestNode_OnTransportWrite(t *testing.T) {
 
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 	err := client.Send([]byte("{}"))
 	require.NoError(t, err)
 	select {
@@ -1283,7 +1283,7 @@ func TestNode_OnTransportWriteSkip(t *testing.T) {
 
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 	err := client.Send([]byte("{}"))
 	require.NoError(t, err)
 
