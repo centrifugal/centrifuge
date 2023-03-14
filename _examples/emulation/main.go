@@ -94,12 +94,6 @@ func main() {
 	}
 
 	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-		// Use reasonably large expiration interval for stream meta key,
-		// much bigger than maximum HistoryLifetime value in Node config.
-		// This way stream metadata will expire, in some cases you may want
-		// to prevent its expiration setting this to zero value.
-		HistoryMetaTTL: 7 * 24 * time.Hour,
-
 		// And configure a couple of shards to use.
 		Shards: redisShards,
 	})

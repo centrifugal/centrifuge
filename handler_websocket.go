@@ -63,13 +63,6 @@ type WebsocketConfig struct {
 	// UseWriteBufferPool enables using buffer pool for writes.
 	UseWriteBufferPool bool
 
-	// PingInterval sets interval server will send ping frames to clients.
-	// By default, 25 * time.Second is used. Only used for clients with ProtocolVersion1.
-	PingInterval time.Duration
-	// PongTimeout sets the time to wait for pong messages from the client.
-	// By default, PingInterval / 3 is used. Only used for clients with ProtocolVersion1.
-	PongTimeout time.Duration
-
 	PingPongConfig
 }
 

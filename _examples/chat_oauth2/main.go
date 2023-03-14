@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -224,7 +224,7 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = response.Body.Close() }()
 
-	contents, err := ioutil.ReadAll(response.Body)
+	contents, err := io.ReadAll(response.Body)
 	if err != nil {
 		log.Printf("Error reading body  %s\n", err.Error())
 		return
@@ -277,7 +277,7 @@ func getSessionValue(session *sessions.Session, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s, err := ioutil.ReadAll(r)
+	s, err := io.ReadAll(r)
 	if err != nil {
 		return "", err
 	}

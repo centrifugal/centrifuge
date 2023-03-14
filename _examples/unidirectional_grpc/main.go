@@ -199,7 +199,7 @@ func (t *grpcTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing not implemented here, example only works over ProtocolVersion1.
+// AppLevelPing ...
 func (t *grpcTransport) AppLevelPing() centrifuge.AppLevelPing {
 	return centrifuge.AppLevelPing{}
 }

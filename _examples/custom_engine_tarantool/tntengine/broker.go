@@ -348,7 +348,8 @@ func (m *historyResponse) DecodeMsgpack(d *msgpack.Decoder) error {
 }
 
 // History - see centrifuge.Broker interface description.
-func (b *Broker) History(ch string, filter centrifuge.HistoryFilter) ([]*centrifuge.Publication, centrifuge.StreamPosition, error) {
+func (b *Broker) History(ch string, opts centrifuge.HistoryOptions) ([]*centrifuge.Publication, centrifuge.StreamPosition, error) {
+	filter := opts.Filter
 	var includePubs = true
 	var offset uint64
 	if filter.Since != nil {

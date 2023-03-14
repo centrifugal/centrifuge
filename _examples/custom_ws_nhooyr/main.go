@@ -220,7 +220,7 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
 }
 
-// AppLevelPing not implemented here, example only works over ProtocolVersion1.
+// AppLevelPing ...
 func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
 	return centrifuge.AppLevelPing{}
 }
@@ -285,7 +285,7 @@ func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error
 	t.mu.Unlock()
 
 	if disconnect != centrifuge.DisconnectConnectionClosed {
-		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
+		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.Reason)
 	}
 	return t.conn.Close(websocket.StatusNormalClosure, "")
 }

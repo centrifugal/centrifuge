@@ -27,11 +27,6 @@ type SockjsConfig struct {
 	// for connecting on the client side.
 	URL string
 
-	// HeartbeatDelay sets how often to send heartbeat frames to clients.
-	// Only used for ProtocolVersion1. For ProtocolVersion2 we are using application level
-	// server-to-client pings.
-	HeartbeatDelay time.Duration
-
 	// CheckOrigin allows deciding whether to use CORS or not in XHR case.
 	// When false returned then CORS headers won't be set.
 	CheckOrigin func(*http.Request) bool
@@ -104,11 +99,6 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 		options.CheckOrigin = sameHostOriginCheck(node)
 	}
 
-	if config.HeartbeatDelay == 0 {
-		config.HeartbeatDelay = 25 * time.Second
-	}
-	options.HeartbeatDelay = config.HeartbeatDelay
-
 	wsWriteTimeout := config.WebsocketWriteTimeout
 	if wsWriteTimeout == 0 {
 		wsWriteTimeout = 1 * time.Second
@@ -124,10 +114,7 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 		config: config,
 	}
 
-	// Disable heartbeats for ProtocolVersion2 if we are using app-level pings.
-	if s.config.PingPongConfig.PingInterval >= 0 {
-		options.HeartbeatDelay = 0
-	}
+	options.HeartbeatDelay = 0
 	s.handlerV2 = sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV2)
 	return s
 }

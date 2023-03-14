@@ -1490,9 +1490,7 @@ func (c *Client) getRefreshPushReply(res *protocol.Refresh) ([]byte, error) {
 }
 
 func (c *Client) releaseRefreshCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleaseRefreshReply(reply)
-	}
+	protocol.ReplyPool.ReleaseRefreshReply(reply)
 }
 
 func (c *Client) getRefreshCommandReply(res *protocol.RefreshResult) (*protocol.Reply, error) {
@@ -1727,9 +1725,7 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 }
 
 func (c *Client) releaseSubRefreshCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleaseSubRefreshReply(reply)
-	}
+	protocol.ReplyPool.ReleaseSubRefreshReply(reply)
 }
 
 func (c *Client) getSubRefreshCommandReply(res *protocol.SubRefreshResult) (*protocol.Reply, error) {
@@ -1758,9 +1754,7 @@ func (c *Client) handleUnsubscribe(req *protocol.UnsubscribeRequest, cmd *protoc
 }
 
 func (c *Client) releaseUnsubscribeCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleaseUnsubscribeReply(reply)
-	}
+	protocol.ReplyPool.ReleaseUnsubscribeReply(reply)
 }
 
 func (c *Client) getUnsubscribeCommandReply(res *protocol.UnsubscribeResult) (*protocol.Reply, error) {
@@ -1822,9 +1816,7 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 }
 
 func (c *Client) releasePublishCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleasePublishReply(reply)
-	}
+	protocol.ReplyPool.ReleasePublishReply(reply)
 }
 
 func (c *Client) getPublishCommandReply(res *protocol.PublishResult) (*protocol.Reply, error) {
@@ -1885,9 +1877,7 @@ func (c *Client) handlePresence(req *protocol.PresenceRequest, cmd *protocol.Com
 }
 
 func (c *Client) releasePresenceCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleasePresenceReply(reply)
-	}
+	protocol.ReplyPool.ReleasePresenceReply(reply)
 }
 
 func (c *Client) getPresenceCommandReply(res *protocol.PresenceResult) (*protocol.Reply, error) {
@@ -1944,9 +1934,7 @@ func (c *Client) handlePresenceStats(req *protocol.PresenceStatsRequest, cmd *pr
 }
 
 func (c *Client) releasePresenceStatsCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleasePresenceStatsReply(reply)
-	}
+	protocol.ReplyPool.ReleasePresenceStatsReply(reply)
 }
 
 func (c *Client) getPresenceStatsCommandReply(res *protocol.PresenceStatsResult) (*protocol.Reply, error) {
@@ -2035,9 +2023,7 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 }
 
 func (c *Client) releaseHistoryCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleaseHistoryReply(reply)
-	}
+	protocol.ReplyPool.ReleaseHistoryReply(reply)
 }
 
 func (c *Client) getHistoryCommandReply(res *protocol.HistoryResult) (*protocol.Reply, error) {
@@ -2122,9 +2108,7 @@ func (c *Client) handleRPC(req *protocol.RPCRequest, cmd *protocol.Command, star
 }
 
 func (c *Client) releaseRPCCommandReply(r *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleaseRPCReply(r)
-	}
+	protocol.ReplyPool.ReleaseRPCReply(r)
 }
 
 func (c *Client) getRPCCommandReply(res *protocol.RPCResult) (*protocol.Reply, error) {
@@ -2507,9 +2491,7 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 }
 
 func (c *Client) releaseConnectCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleaseConnectReply(reply)
-	}
+	protocol.ReplyPool.ReleaseConnectReply(reply)
 }
 
 func (c *Client) getConnectCommandReply(res *protocol.ConnectResult) (*protocol.Reply, error) {
@@ -2754,10 +2736,6 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestEpoch = historyResult.Epoch
 					res.Recovered = false
 					incRecover(res.Recovered)
-					//if c.transport.ProtocolVersion() > ProtocolVersion1 {
-					//	c.pubSubSync.StopBuffering(channel)
-					//	return errorDisconnectContext(ErrorUnrecoverablePosition, nil)
-					//}
 				} else {
 					c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]interface{}{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					c.pubSubSync.StopBuffering(channel)
@@ -2903,9 +2881,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 }
 
 func (c *Client) releaseSubscribeCommandReply(reply *protocol.Reply) {
-	if c.transport.ProtocolVersion() == ProtocolVersion2 {
-		protocol.ReplyPool.ReleaseSubscribeReply(reply)
-	}
+	protocol.ReplyPool.ReleaseSubscribeReply(reply)
 }
 
 func (c *Client) getSubscribeCommandReply(res *protocol.SubscribeResult) (*protocol.Reply, error) {

@@ -39,9 +39,7 @@ func main() {
 		ClientExpiredCloseDelay: 5 * time.Second,
 	})
 
-	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{
-		HistoryMetaTTL: 120 * time.Second,
-	})
+	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{})
 	node.SetBroker(broker)
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
