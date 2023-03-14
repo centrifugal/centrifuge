@@ -93,7 +93,10 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 
 // AppLevelPing ...
 func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+	return centrifuge.AppLevelPing{
+		PingInterval: 25 * time.Second,
+		PongTimeout:  10 * time.Second,
+	}
 }
 
 // Write ...

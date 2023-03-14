@@ -201,7 +201,10 @@ func (t *grpcTransport) DisabledPushFlags() uint64 {
 
 // AppLevelPing ...
 func (t *grpcTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+	return centrifuge.AppLevelPing{
+		PingInterval: 25 * time.Second,
+		PongTimeout:  10 * time.Second,
+	}
 }
 
 func (t *grpcTransport) Write(message []byte) error {

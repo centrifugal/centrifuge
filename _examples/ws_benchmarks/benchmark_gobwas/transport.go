@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/centrifugal/protocol"
@@ -59,7 +60,10 @@ func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion 
 
 // AppLevelPing ...
 func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+	return centrifuge.AppLevelPing{
+		PingInterval: 25 * time.Second,
+		PongTimeout:  10 * time.Second,
+	}
 }
 
 func (t *customWebsocketTransport) read() ([]byte, bool, error) {
