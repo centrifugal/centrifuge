@@ -67,10 +67,6 @@ func main() {
 		HistoryMetaTTL: 24 * time.Hour,
 	})
 
-	// Override default broker which does not use HistoryMetaTTL.
-	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{})
-	node.SetBroker(broker)
-
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
