@@ -15,10 +15,6 @@ import (
 
 // SockjsConfig represents config for SockJS handler.
 type SockjsConfig struct {
-	// ProtocolVersion the handler will serve. If not set we are expecting
-	// client connected using ProtocolVersion2.
-	ProtocolVersion ProtocolVersion
-
 	// HandlerPrefix sets prefix for SockJS handler endpoint path.
 	HandlerPrefix string
 
@@ -62,9 +58,9 @@ type SockjsConfig struct {
 // more than one Centrifuge Node on a backend (so SockJS to be able to emulate
 // bidirectional protocol). So if you can afford it - use WebsocketHandler only.
 type SockjsHandler struct {
-	node      *Node
-	config    SockjsConfig
-	handlerV2 http.Handler
+	node    *Node
+	config  SockjsConfig
+	handler http.Handler
 }
 
 // NewSockjsHandler creates new SockjsHandler.
@@ -105,40 +101,35 @@ func NewSockjsHandler(node *Node, config SockjsConfig) *SockjsHandler {
 	}
 	options.WebsocketWriteTimeout = wsWriteTimeout
 
-	if config.ProtocolVersion == 0 {
-		config.ProtocolVersion = ProtocolVersion2
-	}
-
 	s := &SockjsHandler{
 		node:   node,
 		config: config,
 	}
 
 	options.HeartbeatDelay = 0
-	s.handlerV2 = sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandlerV2)
+	s.handler = sockjs.NewHandler(config.HandlerPrefix, options, s.sockJSHandler)
 	return s
 }
 
 func (s *SockjsHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	s.handlerV2.ServeHTTP(rw, r)
+	s.handler.ServeHTTP(rw, r)
 }
 
 // sockJSHandler called when new client connection comes to SockJS endpoint.
-func (s *SockjsHandler) sockJSHandlerV2(sess sockjs.Session) {
-	s.handleSession(ProtocolVersion2, sess)
+func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
+	s.handleSession(sess)
 }
 
 // sockJSHandler called when new client connection comes to SockJS endpoint.
-func (s *SockjsHandler) handleSession(protoVersion ProtocolVersion, sess sockjs.Session) {
+func (s *SockjsHandler) handleSession(sess sockjs.Session) {
 	incTransportConnect(transportSockJS)
 	pingInterval, pongTimeout := getPingPongPeriodValues(s.config.PingPongConfig)
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		transport := newSockjsTransport(sess, sockjsTransportOptions{
-			protocolVersion: protoVersion,
-			pingInterval:    pingInterval,
-			pongTimeout:     pongTimeout,
+			pingInterval: pingInterval,
+			pongTimeout:  pongTimeout,
 		})
 
 		select {
@@ -199,9 +190,8 @@ const (
 )
 
 type sockjsTransportOptions struct {
-	protocolVersion ProtocolVersion
-	pingInterval    time.Duration
-	pongTimeout     time.Duration
+	pingInterval time.Duration
+	pongTimeout  time.Duration
 }
 
 type sockjsTransport struct {
@@ -233,7 +223,7 @@ func (t *sockjsTransport) Protocol() ProtocolType {
 
 // ProtocolVersion returns transport ProtocolVersion.
 func (t *sockjsTransport) ProtocolVersion() ProtocolVersion {
-	return t.opts.protocolVersion
+	return ProtocolVersion2
 }
 
 // Unidirectional returns whether transport is unidirectional.

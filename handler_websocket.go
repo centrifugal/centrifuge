@@ -18,9 +18,37 @@ import (
 
 // WebsocketConfig represents config for WebsocketHandler.
 type WebsocketConfig struct {
-	// ProtocolVersion the handler will serve by default. If not set we are expecting
-	// client connected using ProtocolVersion2.
-	ProtocolVersion ProtocolVersion
+	// CheckOrigin func to provide custom origin check logic.
+	// nil means that sameHostOriginCheck function will be used which
+	// expects Origin host to match request Host.
+	CheckOrigin func(r *http.Request) bool
+
+	// ReadBufferSize is a parameter that is used for raw websocket Upgrader.
+	// If set to zero reasonable default value will be used.
+	ReadBufferSize int
+
+	// WriteBufferSize is a parameter that is used for raw websocket Upgrader.
+	// If set to zero reasonable default value will be used.
+	WriteBufferSize int
+
+	// UseWriteBufferPool enables using buffer pool for writes.
+	UseWriteBufferPool bool
+
+	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
+	// By default, 65536 bytes (64KB) will be used.
+	MessageSizeLimit int
+
+	// WriteTimeout is maximum time of write message operation.
+	// Slow client will be disconnected.
+	// By default, 1 * time.Second will be used.
+	WriteTimeout time.Duration
+
+	// Compression allows enabling websocket permessage-deflate
+	// compression support for raw websocket connections. It does
+	// not guarantee that compression will be used - i.e. it only
+	// says that server will try to negotiate it with client.
+	// Note: enabling compression may lead to performance degradation.
+	Compression bool
 
 	// CompressionLevel sets a level for websocket compression.
 	// See possible value description at https://golang.org/pkg/compress/flate/#NewWriter
@@ -32,37 +60,6 @@ type WebsocketConfig struct {
 	// WebsocketCompression enabled and compression negotiated with client.
 	CompressionMinSize int
 
-	// ReadBufferSize is a parameter that is used for raw websocket Upgrader.
-	// If set to zero reasonable default value will be used.
-	ReadBufferSize int
-
-	// WriteBufferSize is a parameter that is used for raw websocket Upgrader.
-	// If set to zero reasonable default value will be used.
-	WriteBufferSize int
-
-	// MessageSizeLimit sets the maximum size in bytes of allowed message from client.
-	// By default, 65536 bytes (64KB) will be used.
-	MessageSizeLimit int
-
-	// CheckOrigin func to provide custom origin check logic.
-	// nil means that sameHostOriginCheck function will be used which
-	// expects Origin host to match request Host.
-	CheckOrigin func(r *http.Request) bool
-
-	// WriteTimeout is maximum time of write message operation.
-	// Slow client will be disconnected.
-	// By default, 1 * time.Second will be used.
-	WriteTimeout time.Duration
-
-	// Compression allows enabling websocket permessage-deflate
-	// compression support for raw websocket connections. It does
-	// not guarantee that compression will be used - i.e. it only
-	// says that server will try to negotiate it with client.
-	Compression bool
-
-	// UseWriteBufferPool enables using buffer pool for writes.
-	UseWriteBufferPool bool
-
 	PingPongConfig
 }
 
@@ -73,7 +70,6 @@ type WebsocketHandler struct {
 	node    *Node
 	upgrade *websocket.Upgrader
 	config  WebsocketConfig
-	version ProtocolVersion
 }
 
 var writeBufferPool = &sync.Pool{}
@@ -95,14 +91,10 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	} else {
 		upgrade.CheckOrigin = sameHostOriginCheck(node)
 	}
-	if config.ProtocolVersion == 0 {
-		config.ProtocolVersion = ProtocolVersion2
-	}
 	return &WebsocketHandler{
 		node:    node,
 		config:  config,
 		upgrade: upgrade,
-		version: config.ProtocolVersion,
 	}
 }
 
@@ -110,7 +102,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportWebsocket)
 
 	var protoType = ProtocolTypeJSON
-	protoVersion := s.config.ProtocolVersion
 
 	if r.URL.RawQuery != "" {
 		query := r.URL.Query()
@@ -136,25 +127,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var (
-		pingInterval time.Duration
-		pongTimeout  time.Duration
-	)
-
-	appLevelPing := s.config.PingPongConfig.PingInterval >= 0
-
-	if !appLevelPing {
-		pingInterval = s.config.PingInterval
-		if pingInterval == 0 {
-			pingInterval = 25 * time.Second
-		}
-		pongTimeout = s.config.PongTimeout
-		if pongTimeout == 0 {
-			pongTimeout = pingInterval / 3
-		}
-	} else {
-		pingInterval, pongTimeout = getPingPongPeriodValues(s.config.PingPongConfig)
-	}
+	pingInterval, pongTimeout := getPingPongPeriodValues(s.config.PingPongConfig)
 
 	writeTimeout := s.config.WriteTimeout
 	if writeTimeout == 0 {
@@ -168,15 +141,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		conn.SetReadLimit(int64(messageSizeLimit))
 	}
 
-	if !appLevelPing && pingInterval > 0 {
-		readDeadline := pingInterval + pongTimeout
-		_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
-		conn.SetPongHandler(func(string) error {
-			_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
-			return nil
-		})
-	}
-
 	subProtocol := conn.Subprotocol()
 	if subProtocol == "centrifuge-protobuf" {
 		protoType = ProtocolTypeProtobuf
@@ -185,13 +149,11 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		opts := websocketTransportOptions{
-			appLevelPing:       appLevelPing,
 			pingInterval:       pingInterval,
 			pongTimeout:        pongTimeout,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
 			protoType:          protoType,
-			protoVersion:       protoVersion,
 		}
 
 		graceCh := make(chan struct{})
@@ -232,11 +194,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// https://github.com/gorilla/websocket/issues/448
-		// We only set custom pong handler in proto v1.
-		if !appLevelPing && pingInterval > 0 {
-			conn.SetPongHandler(nil)
-		}
 		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
 		for {
 			if _, _, err := conn.NextReader(); err != nil {
@@ -306,8 +263,6 @@ type websocketTransportOptions struct {
 	pongTimeout        time.Duration
 	writeTimeout       time.Duration
 	compressionMinSize int
-	protoVersion       ProtocolVersion
-	appLevelPing       bool
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}) *websocketTransport {
@@ -317,35 +272,7 @@ func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions,
 		graceCh: graceCh,
 		opts:    opts,
 	}
-	if !opts.appLevelPing && opts.pingInterval > 0 {
-		transport.addPing()
-	}
 	return transport
-}
-
-func (t *websocketTransport) ping() {
-	select {
-	case <-t.closeCh:
-		return
-	default:
-		deadline := time.Now().Add(t.opts.pingInterval / 2)
-		err := t.conn.WriteControl(websocket.PingMessage, nil, deadline)
-		if err != nil {
-			_ = t.Close(DisconnectWriteError)
-			return
-		}
-		t.addPing()
-	}
-}
-
-func (t *websocketTransport) addPing() {
-	t.mu.Lock()
-	if t.closed {
-		t.mu.Unlock()
-		return
-	}
-	t.pingTimer = time.AfterFunc(t.opts.pingInterval, t.ping)
-	t.mu.Unlock()
 }
 
 // Name returns name of transport.
@@ -360,7 +287,7 @@ func (t *websocketTransport) Protocol() ProtocolType {
 
 // ProtocolVersion returns transport ProtocolVersion.
 func (t *websocketTransport) ProtocolVersion() ProtocolVersion {
-	return t.opts.protoVersion
+	return ProtocolVersion2
 }
 
 // Unidirectional returns whether transport is unidirectional.

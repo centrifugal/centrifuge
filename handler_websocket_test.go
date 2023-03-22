@@ -114,9 +114,7 @@ func TestWebsocketHandlerURLParams(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	mux.Handle("/connection/websocket", NewWebsocketHandler(node, WebsocketConfig{
-		ProtocolVersion: ProtocolVersion2,
-	}))
+	mux.Handle("/connection/websocket", NewWebsocketHandler(node, WebsocketConfig{}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -588,7 +586,6 @@ func BenchmarkWsConnectV2(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
-		ProtocolVersion: ProtocolVersion2,
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -703,7 +700,6 @@ func BenchmarkWsPubSubV2(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
-		ProtocolVersion: ProtocolVersion2,
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -755,7 +751,6 @@ func BenchmarkWsCommandReplyV2(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
-		ProtocolVersion: ProtocolVersion2,
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -833,7 +828,6 @@ func BenchmarkWsCommandReplyV2Multiple(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
-		ProtocolVersion: ProtocolVersion2,
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
@@ -939,7 +933,6 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
-		ProtocolVersion: ProtocolVersion2,
 		WriteBufferSize: 0,
 		ReadBufferSize:  0,
 	})))
