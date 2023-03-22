@@ -257,6 +257,8 @@ type Client struct {
 	startWriterOnce   sync.Once
 	replyWithoutQueue bool
 	unusable          bool
+	pingInterval      time.Duration
+	pongTimeout       time.Duration
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -503,6 +505,10 @@ func (c *Client) sendPing() {
 	}
 	c.mu.Lock()
 	appLevelPing := c.transport.AppLevelPing()
+	if c.pingInterval > 0 {
+		appLevelPing.PingInterval = c.pingInterval
+		appLevelPing.PongTimeout = c.pongTimeout
+	}
 	if appLevelPing.PongTimeout > 0 && !unidirectional {
 		c.nextPong = time.Now().Add(appLevelPing.PongTimeout).UnixNano()
 	}
@@ -531,11 +537,14 @@ func (c *Client) checkPong() {
 // Lock must be held outside.
 func (c *Client) addPingUpdate(isFirst bool) {
 	delay := c.transport.AppLevelPing().PingInterval
+	if c.pingInterval > 0 {
+		delay = c.pingInterval
+	}
 	if isFirst {
 		// Send first ping in random interval between 0 and PingInterval to
 		// spread ping-pongs in time (useful when many connections reconnect
 		// almost immediately).
-		pingNanoseconds := c.transport.AppLevelPing().PingInterval.Nanoseconds()
+		pingNanoseconds := delay.Nanoseconds()
 		delay = time.Duration(randSource.Int63n(pingNanoseconds)) * time.Nanosecond
 	}
 	c.nextPing = time.Now().Add(delay).UnixNano()
@@ -1575,7 +1584,7 @@ func (c *Client) scheduleOnConnectTimers() {
 		}
 		c.addExpireUpdate(expireAfter)
 	}
-	if c.transport.ProtocolVersion() > ProtocolVersion1 && c.transport.AppLevelPing().PingInterval > 0 {
+	if c.transport.ProtocolVersion() > ProtocolVersion1 && (c.transport.AppLevelPing().PingInterval > 0 || c.pingInterval > 0) {
 		c.addPingUpdate(true)
 	}
 	c.mu.Unlock()
@@ -2466,6 +2475,15 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				subscriptions[ch] = opts
 			}
 		}
+		if reply.ClientPingInterval > 0 {
+			c.pingInterval = reply.ClientPingInterval
+			c.pongTimeout = reply.ClientPongTimeout
+			if c.pongTimeout < 0 {
+				c.pongTimeout = 0
+			} else if c.pongTimeout == 0 {
+				c.pongTimeout = c.pingInterval / 3
+			}
+		}
 	} else {
 		c.startWriter(0, 0, 0)
 	}
@@ -2538,8 +2556,12 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	if c.transport.ProtocolVersion() > ProtocolVersion1 {
 		appLevelPing := c.transport.AppLevelPing()
+		if c.pingInterval > 0 {
+			appLevelPing.PingInterval = c.pingInterval
+			appLevelPing.PongTimeout = c.pongTimeout
+		}
 		if appLevelPing.PingInterval > 0 {
-			res.Ping = uint32(c.transport.AppLevelPing().PingInterval.Seconds())
+			res.Ping = uint32(appLevelPing.PingInterval.Seconds())
 		}
 		if !c.transport.Unidirectional() && appLevelPing.PongTimeout > 0 {
 			res.Pong = true

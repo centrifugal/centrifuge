@@ -68,6 +68,13 @@ type ConnectReply struct {
 	// QueueInitialCap set an initial capacity for client's message queue, the size of queue
 	// can grow further, but won't be reduced below QueueInitialCap. By default, it's 2.
 	QueueInitialCap int
+	// ClientPingInterval sets the ping interval for each client. Note that to
+	// use ClientPingInterval, the AppLevelPing must be disabled in order to avoid unexpected
+	// connection closes. If both ClientPingInterval & AppLevelPing are disabled, there will be no
+	// server-client pings issued.
+	ClientPingInterval time.Duration
+	// ClientPongTimeout is the same as AppLevelPing's PongTimeout.
+	ClientPongTimeout time.Duration
 }
 
 // ConnectingHandler called when new client authenticates on server.
