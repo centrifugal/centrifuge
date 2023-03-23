@@ -2219,6 +2219,10 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 	} else {
 		c.startWriter(0, 0, 0)
+		pingPongConfig := c.transport.PingPongConfig()
+		c.pingInterval = pingPongConfig.PingInterval
+		c.pongTimeout = pingPongConfig.PongTimeout
+
 	}
 
 	if channelLimit > 0 && len(subscriptions) > channelLimit {
