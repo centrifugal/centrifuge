@@ -1,14 +1,15 @@
 package main
 
 import (
-	"github.com/centrifugal/centrifuge"
-	"github.com/centrifugal/protocol"
-	"github.com/gobwas/ws"
-	"github.com/gobwas/ws/wsutil"
 	"io/ioutil"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/centrifugal/centrifuge"
+	"github.com/centrifugal/protocol"
+	"github.com/gobwas/ws"
+	"github.com/gobwas/ws/wsutil"
 )
 
 const websocketTransportName = "websocket"
