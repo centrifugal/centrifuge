@@ -123,13 +123,12 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 // sockJSHandler called when new client connection comes to SockJS endpoint.
 func (s *SockjsHandler) handleSession(sess sockjs.Session) {
 	incTransportConnect(transportSockJS)
-	pingInterval, pongTimeout := getPingPongPeriodValues(s.config.PingPongConfig)
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		transport := newSockjsTransport(sess, sockjsTransportOptions{
-			pingInterval: pingInterval,
-			pongTimeout:  pongTimeout,
+			pingInterval: s.config.PingPongConfig.PingInterval,
+			pongTimeout:  s.config.PingPongConfig.PongTimeout,
 		})
 
 		select {
@@ -243,9 +242,9 @@ func (t *sockjsTransport) DisabledPushFlags() uint64 {
 	return PushFlagDisconnect
 }
 
-// AppLevelPing ...
-func (t *sockjsTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
+// PingPongConfig ...
+func (t *sockjsTransport) PingPongConfig() PingPongConfig {
+	return PingPongConfig{
 		PingInterval: t.opts.pingInterval,
 		PongTimeout:  t.opts.pongTimeout,
 	}

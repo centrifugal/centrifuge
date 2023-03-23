@@ -127,8 +127,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	pingInterval, pongTimeout := getPingPongPeriodValues(s.config.PingPongConfig)
-
 	writeTimeout := s.config.WriteTimeout
 	if writeTimeout == 0 {
 		writeTimeout = 1 * time.Second
@@ -149,8 +147,8 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		opts := websocketTransportOptions{
-			pingInterval:       pingInterval,
-			pongTimeout:        pongTimeout,
+			pingInterval:       s.config.PingPongConfig.PingInterval,
+			pongTimeout:        s.config.PingPongConfig.PongTimeout,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
 			protoType:          protoType,
@@ -306,9 +304,9 @@ func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return PushFlagDisconnect
 }
 
-// AppLevelPing ...
-func (t *websocketTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
+// PingPongConfig ...
+func (t *websocketTransport) PingPongConfig() PingPongConfig {
+	return PingPongConfig{
 		PingInterval: t.opts.pingInterval,
 		PongTimeout:  t.opts.pongTimeout,
 	}

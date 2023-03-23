@@ -3550,6 +3550,62 @@ func TestClient_HandleCommandV2_NonAuthenticated(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestClientLevelPing(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	done := make(chan struct{})
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			PingPongConfig: &PingPongConfig{
+				PingInterval: 5 * time.Second,
+				PongTimeout:  3 * time.Second,
+			},
+		}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectNoPong.Code, event.Disconnect.Code)
+			close(done)
+		})
+	})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setPing(0, 0)
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+	connectClientV2(t, client)
+	select {
+	case <-done:
+	case <-time.After(9 * time.Second):
+		t.Fatal("no disconnect in timeout")
+	}
+}
+
+func TestNoClientLevelPing(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	done := make(chan struct{})
+	node.OnConnect(func(client *Client) {
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.NotEqual(t, DisconnectNoPong.Code, event.Disconnect.Code)
+			close(done)
+		})
+	})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setPing(-1, 0)
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+	connectClientV2(t, client)
+	select {
+	case <-done:
+		t.Fatal("should not disconnect when no timeout")
+	case <-time.After(36 * time.Second):
+	}
+}
+
 func TestClient_HandleCommandV2(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()

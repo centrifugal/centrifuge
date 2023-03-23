@@ -72,12 +72,10 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pingInterval, pongTimeout := getPingPongPeriodValues(h.config.PingPongConfig)
-
 	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
 		protocolType: protocolType,
-		pingInterval: pingInterval,
-		pongTimeout:  pongTimeout,
+		pingInterval: h.config.PingInterval,
+		pongTimeout:  h.config.PongTimeout,
 	})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
@@ -207,9 +205,9 @@ func (t *httpStreamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing ...
-func (t *httpStreamTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
+// PingPongConfig ...
+func (t *httpStreamTransport) PingPongConfig() PingPongConfig {
+	return PingPongConfig{
 		PingInterval: t.config.pingInterval,
 		PongTimeout:  t.config.pongTimeout,
 	}

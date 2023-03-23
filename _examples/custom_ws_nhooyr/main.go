@@ -220,9 +220,9 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
 }
 
-// AppLevelPing ...
-func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{
+// PingPongConfig ...
+func (t *customWebsocketTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
 		PingInterval: 25 * time.Second,
 		PongTimeout:  10 * time.Second,
 	}

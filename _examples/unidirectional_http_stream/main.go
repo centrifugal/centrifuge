@@ -302,9 +302,9 @@ func (t *streamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing ...
-func (t *streamTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{
+// PingPongConfig ...
+func (t *streamTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
 		PingInterval: 25 * time.Second,
 		PongTimeout:  10 * time.Second,
 	}

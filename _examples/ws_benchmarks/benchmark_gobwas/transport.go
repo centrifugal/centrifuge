@@ -58,9 +58,9 @@ func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion 
 	return centrifuge.ProtocolVersion2
 }
 
-// AppLevelPing ...
-func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{
+// PingPongConfig ...
+func (t *customWebsocketTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
 		PingInterval: 25 * time.Second,
 		PongTimeout:  10 * time.Second,
 	}
