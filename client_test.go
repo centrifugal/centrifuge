@@ -3596,7 +3596,7 @@ func TestNoClientLevelPing(t *testing.T) {
 	ctx, cancelFn := context.WithCancel(context.Background())
 	transport := newTestTransport(cancelFn)
 	transport.setProtocolVersion(ProtocolVersion2)
-	transport.setPing(0, 0)
+	transport.setPing(-1, 0)
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
 	connectClientV2(t, client)
 	select {
