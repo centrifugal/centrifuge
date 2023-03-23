@@ -74,8 +74,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
 		protocolType: protocolType,
-		pingInterval: h.config.PingInterval,
-		pongTimeout:  h.config.PongTimeout,
+		pingPong:     h.config.PingPongConfig,
 	})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
@@ -163,8 +162,7 @@ type httpStreamTransport struct {
 
 type httpStreamTransportConfig struct {
 	protocolType ProtocolType
-	pingInterval time.Duration
-	pongTimeout  time.Duration
+	pingPong     PingPongConfig
 }
 
 func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig) *httpStreamTransport {
@@ -207,10 +205,7 @@ func (t *httpStreamTransport) DisabledPushFlags() uint64 {
 
 // PingPongConfig ...
 func (t *httpStreamTransport) PingPongConfig() PingPongConfig {
-	return PingPongConfig{
-		PingInterval: t.config.pingInterval,
-		PongTimeout:  t.config.pongTimeout,
-	}
+	return t.config.pingPong
 }
 
 func (t *httpStreamTransport) Write(message []byte) error {

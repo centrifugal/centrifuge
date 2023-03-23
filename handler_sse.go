@@ -74,7 +74,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	transport := newSSETransport(r, sseTransportConfig{pingInterval: h.config.PingPongConfig.PingInterval, pongTimeout: h.config.PingPongConfig.PongTimeout})
+	transport := newSSETransport(r, sseTransportConfig{pingPong: h.config.PingPongConfig})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
@@ -151,8 +151,7 @@ type sseTransport struct {
 }
 
 type sseTransportConfig struct {
-	pingInterval time.Duration
-	pongTimeout  time.Duration
+	pingPong PingPongConfig
 }
 
 func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport {
@@ -195,10 +194,7 @@ func (t *sseTransport) DisabledPushFlags() uint64 {
 
 // PingPongConfig ...
 func (t *sseTransport) PingPongConfig() PingPongConfig {
-	return PingPongConfig{
-		PingInterval: t.config.pingInterval,
-		PongTimeout:  t.config.pongTimeout,
-	}
+	return t.config.pingPong
 }
 
 func (t *sseTransport) Write(message []byte) error {

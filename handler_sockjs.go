@@ -127,8 +127,7 @@ func (s *SockjsHandler) handleSession(sess sockjs.Session) {
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		transport := newSockjsTransport(sess, sockjsTransportOptions{
-			pingInterval: s.config.PingPongConfig.PingInterval,
-			pongTimeout:  s.config.PingPongConfig.PongTimeout,
+			pingPong: s.config.PingPongConfig,
 		})
 
 		select {
@@ -189,8 +188,7 @@ const (
 )
 
 type sockjsTransportOptions struct {
-	pingInterval time.Duration
-	pongTimeout  time.Duration
+	pingPong PingPongConfig
 }
 
 type sockjsTransport struct {
@@ -244,10 +242,7 @@ func (t *sockjsTransport) DisabledPushFlags() uint64 {
 
 // PingPongConfig ...
 func (t *sockjsTransport) PingPongConfig() PingPongConfig {
-	return PingPongConfig{
-		PingInterval: t.opts.pingInterval,
-		PongTimeout:  t.opts.pongTimeout,
-	}
+	return t.opts.pingPong
 }
 
 // Write data to transport.

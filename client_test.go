@@ -3601,7 +3601,7 @@ func TestNoClientLevelPing(t *testing.T) {
 	connectClientV2(t, client)
 	select {
 	case <-done:
-		t.Fatal("should not disconnect when no timeout")
+		t.Fatal("should not disconnect when ping is disabled")
 	case <-time.After(36 * time.Second):
 	}
 }

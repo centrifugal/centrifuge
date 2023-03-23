@@ -147,8 +147,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		opts := websocketTransportOptions{
-			pingInterval:       s.config.PingPongConfig.PingInterval,
-			pongTimeout:        s.config.PingPongConfig.PongTimeout,
+			pingPong:           s.config.PingPongConfig,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
 			protoType:          protoType,
@@ -257,8 +256,7 @@ type websocketTransport struct {
 
 type websocketTransportOptions struct {
 	protoType          ProtocolType
-	pingInterval       time.Duration
-	pongTimeout        time.Duration
+	pingPong           PingPongConfig
 	writeTimeout       time.Duration
 	compressionMinSize int
 }
@@ -306,10 +304,7 @@ func (t *websocketTransport) DisabledPushFlags() uint64 {
 
 // PingPongConfig ...
 func (t *websocketTransport) PingPongConfig() PingPongConfig {
-	return PingPongConfig{
-		PingInterval: t.opts.pingInterval,
-		PongTimeout:  t.opts.pongTimeout,
-	}
+	return t.opts.pingPong
 }
 
 func (t *websocketTransport) writeData(data []byte) error {
