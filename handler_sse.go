@@ -74,9 +74,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pingInterval, pongTimeout := getPingPongPeriodValues(h.config.PingPongConfig)
-
-	transport := newSSETransport(r, sseTransportConfig{pingInterval: pingInterval, pongTimeout: pongTimeout})
+	transport := newSSETransport(r, sseTransportConfig{pingInterval: h.config.PingPongConfig.PingInterval, pongTimeout: h.config.PingPongConfig.PongTimeout})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {

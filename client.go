@@ -2189,9 +2189,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if reply.PingPongConfig != nil {
 			c.pingInterval, c.pongTimeout = getPingPongPeriodValues(*reply.PingPongConfig)
 		} else {
-			pingPongConfig := c.transport.PingPongConfig()
-			c.pingInterval = pingPongConfig.PingInterval
-			c.pongTimeout = pingPongConfig.PongTimeout
+			c.pingInterval, c.pongTimeout = getPingPongPeriodValues(c.transport.PingPongConfig())
 		}
 		c.replyWithoutQueue = reply.ReplyWithoutQueue
 		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap)
@@ -2219,9 +2217,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 	} else {
 		c.startWriter(0, 0, 0)
-		pingPongConfig := c.transport.PingPongConfig()
-		c.pingInterval = pingPongConfig.PingInterval
-		c.pongTimeout = pingPongConfig.PongTimeout
+		c.pingInterval, c.pongTimeout = getPingPongPeriodValues(c.transport.PingPongConfig())
 
 	}
 

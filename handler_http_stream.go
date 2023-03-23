@@ -72,12 +72,10 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pingInterval, pongTimeout := getPingPongPeriodValues(h.config.PingPongConfig)
-
 	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
 		protocolType: protocolType,
-		pingInterval: pingInterval,
-		pongTimeout:  pongTimeout,
+		pingInterval: h.config.PingInterval,
+		pongTimeout:  h.config.PongTimeout,
 	})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
