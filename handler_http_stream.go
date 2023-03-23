@@ -207,9 +207,9 @@ func (t *httpStreamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing ...
-func (t *httpStreamTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
+// PingPongConfig ...
+func (t *httpStreamTransport) PingPongConfig() PingPongConfig {
+	return PingPongConfig{
 		PingInterval: t.config.pingInterval,
 		PongTimeout:  t.config.pongTimeout,
 	}

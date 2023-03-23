@@ -1,15 +1,14 @@
 package main
 
 import (
-	"io/ioutil"
-	"net"
-	"sync"
-	"time"
-
 	"github.com/centrifugal/centrifuge"
 	"github.com/centrifugal/protocol"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"io/ioutil"
+	"net"
+	"sync"
+	"time"
 )
 
 const websocketTransportName = "websocket"
@@ -61,9 +60,9 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
 }
 
-// AppLevelPing ...
-func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{
+// PingPongConfig ...
+func (t *customWebsocketTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
 		PingInterval: 25 * time.Second,
 		PongTimeout:  10 * time.Second,
 	}

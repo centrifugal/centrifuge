@@ -195,9 +195,9 @@ func (t *sseTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing ...
-func (t *sseTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
+// PingPongConfig ...
+func (t *sseTransport) PingPongConfig() PingPongConfig {
+	return PingPongConfig{
 		PingInterval: t.config.pingInterval,
 		PongTimeout:  t.config.pongTimeout,
 	}

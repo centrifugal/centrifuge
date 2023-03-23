@@ -1,8 +1,6 @@
 package centrifuge
 
 import (
-	"time"
-
 	"github.com/centrifugal/protocol"
 )
 
@@ -41,20 +39,6 @@ const (
 	ProtocolVersion2 ProtocolVersion = 2
 )
 
-// AppLevelPing is a configuration that describes desired application
-// level ping-pong behavior.
-type AppLevelPing struct {
-	// PingInterval tells how often to issue application-level server-to-client pings.
-	// Zero value will disable pings.
-	PingInterval time.Duration
-	// PongTimeout sets time for application-level pong check after issuing ping.
-	// Pong only checked for bidirectional clients as unidirectional clients can't send
-	// pong back. PongTimeout must be less than PingInterval – this is a limitation of
-	// current implementation (should be fine for most cases though). Zero value disables
-	// pong checks.
-	PongTimeout time.Duration
-}
-
 // TransportInfo has read-only transport description methods. Some of these methods
 // can modify the behaviour of Client.
 type TransportInfo interface {
@@ -78,9 +62,9 @@ type TransportInfo interface {
 	// bidirectional WebSocket implementation since disconnect data sent inside
 	// Close frame.
 	DisabledPushFlags() uint64
-	// AppLevelPing returns application-level server-to-client ping
+	// PingPongConfig returns application-level server-to-client ping
 	// configuration.
-	AppLevelPing() AppLevelPing
+	PingPongConfig() PingPongConfig
 }
 
 // Transport abstracts a connection transport between server and client.

@@ -243,9 +243,9 @@ func (t *sockjsTransport) DisabledPushFlags() uint64 {
 	return PushFlagDisconnect
 }
 
-// AppLevelPing ...
-func (t *sockjsTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
+// PingPongConfig ...
+func (t *sockjsTransport) PingPongConfig() PingPongConfig {
+	return PingPongConfig{
 		PingInterval: t.opts.pingInterval,
 		PongTimeout:  t.opts.pongTimeout,
 	}

@@ -306,9 +306,9 @@ func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return PushFlagDisconnect
 }
 
-// AppLevelPing ...
-func (t *websocketTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
+// PingPongConfig ...
+func (t *websocketTransport) PingPongConfig() PingPongConfig {
+	return PingPongConfig{
 		PingInterval: t.opts.pingInterval,
 		PongTimeout:  t.opts.pongTimeout,
 	}

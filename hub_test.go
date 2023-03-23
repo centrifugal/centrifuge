@@ -127,8 +127,8 @@ func (t *testTransport) DisabledPushFlags() uint64 {
 	return PushFlagDisconnect
 }
 
-func (t *testTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
+func (t *testTransport) PingPongConfig() PingPongConfig {
+	return PingPongConfig{
 		PingInterval: t.pingInterval,
 		PongTimeout:  t.pongTimeout,
 	}
