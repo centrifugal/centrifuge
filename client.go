@@ -260,7 +260,6 @@ type Client struct {
 	startWriterOnce   sync.Once
 	replyWithoutQueue bool
 	unusable          bool
-	overridePing      bool
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -498,9 +497,8 @@ func (c *Client) sendPing() {
 		c.traceOutReply(emptyReply)
 	}
 	c.mu.Lock()
-	pingPongConfig := c.getPingPongConfig()
-	if pingPongConfig.PongTimeout > 0 && !unidirectional {
-		c.nextPong = time.Now().Add(pingPongConfig.PongTimeout).UnixNano()
+	if c.pongTimeout > 0 && !unidirectional {
+		c.nextPong = time.Now().Add(c.pongTimeout).UnixNano()
 	}
 	c.addPingUpdate(false)
 	c.mu.Unlock()
@@ -526,12 +524,12 @@ func (c *Client) checkPong() {
 
 // Lock must be held outside.
 func (c *Client) addPingUpdate(isFirst bool) {
-	delay := c.getPingPongConfig().PingInterval
+	delay := c.pingInterval
 	if isFirst {
 		// Send first ping in random interval between 0 and PingInterval to
 		// spread ping-pongs in time (useful when many connections reconnect
 		// almost immediately).
-		pingNanoseconds := c.getPingPongConfig().PingInterval.Nanoseconds()
+		pingNanoseconds := c.pingInterval.Nanoseconds()
 		delay = time.Duration(randSource.Int63n(pingNanoseconds)) * time.Nanosecond
 	}
 	c.nextPing = time.Now().Add(delay).UnixNano()
@@ -1426,7 +1424,7 @@ func (c *Client) scheduleOnConnectTimers() {
 		}
 		c.addExpireUpdate(expireAfter)
 	}
-	if c.getPingPongConfig().PingInterval > 0 {
+	if c.pingInterval > 0 {
 		c.addPingUpdate(true)
 	}
 	c.mu.Unlock()
@@ -2189,8 +2187,11 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			return nil, err
 		}
 		if reply.PingPongConfig != nil {
-			c.overridePing = true
 			c.pingInterval, c.pongTimeout = getPingPongPeriodValues(*reply.PingPongConfig)
+		} else {
+			pingPongConfig := c.transport.PingPongConfig()
+			c.pingInterval = pingPongConfig.PingInterval
+			c.pongTimeout = pingPongConfig.PongTimeout
 		}
 		c.replyWithoutQueue = reply.ReplyWithoutQueue
 		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap)
@@ -2286,11 +2287,10 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		Ttl:     ttl,
 	}
 
-	pingPongConfig := c.getPingPongConfig()
-	if pingPongConfig.PingInterval > 0 {
-		res.Ping = uint32(c.getPingPongConfig().PingInterval.Seconds())
+	if c.pingInterval > 0 {
+		res.Ping = uint32(c.pingInterval.Seconds())
 	}
-	if !c.transport.Unidirectional() && pingPongConfig.PongTimeout > 0 {
+	if !c.transport.Unidirectional() && c.pongTimeout > 0 {
 		res.Pong = true
 	}
 
@@ -3109,14 +3109,4 @@ func toClientErr(err error) *Error {
 		return clientErr
 	}
 	return ErrorInternal
-}
-
-func (c *Client) getPingPongConfig() PingPongConfig {
-	if c.overridePing {
-		return PingPongConfig{
-			PingInterval: c.pingInterval,
-			PongTimeout:  c.pongTimeout,
-		}
-	}
-	return c.transport.PingPongConfig()
 }
