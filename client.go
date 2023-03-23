@@ -253,12 +253,14 @@ type Client struct {
 	nextPong          int64
 	lastSeen          int64
 	lastPing          int64
+	pingInterval      time.Duration
+	pongTimeout       time.Duration
 	eventHub          *clientEventHub
 	timer             *time.Timer
 	startWriterOnce   sync.Once
 	replyWithoutQueue bool
 	unusable          bool
-	pingPongConfig    *PingPongConfig
+	overridePing      bool
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -2187,11 +2189,8 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			return nil, err
 		}
 		if reply.PingPongConfig != nil {
-			pingInterval, pongTimeout := getPingPongPeriodValues(*reply.PingPongConfig)
-			c.pingPongConfig = &PingPongConfig{
-				PingInterval: pingInterval,
-				PongTimeout:  pongTimeout,
-			}
+			c.overridePing = true
+			c.pingInterval, c.pongTimeout = getPingPongPeriodValues(*reply.PingPongConfig)
 		}
 		c.replyWithoutQueue = reply.ReplyWithoutQueue
 		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap)
@@ -3113,8 +3112,11 @@ func toClientErr(err error) *Error {
 }
 
 func (c *Client) getPingPongConfig() PingPongConfig {
-	if c.pingPongConfig != nil {
-		return *c.pingPongConfig
+	if c.overridePing {
+		return PingPongConfig{
+			PingInterval: c.pingInterval,
+			PongTimeout:  c.pongTimeout,
+		}
 	}
 	return c.transport.PingPongConfig()
 }

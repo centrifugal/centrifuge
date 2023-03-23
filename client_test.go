@@ -3602,7 +3602,7 @@ func TestNoClientLevelPing(t *testing.T) {
 	select {
 	case <-done:
 		t.Fatal("should not disconnect when no timeout")
-	case <-time.After(10 * time.Second):
+	case <-time.After(36 * time.Second):
 	}
 }
 
