@@ -544,7 +544,7 @@ func TestIndex(t *testing.T) {
 	require.Equal(t, 0, index("2121", 1))
 }
 
-var testPayload = map[string]interface{}{
+var testPayload = map[string]any{
 	"_id":        "5adece493c1a23736b037c52",
 	"index":      2,
 	"guid":       "478a00f4-19b1-4567-8097-013b8cc846b8",

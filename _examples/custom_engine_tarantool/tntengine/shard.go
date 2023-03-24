@@ -67,7 +67,7 @@ func (s *Shard) Exec(request *tarantool.Request) (*tarantool.Response, error) {
 	return conn.Exec(request)
 }
 
-func (s *Shard) ExecTyped(request *tarantool.Request, result interface{}) error {
+func (s *Shard) ExecTyped(request *tarantool.Request, result any) error {
 	conn, err := s.mc.LeaderConn()
 	if err != nil {
 		return err

@@ -44,12 +44,12 @@ func LogLevelToString(l LogLevel) string {
 type LogEntry struct {
 	Level   LogLevel
 	Message string
-	Fields  map[string]interface{}
+	Fields  map[string]any
 }
 
 // newLogEntry helps to create Entry.
-func newLogEntry(level LogLevel, message string, fields ...map[string]interface{}) LogEntry {
-	var f map[string]interface{}
+func newLogEntry(level LogLevel, message string, fields ...map[string]any) LogEntry {
+	var f map[string]any
 	if len(fields) > 0 {
 		f = fields[0]
 	}
@@ -61,7 +61,7 @@ func newLogEntry(level LogLevel, message string, fields ...map[string]interface{
 }
 
 // NewLogEntry creates new LogEntry.
-func NewLogEntry(level LogLevel, message string, fields ...map[string]interface{}) LogEntry {
+func NewLogEntry(level LogLevel, message string, fields ...map[string]any) LogEntry {
 	return newLogEntry(level, message, fields...)
 }
 

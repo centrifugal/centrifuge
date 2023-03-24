@@ -57,7 +57,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			rw.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
-		s.node.logger.log(newLogEntry(LogLevelError, "can't read emulation request body", map[string]interface{}{"error": err.Error()}))
+		s.node.logger.log(newLogEntry(LogLevelError, "can't read emulation request body", map[string]any{"error": err.Error()}))
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -69,14 +69,14 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		err = json.Unmarshal(data, &req)
 	}
 	if err != nil {
-		s.node.logger.log(newLogEntry(LogLevelInfo, "can't unmarshal emulation request", map[string]interface{}{"req": &req, "error": err.Error()}))
+		s.node.logger.log(newLogEntry(LogLevelInfo, "can't unmarshal emulation request", map[string]any{"req": &req, "error": err.Error()}))
 		rw.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	err = s.emuLayer.Emulate(&req)
 	if err != nil {
-		s.node.logger.log(newLogEntry(LogLevelError, "error processing emulation request", map[string]interface{}{"req": &req, "error": err.Error()}))
+		s.node.logger.log(newLogEntry(LogLevelError, "error processing emulation request", map[string]any{"req": &req, "error": err.Error()}))
 		if err == errNodeNotFound {
 			rw.WriteHeader(http.StatusNotFound)
 		} else {
@@ -128,7 +128,7 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 	var req protocol.EmulationRequest
 	err := req.UnmarshalVT(e.Data)
 	if err != nil {
-		h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request", map[string]interface{}{"data": string(e.Data), "error": err.Error()}))
+		h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request", map[string]any{"data": string(e.Data), "error": err.Error()}))
 		cb(SurveyReply{Code: 1})
 		return
 	}
@@ -142,7 +142,7 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 		var d string
 		err = json.Unmarshal(req.Data, &d)
 		if err != nil {
-			h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request data", map[string]interface{}{"data": string(req.Data), "error": err.Error()}))
+			h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request data", map[string]any{"data": string(req.Data), "error": err.Error()}))
 			cb(SurveyReply{Code: 3})
 			return
 		}

@@ -235,12 +235,12 @@ func (n *Node) Run() error {
 	}
 	err := n.initMetrics()
 	if err != nil {
-		n.logger.log(newLogEntry(LogLevelError, "error on init metrics", map[string]interface{}{"error": err.Error()}))
+		n.logger.log(newLogEntry(LogLevelError, "error on init metrics", map[string]any{"error": err.Error()}))
 		return err
 	}
 	err = n.pubNode("")
 	if err != nil {
-		n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]interface{}{"error": err.Error()}))
+		n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]any{"error": err.Error()}))
 		return err
 	}
 	go n.sendNodePing()
@@ -369,7 +369,7 @@ func (n *Node) sendNodePing() {
 		case <-time.After(nodeInfoPublishInterval):
 			err := n.pubNode("")
 			if err != nil {
-				n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]interface{}{"error": err.Error()}))
+				n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]any{"error": err.Error()}))
 			}
 		}
 	}
@@ -636,7 +636,7 @@ func (n *Node) handleControl(data []byte) error {
 
 	cmd, err := n.controlDecoder.DecodeCommand(data)
 	if err != nil {
-		n.logger.log(newLogEntry(LogLevelError, "error decoding control command", map[string]interface{}{"error": err.Error()}))
+		n.logger.log(newLogEntry(LogLevelError, "error decoding control command", map[string]any{"error": err.Error()}))
 		return err
 	}
 
@@ -678,7 +678,7 @@ func (n *Node) handleControl(data []byte) error {
 		cmd := cmd.Refresh
 		return n.hub.refresh(cmd.User, cmd.Client, cmd.Session, WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info))
 	}
-	n.logger.log(newLogEntry(LogLevelError, "unknown control command", map[string]interface{}{"command": fmt.Sprintf("%#v", cmd)}))
+	n.logger.log(newLogEntry(LogLevelError, "unknown control command", map[string]any{"command": fmt.Sprintf("%#v", cmd)}))
 	return nil
 }
 
@@ -868,7 +868,7 @@ func (n *Node) pubNode(nodeID string) error {
 
 	err := n.nodeCmd(node)
 	if err != nil {
-		n.logger.log(newLogEntry(LogLevelError, "error handling node command", map[string]interface{}{"error": err.Error()}))
+		n.logger.log(newLogEntry(LogLevelError, "error handling node command", map[string]any{"error": err.Error()}))
 	}
 
 	return n.publishControl(cmd, nodeID)
@@ -1162,7 +1162,7 @@ func (n *Node) Presence(ch string) (PresenceResult, error) {
 	}
 	incActionCount("presence")
 	if n.config.UseSingleFlight {
-		result, err, _ := presenceGroup.Do(ch, func() (interface{}, error) {
+		result, err, _ := presenceGroup.Do(ch, func() (any, error) {
 			return n.presence(ch)
 		})
 		return result.(PresenceResult), err
@@ -1248,7 +1248,7 @@ func (n *Node) PresenceStats(ch string) (PresenceStatsResult, error) {
 	}
 	incActionCount("presence_stats")
 	if n.config.UseSingleFlight {
-		result, err, _ := presenceStatsGroup.Do(ch, func() (interface{}, error) {
+		result, err, _ := presenceStatsGroup.Do(ch, func() (any, error) {
 			return n.presenceStats(ch)
 		})
 		return result.(PresenceStatsResult), err
@@ -1314,7 +1314,7 @@ func (n *Node) History(ch string, opts ...HistoryOption) (HistoryResult, error) 
 		builder.WriteString(historyOpts.MetaTTL.String())
 		key := builder.String()
 
-		result, err, _ := historyGroup.Do(key, func() (interface{}, error) {
+		result, err, _ := historyGroup.Do(key, func() (any, error) {
 			return n.history(ch, historyOpts)
 		})
 		return result.(HistoryResult), err

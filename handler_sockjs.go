@@ -141,15 +141,15 @@ func (s *SockjsHandler) handleSession(sess sockjs.Session) {
 		defer close(ctxCh)
 		c, closeFn, err := NewClient(cancelctx.New(sess.Request().Context(), ctxCh), s.node, transport)
 		if err != nil {
-			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportSockJS}))
+			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]any{"transport": transportSockJS}))
 			return
 		}
 		defer func() { _ = closeFn() }()
 
 		if s.node.LogEnabled(LogLevelDebug) {
-			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportSockJS}))
+			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": transportSockJS}))
 			defer func(started time.Time) {
-				s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportSockJS, "duration": time.Since(started)}))
+				s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": transportSockJS, "duration": time.Since(started)}))
 			}(time.Now())
 		}
 

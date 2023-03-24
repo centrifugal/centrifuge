@@ -116,14 +116,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	conn, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
-		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]interface{}{"error": err.Error()}))
+		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
 
 	if compression {
 		err := conn.SetCompressionLevel(compressionLevel)
 		if err != nil {
-			s.node.logger.log(newLogEntry(LogLevelError, "websocket error setting compression level", map[string]interface{}{"error": err.Error()}))
+			s.node.logger.log(newLogEntry(LogLevelError, "websocket error setting compression level", map[string]any{"error": err.Error()}))
 		}
 	}
 
@@ -168,15 +168,15 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
 		if err != nil {
-			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]interface{}{"transport": transportWebsocket}))
+			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]any{"transport": transportWebsocket}))
 			return
 		}
 		defer func() { _ = closeFn() }()
 
 		if s.node.LogEnabled(LogLevelDebug) {
-			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket}))
+			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": transportWebsocket}))
 			defer func(started time.Time) {
-				s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
+				s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started)}))
 			}(time.Now())
 		}
 
@@ -223,13 +223,13 @@ func HandleReadFrame(c *Client, r io.Reader) bool {
 		if err != nil {
 			if err == io.EOF {
 				if !hadCommands {
-					c.node.logger.log(newLogEntry(LogLevelInfo, "empty request received", map[string]interface{}{"client": c.ID(), "user": c.UserID()}))
+					c.node.logger.log(newLogEntry(LogLevelInfo, "empty request received", map[string]any{"client": c.ID(), "user": c.UserID()}))
 					c.Disconnect(DisconnectBadRequest)
 					return false
 				}
 				break
 			} else {
-				c.node.logger.log(newLogEntry(LogLevelInfo, "error reading command", map[string]interface{}{"client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+				c.node.logger.log(newLogEntry(LogLevelInfo, "error reading command", map[string]any{"client": c.ID(), "user": c.UserID(), "error": err.Error()}))
 				c.Disconnect(DisconnectBadRequest)
 				return false
 			}
@@ -404,7 +404,7 @@ func sameHostOriginCheck(n *Node) func(r *http.Request) bool {
 	return func(r *http.Request) bool {
 		err := checkSameHost(r)
 		if err != nil {
-			n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]interface{}{"error": err.Error()}))
+			n.logger.log(newLogEntry(LogLevelInfo, "origin check failure", map[string]any{"error": err.Error()}))
 			return false
 		}
 		return true

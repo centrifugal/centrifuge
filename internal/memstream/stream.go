@@ -26,7 +26,7 @@ func genEpoch() string {
 // Item to be kept inside stream.
 type Item struct {
 	Offset uint64
-	Value  interface{}
+	Value  any
 }
 
 // Stream is a non-thread safe in-memory data structure that
@@ -49,7 +49,7 @@ func New() *Stream {
 }
 
 // Add item to stream.
-func (s *Stream) Add(v interface{}, size int) (uint64, error) {
+func (s *Stream) Add(v any, size int) (uint64, error) {
 	s.top++
 	item := Item{
 		Offset: s.top,

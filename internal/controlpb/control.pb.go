@@ -1172,7 +1172,7 @@ func file_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
-var file_control_proto_goTypes = []interface{}{
+var file_control_proto_goTypes = []any{
 	(*Command)(nil),        // 0: controlpb.Command
 	(*Shutdown)(nil),       // 1: controlpb.Shutdown
 	(*Node)(nil),           // 2: controlpb.Node
@@ -1213,7 +1213,7 @@ func file_control_proto_init() {
 		return
 	}
 	if !protoimpl.UnsafeEnabled {
-		file_control_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[0].Exporter = func(v any, i int) any {
 			switch v := v.(*Command); i {
 			case 0:
 				return &v.state
@@ -1225,7 +1225,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[1].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[1].Exporter = func(v any, i int) any {
 			switch v := v.(*Shutdown); i {
 			case 0:
 				return &v.state
@@ -1237,7 +1237,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[2].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[2].Exporter = func(v any, i int) any {
 			switch v := v.(*Node); i {
 			case 0:
 				return &v.state
@@ -1249,7 +1249,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[3].Exporter = func(v any, i int) any {
 			switch v := v.(*Metrics); i {
 			case 0:
 				return &v.state
@@ -1261,7 +1261,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[4].Exporter = func(v any, i int) any {
 			switch v := v.(*Subscribe); i {
 			case 0:
 				return &v.state
@@ -1273,7 +1273,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[5].Exporter = func(v any, i int) any {
 			switch v := v.(*StreamPosition); i {
 			case 0:
 				return &v.state
@@ -1285,7 +1285,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[6].Exporter = func(v any, i int) any {
 			switch v := v.(*Unsubscribe); i {
 			case 0:
 				return &v.state
@@ -1297,7 +1297,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[7].Exporter = func(v any, i int) any {
 			switch v := v.(*Disconnect); i {
 			case 0:
 				return &v.state
@@ -1309,7 +1309,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[8].Exporter = func(v any, i int) any {
 			switch v := v.(*SurveyRequest); i {
 			case 0:
 				return &v.state
@@ -1321,7 +1321,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[9].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[9].Exporter = func(v any, i int) any {
 			switch v := v.(*SurveyResponse); i {
 			case 0:
 				return &v.state
@@ -1333,7 +1333,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[10].Exporter = func(v any, i int) any {
 			switch v := v.(*Notification); i {
 			case 0:
 				return &v.state
@@ -1345,7 +1345,7 @@ func file_control_proto_init() {
 				return nil
 			}
 		}
-		file_control_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
+		file_control_proto_msgTypes[11].Exporter = func(v any, i int) any {
 			switch v := v.(*Refresh); i {
 			case 0:
 				return &v.state

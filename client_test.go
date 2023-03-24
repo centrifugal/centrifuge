@@ -3402,7 +3402,7 @@ func TestClientOnStateSnapshot(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
 	node.OnConnect(func(client *Client) {
-		client.OnStateSnapshot(func() (interface{}, error) {
+		client.OnStateSnapshot(func() (any, error) {
 			return 1, nil
 		})
 	})

@@ -34,7 +34,7 @@ func (pq Queue) Swap(i, j int) {
 }
 
 // Push value into queue.
-func (pq *Queue) Push(x interface{}) {
+func (pq *Queue) Push(x any) {
 	n := len(*pq)
 	item := x.(*Item)
 	item.index = n
@@ -42,7 +42,7 @@ func (pq *Queue) Push(x interface{}) {
 }
 
 // Pop value from queue.
-func (pq *Queue) Pop() interface{} {
+func (pq *Queue) Pop() any {
 	old := *pq
 	n := len(old)
 	item := old[n-1]
