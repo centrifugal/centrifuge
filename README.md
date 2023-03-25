@@ -47,7 +47,7 @@ If you opt for a **unidirectional** communication then you may leverage Centrifu
 * see Centrifuge [Documentation on pkg.go.dev](https://pkg.go.dev/github.com/centrifugal/centrifuge)
 * read [Centrifuge introduction post](https://centrifugal.dev/blog/2021/01/15/centrifuge-intro) in Centrifugo blog   
 * you can also consider [Centrifugo server documentation](https://centrifugal.dev/) as extra doc for this package (since Centrifugo is built on top of Centrifuge library, though keep in mind that Centrifugo adds some things on top, Centrifugo [source code](https://github.com/centrifugal/centrifugo) is also a good place to learn from since you can see how to build a production-ready server solution on top of Centrifuge)
-* read this README to the end for [installation](#installation) details, [quick example](#quick-example) and [tips and tricks](#tips-and-tricks) section
+* read this README to the end for [installation](#installation) details, quick [tutorial](#tutorial) and [tips and tricks](#tips-and-tricks) section
 * check out [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder
 
 ### Installation
