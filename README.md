@@ -3,29 +3,34 @@
 [![codecov.io](https://codecov.io/gh/centrifugal/centrifuge/branch/master/graphs/badge.svg)](https://codecov.io/github/centrifugal/centrifuge?branch=master)
 [![GoDoc](https://pkg.go.dev/badge/centrifugal/centrifuge)](https://pkg.go.dev/github.com/centrifugal/centrifuge)
 
-**This library has no v1 release, API still evolves. Use with strict versioning.** Before v1 release patch version updates only have backwards compatible changes and fixes, minor version updates can have backwards-incompatible API changes. For all breaking changes we provide a detailed changelog. Master branch can have unreleased code. Only two last Go minor versions are officially supported by this library.
+**This library has no v1 release, API may change.** Before v1 release patch version updates only have backwards compatible changes and fixes, minor version updates can have backwards-incompatible API changes. Master branch can have unreleased code. Only two last Go minor versions are officially supported by this library.
 
-Centrifuge library is a real-time core of [Centrifugo](https://github.com/centrifugal/centrifugo) server. It's also supposed to be a general purpose real-time messaging library for Go programming language. The library built on top of strict client-server protocol schema and exposes various real-time oriented primitives for a developer. Centrifuge solves several problems a developer may come across when building complex real-time applications – like scalability (millions of connections), proper persistent connection management and invalidation, fast reconnect with message recovery, WebSocket fallback option.
+Centrifuge library is a real-time core of [Centrifugo](https://github.com/centrifugal/centrifugo) server. It's a general purpose real-time messaging library for Go programming language. Real-time messaging can help create interactive applications where events are delivered to online users with minimal delay. Chats apps, live comments, multiplayer games, real-time data visualizations, collaborative tools, etc. can all be built on top of Centrifuge library.
+
+The library is built on top of efficient client-server protocol schema and exposes various real-time oriented primitives for a developer. Centrifuge solves problems developers may come across when building complex real-time applications – like scalability to many server nodes, proper persistent connection management and invalidation, fast reconnect with message recovery, WebSocket fallback options (without sticky sessions requirement in distributed scenario).
 
 Library highlights:
 
 * Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.dev/blog/2020/02/10/million-connections-with-centrifugo)
-* Builtin bidirectional transports: WebSocket (JSON or binary Protobuf), WebSocket emulation over HTTP-streaming, Eventsource (JSON only) or SockJS (JSON only)
-* Possibility to use unidirectional transports without using custom Centrifuge client library: see examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws)
-* Built-in horizontal scalability with Redis PUB/SUB, consistent Redis sharding, Sentinel and Redis Cluster for HA
-* Native authentication over HTTP middleware or custom token-based
+* WebSocket bidirectional transport using JSON or binary Protobuf formats, both based on a [strict Protobuf schema](https://github.com/centrifugal/protocol/blob/master/definitions/client.proto). Code generation is used to push both JSON and Protobuf serialization performance to the limits
+* Our [own WebSocket emulation layer](https://centrifugal.dev/blog/2022/07/19/centrifugo-v4-released#modern-websocket-emulation-in-javascript) over HTTP-streaming (JSON + Protobuf) and Eventsource (JSON) without sticky sessions requirement for distributed setup, or SockJS (JSON only)
+* Possibility to use unidirectional transports without using custom Centrifuge SDK library: see examples for [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [Unidirectional WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws)
+* Built-in horizontal scalability with Redis PUB/SUB, consistent Redis sharding, Redis Sentinel and Redis Cluster support, [super-optimized Redis communication layer](https://centrifugal.dev/blog/2022/12/20/improving-redis-engine-performance)
+* Effective non-blocking broadcasts towards client connections using individual queues
+* Native authentication over HTTP middleware or custom token-based (ex. JWT)
 * Channel concept to broadcast message to all active subscribers
 * Client-side and server-side channel subscriptions
-* Bidirectional asynchronous message communication and RPC calls
+* Bidirectional asynchronous message communication, RPC calls, builtin PING/PONG
 * Presence information for channels (show all active clients in a channel)
 * History information for channels (ephemeral streams with size and TTL retention)
 * Join/leave events for channels (aka client goes online/offline)
-* Possibility to register a custom PUB/SUB Broker and Presence Manager implementations
+* Possibility to register a custom PUB/SUB Broker and PresenceManager implementations
+* Option to register custom Transport, like [Centrifugo does with WebTransport](https://centrifugal.dev/docs/transports/webtransport)
 * Message recovery mechanism for channels to survive PUB/SUB delivery problems, short network disconnects or node restart
-* Prometheus instrumentation
-* Client libraries for main application environments (see below)
+* Out-of-the-box Prometheus instrumentation
+* Client SDKs for main application environments all following [single behaviour spec](https://centrifugal.dev/docs/transports/client_api) (see list of SDKs below).
 
-For **bidirectional** communication between a client and a Centrifuge-based server we have a bunch of client libraries:
+For **bidirectional** communication between a client and a Centrifuge-based server we have a set of official client real-time SDKs:
 
 * [centrifuge-js](https://github.com/centrifugal/centrifuge-js) – for a browser, NodeJS and React Native
 * [centrifuge-go](https://github.com/centrifugal/centrifuge-go) - for Go language
@@ -33,31 +38,29 @@ For **bidirectional** communication between a client and a Centrifuge-based serv
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 
-If you opt for a **unidirectional** communication then you may leverage Centrifuge possibilities without any specific library on client-side - simply by using native browser API or GRPC-generated code. See examples of unidirectional communication over [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws).
+These SDKs abstract asynchronous communication complexity from the developer: handle framing, reconnect with backoff, timeouts, multiplex channel subscriptions over single connection, etc.
+
+If you opt for a **unidirectional** communication then you may leverage Centrifuge possibilities without any specific SDK on client-side - simply by using native browser API or GRPC-generated code. See examples of unidirectional communication over [GRPC](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_grpc), [EventSource(SSE)](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_sse), [HTTP-streaming](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_http_stream), [WebSocket](https://github.com/centrifugal/centrifuge/tree/master/_examples/unidirectional_ws).
 
 ### Explore Centrifuge
 
 * see Centrifuge [Documentation on pkg.go.dev](https://pkg.go.dev/github.com/centrifugal/centrifuge)
 * read [Centrifuge introduction post](https://centrifugal.dev/blog/2021/01/15/centrifuge-intro) in Centrifugo blog   
-* you can also consider [Centrifugo server documentation](https://centrifugal.dev/) as extra doc for this package (since Centrifugo is built on top of Centrifuge library, though keep in mind that Centrifugo adds some things on top, Centrifugo source code is also a good place to learn from)
+* you can also consider [Centrifugo server documentation](https://centrifugal.dev/) as extra doc for this package (since Centrifugo is built on top of Centrifuge library, though keep in mind that Centrifugo adds some things on top, Centrifugo [source code](https://github.com/centrifugal/centrifugo) is also a good place to learn from since you can see how to build a production-ready server solution on top of Centrifuge)
 * read this README to the end for [installation](#installation) details, [quick example](#quick-example) and [tips and tricks](#tips-and-tricks) section
 * check out [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder
 
 ### Installation
 
-To install use:
-
 ```bash
 go get github.com/centrifugal/centrifuge
 ```
 
-`go mod` is a recommended way of adding this library to your project dependencies.
+### Tutorial
 
-### Quick example
+Let's take a look on how to build the simplest real-time chat with Centrifuge library. Clients will be able to connect to a server over Websocket, send a message into a channel and this message will be instantly delivered to all active channel subscribers. On a server side we will accept all connections and will work as a simple PUB/SUB proxy without worrying too much about permissions. In this example we will use Centrifuge Javascript client ([centrifuge-js](https://github.com/centrifugal/centrifuge-js)) on a frontend.
 
-Let's take a look on how to build the simplest real-time chat with Centrifuge library. Clients will be able to connect to a server over Websocket, send a message into a channel and this message will be instantly delivered to all active channel subscribers. On a server side we will accept all connections and will work as a simple PUB/SUB proxy without worrying too much about permissions. In this example we will use Centrifuge Javascript client on a frontend.
-
-Create file `main.go` with the following code:
+Start a new Go project and create `main.go`:
 
 ```go
 package main
@@ -178,7 +181,7 @@ Also create file `index.html` near `main.go` with content:
     <head>
         <meta charset="utf-8">
         <script type="text/javascript" src="https://unpkg.com/centrifuge@3.1.0/dist/centrifuge.js"></script>
-        <title>Centrifuge library chat example</title>
+        <title>Centrifuge chat example</title>
     </head>
     <body>
         <input type="text" id="input" />
@@ -217,7 +220,7 @@ Also create file `index.html` near `main.go` with content:
 </html>
 ```
 
-Then run as usual:
+Then run Go app as usual:
 
 ```bash
 go run main.go
