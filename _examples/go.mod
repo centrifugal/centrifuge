@@ -7,7 +7,7 @@ replace github.com/centrifugal/centrifuge => ../
 require (
 	github.com/FZambia/tarantool v0.2.2
 	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/protocol v0.9.2-0.20230311054954-b71cdd8898e1
+	github.com/centrifugal/protocol v0.10.0
 	github.com/cristalhq/jwt/v3 v3.0.0
 	github.com/dchest/uniuri v0.0.0-20200228104902-7aecb25e1fe5
 	github.com/gin-contrib/sessions v0.0.3
@@ -27,6 +27,6 @@ require (
 	golang.org/x/oauth2 v0.0.0-20220223155221-ee480838109b
 	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
 	google.golang.org/grpc v1.36.0
-	google.golang.org/protobuf v1.28.1
+	google.golang.org/protobuf v1.30.0
 	nhooyr.io/websocket v1.8.6
 )
