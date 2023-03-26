@@ -140,7 +140,7 @@ func (c *MultiConnection) IsLeader(conn *tarantool.Connection) (bool, error) {
 	if c.opts.ConnectionMode == ConnectionModeLeaderFollowerRaft {
 		leaderCheck = "return box.info.election.state == 'leader'"
 	}
-	resp, err := conn.ExecContext(ctx, tarantool.Eval(leaderCheck, []interface{}{}))
+	resp, err := conn.ExecContext(ctx, tarantool.Eval(leaderCheck, []any{}))
 	if err != nil {
 		return false, err
 	}

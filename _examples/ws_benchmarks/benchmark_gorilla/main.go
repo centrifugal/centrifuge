@@ -71,8 +71,7 @@ func main() {
 			redisShards = append(redisShards, redisShard)
 		}
 		broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-			HistoryMetaTTL: 7 * 24 * time.Hour,
-			Shards:         redisShards,
+			Shards: redisShards,
 		})
 		if err != nil {
 			log.Fatal(err)

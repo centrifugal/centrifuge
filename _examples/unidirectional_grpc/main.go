@@ -29,7 +29,7 @@ var (
 	redis    = flag.Bool("redis", false, "Use Redis")
 )
 
-func grpcAuthInterceptor(srv interface{}, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+func grpcAuthInterceptor(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	// You probably want to authenticate user by information included in stream metadata.
 	// meta, ok := metadata.FromIncomingContext(ss.Context())
 	// But here we skip it for simplicity and just always authenticate user with ID 42.
@@ -199,9 +199,12 @@ func (t *grpcTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing not implemented here, example only works over ProtocolVersion1.
-func (t *grpcTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+// PingPongConfig ...
+func (t *grpcTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
+		PingInterval: 25 * time.Second,
+		PongTimeout:  10 * time.Second,
+	}
 }
 
 func (t *grpcTransport) Write(message []byte) error {
@@ -348,7 +351,7 @@ type rawFrame []byte
 
 type rawCodec struct{}
 
-func (c *rawCodec) Marshal(v interface{}) ([]byte, error) {
+func (c *rawCodec) Marshal(v any) ([]byte, error) {
 	out, ok := v.(rawFrame)
 	if !ok {
 		vv, ok := v.(proto.Message)
@@ -360,7 +363,7 @@ func (c *rawCodec) Marshal(v interface{}) ([]byte, error) {
 	return out, nil
 }
 
-func (c *rawCodec) Unmarshal(data []byte, v interface{}) error {
+func (c *rawCodec) Unmarshal(data []byte, v any) error {
 	vv, ok := v.(proto.Message)
 	if !ok {
 		return fmt.Errorf("failed to unmarshal, message is %T, want proto.Message", v)

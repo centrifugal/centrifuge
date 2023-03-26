@@ -229,7 +229,7 @@ func (b *Broker) Subscribe(ch string) error {
 		return centrifuge.ErrorBadRequest
 	}
 	if b.node.LogEnabled(centrifuge.LogLevelDebug) {
-		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "subscribe node on channel", map[string]interface{}{"channel": ch}))
+		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "subscribe node on channel", map[string]any{"channel": ch}))
 	}
 	r := newSubRequest([]string{ch}, true)
 	s := b.shards[consistentIndex(ch, len(b.shards))]
@@ -239,7 +239,7 @@ func (b *Broker) Subscribe(ch string) error {
 // Unsubscribe - see centrifuge.Broker interface description.
 func (b *Broker) Unsubscribe(ch string) error {
 	if b.node.LogEnabled(centrifuge.LogLevelDebug) {
-		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "unsubscribe node from channel", map[string]interface{}{"channel": ch}))
+		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "unsubscribe node from channel", map[string]any{"channel": ch}))
 	}
 	r := newSubRequest([]string{ch}, false)
 	s := b.shards[consistentIndex(ch, len(b.shards))]
@@ -348,7 +348,8 @@ func (m *historyResponse) DecodeMsgpack(d *msgpack.Decoder) error {
 }
 
 // History - see centrifuge.Broker interface description.
-func (b *Broker) History(ch string, filter centrifuge.HistoryFilter) ([]*centrifuge.Publication, centrifuge.StreamPosition, error) {
+func (b *Broker) History(ch string, opts centrifuge.HistoryOptions) ([]*centrifuge.Publication, centrifuge.StreamPosition, error) {
+	filter := opts.Filter
 	var includePubs = true
 	var offset uint64
 	if filter.Since != nil {
@@ -467,7 +468,7 @@ func (m *pubSubMessage) DecodeMsgpack(d *msgpack.Decoder) error {
 
 func (b *Broker) runPubSub(s *Shard, eventHandler centrifuge.BrokerEventHandler) {
 	logError := func(errString string) {
-		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "restart pub/sub", map[string]interface{}{"error": errString}))
+		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "restart pub/sub", map[string]any{"error": errString}))
 	}
 
 	u, err := uuid.NewRandom()
@@ -607,7 +608,7 @@ func (b *Broker) runPubSub(s *Shard, eventHandler centrifuge.BrokerEventHandler)
 				case n := <-ch:
 					err := b.handleMessage(eventHandler, n)
 					if err != nil {
-						b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error handling client message", map[string]interface{}{"error": err.Error()}))
+						b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error handling client message", map[string]any{"error": err.Error()}))
 						continue
 					}
 				}
@@ -632,7 +633,7 @@ func (b *Broker) runPubSub(s *Shard, eventHandler centrifuge.BrokerEventHandler)
 				r := newSubRequest(batch, true)
 				err := b.sendSubscribe(s, r)
 				if err != nil {
-					b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
+					b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error subscribing", map[string]any{"error": err.Error()}))
 					closeDoneOnce()
 					return
 				}
@@ -644,7 +645,7 @@ func (b *Broker) runPubSub(s *Shard, eventHandler centrifuge.BrokerEventHandler)
 			r := newSubRequest(batch, true)
 			err := b.sendSubscribe(s, r)
 			if err != nil {
-				b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error subscribing", map[string]interface{}{"error": err.Error()}))
+				b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error subscribing", map[string]any{"error": err.Error()}))
 				closeDoneOnce()
 				return
 			}
@@ -675,10 +676,10 @@ func (b *Broker) waitPubSubMessages(conn *tarantool.Connection, connID string, c
 		_, err := conn.ExecContext(ctx, tarantool.Call(
 			"centrifuge.get_messages",
 			pollRequest{ConnID: connID, UsePolling: b.config.UsePolling, Timeout: 25},
-		).WithPushTyped(func(decode func(interface{}) error) {
+		).WithPushTyped(func(decode func(any) error) {
 			var m [][]pubSubMessage
 			if err := decode(&m); err != nil {
-				b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error decoding push", map[string]interface{}{"error": err.Error()}))
+				b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error decoding push", map[string]any{"error": err.Error()}))
 				return
 			}
 			if len(m) == 1 {
@@ -738,7 +739,7 @@ func (b *Broker) handleMessage(eventHandler centrifuge.BrokerEventHandler, msg p
 
 func (b *Broker) runControlPubSub(s *Shard, eventHandler centrifuge.BrokerEventHandler) {
 	logError := func(errString string) {
-		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "restart control pub/sub", map[string]interface{}{"error": errString}))
+		b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "restart control pub/sub", map[string]any{"error": errString}))
 	}
 
 	u, err := uuid.NewRandom()
@@ -795,7 +796,7 @@ func (b *Broker) runControlPubSub(s *Shard, eventHandler centrifuge.BrokerEventH
 				case n := <-workCh:
 					err := eventHandler.HandleControl(n.Data)
 					if err != nil {
-						b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error handling control message", map[string]interface{}{"error": err.Error()}))
+						b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error handling control message", map[string]any{"error": err.Error()}))
 						continue
 					}
 				}

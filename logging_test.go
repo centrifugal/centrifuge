@@ -37,7 +37,7 @@ func TestNewLogEntry(t *testing.T) {
 	require.Equal(t, "test", entry.Message)
 	require.Nil(t, entry.Fields)
 
-	entry = newLogEntry(LogLevelError, "test", map[string]interface{}{"one": true})
+	entry = newLogEntry(LogLevelError, "test", map[string]any{"one": true})
 	require.Equal(t, LogLevelError, entry.Level)
 	require.Equal(t, "test", entry.Message)
 	require.NotNil(t, entry.Fields)

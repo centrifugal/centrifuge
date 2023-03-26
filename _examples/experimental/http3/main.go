@@ -93,12 +93,6 @@ func main() {
 	}
 
 	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-		// Use reasonably large expiration interval for stream meta key,
-		// much bigger than maximum HistoryLifetime value in Node config.
-		// This way stream metadata will expire, in some cases you may want
-		// to prevent its expiration setting this to zero value.
-		HistoryMetaTTL: 7 * 24 * time.Hour,
-
 		// And configure a couple of shards to use.
 		Shards: redisShards,
 	})
@@ -254,11 +248,7 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.Handle("/connection/websocket", authMiddleware(
-		centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-			ProtocolVersion: centrifuge.ProtocolVersion2,
-		}),
-	))
+	mux.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	mux.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
 	mux.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
 	mux.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))

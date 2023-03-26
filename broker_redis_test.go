@@ -1,5 +1,4 @@
 //go:build integration
-// +build integration
 
 package centrifuge
 
@@ -62,10 +61,9 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool) 
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
-		Prefix:         prefix,
-		UseLists:       !useStreams,
-		HistoryMetaTTL: 3600 * time.Second,
-		Shards:         []*RedisShard{s},
+		Prefix:   prefix,
+		UseLists: !useStreams,
+		Shards:   []*RedisShard{s},
 	})
 	require.NoError(tb, err)
 	n.SetBroker(e)
@@ -83,10 +81,9 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
-		Prefix:         prefix,
-		UseLists:       !useStreams,
-		HistoryMetaTTL: 300 * time.Second,
-		Shards:         []*RedisShard{s},
+		Prefix:   prefix,
+		UseLists: !useStreams,
+		Shards:   []*RedisShard{s},
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -136,8 +133,10 @@ func TestRedisBroker_NoShards(t *testing.T) {
 func TestRedisBrokerSentinel(t *testing.T) {
 	b := NewTestRedisBrokerSentinel(t)
 	defer stopRedisBroker(b)
-	_, _, err := b.History("test", HistoryFilter{
-		Limit: -1,
+	_, _, err := b.History("test", HistoryOptions{
+		Filter: HistoryFilter{
+			Limit: -1,
+		},
 	})
 	require.NoError(t, err)
 
@@ -202,8 +201,10 @@ func TestRedisBroker(t *testing.T) {
 			// test adding history
 			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			pubs, _, err := b.History("channel", HistoryFilter{
-				Limit: -1,
+			pubs, _, err := b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 1, len(pubs))
@@ -216,8 +217,10 @@ func TestRedisBroker(t *testing.T) {
 			require.NoError(t, err)
 			_, err = b.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 			require.NoError(t, err)
-			pubs, _, err = b.History("channel", HistoryFilter{
-				Limit: 2,
+			pubs, _, err = b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: 2,
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 2, len(pubs))
@@ -231,15 +234,19 @@ func TestRedisBroker(t *testing.T) {
 			require.NoError(t, err)
 
 			// ask all history.
-			pubs, _, err = b.History("channel", HistoryFilter{
-				Limit: -1,
+			pubs, _, err = b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 1, len(pubs))
 
 			// ask more history than history_size.
-			pubs, _, err = b.History("channel", HistoryFilter{
-				Limit: 2,
+			pubs, _, err = b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: 2,
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 1, len(pubs))
@@ -268,8 +275,10 @@ func TestRedisCurrentPosition(t *testing.T) {
 
 			channel := "test-current-position"
 
-			_, streamTop, err := b.History(channel, HistoryFilter{
-				Limit: 0,
+			_, streamTop, err := b.History(channel, HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: 0,
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, uint64(0), streamTop.Offset)
@@ -278,8 +287,10 @@ func TestRedisCurrentPosition(t *testing.T) {
 			_, err = b.Publish(channel, rawData, PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 			require.NoError(t, err)
 
-			_, streamTop, err = b.History(channel, HistoryFilter{
-				Limit: 0,
+			_, streamTop, err = b.History(channel, HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: 0,
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, uint64(1), streamTop.Offset)
@@ -302,15 +313,19 @@ func TestRedisBrokerRecover(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			_, streamTop, err := b.History("channel", HistoryFilter{
-				Limit: 0,
-				Since: nil,
+			_, streamTop, err := b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: 0,
+					Since: nil,
+				},
 			})
 			require.NoError(t, err)
 
-			pubs, _, err := b.History("channel", HistoryFilter{
-				Limit: -1,
-				Since: &StreamPosition{Offset: 2, Epoch: streamTop.Epoch},
+			pubs, _, err := b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+					Since: &StreamPosition{Offset: 2, Epoch: streamTop.Epoch},
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 3, len(pubs))
@@ -323,24 +338,30 @@ func TestRedisBrokerRecover(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			pubs, _, err = b.History("channel", HistoryFilter{
-				Limit: -1,
-				Since: &StreamPosition{Offset: 0, Epoch: streamTop.Epoch},
+			pubs, _, err = b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+					Since: &StreamPosition{Offset: 0, Epoch: streamTop.Epoch},
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 10, len(pubs))
 
-			pubs, _, err = b.History("channel", HistoryFilter{
-				Limit: -1,
-				Since: &StreamPosition{Offset: 100, Epoch: streamTop.Epoch},
+			pubs, _, err = b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+					Since: &StreamPosition{Offset: 100, Epoch: streamTop.Epoch},
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 0, len(pubs))
 
 			require.NoError(t, b.RemoveHistory("channel"))
-			pubs, _, err = b.History("channel", HistoryFilter{
-				Limit: -1,
-				Since: &StreamPosition{Offset: 2, Epoch: streamTop.Epoch},
+			pubs, _, err = b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+					Since: &StreamPosition{Offset: 2, Epoch: streamTop.Epoch},
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, 0, len(pubs))
@@ -1377,9 +1398,11 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					pubs, _, err := broker.History("channel", HistoryFilter{
-						Limit: -1,
-						Since: &StreamPosition{Offset: uint64(numMessages - numMissing), Epoch: ""},
+					pubs, _, err := broker.History("channel", HistoryOptions{
+						Filter: HistoryFilter{
+							Limit: -1,
+							Since: &StreamPosition{Offset: uint64(numMessages - numMissing), Epoch: ""},
+						},
 					})
 					if err != nil {
 						b.Fatal(err)
@@ -1425,21 +1448,36 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 
 	time.Sleep(time.Duration(tt.Sleep) * time.Second)
 
-	_, streamTop, err := node.broker.History(channel, HistoryFilter{
-		Limit: 0,
-		Since: nil,
+	_, streamTop, err := node.broker.History(channel, HistoryOptions{
+		Filter: HistoryFilter{
+			Limit: 0,
+			Since: nil,
+		},
 	})
 	require.NoError(t, err)
 
-	historyResult, err := node.recoverHistory(channel, StreamPosition{tt.SinceOffset, streamTop.Epoch})
+	historyResult, err := node.recoverHistory(channel, StreamPosition{tt.SinceOffset, streamTop.Epoch}, 0)
 	require.NoError(t, err)
 	recoveredPubs, recovered := isRecovered(historyResult, tt.SinceOffset, streamTop.Epoch)
 	require.Equal(t, tt.NumRecovered, len(recoveredPubs))
 	require.Equal(t, tt.Recovered, recovered)
 }
 
+var brokerRecoverTests = []recoverTest{
+	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true},
+	{"from_position", 10, 60, 10, 8, 2, 0, 0, true},
+	{"from_position_limited", 10, 60, 10, 5, 2, 0, 2, false},
+	{"from_position_with_server_limit", 10, 60, 10, 5, 1, 0, 1, false},
+	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, 0, false},
+	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false},
+	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true},
+	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true},
+	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, 0, false},
+	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true},
+}
+
 func TestRedisClientSubscribeRecoverStreams(t *testing.T) {
-	for _, tt := range recoverTests {
+	for _, tt := range brokerRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testRedisClientSubscribeRecover(t, tt, true, false)
 		})
@@ -1447,7 +1485,7 @@ func TestRedisClientSubscribeRecoverStreams(t *testing.T) {
 }
 
 func TestRedisClientSubscribeRecoverLists(t *testing.T) {
-	for _, tt := range recoverTests {
+	for _, tt := range brokerRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testRedisClientSubscribeRecover(t, tt, false, false)
 		})
@@ -1455,7 +1493,7 @@ func TestRedisClientSubscribeRecoverLists(t *testing.T) {
 }
 
 func TestRedisClientSubscribeRecoverStreamsCluster(t *testing.T) {
-	for _, tt := range recoverTests {
+	for _, tt := range brokerRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testRedisClientSubscribeRecover(t, tt, true, true)
 		})
@@ -1463,7 +1501,7 @@ func TestRedisClientSubscribeRecoverStreamsCluster(t *testing.T) {
 }
 
 func TestRedisClientSubscribeRecoverListsCluster(t *testing.T) {
-	for _, tt := range recoverTests {
+	for _, tt := range brokerRecoverTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			testRedisClientSubscribeRecover(t, tt, false, true)
 		})

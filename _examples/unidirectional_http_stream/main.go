@@ -23,8 +23,6 @@ var (
 	tls      = flag.Bool("tls", false, "Use TLS")
 	keyFile  = flag.String("key_file", "server.key", "path to TLS key file")
 	certFile = flag.String("cert_file", "server.crt", "path to TLS crt file")
-	// Was not able to make it work with HTTP/3 yet.
-	//useHttp3 = flag.Bool("http3", false, "Use HTTP/3")
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -304,9 +302,12 @@ func (t *streamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing not implemented here, example only works over ProtocolVersion1.
-func (t *streamTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+// PingPongConfig ...
+func (t *streamTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
+		PingInterval: 25 * time.Second,
+		PongTimeout:  10 * time.Second,
+	}
 }
 
 func (t *streamTransport) Write(message []byte) error {

@@ -57,6 +57,15 @@ type HistoryFilter struct {
 	Reverse bool
 }
 
+// HistoryOptions define some fields to alter History method behaviour.
+type HistoryOptions struct {
+	// Filter for history publications.
+	Filter HistoryFilter
+	// MetaTTL allows overriding default (set in Config.HistoryMetaTTL) history
+	// meta information expiration time.
+	MetaTTL time.Duration
+}
+
 // StreamPosition contains fields to describe position in stream.
 // At moment this is used for automatic recovery mechanics. More info about stream
 // recovery in docs: https://centrifugal.dev/docs/server/history_and_recovery.
@@ -87,6 +96,9 @@ type PublishOptions struct {
 	HistoryTTL time.Duration
 	// HistorySize sets history size limit to prevent infinite stream growth.
 	HistorySize int
+	// HistoryMetaTTL allows overriding default (set in Config.HistoryMetaTTL)
+	// history meta information expiration time upon publish.
+	HistoryMetaTTL time.Duration
 	// ClientInfo to include into Publication. By default, no ClientInfo will be appended.
 	ClientInfo *ClientInfo
 	// Tags to set Publication.Tags.
@@ -131,7 +143,7 @@ type Broker interface {
 	// Publications returned according to HistoryFilter which allows to set several
 	// filtering options. StreamPosition returned describes current history stream
 	// top offset and epoch.
-	History(ch string, filter HistoryFilter) ([]*Publication, StreamPosition, error)
+	History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error)
 	// RemoveHistory removes history from channel. This is in general not
 	// needed as history expires automatically (based on history_lifetime)
 	// but sometimes can be useful for application logic.

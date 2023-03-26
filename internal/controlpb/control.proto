@@ -11,20 +11,19 @@ option go_package = "./;controlpb";
 
 message Command {
     string uid = 1;
-    enum MethodType {
-        NODE = 0;
-        UNSUBSCRIBE = 1;
-        DISCONNECT = 2;
-        SHUTDOWN = 3;
-        SURVEY_REQUEST = 4;
-        SURVEY_RESPONSE = 5;
-        SUBSCRIBE = 6;
-        NOTIFICATION = 7;
-        REFRESH = 8;
-    }
-    MethodType method = 2;
-    bytes params = 3;
+    // 2,3 removed.
+    Node node = 4;
+    Unsubscribe unsubscribe = 5;
+    Disconnect disconnect = 6;
+    Shutdown shutdown = 7;
+    SurveyRequest survey_request = 8;
+    SurveyResponse survey_response = 9;
+    Subscribe subscribe = 10;
+    Notification notification = 11;
+    Refresh refresh = 12;
 }
+
+message Shutdown {}
 
 message Node {
     string uid = 1;

@@ -1,3 +1,61 @@
+v0.29.0
+=======
+
+This release contains several breaking changes.
+
+* Removing client protocol v1 and all related parts, see [#275](https://github.com/centrifugal/centrifuge/issues/275) for more details. If you are using the latest SDK versions - this should not affect you.
+* Possibility to configure history meta TTL on a per-channel level, [#264](https://github.com/centrifugal/centrifuge/pull/264). This is optional and global history TTL value may be set over `Config.HistoryMetaTTL` option. By default, it's 30 days.
+* One shot encode/decode for control proto [#263](https://github.com/centrifugal/centrifuge/pull/263). Note that with this change all nodes in your Centrifuge cluster should be v0.29.0 to work properly. Do not mix nodes based on Centrifuge < v0.29.0 with nodes based on Centrifuge v0.29.0. 
+* Add client level ping config, remove `AppLevelPing` [#286](https://github.com/centrifugal/centrifuge/pull/286) by @bfwbbrj.
+
+```
+❯ gorelease -base v0.28.0 -version v0.29.0
+# github.com/centrifugal/centrifuge
+## incompatible changes
+(*Disconnect).CloseText, method set of *DisconnectEvent: removed
+(*Disconnect).CloseText: removed
+AppLevelPing: removed
+DisableProtocolVersion1: removed
+Disconnect.Reconnect: removed
+DisconnectEvent.Reconnect: removed
+HistoryEvent.Filter: changed from HistoryFilter to HistoryFilter
+HistoryFilter.Limit: removed
+HistoryFilter.Reverse: removed
+HistoryFilter.Since: removed
+HistoryFilter: changed from HistoryFilter to HistoryFilter
+HistoryOptions.Limit: removed
+HistoryOptions.Reverse: removed
+HistoryOptions.Since: removed
+MemoryBrokerConfig.HistoryMetaTTL: removed
+ProtocolVersion1: removed
+RedisBrokerConfig.HistoryMetaTTL: removed
+SockjsConfig.HeartbeatDelay: removed
+SockjsConfig.ProtocolVersion: removed
+TransportInfo.AppLevelPing, method set of Transport: removed
+TransportInfo.AppLevelPing: removed
+TransportInfo.PingPongConfig: added
+WebsocketConfig.PingInterval: removed
+WebsocketConfig.PongTimeout: removed
+WebsocketConfig.ProtocolVersion: removed
+WithHistory: changed from func(int, time.Duration) PublishOption to func(int, time.Duration, ...time.Duration) PublishOption
+## compatible changes
+(*Node).Config: added
+Config.HistoryMetaTTL: added
+ConnectReply.PingPongConfig: added
+HistoryFilter.Filter: added
+HistoryFilter.MetaTTL: added
+HistoryOptions.Filter: added
+HistoryOptions.MetaTTL: added
+PublishOptions.HistoryMetaTTL: added
+SubscribeOptions.HistoryMetaTTL: added
+WithHistoryFilter: added
+WithHistoryMetaTTL: added
+WithSubscribeHistoryMetaTTL: added
+
+# summary
+v0.29.0 is a valid semantic version for this release.
+```
+
 v0.28.0
 =======
 

@@ -62,15 +62,10 @@ func channelSubscribeAllowed(channel string) bool {
 
 func main() {
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelInfo,
-		LogHandler: handleLog,
+		LogLevel:       centrifuge.LogLevelInfo,
+		LogHandler:     handleLog,
+		HistoryMetaTTL: 24 * time.Hour,
 	})
-
-	// Override default broker which does not use HistoryMetaTTL.
-	broker, _ := centrifuge.NewMemoryBroker(node, centrifuge.MemoryBrokerConfig{
-		HistoryMetaTTL: 120 * time.Second,
-	})
-	node.SetBroker(broker)
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)

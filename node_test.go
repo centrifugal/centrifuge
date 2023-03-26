@@ -91,7 +91,7 @@ func (e *TestBroker) Unsubscribe(_ string) error {
 	return nil
 }
 
-func (e *TestBroker) History(_ string, _ HistoryFilter) ([]*Publication, StreamPosition, error) {
+func (e *TestBroker) History(_ string, _ HistoryOptions) ([]*Publication, StreamPosition, error) {
 	if e.errorOnHistory {
 		return nil, StreamPosition{}, errors.New("boom")
 	}
@@ -390,7 +390,7 @@ func TestNode_Subscribe(t *testing.T) {
 		})
 	})
 
-	newTestConnectedClient(t, n, "42")
+	newTestConnectedClientV2(t, n, "42")
 
 	err := n.Subscribe("42", "test_channel", WithRecoverSince(&StreamPosition{0, "test"}))
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ func TestNode_Unsubscribe(t *testing.T) {
 		})
 	})
 
-	client := newTestSubscribedClient(t, n, "42", "test_channel")
+	client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 
 	err = n.Unsubscribe("42", "test_channel")
 	require.NoError(t, err)
@@ -453,7 +453,7 @@ func TestNode_Disconnect(t *testing.T) {
 		})
 	})
 
-	newTestConnectedClient(t, n, "42")
+	newTestConnectedClientV2(t, n, "42")
 
 	err = n.Disconnect("42", WithCustomDisconnect(DisconnectBadRequest))
 	require.NoError(t, err)
@@ -544,7 +544,7 @@ func TestIndex(t *testing.T) {
 	require.Equal(t, 0, index("2121", 1))
 }
 
-var testPayload = map[string]interface{}{
+var testPayload = map[string]any{
 	"_id":        "5adece493c1a23736b037c52",
 	"index":      2,
 	"guid":       "478a00f4-19b1-4567-8097-013b8cc846b8",
@@ -600,11 +600,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	transport.setSink(sink)
 	newCtx := SetCredentials(ctx, &Credentials{UserID: "test"})
 	client, _ := newClient(newCtx, node, transport)
-	if protoVersion == ProtocolVersion1 {
-		connectClient(b, client)
-	} else {
-		connectClientV2(b, client)
-	}
+	connectClientV2(b, client)
 	rwWrapper := testReplyWriterWrapper()
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
@@ -627,14 +623,14 @@ func BenchmarkBroadcastMemory(b *testing.B) {
 		numSubscribers int
 		protoVersion   ProtocolVersion
 	}{
-		{"JSON-V1", newFakeConnJSON, 1, ProtocolVersion1},
-		{"Protobuf-V1", newFakeConnProtobuf, 1, ProtocolVersion1},
-		{"JSON-V1", newFakeConnJSON, 10000, ProtocolVersion1},
-		{"Protobuf-V1", newFakeConnProtobuf, 10000, ProtocolVersion1},
-		{"JSON-V2", newFakeConnJSON, 1, ProtocolVersion1},
-		{"Protobuf-V2", newFakeConnProtobuf, 1, ProtocolVersion1},
-		{"JSON-V2", newFakeConnJSON, 10000, ProtocolVersion1},
-		{"Protobuf-V2", newFakeConnProtobuf, 10000, ProtocolVersion1},
+		{"JSON-V1", newFakeConnJSON, 1, ProtocolVersion2},
+		{"Protobuf-V1", newFakeConnProtobuf, 1, ProtocolVersion2},
+		{"JSON-V1", newFakeConnJSON, 10000, ProtocolVersion2},
+		{"Protobuf-V1", newFakeConnProtobuf, 10000, ProtocolVersion2},
+		{"JSON-V2", newFakeConnJSON, 1, ProtocolVersion2},
+		{"Protobuf-V2", newFakeConnProtobuf, 1, ProtocolVersion2},
+		{"JSON-V2", newFakeConnJSON, 10000, ProtocolVersion2},
+		{"Protobuf-V2", newFakeConnProtobuf, 10000, ProtocolVersion2},
 	}
 
 	for _, bm := range benchmarks {
@@ -703,40 +699,6 @@ func TestNode_handleControl(t *testing.T) {
 
 		err := n.handleControl([]byte("random"))
 		require.EqualError(t, err, "unexpected EOF")
-
-		enc := controlproto.NewProtobufEncoder()
-
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_SURVEY_REQUEST,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
-
-		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_SURVEY_RESPONSE,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
-
-		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_NOTIFICATION,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
-
-		brokenCmdBytes, err = enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_REFRESH,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
 	})
 
 	t.Run("Node", func(t *testing.T) {
@@ -746,18 +708,11 @@ func TestNode_handleControl(t *testing.T) {
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_NODE,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeNode(&controlpb.Node{
-			Name: "new_node",
-		})
-		require.NoError(t, err)
+		brokenCmdBytes := []byte("random")
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_NODE,
-			Params: paramsBytes,
+			Node: &controlpb.Node{
+				Name: "new_node",
+			},
 		})
 		require.NoError(t, err)
 
@@ -774,31 +729,20 @@ func TestNode_handleControl(t *testing.T) {
 		n := defaultNodeNoHandlers()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		newTestConnectedClient(t, n, "42")
+		newTestConnectedClientV2(t, n, "42")
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_SUBSCRIBE,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeSubscribe(&controlpb.Subscribe{
-			Channel: "test_channel",
-			User:    "42",
-			RecoverSince: &controlpb.StreamPosition{
-				Offset: 0,
-				Epoch:  "test",
+		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
+			Subscribe: &controlpb.Subscribe{
+				Channel: "test_channel",
+				User:    "42",
+				RecoverSince: &controlpb.StreamPosition{
+					Offset: 0,
+					Epoch:  "test",
+				},
 			},
 		})
 		require.NoError(t, err)
-		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Method: controlpb.Command_SUBSCRIBE,
-			Params: paramsBytes,
-		})
-		require.NoError(t, err)
-
-		err = n.handleControl(brokenCmdBytes)
-		require.Error(t, err)
 		err = n.handleControl(cmdBytes)
 		require.NoError(t, err)
 		require.Equal(t, 1, n.hub.NumSubscribers("test_channel"))
@@ -820,29 +764,17 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: controlpb.Command_UNSUBSCRIBE,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeUnsubscribe(&controlpb.Unsubscribe{
-			Channel: "test_channel",
-			User:    "42",
-		})
-		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: controlpb.Command_UNSUBSCRIBE,
-			Params: paramsBytes,
+			Uid: client.uid,
+			Unsubscribe: &controlpb.Unsubscribe{
+				Channel: "test_channel",
+				User:    "42",
+			},
 		})
 		require.NoError(t, err)
-
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
 		err = n.handleControl(cmdBytes)
 		select {
 		case <-done:
@@ -860,11 +792,9 @@ func TestNode_handleControl(t *testing.T) {
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		enc := controlproto.NewProtobufEncoder()
-
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    "",
-			Method: controlpb.Command_SHUTDOWN,
-			Params: nil,
+			Uid:      "",
+			Shutdown: &controlpb.Shutdown{},
 		})
 		require.NoError(t, err)
 
@@ -888,28 +818,17 @@ func TestNode_handleControl(t *testing.T) {
 		})
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: controlpb.Command_DISCONNECT,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeDisconnect(&controlpb.Disconnect{
-			User: "42",
-		})
-		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: controlpb.Command_DISCONNECT,
-			Params: paramsBytes,
+			Uid: client.uid,
+			Disconnect: &controlpb.Disconnect{
+				User: "42",
+			},
 		})
 		require.NoError(t, err)
 
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
 		err = n.handleControl(cmdBytes)
 		select {
 		case <-done:
@@ -928,25 +847,13 @@ func TestNode_handleControl(t *testing.T) {
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
 		enc := controlproto.NewProtobufEncoder()
-		brokenCmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    "",
-			Method: controlpb.Command_REFRESH,
-			Params: []byte("random"),
-		})
-		require.NoError(t, err)
-		paramsBytes, err := enc.EncodeRefresh(&controlpb.Refresh{
-			User: "42",
-		})
-		require.NoError(t, err)
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    "",
-			Method: controlpb.Command_REFRESH,
-			Params: paramsBytes,
+			Uid: "",
+			Refresh: &controlpb.Refresh{
+				User: "42",
+			},
 		})
 		require.NoError(t, err)
-
-		err = n.handleControl(brokenCmdBytes)
-		require.EqualError(t, err, "unexpected EOF")
 		err = n.handleControl(cmdBytes)
 		require.NoError(t, err)
 	})
@@ -957,18 +864,16 @@ func TestNode_handleControl(t *testing.T) {
 		n := defaultTestNode()
 		defer func() { _ = n.Shutdown(context.Background()) }()
 
-		client := newTestSubscribedClient(t, n, "42", "test_channel")
+		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 
 		enc := controlproto.NewProtobufEncoder()
 		cmdBytes, err := enc.EncodeCommand(&controlpb.Command{
-			Uid:    client.uid,
-			Method: -1,
-			Params: nil,
+			Uid: client.uid,
 		})
 		require.NoError(t, err)
 
 		err = n.handleControl(cmdBytes)
-		require.EqualError(t, err, "control method not found: -1")
+		require.NoError(t, err)
 	})
 }
 
@@ -1247,8 +1152,8 @@ func TestSingleFlightPresence(t *testing.T) {
 	require.Len(t, result.Presence, 0)
 
 	client := newTestClient(t, node, "42")
-	connectClient(t, client)
-	subscribeClient(t, client, "test")
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
 
 	result, err = node.Presence("test")
 	require.NoError(t, err)
@@ -1311,7 +1216,7 @@ func TestNode_OnTransportWrite(t *testing.T) {
 	done := make(chan struct{})
 
 	node.OnTransportWrite(func(_ *Client, event TransportWriteEvent) bool {
-		if string(event.Data) == "{\"result\":{\"type\":4,\"data\":{\"data\":{}}}}" {
+		if string(event.Data) == `{"push":{"message":{"data":{}}}}` {
 			close(done)
 		}
 		return true
@@ -1324,7 +1229,7 @@ func TestNode_OnTransportWrite(t *testing.T) {
 
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 	err := client.Send([]byte("{}"))
 	require.NoError(t, err)
 	select {
@@ -1378,7 +1283,7 @@ func TestNode_OnTransportWriteSkip(t *testing.T) {
 
 	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
 
-	connectClient(t, client)
+	connectClientV2(t, client)
 	err := client.Send([]byte("{}"))
 	require.NoError(t, err)
 

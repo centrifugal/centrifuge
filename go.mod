@@ -1,10 +1,10 @@
 module github.com/centrifugal/centrifuge
 
-go 1.18
+go 1.19
 
 require (
 	github.com/FZambia/eagle v0.0.2
-	github.com/centrifugal/protocol v0.9.1
+	github.com/centrifugal/protocol v0.10.0
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
@@ -13,7 +13,7 @@ require (
 	github.com/segmentio/encoding v0.3.6
 	github.com/stretchr/testify v1.8.2
 	golang.org/x/sync v0.1.0
-	google.golang.org/protobuf v1.28.1
+	google.golang.org/protobuf v1.30.0
 )
 
 require (

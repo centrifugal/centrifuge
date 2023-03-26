@@ -59,7 +59,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var err error
 		requestData, err = io.ReadAll(r.Body)
 		if err != nil {
-			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
+			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]any{"error": err.Error()}))
 			if len(requestData) >= maxBytesSize {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
@@ -72,26 +72,23 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pingInterval, pongTimeout := getPingPongPeriodValues(h.config.PingPongConfig)
-
 	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
 		protocolType: protocolType,
-		pingInterval: pingInterval,
-		pongTimeout:  pongTimeout,
+		pingPong:     h.config.PingPongConfig,
 	})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
-		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": transportHTTPStream}))
+		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]any{"error": err.Error(), "transport": transportHTTPStream}))
 		return
 	}
 	defer func() { _ = closeFn() }()
 	defer close(transport.closedCh) // need to execute this after client closeFn.
 
 	if h.node.LogEnabled(LogLevelDebug) {
-		h.node.Log(NewLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"transport": transport.Name(), "client": c.ID()}))
+		h.node.Log(NewLogEntry(LogLevelDebug, "client connection established", map[string]any{"transport": transport.Name(), "client": c.ID()}))
 		defer func(started time.Time) {
-			h.node.Log(NewLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"duration": time.Since(started), "transport": transport.Name(), "client": c.ID()}))
+			h.node.Log(NewLogEntry(LogLevelDebug, "client connection completed", map[string]any{"duration": time.Since(started), "transport": transport.Name(), "client": c.ID()}))
 		}(time.Now())
 	}
 
@@ -165,8 +162,7 @@ type httpStreamTransport struct {
 
 type httpStreamTransportConfig struct {
 	protocolType ProtocolType
-	pingInterval time.Duration
-	pongTimeout  time.Duration
+	pingPong     PingPongConfig
 }
 
 func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig) *httpStreamTransport {
@@ -207,12 +203,9 @@ func (t *httpStreamTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing ...
-func (t *httpStreamTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
-		PingInterval: t.config.pingInterval,
-		PongTimeout:  t.config.pongTimeout,
-	}
+// PingPongConfig ...
+func (t *httpStreamTransport) PingPongConfig() PingPongConfig {
+	return t.config.pingPong
 }
 
 func (t *httpStreamTransport) Write(message []byte) error {

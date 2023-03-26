@@ -286,9 +286,9 @@ func (t *eventsourceTransport) Emulation() bool {
 	return false
 }
 
-// AppLevelPing not implemented here, example only works over ProtocolVersion1.
-func (t *eventsourceTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{
+// PingPongConfig ...
+func (t *eventsourceTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
 		PingInterval: 25 * time.Second,
 	}
 }

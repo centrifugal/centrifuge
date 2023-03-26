@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/centrifugal/protocol"
@@ -54,12 +55,15 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 }
 
 func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
+	return centrifuge.ProtocolVersion2
 }
 
-// AppLevelPing not implemented here, example only works over ProtocolVersion1.
-func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+// PingPongConfig ...
+func (t *customWebsocketTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
+		PingInterval: 25 * time.Second,
+		PongTimeout:  10 * time.Second,
+	}
 }
 
 func (t *customWebsocketTransport) read() ([]byte, bool, error) {
@@ -138,7 +142,7 @@ func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error
 	t.mu.Unlock()
 
 	if disconnect != centrifuge.DisconnectConnectionClosed {
-		data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
+		data := ws.NewCloseFrameBody(ws.StatusCode(disconnect.Code), disconnect.Reason)
 		_ = wsutil.WriteServerMessage(t.conn, ws.OpClose, data)
 		return t.conn.Close()
 	}

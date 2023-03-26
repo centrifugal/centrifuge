@@ -1,10 +1,7 @@
 package centrifuge
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
-	"sync"
 )
 
 // Disconnect allows configuring how client will be disconnected from a server.
@@ -36,11 +33,6 @@ type Disconnect struct {
 	Code uint32 `json:"code,omitempty"`
 	// Reason is a short description of disconnect code for humans.
 	Reason string `json:"reason"`
-
-	// Reconnect is only used for compatibility with ProtocolVersion1.
-	// Ignore this field if all your clients are using ProtocolVersion2.
-	// Deprecated.
-	Reconnect bool `json:"reconnect"`
 }
 
 // String representation.
@@ -52,52 +44,6 @@ func (d Disconnect) String() string {
 // that client must be disconnected with corresponding Code and Reason.
 func (d Disconnect) Error() string {
 	return d.String()
-}
-
-func (d Disconnect) isReconnect(protoVersion ProtocolVersion) bool {
-	if protoVersion == ProtocolVersion1 {
-		return d.Reconnect
-	}
-	return d.Code < 3500 || d.Code >= 5000 || (d.Code >= 4000 && d.Code < 4500)
-}
-
-// This is a temporary close text cache for ProtocolVersion1 compatibility.
-var closeTextCacheMu sync.RWMutex
-var closeTextCache map[uint32]string
-
-func init() {
-	closeTextCache = map[uint32]string{}
-}
-
-// CloseText allows building disconnect advice sent inside Close frame.
-// At moment, we don't encode Code here to not duplicate information
-// since it is sent separately as Code of WebSocket/SockJS Close Frame.
-func (d *Disconnect) CloseText(protoVersion ProtocolVersion) string {
-	if protoVersion >= ProtocolVersion2 {
-		return d.Reason
-	}
-	closeTextCacheMu.RLock()
-	closeText, ok := closeTextCache[d.Code]
-	closeTextCacheMu.RUnlock()
-	if !ok {
-		buf := strings.Builder{}
-		buf.WriteString(`{"reason":`)
-		reason, _ := json.Marshal(d.Reason)
-		buf.Write(reason)
-		buf.WriteString(`,"reconnect":`)
-		var reconnect = d.isReconnect(ProtocolVersion1)
-		if reconnect {
-			buf.WriteString("true")
-		} else {
-			buf.WriteString("false")
-		}
-		buf.WriteString(`}`)
-		closeText = buf.String()
-		closeTextCacheMu.Lock()
-		closeTextCache[d.Code] = closeText
-		closeTextCacheMu.Unlock()
-	}
-	return closeText
 }
 
 // DisconnectConnectionClosed is a special Disconnect object used when
@@ -115,62 +61,53 @@ var DisconnectConnectionClosed = Disconnect{
 var (
 	// DisconnectShutdown issued when node is going to shut down.
 	DisconnectShutdown = Disconnect{
-		Code:      3001,
-		Reason:    "shutdown",
-		Reconnect: true,
+		Code:   3001,
+		Reason: "shutdown",
 	}
 	// DisconnectServerError issued when internal error occurred on server.
 	DisconnectServerError = Disconnect{
-		Code:      3004,
-		Reason:    "internal server error",
-		Reconnect: true,
+		Code:   3004,
+		Reason: "internal server error",
 	}
 	// DisconnectExpired issued when client connection expired.
 	DisconnectExpired = Disconnect{
-		Code:      3005,
-		Reason:    "connection expired",
-		Reconnect: true,
+		Code:   3005,
+		Reason: "connection expired",
 	}
 	// DisconnectSubExpired issued when client subscription expired.
 	DisconnectSubExpired = Disconnect{
-		Code:      3006,
-		Reason:    "subscription expired",
-		Reconnect: true,
+		Code:   3006,
+		Reason: "subscription expired",
 	}
 	// DisconnectSlow issued when client can't read messages fast enough.
 	DisconnectSlow = Disconnect{
-		Code:      3008,
-		Reason:    "slow",
-		Reconnect: true,
+		Code:   3008,
+		Reason: "slow",
 	}
 	// DisconnectWriteError issued when an error occurred while writing to
 	// client connection.
 	DisconnectWriteError = Disconnect{
-		Code:      3009,
-		Reason:    "write error",
-		Reconnect: true,
+		Code:   3009,
+		Reason: "write error",
 	}
 	// DisconnectInsufficientState issued when server detects wrong client
 	// position in channel Publication stream. Disconnect allows client
 	// to restore missed publications on reconnect.
 	DisconnectInsufficientState = Disconnect{
-		Code:      3010,
-		Reason:    "insufficient state",
-		Reconnect: true,
+		Code:   3010,
+		Reason: "insufficient state",
 	}
 	// DisconnectForceReconnect issued when server disconnects connection.
 	DisconnectForceReconnect = Disconnect{
-		Code:      3011,
-		Reason:    "force reconnect",
-		Reconnect: true,
+		Code:   3011,
+		Reason: "force reconnect",
 	}
 	// DisconnectNoPong may be issued when server disconnects bidirectional
 	// connection due to no pong received to application-level server-to-client
 	// pings in a configured time.
 	DisconnectNoPong = Disconnect{
-		Code:      3012,
-		Reason:    "no pong",
-		Reconnect: true,
+		Code:   3012,
+		Reason: "no pong",
 	}
 	// DisconnectTooManyRequests may be issued when client sends too many commands to a server.
 	DisconnectTooManyRequests = Disconnect{

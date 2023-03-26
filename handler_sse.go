@@ -48,7 +48,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if requestDataString != "" {
 			requestData = []byte(requestDataString)
 		} else {
-			h.node.Log(NewLogEntry(LogLevelDebug, "no connect command", map[string]interface{}{}))
+			h.node.Log(NewLogEntry(LogLevelDebug, "no connect command", map[string]any{}))
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -65,7 +65,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
-			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]interface{}{"error": err.Error()}))
+			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]any{"error": err.Error()}))
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -74,22 +74,20 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pingInterval, pongTimeout := getPingPongPeriodValues(h.config.PingPongConfig)
-
-	transport := newSSETransport(r, sseTransportConfig{pingInterval: pingInterval, pongTimeout: pongTimeout})
+	transport := newSSETransport(r, sseTransportConfig{pingPong: h.config.PingPongConfig})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
-		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]interface{}{"error": err.Error(), "transport": "uni_sse"}))
+		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]any{"error": err.Error(), "transport": "uni_sse"}))
 		return
 	}
 	defer func() { _ = closeFn() }()
 	defer close(transport.closedCh) // need to execute this after client closeFn.
 
 	if h.node.LogEnabled(LogLevelDebug) {
-		h.node.Log(NewLogEntry(LogLevelDebug, "client connection established", map[string]interface{}{"transport": transport.Name(), "client": c.ID()}))
+		h.node.Log(NewLogEntry(LogLevelDebug, "client connection established", map[string]any{"transport": transport.Name(), "client": c.ID()}))
 		defer func(started time.Time) {
-			h.node.Log(NewLogEntry(LogLevelDebug, "client connection completed", map[string]interface{}{"duration": time.Since(started), "transport": transport.Name(), "client": c.ID()}))
+			h.node.Log(NewLogEntry(LogLevelDebug, "client connection completed", map[string]any{"duration": time.Since(started), "transport": transport.Name(), "client": c.ID()}))
 		}(time.Now())
 	}
 
@@ -153,8 +151,7 @@ type sseTransport struct {
 }
 
 type sseTransportConfig struct {
-	pingInterval time.Duration
-	pongTimeout  time.Duration
+	pingPong PingPongConfig
 }
 
 func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport {
@@ -195,12 +192,9 @@ func (t *sseTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing ...
-func (t *sseTransport) AppLevelPing() AppLevelPing {
-	return AppLevelPing{
-		PingInterval: t.config.pingInterval,
-		PongTimeout:  t.config.pongTimeout,
-	}
+// PingPongConfig ...
+func (t *sseTransport) PingPongConfig() PingPongConfig {
+	return t.config.pingPong
 }
 
 func (t *sseTransport) Write(message []byte) error {

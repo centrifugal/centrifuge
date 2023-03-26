@@ -78,6 +78,20 @@ type Config struct {
 	// UseSingleFlight allows turning on mode where singleflight will be automatically used
 	// for Node.History (including recovery) and Node.Presence/Node.PresenceStats calls.
 	UseSingleFlight bool
+	// HistoryMetaTTL sets a time of stream meta key expiration in Redis. Stream
+	// meta key is a Redis HASH that contains top offset in channel and epoch value.
+	// In some cases – when channels created for а short time and then
+	// not used anymore – created stream meta keys can stay in memory while
+	// not actually useful. For example, you can have a personal user channel but
+	// after using your app for a while user left it forever. In long-term
+	// perspective this can be an unwanted memory leak. Setting a reasonable
+	// value to this option (usually much bigger than history retention period)
+	// can help. In this case unused channel stream metadata will eventually expire.
+	//
+	// Keep this value much larger than history stream TTL used when publishing.
+	// When zero Centrifuge uses default 30 days which we believe is more than enough
+	// for most use cases.
+	HistoryMetaTTL time.Duration
 }
 
 const (

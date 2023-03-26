@@ -65,13 +65,13 @@ func (m PresenceManager) Presence(ch string) (map[string]*centrifuge.ClientInfo,
 	if len(res.Data) == 0 {
 		return nil, errors.New("malformed presence result")
 	}
-	presenceInterfaceSlice, ok := res.Data[0].([]interface{})
+	presenceInterfaceSlice, ok := res.Data[0].([]any)
 	if !ok {
 		return nil, errors.New("malformed presence format: map expected")
 	}
 	presence := make(map[string]*centrifuge.ClientInfo, len(presenceInterfaceSlice))
 	for _, v := range presenceInterfaceSlice {
-		presenceRow, ok := v.([]interface{})
+		presenceRow, ok := v.([]any)
 		if !ok {
 			return nil, errors.New("malformed presence format: tuple expected")
 		}

@@ -73,7 +73,7 @@ func (t *customWebsocketTransport) Protocol() centrifuge.ProtocolType {
 }
 
 func (t *customWebsocketTransport) ProtocolVersion() centrifuge.ProtocolVersion {
-	return centrifuge.ProtocolVersion1
+	return centrifuge.ProtocolVersion2
 }
 
 // Unidirectional returns whether transport is unidirectional.
@@ -91,9 +91,12 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 	return centrifuge.PushFlagDisconnect
 }
 
-// AppLevelPing not implemented here, example only works over ProtocolVersion1.
-func (t *customWebsocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{}
+// PingPongConfig ...
+func (t *customWebsocketTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
+		PingInterval: 25 * time.Second,
+		PongTimeout:  10 * time.Second,
+	}
 }
 
 // Write ...
@@ -119,7 +122,7 @@ func (t *customWebsocketTransport) Write(message []byte) error {
 	}
 }
 
-// Write ...
+// WriteMany ...
 func (t *customWebsocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
@@ -156,7 +159,7 @@ func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error
 	t.mu.Unlock()
 
 	if disconnect != centrifuge.DisconnectConnectionClosed {
-		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.CloseText(t.ProtocolVersion()))
+		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.Reason)
 	}
 	return t.conn.Close(websocket.StatusNormalClosure, "")
 }
@@ -165,7 +168,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 
 	conn, err := websocket.Accept(rw, r, &websocket.AcceptOptions{})
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]interface{}{"error": err.Error()}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
 
@@ -185,13 +188,13 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 
 	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": websocketTransportName}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]any{"transport": websocketTransportName}))
 		return
 	}
 	defer func() { _ = closeFn() }()
-	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": websocketTransportName}))
+	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": websocketTransportName}))
 	defer func(started time.Time) {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started)}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started)}))
 	}(time.Now())
 
 	for {

@@ -68,6 +68,9 @@ type ConnectReply struct {
 	// QueueInitialCap set an initial capacity for client's message queue, the size of queue
 	// can grow further, but won't be reduced below QueueInitialCap. By default, it's 2.
 	QueueInitialCap int
+	// PingPongConfig if set, will override Transport's PingPongConfig to enable setting ping/pong interval
+	// for individual client.
+	PingPongConfig *PingPongConfig
 }
 
 // ConnectingHandler called when new client authenticates on server.
@@ -342,7 +345,7 @@ type HistoryHandler func(HistoryEvent, HistoryCallback)
 
 // StateSnapshotHandler must return a copy of current client's
 // internal state. Returning a copy is important to avoid data races.
-type StateSnapshotHandler func() (interface{}, error)
+type StateSnapshotHandler func() (any, error)
 
 // SurveyEvent with Op and Data of survey.
 type SurveyEvent struct {

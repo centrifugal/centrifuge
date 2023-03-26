@@ -270,9 +270,9 @@ func (t *websocketTransport) DisabledPushFlags() uint64 {
 	return 0
 }
 
-// AppLevelPing not implemented here, example only works over ProtocolVersion1.
-func (t *websocketTransport) AppLevelPing() centrifuge.AppLevelPing {
-	return centrifuge.AppLevelPing{
+// PingPongConfig ...
+func (t *websocketTransport) PingPongConfig() centrifuge.PingPongConfig {
+	return centrifuge.PingPongConfig{
 		PingInterval: DefaultWebsocketPingInterval,
 		PongTimeout:  DefaultWebsocketPingInterval / 3,
 	}
@@ -450,14 +450,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	conn, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]interface{}{"error": err.Error()}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
 
 	if compression {
 		err := conn.SetCompressionLevel(compressionLevel)
 		if err != nil {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "websocket error setting compression level", map[string]interface{}{"error": err.Error()}))
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "websocket error setting compression level", map[string]any{"error": err.Error()}))
 		}
 	}
 
@@ -510,14 +510,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		c, closeFn, err := centrifuge.NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
 		if err != nil {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]interface{}{"transport": transport.Name()}))
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]any{"transport": transport.Name()}))
 			return
 		}
 		defer func() { _ = closeFn() }()
 
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]interface{}{"client": c.ID(), "transport": transport.Name()}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": transport.Name()}))
 		defer func(started time.Time) {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]interface{}{"client": c.ID(), "transport": transport.Name(), "duration": time.Since(started)}))
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": transport.Name(), "duration": time.Since(started)}))
 		}(time.Now())
 
 		_, data, err := conn.ReadMessage()
