@@ -6,8 +6,10 @@
         <style type="text/css">
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
+            .hidden {display: none;}
+            #form {margin-top: 10px;}
         </style>
-        <script type="text/javascript" src="https://unpkg.com/centrifuge@3.1.0/dist/centrifuge.js"></script>
+        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -15,10 +17,14 @@
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
             const channel = "chat";
+            let loggedIn = true;
 
             window.addEventListener('load', function() {
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
                     getToken: function() {
+                        if (!loggedIn) {
+                            return Promise.resolve("");
+                        }
                         return new Promise((resolve, reject) => {
                             fetch('http://localhost:8000/token')
                                 .then(res => {
@@ -52,7 +58,7 @@
 
                 // bind listeners on centrifuge object instance events.
                 centrifuge.on('connected', function(ctx){
-                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
+                    drawText('Connected with client ID ' + ctx.client + ', over ' + ctx.transport);
                     input.removeAttribute('disabled');
                 });
 
@@ -100,10 +106,33 @@
                     });
                     input.value = '';
                 });
+
+                const loginButton = document.getElementById('login');
+                const logoutButton = document.getElementById('logout');
+
+                loginButton.addEventListener('click', function() {
+                    loggedIn = true;
+                    centrifuge.disconnect({resetConnectionToken: true});
+                    centrifuge.connect();
+                    sub.subscribe();
+                    loginButton.classList.toggle("hidden");
+                    logoutButton.classList.toggle("hidden");
+                });
+
+                logoutButton.addEventListener('click', function() {
+                    loggedIn = false;
+                    centrifuge.disconnect({resetConnectionToken: true});
+                    sub.unsubscribe();
+                    centrifuge.connect();
+                    loginButton.classList.toggle("hidden");
+                    logoutButton.classList.toggle("hidden");
+                });
             });
         </script>
     </head>
     <body>
+        <button id="login" class="hidden">Login</button>
+        <button id="logout">Logout</button>
         <form id="form">
             <label for="input"></label><input type="text" id="input" autocomplete="off" />
             <input type="submit" id="submit" value="»">

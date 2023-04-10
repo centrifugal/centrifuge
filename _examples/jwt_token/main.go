@@ -40,8 +40,8 @@ func waitExitSignal(n *centrifuge.Node) {
 
 // Check whether channel is allowed for subscribing. In real case permission
 // most probably will be more complex than in this example.
-func channelSubscribeAllowed(channel string) bool {
-	return channel == "chat"
+func channelSubscribeAllowed(user string, channel string) bool {
+	return user != "" && channel == "chat"
 }
 
 func main() {
@@ -59,24 +59,30 @@ func main() {
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		log.Printf("client connecting with token: %s", e.Token)
-		token, err := tokenVerifier.VerifyConnectToken(e.Token)
-		if err != nil {
-			if err == jwt.ErrTokenExpired {
-				return centrifuge.ConnectReply{}, centrifuge.ErrorTokenExpired
+		if e.Token != "" {
+			token, err := tokenVerifier.VerifyConnectToken(e.Token)
+			if err != nil {
+				if err == jwt.ErrTokenExpired {
+					return centrifuge.ConnectReply{}, centrifuge.ErrorTokenExpired
+				}
+				return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 			}
-			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
+			subs := make(map[string]centrifuge.SubscribeOptions, len(token.Channels))
+			for _, ch := range token.Channels {
+				subs[ch] = centrifuge.SubscribeOptions{}
+			}
+			return centrifuge.ConnectReply{
+				Credentials: &centrifuge.Credentials{
+					UserID:   token.UserID,
+					ExpireAt: token.ExpireAt,
+				},
+				Subscriptions: subs,
+			}, nil
+		} else {
+			return centrifuge.ConnectReply{
+				Credentials: &centrifuge.Credentials{UserID: ""},
+			}, nil
 		}
-		subs := make(map[string]centrifuge.SubscribeOptions, len(token.Channels))
-		for _, ch := range token.Channels {
-			subs[ch] = centrifuge.SubscribeOptions{}
-		}
-		return centrifuge.ConnectReply{
-			Credentials: &centrifuge.Credentials{
-				UserID:   token.UserID,
-				ExpireAt: token.ExpireAt,
-			},
-			Subscriptions: subs,
-		}, nil
 	})
 
 	node.OnConnect(func(client *centrifuge.Client) {
@@ -90,7 +96,7 @@ func main() {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			if !channelSubscribeAllowed(e.Channel) {
+			if !channelSubscribeAllowed(client.UserID(), e.Channel) {
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
