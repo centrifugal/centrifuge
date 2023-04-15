@@ -3,7 +3,7 @@ module github.com/centrifugal/centrifuge
 go 1.19
 
 require (
-	github.com/FZambia/eagle v0.0.2
+	github.com/FZambia/eagle v0.1.0
 	github.com/centrifugal/protocol v0.10.0
 	github.com/google/uuid v1.3.0
 	github.com/gorilla/websocket v1.5.0
