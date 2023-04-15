@@ -190,8 +190,9 @@ type RedisShardConfig struct {
 	// By default, 4 seconds is used.
 	IOTimeout time.Duration
 
-	// ForceRESP2 if set to forces using RESP2 protocol for communicating with Redis. By default,
-	// Redis client tries to detect supported Redis protocol automatically trying RESP3 first.
+	// ForceRESP2 if set to true forces using RESP2 protocol for communicating with Redis.
+	// By default, Redis client tries to detect supported Redis protocol automatically
+	// trying RESP3 first.
 	ForceRESP2 bool
 
 	network string
