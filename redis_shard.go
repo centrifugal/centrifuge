@@ -107,6 +107,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		ShuffleInit:      true,
 		DisableCache:     true,
 		AlwaysPipelining: true,
+		AlwaysRESP2:      conf.ForceRESP2,
 		MaxFlushDelay:    100 * time.Microsecond,
 	}
 
@@ -188,6 +189,11 @@ type RedisShardConfig struct {
 	// Redis with this timeout for PING operation to find out stale/broken/blocked connections.
 	// By default, 4 seconds is used.
 	IOTimeout time.Duration
+
+	// ForceRESP2 if set to true forces using RESP2 protocol for communicating with Redis.
+	// By default, Redis client tries to detect supported Redis protocol automatically
+	// trying RESP3 first.
+	ForceRESP2 bool
 
 	network string
 	address string
