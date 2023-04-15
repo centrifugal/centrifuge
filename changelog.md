@@ -1,3 +1,18 @@
+v0.29.1
+=======
+
+* Add `ForceRESP2` option for `RedisShardConfig`. If set to `true` forces using RESP2 protocol for communicating with Redis. By default, Redis client tries to detect supported Redis protocol automatically trying RESP3 first.
+
+```
+gorelease -base v0.29.0 -version v0.29.1
+# github.com/centrifugal/centrifuge
+## compatible changes
+RedisShardConfig.ForceRESP2: added
+
+# summary
+v0.29.1 is a valid semantic version for this release.
+```
+
 v0.29.0
 =======
 
