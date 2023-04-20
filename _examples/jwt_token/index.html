@@ -17,30 +17,37 @@
             function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
             const channel = "chat";
-            let loggedIn = true;
+            let loggedIn = false;
+
+            function getToken() {
+                console.log("getToken called");
+                if (!loggedIn) {
+                    return Promise.resolve("");
+                }
+                console.log("making HTTP request");
+                return new Promise((resolve, reject) => {
+                    fetch('http://localhost:8000/token')
+                        .then(res => {
+                            if (!res.ok) {
+                                if (res.status === 403) {
+                                    throw new Centrifuge.UnauthorizedError();
+                                }
+                                throw new Error(`Unexpected status code ${res.status}`);
+                            }
+                            return res.json();
+                        })
+                        .then(data => {
+                            resolve(data.token);
+                        })
+                        .catch(err => {
+                            reject(err);
+                        });
+                });
+            }
 
             window.addEventListener('load', function() {
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
-                    getToken: function() {
-                        if (!loggedIn) {
-                            return Promise.resolve("");
-                        }
-                        return new Promise((resolve, reject) => {
-                            fetch('http://localhost:8000/token')
-                                .then(res => {
-                                    if (!res.ok) {
-                                        throw new Error(`Unexpected status code ${res.status}`);
-                                    }
-                                    return res.json();
-                                })
-                                .then(data => {
-                                    resolve(data.token);
-                                })
-                                .catch(err => {
-                                    reject(err);
-                                });
-                        });
-                    }
+                    getToken: getToken
                 });
 
                 const input = document.getElementById("input");
@@ -66,8 +73,6 @@
                 sub.on('publication', handlePublication)
                     .on("subscribed", handleSubscribed)
                     .on("error", handleSubscriptionError);
-
-                sub.subscribe();
 
                 centrifuge.connect();
 
@@ -112,7 +117,7 @@
 
                 loginButton.addEventListener('click', function() {
                     loggedIn = true;
-                    centrifuge.disconnect({resetConnectionToken: true});
+                    centrifuge.disconnect();
                     centrifuge.connect();
                     sub.subscribe();
                     loginButton.classList.toggle("hidden");
@@ -131,8 +136,8 @@
         </script>
     </head>
     <body>
-        <button id="login" class="hidden">Login</button>
-        <button id="logout">Logout</button>
+        <button id="login">Login</button>
+        <button id="logout" class="hidden">Logout</button>
         <form id="form">
             <label for="input"></label><input type="text" id="input" autocomplete="off" />
             <input type="submit" id="submit" value="»">
