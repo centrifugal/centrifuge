@@ -3,7 +3,7 @@
     <head>
         <meta charset="utf-8">
         <title></title>
-        <style type="text/css">
+        <style>
             input[type="text"] { width: 300px; }
             .muted {color: #CCCCCC; font-size: 10px;}
             .hidden {display: none;}
@@ -19,30 +19,21 @@
             const channel = "chat";
             let loggedIn = false;
 
-            function getToken() {
-                console.log("getToken called");
+            async function getToken() {
                 if (!loggedIn) {
-                    return Promise.resolve("");
+                    return "";
                 }
-                console.log("making HTTP request");
-                return new Promise((resolve, reject) => {
-                    fetch('http://localhost:8000/token')
-                        .then(res => {
-                            if (!res.ok) {
-                                if (res.status === 403) {
-                                    throw new Centrifuge.UnauthorizedError();
-                                }
-                                throw new Error(`Unexpected status code ${res.status}`);
-                            }
-                            return res.json();
-                        })
-                        .then(data => {
-                            resolve(data.token);
-                        })
-                        .catch(err => {
-                            reject(err);
-                        });
-                });
+                const res = await fetch('http://localhost:8000/token');
+                if (!res.ok) {
+                    if (res.status === 403) {
+                        // Return special error to not proceed with token refreshes, client will be disconnected.
+                        throw new Centrifuge.UnauthorizedError();
+                    }
+                    // Any other error thrown will result into token refresh re-attempts.
+                    throw new Error(`Unexpected status code ${res.status}`);
+                }
+                const data = await res.json();
+                return data.token;
             }
 
             window.addEventListener('load', function() {
@@ -52,6 +43,9 @@
 
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
+                const form = document.getElementById('form');
+                const loginButton = document.getElementById('login');
+                const logoutButton = document.getElementById('logout');
 
                 centrifuge.on('connecting', function(ctx){
                     drawText('Connecting: ' + ctx.reason);
@@ -102,7 +96,7 @@
                     container.insertBefore(e, container.firstChild);
                 }
 
-                document.getElementById('form').addEventListener('submit', function(event) {
+                form.addEventListener('submit', function(event) {
                     event.preventDefault();
                     sub.publish({"input": input.value}).then(function() {
                         // console.log('message accepted by server');
@@ -112,9 +106,6 @@
                     input.value = '';
                 });
 
-                const loginButton = document.getElementById('login');
-                const logoutButton = document.getElementById('logout');
-
                 loginButton.addEventListener('click', function() {
                     loggedIn = true;
                     centrifuge.disconnect();
@@ -122,6 +113,7 @@
                     sub.subscribe();
                     loginButton.classList.toggle("hidden");
                     logoutButton.classList.toggle("hidden");
+                    form.classList.toggle("hidden");
                 });
 
                 logoutButton.addEventListener('click', function() {
@@ -131,6 +123,7 @@
                     centrifuge.connect();
                     loginButton.classList.toggle("hidden");
                     logoutButton.classList.toggle("hidden");
+                    form.classList.toggle("hidden");
                 });
             });
         </script>
@@ -138,7 +131,7 @@
     <body>
         <button id="login">Login</button>
         <button id="logout" class="hidden">Logout</button>
-        <form id="form">
+        <form id="form" class="hidden">
             <label for="input"></label><input type="text" id="input" autocomplete="off" />
             <input type="submit" id="submit" value="»">
         </form>
