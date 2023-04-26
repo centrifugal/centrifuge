@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/timers"
+
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/saferand"
@@ -258,6 +260,9 @@ type Client struct {
 	eventHub          *clientEventHub
 	timer             *time.Timer
 	startWriterOnce   sync.Once
+	graceCh           chan struct{}
+	graceOnce         sync.Once
+	closeGraceOnce    sync.Once
 	replyWithoutQueue bool
 	unusable          bool
 }
@@ -947,12 +952,31 @@ func (c *Client) Disconnect(disconnect ...Disconnect) {
 
 func (c *Client) close(disconnect Disconnect) error {
 	c.startWriter(0, 0, 0)
+
+	needGrace := disconnect.Code != DisconnectConnectionClosed.Code
+	needWait := false
+	if needGrace {
+		c.graceOnce.Do(func() {
+			c.graceCh = make(chan struct{})
+			needWait = true
+		})
+	}
+
+	if needWait {
+		defer c.waitClose()
+	}
+
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.connectMu.Lock()
 	defer c.connectMu.Unlock()
 	c.mu.Lock()
 	if c.status == statusClosed {
+		if c.graceCh != nil {
+			c.closeGraceOnce.Do(func() {
+				close(c.graceCh)
+			})
+		}
 		c.mu.Unlock()
 		return nil
 	}
@@ -998,7 +1022,9 @@ func (c *Client) close(disconnect Disconnect) error {
 	// close writer and send messages remaining in writer queue if any.
 	_ = c.messageWriter.close(disconnect != DisconnectConnectionClosed && disconnect != DisconnectSlow)
 
-	_ = c.transport.Close(disconnect)
+	if !needGrace {
+		_ = c.transport.Close(disconnect)
+	}
 
 	if disconnect.Code != DisconnectConnectionClosed.Code {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]any{"client": c.uid, "user": c.user, "reason": disconnect.Reason}))
@@ -1011,7 +1037,18 @@ func (c *Client) close(disconnect Disconnect) error {
 			Disconnect: disconnect,
 		})
 	}
+
 	return nil
+}
+
+func (c *Client) waitClose() {
+	tm := timers.AcquireTimer(closeFrameWait)
+	defer timers.ReleaseTimer(tm)
+	select {
+	case <-c.graceCh:
+	case <-tm.C:
+	}
+	_ = c.transport.Close(DisconnectForceReconnect)
 }
 
 func (c *Client) traceInCmd(cmd *protocol.Command) {

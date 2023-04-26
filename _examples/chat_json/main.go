@@ -87,6 +87,11 @@ func main() {
 		transport := client.Transport()
 		log.Printf("[user %s] connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			client.Disconnect(centrifuge.DisconnectForceReconnect)
+		}()
+
 		// Event handler should not block, so start separate goroutine to
 		// periodically send messages to client.
 		go func() {

@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
-	"github.com/centrifugal/centrifuge/internal/timers"
-
 	"github.com/centrifugal/protocol"
 	"github.com/gorilla/websocket"
 )
@@ -299,7 +297,8 @@ func (t *websocketTransport) Emulation() bool {
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
 	// Websocket sends disconnects in Close frames.
-	return PushFlagDisconnect
+	//return PushFlagDisconnect
+	return 0
 }
 
 // PingPongConfig ...
@@ -377,26 +376,6 @@ func (t *websocketTransport) Close(disconnect Disconnect) error {
 	}
 	close(t.closeCh)
 	t.mu.Unlock()
-
-	if disconnect.Code != DisconnectConnectionClosed.Code {
-		msg := websocket.FormatCloseMessage(int(disconnect.Code), disconnect.Reason)
-		err := t.conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
-		if err != nil {
-			return t.conn.Close()
-		}
-		select {
-		case <-t.graceCh:
-		default:
-			// Wait for closing handshake completion.
-			tm := timers.AcquireTimer(closeFrameWait)
-			select {
-			case <-t.graceCh:
-			case <-tm.C:
-			}
-			timers.ReleaseTimer(tm)
-		}
-		return t.conn.Close()
-	}
 	return t.conn.Close()
 }
 

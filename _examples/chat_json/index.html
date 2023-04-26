@@ -21,7 +21,8 @@
                 const container = document.getElementById('messages');
 
                 const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
-                    data: {"user-agent": navigator.userAgent}
+                    data: {"user-agent": navigator.userAgent},
+                    minReconnectDelay: 50,
                 });
 
                 centrifuge.on('connecting', function(ctx){
