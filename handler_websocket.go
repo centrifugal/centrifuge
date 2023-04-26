@@ -245,13 +245,12 @@ const (
 // websocketTransport is a wrapper struct over websocket connection to fit session
 // interface so client will accept it.
 type websocketTransport struct {
-	mu        sync.RWMutex
-	conn      *websocket.Conn
-	closed    bool
-	closeCh   chan struct{}
-	graceCh   chan struct{}
-	opts      websocketTransportOptions
-	pingTimer *time.Timer
+	mu      sync.RWMutex
+	conn    *websocket.Conn
+	closed  bool
+	closeCh chan struct{}
+	graceCh chan struct{}
+	opts    websocketTransportOptions
 }
 
 type websocketTransportOptions struct {
@@ -372,9 +371,6 @@ func (t *websocketTransport) Close(disconnect Disconnect) error {
 		return nil
 	}
 	t.closed = true
-	if t.pingTimer != nil {
-		t.pingTimer.Stop()
-	}
 	close(t.closeCh)
 	t.mu.Unlock()
 
