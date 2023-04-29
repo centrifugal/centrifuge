@@ -228,7 +228,7 @@ func (t *httpStreamTransport) WriteMany(messages ...[]byte) error {
 	return nil
 }
 
-func (t *httpStreamTransport) Close(_ Disconnect) error {
+func (t *httpStreamTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

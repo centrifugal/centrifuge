@@ -86,5 +86,5 @@ type Transport interface {
 	// Close must close transport. Transport implementation can optionally
 	// handle Disconnect passed here. For example builtin WebSocket transport
 	// sends Disconnect as part of websocket.CloseMessage.
-	Close(Disconnect) error
+	Close() error
 }

@@ -88,7 +88,7 @@ func (t *customWebsocketTransport) Emulation() bool {
 
 // DisabledPushFlags ...
 func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
-	return centrifuge.PushFlagDisconnect
+	return 0
 }
 
 // PingPongConfig ...
@@ -148,7 +148,7 @@ func (t *customWebsocketTransport) WriteMany(messages ...[]byte) error {
 }
 
 // Close ...
-func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error {
+func (t *customWebsocketTransport) Close() error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
@@ -157,10 +157,6 @@ func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error
 	t.closed = true
 	close(t.closeCh)
 	t.mu.Unlock()
-
-	if disconnect != centrifuge.DisconnectConnectionClosed {
-		return t.conn.Close(websocket.StatusCode(disconnect.Code), disconnect.Reason)
-	}
 	return t.conn.Close(websocket.StatusNormalClosure, "")
 }
 
@@ -181,7 +177,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 
 	select {
 	case <-s.node.NotifyShutdown():
-		_ = transport.Close(centrifuge.DisconnectShutdown)
+		_ = transport.Close()
 		return
 	default:
 	}

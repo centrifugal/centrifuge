@@ -217,7 +217,7 @@ func (t *sseTransport) WriteMany(messages ...[]byte) error {
 	return nil
 }
 
-func (t *sseTransport) Close(_ Disconnect) error {
+func (t *sseTransport) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

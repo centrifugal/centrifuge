@@ -156,7 +156,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		select {
 		case <-s.node.NotifyShutdown():
-			_ = transport.Close(DisconnectShutdown)
+			_ = transport.Close()
 			return
 		default:
 		}
@@ -185,14 +185,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 			proceed := HandleReadFrame(c, r)
 			if !proceed {
-				break
-			}
-		}
-
-		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
-		for {
-			if _, _, err := conn.NextReader(); err != nil {
-				close(graceCh)
 				break
 			}
 		}
@@ -296,8 +288,6 @@ func (t *websocketTransport) Emulation() bool {
 
 // DisabledPushFlags ...
 func (t *websocketTransport) DisabledPushFlags() uint64 {
-	// Websocket sends disconnects in Close frames.
-	//return PushFlagDisconnect
 	return 0
 }
 
@@ -361,10 +351,8 @@ func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 	}
 }
 
-const closeFrameWait = 5 * time.Second
-
 // Close closes transport.
-func (t *websocketTransport) Close(disconnect Disconnect) error {
+func (t *websocketTransport) Close() error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()

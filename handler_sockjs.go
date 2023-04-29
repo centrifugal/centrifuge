@@ -132,7 +132,7 @@ func (s *SockjsHandler) handleSession(sess sockjs.Session) {
 
 		select {
 		case <-s.node.NotifyShutdown():
-			_ = transport.Close(DisconnectShutdown)
+			_ = transport.Close()
 			return
 		default:
 		}
@@ -273,7 +273,7 @@ func (t *sockjsTransport) WriteMany(messages ...[]byte) error {
 }
 
 // Close closes transport.
-func (t *sockjsTransport) Close(disconnect Disconnect) error {
+func (t *sockjsTransport) Close() error {
 	t.mu.Lock()
 	if t.closed {
 		// Already closed, noop.
@@ -283,5 +283,5 @@ func (t *sockjsTransport) Close(disconnect Disconnect) error {
 	t.closed = true
 	close(t.closeCh)
 	t.mu.Unlock()
-	return t.session.Close(disconnect.Code, disconnect.Reason)
+	return t.session.Close(websocket.CloseNormalClosure, "")
 }

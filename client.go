@@ -1023,7 +1023,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	_ = c.messageWriter.close(disconnect != DisconnectConnectionClosed && disconnect != DisconnectSlow)
 
 	if !needGrace {
-		_ = c.transport.Close(disconnect)
+		_ = c.transport.Close()
 	}
 
 	if disconnect.Code != DisconnectConnectionClosed.Code {
@@ -1041,14 +1041,16 @@ func (c *Client) close(disconnect Disconnect) error {
 	return nil
 }
 
+const closeWait = 5 * time.Second
+
 func (c *Client) waitClose() {
-	tm := timers.AcquireTimer(closeFrameWait)
+	tm := timers.AcquireTimer(closeWait)
 	defer timers.ReleaseTimer(tm)
 	select {
 	case <-c.graceCh:
 	case <-tm.C:
 	}
-	_ = c.transport.Close(DisconnectForceReconnect)
+	_ = c.transport.Close()
 }
 
 func (c *Client) traceInCmd(cmd *protocol.Command) {
