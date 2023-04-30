@@ -108,7 +108,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rc := http.NewResponseController(w)
+	rc := newResponseController(w)
 
 	reader := readerpool.GetBytesReader(requestData)
 	_ = HandleReadFrame(c, reader)
@@ -124,7 +124,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 			if protocolType == ProtocolTypeProtobuf {
 				protoType := protocolType.toProto()
 				encoder := protocol.GetDataEncoder(protoType)

@@ -21,10 +21,10 @@
                 const container = document.getElementById('messages');
 
                 const transports = [
-                    // {
-                    //     transport: 'websocket',
-                    //     endpoint: `ws://${window.location.host}/connection/websocket`
-                    // },
+                    {
+                        transport: 'websocket',
+                        endpoint: `ws://${window.location.host}/connection/websocket`
+                    },
                     {
                         transport: 'http_stream',
                         endpoint: `//${window.location.host}/connection/http_stream`

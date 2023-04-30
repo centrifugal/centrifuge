@@ -176,11 +176,11 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 
 		c.Connect(centrifuge.ConnectRequest{})
 
-		flusher, ok := w.(http.Flusher)
+		_, ok := w.(http.Flusher)
 		if !ok {
-			log.Printf("ResponseWriter does not support Flusher")
 			return
 		}
+		rc := http.NewResponseController(w)
 
 		pingInterval := 25 * time.Second
 		tick := time.NewTicker(pingInterval)
@@ -193,17 +193,19 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 			case <-transport.disconnectCh:
 				return
 			case <-tick.C:
+				_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				_, err = w.Write([]byte("null\n"))
 				if err != nil {
 					log.Printf("error write: %v", err)
 					return
 				}
-				flusher.Flush()
+				_ = rc.Flush()
 			case data, ok := <-transport.messages:
 				if !ok {
 					return
 				}
 				tick.Reset(pingInterval)
+				_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				_, err = w.Write(data)
 				if err != nil {
 					log.Printf("error write: %v", err)
@@ -214,7 +216,7 @@ func handleStream(node *centrifuge.Node) http.HandlerFunc {
 					log.Printf("error write: %v", err)
 					return
 				}
-				flusher.Flush()
+				_ = rc.Flush()
 			}
 		}
 	}

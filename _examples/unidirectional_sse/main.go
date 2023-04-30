@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -134,13 +133,21 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/eventsource", authMiddleware(handleEventsource(node)))
-	http.Handle("/subscribe", handleSubscribe(node))
-	http.Handle("/unsubscribe", handleUnsubscribe(node))
-	http.Handle("/", http.FileServer(http.Dir("./")))
+	mux := http.NewServeMux()
+	mux.Handle("/connection/eventsource", authMiddleware(handleEventsource(node)))
+	mux.Handle("/subscribe", handleSubscribe(node))
+	mux.Handle("/unsubscribe", handleUnsubscribe(node))
+	mux.Handle("/", http.FileServer(http.Dir("./")))
+
+	server := &http.Server{
+		Handler:      mux,
+		Addr:         ":" + strconv.Itoa(*port),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
 
 	go func() {
-		if err := http.ListenAndServe(":"+strconv.Itoa(*port), nil); err != nil {
+		if err := server.ListenAndServe(); err != nil {
 			log.Fatal(err)
 		}
 	}()
@@ -166,13 +173,17 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 		defer func() { _ = closeFn() }()
 		defer close(transport.closedCh) // need to execute this after client closeFn.
 
-		flusher := w.(http.Flusher)
-		_, err = fmt.Fprintf(w, "\r\n")
-		if err != nil {
-			log.Printf("error write: %v", err)
+		_, ok := w.(http.Flusher)
+		if !ok {
 			return
 		}
-		flusher.Flush()
+		rc := http.NewResponseController(w)
+		_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_, err = w.Write([]byte("\r\n"))
+		if err != nil {
+			return
+		}
+		_ = rc.Flush()
 
 		c.Connect(centrifuge.ConnectRequest{})
 
@@ -187,23 +198,25 @@ func handleEventsource(node *centrifuge.Node) http.HandlerFunc {
 			case <-transport.disconnectCh:
 				return
 			case <-tick.C:
+				_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				_, err = w.Write([]byte("event: ping\ndata:\n\n"))
 				if err != nil {
 					log.Printf("error write: %v", err)
 					return
 				}
-				flusher.Flush()
+				_ = rc.Flush()
 			case data, ok := <-transport.messages:
 				if !ok {
 					return
 				}
 				tick.Reset(pingInterval)
+				_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
 				if err != nil {
 					log.Printf("error write: %v", err)
 					return
 				}
-				flusher.Flush()
+				_ = rc.Flush()
 			}
 		}
 	}

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"io"
 	"log"
 	"net/http"
@@ -17,6 +19,8 @@ import (
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+var port = flag.Int("port", 8000, "Port to bind app to")
 
 type clientMessage struct {
 	Timestamp int64  `json:"timestamp"`
@@ -40,13 +44,16 @@ func authMiddleware(h http.Handler) http.Handler {
 	})
 }
 
-func waitExitSignal(n *centrifuge.Node) {
+func waitExitSignal(n *centrifuge.Node, s *http.Server) {
 	sigCh := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		_ = n.Shutdown(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = n.Shutdown(ctx)
+		_ = s.Shutdown(ctx)
 		done <- true
 	}()
 	<-done
@@ -230,11 +237,13 @@ func main() {
 		}
 	}()
 
+	mux := http.NewServeMux()
+
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ReadBufferSize:     1024,
 		UseWriteBufferPool: true,
 	})
-	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
+	mux.Handle("/connection/websocket", authMiddleware(websocketHandler))
 
 	sockjsHandler := centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
 		URL:                      "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
@@ -242,17 +251,24 @@ func main() {
 		WebsocketReadBufferSize:  1024,
 		WebsocketWriteBufferSize: 1024,
 	})
-	http.Handle("/connection/sockjs/", authMiddleware(sockjsHandler))
+	mux.Handle("/connection/sockjs/", authMiddleware(sockjsHandler))
 
-	http.Handle("/metrics", promhttp.Handler())
-	http.Handle("/", http.FileServer(http.Dir("./")))
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/", http.FileServer(http.Dir("./")))
+
+	server := &http.Server{
+		Handler:      mux,
+		Addr:         ":" + strconv.Itoa(*port),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
 
 	go func() {
-		if err := http.ListenAndServe(":8000", nil); err != nil {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
 	}()
 
-	waitExitSignal(node)
+	waitExitSignal(node, server)
 	log.Println("bye!")
 }

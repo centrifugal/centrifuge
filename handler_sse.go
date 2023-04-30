@@ -107,9 +107,8 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-
-	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	rc := newResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 	_, err = w.Write([]byte("\r\n"))
 	if err != nil {
 		return
@@ -130,7 +129,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 			_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
 			if err != nil {
 				return

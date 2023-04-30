@@ -247,20 +247,27 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.Handle("/connection/websocket", authMiddleware(
-		centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-			ProtocolVersion: centrifuge.ProtocolVersion2,
-		}),
-	))
-	http.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
-	http.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
-	http.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
+	mux := http.NewServeMux()
 
-	http.Handle("/metrics", promhttp.Handler())
-	http.Handle("/", http.FileServer(http.Dir("./")))
+	mux.Handle("/connection/websocket", authMiddleware(
+		centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}),
+	))
+	mux.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
+	mux.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
+	mux.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
+
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/", http.FileServer(http.Dir("./")))
+
+	server := &http.Server{
+		Handler:      mux,
+		Addr:         ":" + strconv.Itoa(*port),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
 
 	go func() {
-		if err := http.ListenAndServe(":"+strconv.Itoa(*port), nil); err != nil {
+		if err := server.ListenAndServe(); err != nil {
 			log.Fatal(err)
 		}
 	}()
