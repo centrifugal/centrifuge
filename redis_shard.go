@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rueian/rueidis"
+	"github.com/redis/rueidis"
 )
 
 type (
