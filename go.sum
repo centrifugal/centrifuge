@@ -201,8 +201,8 @@ github.com/prometheus/procfs v0.6.0/go.mod h1:cz+aTbrPOrUb4q7XlbU9ygM+/jj0fzG6c1
 github.com/prometheus/procfs v0.7.3/go.mod h1:cz+aTbrPOrUb4q7XlbU9ygM+/jj0fzG6c1xBZuNvfVA=
 github.com/prometheus/procfs v0.8.0 h1:ODq8ZFEaYeCaZOJlZZdJA2AbQR98dSHSM1KW/You5mo=
 github.com/prometheus/procfs v0.8.0/go.mod h1:z7EfXMXOkbkqb9IINtpCn86r/to3BnA0uaxHdg830/4=
-github.com/redis/rueidis v1.0.0-go1.18 h1:XkYKw8amr00X/0OoiKC6L/nX0Su71Bgj4B4gNwwabHY=
-github.com/redis/rueidis v1.0.0-go1.18/go.mod h1:taBjfxX+EBERki+v8TG/Ub3JKOB12twhw/Ucx2U6HUg=
+github.com/redis/rueidis v1.0.0 h1:LrUhkD46Es7neMvpTgqyYGRpvlGG4F6dLIRq+nUw/ho=
+github.com/redis/rueidis v1.0.0/go.mod h1:yxbpgX+VYNxCvdE0KEQXDeUFcF2hB2Oz/TJiaqFxoEU=
 github.com/rogpeppe/go-internal v1.3.0/go.mod h1:M8bDsm7K2OlrFYOpmOWEs/qY81heoFRclV5y23lUDJ4=
 github.com/segmentio/asm v1.1.3/go.mod h1:Ld3L4ZXGNcSLRg4JBsZ3//1+f/TjYl0Mzen/DQy1EJg=
 github.com/segmentio/asm v1.2.0 h1:9BQrFxC+YOHJlTlHGkTrFWf59nbL3XnCoFLTwDCI7ys=
