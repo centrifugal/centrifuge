@@ -103,10 +103,12 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expire", "0")
 	w.WriteHeader(http.StatusOK)
 
-	flusher, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		return
 	}
+
+	rc := newResponseController(w)
 
 	reader := readerpool.GetBytesReader(requestData)
 	_ = HandleReadFrame(c, reader)
@@ -122,6 +124,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 			if protocolType == ProtocolTypeProtobuf {
 				protoType := protocolType.toProto()
 				encoder := protocol.GetDataEncoder(protoType)
@@ -141,7 +144,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			flusher.Flush()
+			_ = rc.Flush()
 		}
 	}
 }

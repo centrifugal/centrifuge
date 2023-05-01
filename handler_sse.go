@@ -103,15 +103,17 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expire", "0")
 	w.WriteHeader(http.StatusOK)
 
-	flusher, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		return
 	}
+	rc := newResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 	_, err = w.Write([]byte("\r\n"))
 	if err != nil {
 		return
 	}
-	flusher.Flush()
+	_ = rc.Flush()
 
 	reader := readerpool.GetBytesReader(requestData)
 	_ = HandleReadFrame(c, reader)
@@ -127,11 +129,12 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 			_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
 			if err != nil {
 				return
 			}
-			flusher.Flush()
+			_ = rc.Flush()
 		}
 	}
 }

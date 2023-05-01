@@ -13,3 +13,5 @@ go run main.go
 ```
 
 Then go to http://localhost:8000 to see it in action.
+
+You can disable WebSocket handler on server and see how client will use fallback transports.
