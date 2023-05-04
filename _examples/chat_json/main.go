@@ -31,7 +31,7 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
-const metaKeyNumPublishCalls = "num_publish_calls"
+const storageKeyNumPublishCalls = "num_publish_calls"
 
 func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -151,9 +151,9 @@ func main() {
 			}
 
 			storage, release := client.AcquireStorage()
-			numCalls, _ := storage[metaKeyNumPublishCalls].(int)
+			numCalls, _ := storage[storageKeyNumPublishCalls].(int)
 			numCalls++
-			storage[metaKeyNumPublishCalls] = numCalls
+			storage[storageKeyNumPublishCalls] = numCalls
 			release(storage)
 			log.Printf("client %s published %d times during its session", client.ID(), numCalls)
 
