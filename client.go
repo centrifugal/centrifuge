@@ -789,15 +789,15 @@ func (c *Client) Info() []byte {
 	return info
 }
 
-// AcquireStorage returns an attached connection store (a map) and a function to be called when
-// the application finished working with the store map. Be accurate when using this API –
-// avoid acquiring meta for a long time - i.e. on the time of IO operations. Do the work
-// fast and release with the updated store. The API designed this way to allow
-// reading, modifying or fully overriding store and avoid making deep copies each time.
-// Note, that if store map has not been initialized yet - i.e. if it's nil - then it will
+// AcquireStorage returns an attached connection storage (a map) and a function to be
+// called when the application finished working with the storage map. Be accurate when
+// using this API – avoid acquiring storage for a long time - i.e. on the time of IO operations.
+// Do the work fast and release with the updated map. The API designed this way to allow
+// reading, modifying or fully overriding storage map and avoid making deep copies each time.
+// Note, that if storage map has not been initialized yet - i.e. if it's nil - then it will
 // be initialized to an empty map and then returned – so you never receive nil map when
-// acquiring. The purpose of this map is to simplify handling state during connection
-// lifetime. Try to keep this map reasonably small.
+// acquiring. The purpose of this map is to simplify handling user-defined state during the
+// lifetime of connection. Try to keep this map reasonably small.
 func (c *Client) AcquireStorage() (map[string]any, func(map[string]any)) {
 	c.storageMu.Lock()
 	if c.storage == nil {
