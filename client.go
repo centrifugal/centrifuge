@@ -803,8 +803,8 @@ func (c *Client) AcquireStorage() (map[string]any, func(map[string]any)) {
 	if c.storage == nil {
 		c.storage = map[string]any{}
 	}
-	return c.storage, func(updatedStore map[string]any) {
-		c.storage = updatedStore
+	return c.storage, func(updatedStorage map[string]any) {
+		c.storage = updatedStorage
 		c.storageMu.Unlock()
 	}
 }
