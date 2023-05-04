@@ -31,6 +31,8 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
+const metaKeyNumPublishCalls = "num_publish_calls"
+
 func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -141,12 +143,19 @@ func main() {
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			log.Printf("[user %s[ publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			log.Printf("[user %s] publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 
 			if !client.IsSubscribed(e.Channel) {
 				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
+
+			storage, release := client.AcquireStorage()
+			numCalls, _ := storage[metaKeyNumPublishCalls].(int)
+			numCalls++
+			storage[metaKeyNumPublishCalls] = numCalls
+			release(storage)
+			log.Printf("client %s published %d times during its session", client.ID(), numCalls)
 
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)
