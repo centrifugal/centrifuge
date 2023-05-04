@@ -143,19 +143,19 @@ func main() {
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			meta, releaseMeta := client.AcquireMeta()
-			numCalls, _ := meta[metaKeyNumPublishCalls].(int)
-			numCalls++
-			meta[metaKeyNumPublishCalls] = numCalls
-			releaseMeta(meta)
-			log.Printf("client %s published %d times", client.ID(), numCalls)
-
-			log.Printf("[user %s[ publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			log.Printf("[user %s] publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 
 			if !client.IsSubscribed(e.Channel) {
 				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
+
+			store, release := client.AcquireStore()
+			numCalls, _ := store[metaKeyNumPublishCalls].(int)
+			numCalls++
+			store[metaKeyNumPublishCalls] = numCalls
+			release(store)
+			log.Printf("client %s published %d times during its session", client.ID(), numCalls)
 
 			var msg clientMessage
 			err := json.Unmarshal(e.Data, &msg)

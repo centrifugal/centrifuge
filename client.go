@@ -243,8 +243,8 @@ type Client struct {
 	session           string
 	user              string
 	info              []byte
-	meta              map[string]any
-	metaMu            sync.Mutex
+	store             map[string]any
+	storeMu           sync.Mutex
 	authenticated     bool
 	clientSideRefresh bool
 	status            status
@@ -789,22 +789,23 @@ func (c *Client) Info() []byte {
 	return info
 }
 
-// AcquireMeta returns an attached connection meta map and a function to be called when
-// the application finished working with the meta map. Be accurate when using this API –
+// AcquireStore returns an attached connection store (a map) and a function to be called when
+// the application finished working with the store map. Be accurate when using this API –
 // avoid acquiring meta for a long time - i.e. on the time of IO operations. Do the work
-// fast and release with the updated meta map. The API designed this way to allow
-// reading, modifying or fully overriding meta and avoid making deep copies each time.
-// Note, that if meta map has not been initialized yet - i.e. if it's nil - then it will
-// be initialized to an empty map and then returned – so you never receive nil map.
-// acquiring.
-func (c *Client) AcquireMeta() (map[string]any, func(meta map[string]any)) {
-	c.metaMu.Lock()
-	if c.meta == nil {
-		c.meta = map[string]any{}
+// fast and release with the updated store. The API designed this way to allow
+// reading, modifying or fully overriding store and avoid making deep copies each time.
+// Note, that if store map has not been initialized yet - i.e. if it's nil - then it will
+// be initialized to an empty map and then returned – so you never receive nil map when
+// acquiring. The purpose of this map is to simplify handling state during connection
+// lifetime. Try to keep this map reasonably small.
+func (c *Client) AcquireStore() (map[string]any, func(map[string]any)) {
+	c.storeMu.Lock()
+	if c.store == nil {
+		c.store = map[string]any{}
 	}
-	return c.meta, func(meta map[string]any) {
-		c.meta = meta
-		c.metaMu.Unlock()
+	return c.store, func(updatedStore map[string]any) {
+		c.store = updatedStore
+		c.storeMu.Unlock()
 	}
 }
 
@@ -2218,7 +2219,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
 		}
-		c.meta = reply.Meta
+		c.store = reply.Store
 		if reply.Context != nil {
 			c.mu.Lock()
 			c.ctx = reply.Context
