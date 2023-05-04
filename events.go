@@ -46,6 +46,10 @@ type ConnectReply struct {
 	// i.e. send refresh commands with new connection token. If not set
 	// then server-side refresh mechanism will be used.
 	ClientSideRefresh bool
+	// Meta can be used to set initial meta information for the connection. This data may
+	// be accessed/modified/replaced later during Client's lifetime over Client.AcquireMeta()
+	// call.
+	Meta map[string]any
 
 	// MaxMessagesInFrame is the maximum number of messages (replies and pushes) which
 	// Centrifuge Client message writer will collect from the client's queue before sending

@@ -31,6 +31,8 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
 }
 
+const metaKeyNumPublishCalls = "num_publish_calls"
+
 func authMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -141,6 +143,13 @@ func main() {
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
+			meta, releaseMeta := client.AcquireMeta()
+			numCalls, _ := meta[metaKeyNumPublishCalls].(int)
+			numCalls++
+			meta[metaKeyNumPublishCalls] = numCalls
+			releaseMeta(meta)
+			log.Printf("client %s published %d times", client.ID(), numCalls)
+
 			log.Printf("[user %s[ publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 
 			if !client.IsSubscribed(e.Channel) {
