@@ -150,11 +150,11 @@ func main() {
 				return
 			}
 
-			store, release := client.AcquireStore()
-			numCalls, _ := store[metaKeyNumPublishCalls].(int)
+			storage, release := client.AcquireStorage()
+			numCalls, _ := storage[metaKeyNumPublishCalls].(int)
 			numCalls++
-			store[metaKeyNumPublishCalls] = numCalls
-			release(store)
+			storage[metaKeyNumPublishCalls] = numCalls
+			release(storage)
 			log.Printf("client %s published %d times during its session", client.ID(), numCalls)
 
 			var msg clientMessage
