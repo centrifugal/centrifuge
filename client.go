@@ -243,8 +243,8 @@ type Client struct {
 	session           string
 	user              string
 	info              []byte
-	store             map[string]any
-	storeMu           sync.Mutex
+	storage           map[string]any
+	storageMu         sync.Mutex
 	authenticated     bool
 	clientSideRefresh bool
 	status            status
@@ -789,7 +789,7 @@ func (c *Client) Info() []byte {
 	return info
 }
 
-// AcquireStore returns an attached connection store (a map) and a function to be called when
+// AcquireStorage returns an attached connection store (a map) and a function to be called when
 // the application finished working with the store map. Be accurate when using this API –
 // avoid acquiring meta for a long time - i.e. on the time of IO operations. Do the work
 // fast and release with the updated store. The API designed this way to allow
@@ -798,14 +798,14 @@ func (c *Client) Info() []byte {
 // be initialized to an empty map and then returned – so you never receive nil map when
 // acquiring. The purpose of this map is to simplify handling state during connection
 // lifetime. Try to keep this map reasonably small.
-func (c *Client) AcquireStore() (map[string]any, func(map[string]any)) {
-	c.storeMu.Lock()
-	if c.store == nil {
-		c.store = map[string]any{}
+func (c *Client) AcquireStorage() (map[string]any, func(map[string]any)) {
+	c.storageMu.Lock()
+	if c.storage == nil {
+		c.storage = map[string]any{}
 	}
-	return c.store, func(updatedStore map[string]any) {
-		c.store = updatedStore
-		c.storeMu.Unlock()
+	return c.storage, func(updatedStore map[string]any) {
+		c.storage = updatedStore
+		c.storageMu.Unlock()
 	}
 }
 
@@ -2219,7 +2219,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
 		}
-		c.store = reply.Store
+		c.storage = reply.Storage
 		if reply.Context != nil {
 			c.mu.Lock()
 			c.ctx = reply.Context
