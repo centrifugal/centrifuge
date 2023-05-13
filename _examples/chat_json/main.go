@@ -141,7 +141,7 @@ func main() {
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			log.Printf("[user %s[ publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			log.Printf("[user %s] publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
 
 			if !client.IsSubscribed(e.Channel) {
 				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)

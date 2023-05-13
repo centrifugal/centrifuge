@@ -908,6 +908,78 @@ func TestConnectingReply(t *testing.T) {
 	}
 }
 
+func TestClientStorage(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials: &Credentials{
+				UserID: "12",
+			},
+			Storage: map[string]any{
+				"test": 1,
+			},
+		}, nil
+	})
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(c *Client) {
+		storage, release := c.AcquireStorage()
+		defer release(storage)
+		require.Equal(t, 1, storage["test"])
+		storage["test"] = 2
+		close(done)
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+
+	storage, release := client.AcquireStorage()
+	defer release(storage)
+	require.Equal(t, 2, storage["test"])
+}
+
+func TestClientStorageNotNil(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	node.OnConnecting(func(ctx context.Context, e ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials: &Credentials{
+				UserID: "12",
+			},
+		}, nil
+	})
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(c *Client) {
+		storage, release := c.AcquireStorage()
+		defer release(storage)
+		require.NotNil(t, storage)
+		close(done)
+	})
+
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
+	}
+}
+
 func TestServerSideSubscriptions(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {

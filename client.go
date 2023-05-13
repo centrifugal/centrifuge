@@ -243,6 +243,8 @@ type Client struct {
 	session           string
 	user              string
 	info              []byte
+	storage           map[string]any
+	storageMu         sync.Mutex
 	authenticated     bool
 	clientSideRefresh bool
 	status            status
@@ -785,6 +787,27 @@ func (c *Client) Info() []byte {
 	copy(info, c.info)
 	c.mu.Unlock()
 	return info
+}
+
+// AcquireStorage returns an attached connection storage (a map) and a function to be
+// called when the application finished working with the storage map. Be accurate when
+// using this API – avoid acquiring storage for a long time - i.e. on the time of IO operations.
+// Do the work fast and release with the updated map. The API designed this way to allow
+// reading, modifying or fully overriding storage map and avoid making deep copies each time.
+// Note, that if storage map has not been initialized yet - i.e. if it's nil - then it will
+// be initialized to an empty map and then returned – so you never receive nil map when
+// acquiring. The purpose of this map is to simplify handling user-defined state during the
+// lifetime of connection. Try to keep this map reasonably small.
+// This API is EXPERIMENTAL.
+func (c *Client) AcquireStorage() (map[string]any, func(map[string]any)) {
+	c.storageMu.Lock()
+	if c.storage == nil {
+		c.storage = map[string]any{}
+	}
+	return c.storage, func(updatedStorage map[string]any) {
+		c.storage = updatedStorage
+		c.storageMu.Unlock()
+	}
 }
 
 // StateSnapshot allows collecting current state copy.
@@ -2197,6 +2220,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
 		}
+		c.storage = reply.Storage
 		if reply.Context != nil {
 			c.mu.Lock()
 			c.ctx = reply.Context

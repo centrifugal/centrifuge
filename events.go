@@ -46,6 +46,10 @@ type ConnectReply struct {
 	// i.e. send refresh commands with new connection token. If not set
 	// then server-side refresh mechanism will be used.
 	ClientSideRefresh bool
+	// Storage can be used to fill initial connection storage during connecting.
+	// This data may be then accessed/modified/replaced later during Client's lifetime
+	// over Client.AcquireStorage() call. This API is EXPERIMENTAL.
+	Storage map[string]any
 
 	// MaxMessagesInFrame is the maximum number of messages (replies and pushes) which
 	// Centrifuge Client message writer will collect from the client's queue before sending
