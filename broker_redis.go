@@ -15,7 +15,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/convert"
 
 	"github.com/centrifugal/protocol"
-	"github.com/rueian/rueidis"
+	"github.com/redis/rueidis"
 )
 
 var (
