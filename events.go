@@ -48,7 +48,7 @@ type ConnectReply struct {
 	ClientSideRefresh bool
 	// Storage can be used to fill initial connection storage during connecting.
 	// This data may be then accessed/modified/replaced later during Client's lifetime
-	// over Client.AcquireStorage() call.
+	// over Client.AcquireStorage() call. This API is EXPERIMENTAL.
 	Storage map[string]any
 
 	// MaxMessagesInFrame is the maximum number of messages (replies and pushes) which

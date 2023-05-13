@@ -798,6 +798,7 @@ func (c *Client) Info() []byte {
 // be initialized to an empty map and then returned – so you never receive nil map when
 // acquiring. The purpose of this map is to simplify handling user-defined state during the
 // lifetime of connection. Try to keep this map reasonably small.
+// This API is EXPERIMENTAL.
 func (c *Client) AcquireStorage() (map[string]any, func(map[string]any)) {
 	c.storageMu.Lock()
 	if c.storage == nil {
