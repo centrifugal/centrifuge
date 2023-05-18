@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   redis:
-    image: redis:${REDIS_VERSION:-7}-alpine
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.3.0
     ports:
       - "6379:6379"
   sentinel:
