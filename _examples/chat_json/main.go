@@ -237,7 +237,7 @@ func main() {
 		}
 	}()
 
-	mux := http.NewServeMux()
+	mux := http.DefaultServeMux
 
 	websocketHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		ReadBufferSize:     1024,

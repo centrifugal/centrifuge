@@ -133,7 +133,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.NewServeMux()
+	mux := http.DefaultServeMux
 	mux.Handle("/connection/eventsource", authMiddleware(handleEventsource(node)))
 	mux.Handle("/subscribe", handleSubscribe(node))
 	mux.Handle("/unsubscribe", handleUnsubscribe(node))

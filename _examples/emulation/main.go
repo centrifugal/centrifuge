@@ -247,8 +247,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.NewServeMux()
-
+	mux := http.DefaultServeMux
 	mux.Handle("/connection/websocket", authMiddleware(
 		centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{}),
 	))
