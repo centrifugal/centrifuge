@@ -1635,6 +1635,10 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	}
 
 	cb := func(reply SubscribeReply, err error) {
+		if reply.ReplyWritten != nil {
+			defer close(reply.ReplyWritten)
+		}
+
 		if err != nil {
 			c.onSubscribeError(req.Channel)
 			c.writeDisconnectOrErrorFlush(commandSubscribe, cmd, err, started, rw)
@@ -2993,6 +2997,66 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		return nil
 	}
 	return c.transportEnqueue(data)
+}
+
+func (c *Client) WritePublication(channel string, publication *Publication, sp StreamPosition) error {
+	if !c.IsSubscribed(channel) {
+		return nil
+	}
+
+	pub := pubToProto(publication)
+
+	var (
+		jsonReplyV2     []byte
+		protobufReplyV2 []byte
+
+		jsonPushV2     []byte
+		protobufPushV2 []byte
+	)
+
+	protoType := c.transport.Protocol().toProto()
+
+	if protoType == protocol.TypeJSON {
+		if c.transport.Unidirectional() {
+			push := &protocol.Push{Channel: channel, Pub: pub}
+			var err error
+			jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
+			if err != nil {
+				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+				return err
+			}
+			return c.writePublication(channel, pub, jsonPushV2, sp)
+		} else {
+			push := &protocol.Push{Channel: channel, Pub: pub}
+			var err error
+			jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+			if err != nil {
+				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+				return err
+			}
+			return c.writePublication(channel, pub, jsonReplyV2, sp)
+		}
+	} else if protoType == protocol.TypeProtobuf {
+		if c.transport.Unidirectional() {
+			push := &protocol.Push{Channel: channel, Pub: pub}
+			var err error
+			protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+			if err != nil {
+				return err
+			}
+			return c.writePublication(channel, pub, protobufPushV2, sp)
+		} else {
+			push := &protocol.Push{Channel: channel, Pub: pub}
+			var err error
+			protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+			if err != nil {
+				return err
+			}
+			return c.writePublication(channel, pub, protobufReplyV2, sp)
+		}
+	}
+
+	return nil
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
