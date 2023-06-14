@@ -9,7 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
 	github.com/prometheus/client_golang v1.15.1
-	github.com/redis/rueidis v1.0.5-go1.18
+	github.com/redis/rueidis v1.0.8-go1.18
 	github.com/segmentio/encoding v0.3.6
 	github.com/stretchr/testify v1.8.3
 	golang.org/x/sync v0.2.0
@@ -31,6 +31,6 @@ require (
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	golang.org/x/sys v0.7.0 // indirect
+	golang.org/x/sys v0.8.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
