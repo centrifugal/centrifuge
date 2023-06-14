@@ -11,7 +11,7 @@ require (
 	github.com/prometheus/client_golang v1.15.1
 	github.com/redis/rueidis v1.0.8-go1.18
 	github.com/segmentio/encoding v0.3.6
-	github.com/stretchr/testify v1.8.3
+	github.com/stretchr/testify v1.8.4
 	golang.org/x/sync v0.2.0
 	google.golang.org/protobuf v1.30.0
 )
