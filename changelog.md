@@ -1,7 +1,7 @@
 v0.29.2
 =======
 
-* http.ResponseController to set write timeout in SSE and HTTP-streaming handlers [#292](https://github.com/centrifugal/centrifuge/pull/296)
+* http.ResponseController to set write timeout in SSE and HTTP-streaming handlers [#292](https://github.com/centrifugal/centrifuge/pull/292)
 * Experimental Client's storage API for keeping user-defined objects during connection lifetime, [#296](https://github.com/centrifugal/centrifuge/pull/296)
 * Up rueidis to v1.0.8 - fixes connect to Redis Sentinel with ipv6 address
 * Use default mux in examples for pprof to work
