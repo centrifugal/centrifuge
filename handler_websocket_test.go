@@ -315,6 +315,63 @@ func TestWebsocketHandlerPing(t *testing.T) {
 	}
 }
 
+func TestWebsocketHandler_FramePingPong(t *testing.T) {
+	t.Parallel()
+	framePingInterval = time.Second
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Credentials: &Credentials{
+				UserID: "test",
+			},
+		}, nil
+	})
+
+	url := "ws" + server.URL[4:]
+
+	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?cf_ws_frame_ping_pong=true", nil)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+	require.NotNil(t, conn)
+	defer func() { _ = conn.Close() }()
+
+	closeCh := make(chan struct{})
+
+	conn.SetPingHandler(func(_ string) error {
+		close(closeCh)
+		return nil
+	})
+
+	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"id": 1, "connect": {}}`))
+	require.NoError(t, err)
+
+	go func() {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				break
+			}
+			if strings.Contains(string(msg), "{}") {
+				require.Fail(t, "unexpected app-level ping")
+			}
+		}
+	}()
+
+	select {
+	case <-closeCh:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "timeout waiting for frame ping")
+	}
+}
+
 func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())

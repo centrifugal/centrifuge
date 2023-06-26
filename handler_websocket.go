@@ -102,11 +102,19 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportWebsocket)
 
 	var protoType = ProtocolTypeJSON
+	var useFramePingPong bool
 
 	if r.URL.RawQuery != "" {
 		query := r.URL.Query()
 		if query.Get("format") == "protobuf" || query.Get("cf_protocol") == "protobuf" {
 			protoType = ProtocolTypeProtobuf
+		}
+		if query.Get("cf_ws_frame_ping_pong") == "true" {
+			// This is a way for tools like Postman, wscat and others to maintain
+			// active connection to the Centrifuge-based server without the need to
+			// respond to app-level pings. We rely on native websocket ping/pong
+			// frames in this case.
+			useFramePingPong = true
 		}
 	}
 
@@ -144,6 +152,15 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		protoType = ProtocolTypeProtobuf
 	}
 
+	if useFramePingPong {
+		pongWait := framePingInterval * 10 / 9
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+		conn.SetPongHandler(func(string) error {
+			_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+			return nil
+		})
+	}
+
 	// Separate goroutine for better GC of caller's data.
 	go func() {
 		opts := websocketTransportOptions{
@@ -154,7 +171,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 
 		graceCh := make(chan struct{})
-		transport := newWebsocketTransport(conn, opts, graceCh)
+		transport := newWebsocketTransport(conn, opts, graceCh, useFramePingPong)
 
 		select {
 		case <-s.node.NotifyShutdown():
@@ -189,6 +206,11 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			if !proceed {
 				break
 			}
+		}
+
+		if useFramePingPong {
+			conn.SetPingHandler(nil)
+			conn.SetPongHandler(nil)
 		}
 
 		_ = conn.SetReadDeadline(time.Now().Add(closeFrameWait))
@@ -245,12 +267,13 @@ const (
 // websocketTransport is a wrapper struct over websocket connection to fit session
 // interface so client will accept it.
 type websocketTransport struct {
-	mu      sync.RWMutex
-	conn    *websocket.Conn
-	closed  bool
-	closeCh chan struct{}
-	graceCh chan struct{}
-	opts    websocketTransportOptions
+	mu              sync.RWMutex
+	conn            *websocket.Conn
+	closed          bool
+	closeCh         chan struct{}
+	graceCh         chan struct{}
+	opts            websocketTransportOptions
+	nativePingTimer *time.Timer
 }
 
 type websocketTransportOptions struct {
@@ -260,12 +283,15 @@ type websocketTransportOptions struct {
 	compressionMinSize int
 }
 
-func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}) *websocketTransport {
+func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}, useNativePingPong bool) *websocketTransport {
 	transport := &websocketTransport{
 		conn:    conn,
 		closeCh: make(chan struct{}),
 		graceCh: graceCh,
 		opts:    opts,
+	}
+	if useNativePingPong {
+		transport.addPing()
 	}
 	return transport
 }
@@ -303,6 +329,15 @@ func (t *websocketTransport) DisabledPushFlags() uint64 {
 
 // PingPongConfig ...
 func (t *websocketTransport) PingPongConfig() PingPongConfig {
+	t.mu.RLock()
+	useNativePingPong := t.nativePingTimer != nil
+	t.mu.RUnlock()
+	if useNativePingPong {
+		return PingPongConfig{
+			PingInterval: -1,
+			PongTimeout:  -1,
+		}
+	}
 	return t.opts.pingPong
 }
 
@@ -372,6 +407,9 @@ func (t *websocketTransport) Close(disconnect Disconnect) error {
 	}
 	t.closed = true
 	close(t.closeCh)
+	if t.nativePingTimer != nil {
+		t.nativePingTimer.Stop()
+	}
 	t.mu.Unlock()
 
 	if disconnect.Code != DisconnectConnectionClosed.Code {
@@ -394,6 +432,33 @@ func (t *websocketTransport) Close(disconnect Disconnect) error {
 		return t.conn.Close()
 	}
 	return t.conn.Close()
+}
+
+var framePingInterval = 25 * time.Second
+
+func (t *websocketTransport) ping() {
+	select {
+	case <-t.closeCh:
+		return
+	default:
+		deadline := time.Now().Add(framePingInterval / 2)
+		err := t.conn.WriteControl(websocket.PingMessage, nil, deadline)
+		if err != nil {
+			_ = t.Close(DisconnectWriteError)
+			return
+		}
+		t.addPing()
+	}
+}
+
+func (t *websocketTransport) addPing() {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return
+	}
+	t.nativePingTimer = time.AfterFunc(framePingInterval, t.ping)
+	t.mu.Unlock()
 }
 
 func sameHostOriginCheck(n *Node) func(r *http.Request) bool {
