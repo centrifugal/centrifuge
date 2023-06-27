@@ -76,7 +76,7 @@ require (
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.9.0 // indirect
-	github.com/redis/rueidis v1.0.8-go1.18 // indirect
+	github.com/redis/rueidis v1.0.10-go1.18 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.3.6 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
