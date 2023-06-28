@@ -20,7 +20,7 @@ require (
 	github.com/lucas-clemente/quic-go v0.27.2
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
 	github.com/nats-io/nats.go v1.14.0
-	github.com/prometheus/client_golang v1.15.1
+	github.com/prometheus/client_golang v1.16.0
 	github.com/stretchr/testify v1.8.4
 	github.com/vmihailenco/msgpack/v5 v5.3.1
 	golang.org/x/oauth2 v0.5.0
@@ -75,7 +75,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
-	github.com/prometheus/procfs v0.9.0 // indirect
+	github.com/prometheus/procfs v0.10.1 // indirect
 	github.com/redis/rueidis v1.0.10-go1.18 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.3.6 // indirect

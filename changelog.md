@@ -1,3 +1,8 @@
+v0.29.3
+=======
+
+* Support `cf_ws_frame_ping_pong` url param to simplify debugging with Postman [#306](https://github.com/centrifugal/centrifuge/pull/306)
+
 v0.29.2
 =======
 
