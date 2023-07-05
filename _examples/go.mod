@@ -24,13 +24,14 @@ require (
 	github.com/stretchr/testify v1.8.4
 	github.com/vmihailenco/msgpack/v5 v5.3.1
 	golang.org/x/oauth2 v0.5.0
-	google.golang.org/grpc v1.36.0
-	google.golang.org/protobuf v1.30.0
+	google.golang.org/grpc v1.53.0
+	google.golang.org/protobuf v1.31.0
 	nhooyr.io/websocket v1.8.6
 )
 
 require (
-	cloud.google.com/go v0.65.0 // indirect
+	cloud.google.com/go/compute v1.15.1 // indirect
+	cloud.google.com/go/compute/metadata v0.2.3 // indirect
 	github.com/FZambia/eagle v0.1.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.9.1 // indirect
@@ -93,7 +94,7 @@ require (
 	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
 	golang.org/x/tools v0.7.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
-	google.golang.org/genproto v0.0.0-20200825200019-8632dd797987 // indirect
+	google.golang.org/genproto v0.0.0-20230110181048-76db0878b65f // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
