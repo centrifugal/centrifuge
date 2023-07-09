@@ -1,3 +1,27 @@
+v0.29.3
+=======
+
+* Support `cf_ws_frame_ping_pong` url param to simplify debugging with Postman [#306](https://github.com/centrifugal/centrifuge/pull/306)
+
+v0.29.2
+=======
+
+* http.ResponseController to set write timeout in SSE and HTTP-streaming handlers [#292](https://github.com/centrifugal/centrifuge/pull/292)
+* Experimental Client's storage API for keeping user-defined objects during connection lifetime, [#296](https://github.com/centrifugal/centrifuge/pull/296)
+* Up rueidis to v1.0.8 - fixes connect to Redis Sentinel with ipv6 address
+* Use default mux in examples for pprof to work
+
+```
+gorelease -base v0.29.1 -version v0.29.2
+# github.com/centrifugal/centrifuge
+## compatible changes
+(*Client).AcquireStorage: added
+ConnectReply.Storage: added
+
+# summary
+v0.29.2 is a valid semantic version for this release.
+```
+
 v0.29.1
 =======
 
