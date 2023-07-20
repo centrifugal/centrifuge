@@ -6,3 +6,4 @@ coverage:
     patch: off
 ignore:
   - "internal/controlpb/control*"  # generated code
+  - "client_experimental.go"  # experimental code

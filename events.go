@@ -75,6 +75,14 @@ type ConnectReply struct {
 	// PingPongConfig if set, will override Transport's PingPongConfig to enable setting ping/pong interval
 	// for individual client.
 	PingPongConfig *PingPongConfig
+
+	// ClientReady is a channel to be filled once with a Client as soon as it's ready to be used.
+	// This solves a case when app requires access to a Client in the goroutines started as part
+	// of the Node.OnConnecting handler. Callers should check connection context for the cancellation
+	// to handle possible Client disconnection. In usual flow you don't need to provide this channel
+	// at all.
+	// This is EXPERIMENTAL and may be removed in the future.
+	ClientReady chan *Client
 }
 
 // ConnectingHandler called when new client authenticates on server.
@@ -192,9 +200,12 @@ type SubscribeReply struct {
 	// SubRefresh handler will be used.
 	ClientSideRefresh bool
 
-	// ReplyWritten channel if provided will be closed as soon as Centrifuge written
-	// subscribe reply to the connection.
-	ReplyWritten chan struct{}
+	// SubscriptionReady channel if provided will be closed as soon as Centrifuge
+	// written subscribe reply to the connection, so it's possible to start writing
+	// publications into a channel using experimental Client.WritePublication method.
+	// In usual flow you don't need to provide this channel at all.
+	// This is EXPERIMENTAL and may be removed in the future.
+	SubscriptionReady chan struct{}
 }
 
 // SubscribeHandler called when client wants to subscribe on channel.
