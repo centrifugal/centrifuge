@@ -254,8 +254,8 @@ github.com/prometheus/procfs v0.0.0-20180725123919-05ee40e3a273/go.mod h1:c3At6R
 github.com/prometheus/procfs v0.10.1 h1:kYK1Va/YMlutzCGazswoHKo//tZVlFpKYh+PymziUAg=
 github.com/prometheus/procfs v0.10.1/go.mod h1:nwNm2aOCAYw8uTR/9bWRREkZFxAUcWzPHWJq+XBB/FM=
 github.com/quasoft/memstore v0.0.0-20180925164028-84a050167438/go.mod h1:wTPjTepVu7uJBYgZ0SdWHQlIas582j6cn2jgk4DDdlg=
-github.com/redis/rueidis v1.0.12-go1.18 h1:j38R9q18zvXIePN0Eyajh/mOjHJeZWC+nwZK1lkgs/U=
-github.com/redis/rueidis v1.0.12-go1.18/go.mod h1:897bvXAEc/mol6VWC0HhkwQZ42Z1Wav86aUcxm+7f44=
+github.com/redis/rueidis v1.0.13-go1.18 h1:GWqHfV7YbsxpDddL2K7yiVd8RFIf3IT8TRfAZNxy0bg=
+github.com/redis/rueidis v1.0.13-go1.18/go.mod h1:897bvXAEc/mol6VWC0HhkwQZ42Z1Wav86aUcxm+7f44=
 github.com/rogpeppe/go-internal v1.10.0 h1:TMyTOH3F/DB16zRVcYyreMH6GnZZrwQVAoYjRBZyWFQ=
 github.com/russross/blackfriday v1.5.2/go.mod h1:JO/DiYxRf+HjHt06OyowR9PTA263kcR/rfWxYHBV53g=
 github.com/segmentio/asm v1.1.3/go.mod h1:Ld3L4ZXGNcSLRg4JBsZ3//1+f/TjYl0Mzen/DQy1EJg=
