@@ -108,7 +108,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rc := newResponseController(w)
+	rc := http.NewResponseController(w)
 
 	reader := readerpool.GetBytesReader(requestData)
 	_ = HandleReadFrame(c, reader)

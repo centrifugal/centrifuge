@@ -1,6 +1,6 @@
 module github.com/centrifugal/centrifuge
 
-go 1.19
+go 1.20
 
 require (
 	github.com/FZambia/eagle v0.1.0
@@ -9,7 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
 	github.com/prometheus/client_golang v1.16.0
-	github.com/redis/rueidis v1.0.14-go1.18
+	github.com/redis/rueidis v1.0.14
 	github.com/segmentio/encoding v0.3.6
 	github.com/stretchr/testify v1.8.4
 	golang.org/x/sync v0.3.0
