@@ -36,6 +36,8 @@ func NewHTTPStreamHandler(node *Node, config HTTPStreamConfig) *HTTPStreamHandle
 
 const defaultMaxHTTPStreamingBodySize = 64 * 1024
 
+const streamingResponseWriteTimeout = time.Second
+
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	incTransportConnect(transportHTTPStream)
 
@@ -108,7 +110,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rc := newResponseController(w)
+	rc := http.NewResponseController(w)
 
 	reader := readerpool.GetBytesReader(requestData)
 	_ = HandleReadFrame(c, reader)

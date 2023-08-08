@@ -107,7 +107,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rc := newResponseController(w)
+	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 	_, err = w.Write([]byte("\r\n"))
 	if err != nil {
