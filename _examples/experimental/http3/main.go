@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -14,8 +13,8 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/lucas-clemente/quic-go/http3"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/quic-go/quic-go/http3"
 )
 
 var (
@@ -124,25 +123,6 @@ func main() {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
-		// Event handler should not block, so start separate goroutine to
-		// periodically send messages to client.
-		go func() {
-			for {
-				select {
-				case <-client.Context().Done():
-					return
-				case <-time.After(5 * time.Second):
-					err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-					if err != nil {
-						if err == io.EOF {
-							return
-						}
-						log.Printf("error sending message: %s", err)
-					}
-				}
-			}
-		}()
-
 		client.OnAlive(func() {
 			log.Printf("user %s connection is still active", client.UserID())
 		})
@@ -238,7 +218,7 @@ func main() {
 				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
-			time.Sleep(1000 * time.Millisecond)
+			time.Sleep(5000 * time.Millisecond)
 		}
 	}()
 

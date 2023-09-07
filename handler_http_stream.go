@@ -147,6 +147,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			_ = rc.Flush()
+			_ = rc.SetWriteDeadline(time.Time{})
 		}
 	}
 }
