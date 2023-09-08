@@ -123,6 +123,11 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	} else if len(conf.ClusterAddresses) > 0 {
 		options.InitAddress = conf.ClusterAddresses
 	} else {
+		if conf.network == "unix" {
+			options.DialFn = func(s string, d *net.Dialer, c *tls.Config) (net.Conn, error) {
+				return d.Dial("unix", s)
+			}
+		}
 		options.InitAddress = []string{conf.address}
 	}
 
