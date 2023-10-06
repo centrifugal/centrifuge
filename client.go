@@ -2202,15 +2202,6 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				subscriptions[ch] = opts
 			}
 		}
-		if reply.ClientReady != nil {
-			defer func() {
-				select {
-				case <-c.ctx.Done():
-				default:
-					reply.ClientReady <- c
-				}
-			}()
-		}
 	} else {
 		c.startWriter(0, 0, 0)
 		c.pingInterval, c.pongTimeout = getPingPongPeriodValues(c.transport.PingPongConfig())
