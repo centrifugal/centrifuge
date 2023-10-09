@@ -125,12 +125,6 @@ func (c *Client) OnHistory(h HistoryHandler) {
 	c.eventHub.historyHandler = h
 }
 
-// OnStateSnapshot allows settings StateSnapshotHandler.
-// This API is EXPERIMENTAL and may be removed in the future versions.
-func (c *Client) OnStateSnapshot(h StateSnapshotHandler) {
-	c.eventHub.stateSnapshotHandler = h
-}
-
 const (
 	// flagSubscribed will be set upon successful Subscription to a channel.
 	// Until that moment channel exists in client Channels map only to track
@@ -789,36 +783,6 @@ func (c *Client) Info() []byte {
 	return info
 }
 
-// AcquireStorage returns an attached connection storage (a map) and a function to be
-// called when the application finished working with the storage map. Be accurate when
-// using this API – avoid acquiring storage for a long time - i.e. on the time of IO operations.
-// Do the work fast and release with the updated map. The API designed this way to allow
-// reading, modifying or fully overriding storage map and avoid making deep copies each time.
-// Note, that if storage map has not been initialized yet - i.e. if it's nil - then it will
-// be initialized to an empty map and then returned – so you never receive nil map when
-// acquiring. The purpose of this map is to simplify handling user-defined state during the
-// lifetime of connection. Try to keep this map reasonably small.
-// This API is EXPERIMENTAL.
-func (c *Client) AcquireStorage() (map[string]any, func(map[string]any)) {
-	c.storageMu.Lock()
-	if c.storage == nil {
-		c.storage = map[string]any{}
-	}
-	return c.storage, func(updatedStorage map[string]any) {
-		c.storage = updatedStorage
-		c.storageMu.Unlock()
-	}
-}
-
-// StateSnapshot allows collecting current state copy.
-// Mostly useful for connection introspection from the outside.
-func (c *Client) StateSnapshot() (any, error) {
-	if c.eventHub.stateSnapshotHandler != nil {
-		return c.eventHub.stateSnapshotHandler()
-	}
-	return nil, nil
-}
-
 // Transport returns client connection transport information.
 func (c *Client) Transport() TransportInfo {
 	return c.transport
@@ -1119,17 +1083,6 @@ func (c *Client) HandleCommand(cmd *protocol.Command, cmdProtocolSize int) bool 
 	return proceed
 }
 
-// dispatchCommand dispatches Command into correct command handler.
-func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnect, bool) {
-	c.mu.Lock()
-	if c.status == statusClosed {
-		c.mu.Unlock()
-		return nil, false
-	}
-	c.mu.Unlock()
-	return c.dispatchCommandV2(cmd, cmdSize)
-}
-
 // isPong is a helper method to check whether the command from the client
 // is a pong to server ping. It's actually an empty command.
 func isPong(cmd *protocol.Command) bool {
@@ -1179,7 +1132,13 @@ func (c *Client) handleCommandDispatchError(cmd *protocol.Command, method comman
 	}
 }
 
-func (c *Client) dispatchCommandV2(cmd *protocol.Command, cmdSize int) (*Disconnect, bool) {
+func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnect, bool) {
+	c.mu.Lock()
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		return nil, false
+	}
+	c.mu.Unlock()
 	isConnect := cmd.Connect != nil
 	if !c.authenticated && !isConnect {
 		return &DisconnectBadRequest, false
@@ -1635,6 +1594,10 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	}
 
 	cb := func(reply SubscribeReply, err error) {
+		if reply.SubscriptionReady != nil {
+			defer close(reply.SubscriptionReady)
+		}
+
 		if err != nil {
 			c.onSubscribeError(req.Channel)
 			c.writeDisconnectOrErrorFlush(commandSubscribe, cmd, err, started, rw)

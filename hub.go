@@ -546,11 +546,11 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 	}
 
 	var (
-		jsonReplyV2     []byte
-		protobufReplyV2 []byte
+		jsonReply     []byte
+		protobufReply []byte
 
-		jsonPushV2     []byte
-		protobufPushV2 []byte
+		jsonPush     []byte
+		protobufPush []byte
 
 		jsonEncodeErr *encodeError
 	)
@@ -563,51 +563,51 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 				continue
 			}
 			if c.transport.Unidirectional() {
-				if jsonPushV2 == nil {
+				if jsonPush == nil {
 					push := &protocol.Push{Channel: channel, Pub: pub}
 					var err error
-					jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					jsonPush, err = protocol.DefaultJsonPushEncoder.Encode(push)
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
 						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 						continue
 					}
 				}
-				_ = c.writePublication(channel, pub, jsonPushV2, sp)
+				_ = c.writePublication(channel, pub, jsonPush, sp)
 			} else {
-				if jsonReplyV2 == nil {
+				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Pub: pub}
 					var err error
-					jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					jsonReply, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
 						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 						continue
 					}
 				}
-				_ = c.writePublication(channel, pub, jsonReplyV2, sp)
+				_ = c.writePublication(channel, pub, jsonReply, sp)
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if c.transport.Unidirectional() {
-				if protobufPushV2 == nil {
+				if protobufPush == nil {
 					push := &protocol.Push{Channel: channel, Pub: pub}
 					var err error
-					protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					protobufPush, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 					if err != nil {
 						return err
 					}
 				}
-				_ = c.writePublication(channel, pub, protobufPushV2, sp)
+				_ = c.writePublication(channel, pub, protobufPush, sp)
 			} else {
-				if protobufReplyV2 == nil {
+				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Pub: pub}
 					var err error
-					protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					protobufReply, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
 						return err
 					}
 				}
-				_ = c.writePublication(channel, pub, protobufReplyV2, sp)
+				_ = c.writePublication(channel, pub, protobufReply, sp)
 			}
 		}
 	}
@@ -634,11 +634,11 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 	}
 
 	var (
-		jsonReplyV2     []byte
-		protobufReplyV2 []byte
+		jsonReply     []byte
+		protobufReply []byte
 
-		jsonPushV2     []byte
-		protobufPushV2 []byte
+		jsonPush     []byte
+		protobufPush []byte
 
 		jsonEncodeErr *encodeError
 	)
@@ -651,51 +651,51 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 				continue
 			}
 			if c.transport.Unidirectional() {
-				if jsonPushV2 == nil {
+				if jsonPush == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
 					var err error
-					jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					jsonPush, err = protocol.DefaultJsonPushEncoder.Encode(push)
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
 						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 						continue
 					}
 				}
-				_ = c.writeJoin(channel, join, jsonPushV2)
+				_ = c.writeJoin(channel, join, jsonPush)
 			} else {
-				if jsonReplyV2 == nil {
+				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
 					var err error
-					jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					jsonReply, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
 						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 						continue
 					}
 				}
-				_ = c.writeJoin(channel, join, jsonReplyV2)
+				_ = c.writeJoin(channel, join, jsonReply)
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if c.transport.Unidirectional() {
-				if protobufPushV2 == nil {
+				if protobufPush == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
 					var err error
-					protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					protobufPush, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 					if err != nil {
 						return err
 					}
 				}
-				_ = c.writeJoin(channel, join, protobufPushV2)
+				_ = c.writeJoin(channel, join, protobufPush)
 			} else {
-				if protobufReplyV2 == nil {
+				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
 					var err error
-					protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					protobufReply, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
 						return err
 					}
 				}
-				_ = c.writeJoin(channel, join, protobufReplyV2)
+				_ = c.writeJoin(channel, join, protobufReply)
 			}
 		}
 	}
@@ -722,11 +722,11 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 	}
 
 	var (
-		jsonReplyV2     []byte
-		protobufReplyV2 []byte
+		jsonReply     []byte
+		protobufReply []byte
 
-		jsonPushV2     []byte
-		protobufPushV2 []byte
+		jsonPush     []byte
+		protobufPush []byte
 
 		jsonEncodeErr *encodeError
 	)
@@ -739,51 +739,51 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 				continue
 			}
 			if c.transport.Unidirectional() {
-				if jsonPushV2 == nil {
+				if jsonPush == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
 					var err error
-					jsonPushV2, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					jsonPush, err = protocol.DefaultJsonPushEncoder.Encode(push)
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
 						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 						continue
 					}
 				}
-				_ = c.writeLeave(channel, leave, jsonPushV2)
+				_ = c.writeLeave(channel, leave, jsonPush)
 			} else {
-				if jsonReplyV2 == nil {
+				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
 					var err error
-					jsonReplyV2, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					jsonReply, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
 						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 						continue
 					}
 				}
-				_ = c.writeLeave(channel, leave, jsonReplyV2)
+				_ = c.writeLeave(channel, leave, jsonReply)
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if c.transport.Unidirectional() {
-				if protobufPushV2 == nil {
+				if protobufPush == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
 					var err error
-					protobufPushV2, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					protobufPush, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 					if err != nil {
 						return err
 					}
 				}
-				_ = c.writeLeave(channel, leave, protobufPushV2)
+				_ = c.writeLeave(channel, leave, protobufPush)
 			} else {
-				if protobufReplyV2 == nil {
+				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
 					var err error
-					protobufReplyV2, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					protobufReply, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
 						return err
 					}
 				}
-				_ = c.writeLeave(channel, leave, protobufReplyV2)
+				_ = c.writeLeave(channel, leave, protobufReply)
 			}
 		}
 	}

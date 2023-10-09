@@ -191,6 +191,13 @@ type SubscribeReply struct {
 	// SubRefresh commands with new Subscription Token. If not set then server-side
 	// SubRefresh handler will be used.
 	ClientSideRefresh bool
+
+	// SubscriptionReady channel if provided will be closed as soon as Centrifuge
+	// written subscribe reply to the connection, so it's possible to start writing
+	// publications into a channel using experimental Client.WritePublication method.
+	// In usual flow you don't need to provide this channel at all.
+	// This is EXPERIMENTAL and may be removed in the future.
+	SubscriptionReady chan struct{}
 }
 
 // SubscribeHandler called when client wants to subscribe on channel.
