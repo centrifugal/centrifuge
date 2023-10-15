@@ -9,7 +9,7 @@
         </style>
         <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding-indexes.js"></script>
         <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding.js"></script>
-        <script type="text/javascript" src="https://unpkg.com/centrifuge@^4/dist/centrifuge.protobuf.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@^5/dist/centrifuge.protobuf.js"></script>
         <script type="text/javascript">
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
@@ -22,9 +22,7 @@
                 const input = document.getElementById("input");
                 const container = document.getElementById('messages');
 
-                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {
-                    protocol: 'protobuf', // Note we are setting protobuf protocol here!
-                });
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {});
 
                 centrifuge.on('connecting', function(ctx){
                     drawText('Connecting: ' + ctx.reason);
