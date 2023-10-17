@@ -15,22 +15,28 @@ var defaultMetricsNamespace = "centrifuge"
 var registryMu sync.RWMutex
 
 var (
-	messagesSentCount      *prometheus.CounterVec
-	messagesReceivedCount  *prometheus.CounterVec
-	actionCount            *prometheus.CounterVec
-	buildInfoGauge         *prometheus.GaugeVec
-	numClientsGauge        prometheus.Gauge
-	numUsersGauge          prometheus.Gauge
-	numSubsGauge           prometheus.Gauge
-	numChannelsGauge       prometheus.Gauge
-	numNodesGauge          prometheus.Gauge
-	replyErrorCount        *prometheus.CounterVec
-	serverDisconnectCount  *prometheus.CounterVec
-	commandDurationSummary *prometheus.SummaryVec
-	surveyDurationSummary  *prometheus.SummaryVec
-	recoverCount           *prometheus.CounterVec
-	transportConnectCount  *prometheus.CounterVec
-	transportMessagesSent  *prometheus.CounterVec
+	messagesSentCount         *prometheus.CounterVec
+	messagesReceivedCount     *prometheus.CounterVec
+	actionCount               *prometheus.CounterVec
+	buildInfoGauge            *prometheus.GaugeVec
+	numClientsGauge           prometheus.Gauge
+	numUsersGauge             prometheus.Gauge
+	numSubsGauge              prometheus.Gauge
+	numChannelsGauge          prometheus.Gauge
+	numNodesGauge             prometheus.Gauge
+	replyErrorCount           *prometheus.CounterVec
+	serverDisconnectCount     *prometheus.CounterVec
+	commandDurationSummary    *prometheus.SummaryVec
+	surveyDurationSummary     *prometheus.SummaryVec
+	recoverCount              *prometheus.CounterVec
+	transportConnectCount     *prometheus.CounterVec
+	transportMessagesSent     *prometheus.CounterVec
+	transportMessagesSentSize *prometheus.CounterVec
+	messagesBroadcastedCount  *prometheus.CounterVec
+
+	messagesBroadcastedPublication prometheus.Counter
+	messagesBroadcastedJoin        prometheus.Counter
+	messagesBroadcastedLeave       prometheus.Counter
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -64,11 +70,6 @@ var (
 	transportConnectCountSockJS     prometheus.Counter
 	transportConnectCountSSE        prometheus.Counter
 	transportConnectCountHTTPStream prometheus.Counter
-
-	transportMessagesSentWebsocket  prometheus.Counter
-	transportMessagesSentSockJS     prometheus.Counter
-	transportMessagesSentSSE        prometheus.Counter
-	transportMessagesSentHTTPStream prometheus.Counter
 
 	commandDurationConnect       prometheus.Observer
 	commandDurationSubscribe     prometheus.Observer
@@ -234,40 +235,51 @@ func incTransportConnect(transport string) {
 	}
 }
 
-func incTransportMessagesSent(transport string) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	switch transport {
-	case transportWebsocket:
-		transportMessagesSentWebsocket.Inc()
-	case transportSockJS:
-		transportMessagesSentSockJS.Inc()
-	case transportSSE:
-		transportMessagesSentSSE.Inc()
-	case transportHTTPStream:
-		transportMessagesSentHTTPStream.Inc()
-	default:
-		transportMessagesSent.WithLabelValues(transport).Inc()
-	}
+type messagesSentLabels struct {
+	Transport    string
+	ChannelGroup string
 }
 
-func addTransportMessagesSent(transport string, n float64) {
+var (
+	transportMessagesSentCache     map[messagesSentLabels]prometheus.Counter
+	transportMessagesSentSizeCache map[messagesSentLabels]prometheus.Counter
+	metricCacheMu                  sync.RWMutex
+)
+
+func init() {
+	transportMessagesSentCache = make(map[messagesSentLabels]prometheus.Counter)
+	transportMessagesSentSizeCache = make(map[messagesSentLabels]prometheus.Counter)
+}
+
+func incTransportMessages(transport string, channelGroup string, size int) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 
-	switch transport {
-	case transportWebsocket:
-		transportMessagesSentWebsocket.Add(n)
-	case transportSockJS:
-		transportMessagesSentSockJS.Add(n)
-	case transportSSE:
-		transportMessagesSentSSE.Add(n)
-	case transportHTTPStream:
-		transportMessagesSentHTTPStream.Add(n)
-	default:
-		transportMessagesSent.WithLabelValues(transport).Add(n)
+	labels := messagesSentLabels{
+		Transport:    transport,
+		ChannelGroup: channelGroup,
 	}
+
+	metricCacheMu.RLock()
+	counterSent, okSent := transportMessagesSentCache[labels]
+	counterSentSize, okSentSize := transportMessagesSentSizeCache[labels]
+	metricCacheMu.RUnlock()
+
+	if !okSent {
+		counterSent = transportMessagesSent.WithLabelValues(transport, channelGroup)
+		metricCacheMu.Lock()
+		transportMessagesSentCache[labels] = counterSent
+		metricCacheMu.Unlock()
+	}
+
+	if !okSentSize {
+		counterSentSize = transportMessagesSentSize.WithLabelValues(transport, channelGroup)
+		metricCacheMu.Lock()
+		transportMessagesSentSizeCache[labels] = counterSentSize
+		metricCacheMu.Unlock()
+	}
+	counterSent.Inc()
+	counterSentSize.Add(float64(size))
 }
 
 func incServerDisconnect(code uint32) {
@@ -310,6 +322,22 @@ func incMessagesReceived(msgType string) {
 		messagesReceivedCountControl.Inc()
 	default:
 		messagesReceivedCount.WithLabelValues(msgType).Inc()
+	}
+}
+
+func incMessagesBroadcasted(msgType string, numSubscribers int) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+
+	switch msgType {
+	case "publication":
+		messagesBroadcastedPublication.Add(float64(numSubscribers))
+	case "join":
+		messagesBroadcastedJoin.Add(float64(numSubscribers))
+	case "leave":
+		messagesBroadcastedLeave.Add(float64(numSubscribers))
+	default:
+		messagesBroadcastedCount.WithLabelValues(msgType).Add(float64(numSubscribers))
 	}
 }
 
@@ -377,7 +405,14 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "messages_received_count",
-		Help:      "Number of messages received.",
+		Help:      "Number of messages received from engine.",
+	}, []string{"type"})
+
+	messagesBroadcastedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "messages_broadcasted_count",
+		Help:      "Number of messages broadcasted to subscribers.",
 	}, []string{"type"})
 
 	actionCount = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -478,7 +513,14 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Subsystem: "transport",
 		Name:      "messages_sent",
 		Help:      "Number of messages sent over specific transport.",
-	}, []string{"transport"})
+	}, []string{"transport", "channel_group"})
+
+	transportMessagesSentSize = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "transport",
+		Name:      "messages_sent_size",
+		Help:      "Size in bytes of messages sent over specific transport.",
+	}, []string{"transport", "channel_group"})
 
 	messagesReceivedCountPublication = messagesReceivedCount.WithLabelValues("publication")
 	messagesReceivedCountJoin = messagesReceivedCount.WithLabelValues("join")
@@ -489,6 +531,10 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	messagesSentCountJoin = messagesSentCount.WithLabelValues("join")
 	messagesSentCountLeave = messagesSentCount.WithLabelValues("leave")
 	messagesSentCountControl = messagesSentCount.WithLabelValues("control")
+
+	messagesBroadcastedPublication = messagesBroadcastedCount.WithLabelValues("publication")
+	messagesBroadcastedJoin = messagesBroadcastedCount.WithLabelValues("join")
+	messagesBroadcastedLeave = messagesBroadcastedCount.WithLabelValues("leave")
 
 	actionCountAddClient = actionCount.WithLabelValues("add_client")
 	actionCountRemoveClient = actionCount.WithLabelValues("remove_client")
@@ -513,11 +559,6 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	transportConnectCountHTTPStream = transportConnectCount.WithLabelValues(transportHTTPStream)
 	transportConnectCountSSE = transportConnectCount.WithLabelValues(transportSSE)
 
-	transportMessagesSentWebsocket = transportMessagesSent.WithLabelValues(transportWebsocket)
-	transportMessagesSentSockJS = transportMessagesSent.WithLabelValues(transportSockJS)
-	transportMessagesSentSSE = transportMessagesSent.WithLabelValues(transportSSE)
-	transportMessagesSentHTTPStream = transportMessagesSent.WithLabelValues(transportHTTPStream)
-
 	labelForMethod := func(methodType commandMethodType) string {
 		return strings.ToLower(commandMethodTypeName[int32(methodType)])
 	}
@@ -536,6 +577,9 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	commandDurationSubRefresh = commandDurationSummary.WithLabelValues(labelForMethod(commandSubRefresh))
 	commandDurationUnknown = commandDurationSummary.WithLabelValues("unknown")
 
+	if err := registry.Register(messagesBroadcastedCount); err != nil {
+		return err
+	}
 	if err := registry.Register(messagesSentCount); err != nil {
 		return err
 	}
@@ -576,6 +620,9 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		return err
 	}
 	if err := registry.Register(transportMessagesSent); err != nil {
+		return err
+	}
+	if err := registry.Register(transportMessagesSentSize); err != nil {
 		return err
 	}
 	if err := registry.Register(buildInfoGauge); err != nil {

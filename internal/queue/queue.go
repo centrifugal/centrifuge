@@ -5,7 +5,8 @@ import (
 )
 
 type Item struct {
-	Data []byte
+	Data    []byte
+	Channel string
 }
 
 // Queue is an unbounded queue of Item.

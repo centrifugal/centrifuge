@@ -408,6 +408,8 @@ type TransportWriteEvent struct {
 	// into the connection. For unidirectional transports this is an encoded protocol.Push
 	// type, for bidirectional transports this is an encoded protocol.Reply type.
 	Data []byte
+	// Channel will be set if TransportWriteEvent relates to some channel.
+	Channel string
 }
 
 // TransportWriteHandler called just before writing data to the Transport.

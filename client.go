@@ -488,7 +488,7 @@ func (c *Client) sendPing() {
 	c.lastPing = time.Now().Unix()
 	c.mu.Unlock()
 	unidirectional := c.transport.Unidirectional()
-	_ = c.transportEnqueue(getPingData(unidirectional, c.transport.Protocol()))
+	_ = c.transportEnqueue(getPingData(unidirectional, c.transport.Protocol()), "")
 	if c.node.LogEnabled(LogLevelTrace) {
 		c.traceOutReply(emptyReply)
 	}
@@ -559,9 +559,10 @@ func (c *Client) closeStale() {
 	}
 }
 
-func (c *Client) transportEnqueue(data []byte) error {
+func (c *Client) transportEnqueue(data []byte, ch string) error {
 	disconnect := c.messageWriter.enqueue(queue.Item{
-		Data: data,
+		Data:    data,
+		Channel: ch,
 	})
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
@@ -836,7 +837,7 @@ func (c *Client) Send(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return c.transportEnqueue(replyData)
+	return c.transportEnqueue(replyData, "")
 }
 
 func (c *Client) encodeReply(reply *protocol.Reply) ([]byte, error) {
@@ -894,7 +895,7 @@ func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {
 	if err != nil {
 		return err
 	}
-	_ = c.transportEnqueue(replyData)
+	_ = c.transportEnqueue(replyData, ch)
 	return nil
 }
 
@@ -978,7 +979,7 @@ func (c *Client) close(disconnect Disconnect) error {
 
 	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
 		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
-			_ = c.transportEnqueue(replyData)
+			_ = c.transportEnqueue(replyData, "")
 		}
 	}
 
@@ -1461,7 +1462,7 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 	if err != nil {
 		return err
 	}
-	return c.transportEnqueue(replyData)
+	return c.transportEnqueue(replyData, "")
 }
 
 func (c *Client) getRefreshPushReply(res *protocol.Refresh) ([]byte, error) {
@@ -2427,6 +2428,12 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 		messageWriterConf := writerConfig{
 			MaxQueueSize: c.node.config.ClientQueueMaxSize,
 			WriteFn: func(item queue.Item) error {
+				channelGroup := "_"
+				if item.Channel != "" && c.node.config.GetChannelGroup != nil {
+					channelGroup = c.node.config.GetChannelGroup(item.Channel)
+				}
+				incTransportMessages(c.transport.Name(), channelGroup, len(item.Data))
+
 				if c.node.clientEvents.transportWriteHandler != nil {
 					pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(item))
 					if !pass {
@@ -2446,7 +2453,6 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 					}
 					return err
 				}
-				incTransportMessagesSent(c.transport.Name())
 				return nil
 			},
 			WriteManyFn: func(items ...queue.Item) error {
@@ -2459,6 +2465,11 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 						}
 					}
 					messages = append(messages, items[i].Data)
+					channelGroup := "_"
+					if items[i].Channel != "" && c.node.config.GetChannelGroup != nil {
+						channelGroup = c.node.config.GetChannelGroup(items[i].Channel)
+					}
+					incTransportMessages(c.transport.Name(), channelGroup, len(items[i].Data))
 				}
 				writeMu.Lock()
 				defer writeMu.Unlock()
@@ -2473,7 +2484,6 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 					}
 					return err
 				}
-				addTransportMessagesSent(c.transport.Name(), float64(len(messages)))
 				return nil
 			},
 		}
@@ -2535,7 +2545,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if err != nil {
 		return err
 	}
-	err = c.transportEnqueue(replyData)
+	err = c.transportEnqueue(replyData, channel)
 	if err != nil {
 		return err
 	}
@@ -2923,7 +2933,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 			return nil
 		}
 		c.mu.Unlock()
-		return c.transportEnqueue(data)
+		return c.transportEnqueue(data, ch)
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
@@ -2955,7 +2965,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	return c.transportEnqueue(data)
+	return c.transportEnqueue(data, ch)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
@@ -2966,7 +2976,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data []b
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}
-		return c.transportEnqueue(data)
+		return c.transportEnqueue(data, ch)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
 		_ = c.writePublicationUpdatePosition(ch, pub, data, sp)
@@ -2992,7 +3002,7 @@ func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte) error {
 		return nil
 	}
 	c.mu.RUnlock()
-	return c.transportEnqueue(data)
+	return c.transportEnqueue(data, ch)
 }
 
 func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte) error {
@@ -3013,7 +3023,7 @@ func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte) error
 		return nil
 	}
 	c.mu.RUnlock()
-	return c.transportEnqueue(data)
+	return c.transportEnqueue(data, ch)
 }
 
 // Lock must be held outside.

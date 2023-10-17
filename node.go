@@ -692,6 +692,7 @@ func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition)
 	if !hasCurrentSubscribers {
 		return nil
 	}
+	incMessagesBroadcasted("publication", numSubscribers)
 	return n.hub.BroadcastPublication(ch, pub, sp)
 }
 
@@ -699,10 +700,12 @@ func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition)
 // interested local clients subscribed to channel.
 func (n *Node) handleJoin(ch string, info *ClientInfo) error {
 	incMessagesReceived("join")
-	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
+	numSubscribers := n.hub.NumSubscribers(ch)
+	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
+	incMessagesBroadcasted("join", numSubscribers)
 	return n.hub.broadcastJoin(ch, info)
 }
 
@@ -710,10 +713,12 @@ func (n *Node) handleJoin(ch string, info *ClientInfo) error {
 // interested local clients subscribed to channel.
 func (n *Node) handleLeave(ch string, info *ClientInfo) error {
 	incMessagesReceived("leave")
-	hasCurrentSubscribers := n.hub.NumSubscribers(ch) > 0
+	numSubscribers := n.hub.NumSubscribers(ch)
+	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
+	incMessagesBroadcasted("leave", numSubscribers)
 	return n.hub.broadcastLeave(ch, info)
 }
 
