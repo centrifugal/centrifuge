@@ -560,10 +560,13 @@ func (c *Client) closeStale() {
 }
 
 func (c *Client) transportEnqueue(data []byte, ch string) error {
-	disconnect := c.messageWriter.enqueue(queue.Item{
-		Data:    data,
-		Channel: ch,
-	})
+	item := queue.Item{
+		Data: data,
+	}
+	if c.node.config.GetChannelGroupLabel != nil {
+		item.Channel = ch
+	}
+	disconnect := c.messageWriter.enqueue(item)
 	if disconnect != nil {
 		// close in goroutine to not block message broadcast.
 		go func() { _ = c.close(*disconnect) }()
@@ -2429,8 +2432,8 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 			MaxQueueSize: c.node.config.ClientQueueMaxSize,
 			WriteFn: func(item queue.Item) error {
 				channelGroup := "_"
-				if item.Channel != "" && c.node.config.GetChannelGroup != nil {
-					channelGroup = c.node.config.GetChannelGroup(item.Channel)
+				if item.Channel != "" && c.node.config.GetChannelGroupLabel != nil {
+					channelGroup = c.node.config.GetChannelGroupLabel(item.Channel)
 				}
 				incTransportMessages(c.transport.Name(), channelGroup, len(item.Data))
 
@@ -2466,8 +2469,8 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 					}
 					messages = append(messages, items[i].Data)
 					channelGroup := "_"
-					if items[i].Channel != "" && c.node.config.GetChannelGroup != nil {
-						channelGroup = c.node.config.GetChannelGroup(items[i].Channel)
+					if items[i].Channel != "" && c.node.config.GetChannelGroupLabel != nil {
+						channelGroup = c.node.config.GetChannelGroupLabel(items[i].Channel)
 					}
 					incTransportMessages(c.transport.Name(), channelGroup, len(items[i].Data))
 				}

@@ -92,11 +92,11 @@ type Config struct {
 	// When zero Centrifuge uses default 30 days which we believe is more than enough
 	// for most use cases.
 	HistoryMetaTTL time.Duration
-	// GetChannelGroup if set will be used by Centrifuge to extract channel_group label
+	// GetChannelGroupLabel if set will be used by Centrifuge to extract channel_group label
 	// for channel related metrics. Make sure to maintain low cardinality of returned
 	// values to avoid issues with Prometheus performance. This function may introduce
 	// sufficient overhead since it's called in a hot path right before transport write.
-	GetChannelGroup func(channel string) string
+	GetChannelGroupLabel func(channel string) string
 }
 
 const (
