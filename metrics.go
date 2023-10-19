@@ -213,12 +213,19 @@ type transportMessageLabels struct {
 	ChannelGroup string
 }
 
+type transportMessagesSent struct {
+	counterSent     prometheus.Counter
+	counterSentSize prometheus.Counter
+}
+
+type transportMessagesReceived struct {
+	counterReceived     prometheus.Counter
+	counterReceivedSize prometheus.Counter
+}
+
 var (
 	transportMessagesSentCache     sync.Map
-	transportMessagesSentSizeCache sync.Map
-
-	transportMessagesReceivedCache     sync.Map
-	transportMessagesReceivedSizeCache sync.Map
+	transportMessagesReceivedCache sync.Map
 )
 
 func (m *metrics) incTransportMessagesSent(transport string, channelGroup string, size int) {
@@ -226,18 +233,18 @@ func (m *metrics) incTransportMessagesSent(transport string, channelGroup string
 		Transport:    transport,
 		ChannelGroup: channelGroup,
 	}
-	counterSent, okSent := transportMessagesSentCache.Load(labels)
-	if !okSent {
-		counterSent = m.transportMessagesSent.WithLabelValues(transport, channelGroup)
-		transportMessagesSentCache.Store(labels, counterSent)
+	counters, ok := transportMessagesSentCache.Load(labels)
+	if !ok {
+		counterSent := m.transportMessagesSent.WithLabelValues(transport, channelGroup)
+		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, channelGroup)
+		counters = transportMessagesSent{
+			counterSent:     counterSent,
+			counterSentSize: counterSentSize,
+		}
+		transportMessagesSentCache.Store(labels, counters)
 	}
-	counterSentSize, okSentSize := transportMessagesSentSizeCache.Load(labels)
-	if !okSentSize {
-		counterSentSize = m.transportMessagesSentSize.WithLabelValues(transport, channelGroup)
-		transportMessagesSentSizeCache.Store(labels, counterSentSize)
-	}
-	counterSent.(prometheus.Counter).Inc()
-	counterSentSize.(prometheus.Counter).Add(float64(size))
+	counters.(transportMessagesSent).counterSent.Inc()
+	counters.(transportMessagesSent).counterSentSize.Add(float64(size))
 }
 
 func (m *metrics) incTransportMessagesReceived(transport string, channelGroup string, size int) {
@@ -245,18 +252,18 @@ func (m *metrics) incTransportMessagesReceived(transport string, channelGroup st
 		Transport:    transport,
 		ChannelGroup: channelGroup,
 	}
-	counterReceived, okReceived := transportMessagesReceivedCache.Load(labels)
-	if !okReceived {
-		counterReceived = m.transportMessagesReceived.WithLabelValues(transport, channelGroup)
-		transportMessagesReceivedCache.Store(labels, counterReceived)
+	counters, ok := transportMessagesReceivedCache.Load(labels)
+	if !ok {
+		counterReceived := m.transportMessagesReceived.WithLabelValues(transport, channelGroup)
+		counterReceivedSize := m.transportMessagesReceivedSize.WithLabelValues(transport, channelGroup)
+		counters = transportMessagesReceived{
+			counterReceived:     counterReceived,
+			counterReceivedSize: counterReceivedSize,
+		}
+		transportMessagesReceivedCache.Store(labels, counters)
 	}
-	counterReceivedSize, okReceivedSize := transportMessagesReceivedSizeCache.Load(labels)
-	if !okReceivedSize {
-		counterReceivedSize = m.transportMessagesReceivedSize.WithLabelValues(transport, channelGroup)
-		transportMessagesReceivedSizeCache.Store(labels, counterReceivedSize)
-	}
-	counterReceived.(prometheus.Counter).Inc()
-	counterReceivedSize.(prometheus.Counter).Add(float64(size))
+	counters.(transportMessagesReceived).counterReceived.Inc()
+	counters.(transportMessagesReceived).counterReceivedSize.Add(float64(size))
 }
 
 func (m *metrics) incServerDisconnect(code uint32) {
