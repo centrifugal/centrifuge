@@ -40,7 +40,7 @@ const connectUrlParam = "cf_connect"
 const defaultMaxSSEBodySize = 64 * 1024
 
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	incTransportConnect(transportSSE)
+	h.node.metrics.incTransportConnect(transportSSE)
 
 	var requestData []byte
 	if r.Method == http.MethodGet {

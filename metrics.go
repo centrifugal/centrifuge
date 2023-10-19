@@ -14,7 +14,7 @@ var defaultMetricsNamespace = "centrifuge"
 
 var registryMu sync.RWMutex
 
-var (
+type metrics struct {
 	messagesSentCount             *prometheus.CounterVec
 	messagesReceivedCount         *prometheus.CounterVec
 	actionCount                   *prometheus.CounterVec
@@ -86,7 +86,7 @@ var (
 	commandDurationRefresh       prometheus.Observer
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
-)
+}
 
 type commandMethodType int32
 
@@ -122,7 +122,7 @@ var (
 	}
 )
 
-func observeCommandDuration(method commandMethodType, d time.Duration) {
+func (m *metrics) observeCommandDuration(method commandMethodType, d time.Duration) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 
@@ -130,110 +130,83 @@ func observeCommandDuration(method commandMethodType, d time.Duration) {
 
 	switch method {
 	case commandConnect:
-		observer = commandDurationConnect
+		observer = m.commandDurationConnect
 	case commandSubscribe:
-		observer = commandDurationSubscribe
+		observer = m.commandDurationSubscribe
 	case commandUnsubscribe:
-		observer = commandDurationUnsubscribe
+		observer = m.commandDurationUnsubscribe
 	case commandPublish:
-		observer = commandDurationPublish
+		observer = m.commandDurationPublish
 	case commandPresence:
-		observer = commandDurationPresence
+		observer = m.commandDurationPresence
 	case commandPresenceStats:
-		observer = commandDurationPresenceStats
+		observer = m.commandDurationPresenceStats
 	case commandHistory:
-		observer = commandDurationHistory
+		observer = m.commandDurationHistory
 	case commandPing:
-		observer = commandDurationPing
+		observer = m.commandDurationPing
 	case commandSend:
-		observer = commandDurationSend
+		observer = m.commandDurationSend
 	case commandRpc:
-		observer = commandDurationRPC
+		observer = m.commandDurationRPC
 	case commandRefresh:
-		observer = commandDurationRefresh
+		observer = m.commandDurationRefresh
 	case commandSubRefresh:
-		observer = commandDurationSubRefresh
+		observer = m.commandDurationSubRefresh
 	default:
-		observer = commandDurationUnknown
+		observer = m.commandDurationUnknown
 	}
 	observer.Observe(d.Seconds())
 }
 
-func setBuildInfo(version string) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	buildInfoGauge.WithLabelValues(version).Set(1)
+func (m *metrics) setBuildInfo(version string) {
+	m.buildInfoGauge.WithLabelValues(version).Set(1)
 }
 
-func setNumClients(n float64) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	numClientsGauge.Set(n)
+func (m *metrics) setNumClients(n float64) {
+	m.numClientsGauge.Set(n)
 }
 
-func setNumUsers(n float64) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	numUsersGauge.Set(n)
+func (m *metrics) setNumUsers(n float64) {
+	m.numUsersGauge.Set(n)
 }
 
-func setNumSubscriptions(n float64) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	numSubsGauge.Set(n)
+func (m *metrics) setNumSubscriptions(n float64) {
+	m.numSubsGauge.Set(n)
 }
 
-func setNumChannels(n float64) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	numChannelsGauge.Set(n)
+func (m *metrics) setNumChannels(n float64) {
+	m.numChannelsGauge.Set(n)
 }
 
-func setNumNodes(n float64) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	numNodesGauge.Set(n)
+func (m *metrics) setNumNodes(n float64) {
+	m.numNodesGauge.Set(n)
 }
 
-func incReplyError(method commandMethodType, code uint32) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	replyErrorCount.WithLabelValues(commandMethodTypeName[int32(method)], strconv.FormatUint(uint64(code), 10)).Inc()
+func (m *metrics) incReplyError(method commandMethodType, code uint32) {
+	m.replyErrorCount.WithLabelValues(commandMethodTypeName[int32(method)], strconv.FormatUint(uint64(code), 10)).Inc()
 }
 
-func incRecover(success bool) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
+func (m *metrics) incRecover(success bool) {
 	if success {
-		recoverCountYes.Inc()
+		m.recoverCountYes.Inc()
 	} else {
-		recoverCountNo.Inc()
+		m.recoverCountNo.Inc()
 	}
 }
 
-func incTransportConnect(transport string) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
+func (m *metrics) incTransportConnect(transport string) {
 	switch transport {
 	case transportWebsocket:
-		transportConnectCountWebsocket.Inc()
+		m.transportConnectCountWebsocket.Inc()
 	case transportSockJS:
-		transportConnectCountSockJS.Inc()
+		m.transportConnectCountSockJS.Inc()
 	case transportSSE:
-		transportConnectCountSSE.Inc()
+		m.transportConnectCountSSE.Inc()
 	case transportHTTPStream:
-		transportConnectCountHTTPStream.Inc()
+		m.transportConnectCountHTTPStream.Inc()
 	default:
-		transportConnectCount.WithLabelValues(transport).Inc()
+		m.transportConnectCount.WithLabelValues(transport).Inc()
 	}
 }
 
@@ -259,10 +232,7 @@ func init() {
 	transportMessagesReceivedSizeCache = make(map[transportMessageLabels]prometheus.Counter)
 }
 
-func incTransportMessagesSent(transport string, channelGroup string, size int) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
+func (m *metrics) incTransportMessagesSent(transport string, channelGroup string, size int) {
 	labels := transportMessageLabels{
 		Transport:    transport,
 		ChannelGroup: channelGroup,
@@ -274,14 +244,14 @@ func incTransportMessagesSent(transport string, channelGroup string, size int) {
 	messagesSentCacheMu.RUnlock()
 
 	if !okSent {
-		counterSent = transportMessagesSent.WithLabelValues(transport, channelGroup)
+		counterSent = m.transportMessagesSent.WithLabelValues(transport, channelGroup)
 		messagesSentCacheMu.Lock()
 		transportMessagesSentCache[labels] = counterSent
 		messagesSentCacheMu.Unlock()
 	}
 
 	if !okSentSize {
-		counterSentSize = transportMessagesSentSize.WithLabelValues(transport, channelGroup)
+		counterSentSize = m.transportMessagesSentSize.WithLabelValues(transport, channelGroup)
 		messagesSentCacheMu.Lock()
 		transportMessagesSentSizeCache[labels] = counterSentSize
 		messagesSentCacheMu.Unlock()
@@ -290,7 +260,7 @@ func incTransportMessagesSent(transport string, channelGroup string, size int) {
 	counterSentSize.Add(float64(size))
 }
 
-func incTransportMessagesReceived(transport string, channelGroup string, size int) {
+func (m *metrics) incTransportMessagesReceived(transport string, channelGroup string, size int) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 
@@ -305,14 +275,14 @@ func incTransportMessagesReceived(transport string, channelGroup string, size in
 	messagesReceivedCacheMu.RUnlock()
 
 	if !okReceived {
-		counterReceived = transportMessagesReceived.WithLabelValues(transport, channelGroup)
+		counterReceived = m.transportMessagesReceived.WithLabelValues(transport, channelGroup)
 		messagesReceivedCacheMu.Lock()
 		transportMessagesReceivedCache[labels] = counterReceived
 		messagesReceivedCacheMu.Unlock()
 	}
 
 	if !okReceivedSize {
-		counterReceivedSize = transportMessagesReceivedSize.WithLabelValues(transport, channelGroup)
+		counterReceivedSize = m.transportMessagesReceivedSize.WithLabelValues(transport, channelGroup)
 		messagesReceivedCacheMu.Lock()
 		transportMessagesReceivedSizeCache[labels] = counterReceivedSize
 		messagesReceivedCacheMu.Unlock()
@@ -321,108 +291,91 @@ func incTransportMessagesReceived(transport string, channelGroup string, size in
 	counterReceivedSize.Add(float64(size))
 }
 
-func incServerDisconnect(code uint32) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
-	serverDisconnectCount.WithLabelValues(strconv.FormatUint(uint64(code), 10)).Inc()
+func (m *metrics) incServerDisconnect(code uint32) {
+	m.serverDisconnectCount.WithLabelValues(strconv.FormatUint(uint64(code), 10)).Inc()
 }
 
-func incMessagesSent(msgType string) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
+func (m *metrics) incMessagesSent(msgType string) {
 	switch msgType {
 	case "publication":
-		messagesSentCountPublication.Inc()
+		m.messagesSentCountPublication.Inc()
 	case "join":
-		messagesSentCountJoin.Inc()
+		m.messagesSentCountJoin.Inc()
 	case "leave":
-		messagesSentCountLeave.Inc()
+		m.messagesSentCountLeave.Inc()
 	case "control":
-		messagesSentCountControl.Inc()
+		m.messagesSentCountControl.Inc()
 	default:
-		messagesSentCount.WithLabelValues(msgType).Inc()
+		m.messagesSentCount.WithLabelValues(msgType).Inc()
 	}
 }
 
-func incMessagesReceived(msgType string) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
+func (m *metrics) incMessagesReceived(msgType string) {
 	switch msgType {
 	case "publication":
-		messagesReceivedCountPublication.Inc()
+		m.messagesReceivedCountPublication.Inc()
 	case "join":
-		messagesReceivedCountJoin.Inc()
+		m.messagesReceivedCountJoin.Inc()
 	case "leave":
-		messagesReceivedCountLeave.Inc()
+		m.messagesReceivedCountLeave.Inc()
 	case "control":
-		messagesReceivedCountControl.Inc()
+		m.messagesReceivedCountControl.Inc()
 	default:
-		messagesReceivedCount.WithLabelValues(msgType).Inc()
+		m.messagesReceivedCount.WithLabelValues(msgType).Inc()
 	}
 }
 
-func incMessagesBroadcasted(msgType string, numSubscribers int) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
+func (m *metrics) incMessagesBroadcasted(msgType string, numSubscribers int) {
 	switch msgType {
 	case "publication":
-		messagesBroadcastedPublication.Add(float64(numSubscribers))
+		m.messagesBroadcastedPublication.Add(float64(numSubscribers))
 	case "join":
-		messagesBroadcastedJoin.Add(float64(numSubscribers))
+		m.messagesBroadcastedJoin.Add(float64(numSubscribers))
 	case "leave":
-		messagesBroadcastedLeave.Add(float64(numSubscribers))
+		m.messagesBroadcastedLeave.Add(float64(numSubscribers))
 	default:
-		messagesBroadcastedCount.WithLabelValues(msgType).Add(float64(numSubscribers))
+		m.messagesBroadcastedCount.WithLabelValues(msgType).Add(float64(numSubscribers))
 	}
 }
 
-func incActionCount(action string) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
+func (m *metrics) incActionCount(action string) {
 	switch action {
 	case "add_client":
-		actionCountAddClient.Inc()
+		m.actionCountAddClient.Inc()
 	case "remove_client":
-		actionCountRemoveClient.Inc()
+		m.actionCountRemoveClient.Inc()
 	case "add_subscription":
-		actionCountAddSub.Inc()
+		m.actionCountAddSub.Inc()
 	case "remove_subscription":
-		actionCountRemoveSub.Inc()
+		m.actionCountRemoveSub.Inc()
 	case "add_presence":
-		actionCountAddPresence.Inc()
+		m.actionCountAddPresence.Inc()
 	case "remove_presence":
-		actionCountRemovePresence.Inc()
+		m.actionCountRemovePresence.Inc()
 	case "presence":
-		actionCountPresence.Inc()
+		m.actionCountPresence.Inc()
 	case "presence_stats":
-		actionCountPresenceStats.Inc()
+		m.actionCountPresenceStats.Inc()
 	case "history":
-		actionCountHistory.Inc()
+		m.actionCountHistory.Inc()
 	case "history_recover":
-		actionCountHistoryRecover.Inc()
+		m.actionCountHistoryRecover.Inc()
 	case "history_stream_top":
-		actionCountHistoryStreamTop.Inc()
+		m.actionCountHistoryStreamTop.Inc()
 	case "history_remove":
-		actionCountHistoryRemove.Inc()
+		m.actionCountHistoryRemove.Inc()
 	case "survey":
-		actionCountSurvey.Inc()
+		m.actionCountSurvey.Inc()
 	case "notify":
-		actionCountNotify.Inc()
+		m.actionCountNotify.Inc()
 	}
 }
 
-func observeSurveyDuration(op string, d time.Duration) {
-	registryMu.RLock()
-	surveyDurationSummary.WithLabelValues(op).Observe(d.Seconds())
-	registryMu.RUnlock()
+func (m *metrics) observeSurveyDuration(op string, d time.Duration) {
+	m.surveyDurationSummary.WithLabelValues(op).Observe(d.Seconds())
 }
 
-func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string) error {
+func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string) (*metrics, error) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
@@ -433,77 +386,79 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		registry = prometheus.DefaultRegisterer
 	}
 
-	messagesSentCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m := &metrics{}
+
+	m.messagesSentCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "messages_sent_count",
 		Help:      "Number of messages sent.",
 	}, []string{"type"})
 
-	messagesReceivedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.messagesReceivedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "messages_received_count",
 		Help:      "Number of messages received from engine.",
 	}, []string{"type"})
 
-	messagesBroadcastedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.messagesBroadcastedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "messages_broadcasted_count",
 		Help:      "Number of messages broadcasted to subscribers.",
 	}, []string{"type"})
 
-	actionCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.actionCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "action_count",
 		Help:      "Number of node actions called.",
 	}, []string{"action"})
 
-	numClientsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	m.numClientsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "num_clients",
 		Help:      "Number of clients connected.",
 	})
 
-	numUsersGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	m.numUsersGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "num_users",
 		Help:      "Number of unique users connected.",
 	})
 
-	numSubsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	m.numSubsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "num_subscriptions",
 		Help:      "Number of subscriptions.",
 	})
 
-	numNodesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	m.numNodesGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "num_nodes",
 		Help:      "Number of nodes in cluster.",
 	})
 
-	buildInfoGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	m.buildInfoGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "build",
 		Help:      "Node build info.",
 	}, []string{"version"})
 
-	numChannelsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	m.numChannelsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "num_channels",
 		Help:      "Number of channels with one or more subscribers.",
 	})
 
-	surveyDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+	m.surveyDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
 		Namespace:  metricsNamespace,
 		Subsystem:  "node",
 		Name:       "survey_duration_seconds",
@@ -511,21 +466,21 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:       "Survey duration summary.",
 	}, []string{"op"})
 
-	replyErrorCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.replyErrorCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "num_reply_errors",
 		Help:      "Number of errors in replies sent to clients.",
 	}, []string{"method", "code"})
 
-	serverDisconnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.serverDisconnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "num_server_disconnects",
 		Help:      "Number of server initiated disconnects.",
 	}, []string{"code"})
 
-	commandDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+	m.commandDurationSummary = prometheus.NewSummaryVec(prometheus.SummaryOpts{
 		Namespace:  metricsNamespace,
 		Subsystem:  "client",
 		Name:       "command_duration_seconds",
@@ -533,162 +488,162 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:       "Client command duration summary.",
 	}, []string{"method"})
 
-	recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.recoverCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "recover",
 		Help:      "Count of recover operations.",
 	}, []string{"recovered"})
 
-	transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "connect_count",
 		Help:      "Number of connections to specific transport.",
 	}, []string{"transport"})
 
-	transportMessagesSent = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.transportMessagesSent = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_sent",
 		Help:      "Number of messages sent over specific transport.",
 	}, []string{"transport", "channel_namespace"})
 
-	transportMessagesSentSize = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.transportMessagesSentSize = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_sent_size",
 		Help:      "Size in bytes of messages sent over specific transport.",
 	}, []string{"transport", "channel_namespace"})
 
-	transportMessagesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.transportMessagesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_received",
 		Help:      "Number of messages received over specific transport.",
 	}, []string{"transport", "channel_namespace"})
 
-	transportMessagesReceivedSize = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.transportMessagesReceivedSize = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_received_size",
 		Help:      "Size in bytes of messages received over specific transport.",
 	}, []string{"transport", "channel_namespace"})
 
-	messagesReceivedCountPublication = messagesReceivedCount.WithLabelValues("publication")
-	messagesReceivedCountJoin = messagesReceivedCount.WithLabelValues("join")
-	messagesReceivedCountLeave = messagesReceivedCount.WithLabelValues("leave")
-	messagesReceivedCountControl = messagesReceivedCount.WithLabelValues("control")
+	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication")
+	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join")
+	m.messagesReceivedCountLeave = m.messagesReceivedCount.WithLabelValues("leave")
+	m.messagesReceivedCountControl = m.messagesReceivedCount.WithLabelValues("control")
 
-	messagesSentCountPublication = messagesSentCount.WithLabelValues("publication")
-	messagesSentCountJoin = messagesSentCount.WithLabelValues("join")
-	messagesSentCountLeave = messagesSentCount.WithLabelValues("leave")
-	messagesSentCountControl = messagesSentCount.WithLabelValues("control")
+	m.messagesSentCountPublication = m.messagesSentCount.WithLabelValues("publication")
+	m.messagesSentCountJoin = m.messagesSentCount.WithLabelValues("join")
+	m.messagesSentCountLeave = m.messagesSentCount.WithLabelValues("leave")
+	m.messagesSentCountControl = m.messagesSentCount.WithLabelValues("control")
 
-	messagesBroadcastedPublication = messagesBroadcastedCount.WithLabelValues("publication")
-	messagesBroadcastedJoin = messagesBroadcastedCount.WithLabelValues("join")
-	messagesBroadcastedLeave = messagesBroadcastedCount.WithLabelValues("leave")
+	m.messagesBroadcastedPublication = m.messagesBroadcastedCount.WithLabelValues("publication")
+	m.messagesBroadcastedJoin = m.messagesBroadcastedCount.WithLabelValues("join")
+	m.messagesBroadcastedLeave = m.messagesBroadcastedCount.WithLabelValues("leave")
 
-	actionCountAddClient = actionCount.WithLabelValues("add_client")
-	actionCountRemoveClient = actionCount.WithLabelValues("remove_client")
-	actionCountAddSub = actionCount.WithLabelValues("add_subscription")
-	actionCountRemoveSub = actionCount.WithLabelValues("remove_subscription")
-	actionCountAddPresence = actionCount.WithLabelValues("add_presence")
-	actionCountRemovePresence = actionCount.WithLabelValues("remove_presence")
-	actionCountPresence = actionCount.WithLabelValues("presence")
-	actionCountPresenceStats = actionCount.WithLabelValues("presence_stats")
-	actionCountHistory = actionCount.WithLabelValues("history")
-	actionCountHistoryRecover = actionCount.WithLabelValues("history_recover")
-	actionCountHistoryStreamTop = actionCount.WithLabelValues("history_stream_top")
-	actionCountHistoryRemove = actionCount.WithLabelValues("history_remove")
-	actionCountSurvey = actionCount.WithLabelValues("survey")
-	actionCountNotify = actionCount.WithLabelValues("notify")
+	m.actionCountAddClient = m.actionCount.WithLabelValues("add_client")
+	m.actionCountRemoveClient = m.actionCount.WithLabelValues("remove_client")
+	m.actionCountAddSub = m.actionCount.WithLabelValues("add_subscription")
+	m.actionCountRemoveSub = m.actionCount.WithLabelValues("remove_subscription")
+	m.actionCountAddPresence = m.actionCount.WithLabelValues("add_presence")
+	m.actionCountRemovePresence = m.actionCount.WithLabelValues("remove_presence")
+	m.actionCountPresence = m.actionCount.WithLabelValues("presence")
+	m.actionCountPresenceStats = m.actionCount.WithLabelValues("presence_stats")
+	m.actionCountHistory = m.actionCount.WithLabelValues("history")
+	m.actionCountHistoryRecover = m.actionCount.WithLabelValues("history_recover")
+	m.actionCountHistoryStreamTop = m.actionCount.WithLabelValues("history_stream_top")
+	m.actionCountHistoryRemove = m.actionCount.WithLabelValues("history_remove")
+	m.actionCountSurvey = m.actionCount.WithLabelValues("survey")
+	m.actionCountNotify = m.actionCount.WithLabelValues("notify")
 
-	recoverCountYes = recoverCount.WithLabelValues("yes")
-	recoverCountNo = recoverCount.WithLabelValues("no")
+	m.recoverCountYes = m.recoverCount.WithLabelValues("yes")
+	m.recoverCountNo = m.recoverCount.WithLabelValues("no")
 
-	transportConnectCountWebsocket = transportConnectCount.WithLabelValues(transportWebsocket)
-	transportConnectCountSockJS = transportConnectCount.WithLabelValues(transportSockJS)
-	transportConnectCountHTTPStream = transportConnectCount.WithLabelValues(transportHTTPStream)
-	transportConnectCountSSE = transportConnectCount.WithLabelValues(transportSSE)
+	m.transportConnectCountWebsocket = m.transportConnectCount.WithLabelValues(transportWebsocket)
+	m.transportConnectCountSockJS = m.transportConnectCount.WithLabelValues(transportSockJS)
+	m.transportConnectCountHTTPStream = m.transportConnectCount.WithLabelValues(transportHTTPStream)
+	m.transportConnectCountSSE = m.transportConnectCount.WithLabelValues(transportSSE)
 
 	labelForMethod := func(methodType commandMethodType) string {
 		return strings.ToLower(commandMethodTypeName[int32(methodType)])
 	}
 
-	commandDurationConnect = commandDurationSummary.WithLabelValues(labelForMethod(commandConnect))
-	commandDurationSubscribe = commandDurationSummary.WithLabelValues(labelForMethod(commandSubscribe))
-	commandDurationUnsubscribe = commandDurationSummary.WithLabelValues(labelForMethod(commandUnsubscribe))
-	commandDurationPublish = commandDurationSummary.WithLabelValues(labelForMethod(commandPublish))
-	commandDurationPresence = commandDurationSummary.WithLabelValues(labelForMethod(commandPresence))
-	commandDurationPresenceStats = commandDurationSummary.WithLabelValues(labelForMethod(commandPresenceStats))
-	commandDurationHistory = commandDurationSummary.WithLabelValues(labelForMethod(commandHistory))
-	commandDurationPing = commandDurationSummary.WithLabelValues(labelForMethod(commandPing))
-	commandDurationSend = commandDurationSummary.WithLabelValues(labelForMethod(commandSend))
-	commandDurationRPC = commandDurationSummary.WithLabelValues(labelForMethod(commandRpc))
-	commandDurationRefresh = commandDurationSummary.WithLabelValues(labelForMethod(commandRefresh))
-	commandDurationSubRefresh = commandDurationSummary.WithLabelValues(labelForMethod(commandSubRefresh))
-	commandDurationUnknown = commandDurationSummary.WithLabelValues("unknown")
+	m.commandDurationConnect = m.commandDurationSummary.WithLabelValues(labelForMethod(commandConnect))
+	m.commandDurationSubscribe = m.commandDurationSummary.WithLabelValues(labelForMethod(commandSubscribe))
+	m.commandDurationUnsubscribe = m.commandDurationSummary.WithLabelValues(labelForMethod(commandUnsubscribe))
+	m.commandDurationPublish = m.commandDurationSummary.WithLabelValues(labelForMethod(commandPublish))
+	m.commandDurationPresence = m.commandDurationSummary.WithLabelValues(labelForMethod(commandPresence))
+	m.commandDurationPresenceStats = m.commandDurationSummary.WithLabelValues(labelForMethod(commandPresenceStats))
+	m.commandDurationHistory = m.commandDurationSummary.WithLabelValues(labelForMethod(commandHistory))
+	m.commandDurationPing = m.commandDurationSummary.WithLabelValues(labelForMethod(commandPing))
+	m.commandDurationSend = m.commandDurationSummary.WithLabelValues(labelForMethod(commandSend))
+	m.commandDurationRPC = m.commandDurationSummary.WithLabelValues(labelForMethod(commandRpc))
+	m.commandDurationRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(commandRefresh))
+	m.commandDurationSubRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(commandSubRefresh))
+	m.commandDurationUnknown = m.commandDurationSummary.WithLabelValues("unknown")
 
-	if err := registry.Register(messagesBroadcastedCount); err != nil {
-		return err
+	if err := registry.Register(m.messagesBroadcastedCount); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(messagesSentCount); err != nil {
-		return err
+	if err := registry.Register(m.messagesSentCount); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(messagesReceivedCount); err != nil {
-		return err
+	if err := registry.Register(m.messagesReceivedCount); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(actionCount); err != nil {
-		return err
+	if err := registry.Register(m.actionCount); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(numClientsGauge); err != nil {
-		return err
+	if err := registry.Register(m.numClientsGauge); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(numUsersGauge); err != nil {
-		return err
+	if err := registry.Register(m.numUsersGauge); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(numSubsGauge); err != nil {
-		return err
+	if err := registry.Register(m.numSubsGauge); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(numChannelsGauge); err != nil {
-		return err
+	if err := registry.Register(m.numChannelsGauge); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(numNodesGauge); err != nil {
-		return err
+	if err := registry.Register(m.numNodesGauge); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(commandDurationSummary); err != nil {
-		return err
+	if err := registry.Register(m.commandDurationSummary); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(replyErrorCount); err != nil {
-		return err
+	if err := registry.Register(m.replyErrorCount); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(serverDisconnectCount); err != nil {
-		return err
+	if err := registry.Register(m.serverDisconnectCount); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(recoverCount); err != nil {
-		return err
+	if err := registry.Register(m.recoverCount); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(transportConnectCount); err != nil {
-		return err
+	if err := registry.Register(m.transportConnectCount); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(transportMessagesSent); err != nil {
-		return err
+	if err := registry.Register(m.transportMessagesSent); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(transportMessagesSentSize); err != nil {
-		return err
+	if err := registry.Register(m.transportMessagesSentSize); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(transportMessagesReceived); err != nil {
-		return err
+	if err := registry.Register(m.transportMessagesReceived); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(transportMessagesReceivedSize); err != nil {
-		return err
+	if err := registry.Register(m.transportMessagesReceivedSize); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(buildInfoGauge); err != nil {
-		return err
+	if err := registry.Register(m.buildInfoGauge); err != nil {
+		return nil, err
 	}
-	if err := registry.Register(surveyDurationSummary); err != nil {
-		return err
+	if err := registry.Register(m.surveyDurationSummary); err != nil {
+		return nil, err
 	}
-	return nil
+	return m, nil
 }

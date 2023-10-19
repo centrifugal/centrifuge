@@ -39,7 +39,7 @@ const defaultMaxHTTPStreamingBodySize = 64 * 1024
 const streamingResponseWriteTimeout = time.Second
 
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	incTransportConnect(transportHTTPStream)
+	h.node.metrics.incTransportConnect(transportHTTPStream)
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)

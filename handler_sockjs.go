@@ -122,7 +122,7 @@ func (s *SockjsHandler) sockJSHandler(sess sockjs.Session) {
 
 // sockJSHandler called when new client connection comes to SockJS endpoint.
 func (s *SockjsHandler) handleSession(sess sockjs.Session) {
-	incTransportConnect(transportSockJS)
+	s.node.metrics.incTransportConnect(transportSockJS)
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
