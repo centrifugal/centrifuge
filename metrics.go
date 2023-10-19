@@ -124,9 +124,6 @@ var (
 )
 
 func (m *metrics) observeCommandDuration(method commandMethodType, d time.Duration) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
 	var observer prometheus.Observer
 
 	switch method {
@@ -217,79 +214,49 @@ type transportMessageLabels struct {
 }
 
 var (
-	transportMessagesSentCache     map[transportMessageLabels]prometheus.Counter
-	transportMessagesSentSizeCache map[transportMessageLabels]prometheus.Counter
-	messagesSentCacheMu            sync.RWMutex
+	transportMessagesSentCache     sync.Map
+	transportMessagesSentSizeCache sync.Map
 
-	transportMessagesReceivedCache     map[transportMessageLabels]prometheus.Counter
-	transportMessagesReceivedSizeCache map[transportMessageLabels]prometheus.Counter
-	messagesReceivedCacheMu            sync.RWMutex
+	transportMessagesReceivedCache     sync.Map
+	transportMessagesReceivedSizeCache sync.Map
 )
-
-func init() {
-	transportMessagesSentCache = make(map[transportMessageLabels]prometheus.Counter)
-	transportMessagesSentSizeCache = make(map[transportMessageLabels]prometheus.Counter)
-	transportMessagesReceivedCache = make(map[transportMessageLabels]prometheus.Counter)
-	transportMessagesReceivedSizeCache = make(map[transportMessageLabels]prometheus.Counter)
-}
 
 func (m *metrics) incTransportMessagesSent(transport string, channelGroup string, size int) {
 	labels := transportMessageLabels{
 		Transport:    transport,
 		ChannelGroup: channelGroup,
 	}
-
-	messagesSentCacheMu.RLock()
-	counterSent, okSent := transportMessagesSentCache[labels]
-	counterSentSize, okSentSize := transportMessagesSentSizeCache[labels]
-	messagesSentCacheMu.RUnlock()
-
+	counterSent, okSent := transportMessagesSentCache.Load(labels)
 	if !okSent {
 		counterSent = m.transportMessagesSent.WithLabelValues(transport, channelGroup)
-		messagesSentCacheMu.Lock()
-		transportMessagesSentCache[labels] = counterSent
-		messagesSentCacheMu.Unlock()
+		transportMessagesSentCache.Store(labels, counterSent)
 	}
-
+	counterSentSize, okSentSize := transportMessagesSentSizeCache.Load(labels)
 	if !okSentSize {
 		counterSentSize = m.transportMessagesSentSize.WithLabelValues(transport, channelGroup)
-		messagesSentCacheMu.Lock()
-		transportMessagesSentSizeCache[labels] = counterSentSize
-		messagesSentCacheMu.Unlock()
+		transportMessagesSentSizeCache.Store(labels, counterSentSize)
 	}
-	counterSent.Inc()
-	counterSentSize.Add(float64(size))
+	counterSent.(prometheus.Counter).Inc()
+	counterSentSize.(prometheus.Counter).Add(float64(size))
 }
 
 func (m *metrics) incTransportMessagesReceived(transport string, channelGroup string, size int) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-
 	labels := transportMessageLabels{
 		Transport:    transport,
 		ChannelGroup: channelGroup,
 	}
-
-	messagesReceivedCacheMu.RLock()
-	counterReceived, okReceived := transportMessagesReceivedCache[labels]
-	counterReceivedSize, okReceivedSize := transportMessagesReceivedSizeCache[labels]
-	messagesReceivedCacheMu.RUnlock()
-
+	counterReceived, okReceived := transportMessagesReceivedCache.Load(labels)
 	if !okReceived {
 		counterReceived = m.transportMessagesReceived.WithLabelValues(transport, channelGroup)
-		messagesReceivedCacheMu.Lock()
-		transportMessagesReceivedCache[labels] = counterReceived
-		messagesReceivedCacheMu.Unlock()
+		transportMessagesReceivedCache.Store(labels, counterReceived)
 	}
-
+	counterReceivedSize, okReceivedSize := transportMessagesReceivedSizeCache.Load(labels)
 	if !okReceivedSize {
 		counterReceivedSize = m.transportMessagesReceivedSize.WithLabelValues(transport, channelGroup)
-		messagesReceivedCacheMu.Lock()
-		transportMessagesReceivedSizeCache[labels] = counterReceivedSize
-		messagesReceivedCacheMu.Unlock()
+		transportMessagesReceivedSizeCache.Store(labels, counterReceivedSize)
 	}
-	counterReceived.Inc()
-	counterReceivedSize.Add(float64(size))
+	counterReceived.(prometheus.Counter).Inc()
+	counterReceivedSize.(prometheus.Counter).Add(float64(size))
 }
 
 func (m *metrics) incServerDisconnect(code uint32) {
