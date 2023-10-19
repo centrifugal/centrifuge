@@ -166,13 +166,7 @@ func New(c Config) (*Node, error) {
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
 	if m, err := initMetricsRegistry(prometheus.DefaultRegisterer, c.MetricsNamespace); err != nil {
-		switch err.(type) {
-		case prometheus.AlreadyRegisteredError:
-			// Can happen when node initialized several times since we use DefaultRegisterer,
-			// skip for now.
-		default:
-			return nil, err
-		}
+		return nil, err
 	} else {
 		n.metrics = m
 	}

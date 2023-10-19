@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -585,64 +586,66 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	m.commandDurationSubRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(commandSubRefresh))
 	m.commandDurationUnknown = m.commandDurationSummary.WithLabelValues("unknown")
 
-	if err := registry.Register(m.messagesBroadcastedCount); err != nil {
+	var alreadyRegistered prometheus.AlreadyRegisteredError
+
+	if err := registry.Register(m.messagesBroadcastedCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.messagesSentCount); err != nil {
+	if err := registry.Register(m.messagesSentCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.messagesReceivedCount); err != nil {
+	if err := registry.Register(m.messagesReceivedCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.actionCount); err != nil {
+	if err := registry.Register(m.actionCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.numClientsGauge); err != nil {
+	if err := registry.Register(m.numClientsGauge); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.numUsersGauge); err != nil {
+	if err := registry.Register(m.numUsersGauge); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.numSubsGauge); err != nil {
+	if err := registry.Register(m.numSubsGauge); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.numChannelsGauge); err != nil {
+	if err := registry.Register(m.numChannelsGauge); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.numNodesGauge); err != nil {
+	if err := registry.Register(m.numNodesGauge); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.commandDurationSummary); err != nil {
+	if err := registry.Register(m.commandDurationSummary); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.replyErrorCount); err != nil {
+	if err := registry.Register(m.replyErrorCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.serverDisconnectCount); err != nil {
+	if err := registry.Register(m.serverDisconnectCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.recoverCount); err != nil {
+	if err := registry.Register(m.recoverCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.transportConnectCount); err != nil {
+	if err := registry.Register(m.transportConnectCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.transportMessagesSent); err != nil {
+	if err := registry.Register(m.transportMessagesSent); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.transportMessagesSentSize); err != nil {
+	if err := registry.Register(m.transportMessagesSentSize); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.transportMessagesReceived); err != nil {
+	if err := registry.Register(m.transportMessagesReceived); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.transportMessagesReceivedSize); err != nil {
+	if err := registry.Register(m.transportMessagesReceivedSize); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.buildInfoGauge); err != nil {
+	if err := registry.Register(m.buildInfoGauge); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.surveyDurationSummary); err != nil {
+	if err := registry.Register(m.surveyDurationSummary); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
 	return m, nil

@@ -11,13 +11,16 @@ import (
 )
 
 func testMemoryBroker() *MemoryBroker {
-	n, _ := New(Config{
+	n, err := New(Config{
 		LogLevel:   LogLevelDebug,
 		LogHandler: func(entry LogEntry) {},
 	})
+	if err != nil {
+		panic(err)
+	}
 	e, _ := NewMemoryBroker(n, MemoryBrokerConfig{})
 	n.SetBroker(e)
-	err := n.Run()
+	err = n.Run()
 	if err != nil {
 		panic(err)
 	}
