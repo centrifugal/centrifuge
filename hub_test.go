@@ -453,7 +453,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := defaultTestNode()
-			n.config.GetChannelGroupLabel = func(channel string) string {
+			n.config.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()

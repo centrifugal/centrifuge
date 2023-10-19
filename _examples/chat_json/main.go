@@ -72,6 +72,12 @@ func main() {
 		LogLevel:       centrifuge.LogLevelInfo,
 		LogHandler:     handleLog,
 		HistoryMetaTTL: 24 * time.Hour,
+
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+		ChannelNamespaceLabelForMessagesSent:     true,
+		ChannelNamespaceLabelForMessagesReceived: true,
 	})
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {

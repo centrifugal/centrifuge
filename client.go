@@ -563,7 +563,7 @@ func (c *Client) transportEnqueue(data []byte, ch string) error {
 	item := queue.Item{
 		Data: data,
 	}
-	if c.node.config.GetChannelGroupLabel != nil {
+	if c.node.config.GetChannelNamespaceLabel != nil {
 		item.Channel = ch
 	}
 	disconnect := c.messageWriter.enqueue(item)
@@ -1148,6 +1148,15 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 		return &DisconnectBadRequest, false
 	}
 
+	var metricChannel string
+	defer func() {
+		channelGroup := "_"
+		if metricChannel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForMessagesReceived {
+			channelGroup = c.node.config.GetChannelNamespaceLabel(metricChannel)
+		}
+		incTransportMessagesReceived(c.transport.Name(), channelGroup, cmdSize)
+	}()
+
 	if isPong(cmd) {
 		c.mu.Lock()
 		if c.status == statusClosed {
@@ -1216,16 +1225,22 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 	} else if cmd.Ping != nil {
 		handleErr = c.handlePing(cmd, started, nil)
 	} else if cmd.Subscribe != nil {
+		metricChannel = cmd.Subscribe.Channel
 		handleErr = c.handleSubscribe(cmd.Subscribe, cmd, started, nil)
 	} else if cmd.Unsubscribe != nil {
+		metricChannel = cmd.Unsubscribe.Channel
 		handleErr = c.handleUnsubscribe(cmd.Unsubscribe, cmd, started, nil)
 	} else if cmd.Publish != nil {
+		metricChannel = cmd.Publish.Channel
 		handleErr = c.handlePublish(cmd.Publish, cmd, started, nil)
 	} else if cmd.Presence != nil {
+		metricChannel = cmd.Presence.Channel
 		handleErr = c.handlePresence(cmd.Presence, cmd, started, nil)
 	} else if cmd.PresenceStats != nil {
+		metricChannel = cmd.PresenceStats.Channel
 		handleErr = c.handlePresenceStats(cmd.PresenceStats, cmd, started, nil)
 	} else if cmd.History != nil {
+		metricChannel = cmd.History.Channel
 		handleErr = c.handleHistory(cmd.History, cmd, started, nil)
 	} else if cmd.Rpc != nil {
 		handleErr = c.handleRPC(cmd.Rpc, cmd, started, nil)
@@ -1234,6 +1249,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 	} else if cmd.Refresh != nil {
 		handleErr = c.handleRefresh(cmd.Refresh, cmd, started, nil)
 	} else if cmd.SubRefresh != nil {
+		metricChannel = cmd.SubRefresh.Channel
 		handleErr = c.handleSubRefresh(cmd.SubRefresh, cmd, started, nil)
 	} else {
 		return &DisconnectBadRequest, false
@@ -2432,10 +2448,10 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 			MaxQueueSize: c.node.config.ClientQueueMaxSize,
 			WriteFn: func(item queue.Item) error {
 				channelGroup := "_"
-				if item.Channel != "" && c.node.config.GetChannelGroupLabel != nil {
-					channelGroup = c.node.config.GetChannelGroupLabel(item.Channel)
+				if item.Channel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForMessagesSent {
+					channelGroup = c.node.config.GetChannelNamespaceLabel(item.Channel)
 				}
-				incTransportMessages(c.transport.Name(), channelGroup, len(item.Data))
+				incTransportMessagesSent(c.transport.Name(), channelGroup, len(item.Data))
 
 				if c.node.clientEvents.transportWriteHandler != nil {
 					pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(item))
@@ -2469,10 +2485,10 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 					}
 					messages = append(messages, items[i].Data)
 					channelGroup := "_"
-					if items[i].Channel != "" && c.node.config.GetChannelGroupLabel != nil {
-						channelGroup = c.node.config.GetChannelGroupLabel(items[i].Channel)
+					if items[i].Channel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForMessagesSent {
+						channelGroup = c.node.config.GetChannelNamespaceLabel(items[i].Channel)
 					}
-					incTransportMessages(c.transport.Name(), channelGroup, len(items[i].Data))
+					incTransportMessagesSent(c.transport.Name(), channelGroup, len(items[i].Data))
 				}
 				writeMu.Lock()
 				defer writeMu.Unlock()
