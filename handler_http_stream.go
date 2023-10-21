@@ -61,7 +61,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var err error
 		requestData, err = io.ReadAll(r.Body)
 		if err != nil {
-			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]any{"error": err.Error()}))
+			h.node.Log(NewLogEntry(LogLevelInfo, "error reading http stream request body", map[string]any{"error": err.Error()}))
 			if len(requestData) >= maxBytesSize {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return

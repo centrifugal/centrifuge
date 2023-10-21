@@ -53,11 +53,11 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
+		s.node.logger.log(newLogEntry(LogLevelInfo, "error reading emulation request body", map[string]any{"error": err.Error()}))
 		if len(data) >= maxBytesSize {
 			rw.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
-		s.node.logger.log(newLogEntry(LogLevelError, "can't read emulation request body", map[string]any{"error": err.Error()}))
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -69,7 +69,9 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		err = json.Unmarshal(data, &req)
 	}
 	if err != nil {
-		s.node.logger.log(newLogEntry(LogLevelInfo, "can't unmarshal emulation request", map[string]any{"req": &req, "error": err.Error()}))
+		if s.node.LogEnabled(LogLevelInfo) {
+			s.node.logger.log(newLogEntry(LogLevelInfo, "can't unmarshal emulation request", map[string]any{"error": err.Error(), "data": string(data)}))
+		}
 		rw.WriteHeader(http.StatusBadRequest)
 		return
 	}

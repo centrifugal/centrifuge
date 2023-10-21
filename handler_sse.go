@@ -61,11 +61,11 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var err error
 		requestData, err = io.ReadAll(r.Body)
 		if err != nil {
+			h.node.Log(NewLogEntry(LogLevelInfo, "error reading sse request body", map[string]any{"error": err.Error()}))
 			if len(requestData) >= maxBytesSize {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
-			h.node.Log(NewLogEntry(LogLevelError, "error reading body", map[string]any{"error": err.Error()}))
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
