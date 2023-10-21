@@ -690,7 +690,6 @@ func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition)
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	n.metrics.incMessagesBroadcasted("publication", numSubscribers)
 	return n.hub.BroadcastPublication(ch, pub, sp)
 }
 
@@ -703,7 +702,6 @@ func (n *Node) handleJoin(ch string, info *ClientInfo) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	n.metrics.incMessagesBroadcasted("join", numSubscribers)
 	return n.hub.broadcastJoin(ch, info)
 }
 
@@ -716,7 +714,6 @@ func (n *Node) handleLeave(ch string, info *ClientInfo) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	n.metrics.incMessagesBroadcasted("leave", numSubscribers)
 	return n.hub.broadcastLeave(ch, info)
 }
 

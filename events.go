@@ -64,7 +64,7 @@ type ConnectReply struct {
 	// (1000 / 100) * MaxMessagesInFrame (16 by default), i.e. 160 messages per second. This
 	// should be more than enough for target Centrifuge use cases (frontend apps) though.
 	WriteDelay time.Duration
-	// ReplyWithoutQueue when enabled will force Centrifuge to avoid using Client's write
+	// ReplyWithoutQueue when enabled will force Centrifuge to avoid using Client write
 	// queue for sending replies to commands for this connection. Replies sent directly to
 	// the Client's transport thus avoiding possible delays caused by writer loop, but replies
 	// lose a chance to be batched.
@@ -410,6 +410,8 @@ type TransportWriteEvent struct {
 	Data []byte
 	// Channel will be set if TransportWriteEvent relates to some channel.
 	Channel string
+	// FrameType tells what is being sent inside Data.
+	FrameType protocol.FrameType
 }
 
 // TransportWriteHandler called just before writing data to the Transport.

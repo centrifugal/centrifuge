@@ -3,9 +3,10 @@ package centrifuge
 import (
 	"errors"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/centrifugal/protocol"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -35,11 +36,6 @@ type metrics struct {
 	transportMessagesSentSize     *prometheus.CounterVec
 	transportMessagesReceived     *prometheus.CounterVec
 	transportMessagesReceivedSize *prometheus.CounterVec
-	messagesBroadcastedCount      *prometheus.CounterVec
-
-	messagesBroadcastedPublication prometheus.Counter
-	messagesBroadcastedJoin        prometheus.Counter
-	messagesBroadcastedLeave       prometheus.Counter
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -89,67 +85,33 @@ type metrics struct {
 	commandDurationUnknown       prometheus.Observer
 }
 
-type commandMethodType int32
-
-const (
-	commandConnect       commandMethodType = 0
-	commandSubscribe     commandMethodType = 1
-	commandUnsubscribe   commandMethodType = 2
-	commandPublish       commandMethodType = 3
-	commandPresence      commandMethodType = 4
-	commandPresenceStats commandMethodType = 5
-	commandHistory       commandMethodType = 6
-	commandPing          commandMethodType = 7
-	commandSend          commandMethodType = 8
-	commandRpc           commandMethodType = 9
-	commandRefresh       commandMethodType = 10
-	commandSubRefresh    commandMethodType = 11
-)
-
-var (
-	commandMethodTypeName = map[int32]string{
-		0:  "connect",
-		1:  "subscribe",
-		2:  "unsubscribe",
-		3:  "publish",
-		4:  "presence",
-		5:  "presence_stats",
-		6:  "history",
-		7:  "ping",
-		8:  "send",
-		9:  "rpc",
-		10: "refresh",
-		11: "sub_refresh",
-	}
-)
-
-func (m *metrics) observeCommandDuration(method commandMethodType, d time.Duration) {
+func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration) {
 	var observer prometheus.Observer
 
-	switch method {
-	case commandConnect:
+	switch frameType {
+	case protocol.FrameTypeConnect:
 		observer = m.commandDurationConnect
-	case commandSubscribe:
+	case protocol.FrameTypeSubscribe:
 		observer = m.commandDurationSubscribe
-	case commandUnsubscribe:
+	case protocol.FrameTypeUnsubscribe:
 		observer = m.commandDurationUnsubscribe
-	case commandPublish:
+	case protocol.FrameTypePublish:
 		observer = m.commandDurationPublish
-	case commandPresence:
+	case protocol.FrameTypePresence:
 		observer = m.commandDurationPresence
-	case commandPresenceStats:
+	case protocol.FrameTypePresenceStats:
 		observer = m.commandDurationPresenceStats
-	case commandHistory:
+	case protocol.FrameTypeHistory:
 		observer = m.commandDurationHistory
-	case commandPing:
+	case protocol.FrameTypePing:
 		observer = m.commandDurationPing
-	case commandSend:
+	case protocol.FrameTypeSend:
 		observer = m.commandDurationSend
-	case commandRpc:
+	case protocol.FrameTypeRPC:
 		observer = m.commandDurationRPC
-	case commandRefresh:
+	case protocol.FrameTypeRefresh:
 		observer = m.commandDurationRefresh
-	case commandSubRefresh:
+	case protocol.FrameTypeSubRefresh:
 		observer = m.commandDurationSubRefresh
 	default:
 		observer = m.commandDurationUnknown
@@ -181,8 +143,8 @@ func (m *metrics) setNumNodes(n float64) {
 	m.numNodesGauge.Set(n)
 }
 
-func (m *metrics) incReplyError(method commandMethodType, code uint32) {
-	m.replyErrorCount.WithLabelValues(commandMethodTypeName[int32(method)], strconv.FormatUint(uint64(code), 10)).Inc()
+func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32) {
+	m.replyErrorCount.WithLabelValues(frameType.String(), strconv.FormatUint(uint64(code), 10)).Inc()
 }
 
 func (m *metrics) incRecover(success bool) {
@@ -211,6 +173,7 @@ func (m *metrics) incTransportConnect(transport string) {
 type transportMessageLabels struct {
 	Transport    string
 	ChannelGroup string
+	FrameType    string
 }
 
 type transportMessagesSent struct {
@@ -228,15 +191,16 @@ var (
 	transportMessagesReceivedCache sync.Map
 )
 
-func (m *metrics) incTransportMessagesSent(transport string, channelGroup string, size int) {
+func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channelGroup string, size int) {
 	labels := transportMessageLabels{
 		Transport:    transport,
 		ChannelGroup: channelGroup,
+		FrameType:    frameType.String(),
 	}
 	counters, ok := transportMessagesSentCache.Load(labels)
 	if !ok {
-		counterSent := m.transportMessagesSent.WithLabelValues(transport, channelGroup)
-		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, channelGroup)
+		counterSent := m.transportMessagesSent.WithLabelValues(transport, labels.FrameType, channelGroup)
+		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, labels.FrameType, channelGroup)
 		counters = transportMessagesSent{
 			counterSent:     counterSent,
 			counterSentSize: counterSentSize,
@@ -247,15 +211,16 @@ func (m *metrics) incTransportMessagesSent(transport string, channelGroup string
 	counters.(transportMessagesSent).counterSentSize.Add(float64(size))
 }
 
-func (m *metrics) incTransportMessagesReceived(transport string, channelGroup string, size int) {
+func (m *metrics) incTransportMessagesReceived(transport string, frameType protocol.FrameType, channelGroup string, size int) {
 	labels := transportMessageLabels{
 		Transport:    transport,
 		ChannelGroup: channelGroup,
+		FrameType:    frameType.String(),
 	}
 	counters, ok := transportMessagesReceivedCache.Load(labels)
 	if !ok {
-		counterReceived := m.transportMessagesReceived.WithLabelValues(transport, channelGroup)
-		counterReceivedSize := m.transportMessagesReceivedSize.WithLabelValues(transport, channelGroup)
+		counterReceived := m.transportMessagesReceived.WithLabelValues(transport, labels.FrameType, channelGroup)
+		counterReceivedSize := m.transportMessagesReceivedSize.WithLabelValues(transport, labels.FrameType, channelGroup)
 		counters = transportMessagesReceived{
 			counterReceived:     counterReceived,
 			counterReceivedSize: counterReceivedSize,
@@ -297,19 +262,6 @@ func (m *metrics) incMessagesReceived(msgType string) {
 		m.messagesReceivedCountControl.Inc()
 	default:
 		m.messagesReceivedCount.WithLabelValues(msgType).Inc()
-	}
-}
-
-func (m *metrics) incMessagesBroadcasted(msgType string, numSubscribers int) {
-	switch msgType {
-	case "publication":
-		m.messagesBroadcastedPublication.Add(float64(numSubscribers))
-	case "join":
-		m.messagesBroadcastedJoin.Add(float64(numSubscribers))
-	case "leave":
-		m.messagesBroadcastedLeave.Add(float64(numSubscribers))
-	default:
-		m.messagesBroadcastedCount.WithLabelValues(msgType).Add(float64(numSubscribers))
 	}
 }
 
@@ -375,13 +327,6 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Subsystem: "node",
 		Name:      "messages_received_count",
 		Help:      "Number of messages received from engine.",
-	}, []string{"type"})
-
-	m.messagesBroadcastedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "node",
-		Name:      "messages_broadcasted_count",
-		Help:      "Number of messages broadcasted to subscribers.",
 	}, []string{"type"})
 
 	m.actionCount = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -482,28 +427,28 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Subsystem: "transport",
 		Name:      "messages_sent",
 		Help:      "Number of messages sent over specific transport.",
-	}, []string{"transport", "channel_namespace"})
+	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesSentSize = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_sent_size",
 		Help:      "Size in bytes of messages sent over specific transport.",
-	}, []string{"transport", "channel_namespace"})
+	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_received",
 		Help:      "Number of messages received over specific transport.",
-	}, []string{"transport", "channel_namespace"})
+	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesReceivedSize = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_received_size",
 		Help:      "Size in bytes of messages received over specific transport.",
-	}, []string{"transport", "channel_namespace"})
+	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication")
 	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join")
@@ -514,10 +459,6 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	m.messagesSentCountJoin = m.messagesSentCount.WithLabelValues("join")
 	m.messagesSentCountLeave = m.messagesSentCount.WithLabelValues("leave")
 	m.messagesSentCountControl = m.messagesSentCount.WithLabelValues("control")
-
-	m.messagesBroadcastedPublication = m.messagesBroadcastedCount.WithLabelValues("publication")
-	m.messagesBroadcastedJoin = m.messagesBroadcastedCount.WithLabelValues("join")
-	m.messagesBroadcastedLeave = m.messagesBroadcastedCount.WithLabelValues("leave")
 
 	m.actionCountAddClient = m.actionCount.WithLabelValues("add_client")
 	m.actionCountRemoveClient = m.actionCount.WithLabelValues("remove_client")
@@ -542,29 +483,26 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	m.transportConnectCountHTTPStream = m.transportConnectCount.WithLabelValues(transportHTTPStream)
 	m.transportConnectCountSSE = m.transportConnectCount.WithLabelValues(transportSSE)
 
-	labelForMethod := func(methodType commandMethodType) string {
-		return strings.ToLower(commandMethodTypeName[int32(methodType)])
+	labelForMethod := func(frameType protocol.FrameType) string {
+		return frameType.String()
 	}
 
-	m.commandDurationConnect = m.commandDurationSummary.WithLabelValues(labelForMethod(commandConnect))
-	m.commandDurationSubscribe = m.commandDurationSummary.WithLabelValues(labelForMethod(commandSubscribe))
-	m.commandDurationUnsubscribe = m.commandDurationSummary.WithLabelValues(labelForMethod(commandUnsubscribe))
-	m.commandDurationPublish = m.commandDurationSummary.WithLabelValues(labelForMethod(commandPublish))
-	m.commandDurationPresence = m.commandDurationSummary.WithLabelValues(labelForMethod(commandPresence))
-	m.commandDurationPresenceStats = m.commandDurationSummary.WithLabelValues(labelForMethod(commandPresenceStats))
-	m.commandDurationHistory = m.commandDurationSummary.WithLabelValues(labelForMethod(commandHistory))
-	m.commandDurationPing = m.commandDurationSummary.WithLabelValues(labelForMethod(commandPing))
-	m.commandDurationSend = m.commandDurationSummary.WithLabelValues(labelForMethod(commandSend))
-	m.commandDurationRPC = m.commandDurationSummary.WithLabelValues(labelForMethod(commandRpc))
-	m.commandDurationRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(commandRefresh))
-	m.commandDurationSubRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(commandSubRefresh))
+	m.commandDurationConnect = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeConnect))
+	m.commandDurationSubscribe = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeSubscribe))
+	m.commandDurationUnsubscribe = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeUnsubscribe))
+	m.commandDurationPublish = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePublish))
+	m.commandDurationPresence = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePresence))
+	m.commandDurationPresenceStats = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePresenceStats))
+	m.commandDurationHistory = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeHistory))
+	m.commandDurationPing = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePing))
+	m.commandDurationSend = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeSend))
+	m.commandDurationRPC = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeRPC))
+	m.commandDurationRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeRefresh))
+	m.commandDurationSubRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeSubRefresh))
 	m.commandDurationUnknown = m.commandDurationSummary.WithLabelValues("unknown")
 
 	var alreadyRegistered prometheus.AlreadyRegisteredError
 
-	if err := registry.Register(m.messagesBroadcastedCount); err != nil && !errors.As(err, &alreadyRegistered) {
-		return nil, err
-	}
 	if err := registry.Register(m.messagesSentCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
