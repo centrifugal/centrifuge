@@ -1153,7 +1153,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 	var frameType protocol.FrameType
 	defer func() {
 		channelGroup := "_"
-		if metricChannel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForMessagesReceived {
+		if metricChannel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForTransportMessagesReceived {
 			channelGroup = c.node.config.GetChannelNamespaceLabel(metricChannel)
 		}
 		c.node.metrics.incTransportMessagesReceived(c.transport.Name(), frameType, channelGroup, cmdSize)
@@ -1188,8 +1188,6 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 
 	if cmd.Connect != nil {
 		frameType = protocol.FrameTypeConnect
-	} else if cmd.Ping != nil {
-		frameType = protocol.FrameTypePing
 	} else if cmd.Subscribe != nil {
 		metricChannel = cmd.Subscribe.Channel
 		frameType = protocol.FrameTypeSubscribe
@@ -1296,7 +1294,7 @@ func (c *Client) writeEncodedCommandReply(ch string, frameType protocol.FrameTyp
 	}
 
 	item := queue.Item{Data: replyData, FrameType: frameType}
-	if ch != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForMessagesSent {
+	if ch != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForTransportMessagesSent {
 		item.Channel = ch
 	}
 
@@ -2451,7 +2449,7 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 			MaxQueueSize: c.node.config.ClientQueueMaxSize,
 			WriteFn: func(item queue.Item) error {
 				channelGroup := "_"
-				if item.Channel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForMessagesSent {
+				if item.Channel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForTransportMessagesSent {
 					channelGroup = c.node.config.GetChannelNamespaceLabel(item.Channel)
 				}
 				c.node.metrics.incTransportMessagesSent(c.transport.Name(), item.FrameType, channelGroup, len(item.Data))
@@ -2488,7 +2486,7 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 					}
 					messages = append(messages, items[i].Data)
 					channelGroup := "_"
-					if items[i].Channel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForMessagesSent {
+					if items[i].Channel != "" && c.node.config.GetChannelNamespaceLabel != nil && c.node.config.ChannelNamespaceLabelForTransportMessagesSent {
 						channelGroup = c.node.config.GetChannelNamespaceLabel(items[i].Channel)
 					}
 					c.node.metrics.incTransportMessagesSent(c.transport.Name(), items[i].FrameType, channelGroup, len(items[i].Data))

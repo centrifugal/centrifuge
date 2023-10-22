@@ -77,7 +77,6 @@ type metrics struct {
 	commandDurationPresence      prometheus.Observer
 	commandDurationPresenceStats prometheus.Observer
 	commandDurationHistory       prometheus.Observer
-	commandDurationPing          prometheus.Observer
 	commandDurationSend          prometheus.Observer
 	commandDurationRPC           prometheus.Observer
 	commandDurationRefresh       prometheus.Observer
@@ -103,8 +102,6 @@ func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Du
 		observer = m.commandDurationPresenceStats
 	case protocol.FrameTypeHistory:
 		observer = m.commandDurationHistory
-	case protocol.FrameTypePing:
-		observer = m.commandDurationPing
 	case protocol.FrameTypeSend:
 		observer = m.commandDurationSend
 	case protocol.FrameTypeRPC:
@@ -319,21 +316,21 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "messages_sent_count",
-		Help:      "Number of messages sent.",
+		Help:      "Number of messages sent by node to broker.",
 	}, []string{"type"})
 
 	m.messagesReceivedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "messages_received_count",
-		Help:      "Number of messages received from engine.",
+		Help:      "Number of messages received from broker.",
 	}, []string{"type"})
 
 	m.actionCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "action_count",
-		Help:      "Number of node actions called.",
+		Help:      "Number of various actions called.",
 	}, []string{"action"})
 
 	m.numClientsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -361,7 +358,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Namespace: metricsNamespace,
 		Subsystem: "node",
 		Name:      "num_nodes",
-		Help:      "Number of nodes in cluster.",
+		Help:      "Number of nodes in the cluster.",
 	})
 
 	m.buildInfoGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -426,28 +423,28 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_sent",
-		Help:      "Number of messages sent over specific transport.",
+		Help:      "Number of messages sent to client connections over specific transport.",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesSentSize = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_sent_size",
-		Help:      "Size in bytes of messages sent over specific transport.",
+		Help:      "Size in bytes of messages sent to client connections over specific transport.",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_received",
-		Help:      "Number of messages received over specific transport.",
+		Help:      "Number of messages received from client connections over specific transport.",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesReceivedSize = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_received_size",
-		Help:      "Size in bytes of messages received over specific transport.",
+		Help:      "Size in bytes of messages received from client connections over specific transport.",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication")
@@ -494,7 +491,6 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	m.commandDurationPresence = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePresence))
 	m.commandDurationPresenceStats = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePresenceStats))
 	m.commandDurationHistory = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeHistory))
-	m.commandDurationPing = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypePing))
 	m.commandDurationSend = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeSend))
 	m.commandDurationRPC = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeRPC))
 	m.commandDurationRefresh = m.commandDurationSummary.WithLabelValues(labelForMethod(protocol.FrameTypeRefresh))
