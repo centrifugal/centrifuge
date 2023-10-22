@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/FZambia/eagle v0.1.0
-	github.com/centrifugal/protocol v0.10.1-0.20231021200749-cfcfeb7e5916
+	github.com/centrifugal/protocol v0.11.0
 	github.com/google/uuid v1.3.1
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
