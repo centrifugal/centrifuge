@@ -62,9 +62,6 @@ type Config struct {
 	// for client-side subscription requests.
 	// Zero value means 255.
 	ChannelMaxLength int
-	// MetricsNamespace is a Prometheus metrics namespace to use for internal metrics.
-	// If not set then the default namespace name `centrifuge` will be used.
-	MetricsNamespace string
 	// HistoryMaxPublicationLimit allows limiting the maximum number of publications to be
 	// asked over client API history call. This is useful when you have large streams and
 	// want to prevent a massive number of missed messages to be sent to a client when
@@ -92,6 +89,25 @@ type Config struct {
 	// When zero Centrifuge uses default 30 days which we believe is more than enough
 	// for most use cases.
 	HistoryMetaTTL time.Duration
+
+	// MetricsNamespace is a Prometheus metrics namespace to use for internal metrics.
+	// If not set then the default namespace name "centrifuge" will be used.
+	MetricsNamespace string
+	// GetChannelNamespaceLabel if set will be used by Centrifuge to extract channel_namespace
+	// label for some channel related metrics. Make sure to maintain low cardinality of returned
+	// values to avoid issues with Prometheus performance. This function may introduce sufficient
+	// overhead since it's called in hot paths - so it should be fast. Usage of this function for
+	// specific metrics must be enabled over ChannelNamespaceLabelForTransportMessagesSent and
+	// ChannelNamespaceLabelForTransportMessagesReceived options.
+	GetChannelNamespaceLabel func(channel string) string
+	// ChannelNamespaceLabelForTransportMessagesSent enables using GetChannelNamespaceLabel
+	// function for extracting channel_namespace label for transport_messages_sent and
+	// transport_messages_sent_size.
+	ChannelNamespaceLabelForTransportMessagesSent bool
+	// ChannelNamespaceLabelForTransportMessagesReceived enables using GetChannelNamespaceLabel
+	// function for extracting channel_namespace label for transport_messages_received and
+	// transport_messages_received_size.
+	ChannelNamespaceLabelForTransportMessagesReceived bool
 }
 
 const (

@@ -3815,12 +3815,6 @@ func TestClient_HandleCommandV2(t *testing.T) {
 	}, 0)
 	require.True(t, ok)
 
-	ok = clientV2.HandleCommand(&protocol.Command{
-		Id:   4,
-		Ping: &protocol.PingRequest{},
-	}, 0)
-	require.True(t, ok)
-
 	// Only with id set - should result into a disconnect.
 	ok = clientV2.HandleCommand(&protocol.Command{
 		Id: 5,

@@ -99,7 +99,7 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 }
 
 func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	incTransportConnect(transportWebsocket)
+	s.node.metrics.incTransportConnect(transportWebsocket)
 
 	var protoType = ProtocolTypeJSON
 	var useFramePingPong bool
