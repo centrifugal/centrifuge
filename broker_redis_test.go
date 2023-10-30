@@ -1522,6 +1522,38 @@ func TestRedisHistoryIteration(t *testing.T) {
 	}
 }
 
+func TestRedisHistoryReversedNoMetaYet(t *testing.T) {
+	for _, tt := range redisTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := testNode(t)
+			broker := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisBroker(broker)
+			pubs, sp, err := broker.History(
+				randString(10),
+				HistoryOptions{
+					Filter:  HistoryFilter{Limit: 10, Reverse: true},
+					MetaTTL: 24 * time.Hour,
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), sp.Offset)
+			require.Len(t, pubs, 0)
+
+			pubs, sp, err = broker.History(
+				randString(10),
+				HistoryOptions{
+					Filter:  HistoryFilter{Limit: -1, Reverse: true},
+					MetaTTL: 24 * time.Hour,
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), sp.Offset)
+			require.Len(t, pubs, 0)
+		})
+	}
+}
+
 func TestRedisHistoryIterationReverse(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
