@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"net/http"
@@ -166,7 +165,6 @@ func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error
 }
 
 func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-
 	conn, err := websocket.Accept(rw, r, &websocket.AcceptOptions{
 		Subprotocols: []string{"centrifuge-protobuf"},
 	})
@@ -204,11 +202,11 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	}
 
 	for {
-		_, data, err := conn.Read(context.Background())
+		_, r, err := conn.Reader(context.Background())
 		if err != nil {
 			return
 		}
-		ok := centrifuge.HandleReadFrame(c, bytes.NewReader(data))
+		ok := centrifuge.HandleReadFrame(c, r)
 		if !ok {
 			return
 		}
