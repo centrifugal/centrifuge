@@ -49,7 +49,7 @@ func main() {
 		v, _ := strconv.Atoi(os.Getenv("MAX_FRAME_MESSAGES"))
 		maxMessagesInFrame = v
 	}
-	log.Printf("NumCPU: %d, Write Delay: %s, Max messages in frame: %d, Queue init cap: %d\n",
+	log.Printf("NumCPU: %d, WRITE_DELAY: %s, MAX_FRAME_MESSAGES: %d, QUEUE_INITIAL_CAP: %d\n",
 		runtime.NumCPU(), writeDelay, maxMessagesInFrame, queueInitialCap)
 
 	node, _ := centrifuge.New(centrifuge.Config{
