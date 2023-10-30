@@ -95,7 +95,7 @@ func (t *customWebsocketTransport) DisabledPushFlags() uint64 {
 func (t *customWebsocketTransport) PingPongConfig() centrifuge.PingPongConfig {
 	return centrifuge.PingPongConfig{
 		PingInterval: 25 * time.Second,
-		PongTimeout:  10 * time.Second,
+		PongTimeout:  8 * time.Second,
 	}
 }
 
@@ -112,6 +112,7 @@ func (t *customWebsocketTransport) Write(message []byte) error {
 			messageType = websocket.MessageBinary
 			protoType = protocol.TypeProtobuf
 		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
@@ -166,14 +167,16 @@ func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error
 
 func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
-	conn, err := websocket.Accept(rw, r, &websocket.AcceptOptions{})
+	conn, err := websocket.Accept(rw, r, &websocket.AcceptOptions{
+		Subprotocols: []string{"centrifuge-protobuf"},
+	})
 	if err != nil {
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
 
 	var protoType = centrifuge.ProtocolTypeJSON
-	if r.URL.Query().Get("format") == "protobuf" {
+	if conn.Subprotocol() == "centrifuge-protobuf" {
 		protoType = centrifuge.ProtocolTypeProtobuf
 	}
 
@@ -192,10 +195,13 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer func() { _ = closeFn() }()
-	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": websocketTransportName}))
-	defer func(started time.Time) {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started)}))
-	}(time.Now())
+
+	if s.node.LogEnabled(centrifuge.LogLevelDebug) {
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": websocketTransportName}))
+		defer func(started time.Time) {
+			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started)}))
+		}(time.Now())
+	}
 
 	for {
 		_, data, err := conn.Read(context.Background())
