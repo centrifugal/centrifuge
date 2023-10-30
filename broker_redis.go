@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	_ "embed"
+
 	"github.com/centrifugal/centrifuge/internal/convert"
 
 	"github.com/centrifugal/protocol"
@@ -219,150 +221,18 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	return b, nil
 }
 
-const (
-	// Add to history and optionally publish.
-	// KEYS[1] - history LIST key
-	// KEYS[2] - history meta HASH key
-	// ARGV[1] - message payload
-	// ARGV[2] - history size ltrim right bound
-	// ARGV[3] - history lifetime
-	// ARGV[4] - channel to publish message to if needed
-	// ARGV[5] - history meta key expiration time
-	// ARGV[6] - new epoch value if no epoch set yet
-	// ARGV[7] - command to publish (publish or spublish)
-	addHistoryListSource = `
-local epoch
-if redis.call('exists', KEYS[2]) ~= 0 then
-  epoch = redis.call("hget", KEYS[2], "e")
-end
-if epoch == false or epoch == nil then
-  epoch = ARGV[6]
-  redis.call("hset", KEYS[2], "e", epoch)
-end
-local offset = redis.call("hincrby", KEYS[2], "s", 1)
-if ARGV[5] ~= '0' then
-	redis.call("expire", KEYS[2], ARGV[5])
-end
-local payload = "__" .. "p1:" .. offset .. ":" .. epoch .. "__" .. ARGV[1]
-redis.call("lpush", KEYS[1], payload)
-redis.call("ltrim", KEYS[1], 0, ARGV[2])
-redis.call("expire", KEYS[1], ARGV[3])
-if ARGV[4] ~= '' then
-	redis.call(ARGV[7], ARGV[4], payload)
-end
-return {offset, epoch}
-		`
+var (
+	//go:embed internal/redis_lua/broker_history_add_list.lua
+	addHistoryListSource string
 
-	// addHistoryStreamSource contains a Lua script to save data to Redis stream and
-	// publish it into channel.
-	// KEYS[1] - history STREAM key
-	// KEYS[2] - stream meta HASH key
-	// ARGV[1] - message payload
-	// ARGV[2] - stream size
-	// ARGV[3] - stream lifetime
-	// ARGV[4] - channel to publish message to if needed
-	// ARGV[5] - history meta key expiration time
-	// ARGV[6] - new epoch value if no epoch set yet
-	// ARGV[7] - command to publish (publish or spublish)
-	addHistoryStreamSource = `
-local epoch
-if redis.call('exists', KEYS[2]) ~= 0 then
-  epoch = redis.call("hget", KEYS[2], "e")
-end
-if epoch == false or epoch == nil then
-  epoch = ARGV[6]
-  redis.call("hset", KEYS[2], "e", epoch)
-end
-local offset = redis.call("hincrby", KEYS[2], "s", 1)
-if ARGV[5] ~= '0' then
-	redis.call("expire", KEYS[2], ARGV[5])
-end
-redis.call("xadd", KEYS[1], "MAXLEN", ARGV[2], offset, "d", ARGV[1])
-redis.call("expire", KEYS[1], ARGV[3])
-if ARGV[4] ~= '' then
-	local payload = "__" .. "p1:" .. offset .. ":" .. epoch .. "__" .. ARGV[1]
-	redis.call(ARGV[7], ARGV[4], payload)
-end
-return {offset, epoch}
-	`
+	//go:embed internal/redis_lua/broker_history_add_stream.lua
+	addHistoryStreamSource string
 
-	// Retrieve channel history information from LIST.
-	// KEYS[1] - history LIST key
-	// KEYS[2] - list meta HASH key
-	// ARGV[1] - include publications into response
-	// ARGV[2] - publications list right bound
-	// ARGV[3] - list meta hash key expiration time
-	// ARGV[4] - new epoch value if no epoch set yet
-	historyListSource = `
-local offset = redis.call("hget", KEYS[2], "s")
-local epoch
-if redis.call('exists', KEYS[2]) ~= 0 then
-  epoch = redis.call("hget", KEYS[2], "e")
-end
-if epoch == false or epoch == nil then
-  epoch = ARGV[4]
-  redis.call("hset", KEYS[2], "e", epoch)
-end
-if ARGV[3] ~= '0' then
-	redis.call("expire", KEYS[2], ARGV[3])
-end
-local pubs = nil
-if ARGV[1] ~= "0" then
-	pubs = redis.call("lrange", KEYS[1], 0, ARGV[2])
-end
-return {offset, epoch, pubs}
-	`
+	//go:embed internal/redis_lua/broker_history_list.lua
+	historyListSource string
 
-	// Retrieve channel history information from STREAM.
-	// KEYS[1] - history STREAM key
-	// KEYS[2] - stream meta HASH key
-	// ARGV[1] - include publications into response
-	// ARGV[2] - offset
-	// ARGV[3] - limit
-	// ARGV[4] - reverse
-	// ARGV[5] - stream meta hash key expiration time
-	// ARGV[6] - new epoch value if no epoch set yet
-	historyStreamSource = `
-local offset = redis.call("hget", KEYS[2], "s")
-local epoch
-if redis.call('exists', KEYS[2]) ~= 0 then
-  epoch = redis.call("hget", KEYS[2], "e")
-end
-if epoch == false or epoch == nil then
-  epoch = ARGV[6]
-  redis.call("hset", KEYS[2], "e", epoch)
-end
-if ARGV[5] ~= '0' then
-	redis.call("expire", KEYS[2], ARGV[5])
-end
-local pubs = nil
-if ARGV[1] ~= "0" then
-  if ARGV[3] ~= "0" then
-	if ARGV[4] == '0' then
-    	pubs = redis.call("xrange", KEYS[1], ARGV[2], "+", "COUNT", ARGV[3])
-	else
-		local getOffset = offset
-		local incomingOffset = tonumber(ARGV[2])
-		if incomingOffset ~= 0 then
-			getOffset = incomingOffset
-		end
-		pubs = redis.call("xrevrange", KEYS[1], getOffset, "-", "COUNT", ARGV[3])
-	end
-  else
-	if ARGV[4] == '0' then
-		pubs = redis.call("xrange", KEYS[1], ARGV[2], "+")
-	else
-		local getOffset = offset
-		local incomingOffset = tonumber(ARGV[2])
-		if incomingOffset ~= 0 then
-			getOffset = incomingOffset
-		end
-		pubs = redis.call("xrevrange", KEYS[1], getOffset, "-")
-	end
-  end
-end
-return {offset, epoch, pubs}
-	`
+	//go:embed internal/redis_lua/broker_history_stream.lua
+	historyStreamSource string
 )
 
 func (b *RedisBroker) getShard(channel string) *shardWrapper {
