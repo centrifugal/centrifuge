@@ -20,7 +20,7 @@ if meta_expire ~= '0' then
   redis.call("expire", meta_key, meta_expire)
 end
 
-redis.call("xadd", stream_key, "MAXLEN", stream_size, offset, "d", message_payload)
+redis.call("xadd", stream_key, "MAXLEN", stream_size, top_offset, "d", message_payload)
 redis.call("expire", stream_key, stream_ttl)
 
 if channel ~= '' then
