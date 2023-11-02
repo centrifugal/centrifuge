@@ -14,6 +14,10 @@ if current_epoch == false then
   redis.call("hset", meta_key, "e", current_epoch, "s", "0")
 end
 
+if top_offset == false then
+  top_offset = 0
+end
+
 if meta_expire ~= '0' then
   redis.call("expire", meta_key, meta_expire)
 end
