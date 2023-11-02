@@ -13,7 +13,7 @@ local current_epoch, top_offset = stream_meta[1], stream_meta[2]
 if current_epoch == false then
   current_epoch = new_epoch_if_empty
   top_offset = 0
-  redis.call("hset", meta_key, "e", current_epoch, "s", "0")
+  redis.call("hset", meta_key, "e", current_epoch)
 end
 
 if top_offset == false then
