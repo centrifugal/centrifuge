@@ -74,7 +74,7 @@ require (
 	github.com/prometheus/procfs v0.11.1 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
 	github.com/quic-go/qtls-go1-20 v0.3.3 // indirect
-	github.com/redis/rueidis v1.0.20 // indirect
+	github.com/redis/rueidis v1.0.21 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.3.6 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
