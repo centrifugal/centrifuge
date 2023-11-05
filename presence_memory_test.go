@@ -102,6 +102,7 @@ func BenchmarkMemoryAddPresence_OneChannel_Parallel(b *testing.B) {
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
 	b.ResetTimer()
+	b.SetParallelism(getBenchParallelism())
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			err := e.AddPresence("channel", "uid", &ClientInfo{})
@@ -131,6 +132,7 @@ func BenchmarkMemoryPresence_OneChannel_Parallel(b *testing.B) {
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
 	_ = e.AddPresence("channel", "uid", &ClientInfo{})
+	b.SetParallelism(getBenchParallelism())
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

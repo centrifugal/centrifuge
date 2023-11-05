@@ -309,7 +309,7 @@ func BenchmarkMemoryPublish_1Ch(b *testing.B) {
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
 	rawData := protocol.Raw(`{"bench": true}`)
-	b.SetParallelism(128)
+	b.SetParallelism(getBenchParallelism())
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -327,7 +327,7 @@ func BenchmarkMemoryPublish_History_1Ch(b *testing.B) {
 
 	rawData := protocol.Raw(`{"bench": true}`)
 	chOpts := PublishOptions{HistorySize: 100, HistoryTTL: 60 * time.Second}
-	b.SetParallelism(128)
+	b.SetParallelism(getBenchParallelism())
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
