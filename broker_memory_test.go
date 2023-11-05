@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -9,6 +10,20 @@ import (
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
+
+const defaultParallelism = 128
+
+func getBenchParallelism() int {
+	parallelism := os.Getenv("PARALLELISM")
+	if parallelism == "" {
+		return defaultParallelism
+	}
+	p, err := strconv.Atoi(parallelism)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
 
 func testMemoryBroker() *MemoryBroker {
 	n, err := New(Config{
