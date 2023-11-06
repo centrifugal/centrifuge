@@ -125,6 +125,30 @@ func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
 	}
 }
 
+func BenchmarkRedisAddPresence_ManyCh(b *testing.B) {
+	for _, tt := range benchRedisTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			node := benchNode(b)
+			pm := newTestRedisPresenceManager(b, node, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisPresenceManager(pm)
+			b.SetParallelism(getBenchParallelism())
+			j := int32(0)
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					jj := atomic.AddInt32(&j, 1)
+					channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
+					err := pm.AddPresence(channel, "uid", &ClientInfo{})
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
+}
+
 func BenchmarkRedisPresence_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {

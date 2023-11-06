@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -74,17 +75,41 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool) 
 
 func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
 	tb.Helper()
+
+	numClusterNodes := 3
+	numClusterNodesStr := os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS_NUM_NODES")
+	if numClusterNodesStr != "" {
+		num, err := strconv.Atoi(numClusterNodesStr)
+		require.NoError(tb, err)
+		numClusterNodes = num
+	}
+
+	var clusterAddresses []string
+
+	for i := 0; i < numClusterNodes; i++ {
+		clusterAddresses = append(clusterAddresses, net.JoinHostPort("127.0.0.1", strconv.Itoa(7000+i)))
+	}
+
 	redisConf := RedisShardConfig{
-		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		ClusterAddresses: clusterAddresses,
 		IOTimeout:        10 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
-	e, err := NewRedisBroker(n, RedisBrokerConfig{
+	brokerConfig := RedisBrokerConfig{
 		Prefix:   prefix,
 		UseLists: !useStreams,
 		Shards:   []*RedisShard{s},
-	})
+	}
+
+	numClusterShardsStr := os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS_NUM_SHARDS")
+	if numClusterShardsStr != "" {
+		num, err := strconv.Atoi(numClusterShardsStr)
+		require.NoError(tb, err)
+		brokerConfig.numClusterShards = num
+	}
+
+	e, err := NewRedisBroker(n, brokerConfig)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -139,7 +164,6 @@ func TestRedisBrokerSentinel(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-
 }
 
 type redisTest struct {
@@ -149,10 +173,10 @@ type redisTest struct {
 }
 
 var redisTests = []redisTest{
-	{"lists", false, false},
-	{"streams", true, false},
-	{"lists_cluster", false, true},
-	{"streams_cluster", true, true},
+	{"list", false, false},
+	{"strm", true, false},
+	{"list_cluster", false, true},
+	{"strm_cluster", true, true},
 }
 
 var benchRedisTests = func() (tests []redisTest) {
@@ -163,9 +187,9 @@ var benchRedisTests = func() (tests []redisTest) {
 		for _, useStream := range []bool{false, true} {
 			var name string
 			if useStream {
-				name = "streams"
+				name = "strm"
 			} else {
-				name = "lists"
+				name = "list"
 			}
 			if useCluster {
 				name += "_cluster"
@@ -1236,7 +1260,7 @@ func BenchmarkRedisPublish_1Ch(b *testing.B) {
 	}
 }
 
-const benchmarkNumDifferentChannels = 1000
+const benchmarkNumDifferentChannels = 1024
 
 func BenchmarkRedisPublish_ManyCh(b *testing.B) {
 	for _, tt := range benchRedisTests {
@@ -1326,10 +1350,10 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 		UseCluster bool
 	}
 	tests := []test{
-		{"non_cluster", false},
+		{"no_cluster", false},
 	}
 	if os.Getenv("CENTRIFUGE_REDIS_CLUSTER_BENCHMARKS") != "" {
-		tests = append(tests, test{"with_cluster", true})
+		tests = append(tests, test{"in_cluster", true})
 	}
 
 	for _, tt := range tests {
@@ -1344,7 +1368,7 @@ func BenchmarkRedisSubscribe(b *testing.B) {
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
 					ii := atomic.AddInt32(&i, 1)
-					err := broker.Subscribe("subscribe" + strconv.Itoa(int(ii)))
+					err := broker.Subscribe("subscribe" + strconv.Itoa(int(ii)%benchmarkNumDifferentChannels))
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -1624,8 +1648,8 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 
 			node1.SetBroker(b1)
 
-			numChannels := 1024
-			pubCh := make(chan struct{}, 1024)
+			numChannels := benchmarkNumDifferentChannels
+			pubCh := make(chan struct{}, numChannels)
 			brokerEventHandler := &testBrokerEventHandler{
 				HandleControlFunc: func(bytes []byte) error {
 					return nil
