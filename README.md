@@ -231,7 +231,7 @@ Open several browser tabs with http://localhost:8000 and see chat in action.
 
 While this example is only the top of an iceberg, it should give you a good insight on library API. Check out [examples](https://github.com/centrifugal/centrifuge/tree/master/_examples) folder for more. We recommend to start looking from [chat_json](https://github.com/centrifugal/centrifuge/tree/master/_examples/chat_json) example, which extends the basic example shown here and demonstrates many possibilities of Centrifuge protocol:
 
-[![Chat example](https://cdn.rawgit.com/centrifugal/centrifuge/master/_examples/chat_json/demo.gif "Chat Demo")](https://github.com/centrifugal/centrifuge/tree/master/_examples/chat_json)
+[![Chat example](https://raw.githubusercontent.com/centrifugal/centrifuge/master/_examples/chat_json/demo.gif "Chat Demo")](https://github.com/centrifugal/centrifuge/tree/master/_examples/chat_json)
 
 Keep in mind that Centrifuge library is not a framework to build chat applications. It's a **general purpose real-time transport** for your messages with some helpful primitives. You can build many kinds of real-time apps on top of this library including chats but depending on application you may need to write business logic yourself.
 
