@@ -16,6 +16,14 @@ func WithHistory(size int, ttl time.Duration, metaTTL ...time.Duration) PublishO
 	}
 }
 
+// WithIdempotencyKey tells Broker the idempotency key for the publication.
+// See PublishOptions.IdempotencyKey.
+func WithIdempotencyKey(key string) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.IdempotencyKey = key
+	}
+}
+
 // WithClientInfo adds ClientInfo to Publication.
 func WithClientInfo(info *ClientInfo) PublishOption {
 	return func(opts *PublishOptions) {

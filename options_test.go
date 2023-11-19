@@ -15,6 +15,13 @@ func TestWithHistory(t *testing.T) {
 	require.Equal(t, time.Second, opts.HistoryTTL)
 }
 
+func TestWithIdempotencyKey(t *testing.T) {
+	opt := WithIdempotencyKey("ik")
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, "ik", opts.IdempotencyKey)
+}
+
 func TestWithMeta(t *testing.T) {
 	opt := WithTags(map[string]string{"test": "value"})
 	opts := &PublishOptions{}
