@@ -620,17 +620,16 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	}
 
 	idempotencyKey := opts.IdempotencyKey
-	var resultKey channelID
+	resultKey := b.resultCacheKey(s.shard, ch, idempotencyKey)
 	var resultExpire string
 	if idempotencyKey != "" {
-		resultKey = b.resultCacheKey(s.shard, ch)
 		resultExpire = strconv.Itoa(idempotentResulExpireSeconds)
 	}
 
 	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {
 		var resp rueidis.RedisResult
 		if useShardedPublish {
-			if resultKey == "" {
+			if resultExpire == "" {
 				cmd := s.shard.client.B().Spublish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
 				resp = s.shard.client.Do(context.Background(), cmd)
 			} else {
@@ -647,7 +646,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 				)
 			}
 		} else {
-			if resultKey == "" {
+			if resultExpire == "" {
 				cmd := s.shard.client.B().Publish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
 				resp = s.shard.client.Do(context.Background(), cmd)
 			} else {
@@ -900,7 +899,7 @@ func (b *RedisBroker) nodeChannelID(nodeID string) channelID {
 	return channelID(b.config.Prefix + redisNodeChannelPrefix + nodeID)
 }
 
-func (b *RedisBroker) resultCacheKey(s *RedisShard, ch string) channelID {
+func (b *RedisBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) channelID {
 	if s.useCluster {
 		if b.config.numClusterShards > 0 {
 			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.numClusterShards)) + "}." + ch
@@ -908,7 +907,7 @@ func (b *RedisBroker) resultCacheKey(s *RedisShard, ch string) channelID {
 			ch = "{" + ch + "}"
 		}
 	}
-	return channelID(b.config.Prefix + ".result." + ch)
+	return channelID(b.config.Prefix + ".result." + ch + "." + idempotencyKey)
 }
 
 func (b *RedisBroker) historyListKey(s *RedisShard, ch string) channelID {

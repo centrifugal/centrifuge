@@ -10,7 +10,7 @@ local new_epoch_if_empty = ARGV[6]
 local publish_command = ARGV[7]
 local result_key_expire = ARGV[8]
 
-if result_key ~= '' then
+if result_key_expire ~= '' then
     local stream_meta = redis.call("hmget", result_key, "e", "s")
     local result_epoch, result_offset = stream_meta[1], stream_meta[2]
     if result_epoch ~= false then
@@ -37,7 +37,7 @@ if channel ~= '' then
   local payload = "__" .. "p1:" .. top_offset .. ":" .. current_epoch .. "__" .. message_payload
   redis.call(publish_command, channel, payload)
 
-  if result_key ~= '' then
+  if result_key_expire ~= '' then
     redis.call("hset", result_key, "e", current_epoch, "s", top_offset)
     redis.call("expire", result_key, result_key_expire)
   end
