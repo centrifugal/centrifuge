@@ -113,6 +113,48 @@ func TestMemoryBrokerPublishHistory(t *testing.T) {
 	require.Equal(t, 1, len(pubs))
 }
 
+func TestMemoryBrokerPublishIdempotent(t *testing.T) {
+	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
+	require.NotEqual(t, nil, e.historyHub)
+
+	// Test publish with history and with idempotency key.
+	sp1, err := e.Publish("channel", testPublicationData(), PublishOptions{
+		HistorySize:    4,
+		HistoryTTL:     time.Second,
+		IdempotencyKey: "test",
+	})
+	require.NoError(t, err)
+	pubs, _, err := e.History("channel", HistoryOptions{
+		Filter: HistoryFilter{
+			Limit: -1,
+			Since: nil,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(pubs))
+
+	// Publish with same key.
+	sp2, err := e.Publish("channel", testPublicationData(), PublishOptions{
+		HistorySize:    4,
+		HistoryTTL:     time.Second,
+		IdempotencyKey: "test",
+	})
+	require.NoError(t, err)
+	pubs, _, err = e.History("channel", HistoryOptions{
+		Filter: HistoryFilter{
+			Limit: -1,
+			Since: nil,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, len(pubs))
+
+	// Make sure stream positions match.
+	require.Equal(t, sp1, sp2)
+}
+
 func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()

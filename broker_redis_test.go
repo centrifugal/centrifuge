@@ -289,6 +289,62 @@ func TestRedisBroker(t *testing.T) {
 	}
 }
 
+func TestRedisBrokerPublishIdempotent(t *testing.T) {
+	for _, tt := range redisTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := testNode(t)
+
+			b := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisBroker(b)
+
+			_, err := b.Publish("channel", testPublicationData(), PublishOptions{
+				IdempotencyKey: "publish_no_history",
+			})
+			require.NoError(t, err)
+
+			_, err = b.Publish("channel", testPublicationData(), PublishOptions{
+				IdempotencyKey: "publish_no_history",
+			})
+			require.NoError(t, err)
+
+			rawData := []byte("{}")
+
+			// test adding history
+			sp1, err := b.Publish("channel", rawData, PublishOptions{
+				HistorySize:    4,
+				HistoryTTL:     time.Second,
+				IdempotencyKey: "publish_with_history",
+			})
+			require.NoError(t, err)
+			pubs, _, err := b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, len(pubs))
+
+			// test publish with  history and same idempotency key.
+			sp2, err := b.Publish("channel", rawData, PublishOptions{
+				HistorySize:    4,
+				HistoryTTL:     time.Second,
+				IdempotencyKey: "publish_with_history",
+			})
+			require.NoError(t, err)
+			pubs, _, err = b.History("channel", HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, len(pubs))
+
+			require.Equal(t, sp1, sp2)
+		})
+	}
+}
+
 func TestRedisCurrentPosition(t *testing.T) {
 	for _, tt := range redisTests {
 		t.Run(tt.Name, func(t *testing.T) {
@@ -580,8 +636,6 @@ func randString(n int) string {
 // We just expect +-equal distribution and keeping most of chans on
 // the same shard after resharding.
 func TestRedisConsistentIndex(t *testing.T) {
-
-	rand.Seed(time.Now().UnixNano())
 	numChans := 10000
 	numShards := 10
 	chans := make([]string, numChans)

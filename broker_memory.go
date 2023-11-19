@@ -33,6 +33,12 @@ type MemoryBroker struct {
 
 	closeOnce sync.Once
 	closeCh   chan struct{}
+
+	resultKeyExpSeconds int64
+	nextExpireCheck     int64
+	resultExpireQueue   priority.Queue
+	resultCache         map[string]StreamPosition
+	resultCacheMu       sync.RWMutex
 }
 
 var _ Broker = (*MemoryBroker)(nil)
@@ -42,6 +48,8 @@ type MemoryBrokerConfig struct{}
 
 const numPubLocks = 4096
 
+const idempotentResulExpireSeconds = 30
+
 // NewMemoryBroker initializes MemoryBroker.
 func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 	pubLocks := make(map[int]*sync.Mutex, numPubLocks)
@@ -50,10 +58,12 @@ func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 	}
 	closeCh := make(chan struct{})
 	b := &MemoryBroker{
-		node:       n,
-		historyHub: newHistoryHub(n.config.HistoryMetaTTL, closeCh),
-		pubLocks:   pubLocks,
-		closeCh:    closeCh,
+		node:                n,
+		historyHub:          newHistoryHub(n.config.HistoryMetaTTL, closeCh),
+		pubLocks:            pubLocks,
+		closeCh:             closeCh,
+		resultCache:         map[string]StreamPosition{},
+		resultKeyExpSeconds: idempotentResulExpireSeconds,
 	}
 	return b, nil
 }
@@ -61,6 +71,7 @@ func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 // Run runs memory broker.
 func (b *MemoryBroker) Run(h BrokerEventHandler) error {
 	b.eventHandler = h
+	go b.expireResultCache()
 	b.historyHub.runCleanups()
 	return nil
 }
@@ -84,6 +95,15 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 	mu.Lock()
 	defer mu.Unlock()
 
+	if opts.IdempotencyKey != "" {
+		b.resultCacheMu.RLock()
+		if res, ok := b.resultCache[opts.IdempotencyKey]; ok {
+			b.resultCacheMu.RUnlock()
+			return res, nil
+		}
+		b.resultCacheMu.RUnlock()
+	}
+
 	pub := &Publication{
 		Data: data,
 		Info: opts.ClientInfo,
@@ -95,9 +115,57 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 			return StreamPosition{}, err
 		}
 		pub.Offset = streamTop.Offset
+		if opts.IdempotencyKey != "" {
+			b.saveToResultCache(opts.IdempotencyKey, streamTop)
+		}
 		return streamTop, b.eventHandler.HandlePublication(ch, pub, streamTop)
 	}
-	return StreamPosition{}, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
+	streamPosition := StreamPosition{}
+	if opts.IdempotencyKey != "" {
+		b.saveToResultCache(opts.IdempotencyKey, streamPosition)
+	}
+	return streamPosition, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
+}
+
+func (b *MemoryBroker) saveToResultCache(key string, sp StreamPosition) {
+	b.resultCacheMu.Lock()
+	b.resultCache[key] = sp
+	expireAt := time.Now().Unix() + b.resultKeyExpSeconds
+	heap.Push(&b.resultExpireQueue, &priority.Item{Value: key, Priority: expireAt})
+	if b.nextExpireCheck == 0 || b.nextExpireCheck > expireAt {
+		b.nextExpireCheck = expireAt
+	}
+	b.resultCacheMu.Unlock()
+}
+
+func (b *MemoryBroker) expireResultCache() {
+	var nextExpireCheck int64
+	for {
+		select {
+		case <-time.After(time.Second):
+		case <-b.closeCh:
+			return
+		}
+		b.resultCacheMu.Lock()
+		if b.nextExpireCheck == 0 || b.nextExpireCheck > time.Now().Unix() {
+			b.resultCacheMu.Unlock()
+			continue
+		}
+		nextExpireCheck = 0
+		for b.resultExpireQueue.Len() > 0 {
+			item := heap.Pop(&b.resultExpireQueue).(*priority.Item)
+			expireAt := item.Priority
+			if expireAt > time.Now().Unix() {
+				heap.Push(&b.resultExpireQueue, item)
+				nextExpireCheck = expireAt
+				break
+			}
+			key := item.Value
+			delete(b.resultCache, key)
+		}
+		b.nextExpireCheck = nextExpireCheck
+		b.resultCacheMu.Unlock()
+	}
 }
 
 // PublishJoin - see Broker interface description.

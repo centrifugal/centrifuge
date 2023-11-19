@@ -103,6 +103,10 @@ type PublishOptions struct {
 	ClientInfo *ClientInfo
 	// Tags to set Publication.Tags.
 	Tags map[string]string
+	// IdempotencyKey is an optional key for idempotent publish. Broker implementation
+	// may cache these keys for some time to prevent duplicate publications. In this case
+	// the returned result is the same as from the previous publication with the same key.
+	IdempotencyKey string
 }
 
 // Broker is responsible for PUB/SUB mechanics.
