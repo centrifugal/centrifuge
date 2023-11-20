@@ -113,11 +113,64 @@ func TestMemoryBrokerPublishHistory(t *testing.T) {
 	require.Equal(t, 1, len(pubs))
 }
 
+func TestMemoryBrokerResultCacheExpires(t *testing.T) {
+	t.Parallel()
+	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
+	e.resultKeyExpSeconds = 1
+
+	// Test publish with history and with idempotency key.
+	_, err := e.Publish("channel", testPublicationData(), PublishOptions{
+		IdempotencyKey: "test",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, e.resultCache, 1)
+	time.Sleep(2 * time.Second)
+	require.Len(t, e.resultCache, 0)
+}
+
 func TestMemoryBrokerPublishIdempotent(t *testing.T) {
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
-	require.NotEqual(t, nil, e.historyHub)
+	numPubs := 0
+
+	e.eventHandler = &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+			numPubs++
+			return nil
+		},
+	}
+
+	// Test publish with history and with idempotency key.
+	_, err := e.Publish("channel", testPublicationData(), PublishOptions{
+		IdempotencyKey: "test",
+	})
+	require.NoError(t, err)
+
+	// Publish with same key.
+	_, err = e.Publish("channel", testPublicationData(), PublishOptions{
+		IdempotencyKey: "test",
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, numPubs)
+}
+
+func TestMemoryBrokerPublishIdempotentWithHistory(t *testing.T) {
+	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
+	numPubs := 0
+
+	e.eventHandler = &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+			numPubs++
+			return nil
+		},
+	}
 
 	// Test publish with history and with idempotency key.
 	sp1, err := e.Publish("channel", testPublicationData(), PublishOptions{
@@ -153,6 +206,7 @@ func TestMemoryBrokerPublishIdempotent(t *testing.T) {
 
 	// Make sure stream positions match.
 	require.Equal(t, sp1, sp2)
+	require.Equal(t, 1, numPubs)
 }
 
 func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
