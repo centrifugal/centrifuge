@@ -126,9 +126,13 @@ func TestMemoryBrokerResultCacheExpires(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	e.resultCacheMu.Lock()
 	require.Len(t, e.resultCache, 1)
+	e.resultCacheMu.Unlock()
 	time.Sleep(2 * time.Second)
+	e.resultCacheMu.Lock()
 	require.Len(t, e.resultCache, 0)
+	e.resultCacheMu.Unlock()
 }
 
 func TestMemoryBrokerPublishIdempotent(t *testing.T) {
