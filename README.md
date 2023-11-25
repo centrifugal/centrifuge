@@ -114,7 +114,7 @@ func main() {
 	// This handler should not block – so do minimal work here, set required
 	// connection event handlers and return.
 	node.OnConnect(func(client *centrifuge.Client) {
-		// In our example transport will always be Websocket but it can also be SockJS.
+		// In our example transport will always be Websocket but it can be different.
 		transportName := client.Transport().Name()
 		// In our example clients connect with JSON protocol but it can also be Protobuf.
 		transportProto := client.Transport().Protocol()
