@@ -96,12 +96,9 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 	defer mu.Unlock()
 
 	if opts.IdempotencyKey != "" {
-		b.resultCacheMu.RLock()
-		if res, ok := b.resultCache[opts.IdempotencyKey]; ok {
-			b.resultCacheMu.RUnlock()
+		if res, ok := b.getResultFromCache(ch, opts.IdempotencyKey); ok {
 			return res, nil
 		}
-		b.resultCacheMu.RUnlock()
 	}
 
 	pub := &Publication{
@@ -116,26 +113,33 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 		}
 		pub.Offset = streamTop.Offset
 		if opts.IdempotencyKey != "" {
-			b.saveToResultCache(opts.IdempotencyKey, streamTop)
+			b.saveResultToCache(ch, opts.IdempotencyKey, streamTop)
 		}
 		return streamTop, b.eventHandler.HandlePublication(ch, pub, streamTop)
 	}
 	streamPosition := StreamPosition{}
 	if opts.IdempotencyKey != "" {
-		b.saveToResultCache(opts.IdempotencyKey, streamPosition)
+		b.saveResultToCache(ch, opts.IdempotencyKey, streamPosition)
 	}
 	return streamPosition, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
 }
 
-func (b *MemoryBroker) saveToResultCache(key string, sp StreamPosition) {
+func (b *MemoryBroker) getResultFromCache(ch string, key string) (StreamPosition, bool) {
+	b.resultCacheMu.RLock()
+	defer b.resultCacheMu.RUnlock()
+	res, ok := b.resultCache[ch+"_"+key]
+	return res, ok
+}
+
+func (b *MemoryBroker) saveResultToCache(ch string, key string, sp StreamPosition) {
 	b.resultCacheMu.Lock()
-	b.resultCache[key] = sp
+	defer b.resultCacheMu.Unlock()
+	b.resultCache[ch+"_"+key] = sp
 	expireAt := time.Now().Unix() + b.resultKeyExpSeconds
 	heap.Push(&b.resultExpireQueue, &priority.Item{Value: key, Priority: expireAt})
 	if b.nextExpireCheck == 0 || b.nextExpireCheck > expireAt {
 		b.nextExpireCheck = expireAt
 	}
-	b.resultCacheMu.Unlock()
 }
 
 func (b *MemoryBroker) expireResultCache() {
