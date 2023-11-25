@@ -134,9 +134,10 @@ func (b *MemoryBroker) getResultFromCache(ch string, key string) (StreamPosition
 func (b *MemoryBroker) saveResultToCache(ch string, key string, sp StreamPosition) {
 	b.resultCacheMu.Lock()
 	defer b.resultCacheMu.Unlock()
-	b.resultCache[ch+"_"+key] = sp
+	cacheKey := ch + "_" + key
+	b.resultCache[cacheKey] = sp
 	expireAt := time.Now().Unix() + b.resultKeyExpSeconds
-	heap.Push(&b.resultExpireQueue, &priority.Item{Value: key, Priority: expireAt})
+	heap.Push(&b.resultExpireQueue, &priority.Item{Value: cacheKey, Priority: expireAt})
 	if b.nextExpireCheck == 0 || b.nextExpireCheck > expireAt {
 		b.nextExpireCheck = expireAt
 	}
