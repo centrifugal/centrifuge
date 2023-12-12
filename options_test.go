@@ -22,6 +22,13 @@ func TestWithIdempotencyKey(t *testing.T) {
 	require.Equal(t, "ik", opts.IdempotencyKey)
 }
 
+func TestWithIdempotentResultTTL(t *testing.T) {
+	opt := WithIdempotentResultTTL(time.Minute)
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, time.Minute, opts.IdempotentResultTTL)
+}
+
 func TestWithMeta(t *testing.T) {
 	opt := WithTags(map[string]string{"test": "value"})
 	opts := &PublishOptions{}

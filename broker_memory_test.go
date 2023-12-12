@@ -117,12 +117,11 @@ func TestMemoryBrokerResultCacheExpires(t *testing.T) {
 	t.Parallel()
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
-
-	e.resultKeyExpSeconds = 1
-
+	
 	// Test publish with history and with idempotency key.
 	_, err := e.Publish("channel", testPublicationData(), PublishOptions{
-		IdempotencyKey: "test",
+		IdempotencyKey:      "test",
+		IdempotentResultTTL: time.Second,
 	})
 	require.NoError(t, err)
 

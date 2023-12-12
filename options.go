@@ -24,6 +24,14 @@ func WithIdempotencyKey(key string) PublishOption {
 	}
 }
 
+// WithIdempotentResultTTL sets the time of expiration for results of idempotent publications.
+// See PublishOptions.IdempotentResultTTL for more description and defaults.
+func WithIdempotentResultTTL(ttl time.Duration) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.IdempotentResultTTL = ttl
+	}
+}
+
 // WithClientInfo adds ClientInfo to Publication.
 func WithClientInfo(info *ClientInfo) PublishOption {
 	return func(opts *PublishOptions) {

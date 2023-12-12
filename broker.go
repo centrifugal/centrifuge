@@ -107,6 +107,11 @@ type PublishOptions struct {
 	// may cache these keys for some time to prevent duplicate publications. In this case
 	// the returned result is the same as from the previous publication with the same key.
 	IdempotencyKey string
+	// IdempotentResultTTL sets the time of expiration for results of idempotent publications
+	// (publications with idempotency key provided). Memory and Redis engines implement this TTL
+	// with second precision, so don't set something less than one second here. By default,
+	// Centrifuge uses 5 minutes as idempotent result TTL.
+	IdempotentResultTTL time.Duration
 }
 
 // Broker is responsible for PUB/SUB mechanics.

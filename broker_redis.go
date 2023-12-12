@@ -623,7 +623,11 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	resultKey := b.resultCacheKey(s.shard, ch, idempotencyKey)
 	var resultExpire string
 	if idempotencyKey != "" {
-		resultExpire = strconv.Itoa(idempotentResulExpireSeconds)
+		if opts.IdempotentResultTTL != 0 {
+			resultExpire = strconv.Itoa(int(opts.IdempotentResultTTL.Seconds()))
+		} else {
+			resultExpire = strconv.Itoa(defaultIdempotentResultExpireSeconds)
+		}
 	}
 
 	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {

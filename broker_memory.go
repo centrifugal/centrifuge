@@ -34,11 +34,10 @@ type MemoryBroker struct {
 	closeOnce sync.Once
 	closeCh   chan struct{}
 
-	resultKeyExpSeconds int64
-	nextExpireCheck     int64
-	resultExpireQueue   priority.Queue
-	resultCache         map[string]StreamPosition
-	resultCacheMu       sync.RWMutex
+	nextExpireCheck   int64
+	resultExpireQueue priority.Queue
+	resultCache       map[string]StreamPosition
+	resultCacheMu     sync.RWMutex
 }
 
 var _ Broker = (*MemoryBroker)(nil)
@@ -48,7 +47,7 @@ type MemoryBrokerConfig struct{}
 
 const numPubLocks = 4096
 
-const idempotentResulExpireSeconds = 30
+const defaultIdempotentResultExpireSeconds = 300
 
 // NewMemoryBroker initializes MemoryBroker.
 func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
@@ -58,12 +57,11 @@ func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 	}
 	closeCh := make(chan struct{})
 	b := &MemoryBroker{
-		node:                n,
-		historyHub:          newHistoryHub(n.config.HistoryMetaTTL, closeCh),
-		pubLocks:            pubLocks,
-		closeCh:             closeCh,
-		resultCache:         map[string]StreamPosition{},
-		resultKeyExpSeconds: idempotentResulExpireSeconds,
+		node:        n,
+		historyHub:  newHistoryHub(n.config.HistoryMetaTTL, closeCh),
+		pubLocks:    pubLocks,
+		closeCh:     closeCh,
+		resultCache: map[string]StreamPosition{},
 	}
 	return b, nil
 }
@@ -113,13 +111,21 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 		}
 		pub.Offset = streamTop.Offset
 		if opts.IdempotencyKey != "" {
-			b.saveResultToCache(ch, opts.IdempotencyKey, streamTop)
+			resultExpireSeconds := int64(defaultIdempotentResultExpireSeconds)
+			if opts.IdempotentResultTTL != 0 {
+				resultExpireSeconds = int64(opts.IdempotentResultTTL.Seconds())
+			}
+			b.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireSeconds)
 		}
 		return streamTop, b.eventHandler.HandlePublication(ch, pub, streamTop)
 	}
 	streamPosition := StreamPosition{}
 	if opts.IdempotencyKey != "" {
-		b.saveResultToCache(ch, opts.IdempotencyKey, streamPosition)
+		resultExpireSeconds := int64(defaultIdempotentResultExpireSeconds)
+		if opts.IdempotentResultTTL != 0 {
+			resultExpireSeconds = int64(opts.IdempotentResultTTL.Seconds())
+		}
+		b.saveResultToCache(ch, opts.IdempotencyKey, streamPosition, resultExpireSeconds)
 	}
 	return streamPosition, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
 }
@@ -131,12 +137,12 @@ func (b *MemoryBroker) getResultFromCache(ch string, key string) (StreamPosition
 	return res, ok
 }
 
-func (b *MemoryBroker) saveResultToCache(ch string, key string, sp StreamPosition) {
+func (b *MemoryBroker) saveResultToCache(ch string, key string, sp StreamPosition, resultExpireSeconds int64) {
 	b.resultCacheMu.Lock()
 	defer b.resultCacheMu.Unlock()
 	cacheKey := ch + "_" + key
 	b.resultCache[cacheKey] = sp
-	expireAt := time.Now().Unix() + b.resultKeyExpSeconds
+	expireAt := time.Now().Unix() + resultExpireSeconds
 	heap.Push(&b.resultExpireQueue, &priority.Item{Value: cacheKey, Priority: expireAt})
 	if b.nextExpireCheck == 0 || b.nextExpireCheck > expireAt {
 		b.nextExpireCheck = expireAt
