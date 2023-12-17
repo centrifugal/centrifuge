@@ -88,14 +88,14 @@ func (b *MemoryBroker) pubLock(ch string) *sync.Mutex {
 
 // Publish adds message into history hub and calls node method to handle message.
 // We don't have any PUB/SUB here as Memory Engine is single node only.
-func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, error) {
+func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
 	mu := b.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
 
 	if opts.IdempotencyKey != "" {
 		if res, ok := b.getResultFromCache(ch, opts.IdempotencyKey); ok {
-			return res, nil
+			return res, true, nil
 		}
 	}
 
@@ -107,7 +107,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {
 		streamTop, err := b.historyHub.add(ch, pub, opts)
 		if err != nil {
-			return StreamPosition{}, err
+			return StreamPosition{}, false, err
 		}
 		pub.Offset = streamTop.Offset
 		if opts.IdempotencyKey != "" {
@@ -117,7 +117,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 			}
 			b.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireSeconds)
 		}
-		return streamTop, b.eventHandler.HandlePublication(ch, pub, streamTop)
+		return streamTop, false, b.eventHandler.HandlePublication(ch, pub, streamTop)
 	}
 	streamPosition := StreamPosition{}
 	if opts.IdempotencyKey != "" {
@@ -127,7 +127,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 		}
 		b.saveResultToCache(ch, opts.IdempotencyKey, streamPosition, resultExpireSeconds)
 	}
-	return streamPosition, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
+	return streamPosition, false, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
 }
 
 func (b *MemoryBroker) getResultFromCache(ch string, key string) (StreamPosition, bool) {

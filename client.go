@@ -2750,7 +2750,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 			// Client provided subscribe request with recover flag on. Try to recover missed
 			// publications automatically from history (we suppose here that history configured wisely).
-			historyResult, err := c.node.recoverHistory(channel, StreamPosition{cmdOffset, cmdEpoch}, reply.Options.HistoryMetaTTL)
+			historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
 			if err != nil {
 				if errors.Is(err, ErrorUnrecoverablePosition) {
 					// Result contains stream position in case of ErrorUnrecoverablePosition

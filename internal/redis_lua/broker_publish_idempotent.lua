@@ -12,7 +12,10 @@ if result_key_expire ~= '' then
     end
 end
 
-local res = redis.call(publish_command, channel, payload)
+local res
+if channel ~= '' then
+    res = redis.call(publish_command, channel, payload)
+end
 
 if result_key_expire ~= '' then
     redis.call("hset", result_key, "e", "")

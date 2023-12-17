@@ -56,7 +56,7 @@ func TestMemoryBrokerPublishHistory(t *testing.T) {
 
 	require.NotEqual(t, nil, e.historyHub)
 
-	_, err := e.Publish("channel", testPublicationData(), PublishOptions{})
+	_, _, err := e.Publish("channel", testPublicationData(), PublishOptions{})
 	require.NoError(t, err)
 
 	err = e.PublishJoin("channel", &ClientInfo{})
@@ -68,7 +68,7 @@ func TestMemoryBrokerPublishHistory(t *testing.T) {
 	pub := newTestPublication()
 
 	// test adding history.
-	_, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 	require.NoError(t, err)
 	pubs, _, err := e.History("channel", HistoryOptions{
 		Filter: HistoryFilter{
@@ -81,11 +81,11 @@ func TestMemoryBrokerPublishHistory(t *testing.T) {
 	require.Equal(t, pubs[0].Data, pub.Data)
 
 	// test history limit.
-	_, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 	require.NoError(t, err)
-	_, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 	require.NoError(t, err)
-	_, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 4, HistoryTTL: time.Second})
 	require.NoError(t, err)
 	pubs, _, err = e.History("channel", HistoryOptions{
 		Filter: HistoryFilter{
@@ -97,11 +97,11 @@ func TestMemoryBrokerPublishHistory(t *testing.T) {
 	require.Equal(t, 2, len(pubs))
 
 	// test history limit greater than history size
-	_, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 	require.NoError(t, err)
-	_, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 	require.NoError(t, err)
-	_, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 	require.NoError(t, err)
 	pubs, _, err = e.History("channel", HistoryOptions{
 		Filter: HistoryFilter{
@@ -119,7 +119,7 @@ func TestMemoryBrokerResultCacheExpires(t *testing.T) {
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
 	// Test publish with history and with idempotency key.
-	_, err := e.Publish("channel", testPublicationData(), PublishOptions{
+	_, _, err := e.Publish("channel", testPublicationData(), PublishOptions{
 		IdempotencyKey:      "test",
 		IdempotentResultTTL: time.Second,
 	})
@@ -148,13 +148,13 @@ func TestMemoryBrokerPublishIdempotent(t *testing.T) {
 	}
 
 	// Test publish with history and with idempotency key.
-	_, err := e.Publish("channel", testPublicationData(), PublishOptions{
+	_, _, err := e.Publish("channel", testPublicationData(), PublishOptions{
 		IdempotencyKey: "test",
 	})
 	require.NoError(t, err)
 
 	// Publish with same key.
-	_, err = e.Publish("channel", testPublicationData(), PublishOptions{
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{
 		IdempotencyKey: "test",
 	})
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestMemoryBrokerPublishIdempotentWithHistory(t *testing.T) {
 	}
 
 	// Test publish with history and with idempotency key.
-	sp1, err := e.Publish("channel", testPublicationData(), PublishOptions{
+	sp1, _, err := e.Publish("channel", testPublicationData(), PublishOptions{
 		HistorySize:    4,
 		HistoryTTL:     time.Second,
 		IdempotencyKey: "test",
@@ -192,7 +192,7 @@ func TestMemoryBrokerPublishIdempotentWithHistory(t *testing.T) {
 	require.Equal(t, 1, len(pubs))
 
 	// Publish with same key.
-	sp2, err := e.Publish("channel", testPublicationData(), PublishOptions{
+	sp2, _, err := e.Publish("channel", testPublicationData(), PublishOptions{
 		HistorySize:    4,
 		HistoryTTL:     time.Second,
 		IdempotencyKey: "test",
@@ -345,7 +345,7 @@ func TestMemoryBrokerRecover(t *testing.T) {
 	defer func() { _ = e.node.Shutdown(context.Background()) }()
 
 	for i := 0; i < 5; i++ {
-		_, err := e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
+		_, _, err := e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 		require.NoError(t, err)
 	}
 
@@ -370,7 +370,7 @@ func TestMemoryBrokerRecover(t *testing.T) {
 	require.Equal(t, uint64(5), pubs[2].Offset)
 
 	for i := 0; i < 10; i++ {
-		_, err := e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
+		_, _, err := e.Publish("channel", testPublicationData(), PublishOptions{HistorySize: 10, HistoryTTL: 2 * time.Second})
 		require.NoError(t, err)
 	}
 
@@ -412,7 +412,7 @@ func BenchmarkMemoryPublish_1Ch(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, err := e.Publish("channel", rawData, PublishOptions{})
+			_, _, err := e.Publish("channel", rawData, PublishOptions{})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -431,7 +431,7 @@ func BenchmarkMemoryPublish_History_1Ch(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			var err error
-			streamTop, err := e.Publish("channel", rawData, chOpts)
+			streamTop, _, err := e.Publish("channel", rawData, chOpts)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -448,7 +448,7 @@ func BenchmarkMemoryHistory_1Ch(b *testing.B) {
 
 	rawData := protocol.Raw("{}")
 	for i := 0; i < 4; i++ {
-		_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
+		_, _, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: 4, HistoryTTL: 300 * time.Second})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -474,7 +474,7 @@ func BenchmarkMemoryRecover_1Ch(b *testing.B) {
 	numMessages := 1000
 	numMissing := 5
 	for i := 1; i <= numMessages; i++ {
-		_, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
+		_, _, _ = e.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 	}
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {

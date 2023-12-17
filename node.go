@@ -723,16 +723,17 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 		opt(pubOpts)
 	}
 	n.metrics.incMessagesSent("publication")
-	streamPos, err := n.broker.Publish(ch, data, *pubOpts)
+	streamPos, fromCache, err := n.broker.Publish(ch, data, *pubOpts)
 	if err != nil {
 		return PublishResult{}, err
 	}
-	return PublishResult{StreamPosition: streamPos}, nil
+	return PublishResult{StreamPosition: streamPos, FromCache: fromCache}, nil
 }
 
 // PublishResult returned from Publish operation.
 type PublishResult struct {
 	StreamPosition
+	FromCache bool
 }
 
 // Publish sends data to all clients subscribed on channel at this moment. All running

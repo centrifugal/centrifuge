@@ -4,12 +4,12 @@ go 1.20
 
 require (
 	github.com/FZambia/eagle v0.1.0
-	github.com/centrifugal/protocol v0.11.0
+	github.com/centrifugal/protocol v0.11.1-0.20231217174539-d7863acb8224
 	github.com/google/uuid v1.4.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/igm/sockjs-go/v3 v3.0.2
 	github.com/prometheus/client_golang v1.17.0
-	github.com/redis/rueidis v1.0.21
+	github.com/redis/rueidis v1.0.24
 	github.com/segmentio/encoding v0.3.6
 	github.com/stretchr/testify v1.8.4
 	golang.org/x/sync v0.4.0
@@ -30,6 +30,6 @@ require (
 	github.com/prometheus/procfs v0.11.1 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	golang.org/x/sys v0.13.0 // indirect
+	golang.org/x/sys v0.14.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

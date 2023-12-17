@@ -103,6 +103,10 @@ type RedisBrokerConfig struct {
 	// Iteration over history in reversed order not supported with lists.
 	UseLists bool
 
+	// SkipPubSub enables mode when Redis broker only saves history, without
+	// publishing to channels and using PUB/SUB.
+	SkipPubSub bool
+
 	// numPubSubShards defines how many PUB/SUB shards will be used by Centrifuge.
 	// Each PUB/SUB shard uses dedicated connection to Redis. Zero value means 1.
 	numPubSubShards int
@@ -313,6 +317,9 @@ func (b *RedisBroker) runForever(fn func()) {
 }
 
 func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
+	if b.config.SkipPubSub {
+		return nil
+	}
 	go b.runForever(func() {
 		select {
 		case <-b.closeCh:
@@ -597,11 +604,11 @@ func (b *RedisBroker) useShardedPubSub(s *RedisShard) bool {
 }
 
 // Publish - see Broker.Publish.
-func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, error) {
+func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
 	return b.publish(b.getShard(ch), ch, data, opts)
 }
 
-func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts PublishOptions) (StreamPosition, error) {
+func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
 	protoPub := &protocol.Publication{
 		Data: data,
 		Info: infoToProto(opts.ClientInfo),
@@ -609,7 +616,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 	}
 	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {
-		return StreamPosition{}, err
+		return StreamPosition{}, false, err
 	}
 
 	publishChannel := b.messageChannelID(s.shard, ch)
@@ -630,10 +637,18 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		}
 	}
 
+	publishChannelStr := string(publishChannel)
+	if b.config.SkipPubSub {
+		publishChannelStr = ""
+	}
+
 	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {
 		var resp rueidis.RedisResult
 		if useShardedPublish {
 			if resultExpire == "" {
+				if publishChannelStr == "" {
+					return StreamPosition{}, false, nil
+				}
 				cmd := s.shard.client.B().Spublish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
 				resp = s.shard.client.Do(context.Background(), cmd)
 			} else {
@@ -643,7 +658,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 					[]string{string(resultKey)},
 					[]string{
 						convert.BytesToString(byteMessage),
-						string(publishChannel),
+						publishChannelStr,
 						publishCommand,
 						resultExpire,
 					},
@@ -651,6 +666,9 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 			}
 		} else {
 			if resultExpire == "" {
+				if publishChannelStr == "" {
+					return StreamPosition{}, false, nil
+				}
 				cmd := s.shard.client.B().Publish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
 				resp = s.shard.client.Do(context.Background(), cmd)
 			} else {
@@ -660,14 +678,14 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 					[]string{string(resultKey)},
 					[]string{
 						convert.BytesToString(byteMessage),
-						string(publishChannel),
+						publishChannelStr,
 						publishCommand,
 						resultExpire,
 					},
 				)
 			}
 		}
-		return StreamPosition{}, resp.Error()
+		return StreamPosition{}, false, resp.Error()
 	}
 
 	historyMetaKey := b.historyMetaKey(s.shard, ch)
@@ -700,7 +718,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 			convert.BytesToString(byteMessage),
 			strconv.Itoa(size),
 			strconv.Itoa(int(opts.HistoryTTL.Seconds())),
-			string(publishChannel),
+			publishChannelStr,
 			strconv.Itoa(historyMetaTTLSeconds),
 			strconv.FormatInt(time.Now().Unix(), 10),
 			publishCommand,
@@ -708,20 +726,29 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		},
 	).ToArray()
 	if err != nil {
-		return StreamPosition{}, err
+		return StreamPosition{}, false, err
 	}
-	if len(replies) != 2 {
-		return StreamPosition{}, errors.New("wrong Redis reply")
+	if len(replies) != 2 && len(replies) != 3 {
+		return StreamPosition{}, false, errors.New("wrong Redis reply")
 	}
 	offset, err := replies[0].AsInt64()
 	if err != nil {
-		return StreamPosition{}, errors.New("wrong Redis reply offset")
+		return StreamPosition{}, false, errors.New("wrong Redis reply offset")
 	}
 	epoch, err := replies[1].ToString()
 	if err != nil {
-		return StreamPosition{}, errors.New("wrong Redis reply epoch")
+		return StreamPosition{}, false, errors.New("wrong Redis reply epoch")
 	}
-	return StreamPosition{Offset: uint64(offset), Epoch: epoch}, nil
+	fromCache := false
+	if len(replies) == 3 {
+		fromCacheStr, err := replies[2].ToString()
+		if err != nil {
+			return StreamPosition{}, false, errors.New("wrong Redis reply from cache flag")
+		}
+		fromCache = fromCacheStr == "1"
+	}
+
+	return StreamPosition{Offset: uint64(offset), Epoch: epoch}, fromCache, nil
 }
 
 // PublishJoin - see Broker.PublishJoin.

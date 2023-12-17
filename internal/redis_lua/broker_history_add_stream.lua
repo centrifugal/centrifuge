@@ -11,8 +11,8 @@ local publish_command = ARGV[7]
 local result_key_expire = ARGV[8]
 
 if result_key_expire ~= '' then
-    local stream_meta = redis.call("hmget", result_key, "e", "s")
-    local result_epoch, result_offset = stream_meta[1], stream_meta[2]
+    local cached_result = redis.call("hmget", result_key, "e", "s")
+    local result_epoch, result_offset = cached_result[1], cached_result[2]
     if result_epoch ~= false then
         return {result_offset, result_epoch}
     end

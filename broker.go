@@ -138,7 +138,7 @@ type Broker interface {
 	//
 	// StreamPosition returned here describes current stream top offset and epoch.
 	// For channels without history this StreamPosition should be empty.
-	Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, error)
+	Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error)
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, info *ClientInfo) error
 	// PublishLeave publishes Leave Push message into channel.
