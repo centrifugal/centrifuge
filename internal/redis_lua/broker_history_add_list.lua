@@ -37,11 +37,11 @@ redis.call("expire", list_key, list_ttl)
 
 if channel ~= '' then
   redis.call(publish_command, channel, payload)
+end
 
-  if result_key_expire ~= '' then
-    redis.call("hset", result_key, "e", current_epoch, "s", top_offset)
-    redis.call("expire", result_key, result_key_expire)
-  end
+if result_key_expire ~= '' then
+  redis.call("hset", result_key, "e", current_epoch, "s", top_offset)
+  redis.call("expire", result_key, result_key_expire)
 end
 
 return {top_offset, current_epoch, "0"}

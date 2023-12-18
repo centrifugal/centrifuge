@@ -14,7 +14,7 @@ if result_key_expire ~= '' then
     local cached_result = redis.call("hmget", result_key, "e", "s")
     local result_epoch, result_offset = cached_result[1], cached_result[2]
     if result_epoch ~= false then
-        return {result_offset, result_epoch}
+        return {result_offset, result_epoch, "1"}
     end
 end
 
@@ -36,11 +36,11 @@ redis.call("expire", stream_key, stream_ttl)
 if channel ~= '' then
   local payload = "__" .. "p1:" .. top_offset .. ":" .. current_epoch .. "__" .. message_payload
   redis.call(publish_command, channel, payload)
-
-  if result_key_expire ~= '' then
-    redis.call("hset", result_key, "e", current_epoch, "s", top_offset)
-    redis.call("expire", result_key, result_key_expire)
-  end
 end
 
-return {top_offset, current_epoch}
+if result_key_expire ~= '' then
+  redis.call("hset", result_key, "e", current_epoch, "s", top_offset)
+  redis.call("expire", result_key, result_key_expire)
+end
+
+return {top_offset, current_epoch, "0"}
