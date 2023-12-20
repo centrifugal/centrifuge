@@ -12,7 +12,7 @@ require (
 	github.com/redis/rueidis v1.0.24
 	github.com/segmentio/encoding v0.3.6
 	github.com/stretchr/testify v1.8.4
-	golang.org/x/sync v0.4.0
+	golang.org/x/sync v0.5.0
 	google.golang.org/protobuf v1.31.0
 )
 

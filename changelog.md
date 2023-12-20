@@ -1,3 +1,10 @@
+v0.29.4 and higher
+==================
+
+Since Centrifuge v0.29.4 we do not maintain CHANGELOG.md file.
+
+All changes may be found on [Centrifuge releases page](https://github.com/centrifugal/centrifuge/releases) on Github.
+
 v0.29.3
 =======
 
