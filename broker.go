@@ -68,7 +68,7 @@ type HistoryOptions struct {
 
 // StreamPosition contains fields to describe position in stream.
 // At moment this is used for automatic recovery mechanics. More info about stream
-// recovery in docs: https://centrifugal.dev/docs/server/history_and_recovery.
+// recovery in Centrifugo docs: https://centrifugal.dev/docs/server/history_and_recovery.
 type StreamPosition struct {
 	// Offset defines publication incremental offset inside a stream.
 	Offset uint64
@@ -131,13 +131,20 @@ type Broker interface {
 	//
 	// Broker can optionally maintain publication history inside channel according
 	// to PublishOptions provided. See History method for rules that should be implemented
-	// for accessing Publications from history stream.
+	// for accessing publications from history stream.
 	//
 	// Saving message to a history stream and publish to PUB/SUB should be an atomic
-	// operation per channel.
+	// operation per channel. If this is not true – then publication to one channel
+	// must be serialized on the caller side, i.e. publish requests must be issued one
+	// after another. Otherwise, the order of publications and stable behaviour of
+	// subscribers with positioning/recovery enabled can't be guaranteed.
 	//
-	// StreamPosition returned here describes current stream top offset and epoch.
-	// For channels without history this StreamPosition should be empty.
+	// StreamPosition returned here describes stream epoch and offset assigned to
+	// the publication. For channels without history this StreamPosition should be
+	// zero value.
+	// Second bool value returned here means whether Publish was suppressed due to
+	// the use of PublishOptions.IdempotencyKey. In this case StreamPosition is
+	// returned from the cache maintained by Broker.
 	Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error)
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, info *ClientInfo) error
