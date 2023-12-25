@@ -7,7 +7,7 @@ require (
 	github.com/centrifugal/protocol v0.11.0
 	github.com/google/uuid v1.5.0
 	github.com/gorilla/websocket v1.5.0
-	github.com/igm/sockjs-go/v3 v3.0.2
+	github.com/igm/sockjs-go/v3 v3.0.3
 	github.com/prometheus/client_golang v1.17.0
 	github.com/redis/rueidis v1.0.25
 	github.com/segmentio/encoding v0.4.0
