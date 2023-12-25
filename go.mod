@@ -6,7 +6,7 @@ require (
 	github.com/FZambia/eagle v0.1.0
 	github.com/centrifugal/protocol v0.11.0
 	github.com/google/uuid v1.5.0
-	github.com/gorilla/websocket v1.5.0
+	github.com/gorilla/websocket v1.5.1
 	github.com/igm/sockjs-go/v3 v3.0.2
 	github.com/prometheus/client_golang v1.17.0
 	github.com/redis/rueidis v1.0.25
@@ -30,6 +30,7 @@ require (
 	github.com/prometheus/procfs v0.11.1 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	golang.org/x/net v0.17.0 // indirect
 	golang.org/x/sys v0.14.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
