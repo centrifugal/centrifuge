@@ -45,12 +45,12 @@ func (e *TestBroker) Run(_ BrokerEventHandler) error {
 	return nil
 }
 
-func (e *TestBroker) Publish(_ string, _ []byte, _ PublishOptions) (StreamPosition, error) {
+func (e *TestBroker) Publish(_ string, _ []byte, _ PublishOptions) (StreamPosition, bool, error) {
 	atomic.AddInt32(&e.publishCount, 1)
 	if e.errorOnPublish {
-		return StreamPosition{}, errors.New("boom")
+		return StreamPosition{}, false, errors.New("boom")
 	}
-	return StreamPosition{}, nil
+	return StreamPosition{}, false, nil
 }
 
 func (e *TestBroker) PublishJoin(_ string, _ *ClientInfo) error {

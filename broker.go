@@ -68,7 +68,7 @@ type HistoryOptions struct {
 
 // StreamPosition contains fields to describe position in stream.
 // At moment this is used for automatic recovery mechanics. More info about stream
-// recovery in docs: https://centrifugal.dev/docs/server/history_and_recovery.
+// recovery in Centrifugo docs: https://centrifugal.dev/docs/server/history_and_recovery.
 type StreamPosition struct {
 	// Offset defines publication incremental offset inside a stream.
 	Offset uint64
@@ -103,6 +103,15 @@ type PublishOptions struct {
 	ClientInfo *ClientInfo
 	// Tags to set Publication.Tags.
 	Tags map[string]string
+	// IdempotencyKey is an optional key for idempotent publish. Broker implementation
+	// may cache these keys for some time to prevent duplicate publications. In this case
+	// the returned result is the same as from the previous publication with the same key.
+	IdempotencyKey string
+	// IdempotentResultTTL sets the time of expiration for results of idempotent publications
+	// (publications with idempotency key provided). Memory and Redis engines implement this TTL
+	// with second precision, so don't set something less than one second here. By default,
+	// Centrifuge uses 5 minutes as idempotent result TTL.
+	IdempotentResultTTL time.Duration
 }
 
 // Broker is responsible for PUB/SUB mechanics.
@@ -122,14 +131,21 @@ type Broker interface {
 	//
 	// Broker can optionally maintain publication history inside channel according
 	// to PublishOptions provided. See History method for rules that should be implemented
-	// for accessing Publications from history stream.
+	// for accessing publications from history stream.
 	//
 	// Saving message to a history stream and publish to PUB/SUB should be an atomic
-	// operation per channel.
+	// operation per channel. If this is not true – then publication to one channel
+	// must be serialized on the caller side, i.e. publish requests must be issued one
+	// after another. Otherwise, the order of publications and stable behaviour of
+	// subscribers with positioning/recovery enabled can't be guaranteed.
 	//
-	// StreamPosition returned here describes current stream top offset and epoch.
-	// For channels without history this StreamPosition should be empty.
-	Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, error)
+	// StreamPosition returned here describes stream epoch and offset assigned to
+	// the publication. For channels without history this StreamPosition should be
+	// zero value.
+	// Second bool value returned here means whether Publish was suppressed due to
+	// the use of PublishOptions.IdempotencyKey. In this case StreamPosition is
+	// returned from the cache maintained by Broker.
+	Publish(ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error)
 	// PublishJoin publishes Join Push message into channel.
 	PublishJoin(ch string, info *ClientInfo) error
 	// PublishLeave publishes Leave Push message into channel.

@@ -141,7 +141,7 @@ func (m *pubResponse) DecodeMsgpack(d *msgpack.Decoder) error {
 }
 
 // Publish - see centrifuge.Broker interface description.
-func (b *Broker) Publish(ch string, data []byte, opts centrifuge.PublishOptions) (centrifuge.StreamPosition, error) {
+func (b *Broker) Publish(ch string, data []byte, opts centrifuge.PublishOptions) (centrifuge.StreamPosition, bool, error) {
 	s := consistentShard(ch, b.shards)
 	pr := &pubRequest{
 		MsgType:        "p",
@@ -155,9 +155,9 @@ func (b *Broker) Publish(ch string, data []byte, opts centrifuge.PublishOptions)
 	var resp pubResponse
 	err := s.ExecTyped(tarantool.Call("centrifuge.publish", pr), &resp)
 	if err != nil {
-		return centrifuge.StreamPosition{}, err
+		return centrifuge.StreamPosition{}, false, err
 	}
-	return centrifuge.StreamPosition{Offset: resp.Offset, Epoch: resp.Epoch}, err
+	return centrifuge.StreamPosition{Offset: resp.Offset, Epoch: resp.Epoch}, false, err
 }
 
 // PublishJoin - see centrifuge.Broker interface description.
