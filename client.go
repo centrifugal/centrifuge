@@ -2669,6 +2669,19 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 	return recoveredPubs, recovered
 }
 
+func isLastMessageRecovered(historyResult HistoryResult, cmdEpoch string) ([]*protocol.Publication, bool) {
+	latestOffset := historyResult.Offset
+	latestEpoch := historyResult.Epoch
+	var recovered bool
+	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
+	if len(historyResult.Publications) > 0 {
+		protoPub := pubToProto(historyResult.Publications[0])
+		recoveredPubs = append(recoveredPubs, protoPub)
+		recovered = recoveredPubs[0].Offset == latestOffset && (cmdEpoch == "" || latestEpoch == cmdEpoch)
+	}
+	return recoveredPubs, recovered
+}
+
 // subscribeCmd handles subscribe command - clients send this when subscribe
 // on channel, if channel is private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
@@ -2747,19 +2760,14 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		if reply.Options.EnableRecovery && req.Recover {
 			cmdOffset := req.Offset
 			cmdEpoch := req.Epoch
+			cmdRecoverLatestPublication := req.RecoverLatestPublication
 
-			// Client provided subscribe request with recover flag on. Try to recover missed
-			// publications automatically from history (we suppose here that history configured wisely).
-			historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
-			if err != nil {
-				if errors.Is(err, ErrorUnrecoverablePosition) {
-					// Result contains stream position in case of ErrorUnrecoverablePosition
-					// during recovery.
-					latestOffset = historyResult.Offset
-					latestEpoch = historyResult.Epoch
-					res.Recovered = false
-					c.node.metrics.incRecover(res.Recovered)
-				} else {
+			if cmdRecoverLatestPublication {
+				historyResult, err := c.node.History(channel, WithHistoryFilter(HistoryFilter{
+					Limit:   1,
+					Reverse: true,
+				}), WithHistoryMetaTTL(reply.Options.HistoryMetaTTL))
+				if err != nil {
 					c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					c.pubSubSync.StopBuffering(channel)
 					if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
@@ -2768,13 +2776,41 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					ctx.disconnect = &DisconnectServerError
 					return ctx
 				}
-			} else {
 				latestOffset = historyResult.Offset
 				latestEpoch = historyResult.Epoch
 				var recovered bool
-				recoveredPubs, recovered = isRecovered(historyResult, cmdOffset, cmdEpoch)
+				recoveredPubs, recovered = isLastMessageRecovered(historyResult, cmdEpoch)
 				res.Recovered = recovered
 				c.node.metrics.incRecover(res.Recovered)
+			} else {
+				// Client provided subscribe request with recover flag on. Try to recover missed
+				// publications automatically from history (we suppose here that history configured wisely).
+				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
+				if err != nil {
+					if errors.Is(err, ErrorUnrecoverablePosition) {
+						// Result contains stream position in case of ErrorUnrecoverablePosition
+						// during recovery.
+						latestOffset = historyResult.Offset
+						latestEpoch = historyResult.Epoch
+						res.Recovered = false
+						c.node.metrics.incRecover(res.Recovered)
+					} else {
+						c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+						c.pubSubSync.StopBuffering(channel)
+						if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
+							return errorDisconnectContext(clientErr, nil)
+						}
+						ctx.disconnect = &DisconnectServerError
+						return ctx
+					}
+				} else {
+					latestOffset = historyResult.Offset
+					latestEpoch = historyResult.Epoch
+					var recovered bool
+					recoveredPubs, recovered = isRecovered(historyResult, cmdOffset, cmdEpoch)
+					res.Recovered = recovered
+					c.node.metrics.incRecover(res.Recovered)
+				}
 			}
 		} else {
 			streamTop, err := c.node.streamTop(channel, reply.Options.HistoryMetaTTL)
