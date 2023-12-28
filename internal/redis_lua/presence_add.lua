@@ -29,4 +29,5 @@ if ARGV[6] ~= '0' then
     if isNewClient then
         redis.call("hincrby", KEYS[4], ARGV[5], 1)
     end
+    redis.call("expire", KEYS[4], ARGV[1])
 end
