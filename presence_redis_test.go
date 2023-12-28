@@ -311,6 +311,7 @@ func BenchmarkRedisPresenceStatsWithMapping(b *testing.B) {
 				b.Fatal(err)
 			}
 			require.Equal(b, s.NumClients, numClients)
+			require.Equal(b, s.NumUsers, numClients)
 		}
 	})
 }
