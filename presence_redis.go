@@ -19,13 +19,14 @@ var _ PresenceManager = (*RedisPresenceManager)(nil)
 
 // RedisPresenceManager keeps presence in Redis thus allows scaling nodes.
 type RedisPresenceManager struct {
-	node              *Node
-	config            RedisPresenceManagerConfig
-	shards            []*RedisShard
-	sharding          bool
-	addPresenceScript *rueidis.Lua
-	remPresenceScript *rueidis.Lua
-	presenceScript    *rueidis.Lua
+	node                *Node
+	config              RedisPresenceManagerConfig
+	shards              []*RedisShard
+	sharding            bool
+	addPresenceScript   *rueidis.Lua
+	remPresenceScript   *rueidis.Lua
+	presenceScript      *rueidis.Lua
+	presenceStatsScript *rueidis.Lua
 }
 
 // RedisPresenceManagerConfig is a config for RedisPresenceManager.
@@ -43,6 +44,13 @@ type RedisPresenceManagerConfig struct {
 	// Shards is a slice of RedisShard to use. At least one shard must be provided.
 	// Data will be consistently sharded by channel over provided Redis shards.
 	Shards []*RedisShard
+
+	// EnableUserMapping when on tells RedisPresenceManager to additionally store
+	// user to num client connections hash map and sorted set with unique users in Redis.
+	// This increases Redis memory usage since additional structures are used, but provides
+	// a way to optimize presence stats retrieving as we can calculate stats quickly on
+	// Redis side instead of loading the entire presence information.
+	EnableUserMapping bool
 }
 
 var (
@@ -54,6 +62,9 @@ var (
 
 	//go:embed internal/redis_lua/presence_get.lua
 	presenceScriptSource string
+
+	//go:embed internal/redis_lua/presence_stats_get.lua
+	presenceStatsScriptSource string
 )
 
 // NewRedisPresenceManager creates new RedisPresenceManager.
@@ -80,9 +91,10 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		config:   config,
 		sharding: len(config.Shards) > 1,
 
-		addPresenceScript: rueidis.NewLuaScript(addPresenceScriptSource),
-		remPresenceScript: rueidis.NewLuaScript(remPresenceScriptSource),
-		presenceScript:    rueidis.NewLuaScript(presenceScriptSource),
+		addPresenceScript:   rueidis.NewLuaScript(addPresenceScriptSource),
+		remPresenceScript:   rueidis.NewLuaScript(remPresenceScriptSource),
+		presenceScript:      rueidis.NewLuaScript(presenceScriptSource),
+		presenceStatsScript: rueidis.NewLuaScript(presenceStatsScriptSource),
 	}
 	return m, nil
 }
@@ -109,13 +121,26 @@ func (m *RedisPresenceManager) addPresenceScriptKeysArgs(s *RedisShard, ch strin
 	if err != nil {
 		return nil, nil, err
 	}
-	expireAt := time.Now().Unix() + int64(expire)
-	hashKey := m.presenceHashKey(s, ch)
-	setKey := m.presenceSetKey(s, ch)
 
-	keys := []string{string(setKey), string(hashKey)}
-	args := []string{strconv.Itoa(expire), strconv.FormatInt(expireAt, 10), uid, convert.BytesToString(infoBytes)}
+	setKey := m.presenceSetKey(s, ch)
+	hashKey := m.presenceHashKey(s, ch)
+	userSetKey := m.userSetKey(s, ch)
+	userHashKey := m.userHashKey(s, ch)
+	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
+
+	expireAt := time.Now().Unix() + int64(expire)
+	useUserMapping := m.useUserMappingArg()
+	args := []string{strconv.Itoa(expire), strconv.FormatInt(expireAt, 10), uid, convert.BytesToString(infoBytes), info.UserID, useUserMapping}
+
 	return keys, args, nil
+}
+
+func (m *RedisPresenceManager) useUserMappingArg() string {
+	useUserMapping := "0"
+	if m.config.EnableUserMapping {
+		useUserMapping = "1"
+	}
+	return useUserMapping
 }
 
 func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string, info *ClientInfo) error {
@@ -131,20 +156,25 @@ func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string,
 }
 
 // RemovePresence - see PresenceManager interface description.
-func (m *RedisPresenceManager) RemovePresence(ch string, uid string) error {
-	return m.removePresence(m.getShard(ch), ch, uid)
+func (m *RedisPresenceManager) RemovePresence(ch string, clientID string, userID string) error {
+	return m.removePresence(m.getShard(ch), ch, clientID, userID)
 }
 
-func (m *RedisPresenceManager) removePresenceScriptKeysArgs(s *RedisShard, ch string, uid string) ([]string, []string, error) {
-	hashKey := m.presenceHashKey(s, ch)
+func (m *RedisPresenceManager) removePresenceScriptKeysArgs(s *RedisShard, ch string, uid string, userID string) ([]string, []string, error) {
 	setKey := m.presenceSetKey(s, ch)
-	keys := []string{string(setKey), string(hashKey)}
-	args := []string{uid}
+	hashKey := m.presenceHashKey(s, ch)
+	userSetKey := m.userSetKey(s, ch)
+	userHashKey := m.userHashKey(s, ch)
+
+	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
+
+	useUserMapping := m.useUserMappingArg()
+	args := []string{uid, userID, useUserMapping}
 	return keys, args, nil
 }
 
-func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, uid string) error {
-	keys, args, err := m.removePresenceScriptKeysArgs(s, ch, uid)
+func (m *RedisPresenceManager) removePresence(s *RedisShard, ch string, clientID string, userID string) error {
+	keys, args, err := m.removePresenceScriptKeysArgs(s, ch, clientID, userID)
 	if err != nil {
 		return err
 	}
@@ -161,11 +191,26 @@ func (m *RedisPresenceManager) Presence(ch string) (map[string]*ClientInfo, erro
 }
 
 func (m *RedisPresenceManager) presenceScriptKeysArgs(s *RedisShard, ch string) ([]string, []string, error) {
-	hashKey := m.presenceHashKey(s, ch)
 	setKey := m.presenceSetKey(s, ch)
-	now := int(time.Now().Unix())
+	hashKey := m.presenceHashKey(s, ch)
 	keys := []string{string(setKey), string(hashKey)}
+
+	now := int(time.Now().Unix())
 	args := []string{strconv.Itoa(now)}
+
+	return keys, args, nil
+}
+
+func (m *RedisPresenceManager) presenceStatsScriptKeysArgs(s *RedisShard, ch string) ([]string, []string, error) {
+	setKey := m.presenceSetKey(s, ch)
+	hashKey := m.presenceHashKey(s, ch)
+	userSetKey := m.userSetKey(s, ch)
+	userHashKey := m.userHashKey(s, ch)
+	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
+
+	now := int(time.Now().Unix())
+	args := []string{strconv.Itoa(now)}
+
 	return keys, args, nil
 }
 
@@ -205,8 +250,39 @@ func mapStringClientInfo(result []rueidis.RedisMessage) (map[string]*ClientInfo,
 	return m, nil
 }
 
+func (m *RedisPresenceManager) presenceStats(s *RedisShard, ch string) (PresenceStats, error) {
+	keys, args, err := m.presenceStatsScriptKeysArgs(s, ch)
+	if err != nil {
+		return PresenceStats{}, err
+	}
+	replies, err := m.presenceStatsScript.Exec(context.Background(), s.client, keys, args).ToArray()
+	if err != nil {
+		return PresenceStats{}, err
+	}
+	if len(replies) != 2 {
+		return PresenceStats{}, errors.New("wrong Redis reply: must have two values")
+	}
+	numClients, err := replies[0].AsInt64()
+	if err != nil {
+		return PresenceStats{}, errors.New("wrong Redis reply num clients")
+	}
+	numUsers, err := replies[1].AsInt64()
+	if err != nil {
+		return PresenceStats{}, errors.New("wrong Redis reply num users")
+	}
+
+	return PresenceStats{
+		NumClients: int(numClients),
+		NumUsers:   int(numUsers),
+	}, nil
+}
+
 // PresenceStats - see PresenceManager interface description.
 func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
+	if m.config.EnableUserMapping {
+		return m.presenceStats(m.getShard(ch), ch)
+	}
+
 	presence, err := m.Presence(ch)
 	if err != nil {
 		return PresenceStats{}, err
@@ -242,4 +318,18 @@ func (m *RedisPresenceManager) presenceSetKey(s *RedisShard, ch string) channelI
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.expire." + ch)
+}
+
+func (m *RedisPresenceManager) userSetKey(s *RedisShard, ch string) channelID {
+	if s.useCluster {
+		ch = "{" + ch + "}"
+	}
+	return channelID(m.config.Prefix + ".presence.user.expire." + ch)
+}
+
+func (m *RedisPresenceManager) userHashKey(s *RedisShard, ch string) channelID {
+	if s.useCluster {
+		ch = "{" + ch + "}"
+	}
+	return channelID(m.config.Prefix + ".presence.user.clients." + ch)
 }

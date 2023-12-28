@@ -123,7 +123,7 @@ func (e *TestPresenceManager) AddPresence(_ string, _ string, _ *ClientInfo) err
 	return nil
 }
 
-func (e *TestPresenceManager) RemovePresence(_ string, _ string) error {
+func (e *TestPresenceManager) RemovePresence(_ string, _ string, _ string) error {
 	if e.errorOnRemovePresence {
 		return errors.New("boom")
 	}
@@ -309,8 +309,8 @@ func TestNode_SetBroker(t *testing.T) {
 func TestNode_SetPresenceManager_NilPresenceManager(t *testing.T) {
 	n, _ := New(Config{})
 	n.SetPresenceManager(nil)
-	require.NoError(t, n.addPresence("test", "uid", nil))
-	require.NoError(t, n.removePresence("test", "uid"))
+	require.NoError(t, n.addPresence("test", "uid", &ClientInfo{}))
+	require.NoError(t, n.removePresence("test", "uid", ""))
 	_, err := n.Presence("test")
 	require.Equal(t, ErrorNotAvailable, err)
 	_, err = n.PresenceStats("test")
