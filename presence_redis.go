@@ -45,12 +45,13 @@ type RedisPresenceManagerConfig struct {
 	// Data will be consistently sharded by channel over provided Redis shards.
 	Shards []*RedisShard
 
-	// EnableUserMapping when on tells RedisPresenceManager to additionally store
+	// EnableUserMapping when returns true tells RedisPresenceManager to additionally store
 	// user to num client connections hash map and sorted set with unique users in Redis.
 	// This increases Redis memory usage since additional structures are used, but provides
 	// a way to optimize presence stats retrieving as we can calculate stats quickly on
-	// Redis side instead of loading the entire presence information.
-	EnableUserMapping bool
+	// Redis side instead of loading the entire presence information. By default, user mapping
+	// is not maintained.
+	EnableUserMapping func(channel string) bool
 }
 
 var (
@@ -129,15 +130,15 @@ func (m *RedisPresenceManager) addPresenceScriptKeysArgs(s *RedisShard, ch strin
 	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
 
 	expireAt := time.Now().Unix() + int64(expire)
-	useUserMapping := m.useUserMappingArg()
+	useUserMapping := m.useUserMappingArg(ch)
 	args := []string{strconv.Itoa(expire), strconv.FormatInt(expireAt, 10), uid, convert.BytesToString(infoBytes), info.UserID, useUserMapping}
 
 	return keys, args, nil
 }
 
-func (m *RedisPresenceManager) useUserMappingArg() string {
+func (m *RedisPresenceManager) useUserMappingArg(ch string) string {
 	useUserMapping := "0"
-	if m.config.EnableUserMapping {
+	if m.config.EnableUserMapping != nil && m.config.EnableUserMapping(ch) {
 		useUserMapping = "1"
 	}
 	return useUserMapping
@@ -168,7 +169,7 @@ func (m *RedisPresenceManager) removePresenceScriptKeysArgs(s *RedisShard, ch st
 
 	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
 
-	useUserMapping := m.useUserMappingArg()
+	useUserMapping := m.useUserMappingArg(ch)
 	args := []string{uid, userID, useUserMapping}
 	return keys, args, nil
 }
@@ -279,7 +280,7 @@ func (m *RedisPresenceManager) presenceStats(s *RedisShard, ch string) (Presence
 
 // PresenceStats - see PresenceManager interface description.
 func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
-	if m.config.EnableUserMapping {
+	if m.config.EnableUserMapping(ch) {
 		return m.presenceStats(m.getShard(ch), ch)
 	}
 

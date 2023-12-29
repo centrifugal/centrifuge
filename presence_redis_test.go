@@ -31,9 +31,11 @@ func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
 	pm, err := NewRedisPresenceManager(n, RedisPresenceManagerConfig{
-		Prefix:            prefix,
-		Shards:            []*RedisShard{s},
-		EnableUserMapping: userMapping,
+		Prefix: prefix,
+		Shards: []*RedisShard{s},
+		EnableUserMapping: func(_ string) bool {
+			return userMapping
+		},
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -54,9 +56,11 @@ func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
 	pm, err := NewRedisPresenceManager(n, RedisPresenceManagerConfig{
-		Prefix:            prefix,
-		Shards:            []*RedisShard{s},
-		EnableUserMapping: userMapping,
+		Prefix: prefix,
+		Shards: []*RedisShard{s},
+		EnableUserMapping: func(_ string) bool {
+			return userMapping
+		},
 	})
 	if err != nil {
 		tb.Fatal(err)
