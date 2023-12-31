@@ -14,8 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/websocket"
+
 	"github.com/centrifugal/protocol"
-	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
 

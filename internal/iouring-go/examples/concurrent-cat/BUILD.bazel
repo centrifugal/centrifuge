@@ -1,0 +1,15 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "concurrent-cat_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/iceber/iouring-go/examples/concurrent-cat",
+    visibility = ["//visibility:private"],
+    deps = ["//:iouring-go"],
+)
+
+go_binary(
+    name = "concurrent-cat",
+    embed = [":concurrent-cat_lib"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,15 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "hardlink_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/iceber/iouring-go/examples/hardlink",
+    visibility = ["//visibility:private"],
+    deps = ["//:iouring-go"],
+)
+
+go_binary(
+    name = "hardlink",
+    embed = [":hardlink_lib"],
+    visibility = ["//visibility:public"],
+)

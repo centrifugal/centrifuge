@@ -1,0 +1,15 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "symlink_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/iceber/iouring-go/examples/symlink",
+    visibility = ["//visibility:private"],
+    deps = ["//:iouring-go"],
+)
+
+go_binary(
+    name = "symlink",
+    embed = [":symlink_lib"],
+    visibility = ["//visibility:public"],
+)

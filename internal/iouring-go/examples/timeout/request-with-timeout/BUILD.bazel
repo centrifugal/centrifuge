@@ -1,0 +1,15 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "request-with-timeout_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/iceber/iouring-go/examples/timeout/request-with-timeout",
+    visibility = ["//visibility:private"],
+    deps = ["//:iouring-go"],
+)
+
+go_binary(
+    name = "request-with-timeout",
+    embed = [":request-with-timeout_lib"],
+    visibility = ["//visibility:public"],
+)

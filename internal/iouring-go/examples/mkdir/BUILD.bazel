@@ -1,0 +1,15 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "mkdir_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/iceber/iouring-go/examples/mkdir",
+    visibility = ["//visibility:private"],
+    deps = ["//:iouring-go"],
+)
+
+go_binary(
+    name = "mkdir",
+    embed = [":mkdir_lib"],
+    visibility = ["//visibility:public"],
+)
