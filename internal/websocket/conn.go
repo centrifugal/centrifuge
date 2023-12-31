@@ -243,7 +243,7 @@ type writePoolData struct{ buf []byte }
 // The Conn type represents a WebSocket connection.
 type Conn struct {
 	conn        net.Conn
-	connFD      uintptr
+	connFD      int
 	isServer    bool
 	subprotocol string
 
@@ -286,7 +286,7 @@ type Conn struct {
 }
 
 func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, writeBufferPool BufferPool, br *bufio.Reader, writeBuf []byte) *Conn {
-	connFD, _ := extractConnFd(conn)
+	connFD := getFdFromConn(conn)
 
 	if br == nil {
 		if readBufferSize == 0 {
