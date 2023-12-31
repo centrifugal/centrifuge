@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"syscall"
 
 	"github.com/centrifugal/centrifuge/internal/iouring-go"
@@ -17,6 +18,7 @@ func initIoUring() *iouring.IOURing {
 	return ring
 }
 
+var ringLock sync.Mutex
 var ring = initIoUring()
 
 func extractConnFd(conn net.Conn) (uintptr, error) {

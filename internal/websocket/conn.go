@@ -395,9 +395,12 @@ func (c *Conn) write(frameType int, deadline time.Time, buf0, buf1 []byte) error
 	_ = c.conn.SetWriteDeadline(deadline)
 	if len(buf1) == 0 {
 		resultCh := make(chan iouring.Result, 1)
+		ringLock.Lock()
 		if _, errSubmit := ring.SubmitRequest(iouring.Write(int(c.connFD), buf0), resultCh); errSubmit != nil {
+			ringLock.Unlock()
 			err = errSubmit
 		} else {
+			ringLock.Unlock()
 			res := <-resultCh
 			err = res.Err()
 		}
