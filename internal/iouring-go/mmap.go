@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/centrifugal/centrifuge/internal/iouring-go/syscall"
 )
 
 const uint32Size = uint32(unsafe.Sizeof(uint32(0)))
