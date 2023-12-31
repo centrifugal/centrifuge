@@ -139,13 +139,13 @@ func getPingPongPeriodValues(config PingPongConfig) (time.Duration, time.Duratio
 	if pingInterval < 0 {
 		pingInterval = 0
 	} else if pingInterval == 0 {
-		pingInterval = 25 * time.Second
+		pingInterval = 4 * time.Second
 	}
 	pongTimeout := config.PongTimeout
 	if pongTimeout < 0 {
 		pongTimeout = 0
 	} else if pongTimeout == 0 {
-		pongTimeout = 10 * time.Second
+		pongTimeout = 3 * time.Second
 	}
 	return pingInterval, pongTimeout
 }
