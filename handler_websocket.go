@@ -11,9 +11,9 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
 	"github.com/centrifugal/centrifuge/internal/timers"
+	"github.com/centrifugal/centrifuge/internal/websocket"
 
 	"github.com/centrifugal/protocol"
-	"github.com/gorilla/websocket"
 )
 
 // WebsocketConfig represents config for WebsocketHandler.
