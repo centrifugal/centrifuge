@@ -456,7 +456,7 @@ func (c *Client) scheduleNextTimer() {
 	if needTimer {
 		c.timerOp = nextTimerOp
 		afterDuration := time.Duration(minEventTime-time.Now().UnixNano()) * time.Nanosecond
-		c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+		c.timer.Reset(afterDuration)
 	}
 }
 
@@ -525,16 +525,23 @@ func (c *Client) addPingUpdate(isFirst bool) {
 		// Send first ping in random interval between 0 and PingInterval to
 		// spread ping-pongs in time (useful when many connections reconnect
 		// almost immediately).
-		pingNanoseconds := c.pingInterval.Nanoseconds()
-		delay = time.Duration(randSource.Int63n(pingNanoseconds)) * time.Nanosecond
+		delayNanoseconds := delay.Nanoseconds()
+		delay = time.Duration(randSource.Int63n(delayNanoseconds)) * time.Nanosecond
 	}
 	c.nextPing = time.Now().Add(delay).UnixNano()
 	c.scheduleNextTimer()
 }
 
 // Lock must be held outside.
-func (c *Client) addPresenceUpdate() {
-	c.nextPresence = time.Now().Add(c.node.config.ClientPresenceUpdateInterval).UnixNano()
+func (c *Client) addPresenceUpdate(isFirst bool) {
+	delay := c.node.config.ClientPresenceUpdateInterval
+	if isFirst {
+		// Send first presence update in random interval between 0 and ClientPresenceUpdateInterval to
+		// spread updates in time (useful when many connections reconnect almost immediately).
+		delayNanoseconds := delay.Nanoseconds()
+		delay = time.Duration(randSource.Int63n(delayNanoseconds)) * time.Nanosecond
+	}
+	c.nextPresence = time.Now().Add(delay).UnixNano()
 	c.scheduleNextTimer()
 }
 
@@ -703,7 +710,7 @@ func (c *Client) updatePresence() {
 		}
 	}
 	c.mu.Lock()
-	c.addPresenceUpdate()
+	c.addPresenceUpdate(false)
 	c.mu.Unlock()
 }
 
@@ -1418,7 +1425,7 @@ func (c *Client) triggerConnect() {
 func (c *Client) scheduleOnConnectTimers() {
 	// Make presence and refresh handlers always run after client connect event.
 	c.mu.Lock()
-	c.addPresenceUpdate()
+	c.addPresenceUpdate(true)
 	if c.exp > 0 {
 		expireAfter := time.Duration(c.exp-time.Now().Unix()) * time.Second
 		if c.clientSideRefresh {
