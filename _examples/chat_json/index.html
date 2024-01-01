@@ -224,12 +224,7 @@
                 // subscribe on channel and bind various event listeners. Actual
                 // subscription request will be sent after client connects to
                 // a server.
-                const sub = centrifuge.newSubscription(channel, {
-                    since: {
-                        'offset': 0,
-                        'epoch': '',
-                    }
-                });
+                const sub = centrifuge.newSubscription(channel);
 
                 sub.on("publication", handlePublication)
                     .on("join", handleJoin)
