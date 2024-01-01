@@ -2676,12 +2676,13 @@ func isStateRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch st
 	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
 	if len(historyResult.Publications) > 0 {
 		publication := historyResult.Publications[0]
-		recovered = publication.Offset == latestOffset && (cmdEpoch == "" || latestEpoch == cmdEpoch)
-		if recovered && publication.Offset > cmdOffset {
+		recovered = publication.Offset == latestOffset
+		skipPublication := cmdOffset > 0 && cmdOffset == latestOffset && cmdEpoch == latestEpoch
+		if recovered && !skipPublication {
 			protoPub := pubToProto(publication)
 			recoveredPubs = append(recoveredPubs, protoPub)
 		}
-	} else if cmdOffset > 0 && (cmdEpoch == "" || latestEpoch == cmdEpoch) && latestOffset == cmdOffset {
+	} else if cmdOffset > 0 && latestOffset == cmdOffset && cmdEpoch == latestEpoch {
 		// Client already had state, which has not been modified since.
 		recovered = true
 	}
