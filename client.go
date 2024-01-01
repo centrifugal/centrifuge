@@ -2669,15 +2669,21 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 	return recoveredPubs, recovered
 }
 
-func isLastMessageRecovered(historyResult HistoryResult, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isStateRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
 	var recovered bool
 	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
 	if len(historyResult.Publications) > 0 {
-		protoPub := pubToProto(historyResult.Publications[0])
-		recoveredPubs = append(recoveredPubs, protoPub)
-		recovered = recoveredPubs[0].Offset == latestOffset && (cmdEpoch == "" || latestEpoch == cmdEpoch)
+		publication := historyResult.Publications[0]
+		recovered = publication.Offset == latestOffset && (cmdEpoch == "" || latestEpoch == cmdEpoch)
+		if recovered && publication.Offset > cmdOffset {
+			protoPub := pubToProto(publication)
+			recoveredPubs = append(recoveredPubs, protoPub)
+		}
+	} else if cmdOffset > 0 && (cmdEpoch == "" || latestEpoch == cmdEpoch) && latestOffset == cmdOffset {
+		// Client already had state, which has not been modified since.
+		recovered = true
 	}
 	return recoveredPubs, recovered
 }
@@ -2760,9 +2766,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		if reply.Options.EnableRecovery && req.Recover {
 			cmdOffset := req.Offset
 			cmdEpoch := req.Epoch
-			cmdRecoverLatestPublication := req.RecoverLatestPublication
+			recoveryMode := reply.Options.RecoveryMode
 
-			if cmdRecoverLatestPublication {
+			if recoveryMode == RecoveryModeState {
 				historyResult, err := c.node.History(channel, WithHistoryFilter(HistoryFilter{
 					Limit:   1,
 					Reverse: true,
@@ -2779,7 +2785,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				latestOffset = historyResult.Offset
 				latestEpoch = historyResult.Epoch
 				var recovered bool
-				recoveredPubs, recovered = isLastMessageRecovered(historyResult, cmdEpoch)
+				recoveredPubs, recovered = isStateRecovered(historyResult, cmdOffset, cmdEpoch)
 				res.Recovered = recovered
 				c.node.metrics.incRecover(res.Recovered)
 			} else {

@@ -112,7 +112,7 @@
                 max-width: 90%;
             }
         </style>
-        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@^5/dist/centrifuge.js"></script>
         <script type="text/javascript">
             class Message {
                 constructor(time, text, meta) {
@@ -225,8 +225,9 @@
                 // subscription request will be sent after client connects to
                 // a server.
                 const sub = centrifuge.newSubscription(channel, {
-                    sinceLatestPublication: {
-                        epoch: "",
+                    since: {
+                        'offset': 0,
+                        'epoch': '',
                     }
                 });
 

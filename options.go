@@ -78,6 +78,8 @@ type SubscribeOptions struct {
 	// Make sure you are using EnableRecovery in channels that maintain Publication
 	// history stream.
 	EnableRecovery bool
+	// RecoveryMode is by default RecoveryModeStream, but can be also RecoveryModeState.
+	RecoveryMode RecoveryMode
 	// Data to send to a client with Subscribe Push.
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
@@ -145,6 +147,20 @@ func WithPositioning(enabled bool) SubscribeOption {
 func WithRecovery(enabled bool) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.EnableRecovery = enabled
+	}
+}
+
+type RecoveryMode int32
+
+const (
+	RecoveryModeStream RecoveryMode = 0
+	RecoveryModeState  RecoveryMode = 1
+)
+
+// WithRecoveryMode ...
+func WithRecoveryMode(mode RecoveryMode) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.RecoveryMode = mode
 	}
 }
 
