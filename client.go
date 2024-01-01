@@ -2861,13 +2861,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	if res.Recovered {
 		// Only append recovered publications in case continuity in a channel can be achieved.
 		res.Publications = recoveredPubs
-		if reply.Options.RecoveryMode == RecoveryModeStream {
-			// In case of successful recovery attach stream offset from request to subscribe response.
-			// This simplifies client implementation as it doesn't need to distinguish between cases when
-			// subscribe response has recovered publications, or it has no recovered publications.
-			// Valid stream position will be then caught up upon processing publications.
-			res.Offset = req.Offset
-		}
+		// In case of successful recovery attach stream offset from request to subscribe response.
+		// This simplifies client implementation as it doesn't need to distinguish between cases when
+		// subscribe response has recovered publications, or it has no recovered publications.
+		// Valid stream position will be then caught up upon processing publications.
+		res.Offset = req.Offset
 	}
 	res.WasRecovering = req.Recover
 
