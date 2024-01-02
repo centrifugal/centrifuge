@@ -211,11 +211,21 @@ func TestRedisPresenceManagerWithUserMappingExpire(t *testing.T) {
 				ClientID: "uid-3",
 				UserID:   "2",
 			}))
+			// anonymous user, different conn
+			require.NoError(t, pm.AddPresence("channel", "uid-4", &ClientInfo{
+				ClientID: "uid-4",
+				UserID:   "",
+			}))
+			// anonymous user, different conn
+			require.NoError(t, pm.AddPresence("channel", "uid-5", &ClientInfo{
+				ClientID: "uid-5",
+				UserID:   "",
+			}))
 
 			stats, err := pm.PresenceStats("channel")
 			require.NoError(t, err)
-			require.Equal(t, 3, stats.NumClients)
-			require.Equal(t, 2, stats.NumUsers)
+			require.Equal(t, 5, stats.NumClients)
+			require.Equal(t, 3, stats.NumUsers)
 
 			timer := time.NewTimer(2 * time.Second)
 		LOOP:
