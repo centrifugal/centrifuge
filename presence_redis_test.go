@@ -185,6 +185,69 @@ func TestRedisPresenceManagerWithUserMapping(t *testing.T) {
 	}
 }
 
+func TestRedisPresenceManagerWithUserMappingExpire(t *testing.T) {
+	t.Skip()
+	t.Parallel()
+	for _, tt := range redisPresenceTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			t.Parallel()
+			node := testNode(t)
+			pm := newTestRedisPresenceManager(t, node, tt.UseCluster, true)
+			pm.config.PresenceTTL = 2 * time.Second
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisPresenceManager(pm)
+
+			// adding presence for the first time.
+			require.NoError(t, pm.AddPresence("channel", "uid", &ClientInfo{
+				ClientID: "uid",
+				UserID:   "1",
+			}))
+			// same user, different conn
+			require.NoError(t, pm.AddPresence("channel", "uid-2", &ClientInfo{
+				ClientID: "uid-2",
+				UserID:   "1",
+			}))
+			// different user, different conn
+			require.NoError(t, pm.AddPresence("channel", "uid-3", &ClientInfo{
+				ClientID: "uid-3",
+				UserID:   "2",
+			}))
+
+			stats, err := pm.PresenceStats("channel")
+			require.NoError(t, err)
+			require.Equal(t, 3, stats.NumClients)
+			require.Equal(t, 2, stats.NumUsers)
+
+			timer := time.NewTimer(2 * time.Second)
+		LOOP:
+			for {
+				select {
+				case <-timer.C:
+					break LOOP
+				case <-time.After(500 * time.Millisecond):
+					// keep one entry.
+					require.NoError(t, pm.AddPresence("channel", "uid-2", &ClientInfo{
+						ClientID: "uid-2",
+						UserID:   "1",
+					}))
+				}
+			}
+
+			stats, err = pm.PresenceStats("channel")
+			require.NoError(t, err)
+			require.Equal(t, 1, stats.NumClients)
+			require.Equal(t, 1, stats.NumUsers)
+
+			time.Sleep(2 * time.Second)
+
+			stats, err = pm.PresenceStats("channel")
+			require.NoError(t, err)
+			require.Equal(t, 0, stats.NumClients)
+			require.Equal(t, 0, stats.NumUsers)
+		})
+	}
+}
+
 func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
 	for _, tt := range benchRedisTests {
 		b.Run(tt.Name, func(b *testing.B) {
