@@ -186,7 +186,6 @@ func TestRedisPresenceManagerWithUserMapping(t *testing.T) {
 }
 
 func TestRedisPresenceManagerWithUserMappingExpire(t *testing.T) {
-	t.Skip()
 	t.Parallel()
 	for _, tt := range redisPresenceTests {
 		t.Run(tt.Name, func(t *testing.T) {
