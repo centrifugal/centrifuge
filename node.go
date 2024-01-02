@@ -1129,12 +1129,12 @@ func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
 }
 
 // removePresence proxies presence removing to PresenceManager.
-func (n *Node) removePresence(ch string, uid string) error {
+func (n *Node) removePresence(ch string, clientID string, userID string) error {
 	if n.presenceManager == nil {
 		return nil
 	}
 	n.metrics.incActionCount("remove_presence")
-	return n.presenceManager.RemovePresence(ch, uid)
+	return n.presenceManager.RemovePresence(ch, clientID, userID)
 }
 
 var (
