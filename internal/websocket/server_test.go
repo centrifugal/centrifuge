@@ -127,7 +127,7 @@ func TestBufioReuse(t *testing.T) {
 			brw: bufio.NewReadWriter(br, bw),
 		}
 		upgrader := Upgrader{}
-		c, err := upgrader.Upgrade(resp, &http.Request{
+		c, _, err := upgrader.Upgrade(resp, &http.Request{
 			Method: http.MethodGet,
 			Header: http.Header{
 				"Upgrade":               []string{"websocket"},

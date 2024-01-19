@@ -75,7 +75,7 @@ type Upgrader struct {
 	EnableCompression bool
 }
 
-func (u *Upgrader) returnError(w http.ResponseWriter, r *http.Request, status int, reason string) (*Conn, error) {
+func (u *Upgrader) returnError(w http.ResponseWriter, r *http.Request, status int, reason string) (*Conn, string, error) {
 	err := HandshakeError{reason}
 	if u.Error != nil {
 		u.Error(w, r, status, err)
@@ -83,7 +83,7 @@ func (u *Upgrader) returnError(w http.ResponseWriter, r *http.Request, status in
 		w.Header().Set("Sec-Websocket-Version", "13")
 		http.Error(w, http.StatusText(status), status)
 	}
-	return nil, err
+	return nil, "", err
 }
 
 // checkSameOrigin returns true if the origin is not set or is equal to the request host.
@@ -123,7 +123,7 @@ func (u *Upgrader) selectSubprotocol(r *http.Request, responseHeader http.Header
 //
 // If the upgrade fails, then Upgrade replies to the client with an HTTP error
 // response.
-func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*Conn, error) {
+func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*Conn, string, error) {
 	const badHandshake = "websocket: the client is not using the websocket protocol: "
 
 	if !tokenListContainsValue(r.Header, "Connection", "upgrade") {
@@ -184,8 +184,8 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	}
 
 	if brw.Reader.Buffered() > 0 {
-		netConn.Close()
-		return nil, errors.New("websocket: client sent data before handshake is complete")
+		_ = netConn.Close()
+		return nil, "", errors.New("websocket: client sent data before handshake is complete")
 	}
 
 	var br *bufio.Reader
@@ -203,7 +203,6 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	}
 
 	c := newConn(netConn, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, br, writeBuf)
-	c.subprotocol = subprotocol
 
 	if compress {
 		c.newCompressionWriter = compressNoContextTakeover
@@ -220,9 +219,9 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	p = append(p, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "...)
 	p = append(p, computeAcceptKey(challengeKey)...)
 	p = append(p, "\r\n"...)
-	if c.subprotocol != "" {
+	if subprotocol != "" {
 		p = append(p, "Sec-WebSocket-Protocol: "...)
-		p = append(p, c.subprotocol...)
+		p = append(p, subprotocol...)
 		p = append(p, "\r\n"...)
 	}
 	if compress {
@@ -249,62 +248,20 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	p = append(p, "\r\n"...)
 
 	// Clear deadlines set by HTTP server.
-	netConn.SetDeadline(time.Time{})
+	_ = netConn.SetDeadline(time.Time{})
 
 	if u.HandshakeTimeout > 0 {
-		netConn.SetWriteDeadline(time.Now().Add(u.HandshakeTimeout))
+		_ = netConn.SetWriteDeadline(time.Now().Add(u.HandshakeTimeout))
 	}
 	if _, err = netConn.Write(p); err != nil {
-		netConn.Close()
-		return nil, err
+		_ = netConn.Close()
+		return nil, "", err
 	}
 	if u.HandshakeTimeout > 0 {
-		netConn.SetWriteDeadline(time.Time{})
+		_ = netConn.SetWriteDeadline(time.Time{})
 	}
 
-	return c, nil
-}
-
-// Upgrade upgrades the HTTP server connection to the WebSocket protocol.
-//
-// Deprecated: Use websocket.Upgrader instead.
-//
-// Upgrade does not perform origin checking. The application is responsible for
-// checking the Origin header before calling Upgrade. An example implementation
-// of the same origin policy check is:
-//
-//	if req.Header.Get("Origin") != "http://"+req.Host {
-//		http.Error(w, "Origin not allowed", http.StatusForbidden)
-//		return
-//	}
-//
-// If the endpoint supports subprotocols, then the application is responsible
-// for negotiating the protocol used on the connection. Use the Subprotocols()
-// function to get the subprotocols requested by the client. Use the
-// Sec-Websocket-Protocol response header to specify the subprotocol selected
-// by the application.
-//
-// The responseHeader is included in the response to the client's upgrade
-// request. Use the responseHeader to specify cookies (Set-Cookie) and the
-// negotiated subprotocol (Sec-Websocket-Protocol).
-//
-// The connection buffers IO to the underlying network connection. The
-// readBufSize and writeBufSize parameters specify the size of the buffers to
-// use. Messages can be larger than the buffers.
-//
-// If the request is not a valid WebSocket handshake, then Upgrade returns an
-// error of type HandshakeError. Applications should handle this error by
-// replying to the client with an HTTP error response.
-func Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header, readBufSize, writeBufSize int) (*Conn, error) {
-	u := Upgrader{ReadBufferSize: readBufSize, WriteBufferSize: writeBufSize}
-	u.Error = func(w http.ResponseWriter, r *http.Request, status int, reason error) {
-		// don't return errors to maintain backwards compatibility
-	}
-	u.CheckOrigin = func(r *http.Request) bool {
-		// allow all connections by default
-		return true
-	}
-	return u.Upgrade(w, r, responseHeader)
+	return c, subprotocol, nil
 }
 
 // Subprotocols returns the subprotocols requested by the client in the
@@ -357,8 +314,8 @@ func bufioWriterBuffer(originalWriter io.Writer, bw *bufio.Writer) []byte {
 	// bufio.Writer's underlying writer.
 	var wh writeHook
 	bw.Reset(&wh)
-	bw.WriteByte(0)
-	bw.Flush()
+	_ = bw.WriteByte(0)
+	_ = bw.Flush()
 
 	bw.Reset(originalWriter)
 

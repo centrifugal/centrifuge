@@ -28,7 +28,7 @@ var upgrader = websocket.Upgrader{
 
 // echoCopy echoes messages from the client using io.Copy.
 func echoCopy(w http.ResponseWriter, r *http.Request, writerOnly bool) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, _, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade:", err)
 		return
@@ -86,7 +86,7 @@ func echoCopyFull(w http.ResponseWriter, r *http.Request) {
 // echoReadAll echoes messages from the client by reading the entire message
 // with ioutil.ReadAll.
 func echoReadAll(w http.ResponseWriter, r *http.Request, writeMessage, writePrepared bool) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, _, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade:", err)
 		return

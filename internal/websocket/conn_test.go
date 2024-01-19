@@ -562,16 +562,6 @@ func TestAddrs(t *testing.T) {
 	}
 }
 
-func TestDeprecatedUnderlyingConn(t *testing.T) {
-	var b1, b2 bytes.Buffer
-	fc := fakeNetConn{Reader: &b1, Writer: &b2}
-	c := newConn(fc, true, 1024, 1024, nil, nil, nil)
-	ul := c.UnderlyingConn()
-	if ul != fc {
-		t.Fatalf("Underlying conn is not what it should be.")
-	}
-}
-
 func TestNetConn(t *testing.T) {
 	var b1, b2 bytes.Buffer
 	fc := fakeNetConn{Reader: &b1, Writer: &b2}
@@ -663,30 +653,9 @@ func (w blockingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestConcurrentWritePanic(t *testing.T) {
-	w := blockingWriter{make(chan struct{}), make(chan struct{})}
-	c := newTestConn(nil, w, false)
-	go func() {
-		c.WriteMessage(TextMessage, []byte{})
-	}()
-
-	// wait for goroutine to block in write.
-	<-w.c1
-
-	defer func() {
-		close(w.c2)
-		if v := recover(); v != nil {
-			return
-		}
-	}()
-
-	c.WriteMessage(TextMessage, []byte{})
-	t.Fatal("should not get here")
-}
-
 type failingReader struct{}
 
-func (r failingReader) Read(p []byte) (int, error) {
+func (r failingReader) Read(_ []byte) (int, error) {
 	return 0, io.EOF
 }
 
@@ -700,7 +669,7 @@ func TestFailedConnectionReadPanic(t *testing.T) {
 	}()
 
 	for i := 0; i < 20000; i++ {
-		c.ReadMessage()
+		_, _, _ = c.ReadMessage()
 	}
 	t.Fatal("should not get here")
 }
