@@ -3,7 +3,7 @@ package jwt
 import (
 	"time"
 
-	"github.com/cristalhq/jwt/v3"
+	"github.com/cristalhq/jwt/v5"
 )
 
 func BuildUserToken(secret string, userID string, expireAt int64) (string, error) {
@@ -11,7 +11,7 @@ func BuildUserToken(secret string, userID string, expireAt int64) (string, error
 	signer, _ := jwt.NewSignerHS(jwt.HS256, key)
 	builder := jwt.NewBuilder(signer)
 	claims := &connectTokenClaims{
-		StandardClaims: jwt.StandardClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
 			Subject: userID,
 		},
 	}
