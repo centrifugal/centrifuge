@@ -8,7 +8,7 @@ require (
 	github.com/FZambia/tarantool v0.2.2
 	github.com/centrifugal/centrifuge v0.8.2
 	github.com/centrifugal/protocol v0.11.1-0.20231217174539-d7863acb8224
-	github.com/cristalhq/jwt/v3 v3.0.0
+	github.com/cristalhq/jwt/v5 v5.4.0
 	github.com/dchest/uniuri v1.2.0
 	github.com/gin-contrib/sessions v0.0.3
 	github.com/gin-gonic/gin v1.9.1
