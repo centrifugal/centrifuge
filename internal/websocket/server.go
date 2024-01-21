@@ -189,7 +189,7 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	}
 
 	var br *bufio.Reader
-	if u.ReadBufferSize == 0 && bufioReaderSize(netConn, brw.Reader) > 256 {
+	if u.ReadBufferSize == 0 && brw.Reader.Size() > 256 {
 		// Reuse hijacked buffered reader as connection reader.
 		br = brw.Reader
 	}
@@ -283,18 +283,6 @@ func Subprotocols(r *http.Request) []string {
 func IsWebSocketUpgrade(r *http.Request) bool {
 	return tokenListContainsValue(r.Header, "Connection", "upgrade") &&
 		tokenListContainsValue(r.Header, "Upgrade", "websocket")
-}
-
-// bufioReaderSize size returns the size of a bufio.Reader.
-func bufioReaderSize(originalReader io.Reader, br *bufio.Reader) int {
-	// This code assumes that peek on a reset reader returns
-	// bufio.Reader.buf[:0].
-	// TODO: Use bufio.Reader.Size() after Go 1.10
-	br.Reset(originalReader)
-	if p, err := br.Peek(0); err == nil {
-		return cap(p)
-	}
-	return 0
 }
 
 // writeHook is an io.Writer that records the last slice passed to it vio

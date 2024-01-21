@@ -33,7 +33,9 @@ func echoCopy(w http.ResponseWriter, r *http.Request, writerOnly bool) {
 		log.Println("Upgrade:", err)
 		return
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	for {
 		mt, r, err := conn.NextReader()
 		if err != nil {
@@ -60,7 +62,7 @@ func echoCopy(w http.ResponseWriter, r *http.Request, writerOnly bool) {
 		}
 		if err != nil {
 			if err == errInvalidUTF8 {
-				conn.WriteControl(websocket.CloseMessage,
+				_ = conn.WriteControl(websocket.CloseMessage,
 					websocket.FormatCloseMessage(websocket.CloseInvalidFramePayloadData, ""),
 					time.Time{})
 			}
@@ -91,7 +93,9 @@ func echoReadAll(w http.ResponseWriter, r *http.Request, writeMessage, writePrep
 		log.Println("Upgrade:", err)
 		return
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	for {
 		mt, b, err := conn.ReadMessage()
 		if err != nil {
@@ -102,7 +106,7 @@ func echoReadAll(w http.ResponseWriter, r *http.Request, writeMessage, writePrep
 		}
 		if mt == websocket.TextMessage {
 			if !utf8.Valid(b) {
-				conn.WriteControl(websocket.CloseMessage,
+				_ = conn.WriteControl(websocket.CloseMessage,
 					websocket.FormatCloseMessage(websocket.CloseInvalidFramePayloadData, ""),
 					time.Time{})
 				log.Println("ReadAll: invalid utf8")
@@ -165,7 +169,7 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, "<html><body>Echo Server</body></html>")
+	_, _ = io.WriteString(w, "<html><body>Echo Server</body></html>")
 }
 
 var addr = flag.String("addr", ":9000", "http service address")

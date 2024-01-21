@@ -185,7 +185,7 @@ func newMaskKey() [4]byte {
 }
 
 func hideTempErr(err error) error {
-	if e, ok := err.(net.Error); ok && e.Temporary() {
+	if e, ok := err.(net.Error); ok && e.Temporary() { //nolint:staticcheck
 		err = &netError{msg: e.Error(), timeout: e.Timeout()}
 	}
 	return err
@@ -423,7 +423,7 @@ func (c *Conn) WriteControl(messageType int, data []byte, deadline time.Time) er
 
 	d := 1000 * time.Hour
 	if !deadline.IsZero() {
-		d = deadline.Sub(time.Now())
+		d = time.Until(deadline)
 		if d < 0 {
 			return errWriteTimeout
 		}
@@ -1117,7 +1117,7 @@ func (c *Conn) SetPingHandler(h func(appData string) error) {
 			err := c.WriteControl(PongMessage, []byte(message), time.Now().Add(writeWait))
 			if err == ErrCloseSent {
 				return nil
-			} else if e, ok := err.(net.Error); ok && e.Temporary() {
+			} else if e, ok := err.(net.Error); ok && e.Temporary() { //nolint:staticcheck
 				return nil
 			}
 			return err
