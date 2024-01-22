@@ -280,7 +280,7 @@ func (m *RedisPresenceManager) presenceStats(s *RedisShard, ch string) (Presence
 
 // PresenceStats - see PresenceManager interface description.
 func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
-	if m.config.EnableUserMapping(ch) {
+	if m.config.EnableUserMapping != nil && m.config.EnableUserMapping(ch) {
 		return m.presenceStats(m.getShard(ch), ch)
 	}
 
