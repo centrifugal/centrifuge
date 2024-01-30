@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -376,6 +377,51 @@ func (t *websocketTransport) Write(message []byte) error {
 		defer protocol.PutDataEncoder(protoType, encoder)
 		_ = encoder.Encode(message)
 		return t.writeData(encoder.Finish())
+	}
+}
+
+func ProtobufEncode(w io.Writer, data []byte) error {
+	bs := make([]byte, 8)
+	n := binary.PutUvarint(bs, uint64(len(data)))
+	w.Write(bs[:n])
+	w.Write(data)
+	return nil
+}
+
+// WriteMany data to transport.
+func (t *websocketTransport) WriteManyWriter(messages ...[]byte) error {
+	select {
+	case <-t.closeCh:
+		return nil
+	default:
+		//protoType := t.Protocol().toProto()
+
+		//if t.opts.compressionMinSize > 0 {
+		//	t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
+		//}
+		var messageType = websocket.TextMessage
+		if t.Protocol() == ProtocolTypeProtobuf {
+			messageType = websocket.BinaryMessage
+		}
+		if t.opts.writeTimeout > 0 {
+			_ = t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
+		}
+
+		w, err := t.conn.NextWriter(messageType)
+		if err != nil {
+			return err
+		}
+		for i := range messages {
+			_ = ProtobufEncode(w, messages[i])
+		}
+
+		err = w.Close()
+
+		if t.opts.writeTimeout > 0 {
+			_ = t.conn.SetWriteDeadline(time.Time{})
+		}
+
+		return err
 	}
 }
 
