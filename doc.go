@@ -1,8 +1,8 @@
 // Package centrifuge is a real-time messaging library that abstracts
 // several bidirectional transports (Websocket and its emulation over
-// HTTP-Streaming, SSE/EventSource, SockJS) and provides primitives
-// to build scalable real-time applications with Go. It's also used as
-// a core of Centrifugo server (https://github.com/centrifugal/centrifugo).
+// HTTP-Streaming, SSE/EventSource) and provides primitives to build
+// scalable real-time applications with Go. It's also used as a core
+// of Centrifugo server (https://github.com/centrifugal/centrifugo).
 //
 // Centrifuge library provides several features on top of plain Websocket
 // implementation and comes with several client SDKs – see more details in

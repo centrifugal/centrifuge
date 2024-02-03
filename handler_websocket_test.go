@@ -14,8 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/websocket"
+
 	"github.com/centrifugal/protocol"
-	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,8 +34,10 @@ func TestWebsocketHandler(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
+	dialer := &websocket.Dialer{}
+
 	url := "ws" + server.URL[4:]
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -57,8 +60,9 @@ func TestWebsocketHandlerProtocolV2(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
+	dialer := &websocket.Dialer{}
 	url := "ws" + server.URL[4:]
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?cf_protocol_version=v2", nil)
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket?cf_protocol_version=v2", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -83,13 +87,10 @@ func TestWebsocketHandlerSubprotocol(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
+	dialer := &websocket.Dialer{}
 	url := "ws" + server.URL[4:]
-	dialer := &websocket.Dialer{
-		Proxy:            http.ProxyFromEnvironment,
-		HandshakeTimeout: 45 * time.Second,
-	}
 	dialer.Subprotocols = []string{"centrifuge-protobuf"}
-	conn, resp, err := dialer.Dial(url+"/connection/websocket", nil)
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -119,12 +120,9 @@ func TestWebsocketHandlerURLParams(t *testing.T) {
 	defer server.Close()
 
 	url := "ws" + server.URL[4:]
-	dialer := &websocket.Dialer{
-		Proxy:            http.ProxyFromEnvironment,
-		HandshakeTimeout: 45 * time.Second,
-	}
+	dialer := &websocket.Dialer{}
 
-	conn, resp, err := dialer.Dial(url+"/connection/websocket?cf_protocol=protobuf&cf_protocol_version=v1", nil)
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket?cf_protocol=protobuf&cf_protocol_version=v1", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -155,11 +153,9 @@ func TestWebsocketTransportWrite(t *testing.T) {
 
 	url := "ws" + server.URL[4:]
 	dialer := &websocket.Dialer{
-		Proxy:            http.ProxyFromEnvironment,
-		HandshakeTimeout: 45 * time.Second,
+		Subprotocols: []string{"centrifuge-protobuf"},
 	}
-	dialer.Subprotocols = []string{"centrifuge-protobuf"}
-	conn, resp, err := dialer.Dial(url+"/connection/websocket", nil)
+	conn, resp, subprotocol, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -167,6 +163,7 @@ func TestWebsocketTransportWrite(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	err = conn.WriteMessage(websocket.BinaryMessage, getConnectCommandProtobuf(t))
 	require.NoError(t, err)
+	require.Equal(t, "centrifuge-protobuf", subprotocol)
 
 	msgType, msg, err := conn.ReadMessage()
 	require.NoError(t, err)
@@ -195,11 +192,9 @@ func TestWebsocketTransportWriteMany(t *testing.T) {
 
 	url := "ws" + server.URL[4:]
 	dialer := &websocket.Dialer{
-		Proxy:            http.ProxyFromEnvironment,
-		HandshakeTimeout: 45 * time.Second,
+		Subprotocols: []string{"centrifuge-protobuf"},
 	}
-	dialer.Subprotocols = []string{"centrifuge-protobuf"}
-	conn, resp, err := dialer.Dial(url+"/connection/websocket", nil)
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -251,8 +246,9 @@ func TestWebsocketHandlerProtobuf(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
+	dialer := &websocket.Dialer{}
 	url := "ws" + server.URL[4:]
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket?format=protobuf", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -283,7 +279,8 @@ func TestWebsocketHandlerPing(t *testing.T) {
 
 	url := "ws" + server.URL[4:]
 
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	dialer := &websocket.Dialer{}
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -336,7 +333,8 @@ func TestWebsocketHandler_FramePingPong(t *testing.T) {
 
 	url := "ws" + server.URL[4:]
 
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?cf_ws_frame_ping_pong=true", nil)
+	dialer := &websocket.Dialer{}
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket?cf_ws_frame_ping_pong=true", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -382,8 +380,8 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	defer server.Close()
 
 	url := "ws" + server.URL[4:]
-
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	dialer := &websocket.Dialer{}
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
@@ -672,7 +670,8 @@ func BenchmarkWsConnectV2(b *testing.B) {
 }
 
 func newRealConnJSONConnectV2(b testing.TB, url string) *websocket.Conn {
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket", nil)
+	dialer := &websocket.Dialer{}
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(b, err)
 	defer func() { _ = resp.Body.Close() }()
 
@@ -689,7 +688,8 @@ func newRealConnJSONConnectV2(b testing.TB, url string) *websocket.Conn {
 }
 
 func newRealConnProtobufConnectV2(b testing.TB, url string) *websocket.Conn {
-	conn, resp, err := websocket.DefaultDialer.Dial(url+"/connection/websocket?format=protobuf", nil)
+	dialer := &websocket.Dialer{}
+	conn, resp, _, err := dialer.Dial(url+"/connection/websocket?format=protobuf", nil)
 	require.NoError(b, err)
 	defer func() { _ = resp.Body.Close() }()
 

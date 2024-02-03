@@ -66,7 +66,6 @@ type metrics struct {
 	recoverCountNo  prometheus.Counter
 
 	transportConnectCountWebsocket  prometheus.Counter
-	transportConnectCountSockJS     prometheus.Counter
 	transportConnectCountSSE        prometheus.Counter
 	transportConnectCountHTTPStream prometheus.Counter
 
@@ -156,8 +155,6 @@ func (m *metrics) incTransportConnect(transport string) {
 	switch transport {
 	case transportWebsocket:
 		m.transportConnectCountWebsocket.Inc()
-	case transportSockJS:
-		m.transportConnectCountSockJS.Inc()
 	case transportSSE:
 		m.transportConnectCountSSE.Inc()
 	case transportHTTPStream:
@@ -476,7 +473,6 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	m.recoverCountNo = m.recoverCount.WithLabelValues("no")
 
 	m.transportConnectCountWebsocket = m.transportConnectCount.WithLabelValues(transportWebsocket)
-	m.transportConnectCountSockJS = m.transportConnectCount.WithLabelValues(transportSockJS)
 	m.transportConnectCountHTTPStream = m.transportConnectCount.WithLabelValues(transportHTTPStream)
 	m.transportConnectCountSSE = m.transportConnectCount.WithLabelValues(transportSSE)
 
