@@ -245,14 +245,6 @@ func main() {
 	})
 	mux.Handle("/connection/websocket", authMiddleware(websocketHandler))
 
-	sockjsHandler := centrifuge.NewSockjsHandler(node, centrifuge.SockjsConfig{
-		URL:                      "https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js",
-		HandlerPrefix:            "/connection/sockjs",
-		WebsocketReadBufferSize:  1024,
-		WebsocketWriteBufferSize: 1024,
-	})
-	mux.Handle("/connection/sockjs/", authMiddleware(sockjsHandler))
-
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/", http.FileServer(http.Dir("./")))
 

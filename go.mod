@@ -6,8 +6,6 @@ require (
 	github.com/FZambia/eagle v0.1.0
 	github.com/centrifugal/protocol v0.11.0
 	github.com/google/uuid v1.5.0
-	github.com/gorilla/websocket v1.5.0
-	github.com/igm/sockjs-go/v3 v3.0.2
 	github.com/prometheus/client_golang v1.18.0
 	github.com/redis/rueidis v1.0.27
 	github.com/segmentio/encoding v0.4.0
