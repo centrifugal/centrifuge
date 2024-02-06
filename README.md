@@ -30,6 +30,8 @@ Library highlights:
 * Out-of-the-box Prometheus instrumentation
 * Client SDKs for main application environments all following [single behaviour spec](https://centrifugal.dev/docs/transports/client_api) (see list of SDKs below).
 
+### Real-time SDK
+
 For **bidirectional** communication between a client and a Centrifuge-based server we have a set of official client real-time SDKs:
 
 * [centrifuge-js](https://github.com/centrifugal/centrifuge-js) – for a browser, NodeJS and React Native
@@ -37,6 +39,7 @@ For **bidirectional** communication between a client and a Centrifuge-based serv
 * [centrifuge-dart](https://github.com/centrifugal/centrifuge-dart) - for Dart and Flutter
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
+* [centrifuge-python](https://github.com/centrifugal/centrifuge-python) - real-time SDK for Python on top of asyncio (curently in BETA)
 
 These SDKs abstract asynchronous communication complexity from the developer: handle framing, reconnect with backoff, timeouts, multiplex channel subscriptions over single connection, etc.
 
