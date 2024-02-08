@@ -39,7 +39,7 @@ For **bidirectional** communication between a client and a Centrifuge-based serv
 * [centrifuge-dart](https://github.com/centrifugal/centrifuge-dart) - for Dart and Flutter
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
-* [centrifuge-python](https://github.com/centrifugal/centrifuge-python) - real-time SDK for Python on top of asyncio (curently in BETA)
+* [centrifuge-python](https://github.com/centrifugal/centrifuge-python) - real-time SDK for Python on top of asyncio
 
 These SDKs abstract asynchronous communication complexity from the developer: handle framing, reconnect with backoff, timeouts, multiplex channel subscriptions over single connection, etc.
 
