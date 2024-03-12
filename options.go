@@ -24,6 +24,13 @@ func WithIdempotencyKey(key string) PublishOption {
 	}
 }
 
+// WithDelta tells Broker to use delta streaming.
+func WithDelta(enabled bool) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.UseDelta = enabled
+	}
+}
+
 // WithIdempotentResultTTL sets the time of expiration for results of idempotent publications.
 // See PublishOptions.IdempotentResultTTL for more description and defaults.
 func WithIdempotentResultTTL(ttl time.Duration) PublishOption {

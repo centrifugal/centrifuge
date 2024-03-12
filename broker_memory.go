@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"container/heap"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -104,7 +105,20 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 		Info: opts.ClientInfo,
 		Tags: opts.Tags,
 	}
+	var prevPub *Publication
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {
+		if opts.UseDelta {
+			pubs, _, err := b.historyHub.get(ch, HistoryOptions{Filter: HistoryFilter{
+				Limit:   1,
+				Reverse: true,
+			}, MetaTTL: opts.HistoryMetaTTL})
+			if err != nil {
+				return StreamPosition{}, false, fmt.Errorf("error getting previous publication from stream: %w", err)
+			}
+			if len(pubs) > 0 {
+				prevPub = pubs[0]
+			}
+		}
 		streamTop, err := b.historyHub.add(ch, pub, opts)
 		if err != nil {
 			return StreamPosition{}, false, err
@@ -117,7 +131,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 			}
 			b.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireSeconds)
 		}
-		return streamTop, false, b.eventHandler.HandlePublication(ch, pub, streamTop)
+		return streamTop, false, b.eventHandler.HandlePublication(ch, pub, streamTop, prevPub)
 	}
 	streamPosition := StreamPosition{}
 	if opts.IdempotencyKey != "" {
@@ -127,7 +141,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 		}
 		b.saveResultToCache(ch, opts.IdempotencyKey, streamPosition, resultExpireSeconds)
 	}
-	return streamPosition, false, b.eventHandler.HandlePublication(ch, pub, StreamPosition{})
+	return streamPosition, false, b.eventHandler.HandlePublication(ch, pub, StreamPosition{}, prevPub)
 }
 
 func (b *MemoryBroker) getResultFromCache(ch string, key string) (StreamPosition, bool) {
@@ -340,8 +354,13 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 		h.nextExpireCheck = expireAt
 	}
 
-	if h.historyMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
+	historyMetaTTL := opts.HistoryMetaTTL
+	if historyMetaTTL == 0 {
+		historyMetaTTL = h.historyMetaTTL
+	}
+
+	if historyMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
@@ -388,8 +407,13 @@ func (h *historyHub) get(ch string, opts HistoryOptions) ([]*Publication, Stream
 
 	filter := opts.Filter
 
-	if h.historyMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
+	historyMetaTTL := opts.MetaTTL
+	if historyMetaTTL == 0 {
+		historyMetaTTL = h.historyMetaTTL
+	}
+
+	if historyMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
