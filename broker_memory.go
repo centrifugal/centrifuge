@@ -340,8 +340,13 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 		h.nextExpireCheck = expireAt
 	}
 
-	if h.historyMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
+	historyMetaTTL := opts.HistoryMetaTTL
+	if historyMetaTTL == 0 {
+		historyMetaTTL = h.historyMetaTTL
+	}
+
+	if historyMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
@@ -388,8 +393,13 @@ func (h *historyHub) get(ch string, opts HistoryOptions) ([]*Publication, Stream
 
 	filter := opts.Filter
 
-	if h.historyMetaTTL > 0 {
-		removeAt := time.Now().Unix() + int64(h.historyMetaTTL.Seconds())
+	historyMetaTTL := opts.MetaTTL
+	if historyMetaTTL == 0 {
+		historyMetaTTL = h.historyMetaTTL
+	}
+
+	if historyMetaTTL > 0 {
+		removeAt := time.Now().Unix() + int64(historyMetaTTL.Seconds())
 		if _, ok := h.removes[ch]; !ok {
 			heap.Push(&h.removeQueue, &priority.Item{Value: ch, Priority: removeAt})
 		}
