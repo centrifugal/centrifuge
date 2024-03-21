@@ -2769,7 +2769,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			cmdEpoch := req.Epoch
 			recoveryMode := reply.Options.RecoveryMode
 
-			if recoveryMode == RecoveryModeState {
+			if recoveryMode == RecoveryModeDocument {
 				historyResult, err := c.node.History(channel, WithHistoryFilter(HistoryFilter{
 					Limit:   1,
 					Reverse: true,
