@@ -64,6 +64,7 @@ func main() {
 			if err == jwt.ErrTokenExpired {
 				return centrifuge.ConnectReply{}, centrifuge.ErrorTokenExpired
 			}
+			log.Printf("error verifying token: %s", err)
 			return centrifuge.ConnectReply{}, centrifuge.DisconnectInvalidToken
 		}
 		subs := make(map[string]centrifuge.SubscribeOptions, len(token.Channels))

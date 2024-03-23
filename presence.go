@@ -22,6 +22,6 @@ type PresenceManager interface {
 	// (touched) after some configured time interval.
 	AddPresence(ch string, clientID string, info *ClientInfo) error
 	// RemovePresence removes presence information for connection
-	// with specified identifier.
-	RemovePresence(ch string, clientID string) error
+	// with specified client and user identifiers.
+	RemovePresence(ch string, clientID string, userID string) error
 }

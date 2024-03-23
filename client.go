@@ -3105,7 +3105,7 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	c.mu.Unlock()
 
 	if channelHasFlag(chCtx.flags, flagEmitPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
-		err := c.node.removePresence(channel, c.uid)
+		err := c.node.removePresence(channel, c.uid, c.user)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}

@@ -26,7 +26,7 @@ func TestNewMemoryPresenceManager_RemovePresence(t *testing.T) {
 	p, err := m.Presence("channel")
 	require.NoError(t, err)
 	require.Equal(t, 1, len(p))
-	require.NoError(t, m.RemovePresence("channel", "uid"))
+	require.NoError(t, m.RemovePresence("channel", "uid", ""))
 	p, err = m.Presence("channel")
 	require.NoError(t, err)
 	require.Equal(t, 0, len(p))

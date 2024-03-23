@@ -42,8 +42,8 @@ func (m *MemoryPresenceManager) AddPresence(ch string, uid string, info *ClientI
 }
 
 // RemovePresence - see PresenceManager interface description.
-func (m *MemoryPresenceManager) RemovePresence(ch string, uid string) error {
-	return m.presenceHub.remove(ch, uid)
+func (m *MemoryPresenceManager) RemovePresence(ch string, clientID string, _ string) error {
+	return m.presenceHub.remove(ch, clientID)
 }
 
 // Presence - see PresenceManager interface description.

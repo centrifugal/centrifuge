@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cristalhq/jwt/v3"
+	"github.com/cristalhq/jwt/v5"
 )
 
 type ConnectToken struct {
@@ -83,7 +83,7 @@ type connectTokenClaims struct {
 	Info       json.RawMessage `json:"info,omitempty"`
 	Base64Info string          `json:"b64info,omitempty"`
 	Channels   []string        `json:"channels,omitempty"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
 
 type subscribeTokenClaims struct {
@@ -92,7 +92,7 @@ type subscribeTokenClaims struct {
 	Info            json.RawMessage `json:"info,omitempty"`
 	Base64Info      string          `json:"b64info,omitempty"`
 	ExpireTokenOnly bool            `json:"eto,omitempty"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
 
 type algorithms struct {
@@ -148,60 +148,67 @@ func newAlgorithms(tokenHMACSecretKey string, pubKey *rsa.PublicKey) (*algorithm
 	return alg, nil
 }
 
-func (s *algorithms) verify(token *jwt.Token) error {
-	var verifier jwt.Verifier
-	switch token.Header().Algorithm {
-	case jwt.HS256:
-		verifier = s.HS256
-	case jwt.HS384:
-		verifier = s.HS384
-	case jwt.HS512:
-		verifier = s.HS512
-	case jwt.RS256:
-		verifier = s.RS256
-	case jwt.RS384:
-		verifier = s.RS384
-	case jwt.RS512:
-		verifier = s.RS512
-	default:
-		return fmt.Errorf("%w: %s", errUnsupportedAlgorithm, string(token.Header().Algorithm))
-	}
-	if verifier == nil {
-		return fmt.Errorf("%w: %s", errDisabledAlgorithm, string(token.Header().Algorithm))
-	}
-	return verifier.Verify(token.Payload(), token.Signature())
-}
-
 func (verifier *TokenVerifier) verifySignature(token *jwt.Token) error {
 	verifier.mu.RLock()
 	defer verifier.mu.RUnlock()
-	return verifier.algorithms.verify(token)
+
+	var verifierFunc jwt.Verifier
+	switch token.Header().Algorithm {
+	case jwt.HS256:
+		verifierFunc = verifier.algorithms.HS256
+	case jwt.HS384:
+		verifierFunc = verifier.algorithms.HS384
+	case jwt.HS512:
+		verifierFunc = verifier.algorithms.HS512
+	case jwt.RS256:
+		verifierFunc = verifier.algorithms.RS256
+	case jwt.RS384:
+		verifierFunc = verifier.algorithms.RS384
+	case jwt.RS512:
+		verifierFunc = verifier.algorithms.RS512
+	default:
+		return fmt.Errorf("%w: %s", errUnsupportedAlgorithm, string(token.Header().Algorithm))
+	}
+
+	if verifierFunc == nil {
+		return fmt.Errorf("%w: %s", errDisabledAlgorithm, string(token.Header().Algorithm))
+	}
+
+	return verifierFunc.Verify(token)
 }
 
 func (verifier *TokenVerifier) VerifyConnectToken(t string) (ConnectToken, error) {
-	token, err := jwt.Parse([]byte(t))
+	token, err := jwt.ParseNoVerify([]byte(t))
 	if err != nil {
-		return ConnectToken{}, err
+		return ConnectToken{}, fmt.Errorf("error parsing connect token: %w", err)
 	}
 
 	err = verifier.verifySignature(token)
 	if err != nil {
-		return ConnectToken{}, err
+		return ConnectToken{}, fmt.Errorf("error verifying connect token signature: %w", err)
+	}
+
+	token, err = jwt.Parse([]byte(t), verifier.selectVerifier(token.Header().Algorithm))
+	if err != nil {
+		return ConnectToken{}, fmt.Errorf("error verifying connect token: %w", err)
 	}
 
 	claims := &connectTokenClaims{}
-	err = json.Unmarshal(token.RawClaims(), claims)
+	err = json.Unmarshal(token.Claims(), claims)
 	if err != nil {
-		return ConnectToken{}, err
+		return ConnectToken{}, fmt.Errorf("error unmarshalling connect token claims: %w", err)
 	}
 
 	now := time.Now()
-	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
+	if !claims.IsValidExpiresAt(now) {
 		return ConnectToken{}, ErrTokenExpired
+	}
+	if !claims.IsValidNotBefore(now) {
+		return ConnectToken{}, errors.New("token not valid yet")
 	}
 
 	ct := ConnectToken{
-		UserID:   claims.StandardClaims.Subject,
+		UserID:   claims.RegisteredClaims.Subject,
 		Info:     claims.Info,
 		Channels: claims.Channels,
 	}
@@ -211,15 +218,37 @@ func (verifier *TokenVerifier) VerifyConnectToken(t string) (ConnectToken, error
 	if claims.Base64Info != "" {
 		byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 		if err != nil {
-			return ConnectToken{}, err
+			return ConnectToken{}, fmt.Errorf("error decoding base64 info in connect token: %w", err)
 		}
 		ct.Info = byteInfo
 	}
 	return ct, nil
 }
 
+func (verifier *TokenVerifier) selectVerifier(alg jwt.Algorithm) jwt.Verifier {
+	verifier.mu.RLock()
+	defer verifier.mu.RUnlock()
+
+	switch alg {
+	case jwt.HS256:
+		return verifier.algorithms.HS256
+	case jwt.HS384:
+		return verifier.algorithms.HS384
+	case jwt.HS512:
+		return verifier.algorithms.HS512
+	case jwt.RS256:
+		return verifier.algorithms.RS256
+	case jwt.RS384:
+		return verifier.algorithms.RS384
+	case jwt.RS512:
+		return verifier.algorithms.RS512
+	default:
+		return nil
+	}
+}
+
 func (verifier *TokenVerifier) VerifySubscribeToken(t string) (SubscribeToken, error) {
-	token, err := jwt.Parse([]byte(t))
+	token, err := jwt.ParseNoVerify([]byte(t))
 	if err != nil {
 		return SubscribeToken{}, err
 	}
@@ -229,33 +258,44 @@ func (verifier *TokenVerifier) VerifySubscribeToken(t string) (SubscribeToken, e
 		return SubscribeToken{}, err
 	}
 
+	token, err = jwt.Parse([]byte(t), verifier.selectVerifier(token.Header().Algorithm))
+	if err != nil {
+		return SubscribeToken{}, fmt.Errorf("error verifying subscribe token: %w", err)
+	}
+
 	claims := &subscribeTokenClaims{}
-	err = json.Unmarshal(token.RawClaims(), claims)
+	err = json.Unmarshal(token.Claims(), claims)
 	if err != nil {
 		return SubscribeToken{}, err
 	}
 
 	now := time.Now()
-	if !claims.IsValidExpiresAt(now) || !claims.IsValidNotBefore(now) {
+	if !claims.IsValidExpiresAt(now) {
 		return SubscribeToken{}, ErrTokenExpired
+	}
+	if !claims.IsValidNotBefore(now) {
+		return SubscribeToken{}, errors.New("token not valid yet")
 	}
 
 	st := SubscribeToken{
 		Client:          claims.Client,
-		Info:            claims.Info,
 		Channel:         claims.Channel,
+		ExpireAt:        claims.ExpiresAt.Unix(),
 		ExpireTokenOnly: claims.ExpireTokenOnly,
 	}
-	if claims.ExpiresAt != nil {
-		st.ExpireAt = claims.ExpiresAt.Unix()
-	}
-	if claims.Base64Info != "" {
+
+	// Decode the Info field if it's present
+	if len(claims.Info) > 0 {
+		st.Info = claims.Info
+	} else if claims.Base64Info != "" {
+		// If Info is not present, but Base64Info is, decode it
 		byteInfo, err := base64.StdEncoding.DecodeString(claims.Base64Info)
 		if err != nil {
-			return SubscribeToken{}, err
+			return SubscribeToken{}, fmt.Errorf("error decoding base64 info in subscribe token: %w", err)
 		}
 		st.Info = byteInfo
 	}
+
 	return st, nil
 }
 

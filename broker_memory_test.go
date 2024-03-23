@@ -340,6 +340,46 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	h.RUnlock()
 }
 
+func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
+	h := newHistoryHub(300*time.Second, make(chan struct{}))
+	h.runCleanups()
+
+	ch1 := "channel1"
+	ch2 := "channel2"
+	pub := newTestPublication()
+	h.RLock()
+	require.Equal(t, int64(0), h.nextRemoveCheck)
+	h.RUnlock()
+	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	h.RLock()
+	require.True(t, h.nextRemoveCheck > 0)
+	require.Equal(t, 2, len(h.streams))
+	h.RUnlock()
+	pubs, _, err := h.get(ch1, HistoryOptions{
+		Filter:  HistoryFilter{Limit: -1},
+		MetaTTL: time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	pubs, _, err = h.get(ch2, HistoryOptions{
+		Filter:  HistoryFilter{Limit: -1},
+		MetaTTL: time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 2)
+
+	time.Sleep(2 * time.Second)
+
+	// test that stream cleaned up by periodic task
+	h.RLock()
+	require.Equal(t, 0, len(h.streams))
+	require.Equal(t, int64(0), h.nextRemoveCheck)
+	h.RUnlock()
+}
+
 func TestMemoryBrokerRecover(t *testing.T) {
 	e := testMemoryBroker()
 	defer func() { _ = e.node.Shutdown(context.Background()) }()

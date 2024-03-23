@@ -11,9 +11,9 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
 	"github.com/centrifugal/centrifuge/internal/timers"
+	"github.com/centrifugal/centrifuge/internal/websocket"
 
 	"github.com/centrifugal/protocol"
-	"github.com/gorilla/websocket"
 )
 
 // WebsocketConfig represents config for WebsocketHandler.
@@ -122,7 +122,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	compressionLevel := s.config.CompressionLevel
 	compressionMinSize := s.config.CompressionMinSize
 
-	conn, err := s.upgrade.Upgrade(rw, r, nil)
+	conn, subProtocol, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
@@ -147,7 +147,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		conn.SetReadLimit(int64(messageSizeLimit))
 	}
 
-	subProtocol := conn.Subprotocol()
 	if subProtocol == "centrifuge-protobuf" {
 		protoType = ProtocolTypeProtobuf
 	}

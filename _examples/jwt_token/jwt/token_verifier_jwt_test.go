@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cristalhq/jwt/v3"
+	"github.com/cristalhq/jwt/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,7 +48,7 @@ func getConnToken(user string, exp int64, rsaPrivateKey *rsa.PrivateKey) string 
 	builder := getTokenBuilder(rsaPrivateKey)
 	claims := &connectTokenClaims{
 		Base64Info: "e30=",
-		StandardClaims: jwt.StandardClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
 			Subject: user,
 		},
 	}
@@ -59,16 +59,16 @@ func getConnToken(user string, exp int64, rsaPrivateKey *rsa.PrivateKey) string 
 	if err != nil {
 		panic(err)
 	}
-	return string(token.Raw())
+	return string(token.Bytes())
 }
 
 func getSubscribeToken(channel string, client string, exp int64, rsaPrivateKey *rsa.PrivateKey) string {
 	builder := getTokenBuilder(rsaPrivateKey)
 	claims := &subscribeTokenClaims{
-		Base64Info:     "e30=",
-		Channel:        channel,
-		Client:         client,
-		StandardClaims: jwt.StandardClaims{},
+		Base64Info:       "e30=",
+		Channel:          channel,
+		Client:           client,
+		RegisteredClaims: jwt.RegisteredClaims{},
 	}
 	if exp > 0 {
 		claims.ExpiresAt = jwt.NewNumericDate(time.Unix(exp, 0))
@@ -77,7 +77,7 @@ func getSubscribeToken(channel string, client string, exp int64, rsaPrivateKey *
 	if err != nil {
 		panic(err)
 	}
-	return string(token.Raw())
+	return string(token.Bytes())
 }
 
 func Test_tokenVerifierJWT_Signer(t *testing.T) {
