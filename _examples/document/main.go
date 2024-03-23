@@ -1,10 +1,15 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 	"time"
+
+	jsonpatch "github.com/evanphx/json-patch/v5"
+	fdelta "github.com/shadowspore/fossil-delta"
 )
 
 type Event struct {
@@ -39,11 +44,13 @@ const (
 func simulateMatch(match *Match) {
 	fmt.Println("Match started between", match.HomeTeam.Name, "and", match.AwayTeam.Name)
 
-	totalSimulationTime := 9                                             // Total time for the simulation in seconds
+	totalSimulationTime := 1                                             // Total time for the simulation in seconds
 	totalEvents := 20                                                    // Total number of events to simulate
 	eventInterval := float64(totalSimulationTime) / float64(totalEvents) // Time between events
 
+	var prevData []byte
 	totalBytes := 0
+	totalBytesSent := 0
 
 	for i := 0; i < totalEvents; i++ {
 		time.Sleep(time.Duration(eventInterval*1000) * time.Millisecond) // Sleep between events
@@ -66,10 +73,30 @@ func simulateMatch(match *Match) {
 
 		data, _ := json.Marshal(match)
 		totalBytes += len(data)
+		if prevData != nil {
+
+			patch, err := jsonpatch.CreateMergePatch(prevData, data)
+			if err != nil {
+				log.Fatal(err)
+			}
+			//fmt.Println(string(patch))
+
+			patch = fdelta.Create(prevData, data)
+			//fmt.Println(string(patch))
+			patch = []byte(base64.StdEncoding.EncodeToString(patch))
+
+			totalBytesSent += len(patch)
+		} else {
+			totalBytesSent += len(data)
+		}
+		prevData = data
 	}
 
-	fmt.Println("Match ended. Final Score:", match.HomeTeam.Name, match.HomeTeam.Score, "-", match.AwayTeam.Score, match.AwayTeam.Name)
-	fmt.Println("Total bytes sent:", totalBytes)
+	fmt.Println(
+		"Match ended. Final Score:",
+		match.HomeTeam.Name, match.HomeTeam.Score, "-", match.AwayTeam.Score, match.AwayTeam.Name)
+	fmt.Println("Bytes without delta:", totalBytes)
+	fmt.Println("Bytes with delta:", totalBytesSent)
 }
 
 func chooseRandomEventType() string {
@@ -101,11 +128,11 @@ func main() {
 	// Example setup
 	match := Match{
 		HomeTeam: Team{
-			Name:    "Team A",
+			Name:    "Real Madrid",
 			Players: assignNamesToPlayers(playerNamesTeamA),
 		},
 		AwayTeam: Team{
-			Name:    "Team B",
+			Name:    "Barcelona",
 			Players: assignNamesToPlayers(playerNamesTeamB),
 		},
 	}
