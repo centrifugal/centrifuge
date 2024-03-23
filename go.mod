@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/FZambia/eagle v0.1.0
 	github.com/centrifugal/protocol v0.12.1-0.20240323055736-2bac99578c1f
+	github.com/evanphx/json-patch/v5 v5.9.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.0
 	github.com/redis/rueidis v1.0.31
@@ -20,6 +21,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
+	github.com/pkg/errors v0.8.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
