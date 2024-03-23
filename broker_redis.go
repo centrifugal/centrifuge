@@ -1013,7 +1013,7 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 			// it to unmarshalled Publication.
 			pub.Offset = sp.Offset
 		}
-		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp)
+		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, nil)
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo
 		err := info.UnmarshalVT(pushData)

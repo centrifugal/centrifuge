@@ -24,6 +24,13 @@ func WithIdempotencyKey(key string) PublishOption {
 	}
 }
 
+// WithDelta tells Broker to use delta streaming.
+func WithDelta(enabled bool) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.UseDelta = enabled
+	}
+}
+
 // WithIdempotentResultTTL sets the time of expiration for results of idempotent publications.
 // See PublishOptions.IdempotentResultTTL for more description and defaults.
 func WithIdempotentResultTTL(ttl time.Duration) PublishOption {
@@ -78,6 +85,8 @@ type SubscribeOptions struct {
 	// Make sure you are using EnableRecovery in channels that maintain Publication
 	// history stream.
 	EnableRecovery bool
+	// RecoveryMode is by default RecoveryModeStream, but can be also RecoveryModeDocument.
+	RecoveryMode RecoveryMode
 	// Data to send to a client with Subscribe Push.
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
@@ -145,6 +154,20 @@ func WithPositioning(enabled bool) SubscribeOption {
 func WithRecovery(enabled bool) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.EnableRecovery = enabled
+	}
+}
+
+type RecoveryMode int32
+
+const (
+	RecoveryModeStream   RecoveryMode = 0
+	RecoveryModeDocument RecoveryMode = 1
+)
+
+// WithRecoveryMode ...
+func WithRecoveryMode(mode RecoveryMode) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.RecoveryMode = mode
 	}
 }
 

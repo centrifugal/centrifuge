@@ -161,6 +161,7 @@ func main() {
 				e.Channel, data,
 				centrifuge.WithHistory(300, time.Minute),
 				centrifuge.WithClientInfo(e.ClientInfo),
+				centrifuge.WithDelta(true),
 			)
 
 			cb(centrifuge.PublishReply{Result: &result}, err)

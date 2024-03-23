@@ -18,6 +18,7 @@ import (
 
 	"github.com/FZambia/eagle"
 	"github.com/centrifugal/protocol"
+	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/singleflight"
@@ -683,13 +684,31 @@ func (n *Node) handleControl(data []byte) error {
 // handlePublication handles messages published into channel and
 // coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition) error {
+func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	n.metrics.incMessagesReceived("publication")
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
+
+	if prevPub != nil {
+		// Generate the patch required to turn originalJSON into modifiedJSON
+		patch, err := jsonpatch.CreateMergePatch(prevPub.Data, pub.Data)
+		if err != nil {
+			// TODO: log
+			n.Log(newLogEntry(LogLevelError, "error creating JSON patch", map[string]any{"error": err.Error()}))
+			return nil
+		}
+		fmt.Println(string(patch))
+		pub = &Publication{
+			Offset: pub.Offset,
+			Data:   patch,
+			Info:   pub.Info,
+			Tags:   pub.Tags,
+		}
+	}
+
 	return n.hub.BroadcastPublication(ch, pub, sp)
 }
 
@@ -1517,11 +1536,11 @@ type brokerEventHandler struct {
 }
 
 // HandlePublication coming from Broker.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
+func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
-	return h.node.handlePublication(ch, pub, sp)
+	return h.node.handlePublication(ch, pub, sp, prevPub)
 }
 
 // HandleJoin coming from Broker.

@@ -292,7 +292,7 @@
                 }
 
                 function sendMessage() {
-                    sub.publish({"input": input.value}).then(function() {
+                    sub.publish({"input": input.value, "some": "stable", "keys": "here"}).then(function() {
                         console.log("Successfully published to channel");
                     }, function(err) {
                         drawText("❌ Publish error", JSON.stringify(err));
