@@ -408,9 +408,9 @@ func (c *Client) onTimerOp() {
 		c.mu.Unlock()
 		return
 	}
-	timerOp := c.timerOp
+	op := c.timerOp
 	c.mu.Unlock()
-	switch timerOp {
+	switch op {
 	case timerOpStale:
 		c.closeStale()
 	case timerOpPresence:
@@ -456,7 +456,11 @@ func (c *Client) scheduleNextTimer() {
 	if needTimer {
 		c.timerOp = nextTimerOp
 		afterDuration := time.Duration(minEventTime-time.Now().UnixNano()) * time.Nanosecond
-		c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+		if c.timer != nil {
+			c.timer.Reset(afterDuration)
+		} else {
+			c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+		}
 	}
 }
 

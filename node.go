@@ -96,7 +96,7 @@ func New(c Config) (*Node, error) {
 		c.NodeInfoMetricsAggregateInterval = 60 * time.Second
 	}
 	if c.ClientPresenceUpdateInterval == 0 {
-		c.ClientPresenceUpdateInterval = 27 * time.Second
+		c.ClientPresenceUpdateInterval = 25 * time.Second
 	}
 	if c.ClientChannelPositionCheckDelay == 0 {
 		c.ClientChannelPositionCheckDelay = 40 * time.Second
