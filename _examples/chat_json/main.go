@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -75,18 +74,18 @@ func main() {
 	})
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
-		cred, _ := centrifuge.GetCredentials(ctx)
+		//cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
 			Data: []byte(`{}`),
 			// Subscribe to a personal server-side channel.
-			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				"#" + cred.UserID: {
-					EnableRecovery: true,
-					EmitPresence:   true,
-					EmitJoinLeave:  true,
-					PushJoinLeave:  true,
-				},
-			},
+			//Subscriptions: map[string]centrifuge.SubscribeOptions{
+			//	"#" + cred.UserID: {
+			//		EnableRecovery: true,
+			//		EmitPresence:   true,
+			//		EmitJoinLeave:  true,
+			//		PushJoinLeave:  true,
+			//	},
+			//},
 		}, nil
 	})
 
@@ -94,24 +93,24 @@ func main() {
 		transport := client.Transport()
 		log.Printf("[user %s] connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
-		// Event handler should not block, so start separate goroutine to
-		// periodically send messages to client.
-		go func() {
-			for {
-				select {
-				case <-client.Context().Done():
-					return
-				case <-time.After(5 * time.Second):
-					err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-					if err != nil {
-						if err == io.EOF {
-							return
-						}
-						log.Printf("error sending message: %s", err)
-					}
-				}
-			}
-		}()
+		//// Event handler should not block, so start separate goroutine to
+		//// periodically send messages to client.
+		//go func() {
+		//	for {
+		//		select {
+		//		case <-client.Context().Done():
+		//			return
+		//		case <-time.After(5 * time.Second):
+		//			err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
+		//			if err != nil {
+		//				if err == io.EOF {
+		//					return
+		//				}
+		//				log.Printf("error sending message: %s", err)
+		//			}
+		//		}
+		//	}
+		//}()
 
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
 			log.Printf("[user %s] connection is going to expire, refreshing", client.UserID())
@@ -204,39 +203,39 @@ func main() {
 		log.Fatal(err)
 	}
 
-	go func() {
-		// Publish personal notifications for user 42 periodically.
-		i := 1
-		for {
-			_, err := node.Publish(
-				"#42",
-				[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute),
-			)
-			if err != nil {
-				log.Printf("error publishing to personal channel: %s", err)
-			}
-			i++
-			time.Sleep(5000 * time.Millisecond)
-		}
-	}()
-
-	go func() {
-		// Publish to channel periodically.
-		i := 1
-		for {
-			_, err := node.Publish(
-				"chat:index",
-				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
-				centrifuge.WithHistory(300, time.Minute),
-			)
-			if err != nil {
-				log.Printf("error publishing to channel: %s", err)
-			}
-			i++
-			time.Sleep(10000 * time.Millisecond)
-		}
-	}()
+	//go func() {
+	//	// Publish personal notifications for user 42 periodically.
+	//	i := 1
+	//	for {
+	//		_, err := node.Publish(
+	//			"#42",
+	//			[]byte(`{"personal": "`+strconv.Itoa(i)+`"}`),
+	//			centrifuge.WithHistory(300, time.Minute),
+	//		)
+	//		if err != nil {
+	//			log.Printf("error publishing to personal channel: %s", err)
+	//		}
+	//		i++
+	//		time.Sleep(5000 * time.Millisecond)
+	//	}
+	//}()
+	//
+	//go func() {
+	//	// Publish to channel periodically.
+	//	i := 1
+	//	for {
+	//		_, err := node.Publish(
+	//			"chat:index",
+	//			[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
+	//			centrifuge.WithHistory(300, time.Minute),
+	//		)
+	//		if err != nil {
+	//			log.Printf("error publishing to channel: %s", err)
+	//		}
+	//		i++
+	//		time.Sleep(10000 * time.Millisecond)
+	//	}
+	//}()
 
 	mux := http.DefaultServeMux
 
@@ -251,7 +250,7 @@ func main() {
 
 	server := &http.Server{
 		Handler:      mux,
-		Addr:         ":" + strconv.Itoa(*port),
+		Addr:         "127.0.0.1:" + strconv.Itoa(*port),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}

@@ -4,12 +4,13 @@ go 1.20
 
 require (
 	github.com/FZambia/eagle v0.1.0
-	github.com/centrifugal/protocol v0.12.1-0.20240323055736-2bac99578c1f
+	github.com/centrifugal/protocol v0.12.1-0.20240324055340-a826f3aa7e88
 	github.com/evanphx/json-patch/v5 v5.9.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.0
 	github.com/redis/rueidis v1.0.31
 	github.com/segmentio/encoding v0.4.0
+	github.com/shadowspore/fossil-delta v0.0.0-20240102155221-e3a8590b820b
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/sync v0.6.0
 	google.golang.org/protobuf v1.33.0

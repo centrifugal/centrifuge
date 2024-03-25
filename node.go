@@ -18,7 +18,6 @@ import (
 
 	"github.com/FZambia/eagle"
 	"github.com/centrifugal/protocol"
-	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/singleflight"
@@ -691,25 +690,17 @@ func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition,
 	if !hasCurrentSubscribers {
 		return nil
 	}
-
-	if prevPub != nil {
-		// Generate the patch required to turn originalJSON into modifiedJSON
-		patch, err := jsonpatch.CreateMergePatch(prevPub.Data, pub.Data)
-		if err != nil {
-			// TODO: log
-			n.Log(newLogEntry(LogLevelError, "error creating JSON patch", map[string]any{"error": err.Error()}))
-			return nil
-		}
-		fmt.Println(string(patch))
-		pub = &Publication{
-			Offset: pub.Offset,
-			Data:   patch,
-			Info:   pub.Info,
-			Tags:   pub.Tags,
-		}
+	//if prevPub != nil {
+	err := n.hub.broadcastData(ch, &broadcastData{
+		pub:     pub,
+		prevPub: prevPub,
+	}, sp)
+	if err != nil {
+		n.Log(newLogEntry(LogLevelError, "error broadcast", map[string]any{"error": err.Error()}))
 	}
-
-	return n.hub.BroadcastPublication(ch, pub, sp)
+	return err
+	//}
+	//return n.hub.BroadcastPublication(ch, pub, sp)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -990,19 +981,19 @@ func (n *Node) removeClient(c *Client) error {
 
 // addSubscription registers subscription of connection on channel in both
 // Hub and Broker.
-func (n *Node) addSubscription(ch string, c *Client) error {
+func (n *Node) addSubscription(ch string, sub subInfo) error {
 	n.metrics.incActionCount("add_subscription")
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	first, err := n.hub.addSub(ch, c)
+	first, err := n.hub.addSub(ch, sub)
 	if err != nil {
 		return err
 	}
 	if first {
 		err := n.broker.Subscribe(ch)
 		if err != nil {
-			_, _ = n.hub.removeSub(ch, c)
+			_, _ = n.hub.removeSub(ch, sub.client)
 			return err
 		}
 	}

@@ -664,7 +664,7 @@ func TestUserConnections(t *testing.T) {
 	_ = h.add(c)
 
 	connections := h.UserConnections(c.UserID())
-	require.Equal(t, h.connShards[index(c.UserID(), numHubShards)].conns, connections)
+	require.Equal(t, h.connShards[index(c.UserID(), numHubShards)].clients, connections)
 }
 
 func TestHubSharding(t *testing.T) {
