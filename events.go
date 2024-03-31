@@ -358,6 +358,19 @@ type HistoryHandler func(HistoryEvent, HistoryCallback)
 // internal state. Returning a copy is important to avoid data races.
 type StateSnapshotHandler func() (any, error)
 
+// CacheEmptyEvent ...
+type CacheEmptyEvent struct {
+	Channel string
+}
+
+// CacheEmptyReply ...
+type CacheEmptyReply struct {
+	Populated bool
+}
+
+// CacheEmptyHandler ...
+type CacheEmptyHandler func(CacheEmptyEvent) CacheEmptyReply
+
 // SurveyEvent with Op and Data of survey.
 type SurveyEvent struct {
 	Op   string

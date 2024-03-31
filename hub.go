@@ -3,12 +3,10 @@ package centrifuge
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"io"
 	"sync"
 
 	"github.com/centrifugal/protocol"
-	jsonpatch "github.com/evanphx/json-patch/v5"
 	fdelta "github.com/shadowspore/fossil-delta"
 )
 
@@ -140,15 +138,8 @@ func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPositio
 	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pubToProto(pub), sp)
 }
 
-type broadcastData struct {
-	pub          *Publication
-	prevPub      *Publication
-	jsonPatchPub *Publication
-	fossilPub    *Publication
-}
-
-func (h *Hub) broadcastData(ch string, bd *broadcastData, sp StreamPosition) error {
-	return h.subShards[index(ch, numHubShards)].broadcastData(ch, bd, sp)
+func (h *Hub) broadcastPublicationDelta(ch string, pub *Publication, prevPub *Publication, sp StreamPosition) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublicationDelta(ch, pub, prevPub, sp)
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
@@ -485,13 +476,16 @@ func (h *connShard) NumUsers() int {
 	return len(h.users)
 }
 
-type DeltaType int
+type DeltaType string
 
 const (
-	deltaTypeDisabled DeltaType = iota
-	deltaTypeJsonPatch
-	deltaTypeFossil
+	// DeltaTypeFossil is Fossil delta encoding. See https://fossil-scm.org/home/doc/tip/www/delta_encoder_algorithm.wiki.
+	DeltaTypeFossil DeltaType = "fossil"
 )
+
+var stringToDeltaType = map[string]DeltaType{
+	"fossil": DeltaTypeFossil,
+}
 
 type subInfo struct {
 	client    *Client
@@ -574,9 +568,9 @@ type dataValue struct {
 	deltaData []byte
 }
 
-// broadcastPublication sends message to all clients subscribed on channel.
-func (h *subShard) broadcastData(channel string, bd *broadcastData, sp StreamPosition) error {
-	pub := pubToProto(bd.pub)
+// broadcastPublicationDelta sends message to all clients subscribed on channel trying to use deltas.
+func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, prevPub *Publication, sp StreamPosition) error {
+	fullPub := pubToProto(pub)
 
 	dataByKey := make(map[broadcastKey]dataValue)
 
@@ -593,57 +587,43 @@ func (h *subShard) broadcastData(channel string, bd *broadcastData, sp StreamPos
 	)
 
 	for _, sub := range channelSubscribers {
-		protoType := sub.client.Transport().Protocol().toProto()
-		isUnidirectional := sub.client.transport.Unidirectional()
-		deltaType := sub.deltaType
-		key := broadcastKey{ProtocolType: protoType, Unidirectional: isUnidirectional, DeltaType: deltaType}
-		value, dataFound := dataByKey[key]
-		if !dataFound {
-			deltaPub := pub
-			if bd.prevPub != nil && key.DeltaType == deltaTypeJsonPatch {
-				// Generate the patch required to turn originalJSON into modifiedJSON
-				patch, err := jsonpatch.CreateMergePatch(bd.prevPub.Data, pub.Data)
-				if err != nil {
-					jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-					continue
-				}
-				deltaPub = &protocol.Publication{
-					Offset: pub.Offset,
-					Data:   patch,
-					Info:   pub.Info,
-					Tags:   pub.Tags,
-					Delta:  true,
-				}
-			} else if bd.prevPub != nil && key.DeltaType == deltaTypeFossil {
-				patch := fdelta.Create(bd.prevPub.Data, pub.Data)
-				fmt.Println(string(patch))
+		key := broadcastKey{
+			ProtocolType:   sub.client.Transport().Protocol().toProto(),
+			Unidirectional: sub.client.transport.Unidirectional(),
+			DeltaType:      sub.deltaType,
+		}
+		value, valueFound := dataByKey[key]
+		if !valueFound {
+			deltaPub := fullPub
+			if prevPub != nil && key.DeltaType == DeltaTypeFossil {
+				patch := fdelta.Create(prevPub.Data, fullPub.Data)
 				if key.ProtocolType == protocol.TypeJSON {
 					b64patch := base64.StdEncoding.EncodeToString(patch)
 					deltaPub = &protocol.Publication{
-						Offset: pub.Offset,
+						Offset: fullPub.Offset,
 						//Data:   nil,
-						Info:    pub.Info,
-						Tags:    pub.Tags,
+						Info:    fullPub.Info,
+						Tags:    fullPub.Tags,
 						Delta:   true,
 						B64Data: b64patch,
 					}
 				} else {
 					deltaPub = &protocol.Publication{
-						Offset: pub.Offset,
+						Offset: fullPub.Offset,
 						Data:   patch,
-						Info:   pub.Info,
-						Tags:   pub.Tags,
+						Info:   fullPub.Info,
+						Tags:   fullPub.Tags,
 						Delta:  true,
 					}
 				}
-			} else if bd.prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == deltaTypeFossil {
+			} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 				// In JSON and Fossil case we need to send full state in base64 format.
-				b64data := base64.StdEncoding.EncodeToString(pub.Data)
+				b64data := base64.StdEncoding.EncodeToString(fullPub.Data)
 				deltaPub = &protocol.Publication{
-					Offset: pub.Offset,
+					Offset: fullPub.Offset,
 					//Data:   nil,
-					Info:    pub.Info,
-					Tags:    pub.Tags,
+					Info:    fullPub.Info,
+					Tags:    fullPub.Tags,
 					B64Data: b64data,
 				}
 			}
@@ -653,14 +633,14 @@ func (h *subShard) broadcastData(channel string, bd *broadcastData, sp StreamPos
 
 			if key.ProtocolType == protocol.TypeJSON {
 				if sub.client.transport.Unidirectional() {
-					pubToUse := pub
-					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == deltaTypeFossil {
+					pubToUse := fullPub
+					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 						pubToUse = &protocol.Publication{
-							Offset: pub.Offset,
+							Offset: fullPub.Offset,
 							//Data:   nil,
-							Info:    pub.Info,
-							Tags:    pub.Tags,
-							B64Data: base64.StdEncoding.EncodeToString(pub.Data),
+							Info:    fullPub.Info,
+							Tags:    fullPub.Tags,
+							B64Data: base64.StdEncoding.EncodeToString(fullPub.Data),
 						}
 					}
 					push := &protocol.Push{Channel: channel, Pub: pubToUse}
@@ -670,14 +650,14 @@ func (h *subShard) broadcastData(channel string, bd *broadcastData, sp StreamPos
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
 				} else {
-					pubToUse := pub
-					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == deltaTypeFossil {
+					pubToUse := fullPub
+					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 						pubToUse = &protocol.Publication{
-							Offset: pub.Offset,
+							Offset: fullPub.Offset,
 							//Data:   nil,
-							Info:    pub.Info,
-							Tags:    pub.Tags,
-							B64Data: base64.StdEncoding.EncodeToString(pub.Data),
+							Info:    fullPub.Info,
+							Tags:    fullPub.Tags,
+							B64Data: base64.StdEncoding.EncodeToString(fullPub.Data),
 						}
 					}
 					push := &protocol.Push{Channel: channel, Pub: pubToUse}
@@ -687,16 +667,16 @@ func (h *subShard) broadcastData(channel string, bd *broadcastData, sp StreamPos
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
 				}
-			} else if protoType == protocol.TypeProtobuf {
+			} else if key.ProtocolType == protocol.TypeProtobuf {
 				if sub.client.transport.Unidirectional() {
-					push := &protocol.Push{Channel: channel, Pub: pub}
+					push := &protocol.Push{Channel: channel, Pub: fullPub}
 					var err error
 					data, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 					if err != nil {
 						return err
 					}
 				} else {
-					push := &protocol.Push{Channel: channel, Pub: pub}
+					push := &protocol.Push{Channel: channel, Pub: fullPub}
 					var err error
 					data, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
@@ -721,7 +701,7 @@ func (h *subShard) broadcastData(channel string, bd *broadcastData, sp StreamPos
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
 				}
-			} else if protoType == protocol.TypeProtobuf {
+			} else if key.ProtocolType == protocol.TypeProtobuf {
 				if sub.client.transport.Unidirectional() {
 					push := &protocol.Push{Channel: channel, Pub: deltaPub}
 					var err error
@@ -746,7 +726,7 @@ func (h *subShard) broadcastData(channel string, bd *broadcastData, sp StreamPos
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
 		}
-		_ = sub.client.writePublication(channel, pub, value, sp)
+		_ = sub.client.writePublication(channel, fullPub, value, sp)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.

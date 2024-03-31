@@ -2,9 +2,11 @@ package centrifuge
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
 	"github.com/segmentio/encoding/json"
+	fdelta "github.com/shadowspore/fossil-delta"
 )
 
 // Empty Replies/Pushes for pings.
@@ -48,6 +51,7 @@ type clientEventHub struct {
 	presenceStatsHandler PresenceStatsHandler
 	historyHandler       HistoryHandler
 	stateSnapshotHandler StateSnapshotHandler
+	cacheEmptyHandler    CacheEmptyHandler
 }
 
 // OnAlive allows setting AliveHandler.
@@ -102,6 +106,14 @@ func (c *Client) OnUnsubscribe(h UnsubscribeHandler) {
 // PublishHandler called when client publishes message into channel.
 func (c *Client) OnPublish(h PublishHandler) {
 	c.eventHub.publishHandler = h
+}
+
+// OnCacheEmpty allows setting CacheEmptyHandler.
+// CacheEmptyHandler called when client subscribes on a channel with RecoveryModeCache but there is no
+// cached value in channel. In response to this handler it's possible to tell Centrifuge what to do with
+// subscribe request – keep it, or return error.
+func (c *Client) OnCacheEmpty(h CacheEmptyHandler) {
+	c.eventHub.cacheEmptyHandler = h
 }
 
 // OnPresence allows setting PresenceHandler.
@@ -1598,6 +1610,20 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		return ErrorNotAvailable
 	}
 
+	if req.Channel == "" {
+		return c.logDisconnectBadRequest("channel required for subscribe")
+	}
+
+	if req.Delta != "" {
+		dt, ok := stringToDeltaType[req.Delta]
+		if !ok {
+			return c.logDisconnectBadRequest("unknown delta type in subscribe request: " + req.Delta)
+		}
+		if !slices.Contains(c.node.config.AllowedDeltaTypes, dt) {
+			return c.logDisconnectBadRequest("disabled delta type in subscribe request: " + req.Delta)
+		}
+	}
+
 	replyError, disconnect := c.validateSubscribeRequest(req)
 	if disconnect != nil || replyError != nil {
 		if disconnect != nil {
@@ -2647,7 +2673,7 @@ type subscribeContext struct {
 	channelContext ChannelContext
 }
 
-func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isStreamRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
 
@@ -2670,7 +2696,7 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 	return recoveredPubs, recovered
 }
 
-func isStateRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isCacheRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
 	var recovered bool
@@ -2732,7 +2758,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		c.pubSubSync.StartBuffering(channel)
 	}
 
-	err := c.node.addSubscription(channel, subInfo{client: c, deltaType: deltaTypeFossil})
+	sub := subInfo{client: c, deltaType: ""}
+	if req.Delta != "" {
+		if dt, deltaFound := stringToDeltaType[req.Delta]; deltaFound {
+			sub.deltaType = dt
+		}
+	}
+	err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.pubSubSync.StopBuffering(channel)
@@ -2760,6 +2792,16 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	)
 
 	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
+		handleErr := func(err error) subscribeContext {
+			c.pubSubSync.StopBuffering(channel)
+			var clientErr *Error
+			if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
+				return errorDisconnectContext(clientErr, nil)
+			}
+			ctx.disconnect = &DisconnectServerError
+			return ctx
+		}
+
 		res.Positioned = true
 		if reply.Options.EnableRecovery {
 			res.Recoverable = true
@@ -2770,29 +2812,41 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			cmdEpoch := req.Epoch
 			recoveryMode := reply.Options.RecoveryMode
 
-			if recoveryMode == RecoveryModeDocument {
-				historyResult, err := c.node.History(channel, WithHistoryFilter(HistoryFilter{
-					Limit:   1,
-					Reverse: true,
-				}), WithHistoryMetaTTL(reply.Options.HistoryMetaTTL))
+			// Client provided subscribe request with recover flag on. Try to recover missed
+			// publications automatically from history (we assume here that the history configured wisely).
+
+			if recoveryMode == RecoveryModeCache {
+				historyResult, err := c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
 				if err != nil {
-					c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-					c.pubSubSync.StopBuffering(channel)
-					if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
-						return errorDisconnectContext(clientErr, nil)
-					}
-					ctx.disconnect = &DisconnectServerError
-					return ctx
+					c.node.logger.log(newLogEntry(LogLevelError, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+					return handleErr(err)
 				}
 				latestOffset = historyResult.Offset
 				latestEpoch = historyResult.Epoch
 				var recovered bool
-				recoveredPubs, recovered = isStateRecovered(historyResult, cmdOffset, cmdEpoch)
+				recoveredPubs, recovered = isCacheRecovered(historyResult, cmdOffset, cmdEpoch)
 				res.Recovered = recovered
-				c.node.metrics.incRecover(res.Recovered)
+				if len(historyResult.Publications) == 0 && c.eventHub.cacheEmptyHandler != nil {
+					cacheReply := c.eventHub.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
+					if cacheReply.Populated && !recovered {
+						// One more chance to recover in case we know cache was populated.
+						historyResult, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+						if err != nil {
+							c.node.logger.log(newLogEntry(LogLevelError, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+							return handleErr(err)
+						}
+						latestOffset = historyResult.Offset
+						latestEpoch = historyResult.Epoch
+						recoveredPubs, recovered = isCacheRecovered(historyResult, cmdOffset, cmdEpoch)
+						res.Recovered = recovered
+						c.node.metrics.incRecover(res.Recovered)
+					} else {
+						c.node.metrics.incRecover(res.Recovered)
+					}
+				} else {
+					c.node.metrics.incRecover(res.Recovered)
+				}
 			} else {
-				// Client provided subscribe request with recover flag on. Try to recover missed
-				// publications automatically from history (we suppose here that history configured wisely).
 				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
 				if err != nil {
 					if errors.Is(err, ErrorUnrecoverablePosition) {
@@ -2804,18 +2858,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 						c.node.metrics.incRecover(res.Recovered)
 					} else {
 						c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-						c.pubSubSync.StopBuffering(channel)
-						if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
-							return errorDisconnectContext(clientErr, nil)
-						}
-						ctx.disconnect = &DisconnectServerError
-						return ctx
+						return handleErr(err)
 					}
 				} else {
 					latestOffset = historyResult.Offset
 					latestEpoch = historyResult.Epoch
 					var recovered bool
-					recoveredPubs, recovered = isRecovered(historyResult, cmdOffset, cmdEpoch)
+					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch)
 					res.Recovered = recovered
 					c.node.metrics.incRecover(res.Recovered)
 				}
@@ -2824,12 +2873,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			streamTop, err := c.node.streamTop(channel, reply.Options.HistoryMetaTTL)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting stream state for channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				c.pubSubSync.StopBuffering(channel)
-				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
-					return errorDisconnectContext(clientErr, nil)
-				}
-				ctx.disconnect = &DisconnectServerError
-				return ctx
+				return handleErr(err)
 			}
 			latestOffset = streamTop.Offset
 			latestEpoch = streamTop.Epoch
@@ -2846,6 +2890,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			ctx.disconnect = &DisconnectInsufficientState
 			return ctx
 		}
+		if reply.Options.RecoveryMode == RecoveryModeCache && len(recoveredPubs) > 1 && req.Delta == "" {
+			// In RecoveryModeCache case client is only interested in last message. So if delta encoding is
+			// not used then we can only send the last publication.
+			recoveredPubs = recoveredPubs[len(recoveredPubs)-1:]
+		}
 	}
 
 	if len(recoveredPubs) > 0 {
@@ -2859,9 +2908,18 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 	}
 
+	var channelFlags uint8
+
 	if res.Recovered {
 		// Only append recovered publications in case continuity in a channel can be achieved.
-		res.Publications = recoveredPubs
+		if req.Delta == string(DeltaTypeFossil) {
+			res.Publications = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
+			// Allow delta for the following real-time publications since recovery is successful
+			// and makeRecoveredPubsDeltaFossil already created publication with base data if required.
+			channelFlags |= flagDeltaAllowed
+		} else {
+			res.Publications = recoveredPubs
+		}
 		// In case of successful recovery attach stream offset from request to subscribe response.
 		// This simplifies client implementation as it doesn't need to distinguish between cases when
 		// subscribe response has recovered publications, or it has no recovered publications.
@@ -2890,7 +2948,6 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		defer c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started)
 	}
 
-	var channelFlags uint8
 	channelFlags |= flagSubscribed
 	if serverSide {
 		channelFlags |= flagServerSide
@@ -2944,6 +3001,55 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	ctx.clientInfo = info
 	ctx.channelContext = channelContext
 	return ctx
+}
+
+func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publication) []*protocol.Publication {
+	if len(recoveredPubs) == 0 {
+		return nil
+	}
+	prevPub := recoveredPubs[0]
+	if c.transport.Protocol() == ProtocolTypeJSON {
+		// For JSON case we need to use b64 for data.
+		pub := &protocol.Publication{
+			Offset:  prevPub.Offset,
+			Info:    prevPub.Info,
+			Tags:    prevPub.Tags,
+			Data:    nil,
+			B64Data: base64.StdEncoding.EncodeToString(prevPub.Data),
+			Delta:   false,
+		}
+		recoveredPubs[0] = pub
+	}
+	// Probably during recovery we should not make deltas? This is something to investigate, in
+	// RecoveryModeCache case this won't be used since there is only one publication max recovered.
+	if len(recoveredPubs) > 1 {
+		for i, pub := range recoveredPubs[1:] {
+			patch := fdelta.Create(prevPub.Data, pub.Data)
+			var deltaPub *protocol.Publication
+			if c.transport.Protocol() == ProtocolTypeJSON {
+				b64patch := base64.StdEncoding.EncodeToString(patch)
+				deltaPub = &protocol.Publication{
+					Offset: pub.Offset,
+					//Data:   nil,
+					Info:    pub.Info,
+					Tags:    pub.Tags,
+					Delta:   true,
+					B64Data: b64patch,
+				}
+			} else {
+				deltaPub = &protocol.Publication{
+					Offset: pub.Offset,
+					Data:   patch,
+					Info:   pub.Info,
+					Tags:   pub.Tags,
+					Delta:  true,
+				}
+			}
+			recoveredPubs[i+1] = deltaPub
+			prevPub = recoveredPubs[i]
+		}
+	}
+	return recoveredPubs
 }
 
 func (c *Client) releaseSubscribeCommandReply(reply *protocol.Reply) {

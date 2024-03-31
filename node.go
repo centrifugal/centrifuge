@@ -683,24 +683,21 @@ func (n *Node) handleControl(data []byte) error {
 // handlePublication handles messages published into channel and
 // coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
+func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	n.metrics.incMessagesReceived("publication")
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	//if prevPub != nil {
-	err := n.hub.broadcastData(ch, &broadcastData{
-		pub:     pub,
-		prevPub: prevPub,
-	}, sp)
-	if err != nil {
-		n.Log(newLogEntry(LogLevelError, "error broadcast", map[string]any{"error": err.Error()}))
+	if delta {
+		err := n.hub.broadcastPublicationDelta(ch, pub, prevPub, sp)
+		if err != nil {
+			n.Log(newLogEntry(LogLevelError, "error broadcast delta", map[string]any{"error": err.Error()}))
+		}
+		return err
 	}
-	return err
-	//}
-	//return n.hub.BroadcastPublication(ch, pub, sp)
+	return n.hub.BroadcastPublication(ch, pub, sp)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -1347,6 +1344,15 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 	}), WithHistoryMetaTTL(historyMetaTTL))
 }
 
+// recoverCache recovers last publication in channel.
+func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration) (HistoryResult, error) {
+	n.metrics.incActionCount("history_recover")
+	return n.History(ch, WithHistoryFilter(HistoryFilter{
+		Limit:   1,
+		Reverse: true,
+	}), WithHistoryMetaTTL(historyMetaTTL))
+}
+
 // streamTop returns current stream top StreamPosition for a channel.
 func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 	n.metrics.incActionCount("history_stream_top")
@@ -1527,11 +1533,11 @@ type brokerEventHandler struct {
 }
 
 // HandlePublication coming from Broker.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
+func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
-	return h.node.handlePublication(ch, pub, sp, prevPub)
+	return h.node.handlePublication(ch, pub, sp, delta, prevPub)
 }
 
 // HandleJoin coming from Broker.

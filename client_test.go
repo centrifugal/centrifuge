@@ -678,7 +678,7 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 
 	err = node.handlePublication("test", &Publication{
 		Offset: offset,
-	}, StreamPosition{offset, epoch})
+	}, StreamPosition{offset, epoch}, false, nil)
 	require.NoError(t, err)
 
 	select {
@@ -1503,7 +1503,7 @@ func TestClientPublishNotAvailable(t *testing.T) {
 
 type testBrokerEventHandler struct {
 	// Publication must register callback func to handle Publications received.
-	HandlePublicationFunc func(ch string, pub *Publication, sp StreamPosition) error
+	HandlePublicationFunc func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error
 	// Join must register callback func to handle Join messages received.
 	HandleJoinFunc func(ch string, info *ClientInfo) error
 	// Leave must register callback func to handle Leave messages received.
@@ -1512,9 +1512,9 @@ type testBrokerEventHandler struct {
 	HandleControlFunc func([]byte) error
 }
 
-func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
+func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if b.HandlePublicationFunc != nil {
-		return b.HandlePublicationFunc(ch, pub, sp)
+		return b.HandlePublicationFunc(ch, pub, sp, delta, prevPub)
 	}
 	return nil
 }
@@ -1560,7 +1560,7 @@ func TestClientPublishHandler(t *testing.T) {
 	connectClientV2(t, client)
 
 	node.broker.(*MemoryBroker).eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			var msg testClientMessage
 			err := json.Unmarshal(pub.Data, &msg)
 			require.NoError(t, err)
@@ -3080,7 +3080,7 @@ func TestErrLogLevel(t *testing.T) {
 
 func errLogLevel(err error) LogLevel {
 	logLevel := LogLevelInfo
-	if err != ErrorNotAvailable {
+	if !errors.Is(err, ErrorNotAvailable) {
 		logLevel = LogLevelError
 	}
 	return logLevel

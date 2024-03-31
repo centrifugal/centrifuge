@@ -621,8 +621,8 @@ func TestHubSubscriptions(t *testing.T) {
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 
-	_, _ = h.addSub("test1", c)
-	_, _ = h.addSub("test2", c)
+	_, _ = h.addSub("test1", subInfo{client: c, deltaType: ""})
+	_, _ = h.addSub("test2", subInfo{client: c, deltaType: ""})
 	require.Equal(t, 2, h.NumChannels())
 	require.Contains(t, h.Channels(), "test1")
 	require.Contains(t, h.Channels(), "test2")
@@ -687,7 +687,7 @@ func TestHubSharding(t *testing.T) {
 			require.NoError(t, err)
 			_ = n.hub.add(c)
 			for _, ch := range channels {
-				_, _ = n.hub.addSub(ch, c)
+				_, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
 			}
 		}
 	}
@@ -726,7 +726,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 		_ = n.hub.add(c)
 		clients = append(clients, c)
 		for _, ch := range channels {
-			_, _ = n.hub.addSub(ch, c)
+			_, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
 		}
 	}
 
@@ -746,7 +746,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 				defer wg.Done()
 				_ = n.hub.BroadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
 			}()
-			_, _ = n.hub.addSub(channels[i%numChannels], clients[i%numClients])
+			_, _ = n.hub.addSub(channels[i%numChannels], subInfo{client: clients[i%numClients], deltaType: ""})
 			wg.Wait()
 		}
 	})
@@ -787,7 +787,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 				c := newTestConnectedClientWithTransport(b, context.Background(), n, t, "12")
 				_ = n.hub.add(c)
 				for _, ch := range channels {
-					_, _ = n.hub.addSub(ch, c)
+					_, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
 				}
 			}
 

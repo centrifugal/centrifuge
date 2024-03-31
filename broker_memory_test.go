@@ -141,7 +141,7 @@ func TestMemoryBrokerPublishIdempotent(t *testing.T) {
 	numPubs := 0
 
 	e.eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			numPubs++
 			return nil
 		},
@@ -169,7 +169,7 @@ func TestMemoryBrokerPublishIdempotentWithHistory(t *testing.T) {
 	numPubs := 0
 
 	e.eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 			numPubs++
 			return nil
 		},

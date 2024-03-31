@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title></title>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Arial', sans-serif;
+            background-color: #f0f0f0;
+            color: #333;
+        }
+
+        #app {
+            width: 100%;
+            max-width: 800px; /* Larger width for better display of big elements */
+            text-align: center;
+            padding: 40px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+            background-color: white;
+            border-radius: 10px;
+            margin: 20px;
+        }
+
+        #app h2 {
+            font-size: 36px; /* Larger heading */
+            color: #444;
+            margin-bottom: 30px;
+        }
+
+        #app p {
+            font-size: 28px; /* Larger font size for the scores */
+            line-height: 1.6;
+            margin: 20px 0;
+            color: #555;
+        }
+
+        /* Styling for team names to make them stand out */
+        #app p span.team-name {
+            font-weight: bold;
+        }
+
+        /* Making the scores pop out even more */
+        #app p span.team-score {
+            color: #d9534f; /* A vibrant color for the scores */
+            font-weight: bold;
+        }
+    </style>
+    <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
+    <script type="text/javascript">
+        const channel = "match:state:1";
+
+        const isProtobuf = false;
+
+        function render(data) {
+            const app = document.getElementById('app');
+            const matchNumber = data.Number;
+            const homeTeamName = data.HomeTeam.Name;
+            const awayTeamName = data.AwayTeam.Name;
+            const homeTeamScore = data.HomeTeam.Score;
+            const awayTeamScore = data.AwayTeam.Score;
+
+            // Clear previous content.
+            app.innerHTML = '';
+
+            const scoreDisplay = document.createElement('div');
+            scoreDisplay.innerHTML = `<h2>Score for match #${matchNumber}</h2>
+                              <p>${homeTeamName} ${homeTeamScore} - ${awayTeamScore} ${awayTeamName}</p>`;
+            app.appendChild(scoreDisplay);
+        }
+
+        window.addEventListener('load', function() {
+            const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {});
+
+            // subscribe on channel and bind various event listeners. Actual
+            // subscription request will be sent after client connects to
+            // a server.
+            const sub = centrifuge.newSubscription(channel, {
+                // delta: 'fossil',
+                since: {},
+            });
+
+            sub.on("publication", (ctx) => {
+                let matchData = ctx.data;
+                if (isProtobuf) {
+                    const matchJSON = new TextDecoder("utf-8").decode(matchData);
+                    matchData = JSON.parse(matchJSON)
+                }
+                render(matchData);
+            })
+
+            sub.subscribe();
+            centrifuge.connect();
+        });
+    </script>
+</head>
+<body>
+    <div id="app">
+
+    </div>
+</body>
+</html>

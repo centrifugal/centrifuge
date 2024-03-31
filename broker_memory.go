@@ -131,7 +131,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 			}
 			b.saveResultToCache(ch, opts.IdempotencyKey, streamTop, resultExpireSeconds)
 		}
-		return streamTop, false, b.eventHandler.HandlePublication(ch, pub, streamTop, prevPub)
+		return streamTop, false, b.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
 	}
 	streamPosition := StreamPosition{}
 	if opts.IdempotencyKey != "" {
@@ -141,7 +141,7 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 		}
 		b.saveResultToCache(ch, opts.IdempotencyKey, streamPosition, resultExpireSeconds)
 	}
-	return streamPosition, false, b.eventHandler.HandlePublication(ch, pub, StreamPosition{}, prevPub)
+	return streamPosition, false, b.eventHandler.HandlePublication(ch, pub, StreamPosition{}, opts.UseDelta, prevPub)
 }
 
 func (b *MemoryBroker) getResultFromCache(ch string, key string) (StreamPosition, bool) {

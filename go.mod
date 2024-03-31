@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/FZambia/eagle v0.1.0
-	github.com/centrifugal/protocol v0.12.1-0.20240324055340-a826f3aa7e88
+	github.com/centrifugal/protocol v0.12.1-0.20240330085231-151d7a9a3b26
 	github.com/evanphx/json-patch/v5 v5.9.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.0

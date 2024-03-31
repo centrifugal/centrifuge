@@ -710,6 +710,11 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		script = b.addHistoryStreamScript
 	}
 
+	var useDelta string
+	if opts.UseDelta {
+		useDelta = "1"
+	}
+
 	replies, err := script.Exec(
 		context.Background(),
 		s.shard.client,
@@ -723,6 +728,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 			strconv.FormatInt(time.Now().Unix(), 10),
 			publishCommand,
 			resultExpire,
+			useDelta,
 		},
 	).ToArray()
 	if err != nil {
@@ -996,7 +1002,7 @@ var (
 )
 
 func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, chID channelID, data []byte) error {
-	pushData, pushType, sp, ok := extractPushData(data)
+	pushData, pushType, sp, delta, prevPayload, ok := extractPushData(data)
 	if !ok {
 		return fmt.Errorf("malformed PUB/SUB data: %s", data)
 	}
@@ -1013,7 +1019,14 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 			// it to unmarshalled Publication.
 			pub.Offset = sp.Offset
 		}
-		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, nil)
+		var prevPub protocol.Publication
+		if delta && len(prevPayload) > 0 {
+			err = pub.UnmarshalVT(pushData)
+			if err != nil {
+				return err
+			}
+		}
+		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, false, pubFromProto(&prevPub))
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo
 		err := info.UnmarshalVT(pushData)
@@ -1199,7 +1212,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 			return nil, StreamPosition{}, errors.New("error getting value")
 		}
 
-		pushData, _, sp, ok := extractPushData(convert.StringToBytes(value))
+		pushData, _, sp, _, _, ok := extractPushData(convert.StringToBytes(value))
 		if !ok {
 			return nil, StreamPosition{}, fmt.Errorf("malformed publication value: %s", value)
 		}
@@ -1281,15 +1294,15 @@ var (
 )
 
 // See tests for supported format examples.
-func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool) {
+func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool, []byte, bool) {
 	var offset uint64
 	var epoch string
 	if !bytes.HasPrefix(data, metaSep) {
-		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, true
+		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, true
 	}
 	nextMetaSepPos := bytes.Index(data[len(metaSep):], metaSep)
 	if nextMetaSepPos <= 0 {
-		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false
+		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
 	}
 	content := data[len(metaSep) : len(metaSep)+nextMetaSepPos]
 	contentType := content[0]
@@ -1298,28 +1311,117 @@ func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool) {
 
 	switch contentType {
 	case 'j':
-		return rest, joinPushType, StreamPosition{}, true
+		return rest, joinPushType, StreamPosition{}, false, nil, true
 	case 'l':
-		return rest, leavePushType, StreamPosition{}, true
+		return rest, leavePushType, StreamPosition{}, false, nil, true
 	}
 
 	stringContent := convert.BytesToString(content)
 
 	if contentType == 'p' {
-		// new format p1:offset:epoch
+		// p1:offset:epoch__payload
 		stringContent = stringContent[3:] // offset:epoch
 		epochDelimiterPos := strings.Index(stringContent, contentSep)
 		if epochDelimiterPos <= 0 {
-			return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false
+			return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
 		}
 		var err error
 		offset, err = strconv.ParseUint(stringContent[:epochDelimiterPos], 10, 64)
 		epoch = stringContent[epochDelimiterPos+1:]
-		return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, err == nil
+		return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, err == nil
+	} else if contentType == 'd' {
+		// d1:offset:epoch:prev_payload_length:prev_payload:payload_length:payload
+		parsedDelta, err := parseDeltaPush(stringContent)
+		return convert.StringToBytes(parsedDelta.Payload), pubPushType, StreamPosition{Epoch: parsedDelta.Epoch, Offset: parsedDelta.Offset}, true, convert.StringToBytes(parsedDelta.PrevPayload), err == nil
 	}
 
 	// old format with offset only: __offset__
 	var err error
 	offset, err = strconv.ParseUint(stringContent, 10, 64)
-	return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, err == nil
+	return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, err == nil
+}
+
+type deltaPublicationPush struct {
+	Offset            uint64
+	Epoch             string
+	PrevPayloadLength int
+	PrevPayload       string
+	PayloadLength     int
+	Payload           string
+}
+
+func parseDeltaPush(input string) (*deltaPublicationPush, error) {
+	// d1:offset:epoch:prev_payload_length:prev_payload:payload_length:payload
+	const prefix = "d1:"
+	if !strings.HasPrefix(input, prefix) {
+		return nil, fmt.Errorf("input does not start with the expected prefix")
+	}
+	input = input[len(prefix):] // Remove prefix
+
+	// offset:epoch:prev_payload_length:prev_payload:payload_length:payload
+
+	idx := strings.IndexByte(input, ':')
+	if idx == -1 {
+		return nil, fmt.Errorf("invalid format, missing offset")
+	}
+	offset, err := strconv.ParseUint(input[:idx], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing offset: %v", err)
+	}
+	input = input[idx+1:]
+
+	// epoch:prev_payload_length:prev_payload:payload_length:payload
+
+	idx = strings.IndexByte(input, ':')
+	if idx == -1 {
+		return nil, fmt.Errorf("invalid format, missing epoch")
+	}
+	epoch := input[:idx]
+	input = input[idx+1:]
+
+	// prev_payload_length:prev_payload:payload_length:payload
+
+	idx = strings.IndexByte(input, ':')
+	if idx == -1 {
+		return nil, fmt.Errorf("invalid format, missing prev payload length")
+	}
+	prevPayloadLength, err := strconv.Atoi(input[:idx])
+	if err != nil {
+		return nil, fmt.Errorf("error parsing prev payload length: %v", err)
+	}
+
+	input = input[idx+1:]
+
+	// Extract prev_payload based on prev_payload_length
+	if len(input) < prevPayloadLength {
+		return nil, fmt.Errorf("input is shorter than expected prev payload length")
+	}
+	prevPayload := input[:prevPayloadLength]
+	input = input[prevPayloadLength+1:]
+
+	// payload_length:payload
+	idx = strings.IndexByte(input, ':')
+	if idx == -1 {
+		return nil, fmt.Errorf("invalid format, missing payload")
+	}
+	payloadLength, err := strconv.Atoi(input[:idx])
+	if err != nil {
+		return nil, fmt.Errorf("error parsing payload_length: %v", err)
+	}
+	input = input[idx+1:]
+
+	// Extract payload based on payload_length
+	if len(input) < payloadLength {
+		return nil, fmt.Errorf("input is shorter than expected payload length")
+	}
+	payload := input[:payloadLength]
+
+	return &deltaPublicationPush{
+		Offset:            offset,
+		Epoch:             epoch,
+		PrevPayloadLength: prevPayloadLength,
+		PrevPayload:       prevPayload,
+		PayloadLength:     payloadLength,
+		Payload:           payload,
+	}, nil
 }

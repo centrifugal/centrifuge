@@ -7,10 +7,9 @@ replace github.com/centrifugal/centrifuge => ../
 require (
 	github.com/FZambia/tarantool v0.2.2
 	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/protocol v0.12.1-0.20240324055340-a826f3aa7e88
+	github.com/centrifugal/protocol v0.12.1-0.20240330085231-151d7a9a3b26
 	github.com/cristalhq/jwt/v5 v5.4.0
 	github.com/dchest/uniuri v1.2.0
-	github.com/evanphx/json-patch/v5 v5.9.0
 	github.com/gin-contrib/sessions v0.0.3
 	github.com/gin-gonic/gin v1.9.1
 	github.com/gobwas/ws v1.3.1
@@ -22,7 +21,6 @@ require (
 	github.com/nats-io/nats.go v1.31.0
 	github.com/prometheus/client_golang v1.19.0
 	github.com/quic-go/quic-go v0.40.1
-	github.com/shadowspore/fossil-delta v0.0.0-20240102155221-e3a8590b820b
 	github.com/stretchr/testify v1.9.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/oauth2 v0.16.0
@@ -40,6 +38,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/evanphx/json-patch/v5 v5.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.2 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
@@ -76,6 +75,7 @@ require (
 	github.com/redis/rueidis v1.0.31 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.4.0 // indirect
+	github.com/shadowspore/fossil-delta v0.0.0-20240102155221-e3a8590b820b // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect

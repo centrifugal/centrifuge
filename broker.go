@@ -35,7 +35,7 @@ type ClientInfo struct {
 // BrokerEventHandler can handle messages received from PUB/SUB system.
 type BrokerEventHandler interface {
 	// HandlePublication to handle received Publications.
-	HandlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error
+	HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error
 	// HandleJoin to handle received Join messages.
 	HandleJoin(ch string, info *ClientInfo) error
 	// HandleLeave to handle received Leave messages.
