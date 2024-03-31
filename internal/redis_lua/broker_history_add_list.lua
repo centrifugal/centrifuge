@@ -39,7 +39,6 @@ redis.call("ltrim", list_key, 0, ltrim_right_bound)
 redis.call("expire", list_key, list_ttl)
 
 if channel ~= '' then
-  local payload
   if use_delta == "1" then
     payload = "__" .. "d1:" .. top_offset .. ":" .. current_epoch .. ":" .. #prev_message_payload .. ":" .. prev_message_payload .. ":" .. #message_payload .. ":" .. message_payload
   end
