@@ -4,10 +4,10 @@ go 1.20
 
 require (
 	github.com/FZambia/eagle v0.1.0
-	github.com/centrifugal/protocol v0.12.0
+	github.com/centrifugal/protocol v0.12.1
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.0
-	github.com/redis/rueidis v1.0.31
+	github.com/redis/rueidis v1.0.33
 	github.com/segmentio/encoding v0.4.0
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/sync v0.6.0
