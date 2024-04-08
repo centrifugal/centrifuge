@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title></title>
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="app">
+    <ol>
+        <li>
+            <a href="/json?protocol=json&payload=json&compression=no&delta=no">JSON over JSON, no compression, no delta</a>
+        </li>
+        <li>
+            <a href="/json?protocol=json&payload=json&compression=yes&delta=no">JSON over JSON, with compression, no delta</a>
+        </li>
+        <li>
+            <a href="/json?protocol=json&payload=json&compression=no&delta=yes">JSON over JSON, no compression, with delta</a>
+        </li>
+        <li>
+            <a href="/json?protocol=json&payload=json&compression=yes&delta=yes">JSON over JSON, with compression, with delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=json&compression=no&delta=no">JSON over Protobuf, no compression, no delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=json&compression=yes&delta=no">JSON over Protobuf, with compression, no delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=json&compression=no&delta=yes">JSON over Protobuf, no compression, with delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=json&compression=yes&delta=yes">JSON over Protobuf, with compression, with delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=protobuf&compression=no&delta=no">Protobuf over Protobuf, no compression, no delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=protobuf&compression=yes&delta=no">Protobuf over Protobuf, with compression, no delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=protobuf&compression=no&delta=yes">Protobuf over Protobuf, no compression, with delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=protobuf&compression=yes&delta=yes">Protobuf over Protobuf, with compression, with delta</a>
+        </li>
+        <li>
+            <a href="/protobuf?protocol=protobuf&payload=json&compression=yes&delta=yes&delay=yes">JSON over Protobuf, with compression, with delta, with delay</a>
+        </li>
+    </ol>
+</div>
+</body>
+</html>

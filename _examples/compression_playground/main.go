@@ -2,59 +2,33 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"html/template"
 	"log"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/centrifugal/centrifuge/_examples/compression_playground/apppb"
+
 	"github.com/centrifugal/centrifuge"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
-type Event struct {
-	Type   string
-	Minute int
-}
-
-type Player struct {
-	Name   string
-	Events []Event
-}
-
-type Team struct {
-	Name    string
-	Score   int
-	Players [11]Player
-}
-
-type Match struct {
-	Number   int
-	HomeTeam Team
-	AwayTeam Team
-}
-
-// Define event types
-const (
-	Goal       = "goal"
-	YellowCard = "yellow card"
-	RedCard    = "red card"
-	Substitute = "substitute"
-)
-
-func simulateMatch(ctx context.Context, num int, node *centrifuge.Node) {
-	// Predefined lists of player names for each team
+func simulateMatch(client *centrifuge.Client, num int32, node *centrifuge.Node, useProtobufPayload bool) {
+	// Predefined lists of player names for each team.
 	playerNamesTeamA := []string{"John Doe", "Jane Smith", "Alex Johnson", "Chris Lee", "Pat Kim", "Sam Morgan", "Jamie Brown", "Casey Davis", "Morgan Garcia", "Taylor White", "Jordan Martinez"}
 	playerNamesTeamB := []string{"Robin Wilson", "Drew Taylor", "Jessie Bailey", "Casey Flores", "Jordan Walker", "Charlie Green", "Alex Adams", "Morgan Thompson", "Taylor Clark", "Jordan Hernandez", "Jamie Lewis"}
 
 	// Example setup
-	match := &Match{
-		Number: num,
-		HomeTeam: Team{
+	match := &apppb.Match{
+		Id: num,
+		HomeTeam: &apppb.Team{
 			Name:    "Real Madrid",
 			Players: assignNamesToPlayers(playerNamesTeamA),
 		},
-		AwayTeam: Team{
+		AwayTeam: &apppb.Team{
 			Name:    "Barcelona",
 			Players: assignNamesToPlayers(playerNamesTeamB),
 		},
@@ -64,12 +38,12 @@ func simulateMatch(ctx context.Context, num int, node *centrifuge.Node) {
 	totalEvents := 20                                                    // Total number of events to simulate
 	eventInterval := float64(totalSimulationTime) / float64(totalEvents) // Time between events
 
-	r := rand.New(rand.NewSource(17))
+	r := rand.New(rand.NewSource(27))
 
 	for i := 0; i < totalEvents; i++ {
 		// Sleep between events
 		select {
-		case <-ctx.Done():
+		case <-client.Context().Done():
 			return
 		case <-time.After(time.Duration(eventInterval*1000) * time.Millisecond):
 		}
@@ -80,16 +54,33 @@ func simulateMatch(ctx context.Context, num int, node *centrifuge.Node) {
 		team := chooseRandomTeam(r, match)
 		playerIndex := r.Intn(11) // Choose one of the 11 players randomly
 
-		event := Event{Type: eventType, Minute: minute}
+		event := &apppb.Event{Type: eventType, Minute: int32(minute)}
 		team.Players[playerIndex].Events = append(team.Players[playerIndex].Events, event)
 
-		if eventType == Goal {
+		if eventType == apppb.EventType_GOAL {
 			team.Score++
 		}
 
-		data, _ := json.Marshal(match)
-		_, err := node.Publish(
-			"match:state:1", data,
+		var data []byte
+		var err error
+
+		if useProtobufPayload {
+			data, err = proto.Marshal(match)
+		} else {
+			data, err = protojson.MarshalOptions{
+				UseProtoNames: false,
+			}.Marshal(match)
+		}
+		if err != nil {
+			log.Fatal(err)
+
+		}
+		ch := "match:js:1"
+		if useProtobufPayload {
+			ch = "match:pb:1"
+		}
+		_, err = node.Publish(
+			ch, data,
 			centrifuge.WithDelta(true),
 			centrifuge.WithHistory(10, time.Minute),
 		)
@@ -99,25 +90,26 @@ func simulateMatch(ctx context.Context, num int, node *centrifuge.Node) {
 	}
 }
 
-func chooseRandomEventType(r *rand.Rand) string {
-	events := []string{Goal, YellowCard, RedCard, Substitute}
+func chooseRandomEventType(r *rand.Rand) apppb.EventType {
+	events := []apppb.EventType{
+		apppb.EventType_GOAL, apppb.EventType_YELLOW_CARD, apppb.EventType_RED_CARD, apppb.EventType_SUBSTITUTE}
 	return events[r.Intn(len(events))]
 }
 
-func chooseRandomTeam(r *rand.Rand, match *Match) *Team {
+func chooseRandomTeam(r *rand.Rand, match *apppb.Match) *apppb.Team {
 	if r.Intn(2) == 0 {
-		return &match.HomeTeam
+		return match.HomeTeam
 	}
-	return &match.AwayTeam
+	return match.AwayTeam
 }
 
 // Helper function to create players with names from a given list
-func assignNamesToPlayers(names []string) [11]Player {
-	var players [11]Player
+func assignNamesToPlayers(names []string) []*apppb.Player {
+	var players [11]*apppb.Player
 	for i, name := range names {
-		players[i] = Player{Name: name}
+		players[i] = &apppb.Player{Name: name}
 	}
-	return players
+	return players[:]
 }
 
 func auth(h http.Handler) http.Handler {
@@ -130,6 +122,7 @@ func auth(h http.Handler) http.Handler {
 		// anonymous users allowed to connect to your server or not.
 		cred := &centrifuge.Credentials{
 			UserID: "",
+			Info:   []byte(r.URL.RawQuery), // This is a hack for the playground.
 		}
 		newCtx := centrifuge.SetCredentials(ctx, cred)
 		r = r.WithContext(newCtx)
@@ -147,10 +140,22 @@ func main() {
 		LogHandler: func(entry centrifuge.LogEntry) {
 			log.Println(entry.Message, entry.Fields)
 		},
+		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		cred, _ := centrifuge.GetCredentials(ctx)
+		reply := centrifuge.ConnectReply{}
+		if strings.Contains(string(cred.Info), "delay") {
+			reply.MaxMessagesInFrame = -1
+			reply.WriteDelay = 200 * time.Millisecond
+			reply.ReplyWithoutQueue = true
+		}
+		return reply, nil
+	})
 
 	// Set ConnectHandler called when client successfully connected to Node.
 	// Your code inside a handler must be synchronized since it will be called
@@ -165,23 +170,29 @@ func main() {
 		transportProto := client.Transport().Protocol()
 		log.Printf("client connected via %s (%s)", transportName, transportProto)
 
-		//go func() {
-		//	simulateMatch(client.Context(), 0, node)
-		//}()
+		var useProtobufPayload bool
+		if strings.Contains(string(client.Info()), "protobuf") {
+			useProtobufPayload = true
+		}
 
-		client.OnCacheEmpty(func(event centrifuge.CacheEmptyEvent) centrifuge.CacheEmptyReply {
-			simulateMatch(context.Background(), 0, node)
-			//go func() {
-			//	num := 0
-			//	for {
-			//
-			//		num++
-			//		time.Sleep(5 * time.Second)
-			//	}
-			//}()
-			fmt.Println("simulated")
-			return centrifuge.CacheEmptyReply{}
-		})
+		go func() {
+			log.Printf("using protobuf payload: %v", useProtobufPayload)
+			simulateMatch(client, 0, node, useProtobufPayload)
+		}()
+
+		//client.OnCacheEmpty(func(event centrifuge.CacheEmptyEvent) centrifuge.CacheEmptyReply {
+		//	simulateMatch(context.Background(), 0, node)
+		//	//go func() {
+		//	//	num := 0
+		//	//	for {
+		//	//
+		//	//		num++
+		//	//		time.Sleep(5 * time.Second)
+		//	//	}
+		//	//}()
+		//	fmt.Println("simulated")
+		//	return centrifuge.CacheEmptyReply{Populated: true}
+		//})
 
 		// Set SubscribeHandler to react on every channel subscription attempt
 		// initiated by a client. Here you can theoretically return an error or
@@ -215,7 +226,7 @@ func main() {
 
 		// Set Disconnect handler to react on client disconnect events.
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
-			log.Print("client disconnected", e.Code, e.Reason)
+			log.Printf("client disconnected: %d (%s)", e.Code, e.Reason)
 		})
 	})
 
@@ -227,19 +238,51 @@ func main() {
 
 	// Now configure HTTP routes.
 
-	// Serve Websocket connections using WebsocketHandler.
-	wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		//Compression:        true,
-		//CompressionMinSize: 1,
-		//CompressionLevel:   1,
-	})
-	http.Handle("/connection/websocket", auth(wsHandler))
+	http.Handle("/connection/websocket/no_compression", auth(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 
-	// The second route is for serving index.html file.
-	http.Handle("/", http.FileServer(http.Dir("./")))
+	http.Handle("/connection/websocket/with_compression", auth(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+		Compression:        true,
+		CompressionMinSize: 1,
+		CompressionLevel:   1,
+	})))
+
+	http.HandleFunc("/", serveIndex)
+	http.HandleFunc("/json", serveJsonApp)
+	http.HandleFunc("/protobuf", serveProtobufApp)
+
+	// Serve static files from the /static folder
+	fs := http.FileServer(http.Dir("static"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
 	log.Printf("Starting server, visit http://localhost:8000")
 	if err := http.ListenAndServe("127.0.0.1:8000", nil); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func serveIndex(w http.ResponseWriter, r *http.Request) {
+	t, err := template.ParseFiles("templates/index.html")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = t.Execute(w, nil)
+}
+
+func serveJsonApp(w http.ResponseWriter, r *http.Request) {
+	t, err := template.ParseFiles("templates/json.html")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = t.Execute(w, nil)
+}
+
+func serveProtobufApp(w http.ResponseWriter, r *http.Request) {
+	t, err := template.ParseFiles("templates/protobuf.html")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = t.Execute(w, nil)
 }

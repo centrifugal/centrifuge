@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package centrifugal.centrifuge.examples.compression_playground;
+
+option go_package = "./;apppb";
+
+enum EventType {
+  UNKNOWN = 0; // Default value, should not be used
+  GOAL = 1;
+  YELLOW_CARD = 2;
+  RED_CARD = 3;
+  SUBSTITUTE = 4;
+}
+
+message Event {
+  EventType type = 1;
+  int32 minute = 2;
+}
+
+message Player {
+  string name = 1;
+  repeated Event events = 2;
+}
+
+message Team {
+  string name = 1;
+  int32 score = 2;
+  repeated Player players = 3;
+}
+
+message Match {
+  int32 id = 1;
+  Team home_team = 2;
+  Team away_team = 3;
+}
