@@ -16,7 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func simulateMatch(client *centrifuge.Client, num int32, node *centrifuge.Node, useProtobufPayload bool) {
+func simulateMatch(ctx context.Context, num int32, node *centrifuge.Node, useProtobufPayload bool) {
 	// Predefined lists of player names for each team.
 	playerNamesTeamA := []string{"John Doe", "Jane Smith", "Alex Johnson", "Chris Lee", "Pat Kim", "Sam Morgan", "Jamie Brown", "Casey Davis", "Morgan Garcia", "Taylor White", "Jordan Martinez"}
 	playerNamesTeamB := []string{"Robin Wilson", "Drew Taylor", "Jessie Bailey", "Casey Flores", "Jordan Walker", "Charlie Green", "Alex Adams", "Morgan Thompson", "Taylor Clark", "Jordan Hernandez", "Jamie Lewis"}
@@ -43,7 +43,7 @@ func simulateMatch(client *centrifuge.Client, num int32, node *centrifuge.Node, 
 	for i := 0; i < totalEvents; i++ {
 		// Sleep between events
 		select {
-		case <-client.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-time.After(time.Duration(eventInterval*1000) * time.Millisecond):
 		}
@@ -141,6 +141,11 @@ func main() {
 			log.Println(entry.Message, entry.Fields)
 		},
 		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
+		GetChannelCacheOptions: func(channel string) (centrifuge.ChannelCacheOptions, bool) {
+			return centrifuge.ChannelCacheOptions{
+				Delay: 400 * time.Millisecond,
+			}, true
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -177,7 +182,7 @@ func main() {
 
 		go func() {
 			log.Printf("using protobuf payload: %v", useProtobufPayload)
-			simulateMatch(client, 0, node, useProtobufPayload)
+			simulateMatch(client.Context(), 0, node, useProtobufPayload)
 		}()
 
 		//client.OnCacheEmpty(func(event centrifuge.CacheEmptyEvent) centrifuge.CacheEmptyReply {
@@ -235,6 +240,12 @@ func main() {
 	if err := node.Run(); err != nil {
 		log.Fatal(err)
 	}
+
+	go func() {
+		for {
+			simulateMatch(context.Background(), 0, node, false)
+		}
+	}()
 
 	// Now configure HTTP routes.
 
