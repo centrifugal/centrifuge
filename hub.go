@@ -134,12 +134,12 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
 // uses a Broker to deliver publications to all Nodes in a cluster and maintains publication history
 // in a channel with incremental offset. By calling BroadcastPublication messages will only be sent
 // to the current node subscribers without any defined offset semantics.
-func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pubToProto(pub), sp)
+func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition, bypassOffset bool) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pubToProto(pub), sp, bypassOffset)
 }
 
-func (h *Hub) broadcastPublicationDelta(ch string, pub *Publication, prevPub *Publication, sp StreamPosition) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublicationDelta(ch, pub, prevPub, sp)
+func (h *Hub) broadcastPublicationDelta(ch string, pub *Publication, prevPub *Publication, sp StreamPosition, bypassOffset bool) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublicationDelta(ch, pub, prevPub, sp, bypassOffset)
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
@@ -569,7 +569,7 @@ type dataValue struct {
 }
 
 // broadcastPublicationDelta sends message to all clients subscribed on channel trying to use deltas.
-func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, prevPub *Publication, sp StreamPosition) error {
+func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, prevPub *Publication, sp StreamPosition, bypassOffset bool) error {
 	fullPub := pubToProto(pub)
 
 	dataByKey := make(map[broadcastKey]dataValue)
@@ -726,7 +726,7 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
 		}
-		_ = sub.client.writePublication(channel, fullPub, value, sp)
+		_ = sub.client.writePublication(channel, fullPub, value, sp, bypassOffset)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
@@ -741,7 +741,7 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 }
 
 // broadcastPublication sends message to all clients subscribed on channel.
-func (h *subShard) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
+func (h *subShard) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition, bypassOffset bool) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -778,7 +778,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						continue
 					}
 				}
-				_ = sub.client.writePublicationNoDelta(channel, pub, jsonPush, sp)
+				_ = sub.client.writePublicationNoDelta(channel, pub, jsonPush, sp, bypassOffset)
 			} else {
 				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Pub: pub}
@@ -790,7 +790,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						continue
 					}
 				}
-				_ = sub.client.writePublicationNoDelta(channel, pub, jsonReply, sp)
+				_ = sub.client.writePublicationNoDelta(channel, pub, jsonReply, sp, bypassOffset)
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if sub.client.transport.Unidirectional() {
@@ -802,7 +802,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						return err
 					}
 				}
-				_ = sub.client.writePublicationNoDelta(channel, pub, protobufPush, sp)
+				_ = sub.client.writePublicationNoDelta(channel, pub, protobufPush, sp, bypassOffset)
 			} else {
 				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Pub: pub}
@@ -812,7 +812,7 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 						return err
 					}
 				}
-				_ = sub.client.writePublicationNoDelta(channel, pub, protobufReply, sp)
+				_ = sub.client.writePublicationNoDelta(channel, pub, protobufReply, sp, bypassOffset)
 			}
 		}
 	}

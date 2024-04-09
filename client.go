@@ -535,11 +535,11 @@ func (c *Client) checkPong() {
 func (c *Client) addPingUpdate(isFirst bool) {
 	delay := c.pingInterval
 	if isFirst {
-		// Send first ping in random interval between 0 and PingInterval to
+		// Send first ping in random interval between PingInterval/2 and PingInterval to
 		// spread ping-pongs in time (useful when many connections reconnect
 		// almost immediately).
 		pingNanoseconds := c.pingInterval.Nanoseconds()
-		delay = time.Duration(randSource.Int63n(pingNanoseconds)) * time.Nanosecond
+		delay = time.Duration(pingNanoseconds/2) + time.Duration(randSource.Int63n(pingNanoseconds/2))*time.Nanosecond
 	}
 	c.nextPing = time.Now().Add(delay).UnixNano()
 	c.scheduleNextTimer()
@@ -3089,7 +3089,7 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 	}
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition, bypassOffset bool) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
@@ -3119,7 +3119,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return nil
 	}
-	if pubOffset != nextExpectedOffset {
+	if !bypassOffset && pubOffset != nextExpectedOffset {
 		if c.node.logger.enabled(LogLevelDebug) {
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
 		}
@@ -3149,11 +3149,11 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
 }
 
-func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
-	return c.writePublication(ch, pub, dataValue{data: data, deltaData: data}, sp)
+func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, bypassOffset bool) error {
+	return c.writePublication(ch, pub, dataValue{data: data, deltaData: data}, sp, bypassOffset)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition) error {
+func (c *Client) writePublication(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition, bypassOffset bool) error {
 	if c.node.LogEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
@@ -3164,7 +3164,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data dat
 		return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, data, sp)
+		_ = c.writePublicationUpdatePosition(ch, pub, data, sp, bypassOffset)
 	})
 	return nil
 }

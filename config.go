@@ -112,6 +112,13 @@ type Config struct {
 	// AllowedDeltaTypes is a whitelist of DeltaType subscribers can use. At this point Centrifuge
 	// only supports DeltaTypeFossil. If not set clients won't be able to negotiate delta encoding.
 	AllowedDeltaTypes []DeltaType
+
+	GetChannelCacheOptions func(channel string) (ChannelCacheOptions, bool)
+}
+
+type ChannelCacheOptions struct {
+	// Delay broadcasting.
+	Delay time.Duration
 }
 
 const (

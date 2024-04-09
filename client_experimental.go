@@ -29,7 +29,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, jsonPush, sp)
+			return c.writePublicationNoDelta(channel, pub, jsonPush, sp, false)
 		} else {
 			push := &protocol.Push{Channel: channel, Pub: pub}
 			var err error
@@ -38,7 +38,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, jsonReply, sp)
+			return c.writePublicationNoDelta(channel, pub, jsonReply, sp, false)
 		}
 	} else if protoType == protocol.TypeProtobuf {
 		if c.transport.Unidirectional() {
@@ -48,7 +48,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 			if err != nil {
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, protobufPush, sp)
+			return c.writePublicationNoDelta(channel, pub, protobufPush, sp, false)
 		} else {
 			push := &protocol.Push{Channel: channel, Pub: pub}
 			var err error
@@ -56,7 +56,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 			if err != nil {
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, protobufReply, sp)
+			return c.writePublicationNoDelta(channel, pub, protobufReply, sp, false)
 		}
 	}
 

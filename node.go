@@ -83,6 +83,8 @@ type Node struct {
 	nodeInfoSendHandler NodeInfoSendHandler
 
 	emulationSurveyHandler *emulationSurveyHandler
+
+	caches map[string]*channelCache
 }
 
 const (
@@ -162,6 +164,7 @@ func New(c Config) (*Node, error) {
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
+		caches:         make(map[string]*channelCache),
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
@@ -683,7 +686,7 @@ func (n *Node) handleControl(data []byte) error {
 // handlePublication handles messages published into channel and
 // coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication, bypassOffset bool) error {
 	n.metrics.incMessagesReceived("publication")
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
@@ -691,13 +694,26 @@ func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition,
 		return nil
 	}
 	if delta {
-		err := n.hub.broadcastPublicationDelta(ch, pub, prevPub, sp)
+		err := n.hub.broadcastPublicationDelta(ch, pub, prevPub, sp, bypassOffset)
 		if err != nil {
 			n.Log(newLogEntry(LogLevelError, "error broadcast delta", map[string]any{"error": err.Error()}))
 		}
 		return err
 	}
-	return n.hub.BroadcastPublication(ch, pub, sp)
+	return n.hub.BroadcastPublication(ch, pub, sp, bypassOffset)
+}
+
+func (n *Node) handlePublicationCached(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+	mu := n.subLock(ch)
+	mu.Lock()
+	cache, ok := n.caches[ch]
+	if ok {
+		cache.handlePublication(pub, sp, delta, prevPub)
+		mu.Unlock()
+		return nil
+	}
+	mu.Unlock()
+	return n.handlePublication(ch, pub, sp, delta, prevPub, false)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -988,10 +1004,68 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 		return err
 	}
 	if first {
+		// TODO: there is a gap between subscribe and cache initialization.
+		// Need to synchronize.
+		if n.config.GetChannelCacheOptions != nil {
+			cacheOpts, ok := n.config.GetChannelCacheOptions(ch)
+			if ok {
+				chCache := newChannelCache(ch, n, cacheOpts)
+				n.caches[ch] = chCache
+			}
+		}
+
 		err := n.broker.Subscribe(ch)
 		if err != nil {
 			_, _ = n.hub.removeSub(ch, sub.client)
+			if n.config.GetChannelCacheOptions != nil {
+				delete(n.caches, ch)
+			}
 			return err
+		}
+
+		// TODO: there is a gap between subscribe and cache initialization.
+		// Need to synchronize.
+		if n.config.GetChannelCacheOptions != nil {
+			cache, ok := n.caches[ch]
+			if ok {
+				hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
+					Limit:   1,
+					Reverse: true,
+				}))
+				if err != nil {
+					_, _ = n.hub.removeSub(ch, sub.client)
+
+					// TODO: eliminate code duplication.
+					submittedAt := time.Now()
+					_ = n.subDissolver.Submit(func() error {
+						timeSpent := time.Since(submittedAt)
+						if timeSpent < time.Second {
+							time.Sleep(time.Second - timeSpent)
+						}
+						mu := n.subLock(ch)
+						mu.Lock()
+						defer mu.Unlock()
+						empty := n.hub.NumSubscribers(ch) == 0
+						if empty {
+							err := n.broker.Unsubscribe(ch)
+							if err != nil {
+								// Cool down a bit since broker is not ready to process unsubscription.
+								time.Sleep(500 * time.Millisecond)
+							}
+							return err
+						}
+						return nil
+					})
+
+					return err
+				}
+				currentStreamPosition := hr.StreamPosition
+				var latestPublication *Publication
+				if len(hr.Publications) > 0 {
+					latestPublication = hr.Publications[0]
+				}
+				cache.initState(latestPublication, currentStreamPosition)
+			}
 		}
 	}
 	return nil
@@ -1009,6 +1083,13 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 		return err
 	}
 	if empty {
+		cache, ok := n.caches[ch]
+		if ok {
+			println("close cache")
+			cache.close()
+			delete(n.caches, ch)
+		}
+
 		submittedAt := time.Now()
 		_ = n.subDissolver.Submit(func() error {
 			timeSpent := time.Since(submittedAt)
@@ -1347,10 +1428,22 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 // recoverCache recovers last publication in channel.
 func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration) (HistoryResult, error) {
 	n.metrics.incActionCount("history_recover")
-	return n.History(ch, WithHistoryFilter(HistoryFilter{
-		Limit:   1,
-		Reverse: true,
-	}), WithHistoryMetaTTL(historyMetaTTL))
+	if n.caches[ch] == nil {
+		return n.History(ch, WithHistoryFilter(HistoryFilter{
+			Limit:   1,
+			Reverse: true,
+		}), WithHistoryMetaTTL(historyMetaTTL))
+	}
+	if n.caches[ch].prevPublication != nil {
+		return HistoryResult{
+			StreamPosition: n.caches[ch].prevStreamPosition,
+			Publications:   []*Publication{n.caches[ch].prevPublication},
+		}, nil
+	}
+	return HistoryResult{
+		StreamPosition: n.caches[ch].prevStreamPosition,
+		Publications:   nil,
+	}, nil
 }
 
 // streamTop returns current stream top StreamPosition for a channel.
@@ -1537,7 +1630,10 @@ func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp S
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
-	return h.node.handlePublication(ch, pub, sp, delta, prevPub)
+	if h.node.config.GetChannelCacheOptions != nil {
+		return h.node.handlePublicationCached(ch, pub, sp, delta, prevPub)
+	}
+	return h.node.handlePublication(ch, pub, sp, delta, prevPub, false)
 }
 
 // HandleJoin coming from Broker.
