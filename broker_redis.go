@@ -1019,14 +1019,16 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 			// it to unmarshalled Publication.
 			pub.Offset = sp.Offset
 		}
-		var prevPub protocol.Publication
 		if delta && len(prevPayload) > 0 {
-			err = pub.UnmarshalVT(pushData)
+			var prevPub protocol.Publication
+			err = prevPub.UnmarshalVT(prevPayload)
 			if err != nil {
 				return err
 			}
+			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, delta, pubFromProto(&prevPub))
+		} else {
+			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, false, nil)
 		}
-		_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, false, pubFromProto(&prevPub))
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo
 		err := info.UnmarshalVT(pushData)
@@ -1300,45 +1302,60 @@ func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool, []byt
 	if !bytes.HasPrefix(data, metaSep) {
 		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, true
 	}
-	nextMetaSepPos := bytes.Index(data[len(metaSep):], metaSep)
-	if nextMetaSepPos <= 0 {
+
+	content := data[len(metaSep):]
+	if len(content) < 0 {
 		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
 	}
-	content := data[len(metaSep) : len(metaSep)+nextMetaSepPos]
-	contentType := content[0]
 
-	rest := data[len(metaSep)+nextMetaSepPos+len(metaSep):]
+	contentType := content[0]
 
 	switch contentType {
 	case 'j':
+		// __j__payload.
+		nextMetaSepPos := bytes.Index(data[len(metaSep):], metaSep)
+		if nextMetaSepPos <= 0 {
+			return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
+		}
+		rest := data[len(metaSep)+nextMetaSepPos+len(metaSep):]
 		return rest, joinPushType, StreamPosition{}, false, nil, true
 	case 'l':
+		// __l__payload.
+		nextMetaSepPos := bytes.Index(data[len(metaSep):], metaSep)
+		if nextMetaSepPos <= 0 {
+			return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
+		}
+		rest := data[len(metaSep)+nextMetaSepPos+len(metaSep):]
 		return rest, leavePushType, StreamPosition{}, false, nil, true
-	}
-
-	stringContent := convert.BytesToString(content)
-
-	if contentType == 'p' {
+	case 'p':
 		// p1:offset:epoch__payload
-		stringContent = stringContent[3:] // offset:epoch
-		epochDelimiterPos := strings.Index(stringContent, contentSep)
+		nextMetaSepPos := bytes.Index(data[len(metaSep):], metaSep)
+		if nextMetaSepPos <= 0 {
+			return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
+		}
+		header := data[len(metaSep) : len(metaSep)+nextMetaSepPos]
+		stringHeader := convert.BytesToString(header)
+
+		rest := data[len(metaSep)+nextMetaSepPos+len(metaSep):]
+
+		stringHeader = stringHeader[3:] // offset:epoch
+		epochDelimiterPos := strings.Index(stringHeader, contentSep)
 		if epochDelimiterPos <= 0 {
 			return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
 		}
 		var err error
-		offset, err = strconv.ParseUint(stringContent[:epochDelimiterPos], 10, 64)
-		epoch = stringContent[epochDelimiterPos+1:]
+		offset, err = strconv.ParseUint(stringHeader[:epochDelimiterPos], 10, 64)
+		epoch = stringHeader[epochDelimiterPos+1:]
 		return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, err == nil
-	} else if contentType == 'd' {
+	case 'd':
 		// d1:offset:epoch:prev_payload_length:prev_payload:payload_length:payload
+		stringContent := convert.BytesToString(content)
 		parsedDelta, err := parseDeltaPush(stringContent)
 		return convert.StringToBytes(parsedDelta.Payload), pubPushType, StreamPosition{Epoch: parsedDelta.Epoch, Offset: parsedDelta.Offset}, true, convert.StringToBytes(parsedDelta.PrevPayload), err == nil
+	default:
+		// Unknown content type.
+		return nil, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
 	}
-
-	// old format with offset only: __offset__
-	var err error
-	offset, err = strconv.ParseUint(stringContent, 10, 64)
-	return rest, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, err == nil
 }
 
 type deltaPublicationPush struct {

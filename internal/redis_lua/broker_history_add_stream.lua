@@ -36,6 +36,16 @@ if use_delta == "1" then
   local prev_entries = redis.call("xrevrange", stream_key, "+", "-", "COUNT", 1)
   if #prev_entries > 0 then
     prev_message_payload = prev_entries[1][2]["d"]
+    local fields_and_values = prev_entries[1][2]
+    -- Loop through the fields and values to find the field "d"
+    for i = 1, #fields_and_values, 2 do
+        local field = fields_and_values[i]
+        local value = fields_and_values[i + 1]
+        if field == "d" then
+            prev_message_payload = value
+            break  -- Stop the loop once we find the field "d"
+        end
+    end
   end
 end
 

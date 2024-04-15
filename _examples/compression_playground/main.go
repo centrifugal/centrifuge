@@ -143,13 +143,36 @@ func main() {
 		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
 		GetChannelCacheOptions: func(channel string) (centrifuge.ChannelCacheOptions, bool) {
 			return centrifuge.ChannelCacheOptions{
-				Delay: 400 * time.Millisecond,
+				Delay:                 200 * time.Millisecond,
+				SyncInterval:          10 * time.Millisecond,
+				KeepLatestPublication: true,
 			}, true
 		},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	redisShardConfigs := []centrifuge.RedisShardConfig{
+		{Address: "localhost:6379"},
+	}
+	var redisShards []*centrifuge.RedisShard
+	for _, redisConf := range redisShardConfigs {
+		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
+		if err != nil {
+			log.Fatal(err)
+		}
+		redisShards = append(redisShards, redisShard)
+	}
+
+	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
+		// And configure a couple of shards to use.
+		Shards: redisShards,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	node.SetBroker(broker)
 
 	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)

@@ -678,7 +678,7 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 
 	err = node.handlePublication("test", &Publication{
 		Offset: offset,
-	}, StreamPosition{offset, epoch}, false, nil)
+	}, StreamPosition{offset, epoch}, false, nil, false)
 	require.NoError(t, err)
 
 	select {

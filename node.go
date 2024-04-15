@@ -1085,7 +1085,6 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	if empty {
 		cache, ok := n.caches[ch]
 		if ok {
-			println("close cache")
 			cache.close()
 			delete(n.caches, ch)
 		}
@@ -1428,20 +1427,24 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 // recoverCache recovers last publication in channel.
 func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration) (HistoryResult, error) {
 	n.metrics.incActionCount("history_recover")
-	if n.caches[ch] == nil {
+	mu := n.subLock(ch)
+	mu.Lock()
+	cache := n.caches[ch]
+	mu.Unlock()
+	if cache == nil || !cache.options.KeepLatestPublication {
 		return n.History(ch, WithHistoryFilter(HistoryFilter{
 			Limit:   1,
 			Reverse: true,
 		}), WithHistoryMetaTTL(historyMetaTTL))
 	}
-	if n.caches[ch].prevPublication != nil {
+	if n.caches[ch].latestPublication != nil {
 		return HistoryResult{
-			StreamPosition: n.caches[ch].prevStreamPosition,
-			Publications:   []*Publication{n.caches[ch].prevPublication},
+			StreamPosition: n.caches[ch].currentStreamPosition,
+			Publications:   []*Publication{n.caches[ch].latestPublication},
 		}, nil
 	}
 	return HistoryResult{
-		StreamPosition: n.caches[ch].prevStreamPosition,
+		StreamPosition: n.caches[ch].currentStreamPosition,
 		Publications:   nil,
 	}, nil
 }

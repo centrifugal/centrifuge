@@ -116,11 +116,6 @@ type Config struct {
 	GetChannelCacheOptions func(channel string) (ChannelCacheOptions, bool)
 }
 
-type ChannelCacheOptions struct {
-	// Delay broadcasting.
-	Delay time.Duration
-}
-
 const (
 	// nodeInfoPublishInterval is an interval how often node must publish
 	// node control message.

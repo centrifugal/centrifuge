@@ -49,7 +49,9 @@
                     app.appendChild(scoreDisplay);
                 }
 
-                const centrifuge = new Centrifuge(wsEndpoint, {});
+                const centrifuge = new Centrifuge(wsEndpoint, {
+                    debug: true,
+                });
 
                 let subOptions = {
                     since: {},
