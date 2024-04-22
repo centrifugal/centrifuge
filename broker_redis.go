@@ -1308,7 +1308,7 @@ func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool, []byt
 	}
 
 	content := data[len(metaSep):]
-	if len(content) < 0 {
+	if len(content) == 0 {
 		return data, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
 	}
 

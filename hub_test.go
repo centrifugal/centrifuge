@@ -470,7 +470,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 			err := n.hub.BroadcastPublication(
 				"non_existing_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
-				StreamPosition{}, false,
+				StreamPosition{},
 			)
 			require.NoError(t, err)
 
@@ -478,7 +478,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 			err = n.hub.BroadcastPublication(
 				"test_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
-				StreamPosition{}, false,
+				StreamPosition{},
 			)
 			require.NoError(t, err)
 		LOOP:
@@ -744,7 +744,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_ = n.hub.BroadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition, false)
+				_ = n.hub.BroadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
 			}()
 			_, _ = n.hub.addSub(channels[i%numChannels], subInfo{client: clients[i%numClients], deltaType: ""})
 			wg.Wait()
@@ -806,7 +806,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 						}
 					}
 				}()
-				_ = n.hub.BroadcastPublication(channels[i%numChannels], pub, streamPosition, false)
+				_ = n.hub.BroadcastPublication(channels[i%numChannels], pub, streamPosition)
 				wg.Wait()
 			}
 		})
@@ -831,7 +831,7 @@ func TestHubBroadcastInappropriateProtocol_Publication(t *testing.T) {
 		}
 		err := n.hub.BroadcastPublication("test_channel", &Publication{
 			Data: []byte(`{111`),
-		}, StreamPosition{}, false)
+		}, StreamPosition{})
 		require.NoError(t, err)
 		waitWithTimeout(t, done)
 	}

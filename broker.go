@@ -19,18 +19,6 @@ type Publication struct {
 	Tags map[string]string
 }
 
-func (p *Publication) shallowCopy() *Publication {
-	if p == nil {
-		return nil
-	}
-	return &Publication{
-		Offset: p.Offset,
-		Data:   p.Data,
-		Info:   p.Info,
-		Tags:   p.Tags,
-	}
-}
-
 // ClientInfo contains information about client connection.
 type ClientInfo struct {
 	// ClientID is a client unique id.
