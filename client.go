@@ -2696,13 +2696,13 @@ func isStreamRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch s
 	return recoveredPubs, recovered
 }
 
-func isCacheRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
-	latestOffset := historyResult.Offset
-	latestEpoch := historyResult.Epoch
+func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+	latestOffset := currentSP.Offset
+	latestEpoch := currentSP.Epoch
 	var recovered bool
-	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
-	if len(historyResult.Publications) > 0 {
-		publication := historyResult.Publications[0]
+	recoveredPubs := make([]*protocol.Publication, 0, 1)
+	if latestPub != nil {
+		publication := latestPub
 		recovered = publication.Offset == latestOffset
 		skipPublication := cmdOffset > 0 && cmdOffset == latestOffset && cmdEpoch == latestEpoch
 		if recovered && !skipPublication {
@@ -2816,28 +2816,28 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			// publications automatically from history (we assume here that the history configured wisely).
 
 			if recoveryMode == RecoveryModeCache {
-				historyResult, err := c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+				latestPub, currentSP, err := c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
 				if err != nil {
 					c.node.logger.log(newLogEntry(LogLevelError, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					return handleErr(err)
 				}
-				latestOffset = historyResult.Offset
-				latestEpoch = historyResult.Epoch
+				latestOffset = currentSP.Offset
+				latestEpoch = currentSP.Epoch
 				var recovered bool
-				recoveredPubs, recovered = isCacheRecovered(historyResult, cmdOffset, cmdEpoch)
+				recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
 				res.Recovered = recovered
-				if len(historyResult.Publications) == 0 && c.eventHub.cacheEmptyHandler != nil {
+				if latestPub == nil && c.eventHub.cacheEmptyHandler != nil {
 					cacheReply := c.eventHub.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
-						historyResult, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+						latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
 						if err != nil {
 							c.node.logger.log(newLogEntry(LogLevelError, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 							return handleErr(err)
 						}
-						latestOffset = historyResult.Offset
-						latestEpoch = historyResult.Epoch
-						recoveredPubs, recovered = isCacheRecovered(historyResult, cmdOffset, cmdEpoch)
+						latestOffset = currentSP.Offset
+						latestEpoch = currentSP.Epoch
+						recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
 						res.Recovered = recovered
 						c.node.metrics.incRecover(res.Recovered)
 					} else {
@@ -3089,7 +3089,7 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 	}
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition, bypassOffset bool) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
@@ -3119,7 +3119,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return nil
 	}
-	if !bypassOffset && pubOffset != nextExpectedOffset {
+	if pubOffset != nextExpectedOffset {
 		if c.node.logger.enabled(LogLevelDebug) {
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
 		}
@@ -3149,11 +3149,11 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
 }
 
-func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, bypassOffset bool) error {
-	return c.writePublication(ch, pub, dataValue{data: data, deltaData: data}, sp, bypassOffset)
+func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
+	return c.writePublication(ch, pub, dataValue{data: data, deltaData: data}, sp)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition, bypassOffset bool) error {
+func (c *Client) writePublication(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition) error {
 	if c.node.LogEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
@@ -3164,7 +3164,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data dat
 		return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, data, sp, bypassOffset)
+		_ = c.writePublicationUpdatePosition(ch, pub, data, sp)
 	})
 	return nil
 }

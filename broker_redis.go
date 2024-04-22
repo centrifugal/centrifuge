@@ -710,6 +710,10 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		script = b.addHistoryStreamScript
 	}
 
+	if opts.UseDelta && b.config.UseLists {
+		return StreamPosition{}, false, errors.New("delta is not supported when using Redis lists for history")
+	}
+
 	var useDelta string
 	if opts.UseDelta {
 		useDelta = "1"

@@ -141,38 +141,31 @@ func main() {
 			log.Println(entry.Message, entry.Fields)
 		},
 		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
-		GetChannelCacheOptions: func(channel string) (centrifuge.ChannelCacheOptions, bool) {
-			return centrifuge.ChannelCacheOptions{
-				Delay:                 200 * time.Millisecond,
-				SyncInterval:          10 * time.Millisecond,
-				KeepLatestPublication: true,
-			}, true
-		},
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	redisShardConfigs := []centrifuge.RedisShardConfig{
-		{Address: "localhost:6379"},
-	}
-	var redisShards []*centrifuge.RedisShard
-	for _, redisConf := range redisShardConfigs {
-		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
-		if err != nil {
-			log.Fatal(err)
-		}
-		redisShards = append(redisShards, redisShard)
-	}
-
-	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-		// And configure a couple of shards to use.
-		Shards: redisShards,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	node.SetBroker(broker)
+	//redisShardConfigs := []centrifuge.RedisShardConfig{
+	//	{Address: "localhost:6379"},
+	//}
+	//var redisShards []*centrifuge.RedisShard
+	//for _, redisConf := range redisShardConfigs {
+	//	redisShard, err := centrifuge.NewRedisShard(node, redisConf)
+	//	if err != nil {
+	//		log.Fatal(err)
+	//	}
+	//	redisShards = append(redisShards, redisShard)
+	//}
+	//
+	//broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
+	//	// And configure a couple of shards to use.
+	//	Shards: redisShards,
+	//})
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//node.SetBroker(broker)
 
 	node.OnConnecting(func(ctx context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
@@ -202,6 +195,11 @@ func main() {
 		if strings.Contains(string(client.Info()), "protobuf") {
 			useProtobufPayload = true
 		}
+
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			client.Disconnect(centrifuge.DisconnectForceReconnect)
+		}()
 
 		go func() {
 			log.Printf("using protobuf payload: %v", useProtobufPayload)
@@ -265,8 +263,10 @@ func main() {
 	}
 
 	go func() {
+		var num int32
 		for {
-			simulateMatch(context.Background(), 0, node, false)
+			num++
+			simulateMatch(context.Background(), num, node, false)
 		}
 	}()
 
