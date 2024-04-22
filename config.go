@@ -22,7 +22,7 @@ type Config struct {
 	NodeInfoMetricsAggregateInterval time.Duration
 	// ClientPresenceUpdateInterval sets an interval how often connected
 	// clients update presence information.
-	// Zero value means 27 * time.Second.
+	// Zero value means 25 * time.Second.
 	ClientPresenceUpdateInterval time.Duration
 	// ClientExpiredCloseDelay is an extra time given to client to refresh
 	// its connection in the end of connection TTL. At moment only used for

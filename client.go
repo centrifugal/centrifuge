@@ -421,9 +421,9 @@ func (c *Client) onTimerOp() {
 		c.mu.Unlock()
 		return
 	}
-	timerOp := c.timerOp
+	op := c.timerOp
 	c.mu.Unlock()
-	switch timerOp {
+	switch op {
 	case timerOpStale:
 		c.closeStale()
 	case timerOpPresence:
@@ -469,7 +469,11 @@ func (c *Client) scheduleNextTimer() {
 	if needTimer {
 		c.timerOp = nextTimerOp
 		afterDuration := time.Duration(minEventTime-time.Now().UnixNano()) * time.Nanosecond
-		c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+		if c.timer != nil {
+			c.timer.Reset(afterDuration)
+		} else {
+			c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+		}
 	}
 }
 
@@ -509,7 +513,7 @@ func (c *Client) sendPing() {
 	if c.pongTimeout > 0 && !unidirectional {
 		c.nextPong = time.Now().Add(c.pongTimeout).UnixNano()
 	}
-	c.addPingUpdate(false)
+	c.addPingUpdate(false, true)
 	c.mu.Unlock()
 }
 
@@ -532,7 +536,7 @@ func (c *Client) checkPong() {
 }
 
 // Lock must be held outside.
-func (c *Client) addPingUpdate(isFirst bool) {
+func (c *Client) addPingUpdate(isFirst bool, scheduleNext bool) {
 	delay := c.pingInterval
 	if isFirst {
 		// Send first ping in random interval between PingInterval/2 and PingInterval to
@@ -542,19 +546,25 @@ func (c *Client) addPingUpdate(isFirst bool) {
 		delay = time.Duration(pingNanoseconds/2) + time.Duration(randSource.Int63n(pingNanoseconds/2))*time.Nanosecond
 	}
 	c.nextPing = time.Now().Add(delay).UnixNano()
-	c.scheduleNextTimer()
+	if scheduleNext {
+		c.scheduleNextTimer()
+	}
 }
 
 // Lock must be held outside.
-func (c *Client) addPresenceUpdate() {
+func (c *Client) addPresenceUpdate(scheduleNext bool) {
 	c.nextPresence = time.Now().Add(c.node.config.ClientPresenceUpdateInterval).UnixNano()
-	c.scheduleNextTimer()
+	if scheduleNext {
+		c.scheduleNextTimer()
+	}
 }
 
 // Lock must be held outside.
-func (c *Client) addExpireUpdate(after time.Duration) {
+func (c *Client) addExpireUpdate(after time.Duration, scheduleNext bool) {
 	c.nextExpire = time.Now().Add(after).UnixNano()
-	c.scheduleNextTimer()
+	if scheduleNext {
+		c.scheduleNextTimer()
+	}
 }
 
 // closeStale closes connection if it's not authenticated yet, or it's
@@ -716,7 +726,7 @@ func (c *Client) updatePresence() {
 		}
 	}
 	c.mu.Lock()
-	c.addPresenceUpdate()
+	c.addPresenceUpdate(true)
 	c.mu.Unlock()
 }
 
@@ -1346,7 +1356,7 @@ func (c *Client) checkExpired() {
 		if ttl > 0 {
 			c.mu.Lock()
 			if c.status != statusClosed {
-				c.addExpireUpdate(time.Duration(ttl) * time.Second)
+				c.addExpireUpdate(time.Duration(ttl)*time.Second, true)
 			}
 			c.mu.Unlock()
 		}
@@ -1431,18 +1441,20 @@ func (c *Client) triggerConnect() {
 func (c *Client) scheduleOnConnectTimers() {
 	// Make presence and refresh handlers always run after client connect event.
 	c.mu.Lock()
-	c.addPresenceUpdate()
+	c.addPresenceUpdate(false)
 	if c.exp > 0 {
 		expireAfter := time.Duration(c.exp-time.Now().Unix()) * time.Second
 		if c.clientSideRefresh {
 			conf := c.node.config
 			expireAfter += conf.ClientExpiredCloseDelay
 		}
-		c.addExpireUpdate(expireAfter)
+		c.addExpireUpdate(expireAfter, false)
 	}
 	if c.pingInterval > 0 {
-		c.addPingUpdate(true)
+		c.addPingUpdate(true, false)
 	}
+	// Only schedule next timer once here after setting required points in time for ops.
+	c.scheduleNextTimer()
 	c.mu.Unlock()
 }
 
@@ -1479,7 +1491,7 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 				c.info = info
 			}
 			duration := time.Duration(ttl)*time.Second + c.node.config.ClientExpiredCloseDelay
-			c.addExpireUpdate(duration)
+			c.addExpireUpdate(duration, true)
 			c.mu.Unlock()
 		} else {
 			go func() { _ = c.close(DisconnectExpired) }()
@@ -1571,7 +1583,7 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 					c.info = info
 				}
 				duration := time.Duration(ttl)*time.Second + c.node.config.ClientExpiredCloseDelay
-				c.addExpireUpdate(duration)
+				c.addExpireUpdate(duration, true)
 				c.mu.Unlock()
 			} else {
 				c.writeDisconnectOrErrorFlush("", protocol.FrameTypeRefresh, cmd, ErrorExpired, started, rw)
