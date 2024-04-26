@@ -110,7 +110,8 @@ type Config struct {
 	ChannelNamespaceLabelForTransportMessagesReceived bool
 
 	// AllowedDeltaTypes is a whitelist of DeltaType subscribers can use. At this point Centrifuge
-	// only supports DeltaTypeFossil. If not set clients won't be able to negotiate delta encoding.
+	// only supports DeltaTypeFossil. If zero value – clients won't be able to negotiate delta encoding.
+	// Delta encoding is an EXPERIMENTAL feature and may be changed/removed.
 	AllowedDeltaTypes []DeltaType
 }
 

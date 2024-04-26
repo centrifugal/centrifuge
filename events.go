@@ -358,17 +358,23 @@ type HistoryHandler func(HistoryEvent, HistoryCallback)
 // internal state. Returning a copy is important to avoid data races.
 type StateSnapshotHandler func() (any, error)
 
-// CacheEmptyEvent ...
+// CacheEmptyEvent is issued when recovery mode is used but Centrifuge can't
+// find Publication in history to recover from. This event allows application
+// to decide what to do in this case – it's possible to populate the cache by
+// sending actual data to a channel.
 type CacheEmptyEvent struct {
 	Channel string
 }
 
-// CacheEmptyReply ...
+// CacheEmptyReply contains fields determining the reaction on cache empty event.
 type CacheEmptyReply struct {
+	// Populated when set to true tells Centrifuge that cache was populated and
+	// in that case Centrifuge will try to recover missed Publication from history
+	// one more time.
 	Populated bool
 }
 
-// CacheEmptyHandler ...
+// CacheEmptyHandler allows setting cache empty handler function.
 type CacheEmptyHandler func(CacheEmptyEvent) CacheEmptyReply
 
 // SurveyEvent with Op and Data of survey.

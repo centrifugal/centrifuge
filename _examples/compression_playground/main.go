@@ -196,10 +196,10 @@ func main() {
 			useProtobufPayload = true
 		}
 
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			client.Disconnect(centrifuge.DisconnectForceReconnect)
-		}()
+		//go func() {
+		//	time.Sleep(500 * time.Millisecond)
+		//	client.Disconnect(centrifuge.DisconnectForceReconnect)
+		//}()
 
 		go func() {
 			log.Printf("using protobuf payload: %v", useProtobufPayload)
@@ -262,13 +262,21 @@ func main() {
 		log.Fatal(err)
 	}
 
-	go func() {
-		var num int32
-		for {
-			num++
-			simulateMatch(context.Background(), num, node, false)
-		}
-	}()
+	//go func() {
+	//	var num int32
+	//	for {
+	//		num++
+	//		simulateMatch(context.Background(), num, node, false)
+	//	}
+	//}()
+	//
+	//go func() {
+	//	var num int32
+	//	for {
+	//		num++
+	//		simulateMatch(context.Background(), num, node, true)
+	//	}
+	//}()
 
 	// Now configure HTTP routes.
 

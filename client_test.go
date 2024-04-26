@@ -648,6 +648,44 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 	}
 }
 
+func TestClientSubscribeDeltaNotAllowed(t *testing.T) {
+	n := defaultTestNode()
+	n.config.AllowedDeltaTypes = []DeltaType{}
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client := newTestConnectedClientWithTransport(t, ctx, n, transport, "42")
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_channel",
+		Delta:   string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+}
+
+func TestClientSubscribeUnknownDelta(t *testing.T) {
+	n := defaultTestNode()
+	n.config.AllowedDeltaTypes = []DeltaType{}
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client := newTestConnectedClientWithTransport(t, ctx, n, transport, "42")
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_channel",
+		Delta:   "invalid",
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+}
+
 func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch string) {
 	t.Parallel()
 	broker := NewTestBroker()
