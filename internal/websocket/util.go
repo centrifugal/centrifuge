@@ -38,10 +38,13 @@ func encodeAcceptKey(challengeKey string, p []byte) []byte {
 	h := sha1.New()
 	h.Write(convert.StringToBytes(challengeKey))
 	h.Write(keyGUID)
+
 	bufPtr := acceptKeyBufferPool.Get().(*[]byte)
 	defer acceptKeyBufferPool.Put(bufPtr)
 	*bufPtr = (*bufPtr)[:0]
 	sum := h.Sum(*bufPtr)
+
+	// replace with base64.AppendEncode when we can depend on Go 1.22.
 	n := base64.StdEncoding.EncodedLen(len(sum))
 	p = slices.Grow(p, n)
 	base64.StdEncoding.Encode(p[len(p):][:n], sum)

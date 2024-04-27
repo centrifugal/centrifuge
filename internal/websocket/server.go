@@ -161,7 +161,7 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 
 	subprotocol := u.selectSubprotocol(r, responseHeader)
 
-	// Negotiate PMCE
+	// Negotiate PMCE.
 	var compress bool
 	if u.EnableCompression {
 		for _, ext := range parseExtensions(r.Header) {
