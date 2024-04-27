@@ -251,9 +251,7 @@ type Conn struct {
 
 	newDecompressionReader func(io.Reader) io.ReadCloser
 	messageReader          *messageReader // the current low-level reader
-	handleClose            func(int, string) error
-	handlePing             func(string) error
-	handlePong             func(string) error
+	handlePong             func([]byte) error
 	newCompressionWriter   func(io.WriteCloser, int) io.WriteCloser
 	br                     *bufio.Reader
 	writeBuf               []byte // frame is constructed in this buffer.
@@ -307,8 +305,6 @@ func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, 
 		enableWriteCompression: true,
 		compressionLevel:       defaultCompressionLevel,
 	}
-	c.SetCloseHandler(nil)
-	c.SetPingHandler(nil)
 	c.SetPongHandler(nil)
 	return c
 }
@@ -328,6 +324,10 @@ func (c *Conn) setReadRemaining(n int64) error {
 // for a close message.
 func (c *Conn) Close() error {
 	return c.conn.Close()
+}
+
+func (c *Conn) IsCompressionNegotiated() bool {
+	return c.newCompressionWriter != nil || c.newDecompressionReader != nil
 }
 
 // LocalAddr returns the local network address.
@@ -911,11 +911,11 @@ func (c *Conn) advanceFrame() (int, error) {
 
 	switch frameType {
 	case PongMessage:
-		if err := c.handlePong(string(payload)); err != nil {
+		if err := c.handlePong(payload); err != nil {
 			return noFrame, err
 		}
 	case PingMessage:
-		if err := c.handlePing(string(payload)); err != nil {
+		if err := c.defaultPingHandler(payload); err != nil {
 			return noFrame, err
 		}
 	case CloseMessage:
@@ -931,7 +931,7 @@ func (c *Conn) advanceFrame() (int, error) {
 				return noFrame, c.handleProtocolError("invalid utf8 payload in close frame")
 			}
 		}
-		if err := c.handleClose(closeCode, closeText); err != nil {
+		if err := c.defaultCloseHandler(closeCode, closeText); err != nil {
 			return noFrame, err
 		}
 		return noFrame, &CloseError{Code: closeCode, Text: closeText}
@@ -1069,65 +1069,24 @@ func (c *Conn) SetReadLimit(limit int64) {
 	c.readLimit = limit
 }
 
-// CloseHandler returns the current close handler
-func (c *Conn) CloseHandler() func(code int, text string) error {
-	return c.handleClose
+func (c *Conn) defaultCloseHandler(code int, _ string) error {
+	message := FormatCloseMessage(code, "")
+	_ = c.WriteControl(CloseMessage, message, time.Now().Add(writeWait))
+	return nil
 }
 
-// SetCloseHandler sets the handler for close messages received from the peer.
-// The code argument to h is the received close code or CloseNoStatusReceived
-// if the close message is empty. The default close handler sends a close
-// message back to the peer.
-//
-// The handler function is called from the NextReader, ReadMessage and message
-// reader Read methods. The application must read the connection to process
-// close messages as described in the section on Control Messages above.
-//
-// The connection read methods return a CloseError when a close message is
-// received. Most applications should handle close messages as part of their
-// normal error handling. Applications should only set a close handler when the
-// application must perform some action before sending a close message back to
-// the peer.
-func (c *Conn) SetCloseHandler(h func(code int, text string) error) {
-	if h == nil {
-		h = func(code int, text string) error {
-			message := FormatCloseMessage(code, "")
-			_ = c.WriteControl(CloseMessage, message, time.Now().Add(writeWait))
-			return nil
-		}
+func (c *Conn) defaultPingHandler(message []byte) error {
+	err := c.WriteControl(PongMessage, message, time.Now().Add(writeWait))
+	if err == ErrCloseSent {
+		return nil
+	} else if e, ok := err.(net.Error); ok && e.Temporary() { //nolint:staticcheck
+		return nil
 	}
-	c.handleClose = h
-}
-
-// PingHandler returns the current ping handler
-func (c *Conn) PingHandler() func(appData string) error {
-	return c.handlePing
-}
-
-// SetPingHandler sets the handler for ping messages received from the peer.
-// The appData argument to h is the PING message application data. The default
-// ping handler sends a pong to the peer.
-//
-// The handler function is called from the NextReader, ReadMessage and message
-// reader Read methods. The application must read the connection to process
-// ping messages as described in the section on Control Messages above.
-func (c *Conn) SetPingHandler(h func(appData string) error) {
-	if h == nil {
-		h = func(message string) error {
-			err := c.WriteControl(PongMessage, []byte(message), time.Now().Add(writeWait))
-			if err == ErrCloseSent {
-				return nil
-			} else if e, ok := err.(net.Error); ok && e.Temporary() { //nolint:staticcheck
-				return nil
-			}
-			return err
-		}
-	}
-	c.handlePing = h
+	return err
 }
 
 // PongHandler returns the current pong handler
-func (c *Conn) PongHandler() func(appData string) error {
+func (c *Conn) PongHandler() func(appData []byte) error {
 	return c.handlePong
 }
 
@@ -1138,9 +1097,9 @@ func (c *Conn) PongHandler() func(appData string) error {
 // The handler function is called from the NextReader, ReadMessage and message
 // reader Read methods. The application must read the connection to process
 // pong messages as described in the section on Control Messages above.
-func (c *Conn) SetPongHandler(h func(appData string) error) {
+func (c *Conn) SetPongHandler(h func(appData []byte) error) {
 	if h == nil {
-		h = func(string) error { return nil }
+		h = func([]byte) error { return nil }
 	}
 	c.handlePong = h
 }

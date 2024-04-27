@@ -7,11 +7,15 @@ package websocket
 import (
 	"bufio"
 	"bytes"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 var subprotocolTests = []struct {
@@ -146,4 +150,104 @@ func TestBufioReuse(t *testing.T) {
 			t.Errorf("%d: write buffer reuse=%v, want %v", i, reuse, tt.reuse)
 		}
 	}
+}
+
+func BenchmarkUpgrade(b *testing.B) {
+	// Create a sample request with necessary WebSocket headers
+	req, err := http.NewRequest("GET", "http://example.com/socket", nil)
+	if err != nil {
+		b.Fatal("Error creating request:", err)
+	}
+	req.Header.Add("Connection", "Upgrade")
+	req.Header.Add("Upgrade", "websocket")
+	req.Header.Add("Sec-Websocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	req.Header.Add("Sec-Websocket-Version", "13")
+
+	// Mock connection and buffer to fulfill the Hijack requirement
+	conn := newMockConn()
+	buf := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	// Create a response recorder with Hijack capability
+	w := &HijackableResponseRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		HijackFunc: func() (net.Conn, *bufio.ReadWriter, error) {
+			return conn, buf, nil
+		},
+	}
+
+	//// Create a response recorder
+	//w := httptest.NewRecorder()
+
+	// Initialize the Upgrader
+	upgrader := &Upgrader{
+		// Configure your Upgrader here
+	}
+
+	// Pre-create the responseHeader map
+	responseHeader := http.Header{}
+
+	b.ResetTimer() // Start the benchmark timer
+	for i := 0; i < b.N; i++ {
+		// Run the Upgrade function
+		_, _, err := upgrader.Upgrade(w, req, responseHeader)
+		if err != nil {
+			b.Error("Upgrade failed:", err)
+		}
+	}
+}
+
+// Mock connection
+func newMockConn() net.Conn {
+	return &mockConn{writeBuf: io.Discard}
+}
+
+type mockConn struct {
+	readBuf  bytes.Buffer
+	writeBuf io.Writer
+}
+
+func (m *mockConn) LocalAddr() net.Addr {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockConn) RemoteAddr() net.Addr {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockConn) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (m *mockConn) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+func (m *mockConn) SetWriteDeadline(t time.Time) error {
+	return nil
+}
+
+func (m *mockConn) Read(b []byte) (int, error) {
+	return m.readBuf.Read(b)
+}
+
+func (m *mockConn) Write(b []byte) (int, error) {
+	return m.writeBuf.Write(b)
+}
+
+func (m *mockConn) Close() error {
+	return nil
+}
+
+type HijackableResponseRecorder struct {
+	*httptest.ResponseRecorder
+	HijackFunc func() (net.Conn, *bufio.ReadWriter, error)
+}
+
+func (h *HijackableResponseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h.HijackFunc != nil {
+		return h.HijackFunc()
+	}
+	return nil, nil, fmt.Errorf("Hijack not implemented")
 }

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -312,63 +314,63 @@ func TestWebsocketHandlerPing(t *testing.T) {
 	}
 }
 
-func TestWebsocketHandler_FramePingPong(t *testing.T) {
-	t.Parallel()
-	framePingInterval = time.Second
-	n, _ := New(Config{})
-	require.NoError(t, n.Run())
-	defer func() { _ = n.Shutdown(context.Background()) }()
-	mux := http.NewServeMux()
-	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
-		return ConnectReply{
-			Credentials: &Credentials{
-				UserID: "test",
-			},
-		}, nil
-	})
-
-	url := "ws" + server.URL[4:]
-
-	dialer := &websocket.Dialer{}
-	conn, resp, _, err := dialer.Dial(url+"/connection/websocket?cf_ws_frame_ping_pong=true", nil)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
-	require.NotNil(t, conn)
-	defer func() { _ = conn.Close() }()
-
-	closeCh := make(chan struct{})
-
-	conn.SetPingHandler(func(_ string) error {
-		close(closeCh)
-		return nil
-	})
-
-	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"id": 1, "connect": {}}`))
-	require.NoError(t, err)
-
-	go func() {
-		for {
-			_, msg, err := conn.ReadMessage()
-			if err != nil {
-				break
-			}
-			if strings.Contains(string(msg), "{}") {
-				require.Fail(t, "unexpected app-level ping")
-			}
-		}
-	}()
-
-	select {
-	case <-closeCh:
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "timeout waiting for frame ping")
-	}
-}
+//func TestWebsocketHandler_FramePingPong(t *testing.T) {
+//	t.Parallel()
+//	framePingInterval = time.Second
+//	n, _ := New(Config{})
+//	require.NoError(t, n.Run())
+//	defer func() { _ = n.Shutdown(context.Background()) }()
+//	mux := http.NewServeMux()
+//	mux.Handle("/connection/websocket", NewWebsocketHandler(n, WebsocketConfig{}))
+//	server := httptest.NewServer(mux)
+//	defer server.Close()
+//
+//	n.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+//		return ConnectReply{
+//			Credentials: &Credentials{
+//				UserID: "test",
+//			},
+//		}, nil
+//	})
+//
+//	url := "ws" + server.URL[4:]
+//
+//	dialer := &websocket.Dialer{}
+//	conn, resp, _, err := dialer.Dial(url+"/connection/websocket?cf_ws_frame_ping_pong=true", nil)
+//	require.NoError(t, err)
+//	defer func() { _ = resp.Body.Close() }()
+//	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
+//	require.NotNil(t, conn)
+//	defer func() { _ = conn.Close() }()
+//
+//	closeCh := make(chan struct{})
+//
+//	conn.SetPingHandler(func(_ string) error {
+//		close(closeCh)
+//		return nil
+//	})
+//
+//	err = conn.WriteMessage(websocket.TextMessage, []byte(`{"id": 1, "connect": {}}`))
+//	require.NoError(t, err)
+//
+//	go func() {
+//		for {
+//			_, msg, err := conn.ReadMessage()
+//			if err != nil {
+//				break
+//			}
+//			if strings.Contains(string(msg), "{}") {
+//				require.Fail(t, "unexpected app-level ping")
+//			}
+//		}
+//	}()
+//
+//	select {
+//	case <-closeCh:
+//	case <-time.After(5 * time.Second):
+//		require.Fail(t, "timeout waiting for frame ping")
+//	}
+//}
 
 func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	n, _ := New(Config{})
@@ -404,7 +406,8 @@ func TestWebsocketHandlerCustomDisconnect(t *testing.T) {
 	_ = conn.WriteMessage(websocket.TextMessage, cmdBytes)
 	_, _, err = conn.ReadMessage()
 	require.Error(t, err)
-	closeErr, ok := err.(*websocket.CloseError)
+	var closeErr *websocket.CloseError
+	ok := errors.As(err, &closeErr)
 	require.True(t, ok)
 	require.Equal(t, int(DisconnectInvalidToken.Code), closeErr.Code)
 	select {
@@ -445,7 +448,7 @@ func TestWebsocketHandlerConcurrentConnections(t *testing.T) {
 
 	var conns []*websocket.Conn
 	for i := 0; i < numConns; i++ {
-		conn := newRealConnJSONV2(t, "test"+strconv.Itoa(i), url)
+		conn := newRealConnJSON(t, "test"+strconv.Itoa(i), url, false)
 		conns = append(conns, conn)
 	}
 	defer func() {
@@ -520,7 +523,7 @@ func TestWebsocketHandlerConnectionsBroadcast(t *testing.T) {
 
 	var conns []*websocket.Conn
 	for i := 0; i < numConns; i++ {
-		conn := newRealConnJSONV2(t, "test", url)
+		conn := newRealConnJSON(t, "test", url, false)
 		conns = append(conns, conn)
 	}
 	defer func() {
@@ -632,7 +635,7 @@ func TestCheckSameHostOrigin(t *testing.T) {
 	}
 }
 
-func BenchmarkWsConnectV2(b *testing.B) {
+func BenchmarkWsConnect(b *testing.B) {
 	b.Skip()
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
@@ -651,10 +654,10 @@ func BenchmarkWsConnectV2(b *testing.B) {
 
 	benchmarks := []struct {
 		name    string
-		getConn func(b testing.TB, url string) *websocket.Conn
+		getConn func(b testing.TB, url string, compression bool) *websocket.Conn
 	}{
-		{"JSON", newRealConnJSONConnectV2},
-		{"PB", newRealConnProtobufConnectV2},
+		{"JSON", newRealConnJSONConnect},
+		{"PB", newRealConnProtobufConnect},
 	}
 
 	for _, bm := range benchmarks {
@@ -662,15 +665,17 @@ func BenchmarkWsConnectV2(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				conn := bm.getConn(b, url)
+				conn := bm.getConn(b, url, false)
 				_ = conn.Close()
 			}
 		})
 	}
 }
 
-func newRealConnJSONConnectV2(b testing.TB, url string) *websocket.Conn {
-	dialer := &websocket.Dialer{}
+func newRealConnJSONConnect(b testing.TB, url string, compression bool) *websocket.Conn {
+	dialer := &websocket.Dialer{
+		EnableCompression: compression,
+	}
 	conn, resp, _, err := dialer.Dial(url+"/connection/websocket", nil)
 	require.NoError(b, err)
 	defer func() { _ = resp.Body.Close() }()
@@ -687,8 +692,10 @@ func newRealConnJSONConnectV2(b testing.TB, url string) *websocket.Conn {
 	return conn
 }
 
-func newRealConnProtobufConnectV2(b testing.TB, url string) *websocket.Conn {
-	dialer := &websocket.Dialer{}
+func newRealConnProtobufConnect(b testing.TB, url string, compression bool) *websocket.Conn {
+	dialer := &websocket.Dialer{
+		EnableCompression: compression,
+	}
 	conn, resp, _, err := dialer.Dial(url+"/connection/websocket?format=protobuf", nil)
 	require.NoError(b, err)
 	defer func() { _ = resp.Body.Close() }()
@@ -712,8 +719,8 @@ func newRealConnProtobufConnectV2(b testing.TB, url string) *websocket.Conn {
 	return conn
 }
 
-func newRealConnJSONV2(b testing.TB, channel string, url string) *websocket.Conn {
-	conn := newRealConnJSONConnectV2(b, url)
+func newRealConnJSON(b testing.TB, channel string, url string, compression bool) *websocket.Conn {
+	conn := newRealConnJSONConnect(b, url, compression)
 
 	cmd := &protocol.Command{
 		Id: 2,
@@ -728,8 +735,8 @@ func newRealConnJSONV2(b testing.TB, channel string, url string) *websocket.Conn
 	return conn
 }
 
-func newRealConnProtobufV2(b testing.TB, channel string, url string) *websocket.Conn {
-	conn := newRealConnProtobufConnectV2(b, url)
+func newRealConnProtobuf(b testing.TB, channel string, url string, compression bool) *websocket.Conn {
+	conn := newRealConnProtobufConnect(b, url, compression)
 
 	cmd := &protocol.Command{
 		Id: 2,
@@ -751,7 +758,7 @@ func newRealConnProtobufV2(b testing.TB, channel string, url string) *websocket.
 	return conn
 }
 
-func BenchmarkWsPubSubV2(b *testing.B) {
+func BenchmarkWsPubSub(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -769,15 +776,15 @@ func BenchmarkWsPubSubV2(b *testing.B) {
 
 	benchmarks := []struct {
 		name    string
-		getConn func(b testing.TB, channel string, url string) *websocket.Conn
+		getConn func(b testing.TB, channel string, url string, compression bool) *websocket.Conn
 	}{
-		{"JSON", newRealConnJSONV2},
-		{"PB", newRealConnProtobufV2},
+		{"JSON", newRealConnJSON},
+		{"PB", newRealConnProtobuf},
 	}
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
 			b.ReportAllocs()
-			conn := bm.getConn(b, "test", url)
+			conn := bm.getConn(b, "test", url, false)
 			defer func() { _ = conn.Close() }()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -788,6 +795,121 @@ func BenchmarkWsPubSubV2(b *testing.B) {
 				_, _, err = conn.ReadMessage()
 				if err != nil {
 					panic(err)
+				}
+			}
+		})
+	}
+}
+
+func TestWsBroadcastCompressionCache(t *testing.T) {
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	payload := []byte(`{"input": "test"}`)
+
+	tests := []struct {
+		getConn     func(b testing.TB, channel string, url string, compression bool) *websocket.Conn
+		compression bool
+		cacheSizeMB int64
+	}{
+		{newRealConnJSON, false, 0},
+		{newRealConnJSON, true, 0},
+		{newRealConnJSON, true, 50},
+	}
+
+	numConns := 10
+
+	for _, bm := range tests {
+		testName := "compress_" + fmt.Sprintf("%v", bm.compression) + "_" +
+			"cache_" + strconv.FormatInt(bm.cacheSizeMB, 10) + "MB"
+		t.Run(testName, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+				Compression:                 true,
+				PreparedMessageCacheMaxSize: bm.cacheSizeMB * 1024 * 1024,
+			})))
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			url := "ws" + server.URL[4:]
+
+			conns := make([]*websocket.Conn, 0, numConns)
+			for i := 0; i < numConns; i++ {
+				conn := bm.getConn(t, "test", url, bm.compression)
+				conns = append(conns, conn)
+			}
+			defer func() {
+				for _, conn := range conns {
+					_ = conn.Close()
+				}
+			}()
+			_, err := n.Publish("test", payload)
+			if err != nil {
+				require.NoError(t, err)
+			}
+			for _, conn := range conns {
+				_, _, err = conn.ReadMessage()
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
+	n := defaultTestNodeBenchmark(b)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	payload := []byte(`{"input": "test"}`)
+
+	benchmarks := []struct {
+		getConn     func(b testing.TB, channel string, url string, compression bool) *websocket.Conn
+		compression bool
+		cacheSizeMB int64
+	}{
+		{newRealConnJSON, false, 0},
+		{newRealConnJSON, true, 0},
+		{newRealConnJSON, true, 50},
+	}
+
+	numConns := 100
+
+	for _, bm := range benchmarks {
+		benchName := "compress_" + fmt.Sprintf("%v", bm.compression) + "_" +
+			"cache_" + strconv.FormatInt(bm.cacheSizeMB, 10) + "MB"
+		b.Run(benchName, func(b *testing.B) {
+			b.ReportAllocs()
+
+			mux := http.NewServeMux()
+			mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
+				Compression:                 true,
+				PreparedMessageCacheMaxSize: bm.cacheSizeMB * 1024 * 1024,
+			})))
+			server := httptest.NewServer(mux)
+			defer server.Close()
+
+			url := "ws" + server.URL[4:]
+
+			conns := make([]*websocket.Conn, 0, numConns)
+			for i := 0; i < numConns; i++ {
+				conn := bm.getConn(b, "test", url, bm.compression)
+				conns = append(conns, conn)
+			}
+			defer func() {
+				for _, conn := range conns {
+					_ = conn.Close()
+				}
+			}()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := n.Publish("test", payload)
+				if err != nil {
+					panic(err)
+				}
+				for _, conn := range conns {
+					_, _, err = conn.ReadMessage()
+					if err != nil {
+						panic(err)
+					}
 				}
 			}
 		})
@@ -820,10 +942,10 @@ func BenchmarkWsCommandReplyV2(b *testing.B) {
 
 	benchmarks := []struct {
 		name    string
-		getConn func(b testing.TB, url string) *websocket.Conn
+		getConn func(b testing.TB, url string, compression bool) *websocket.Conn
 	}{
-		{"JSON", newRealConnJSONConnectV2},
-		{"PB", newRealConnProtobufConnectV2},
+		{"JSON", newRealConnJSONConnect},
+		{"PB", newRealConnProtobufConnect},
 	}
 
 	rpcRequest := &protocol.RPCRequest{
@@ -849,7 +971,7 @@ func BenchmarkWsCommandReplyV2(b *testing.B) {
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
 			b.ReportAllocs()
-			conn := bm.getConn(b, url)
+			conn := bm.getConn(b, url, false)
 			defer func() { _ = conn.Close() }()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -897,10 +1019,10 @@ func BenchmarkWsCommandReplyV2Multiple(b *testing.B) {
 
 	benchmarks := []struct {
 		name    string
-		getConn func(b testing.TB, url string) *websocket.Conn
+		getConn func(b testing.TB, url string, compression bool) *websocket.Conn
 	}{
-		{"JSON", newRealConnJSONConnectV2},
-		{"PB", newRealConnProtobufConnectV2},
+		{"JSON", newRealConnJSONConnect},
+		{"PB", newRealConnProtobufConnect},
 	}
 
 	rpcRequest := &protocol.RPCRequest{
@@ -945,7 +1067,7 @@ func BenchmarkWsCommandReplyV2Multiple(b *testing.B) {
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
 			b.ReportAllocs()
-			conn := bm.getConn(b, url)
+			conn := bm.getConn(b, url, false)
 			defer func() { _ = conn.Close() }()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -1000,10 +1122,10 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 
 	benchmarks := []struct {
 		name    string
-		getConn func(b testing.TB, url string) *websocket.Conn
+		getConn func(b testing.TB, url string, compression bool) *websocket.Conn
 	}{
-		{"JSON", newRealConnJSONConnectV2},
-		{"PB", newRealConnProtobufConnectV2},
+		{"JSON", newRealConnJSONConnect},
+		{"PB", newRealConnProtobufConnect},
 	}
 
 	cmd1 := &protocol.Command{
@@ -1055,7 +1177,7 @@ func BenchmarkWsCommandReplyV2MultipleParallel(b *testing.B) {
 	for _, bm := range benchmarks {
 		b.Run(bm.name, func(b *testing.B) {
 			b.RunParallel(func(pb *testing.PB) {
-				conn := bm.getConn(b, url)
+				conn := bm.getConn(b, url, false)
 				defer func() { _ = conn.Close() }()
 				b.ResetTimer()
 				b.ReportAllocs()
