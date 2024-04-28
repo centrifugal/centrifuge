@@ -3022,13 +3022,16 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 	prevPub := recoveredPubs[0]
 	if c.transport.Protocol() == ProtocolTypeJSON {
 		// For JSON case we need to use b64 for data.
+
+		js, _ := json.Marshal(string(prevPub.Data))
+
 		pub := &protocol.Publication{
-			Offset:  prevPub.Offset,
-			Info:    prevPub.Info,
-			Tags:    prevPub.Tags,
-			Data:    nil,
-			B64Data: base64.StdEncoding.EncodeToString(prevPub.Data),
-			Delta:   false,
+			Offset: prevPub.Offset,
+			Info:   prevPub.Info,
+			Tags:   prevPub.Tags,
+			Data:   js,
+			//B64Data: string(js), //base64.StdEncoding.EncodeToString(prevPub.Data),
+			Delta: false,
 		}
 		recoveredPubs[0] = pub
 	}

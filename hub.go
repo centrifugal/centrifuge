@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"context"
 	"encoding/base64"
+	"github.com/segmentio/encoding/json"
 	"io"
 	"sync"
 
@@ -597,15 +598,16 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 			deltaPub := fullPub
 			if prevPub != nil && key.DeltaType == DeltaTypeFossil {
 				patch := fdelta.Create(prevPub.Data, fullPub.Data)
+				js, _ := json.Marshal(string(patch))
 				if key.ProtocolType == protocol.TypeJSON {
-					b64patch := base64.StdEncoding.EncodeToString(patch)
+					//b64patch := base64.StdEncoding.EncodeToString(patch)
 					deltaPub = &protocol.Publication{
 						Offset: fullPub.Offset,
-						//Data:   nil,
-						Info:    fullPub.Info,
-						Tags:    fullPub.Tags,
-						Delta:   true,
-						B64Data: b64patch,
+						Data:   js,
+						Info:   fullPub.Info,
+						Tags:   fullPub.Tags,
+						Delta:  true,
+						//B64Data: b64patch,
 					}
 				} else {
 					deltaPub = &protocol.Publication{
