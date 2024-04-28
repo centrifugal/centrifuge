@@ -382,7 +382,7 @@ func (t *websocketTransport) writeData(data []byte) error {
 			if err != nil {
 				return err
 			}
-			t.opts.preparedCache.SetWithTTL(key, preparedMessage, int64(len(data)), 10*time.Second)
+			t.opts.preparedCache.SetWithTTL(key, preparedMessage, int64(len(data)), time.Second)
 		}
 		err := t.conn.WritePreparedMessage(preparedMessage)
 		if err != nil {

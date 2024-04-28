@@ -5,8 +5,10 @@
 package websocket
 
 import (
+	"crypto/sha1"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -112,4 +114,40 @@ func TestParseExtensions(t *testing.T) {
 			t.Errorf("parseExtensions(%q)\n    = %v,\nwant %v", tt.value, extensions, tt.extensions)
 		}
 	}
+}
+
+func TestEncodeAcceptKey(t *testing.T) {
+	challengeKey := "dGhlIHNhbXBsZSBub25jZQ=="
+	expectedKey := computeAcceptKey(challengeKey)
+
+	// Initial encoding.
+	result := encodeAcceptKey(challengeKey, []byte{})
+	if !strings.EqualFold(expectedKey, string(result)) {
+		t.Errorf("Expected %s, got %s", expectedKey, string(result))
+	}
+
+	// Test reuse of pooled buffer to see if it correctly resets and does not grow unexpectedly.
+	result2 := encodeAcceptKey(challengeKey, []byte{})
+	if len(result2) != len(result) {
+		t.Errorf("Buffer reused improperly, expected length %d, got length %d", len(result), len(result2))
+	}
+
+	// Test that we really append to the buffer.
+	result3 := encodeAcceptKey(challengeKey, []byte{0})
+	if result3[0] != 0 {
+		t.Errorf("appended improperly, expected 0, got %d", result3[0])
+	}
+	if string(result3[1:]) != expectedKey {
+		t.Errorf("Expected %s, got %s", expectedKey, string(result3[1:]))
+	}
+
+	// Check if buffer returns the same size after multiple uses
+	for i := 0; i < 10; i++ {
+		_ = encodeAcceptKey(challengeKey, []byte{})
+	}
+	bufPtr := acceptKeyBufferPool.Get().(*[]byte)
+	if cap(*bufPtr) != sha1.Size {
+		t.Errorf("Expected buffer capacity to be %d, got %d", sha1.Size, cap(*bufPtr))
+	}
+	acceptKeyBufferPool.Put(bufPtr)
 }
