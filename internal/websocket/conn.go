@@ -252,6 +252,7 @@ type Conn struct {
 	newDecompressionReader func(io.Reader) io.ReadCloser
 	messageReader          *messageReader // the current low-level reader
 	handlePong             func([]byte) error
+	handlePing             func([]byte) error
 	newCompressionWriter   func(io.WriteCloser, int) io.WriteCloser
 	br                     *bufio.Reader
 	writeBuf               []byte // frame is constructed in this buffer.
@@ -293,7 +294,7 @@ func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, 
 
 	mu := make(chan struct{}, 1)
 	mu <- struct{}{}
-	c := &Conn{
+	return &Conn{
 		isServer:               isServer,
 		br:                     br,
 		conn:                   conn,
@@ -305,8 +306,6 @@ func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, 
 		enableWriteCompression: true,
 		compressionLevel:       defaultCompressionLevel,
 	}
-	c.SetPongHandler(nil)
-	return c
 }
 
 // setReadRemaining tracks the number of bytes remaining on the connection. If n
@@ -911,11 +910,19 @@ func (c *Conn) advanceFrame() (int, error) {
 
 	switch frameType {
 	case PongMessage:
-		if err := c.handlePong(payload); err != nil {
+		pongHandler := c.handlePong
+		if pongHandler == nil {
+			pongHandler = c.defaultPongHandler
+		}
+		if err := pongHandler(payload); err != nil {
 			return noFrame, err
 		}
 	case PingMessage:
-		if err := c.defaultPingHandler(payload); err != nil {
+		pingHandler := c.handlePing
+		if pingHandler == nil {
+			pingHandler = c.defaultPingHandler
+		}
+		if err := pingHandler(payload); err != nil {
 			return noFrame, err
 		}
 	case CloseMessage:
@@ -1077,7 +1084,7 @@ func (c *Conn) defaultCloseHandler(code int, _ string) error {
 
 func (c *Conn) defaultPingHandler(message []byte) error {
 	err := c.WriteControl(PongMessage, message, time.Now().Add(writeWait))
-	if err == ErrCloseSent {
+	if errors.Is(err, ErrCloseSent) {
 		return nil
 	} else if e, ok := err.(net.Error); ok && e.Temporary() { //nolint:staticcheck
 		return nil
@@ -1085,9 +1092,22 @@ func (c *Conn) defaultPingHandler(message []byte) error {
 	return err
 }
 
-// PongHandler returns the current pong handler
-func (c *Conn) PongHandler() func(appData []byte) error {
-	return c.handlePong
+// SetPingHandler sets the handler for ping messages received from the peer.
+// The appData argument to h is the PING message application data. The default
+// ping handler sends a pong to the peer.
+//
+// The handler function is called from the NextReader, ReadMessage and message
+// reader Read methods. The application must read the connection to process
+// ping messages as described in the section on Control Messages above.
+func (c *Conn) SetPingHandler(h func(appData []byte) error) {
+	if h == nil {
+		h = c.defaultPingHandler
+	}
+	c.handlePing = h
+}
+
+func (c *Conn) defaultPongHandler(_ []byte) error {
+	return nil
 }
 
 // SetPongHandler sets the handler for pong messages received from the peer.
@@ -1099,7 +1119,7 @@ func (c *Conn) PongHandler() func(appData []byte) error {
 // pong messages as described in the section on Control Messages above.
 func (c *Conn) SetPongHandler(h func(appData []byte) error) {
 	if h == nil {
-		h = func([]byte) error { return nil }
+		h = c.defaultPongHandler
 	}
 	c.handlePong = h
 }

@@ -67,6 +67,8 @@ type WebsocketConfig struct {
 	// uses prepared WebSocket messages for connections with compression. This generally
 	// introduces overhead but at the same time may drastically reduce compression memory
 	// and CPU spikes during broadcasts. See also BenchmarkWsBroadcastCompressionCache.
+	// This option is EXPERIMENTAL, do not use in production. Contact maintainers if it
+	// works well for your use case, and you want to enable it in production.
 	PreparedMessageCacheMaxSize int64
 
 	PingPongConfig
