@@ -589,7 +589,7 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
 			)
 			require.NoError(t, err)
-			
+
 		LOOP:
 			for {
 				select {

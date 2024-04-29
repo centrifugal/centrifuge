@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/FZambia/eagle v0.1.0
-	github.com/centrifugal/protocol v0.12.2-0.20240422190129-0bd81b469a35
+	github.com/centrifugal/protocol v0.12.2-0.20240429145950-b906e73562fe
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.0
 	github.com/redis/rueidis v1.0.33
