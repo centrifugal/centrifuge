@@ -3022,12 +3022,11 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 	prevPub := recoveredPubs[0]
 	if c.transport.Protocol() == ProtocolTypeJSON {
 		// For JSON case we need to use JSON string (js) for data.
-		jsData, _ := json.Marshal(convert.BytesToString(prevPub.Data))
 		pub := &protocol.Publication{
 			Offset: prevPub.Offset,
 			Info:   prevPub.Info,
 			Tags:   prevPub.Tags,
-			Data:   jsData,
+			Data:   json.Escape(convert.BytesToString(prevPub.Data)),
 			Delta:  false,
 		}
 		recoveredPubs[0] = pub
@@ -3040,10 +3039,9 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 			var deltaPub *protocol.Publication
 			if c.transport.Protocol() == ProtocolTypeJSON {
 				// For JSON case we need to use JSON string (js) for patch.
-				jsPatch, _ := json.Marshal(convert.BytesToString(patch))
 				deltaPub = &protocol.Publication{
 					Offset: pub.Offset,
-					Data:   jsPatch,
+					Data:   json.Escape(convert.BytesToString(patch)),
 					Info:   pub.Info,
 					Tags:   pub.Tags,
 					Delta:  true,

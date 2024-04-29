@@ -600,13 +600,9 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 			if prevPub != nil && key.DeltaType == DeltaTypeFossil {
 				patch := fdelta.Create(prevPub.Data, fullPub.Data)
 				if key.ProtocolType == protocol.TypeJSON {
-					jsData, err := json.Marshal(convert.BytesToString(patch))
-					if err != nil {
-						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-					}
 					deltaPub = &protocol.Publication{
 						Offset: fullPub.Offset,
-						Data:   jsData,
+						Data:   json.Escape(convert.BytesToString(patch)),
 						Info:   fullPub.Info,
 						Tags:   fullPub.Tags,
 						Delta:  true,
@@ -622,13 +618,9 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 				}
 			} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 				// In JSON and Fossil case we need to send full state in JSON string format.
-				jsData, err := json.Marshal(convert.BytesToString(fullPub.Data))
-				if err != nil {
-					jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-				}
 				deltaPub = &protocol.Publication{
 					Offset: fullPub.Offset,
-					Data:   jsData,
+					Data:   json.Escape(convert.BytesToString(fullPub.Data)),
 					Info:   fullPub.Info,
 					Tags:   fullPub.Tags,
 				}
@@ -641,13 +633,9 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 				if sub.client.transport.Unidirectional() {
 					pubToUse := fullPub
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
-						jsData, err := json.Marshal(convert.BytesToString(fullPub.Data))
-						if err != nil {
-							jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-						}
 						pubToUse = &protocol.Publication{
 							Offset: fullPub.Offset,
-							Data:   jsData,
+							Data:   json.Escape(convert.BytesToString(fullPub.Data)),
 							Info:   fullPub.Info,
 							Tags:   fullPub.Tags,
 						}
@@ -661,13 +649,9 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 				} else {
 					pubToUse := fullPub
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
-						jsData, err := json.Marshal(convert.BytesToString(fullPub.Data))
-						if err != nil {
-							jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-						}
 						pubToUse = &protocol.Publication{
 							Offset: fullPub.Offset,
-							Data:   jsData,
+							Data:   json.Escape(convert.BytesToString(fullPub.Data)),
 							Info:   fullPub.Info,
 							Tags:   fullPub.Tags,
 						}

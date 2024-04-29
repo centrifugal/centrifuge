@@ -14,6 +14,7 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
+	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1033,15 +1034,123 @@ func TestHubBroadcastInappropriateProtocol_Leave(t *testing.T) {
 	})
 }
 
-var res []byte
+var testJsonData = []byte(`{
+   "_id":"662fb7df5110d6e8e9942fb2",
+   "index":0,
+   "guid":"a100afc6-fc35-47fd-8e3e-e8e9a81629ec",
+   "isActive":true,
+   "balance":"$2,784.25",
+   "picture":"http://placehold.it/32x32",
+   "age":21,
+   "eyeColor":"green",
+   "name":"Lois Norris",
+   "gender":"female",
+   "company":"ORGANICA",
+   "email":"loisnorris@organica.com",
+   "phone":"+1 (939) 451-2349",
+   "address":"774 Ide Court, Sabillasville, Virginia, 4034",
+   "about":"Cupidatat reprehenderit laboris aute pariatur nulla exercitation. Commodo aliqua cupidatat consectetur aliquip. Id irure nisi qui ullamco culpa reprehenderit nisi sunt consequat ipsum. Velit officia sint id voluptate anim. Sunt duis duis consequat mollit incididunt laborum enim amet ad aliqua esse nulla. Aliqua nulla adipisicing ad aliquip ut. Nostrud mollit ex aute magna culpa ea exercitation qui ex.\r\n",
+   "registered":"2023-02-28T11:09:34 -02:00",
+   "latitude":24.054483,
+   "longitude":38.953522,
+   "tags":[
+      "consequat",
+      "adipisicing",
+      "eiusmod",
+      "ipsum",
+      "enim",
+      "et",
+      "voluptate"
+   ],
+   "friends":[
+      {
+         "id":0,
+         "name":"Kaufman Randall"
+      },
+      {
+         "id":1,
+         "name":"Byrd Cooley"
+      },
+      {
+         "id":2,
+         "name":"Obrien William"
+      }
+   ],
+   "greeting":"Hello, Lois Norris! You have 9 unread messages.",
+   "favoriteFruit":"banana"
+}`)
 
-func BenchmarkEncode(b *testing.B) {
+// Has some changes (in tags field, in friends field).
+var testNewJsonData = []byte(`{
+   "_id":"662fb7df5110d6e8e9942fb2",
+   "index":0,
+   "guid":"a100afc6-fc35-47fd-8e3e-e8e9a81629ec",
+   "isActive":true,
+   "balance":"$2,784.25",
+   "picture":"http://placehold.it/32x32",
+   "age":21,
+   "eyeColor":"green",
+   "name":"Lois Norris",
+   "gender":"female",
+   "company":"ORGANICA",
+   "email":"loisnorris@organica.com",
+   "phone":"+1 (939) 451-2349",
+   "address":"774 Ide Court, Sabillasville, Virginia, 4034",
+   "about":"Cupidatat reprehenderit laboris aute pariatur nulla exercitation. Commodo aliqua cupidatat consectetur aliquip. Id irure nisi qui ullamco culpa reprehenderit nisi sunt consequat ipsum. Velit officia sint id voluptate anim. Sunt duis duis consequat mollit incididunt laborum enim amet ad aliqua esse nulla. Aliqua nulla adipisicing ad aliquip ut. Nostrud mollit ex aute magna culpa ea exercitation qui ex.\r\n",
+   "registered":"2023-02-28T11:09:34 -02:00",
+   "latitude":24.054483,
+   "longitude":38.953522,
+   "tags":[
+      "consequat",
+      "adipisicing",
+      "eiusmod"
+   ],
+   "friends":[
+      {
+         "id":0,
+         "name":"Kaufman Randall"
+      },
+      {
+         "id":1,
+         "name":"Byrd Cooley"
+      }
+   ],
+   "greeting":"Hello, Lois Norris! You have 9 unread messages.",
+   "favoriteFruit":"banana"
+}`)
+
+func TestJsonStringEncode(t *testing.T) {
+	testBenchmarkDeltaFossilPatch = fdelta.Create(testJsonData, testNewJsonData)
+	if len(testBenchmarkDeltaFossilPatch) == 0 {
+		t.Fatal("empty fossil patch")
+	}
+	testDeltaJsonData, err := json.Marshal(convert.BytesToString(testBenchmarkDeltaFossilPatch))
+	require.NoError(t, err)
+	require.NotNil(t, testDeltaJsonData)
+
+	alternativeDeltaJsonData := json.Escape(convert.BytesToString(testBenchmarkDeltaFossilPatch))
+	require.Equal(t, testDeltaJsonData, alternativeDeltaJsonData)
+}
+
+var testBenchmarkEncodeData []byte
+
+func BenchmarkEncodeJSONString(b *testing.B) {
 	jsonData := []byte(`{"input": "test"}`)
 	for i := 0; i < b.N; i++ {
-		var err error
-		res, err = json.Marshal(convert.BytesToString(jsonData))
-		if err != nil {
-			b.Fatal(err)
+		testBenchmarkEncodeData = json.Escape(convert.BytesToString(jsonData))
+		if len(testBenchmarkEncodeData) == 0 {
+			b.Fatal("empty data")
+		}
+	}
+}
+
+var testBenchmarkDeltaFossilPatch []byte
+
+func BenchmarkDeltaFossil(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		testBenchmarkDeltaFossilPatch = fdelta.Create(testJsonData, testNewJsonData)
+		if len(testBenchmarkDeltaFossilPatch) == 0 {
+			b.Fatal("empty fossil patch")
 		}
 	}
 }
