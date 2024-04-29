@@ -3834,13 +3834,13 @@ func asyncSubscribeClient(t testing.TB, client *Client, ch string) {
 func TestClientUnsubscribeDuringSubscribe(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
-	subscribedCh := make(chan struct{})
-	doneCh := make(chan struct{})
+	subscribedCh := make(chan struct{}, 2)
+	unsubscribedCh := make(chan struct{}, 2)
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			go func() {
 				defer func() {
-					close(subscribedCh)
+					subscribedCh <- struct{}{}
 				}()
 				time.Sleep(200 * time.Millisecond)
 				cb(SubscribeReply{}, nil)
@@ -3848,7 +3848,7 @@ func TestClientUnsubscribeDuringSubscribe(t *testing.T) {
 		})
 		client.OnUnsubscribe(func(e UnsubscribeEvent) {
 			<-subscribedCh
-			close(doneCh)
+			unsubscribedCh <- struct{}{}
 		})
 	})
 	defer func() { _ = node.Shutdown(context.Background()) }()
@@ -3860,7 +3860,41 @@ func TestClientUnsubscribeDuringSubscribe(t *testing.T) {
 	_, ok := client.channels["test"]
 	client.mu.Unlock()
 	require.False(t, ok)
-	waitWithTimeout(t, doneCh)
+	waitWithTimeout(t, unsubscribedCh)
+	asyncSubscribeClient(t, client, "test")
+	err := client.close(DisconnectForceNoReconnect)
+	waitWithTimeout(t, unsubscribedCh)
+	require.NoError(t, err)
+}
+
+func TestClientUnsubscribeDuringSubscribeWithError(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	subscribedCh := make(chan struct{}, 1)
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			go func() {
+				defer func() {
+					subscribedCh <- struct{}{}
+				}()
+				time.Sleep(200 * time.Millisecond)
+				cb(SubscribeReply{}, ErrorInternal)
+			}()
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			t.Fatal("unexpected unsubscribe")
+		})
+	})
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+	asyncSubscribeClient(t, client, "test")
+	client.Unsubscribe("test")
+	client.mu.Lock()
+	_, ok := client.channels["test"]
+	client.mu.Unlock()
+	require.False(t, ok)
+	waitWithTimeout(t, subscribedCh)
 	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
 }
