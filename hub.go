@@ -2,12 +2,13 @@ package centrifuge
 
 import (
 	"context"
-	"encoding/base64"
-	"github.com/segmentio/encoding/json"
 	"io"
 	"sync"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
+
 	"github.com/centrifugal/protocol"
+	"github.com/segmentio/encoding/json"
 	fdelta "github.com/shadowspore/fossil-delta"
 )
 
@@ -598,16 +599,17 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 			deltaPub := fullPub
 			if prevPub != nil && key.DeltaType == DeltaTypeFossil {
 				patch := fdelta.Create(prevPub.Data, fullPub.Data)
-				js, _ := json.Marshal(string(patch))
 				if key.ProtocolType == protocol.TypeJSON {
-					//b64patch := base64.StdEncoding.EncodeToString(patch)
+					jsData, err := json.Marshal(convert.BytesToString(patch))
+					if err != nil {
+						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+					}
 					deltaPub = &protocol.Publication{
 						Offset: fullPub.Offset,
-						Data:   js,
+						Data:   jsData,
 						Info:   fullPub.Info,
 						Tags:   fullPub.Tags,
 						Delta:  true,
-						//B64Data: b64patch,
 					}
 				} else {
 					deltaPub = &protocol.Publication{
@@ -619,14 +621,16 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 					}
 				}
 			} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
-				// In JSON and Fossil case we need to send full state in base64 format.
-				b64data := base64.StdEncoding.EncodeToString(fullPub.Data)
+				// In JSON and Fossil case we need to send full state in JSON string format.
+				jsData, err := json.Marshal(convert.BytesToString(fullPub.Data))
+				if err != nil {
+					jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+				}
 				deltaPub = &protocol.Publication{
 					Offset: fullPub.Offset,
-					//Data:   nil,
-					Info:    fullPub.Info,
-					Tags:    fullPub.Tags,
-					B64Data: b64data,
+					Data:   jsData,
+					Info:   fullPub.Info,
+					Tags:   fullPub.Tags,
 				}
 			}
 
@@ -637,12 +641,15 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 				if sub.client.transport.Unidirectional() {
 					pubToUse := fullPub
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
+						jsData, err := json.Marshal(convert.BytesToString(fullPub.Data))
+						if err != nil {
+							jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+						}
 						pubToUse = &protocol.Publication{
 							Offset: fullPub.Offset,
-							//Data:   nil,
-							Info:    fullPub.Info,
-							Tags:    fullPub.Tags,
-							B64Data: base64.StdEncoding.EncodeToString(fullPub.Data),
+							Data:   jsData,
+							Info:   fullPub.Info,
+							Tags:   fullPub.Tags,
 						}
 					}
 					push := &protocol.Push{Channel: channel, Pub: pubToUse}
@@ -654,12 +661,15 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 				} else {
 					pubToUse := fullPub
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
+						jsData, err := json.Marshal(convert.BytesToString(fullPub.Data))
+						if err != nil {
+							jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+						}
 						pubToUse = &protocol.Publication{
 							Offset: fullPub.Offset,
-							//Data:   nil,
-							Info:    fullPub.Info,
-							Tags:    fullPub.Tags,
-							B64Data: base64.StdEncoding.EncodeToString(fullPub.Data),
+							Data:   jsData,
+							Info:   fullPub.Info,
+							Tags:   fullPub.Tags,
 						}
 					}
 					push := &protocol.Push{Channel: channel, Pub: pubToUse}

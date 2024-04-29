@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"context"
 	"fmt"
-	"github.com/centrifugal/protocol"
 	"io"
 	"strconv"
 	"strings"
@@ -11,6 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
+
+	"github.com/centrifugal/protocol"
+	"github.com/segmentio/encoding/json"
 	"github.com/stretchr/testify/require"
 )
 
@@ -592,16 +595,9 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 			for {
 				select {
 				case data := <-transport.sink:
-					if tc.protocolType == ProtocolTypeProtobuf {
-						if strings.Contains(string(data), "broadcast_data") {
-							totalLength += len(data)
-							break LOOP
-						}
-					} else {
-						if strings.Contains(string(data), "pub") && strings.Contains(string(data), "b64data") {
-							totalLength += len(data)
-							break LOOP
-						}
+					if strings.Contains(string(data), "broadcast_data") {
+						totalLength += len(data)
+						break LOOP
 					}
 				case <-time.After(2 * time.Second):
 					t.Fatal("no data in sink")
@@ -621,14 +617,8 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 			for {
 				select {
 				case data := <-transport.sink:
-					if tc.protocolType == ProtocolTypeProtobuf {
-						if strings.Contains(string(data), "broadcast_data") {
-							require.Fail(t, "should not receive same data twice - delta expected")
-						}
-					} else {
-						if strings.Contains(string(data), "pub") && strings.Contains(string(data), "b64data") && !strings.Contains(string(data), "delta") {
-							require.Fail(t, "should not receive same data twice - delta expected")
-						}
+					if strings.Contains(string(data), "broadcast_data") {
+						require.Fail(t, "should not receive same data twice - delta expected")
 					}
 					break LOOP2
 				case <-time.After(2 * time.Second):
@@ -1041,4 +1031,17 @@ func TestHubBroadcastInappropriateProtocol_Leave(t *testing.T) {
 		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 		testFunc(client)
 	})
+}
+
+var res []byte
+
+func BenchmarkEncode(b *testing.B) {
+	jsonData := []byte(`{"input": "test"}`)
+	for i := 0; i < b.N; i++ {
+		var err error
+		res, err = json.Marshal(convert.BytesToString(jsonData))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }

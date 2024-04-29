@@ -36,7 +36,7 @@ func newWriter(config writerConfig, queueInitialCap int) *writer {
 }
 
 const (
-	defaultMaxMessagesInFrame = 1
+	defaultMaxMessagesInFrame = 16
 )
 
 func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duration) bool {
