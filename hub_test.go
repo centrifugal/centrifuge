@@ -589,15 +589,12 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
 			)
 			require.NoError(t, err)
-
-			totalLength := 0
-
+			
 		LOOP:
 			for {
 				select {
 				case data := <-transport.sink:
 					if strings.Contains(string(data), "broadcast_data") {
-						totalLength += len(data)
 						break LOOP
 					}
 				case <-time.After(2 * time.Second):
