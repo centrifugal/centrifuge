@@ -3821,3 +3821,46 @@ func TestClient_HandleCommandV2(t *testing.T) {
 	}, 0)
 	require.False(t, ok)
 }
+
+// Not looking at subscribe result - just execute subscribe command.
+func asyncSubscribeClient(t testing.TB, client *Client, ch string) {
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: ch,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+}
+
+func TestClientUnsubscribeDuringSubscribe(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	subscribedCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			go func() {
+				defer func() {
+					close(subscribedCh)
+				}()
+				time.Sleep(200 * time.Millisecond)
+				cb(SubscribeReply{}, nil)
+			}()
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+			<-subscribedCh
+			close(doneCh)
+		})
+	})
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+	asyncSubscribeClient(t, client, "test")
+	client.Unsubscribe("test")
+	client.mu.Lock()
+	_, ok := client.channels["test"]
+	client.mu.Unlock()
+	require.False(t, ok)
+	waitWithTimeout(t, doneCh)
+	err := client.close(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+}
