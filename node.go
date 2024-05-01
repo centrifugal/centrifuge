@@ -1510,6 +1510,7 @@ type eventHub struct {
 	transportWriteHandler   TransportWriteHandler
 	commandReadHandler      CommandReadHandler
 	commandProcessedHandler CommandProcessedHandler
+	cacheEmptyHandler       CacheEmptyHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1540,6 +1541,14 @@ func (n *Node) OnCommandRead(handler CommandReadHandler) {
 // OnCommandProcessed allows setting CommandProcessedHandler. This should be done before Node.Run called.
 func (n *Node) OnCommandProcessed(handler CommandProcessedHandler) {
 	n.clientEvents.commandProcessedHandler = handler
+}
+
+// OnCacheEmpty allows setting CacheEmptyHandler.
+// CacheEmptyHandler called when client subscribes on a channel with RecoveryModeCache but there is no
+// cached value in channel. In response to this handler it's possible to tell Centrifuge what to do with
+// subscribe request – keep it, or return error.
+func (n *Node) OnCacheEmpty(h CacheEmptyHandler) {
+	n.clientEvents.cacheEmptyHandler = h
 }
 
 type brokerEventHandler struct {

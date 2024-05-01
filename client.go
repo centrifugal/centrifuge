@@ -51,7 +51,6 @@ type clientEventHub struct {
 	presenceStatsHandler PresenceStatsHandler
 	historyHandler       HistoryHandler
 	stateSnapshotHandler StateSnapshotHandler
-	cacheEmptyHandler    CacheEmptyHandler
 }
 
 // OnAlive allows setting AliveHandler.
@@ -106,14 +105,6 @@ func (c *Client) OnUnsubscribe(h UnsubscribeHandler) {
 // PublishHandler called when client publishes message into channel.
 func (c *Client) OnPublish(h PublishHandler) {
 	c.eventHub.publishHandler = h
-}
-
-// OnCacheEmpty allows setting CacheEmptyHandler.
-// CacheEmptyHandler called when client subscribes on a channel with RecoveryModeCache but there is no
-// cached value in channel. In response to this handler it's possible to tell Centrifuge what to do with
-// subscribe request – keep it, or return error.
-func (c *Client) OnCacheEmpty(h CacheEmptyHandler) {
-	c.eventHub.cacheEmptyHandler = h
 }
 
 // OnPresence allows setting PresenceHandler.
@@ -2838,8 +2829,8 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				var recovered bool
 				recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
 				res.Recovered = recovered
-				if latestPub == nil && c.eventHub.cacheEmptyHandler != nil {
-					cacheReply := c.eventHub.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
+				if latestPub == nil && c.node.clientEvents.cacheEmptyHandler != nil {
+					cacheReply := c.node.clientEvents.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
 						latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
