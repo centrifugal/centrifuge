@@ -2830,7 +2830,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
 				res.Recovered = recovered
 				if latestPub == nil && c.node.clientEvents.cacheEmptyHandler != nil {
-					cacheReply := c.node.clientEvents.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
+					cacheReply, err := c.node.clientEvents.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
+					if err != nil {
+						c.node.logger.log(newLogEntry(LogLevelError, "error on cache empty", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+						return handleErr(err)
+					}
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
 						latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)

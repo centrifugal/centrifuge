@@ -375,7 +375,7 @@ type CacheEmptyReply struct {
 }
 
 // CacheEmptyHandler allows setting cache empty handler function.
-type CacheEmptyHandler func(CacheEmptyEvent) CacheEmptyReply
+type CacheEmptyHandler func(CacheEmptyEvent) (CacheEmptyReply, error)
 
 // SurveyEvent with Op and Data of survey.
 type SurveyEvent struct {
