@@ -12,7 +12,7 @@ import (
 )
 
 // Helper function to create a channelLayer with options.
-func setupChannelCache(t testing.TB, options ChannelLayerOptions, node node) *channelLayer {
+func setupChannelLayer(t testing.TB, options ChannelLayerOptions, node node) *channelLayer {
 	t.Helper()
 	channel := "testChannel"
 	cache, err := newChannelInterlayer(channel, node, options)
@@ -24,13 +24,13 @@ func setupChannelCache(t testing.TB, options ChannelLayerOptions, node node) *ch
 
 type mockNode struct {
 	// Store function outputs and any state needed for testing
-	handlePublicationFunc  func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication, bypassOffset bool) error
+	handlePublicationFunc  func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error
 	streamTopLatestPubFunc func(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error)
 }
 
-func (m *mockNode) handlePublication(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication, bypassOffset bool) error {
+func (m *mockNode) handlePublication(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error {
 	if m.handlePublicationFunc != nil {
-		return m.handlePublicationFunc(channel, pub, sp, delta, prevPublication, bypassOffset)
+		return m.handlePublicationFunc(channel, pub, sp, delta, prevPublication)
 	}
 	return nil
 }
@@ -42,23 +42,7 @@ func (m *mockNode) streamTopLatestPub(ch string, historyMetaTTL time.Duration) (
 	return nil, StreamPosition{}, nil
 }
 
-func TestChannelCacheInitialization(t *testing.T) {
-	options := ChannelLayerOptions{
-		EnableQueue:           true,
-		KeepLatestPublication: true,
-		BroadcastDelay:        10 * time.Millisecond,
-		PositionSyncInterval:  1 * time.Second,
-	}
-	cache := setupChannelCache(t, options, &mockNode{})
-
-	require.NotNil(t, cache)
-	require.NotNil(t, cache.messages)
-	require.Equal(t, int64(0), cache.initialized.Load())
-	cache.InitState(&Publication{}, StreamPosition{1, "epoch"})
-	require.Equal(t, int64(1), cache.initialized.Load())
-}
-
-func TestChannelCacheHandlePublication(t *testing.T) {
+func TestChannelLayerHandlePublication(t *testing.T) {
 	optionSet := []ChannelLayerOptions{
 		{
 			EnableQueue:           false,
@@ -84,18 +68,17 @@ func TestChannelCacheHandlePublication(t *testing.T) {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			doneCh := make(chan struct{})
 
-			cache := setupChannelCache(t, options, &mockNode{
-				handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication, bypassOffset bool) error {
+			cache := setupChannelLayer(t, options, &mockNode{
+				handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error {
 					close(doneCh)
 					return nil
 				},
 			})
-			cache.InitState(&Publication{}, StreamPosition{})
 
 			pub := &Publication{Data: []byte("test data")}
 			sp := StreamPosition{Offset: 1}
 
-			cache.processPublication(pub, sp, false, nil)
+			cache.broadcastPublication(pub, sp, false, nil)
 
 			select {
 			case <-doneCh:
@@ -106,25 +89,23 @@ func TestChannelCacheHandlePublication(t *testing.T) {
 	}
 }
 
-func TestChannelCacheInsufficientState(t *testing.T) {
+func TestChannelLayerInsufficientState(t *testing.T) {
 	options := ChannelLayerOptions{
 		EnableQueue:           true,
 		KeepLatestPublication: true,
 	}
 	doneCh := make(chan struct{})
-	cache := setupChannelCache(t, options, &mockNode{
-		handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication, bypassOffset bool) error {
+	cache := setupChannelLayer(t, options, &mockNode{
+		handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error {
 			require.Equal(t, uint64(math.MaxUint64), pub.Offset)
 			require.Equal(t, uint64(math.MaxUint64), sp.Offset)
-			require.False(t, bypassOffset)
 			close(doneCh)
 			return nil
 		},
 	})
-	cache.InitState(&Publication{}, StreamPosition{})
 
 	// Simulate the behavior when the state is marked as insufficient
-	cache.processInsufficientState(StreamPosition{Offset: 2}, &Publication{})
+	cache.broadcastInsufficientState(StreamPosition{Offset: 2}, &Publication{})
 
 	select {
 	case <-doneCh:
@@ -133,13 +114,13 @@ func TestChannelCacheInsufficientState(t *testing.T) {
 	}
 }
 
-func TestChannelCachePositionSync(t *testing.T) {
+func TestChannelLayerPositionSync(t *testing.T) {
 	options := ChannelLayerOptions{
-		PositionSyncInterval: 10 * time.Millisecond,
+		EnablePositionSync: true,
 	}
 	doneCh := make(chan struct{})
 	var closeOnce sync.Once
-	cache := setupChannelCache(t, options, &mockNode{
+	layer := setupChannelLayer(t, options, &mockNode{
 		streamTopLatestPubFunc: func(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
 			closeOnce.Do(func() {
 				close(doneCh)
@@ -147,8 +128,12 @@ func TestChannelCachePositionSync(t *testing.T) {
 			return nil, StreamPosition{}, nil
 		},
 	})
-	cache.InitState(&Publication{}, StreamPosition{})
-
+	originalGetter := channelLayerTimeNow
+	channelLayerTimeNow = func() time.Time {
+		return time.Now().Add(time.Hour)
+	}
+	layer.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	channelLayerTimeNow = originalGetter
 	select {
 	case <-doneCh:
 	case <-time.After(5 * time.Second):
@@ -156,14 +141,14 @@ func TestChannelCachePositionSync(t *testing.T) {
 	}
 }
 
-func TestChannelCachePositionSyncRetry(t *testing.T) {
+func TestChannelLayerPositionSyncRetry(t *testing.T) {
 	options := ChannelLayerOptions{
-		PositionSyncInterval: 10 * time.Millisecond,
+		EnablePositionSync: true,
 	}
 	doneCh := make(chan struct{})
 	var closeOnce sync.Once
 	numCalls := 0
-	cache := setupChannelCache(t, options, &mockNode{
+	layer := setupChannelLayer(t, options, &mockNode{
 		streamTopLatestPubFunc: func(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
 			if numCalls == 0 {
 				numCalls++
@@ -175,11 +160,15 @@ func TestChannelCachePositionSyncRetry(t *testing.T) {
 			return nil, StreamPosition{}, nil
 		},
 	})
-	cache.InitState(&Publication{}, StreamPosition{})
-
+	originalGetter := channelLayerTimeNow
+	channelLayerTimeNow = func() time.Time {
+		return time.Now().Add(time.Hour)
+	}
+	layer.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	channelLayerTimeNow = originalGetter
 	select {
 	case <-doneCh:
 	case <-time.After(5 * time.Second):
-		require.Fail(t, "historyFunc was not called")
+		require.Fail(t, "streamTopLatestPubFunc was not called")
 	}
 }

@@ -110,9 +110,14 @@ type Config struct {
 	ChannelNamespaceLabelForTransportMessagesReceived bool
 
 	// AllowedDeltaTypes is a whitelist of DeltaType subscribers can use. At this point Centrifuge
-	// only supports DeltaTypeFossil. If zero value – clients won't be able to negotiate delta encoding.
-	// Delta encoding is an EXPERIMENTAL feature and may be changed/removed.
+	// only supports DeltaTypeFossil. If zero value – clients won't be able to negotiate delta encoding
+	// and will receive full data in publications.
+	// Delta encoding is an EXPERIMENTAL feature and may be changed.
 	AllowedDeltaTypes []DeltaType
+
+	// GetChannelLayerOptions is a way to provide ChannelLayerOptions for channel.
+	// See the doc comment for ChannelLayerOptions.
+	GetChannelLayerOptions func(channel string) (ChannelLayerOptions, bool)
 }
 
 const (

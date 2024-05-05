@@ -568,6 +568,7 @@ type broadcastKey struct {
 type dataValue struct {
 	data      []byte
 	deltaData []byte
+	delta     bool
 }
 
 // broadcastPublicationDelta sends message to all clients subscribed on channel trying to use deltas.
@@ -722,6 +723,7 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
 		}
+		value.delta = true
 		_ = sub.client.writePublication(channel, fullPub, value, sp)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {

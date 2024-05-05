@@ -3042,74 +3042,74 @@ func TestClientCheckPosition(t *testing.T) {
 	require.True(t, got)
 }
 
-func TestClientIsValidPosition(t *testing.T) {
-	node := defaultTestNode()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	client := newTestClient(t, node, "42")
-
-	node.mu.Lock()
-	node.nowTimeGetter = func() time.Time {
-		return time.Unix(200, 0)
-	}
-	node.mu.Unlock()
-
-	client.channels = map[string]ChannelContext{
-		"example": {
-			flags:             flagSubscribed,
-			positionCheckTime: 50,
-			streamPosition: StreamPosition{
-				Offset: 20,
-				Epoch:  "test",
-			},
-		},
-	}
-
-	got := client.isValidPosition(StreamPosition{
-		Offset: 20,
-		Epoch:  "test",
-	}, 200, "example")
-	require.True(t, got)
-	require.Equal(t, int64(200), client.channels["example"].positionCheckTime)
-
-	got = client.isValidPosition(StreamPosition{
-		Offset: 19,
-		Epoch:  "test",
-	}, 210, "example")
-	require.True(t, got)
-	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
-
-	got = client.isValidPosition(StreamPosition{
-		Offset: 21,
-		Epoch:  "test",
-	}, 220, "example")
-	require.False(t, got)
-	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
-
-	client.channels = map[string]ChannelContext{
-		"example": {
-			positionCheckTime: 50,
-			streamPosition: StreamPosition{
-				Offset: 20,
-				Epoch:  "test",
-			},
-		},
-	}
-	// no subscribed flag.
-	got = client.isValidPosition(StreamPosition{
-		Offset: 21,
-		Epoch:  "test",
-	}, 220, "example")
-	require.True(t, got)
-
-	_ = client.close(DisconnectConnectionClosed)
-	// closed client.
-	got = client.isValidPosition(StreamPosition{
-		Offset: 21,
-		Epoch:  "test",
-	}, 220, "example")
-	require.True(t, got)
-}
+//func TestClientIsValidPosition(t *testing.T) {
+//	node := defaultTestNode()
+//	defer func() { _ = node.Shutdown(context.Background()) }()
+//
+//	client := newTestClient(t, node, "42")
+//
+//	node.mu.Lock()
+//	node.nowTimeGetter = func() time.Time {
+//		return time.Unix(200, 0)
+//	}
+//	node.mu.Unlock()
+//
+//	client.channels = map[string]ChannelContext{
+//		"example": {
+//			flags:             flagSubscribed,
+//			positionCheckTime: 50,
+//			streamPosition: StreamPosition{
+//				Offset: 20,
+//				Epoch:  "test",
+//			},
+//		},
+//	}
+//
+//	got := client.isValidPosition(StreamPosition{
+//		Offset: 20,
+//		Epoch:  "test",
+//	}, 200, "example")
+//	require.True(t, got)
+//	require.Equal(t, int64(200), client.channels["example"].positionCheckTime)
+//
+//	got = client.isValidPosition(StreamPosition{
+//		Offset: 19,
+//		Epoch:  "test",
+//	}, 210, "example")
+//	require.True(t, got)
+//	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
+//
+//	got = client.isValidPosition(StreamPosition{
+//		Offset: 21,
+//		Epoch:  "test",
+//	}, 220, "example")
+//	require.False(t, got)
+//	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
+//
+//	client.channels = map[string]ChannelContext{
+//		"example": {
+//			positionCheckTime: 50,
+//			streamPosition: StreamPosition{
+//				Offset: 20,
+//				Epoch:  "test",
+//			},
+//		},
+//	}
+//	// no subscribed flag.
+//	got = client.isValidPosition(StreamPosition{
+//		Offset: 21,
+//		Epoch:  "test",
+//	}, 220, "example")
+//	require.True(t, got)
+//
+//	_ = client.close(DisconnectConnectionClosed)
+//	// closed client.
+//	got = client.isValidPosition(StreamPosition{
+//		Offset: 21,
+//		Epoch:  "test",
+//	}, 220, "example")
+//	require.True(t, got)
+//}
 
 func TestErrLogLevel(t *testing.T) {
 	require.Equal(t, LogLevelInfo, errLogLevel(ErrorNotAvailable))

@@ -83,6 +83,8 @@ type Node struct {
 	nodeInfoSendHandler NodeInfoSendHandler
 
 	emulationSurveyHandler *emulationSurveyHandler
+
+	layers map[string]*channelLayer
 }
 
 const (
@@ -162,6 +164,7 @@ func New(c Config) (*Node, error) {
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
+		layers:         map[string]*channelLayer{},
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
@@ -680,6 +683,18 @@ func (n *Node) handleControl(data []byte) error {
 	return nil
 }
 
+func (n *Node) handlePublicationCached(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+	mu := n.subLock(ch)
+	mu.Lock()
+	cache, ok := n.layers[ch]
+	mu.Unlock()
+	if ok {
+		cache.broadcastPublication(pub, sp, delta, prevPub)
+		return nil
+	}
+	return n.handlePublication(ch, pub, sp, delta, prevPub)
+}
+
 // handlePublication handles messages published into channel and
 // coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
@@ -988,9 +1003,27 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 		return err
 	}
 	if first {
+		if n.config.GetChannelLayerOptions != nil {
+			cacheOpts, ok := n.config.GetChannelLayerOptions(ch)
+			if ok {
+				layer, err := newChannelInterlayer(ch, n, cacheOpts)
+				if err != nil {
+					return err
+				}
+				n.layers[ch] = layer
+			}
+		}
+
 		err := n.broker.Subscribe(ch)
 		if err != nil {
 			_, _ = n.hub.removeSub(ch, sub.client)
+			if n.config.GetChannelLayerOptions != nil {
+				layer, ok := n.layers[ch]
+				if ok {
+					layer.close()
+					delete(n.layers, ch)
+				}
+			}
 			return err
 		}
 	}
@@ -1024,6 +1057,12 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 				if err != nil {
 					// Cool down a bit since broker is not ready to process unsubscription.
 					time.Sleep(500 * time.Millisecond)
+				} else {
+					cache, ok := n.layers[ch]
+					if ok {
+						cache.close()
+						delete(n.layers, ch)
+					}
 				}
 				return err
 			}
@@ -1377,6 +1416,53 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 	return historyResult.StreamPosition, nil
 }
 
+//func (c *Client) isValidPosition(streamTop StreamPosition, nowUnix int64, ch string) bool {
+//	c.mu.Lock()
+//	if c.status == statusClosed {
+//		c.mu.Unlock()
+//		return true
+//	}
+//	chCtx, ok := c.channels[ch]
+//	if !ok || !channelHasFlag(chCtx.flags, flagSubscribed) {
+//		c.mu.Unlock()
+//		return true
+//	}
+//	position := chCtx.streamPosition
+//	c.mu.Unlock()
+//
+//	isValidPosition := streamTop.Epoch == position.Epoch && position.Offset >= streamTop.Offset
+//	if isValidPosition {
+//		c.mu.Lock()
+//		if chContext, ok := c.channels[ch]; ok {
+//			chContext.positionCheckTime = nowUnix
+//			c.channels[ch] = chContext
+//		}
+//		c.mu.Unlock()
+//		return true
+//	}
+//
+//	return false
+//}
+
+func (n *Node) checkPosition(ch string, position StreamPosition, historyMetaTTL time.Duration) (bool, error) {
+	n.metrics.incActionCount("add_subscription")
+	mu := n.subLock(ch)
+	mu.Lock()
+	cache, ok := n.layers[ch]
+	mu.Unlock()
+	if !ok || !cache.options.EnablePositionSync {
+		// No interlayer for channel or position sync disabled – we then check position over Broker.
+		streamTop, err := n.streamTop(ch, historyMetaTTL)
+		if err != nil {
+			// Will be checked later.
+			return false, err
+		}
+		return streamTop.Epoch == position.Epoch && position.Offset == streamTop.Offset, nil
+	}
+	validPosition := cache.CheckPosition(historyMetaTTL, position, n.config.ClientChannelPositionCheckDelay)
+	return validPosition, nil
+}
+
 // RemoveHistory removes channel history.
 func (n *Node) RemoveHistory(ch string) error {
 	n.metrics.incActionCount("history_remove")
@@ -1559,6 +1645,9 @@ type brokerEventHandler struct {
 func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
+	}
+	if h.node.config.GetChannelLayerOptions != nil {
+		return h.node.handlePublicationCached(ch, pub, sp, delta, prevPub)
 	}
 	return h.node.handlePublication(ch, pub, sp, delta, prevPub)
 }

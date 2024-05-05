@@ -68,9 +68,17 @@ func channelSubscribeAllowed(channel string) bool {
 
 func main() {
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:       centrifuge.LogLevelInfo,
-		LogHandler:     handleLog,
-		HistoryMetaTTL: 24 * time.Hour,
+		LogLevel:          centrifuge.LogLevelInfo,
+		LogHandler:        handleLog,
+		HistoryMetaTTL:    24 * time.Hour,
+		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
+		GetChannelLayerOptions: func(channel string) (centrifuge.ChannelLayerOptions, bool) {
+			return centrifuge.ChannelLayerOptions{
+				KeepLatestPublication: true,
+				EnableQueue:           true,
+				BroadcastDelay:        time.Second,
+			}, true
+		},
 	})
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
@@ -160,7 +168,6 @@ func main() {
 				e.Channel, data,
 				centrifuge.WithHistory(300, time.Minute),
 				centrifuge.WithClientInfo(e.ClientInfo),
-				centrifuge.WithDelta(true),
 			)
 
 			cb(centrifuge.PublishReply{Result: &result}, err)
@@ -220,22 +227,23 @@ func main() {
 	//	}
 	//}()
 	//
-	//go func() {
-	//	// Publish to channel periodically.
-	//	i := 1
-	//	for {
-	//		_, err := node.Publish(
-	//			"chat:index",
-	//			[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
-	//			centrifuge.WithHistory(300, time.Minute),
-	//		)
-	//		if err != nil {
-	//			log.Printf("error publishing to channel: %s", err)
-	//		}
-	//		i++
-	//		time.Sleep(10000 * time.Millisecond)
-	//	}
-	//}()
+	go func() {
+		// Publish to channel periodically.
+		i := 1
+		for {
+			_, err := node.Publish(
+				"chat:index",
+				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
+				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithDelta(true),
+			)
+			if err != nil {
+				log.Printf("error publishing to channel: %s", err)
+			}
+			i++
+			time.Sleep(300 * time.Millisecond)
+		}
+	}()
 
 	mux := http.DefaultServeMux
 
@@ -255,6 +263,7 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	}
 
+	log.Print("Starting server, visit http://localhost:8000")
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)

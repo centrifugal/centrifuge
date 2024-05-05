@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/centrifugal/centrifuge/internal/convert"
 	"io"
+	"math"
 	"slices"
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/saferand"
@@ -740,16 +741,6 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 		historyMetaTTL = time.Duration(chCtx.metaTTLSeconds) * time.Second
 	}
 
-	streamTop, err := c.node.streamTop(ch, historyMetaTTL)
-	if err != nil {
-		// Check later.
-		return true
-	}
-
-	return c.isValidPosition(streamTop, nowUnix, ch)
-}
-
-func (c *Client) isValidPosition(streamTop StreamPosition, nowUnix int64, ch string) bool {
 	c.mu.Lock()
 	if c.status == statusClosed {
 		c.mu.Unlock()
@@ -763,18 +754,20 @@ func (c *Client) isValidPosition(streamTop StreamPosition, nowUnix int64, ch str
 	position := chCtx.streamPosition
 	c.mu.Unlock()
 
-	isValidPosition := streamTop.Epoch == position.Epoch && position.Offset >= streamTop.Offset
-	if isValidPosition {
+	validPosition, err := c.node.checkPosition(ch, position, historyMetaTTL)
+	if err != nil {
+		// Check later.
+		return true
+	}
+	if validPosition {
 		c.mu.Lock()
 		if chContext, ok := c.channels[ch]; ok {
 			chContext.positionCheckTime = nowUnix
 			c.channels[ch] = chContext
 		}
 		c.mu.Unlock()
-		return true
 	}
-
-	return false
+	return validPosition
 }
 
 // ID returns unique client connection id.
@@ -1618,12 +1611,9 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 	}
 
 	if req.Delta != "" {
-		dt, ok := stringToDeltaType[req.Delta]
+		_, ok := stringToDeltaType[req.Delta]
 		if !ok {
 			return c.logDisconnectBadRequest("unknown delta type in subscribe request: " + req.Delta)
-		}
-		if !slices.Contains(c.node.config.AllowedDeltaTypes, dt) {
-			return c.logDisconnectBadRequest("disabled delta type in subscribe request: " + req.Delta)
 		}
 	}
 
@@ -2763,9 +2753,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	sub := subInfo{client: c, deltaType: ""}
 	if req.Delta != "" {
-		if dt, deltaFound := stringToDeltaType[req.Delta]; deltaFound {
-			sub.deltaType = dt
+		dt := DeltaType(req.Delta)
+		if slices.Contains(c.node.config.AllowedDeltaTypes, dt) {
+			res.Delta = true
 		}
+		sub.deltaType = dt
 	}
 	err := c.node.addSubscription(channel, sub)
 	if err != nil {
@@ -2919,7 +2911,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	if res.Recovered {
 		// Only append recovered publications in case continuity in a channel can be achieved.
-		if req.Delta == string(DeltaTypeFossil) {
+		if res.Delta && req.Delta == string(DeltaTypeFossil) {
 			res.Publications = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
 			// Allow delta for the following real-time publications since recovery is successful
 			// and makeRecoveredPubsDeltaFossil already created publication with base data if required.
@@ -3101,15 +3093,30 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		c.mu.Unlock()
 		return nil
 	}
+	deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
 	if !channelHasFlag(channelContext.flags, flagPositioning) {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			c.mu.Unlock()
 			return nil
 		}
 		c.mu.Unlock()
+		if pub.Offset == math.MaxUint64 {
+			// This is a special pub to trigger insufficient state.
+			return nil
+		}
+		if data.delta && deltaAllowed {
+			return c.transportEnqueue(data.deltaData, ch, protocol.FrameTypePushPublication)
+		}
+		if !deltaAllowed {
+			c.mu.Lock()
+			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+				chCtx.flags |= flagDeltaAllowed
+				c.channels[ch] = chCtx
+			}
+			c.mu.Unlock()
+		}
 		return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
 	}
-	deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
@@ -3140,7 +3147,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	if deltaAllowed {
+	if data.delta && deltaAllowed {
 		return c.transportEnqueue(data.deltaData, ch, protocol.FrameTypePushPublication)
 	}
 	if !deltaAllowed {
@@ -3155,7 +3162,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
-	return c.writePublication(ch, pub, dataValue{data: data, deltaData: data}, sp)
+	return c.writePublication(ch, pub, dataValue{data: data, deltaData: nil, delta: false}, sp)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition) error {
@@ -3165,6 +3172,28 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data dat
 	if pub.Offset == 0 {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
+		}
+
+		if data.delta {
+			c.mu.RLock()
+			channelContext, ok := c.channels[ch]
+			if !ok {
+				c.mu.RUnlock()
+				return nil
+			}
+			deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
+			c.mu.RUnlock()
+
+			if deltaAllowed {
+				return c.transportEnqueue(data.deltaData, ch, protocol.FrameTypePushPublication)
+			} else {
+				c.mu.Lock()
+				if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+					chCtx.flags |= flagDeltaAllowed
+					c.channels[ch] = chCtx
+				}
+				c.mu.Unlock()
+			}
 		}
 		return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
 	}
