@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Helper function to create a channelCache with options.
-func setupChannelCache(t testing.TB, options ChannelCacheOptions, node node) *channelCache {
+// Helper function to create a channelLayer with options.
+func setupChannelCache(t testing.TB, options ChannelLayerOptions, node node) *channelLayer {
 	t.Helper()
 	channel := "testChannel"
-	cache, err := newChannelCache(channel, node, options)
+	cache, err := newChannelInterlayer(channel, node, options)
 	if err != nil {
 		require.NoError(t, err)
 	}
@@ -43,8 +43,8 @@ func (m *mockNode) streamTopLatestPub(ch string, historyMetaTTL time.Duration) (
 }
 
 func TestChannelCacheInitialization(t *testing.T) {
-	options := ChannelCacheOptions{
-		UseQueue:              true,
+	options := ChannelLayerOptions{
+		EnableQueue:           true,
 		KeepLatestPublication: true,
 		BroadcastDelay:        10 * time.Millisecond,
 		PositionSyncInterval:  1 * time.Second,
@@ -59,22 +59,22 @@ func TestChannelCacheInitialization(t *testing.T) {
 }
 
 func TestChannelCacheHandlePublication(t *testing.T) {
-	optionSet := []ChannelCacheOptions{
+	optionSet := []ChannelLayerOptions{
 		{
-			UseQueue:              false,
+			EnableQueue:           false,
 			KeepLatestPublication: false,
 		},
 		{
-			UseQueue:              true,
+			EnableQueue:           true,
 			KeepLatestPublication: false,
 		},
 		{
-			UseQueue:              true,
+			EnableQueue:           true,
 			KeepLatestPublication: false,
 			BroadcastDelay:        10 * time.Millisecond,
 		},
 		{
-			UseQueue:              true,
+			EnableQueue:           true,
 			KeepLatestPublication: true,
 			BroadcastDelay:        10 * time.Millisecond,
 		},
@@ -107,8 +107,8 @@ func TestChannelCacheHandlePublication(t *testing.T) {
 }
 
 func TestChannelCacheInsufficientState(t *testing.T) {
-	options := ChannelCacheOptions{
-		UseQueue:              true,
+	options := ChannelLayerOptions{
+		EnableQueue:           true,
 		KeepLatestPublication: true,
 	}
 	doneCh := make(chan struct{})
@@ -134,7 +134,7 @@ func TestChannelCacheInsufficientState(t *testing.T) {
 }
 
 func TestChannelCachePositionSync(t *testing.T) {
-	options := ChannelCacheOptions{
+	options := ChannelLayerOptions{
 		PositionSyncInterval: 10 * time.Millisecond,
 	}
 	doneCh := make(chan struct{})
@@ -157,7 +157,7 @@ func TestChannelCachePositionSync(t *testing.T) {
 }
 
 func TestChannelCachePositionSyncRetry(t *testing.T) {
-	options := ChannelCacheOptions{
+	options := ChannelLayerOptions{
 		PositionSyncInterval: 10 * time.Millisecond,
 	}
 	doneCh := make(chan struct{})

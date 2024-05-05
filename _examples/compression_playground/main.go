@@ -141,6 +141,13 @@ func main() {
 			log.Println(entry.Message, entry.Fields)
 		},
 		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
+		//GetChannelLayerOptions: func(channel string) (centrifuge.ChannelLayerOptions, bool) {
+		//	return centrifuge.ChannelLayerOptions{
+		//		//KeepLatestPublication: true,
+		//		//EnableQueue:           true,
+		//		//BroadcastDelay:        500 * time.Millisecond,
+		//	}, true
+		//},
 	})
 	if err != nil {
 		log.Fatal(err)

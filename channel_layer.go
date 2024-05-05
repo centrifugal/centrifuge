@@ -10,24 +10,25 @@ import (
 	"github.com/centrifugal/centrifuge/internal/timers"
 )
 
-// ChannelCacheOptions is an EXPERIMENTAL way to provide a channelCache layer options to Centrifuge.
+// ChannelLayerOptions is an EXPERIMENTAL way to provide a channelLayer layer options to Centrifuge.
 // This is very unstable at the moment, do not use in production.
-type ChannelCacheOptions struct {
-	// UseQueue enables queue for incoming publications. This can be useful to reduce PUB/SUB message
-	// processing time (as we put it into a single cache layer queue instead of each individual connection queue),
-	// reduce channel broadcast contention (when one channel waits for broadcast of another channel to finish),
+type ChannelLayerOptions struct {
+	// EnableQueue for incoming publications. This can be useful to reduce PUB/SUB message processing time
+	// (as we put it into a single cache layer queue instead of each individual connection queue), reduce
+	// channel broadcast contention (when one channel waits for broadcast of another channel to finish),
 	// and also opens a road to broadcast tweaks – such as BroadcastDelay and delta between several
 	// publications (deltas require both BroadcastDelay and KeepLatestPublication to be enabled).
-	UseQueue bool
+	EnableQueue bool
 	// QueueMaxSize is a maximum size of the queue used in channel cache. If zero, 16MB default is used.
 	// If max size reached, new publications will be dropped.
 	QueueMaxSize int
 
-	// BroadcastDelay controls delay before Publication broadcast. On time tick Centrifugo broadcasts
+	// BroadcastDelay controls the delay before Publication broadcast. On time tick Centrifugo broadcasts
 	// only the latest publication in the channel if any. Useful to reduce/smooth the number of messages sent
 	// to clients when publication contains the entire state. If zero, all publications will be sent to clients
-	// without delay logic involved on channel cache level. BroadcastDelay option requires (!) UseQueue to be
-	// enabled, as we can not afford delays during broadcast from the PUB/SUB layer.
+	// without delay logic involved on channel cache level. BroadcastDelay option requires (!) EnableQueue to be
+	// enabled, as we can not afford delays during broadcast from the PUB/SUB layer. BroadcastDelay must not be
+	// used in channels with positioning/recovery on.
 	BroadcastDelay time.Duration
 
 	// KeepLatestPublication enables keeping latest publication in channel cache layer. This is required
@@ -35,31 +36,29 @@ type ChannelCacheOptions struct {
 	// Probably it may be used for fast recovery also, but need to consider edge cases for races.
 	KeepLatestPublication bool
 
-	// PositionSync when true delegates connection position checks to the channel cache. In that case check
+	// EnablePositionSync when true delegates connection position checks to the channel cache. In that case check
 	// is only performed no more often than PositionSyncInterval thus reducing the load on broker in cases when
 	// channel has many subscribers. When message loss is detected cache layer tells caller about this and also
 	// marks all channel subscribers with insufficient state flag. By default, cache is not used for sync – in
 	// that case each individual connection syncs position independently.
-	// TODO: introduce Node method to sync positions and call it from Client.
-	PositionSync bool
+	EnablePositionSync bool
 	// PositionSyncInterval is a period of time between position sync checks. If zero, Centrifuge uses
 	// Config.ClientChannelPositionCheckDelay as a default value.
 	PositionSyncInterval time.Duration
 }
 
-// channelCache is an optional intermediary layer between broker PUB/SUB and client connections.
-// It comes with memory overhead depending on ChannelCacheOptions used, and may consume one additional
-// goroutine per channel if ChannelCacheOptions.UseQueue used. At the same time it can provide significant
+// channelLayer is an optional intermediary between broker PUB/SUB and client connections. It comes
+// with memory overhead depending on ChannelLayerOptions used, and may consume one additional goroutine
+// per channel if ChannelLayerOptions.EnableQueue used. At the same time it can provide significant
 // benefits in terms of overall system efficiency.
 //
-// channelCache is initialized when first subscriber comes into channel, and dropped as soon as last subscriber
-// leaves the channel on the node. This generally makes it possible to keep latest publication without TTL, but
-// probably we still need to handle TTL to match broker behaviour.
-type channelCache struct {
+// channelLayer is initialized when first subscriber comes into channel, and dropped as soon as last
+// subscriber leaves the channel on the Node.
+type channelLayer struct {
 	initialized atomic.Int64
 	channel     string
 	node        node
-	options     ChannelCacheOptions
+	options     ChannelLayerOptions
 
 	mu sync.RWMutex
 
@@ -82,17 +81,17 @@ type channelCache struct {
 type node interface {
 	handlePublication(
 		channel string, pub *Publication, sp StreamPosition, delta bool,
-		prevPublication *Publication, bypassOffset bool,
+		prevPublication *Publication,
 	) error
 	streamTopLatestPub(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error)
 }
 
-func newChannelCache(
+func newChannelInterlayer(
 	channel string,
 	node node,
-	options ChannelCacheOptions,
-) (*channelCache, error) {
-	c := &channelCache{
+	options ChannelLayerOptions,
+) (*channelLayer, error) {
+	c := &channelLayer{
 		channel: channel,
 		node:    node,
 		options: options,
@@ -102,11 +101,14 @@ func newChannelCache(
 		},
 		positionCheckTime: time.Now().Unix(),
 	}
-	if options.UseQueue {
+	if options.EnableQueue {
 		c.messages = newCacheQueue(2)
 	}
-	if options.BroadcastDelay > 0 && !options.UseQueue {
+	if options.BroadcastDelay > 0 && !options.EnableQueue {
 		return nil, fmt.Errorf("broadcast delay can only be used with queue enabled")
+	}
+	if c.options.EnableQueue {
+		go c.writer()
 	}
 	return c, nil
 }
@@ -119,32 +121,18 @@ type queuedPub struct {
 	isInsufficientState bool
 }
 
-func (c *channelCache) InitState(latestPublication *Publication, currentStreamPosition StreamPosition) {
-	if c.options.KeepLatestPublication {
-		c.latestPublication = latestPublication
-	}
-	c.latestStreamPosition = currentStreamPosition
-	c.latestQueuedStreamPosition = currentStreamPosition
-	if c.options.UseQueue {
-		go c.writer()
-	}
-	c.initialized.Store(1)
-}
-
-func (c *channelCache) processPublication(pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) {
-	if c.initialized.Load() == 0 {
-		// Skip publications while cache is not initialized.
-		return
-	}
+func (c *channelLayer) processPublication(pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) {
 	bp := queuedPub{pub: pub, sp: sp, delta: delta, prevPub: prevPub}
 	c.mu.Lock()
 	c.latestQueuedStreamPosition = sp
-	c.positionCheckTime = c.nowTimeGetter().Unix()
+	c.positionCheckTime = c.nowTimeGetter().UnixNano()
 	c.mu.Unlock()
 
-	if c.options.UseQueue {
+	if c.options.EnableQueue {
+		if c.options.QueueMaxSize > 0 && c.messages.Size() > c.options.QueueMaxSize {
+			return
+		}
 		c.messages.Add(queuedItem{Publication: bp})
-		// TODO: do we need to limit queue size here?
 	} else {
 		c.broadcastMu.Lock()
 		defer c.broadcastMu.Unlock()
@@ -152,13 +140,13 @@ func (c *channelCache) processPublication(pub *Publication, sp StreamPosition, d
 	}
 }
 
-func (c *channelCache) processInsufficientState(currentStreamTop StreamPosition, latestPublication *Publication) {
+func (c *channelLayer) processInsufficientState(currentStreamTop StreamPosition, latestPublication *Publication) {
 	bp := queuedPub{pub: latestPublication, sp: currentStreamTop, delta: false, isInsufficientState: true, prevPub: nil}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.latestQueuedStreamPosition = currentStreamTop
-	c.positionCheckTime = c.nowTimeGetter().Unix()
-	if c.options.UseQueue {
+	c.positionCheckTime = c.nowTimeGetter().UnixNano()
+	if c.options.EnableQueue {
 		// TODO: possibly support c.messages.dropQueued() for this path ?
 		c.messages.Add(queuedItem{Publication: bp})
 	} else {
@@ -168,8 +156,8 @@ func (c *channelCache) processInsufficientState(currentStreamTop StreamPosition,
 	}
 }
 
-func (c *channelCache) broadcast(qp queuedPub) {
-	bypassOffset := c.options.BroadcastDelay > 0 && !qp.isInsufficientState
+func (c *channelLayer) broadcast(qp queuedPub) {
+	//bypassOffset := c.options.BroadcastDelay > 0 && !qp.isInsufficientState
 	pubToBroadcast := qp.pub
 	spToBroadcast := qp.sp
 	if qp.isInsufficientState {
@@ -180,26 +168,30 @@ func (c *channelCache) broadcast(qp queuedPub) {
 	}
 
 	prevPub := qp.prevPub
-	if c.options.KeepLatestPublication && c.options.BroadcastDelay > 0 {
+	if qp.delta && c.options.KeepLatestPublication {
 		prevPub = c.latestPublication
 	}
 	delta := qp.delta
 	if c.options.BroadcastDelay > 0 && !c.options.KeepLatestPublication {
 		delta = false
 	}
+	if qp.isInsufficientState {
+		delta = false
+		prevPub = nil
+	}
 	_ = c.node.handlePublication(
-		c.channel, pubToBroadcast, spToBroadcast, delta, prevPub, bypassOffset)
+		c.channel, pubToBroadcast, spToBroadcast, delta, prevPub)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if qp.sp.Offset > c.latestStreamPosition.Offset {
 		c.latestStreamPosition = qp.sp
-		if c.options.KeepLatestPublication {
-			c.latestPublication = qp.pub
-		}
+	}
+	if c.options.KeepLatestPublication {
+		c.latestPublication = qp.pub
 	}
 }
 
-func (c *channelCache) writer() {
+func (c *channelLayer) writer() {
 	for {
 		if ok := c.waitSendPub(c.options.BroadcastDelay); !ok {
 			return
@@ -207,7 +199,7 @@ func (c *channelCache) writer() {
 	}
 }
 
-func (c *channelCache) waitSendPub(delay time.Duration) bool {
+func (c *channelLayer) waitSendPub(delay time.Duration) bool {
 	// Wait for message from the queue.
 	ok := c.messages.Wait()
 	if !ok {
@@ -252,7 +244,7 @@ func (c *channelCache) waitSendPub(delay time.Duration) bool {
 	return true
 }
 
-func (c *channelCache) CheckPosition(historyMetaTTL time.Duration) bool {
+func (c *channelLayer) CheckPosition(historyMetaTTL time.Duration, clientPosition StreamPosition) bool {
 	nowUnixNano := c.nowTimeGetter().UnixNano()
 	c.mu.RLock()
 	needCheckPosition := nowUnixNano-c.positionCheckTime >= c.options.PositionSyncInterval.Nanoseconds()
@@ -260,7 +252,7 @@ func (c *channelCache) CheckPosition(historyMetaTTL time.Duration) bool {
 	if !needCheckPosition {
 		return true
 	}
-	latestPublication, streamTop, validPosition := c.checkPositionWithRetry(historyMetaTTL)
+	latestPublication, streamTop, validPosition := c.checkPositionWithRetry(historyMetaTTL, clientPosition)
 	c.mu.Lock()
 	c.positionCheckTime = nowUnixNano
 	c.mu.Unlock()
@@ -270,16 +262,16 @@ func (c *channelCache) CheckPosition(historyMetaTTL time.Duration) bool {
 	return validPosition
 }
 
-func (c *channelCache) checkPositionWithRetry(historyMetaTTL time.Duration) (*Publication, StreamPosition, bool) {
-	latestPub, sp, validPosition := c.checkPositionOnce(historyMetaTTL)
+func (c *channelLayer) checkPositionWithRetry(historyMetaTTL time.Duration, clientPosition StreamPosition) (*Publication, StreamPosition, bool) {
+	latestPub, sp, validPosition := c.checkPositionOnce(historyMetaTTL, clientPosition)
 	if !validPosition {
-		return c.checkPositionOnce(historyMetaTTL)
+		return c.checkPositionOnce(historyMetaTTL, clientPosition)
 	}
 	return latestPub, sp, true
 }
 
-func (c *channelCache) checkPositionOnce(historyMetaTTL time.Duration) (*Publication, StreamPosition, bool) {
-	latestPublication, currentStreamPosition, err := c.node.streamTopLatestPub(c.channel, historyMetaTTL)
+func (c *channelLayer) checkPositionOnce(historyMetaTTL time.Duration, clientPosition StreamPosition) (*Publication, StreamPosition, bool) {
+	latestPublication, streamTop, err := c.node.streamTopLatestPub(c.channel, historyMetaTTL)
 	if err != nil {
 		// Will result into position check later.
 		return nil, StreamPosition{}, true
@@ -287,11 +279,14 @@ func (c *channelCache) checkPositionOnce(historyMetaTTL time.Duration) (*Publica
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	position := c.latestQueuedStreamPosition
-	isValidPosition := currentStreamPosition.Epoch == position.Epoch && position.Offset == currentStreamPosition.Offset
-	return latestPublication, currentStreamPosition, isValidPosition
+	if position.Offset == 0 {
+		position = clientPosition
+	}
+	isValidPosition := streamTop.Epoch == position.Epoch && position.Offset == streamTop.Offset
+	return latestPublication, streamTop, isValidPosition
 }
 
-func (c *channelCache) close() {
+func (c *channelLayer) close() {
 	close(c.closeCh)
 }
 
