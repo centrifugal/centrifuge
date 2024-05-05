@@ -72,8 +72,8 @@ func main() {
 		LogHandler:        handleLog,
 		HistoryMetaTTL:    24 * time.Hour,
 		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
-		GetChannelLayerOptions: func(channel string) (centrifuge.ChannelLayerOptions, bool) {
-			return centrifuge.ChannelLayerOptions{
+		GetChannelMediumOptions: func(channel string) (centrifuge.ChannelMediumOptions, bool) {
+			return centrifuge.ChannelMediumOptions{
 				KeepLatestPublication: true,
 				EnableQueue:           true,
 				BroadcastDelay:        time.Second,

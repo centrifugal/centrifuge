@@ -84,7 +84,7 @@ type Node struct {
 
 	emulationSurveyHandler *emulationSurveyHandler
 
-	layers map[string]*channelLayer
+	mediums map[string]*channelMedium
 }
 
 const (
@@ -164,7 +164,7 @@ func New(c Config) (*Node, error) {
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
-		layers:         map[string]*channelLayer{},
+		mediums:        map[string]*channelMedium{},
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
@@ -683,13 +683,13 @@ func (n *Node) handleControl(data []byte) error {
 	return nil
 }
 
-func (n *Node) handlePublicationCached(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+func (n *Node) handlePublicationViaMedium(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	mu := n.subLock(ch)
 	mu.Lock()
-	cache, ok := n.layers[ch]
+	medium, ok := n.mediums[ch]
 	mu.Unlock()
 	if ok {
-		cache.broadcastPublication(pub, sp, delta, prevPub)
+		medium.broadcastPublication(pub, sp, delta, prevPub)
 		return nil
 	}
 	return n.handlePublication(ch, pub, sp, delta, prevPub)
@@ -1003,25 +1003,25 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 		return err
 	}
 	if first {
-		if n.config.GetChannelLayerOptions != nil {
-			cacheOpts, ok := n.config.GetChannelLayerOptions(ch)
+		if n.config.GetChannelMediumOptions != nil {
+			mediumOptions, ok := n.config.GetChannelMediumOptions(ch)
 			if ok {
-				layer, err := newChannelInterlayer(ch, n, cacheOpts)
+				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
 					return err
 				}
-				n.layers[ch] = layer
+				n.mediums[ch] = medium
 			}
 		}
 
 		err := n.broker.Subscribe(ch)
 		if err != nil {
 			_, _ = n.hub.removeSub(ch, sub.client)
-			if n.config.GetChannelLayerOptions != nil {
-				layer, ok := n.layers[ch]
+			if n.config.GetChannelMediumOptions != nil {
+				medium, ok := n.mediums[ch]
 				if ok {
-					layer.close()
-					delete(n.layers, ch)
+					medium.close()
+					delete(n.mediums, ch)
 				}
 			}
 			return err
@@ -1058,10 +1058,10 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 					// Cool down a bit since broker is not ready to process unsubscription.
 					time.Sleep(500 * time.Millisecond)
 				} else {
-					cache, ok := n.layers[ch]
+					medium, ok := n.mediums[ch]
 					if ok {
-						cache.close()
-						delete(n.layers, ch)
+						medium.close()
+						delete(n.mediums, ch)
 					}
 				}
 				return err
@@ -1448,10 +1448,10 @@ func (n *Node) checkPosition(ch string, position StreamPosition, historyMetaTTL 
 	n.metrics.incActionCount("add_subscription")
 	mu := n.subLock(ch)
 	mu.Lock()
-	cache, ok := n.layers[ch]
+	medium, ok := n.mediums[ch]
 	mu.Unlock()
-	if !ok || !cache.options.EnablePositionSync {
-		// No interlayer for channel or position sync disabled – we then check position over Broker.
+	if !ok || !medium.options.EnablePositionSync {
+		// No medium for channel or position sync disabled – we then check position over Broker.
 		streamTop, err := n.streamTop(ch, historyMetaTTL)
 		if err != nil {
 			// Will be checked later.
@@ -1459,7 +1459,7 @@ func (n *Node) checkPosition(ch string, position StreamPosition, historyMetaTTL 
 		}
 		return streamTop.Epoch == position.Epoch && position.Offset == streamTop.Offset, nil
 	}
-	validPosition := cache.CheckPosition(historyMetaTTL, position, n.config.ClientChannelPositionCheckDelay)
+	validPosition := medium.CheckPosition(historyMetaTTL, position, n.config.ClientChannelPositionCheckDelay)
 	return validPosition, nil
 }
 
@@ -1646,8 +1646,8 @@ func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp S
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
-	if h.node.config.GetChannelLayerOptions != nil {
-		return h.node.handlePublicationCached(ch, pub, sp, delta, prevPub)
+	if h.node.config.GetChannelMediumOptions != nil {
+		return h.node.handlePublicationViaMedium(ch, pub, sp, delta, prevPub)
 	}
 	return h.node.handlePublication(ch, pub, sp, delta, prevPub)
 }

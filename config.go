@@ -115,9 +115,11 @@ type Config struct {
 	// Delta encoding is an EXPERIMENTAL feature and may be changed.
 	AllowedDeltaTypes []DeltaType
 
-	// GetChannelLayerOptions is a way to provide ChannelLayerOptions for channel.
-	// See the doc comment for ChannelLayerOptions.
-	GetChannelLayerOptions func(channel string) (ChannelLayerOptions, bool)
+	// GetChannelMediumOptions is a way to provide ChannelMediumOptions for specific channel.
+	// This function is called each time new channel appears on the Node. If it returns false
+	// then no medium layer will be used for the channel.
+	// See the doc comment for ChannelMediumOptions for more details about channel medium concept.
+	GetChannelMediumOptions func(channel string) (ChannelMediumOptions, bool)
 }
 
 const (

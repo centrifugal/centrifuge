@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Helper function to create a channelLayer with options.
-func setupChannelLayer(t testing.TB, options ChannelLayerOptions, node node) *channelLayer {
+// Helper function to create a channelMedium with options.
+func setupChannelMedium(t testing.TB, options ChannelMediumOptions, node node) *channelMedium {
 	t.Helper()
 	channel := "testChannel"
-	cache, err := newChannelInterlayer(channel, node, options)
+	cache, err := newChannelMedium(channel, node, options)
 	if err != nil {
 		require.NoError(t, err)
 	}
@@ -42,8 +42,8 @@ func (m *mockNode) streamTopLatestPub(ch string, historyMetaTTL time.Duration) (
 	return nil, StreamPosition{}, nil
 }
 
-func TestChannelLayerHandlePublication(t *testing.T) {
-	optionSet := []ChannelLayerOptions{
+func TestChannelMediumHandlePublication(t *testing.T) {
+	optionSet := []ChannelMediumOptions{
 		{
 			EnableQueue:           false,
 			KeepLatestPublication: false,
@@ -68,7 +68,7 @@ func TestChannelLayerHandlePublication(t *testing.T) {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			doneCh := make(chan struct{})
 
-			cache := setupChannelLayer(t, options, &mockNode{
+			cache := setupChannelMedium(t, options, &mockNode{
 				handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error {
 					close(doneCh)
 					return nil
@@ -89,13 +89,13 @@ func TestChannelLayerHandlePublication(t *testing.T) {
 	}
 }
 
-func TestChannelLayerInsufficientState(t *testing.T) {
-	options := ChannelLayerOptions{
+func TestChannelMediumInsufficientState(t *testing.T) {
+	options := ChannelMediumOptions{
 		EnableQueue:           true,
 		KeepLatestPublication: true,
 	}
 	doneCh := make(chan struct{})
-	cache := setupChannelLayer(t, options, &mockNode{
+	medium := setupChannelMedium(t, options, &mockNode{
 		handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error {
 			require.Equal(t, uint64(math.MaxUint64), pub.Offset)
 			require.Equal(t, uint64(math.MaxUint64), sp.Offset)
@@ -105,7 +105,7 @@ func TestChannelLayerInsufficientState(t *testing.T) {
 	})
 
 	// Simulate the behavior when the state is marked as insufficient
-	cache.broadcastInsufficientState(StreamPosition{Offset: 2}, &Publication{})
+	medium.broadcastInsufficientState(StreamPosition{Offset: 2}, &Publication{})
 
 	select {
 	case <-doneCh:
@@ -114,13 +114,13 @@ func TestChannelLayerInsufficientState(t *testing.T) {
 	}
 }
 
-func TestChannelLayerPositionSync(t *testing.T) {
-	options := ChannelLayerOptions{
+func TestChannelMediumPositionSync(t *testing.T) {
+	options := ChannelMediumOptions{
 		EnablePositionSync: true,
 	}
 	doneCh := make(chan struct{})
 	var closeOnce sync.Once
-	layer := setupChannelLayer(t, options, &mockNode{
+	medium := setupChannelMedium(t, options, &mockNode{
 		streamTopLatestPubFunc: func(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
 			closeOnce.Do(func() {
 				close(doneCh)
@@ -128,12 +128,12 @@ func TestChannelLayerPositionSync(t *testing.T) {
 			return nil, StreamPosition{}, nil
 		},
 	})
-	originalGetter := channelLayerTimeNow
-	channelLayerTimeNow = func() time.Time {
+	originalGetter := channelMediumTimeNow
+	channelMediumTimeNow = func() time.Time {
 		return time.Now().Add(time.Hour)
 	}
-	layer.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
-	channelLayerTimeNow = originalGetter
+	medium.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	channelMediumTimeNow = originalGetter
 	select {
 	case <-doneCh:
 	case <-time.After(5 * time.Second):
@@ -141,14 +141,14 @@ func TestChannelLayerPositionSync(t *testing.T) {
 	}
 }
 
-func TestChannelLayerPositionSyncRetry(t *testing.T) {
-	options := ChannelLayerOptions{
+func TestChannelMediumPositionSyncRetry(t *testing.T) {
+	options := ChannelMediumOptions{
 		EnablePositionSync: true,
 	}
 	doneCh := make(chan struct{})
 	var closeOnce sync.Once
 	numCalls := 0
-	layer := setupChannelLayer(t, options, &mockNode{
+	medium := setupChannelMedium(t, options, &mockNode{
 		streamTopLatestPubFunc: func(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
 			if numCalls == 0 {
 				numCalls++
@@ -160,12 +160,12 @@ func TestChannelLayerPositionSyncRetry(t *testing.T) {
 			return nil, StreamPosition{}, nil
 		},
 	})
-	originalGetter := channelLayerTimeNow
-	channelLayerTimeNow = func() time.Time {
+	originalGetter := channelMediumTimeNow
+	channelMediumTimeNow = func() time.Time {
 		return time.Now().Add(time.Hour)
 	}
-	layer.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
-	channelLayerTimeNow = originalGetter
+	medium.CheckPosition(time.Second, StreamPosition{Offset: 1, Epoch: "test"}, time.Second)
+	channelMediumTimeNow = originalGetter
 	select {
 	case <-doneCh:
 	case <-time.After(5 * time.Second):
