@@ -48,7 +48,7 @@ type ChannelLayerOptions struct {
 	EnablePositionSync bool
 }
 
-// Keep global to not allocate per-channel. Must be only changed by tests.
+// Keep global to save 8 byte per-channel. Must be only changed by tests.
 var channelLayerTimeNow = time.Now
 
 // channelLayer is initialized when first subscriber comes into channel, and dropped as soon as last
@@ -61,8 +61,10 @@ type channelLayer struct {
 	mu      sync.RWMutex
 	closeCh chan struct{}
 	// optional queue for publications.
-	messages    *cacheQueue
-	broadcastMu sync.Mutex // When queue is not used need to protect broadcast method from concurrent execution.
+	messages *publicationQueue
+	// We must synchronize broadcast method between general publications and insufficient state notifications.
+	// Only used when queue is disabled.
+	broadcastMu sync.Mutex
 	// latestPublication is an initial publication in channel or publication last sent to connections.
 	latestPublication *Publication
 	// latestStreamPosition is an initial stream position or stream position lastly sent.
@@ -91,7 +93,7 @@ func newChannelInterlayer(
 		positionCheckTime: channelLayerTimeNow().UnixNano(),
 	}
 	if options.EnableQueue {
-		c.messages = newCacheQueue(2)
+		c.messages = newPublicationQueue(2)
 	}
 	if options.BroadcastDelay > 0 && !options.EnableQueue {
 		return nil, fmt.Errorf("broadcast delay can only be used with queue enabled")
@@ -127,7 +129,7 @@ func (c *channelLayer) broadcastPublication(pub *Publication, sp StreamPosition,
 		if c.messages.Size() > queueMaxSize {
 			return
 		}
-		c.messages.Add(queuedItem{Publication: bp})
+		c.messages.Add(queuedPublication{Publication: bp})
 	} else {
 		c.broadcastMu.Lock()
 		defer c.broadcastMu.Unlock()
@@ -143,7 +145,7 @@ func (c *channelLayer) broadcastInsufficientState(currentStreamTop StreamPositio
 	c.mu.Unlock()
 	if c.options.EnableQueue {
 		// TODO: possibly support c.messages.dropQueued() for this path ?
-		c.messages.Add(queuedItem{Publication: bp})
+		c.messages.Add(queuedPublication{Publication: bp})
 	} else {
 		c.broadcastMu.Lock()
 		defer c.broadcastMu.Unlock()
@@ -287,17 +289,17 @@ func (c *channelLayer) close() {
 	close(c.closeCh)
 }
 
-type queuedItem struct {
+type queuedPublication struct {
 	Publication queuedPub
 }
 
-// cacheQueue is an unbounded queue of queuedItem.
+// publicationQueue is an unbounded queue of queuedPublication.
 // The queue is goroutine safe.
 // Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT)
-type cacheQueue struct {
+type publicationQueue struct {
 	mu      sync.RWMutex
 	cond    *sync.Cond
-	nodes   []queuedItem
+	nodes   []queuedPublication
 	head    int
 	tail    int
 	cnt     int
@@ -306,19 +308,19 @@ type cacheQueue struct {
 	initCap int
 }
 
-// newCacheQueue returns a new queuedItem queue with initial capacity.
-func newCacheQueue(initialCapacity int) *cacheQueue {
-	sq := &cacheQueue{
+// newPublicationQueue returns a new queuedPublication queue with initial capacity.
+func newPublicationQueue(initialCapacity int) *publicationQueue {
+	sq := &publicationQueue{
 		initCap: initialCapacity,
-		nodes:   make([]queuedItem, initialCapacity),
+		nodes:   make([]queuedPublication, initialCapacity),
 	}
 	sq.cond = sync.NewCond(&sq.mu)
 	return sq
 }
 
 // Mutex must be held when calling.
-func (q *cacheQueue) resize(n int) {
-	nodes := make([]queuedItem, n)
+func (q *publicationQueue) resize(n int) {
+	nodes := make([]queuedPublication, n)
 	if q.head < q.tail {
 		copy(nodes, q.nodes[q.head:q.tail])
 	} else {
@@ -331,10 +333,10 @@ func (q *cacheQueue) resize(n int) {
 	q.nodes = nodes
 }
 
-// Add an queuedItem to the back of the queue
+// Add an queuedPublication to the back of the queue
 // will return false if the queue is closed.
-// In that case the queuedItem is dropped.
-func (q *cacheQueue) Add(i queuedItem) bool {
+// In that case the queuedPublication is dropped.
+func (q *publicationQueue) Add(i queuedPublication) bool {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
@@ -358,7 +360,7 @@ func (q *cacheQueue) Add(i queuedItem) bool {
 
 // Close the queue and discard all entries in the queue
 // all goroutines in wait() will return
-func (q *cacheQueue) Close() {
+func (q *publicationQueue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.closed = true
@@ -370,13 +372,13 @@ func (q *cacheQueue) Close() {
 
 // CloseRemaining will close the queue and return all entries in the queue.
 // All goroutines in wait() will return.
-func (q *cacheQueue) CloseRemaining() []queuedItem {
+func (q *publicationQueue) CloseRemaining() []queuedPublication {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
-		return []queuedItem{}
+		return []queuedPublication{}
 	}
-	rem := make([]queuedItem, 0, q.cnt)
+	rem := make([]queuedPublication, 0, q.cnt)
 	for q.cnt > 0 {
 		i := q.nodes[q.head]
 		q.head = (q.head + 1) % len(q.nodes)
@@ -394,7 +396,7 @@ func (q *cacheQueue) CloseRemaining() []queuedItem {
 // Closed returns true if the queue has been closed
 // The call cannot guarantee that the queue hasn't been
 // closed while the function returns, so only "true" has a definite meaning.
-func (q *cacheQueue) Closed() bool {
+func (q *publicationQueue) Closed() bool {
 	q.mu.RLock()
 	c := q.closed
 	q.mu.RUnlock()
@@ -405,7 +407,7 @@ func (q *cacheQueue) Closed() bool {
 // If there are items on the queue will return immediately.
 // Will return false if the queue is closed.
 // Otherwise, returns true.
-func (q *cacheQueue) Wait() bool {
+func (q *publicationQueue) Wait() bool {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
@@ -420,14 +422,14 @@ func (q *cacheQueue) Wait() bool {
 	return true
 }
 
-// Remove will remove an queuedItem from the queue.
+// Remove will remove an queuedPublication from the queue.
 // If false is returned, it either means 1) there were no items on the queue
 // or 2) the queue is closed.
-func (q *cacheQueue) Remove() (queuedItem, bool) {
+func (q *publicationQueue) Remove() (queuedPublication, bool) {
 	q.mu.Lock()
 	if q.cnt == 0 {
 		q.mu.Unlock()
-		return queuedItem{}, false
+		return queuedPublication{}, false
 	}
 	i := q.nodes[q.head]
 	q.head = (q.head + 1) % len(q.nodes)
@@ -445,7 +447,7 @@ func (q *cacheQueue) Remove() (queuedItem, bool) {
 }
 
 // Cap returns the capacity (without allocations)
-func (q *cacheQueue) Cap() int {
+func (q *publicationQueue) Cap() int {
 	q.mu.RLock()
 	c := cap(q.nodes)
 	q.mu.RUnlock()
@@ -453,7 +455,7 @@ func (q *cacheQueue) Cap() int {
 }
 
 // Len returns the current length of the queue.
-func (q *cacheQueue) Len() int {
+func (q *publicationQueue) Len() int {
 	q.mu.RLock()
 	l := q.cnt
 	q.mu.RUnlock()
@@ -461,7 +463,7 @@ func (q *cacheQueue) Len() int {
 }
 
 // Size returns the current size of the queue.
-func (q *cacheQueue) Size() int {
+func (q *publicationQueue) Size() int {
 	q.mu.RLock()
 	s := q.size
 	q.mu.RUnlock()
