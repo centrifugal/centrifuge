@@ -664,7 +664,11 @@ func TestClientSubscribeDeltaNotAllowed(t *testing.T) {
 		Channel: "test_channel",
 		Delta:   string(DeltaTypeFossil),
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
-	require.Equal(t, DisconnectBadRequest, err)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(rwWrapper.replies))
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res := extractSubscribeResult(rwWrapper.replies)
+	require.False(t, res.Delta)
 }
 
 func TestClientSubscribeUnknownDelta(t *testing.T) {
