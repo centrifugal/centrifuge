@@ -23,15 +23,15 @@ require (
 	github.com/quic-go/quic-go v0.42.0
 	github.com/stretchr/testify v1.9.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
-	golang.org/x/oauth2 v0.19.0
-	google.golang.org/grpc v1.63.0
-	google.golang.org/protobuf v1.33.0
+	golang.org/x/oauth2 v0.20.0
+	google.golang.org/grpc v1.63.2
+	google.golang.org/protobuf v1.34.0
 	nhooyr.io/websocket v1.8.10
 )
 
 require (
 	cloud.google.com/go/compute v1.24.0 // indirect
-	cloud.google.com/go/compute/metadata v0.2.3 // indirect
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/FZambia/eagle v0.1.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.9.1 // indirect
@@ -68,7 +68,7 @@ require (
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
-	github.com/redis/rueidis v1.0.35 // indirect
+	github.com/redis/rueidis v1.0.36 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.4.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
