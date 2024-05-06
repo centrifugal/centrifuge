@@ -1,6 +1,6 @@
 module github.com/centrifugal/centrifuge
 
-go 1.20
+go 1.21
 
 require (
 	github.com/FZambia/eagle v0.1.0
