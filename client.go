@@ -146,6 +146,7 @@ const (
 // ChannelContext contains extra context for channel connection subscribed to.
 // Note: this struct is aligned to consume less memory.
 type ChannelContext struct {
+	subscribingCh     chan struct{}
 	info              []byte
 	expireAt          int64
 	positionCheckTime int64
@@ -1593,11 +1594,14 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 // Channel kept in a map during subscribe request to check for duplicate subscription attempts.
 func (c *Client) onSubscribeError(channel string) {
 	c.mu.Lock()
-	_, ok := c.channels[channel]
+	chCtx, ok := c.channels[channel]
 	delete(c.channels, channel)
 	c.mu.Unlock()
 	if ok {
 		_ = c.node.removeSubscription(channel, c)
+		if chCtx.subscribingCh != nil {
+			close(chCtx.subscribingCh)
+		}
 	}
 }
 
@@ -2641,8 +2645,12 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 		return ErrorLimitExceeded, nil
 	}
 	// Put channel to a map to track duplicate subscriptions. This channel should
-	// be removed from a map upon an error during subscribe.
-	c.channels[channel] = ChannelContext{}
+	// be removed from a map upon an error during subscribe. Also initialize subscribingCh
+	// which is used to sync unsubscribe requests with inflight subscriptions (useful when
+	// subscribe is performed in a separate goroutine).
+	c.channels[channel] = ChannelContext{
+		subscribingCh: make(chan struct{}),
+	}
 	c.mu.Unlock()
 
 	return nil, nil
@@ -2985,6 +2993,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	if !serverSide {
 		// In case of server-side sub this will be done later by the caller.
 		c.mu.Lock()
+		if chCtx, ok := c.channels[channel]; ok {
+			subscribedCh := chCtx.subscribingCh
+			defer func() { close(subscribedCh) }()
+			channelContext.subscribingCh = subscribedCh
+		}
 		c.channels[channel] = channelContext
 		c.mu.Unlock()
 		// Stop syncing recovery and PUB/SUB.
@@ -3250,12 +3263,31 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	c.mu.RLock()
 	info := c.clientInfo(channel)
 	chCtx, ok := c.channels[channel]
+	subscribingCh := chCtx.subscribingCh
+	isSubscribed := channelHasFlag(chCtx.flags, flagSubscribed)
+	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
 	c.mu.RUnlock()
 	if !ok {
 		return nil
 	}
 
-	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
+	if !serverSide && !isSubscribed && subscribingCh != nil {
+		// If client is not yet subscribed on a client-side channel, and subscribe
+		// command is in progress - we need to wait for it to finish before proceeding.
+		// If client hits subscribe or unsubscribe timeouts – it reconnects, so we never
+		// hang long here.
+		select {
+		case <-subscribingCh:
+			c.mu.RLock()
+			chCtx, ok = c.channels[channel]
+			c.mu.RUnlock()
+			if !ok {
+				return nil
+			}
+		case <-c.Context().Done():
+			return nil
+		}
+	}
 
 	c.mu.Lock()
 	delete(c.channels, channel)

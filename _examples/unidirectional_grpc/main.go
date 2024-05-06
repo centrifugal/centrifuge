@@ -106,7 +106,7 @@ func newGRPCClientService(n *centrifuge.Node, c GRPCClientServiceConfig) *grpcCl
 	}
 }
 
-// Consume is a unidirectional server->client stream wit real-time data.
+// Consume is a unidirectional server->client stream with real-time data.
 func (s *grpcClientService) Consume(req *clientproto.ConnectRequest, stream clientproto.CentrifugeUni_ConsumeServer) error {
 	streamDataCh := make(chan []byte)
 	transport := newGRPCTransport(stream, streamDataCh)
