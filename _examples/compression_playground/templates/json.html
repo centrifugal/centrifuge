@@ -5,7 +5,7 @@
     <title></title>
     <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.X.X/dist/protobuf.js"></script>
     <link rel="stylesheet" href="/static/app.css">
-    <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/centrifuge@5.2.0-beta.1/dist/centrifuge.js"></script>
     <script type="text/javascript">
         window.addEventListener('load', function() {
             const url = new URL(window.location.href);
@@ -15,17 +15,22 @@
             const payload = params.get('payload'); // "json | protobuf"
             const compression = params.get('compression'); // "yes | no"
             const delta = params.get('delta'); // "yes | no"
+            const delay = params.get('delay'); // "yes | no"
 
             protobuf.load("/static/app.proto", function(err, root) {
                 if (err) throw err;
 
-                let wsEndpoint = "ws://localhost:8000/connection/websocket/no_compression";
+                let wsEndpoint = "ws://localhost:8000/connection/websocket/no_compression?v=1";
                 if (compression === "yes") {
-                    wsEndpoint = "ws://localhost:8000/connection/websocket/with_compression";
+                    wsEndpoint = "ws://localhost:8000/connection/websocket/with_compression?v=1";
                 }
 
                 if (payload === "protobuf") {
-                    wsEndpoint += "?payload=protobuf";
+                    wsEndpoint += "&payload=protobuf";
+                }
+
+                if (delay === "yes") {
+                    wsEndpoint += "&delay=yes";
                 }
 
                 const Match = root.lookupType("centrifugal.centrifuge.examples.compression_playground.Match");

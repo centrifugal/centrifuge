@@ -22,6 +22,7 @@ tcp.srcport == 8000 && websocket
 | Protobuf over Protobuf       | Yes         | No        | 13115      | 32.58      |
 | Protobuf over Protobuf       | No          | Yes       | 4382       | 10.89      |
 | Protobuf over Protobuf       | Yes         | Yes       | 4473       | 11.11      |
+| JSON over JSON 200ms         | Yes         | Yes       | 2060       | 5.12       |
 | JSON over Protobuf 200ms     | Yes         | Yes       | 2008       | 4.99       |
 | Protobuf over Protobuf 200ms | Yes         | Yes       | 2315       | 5.75       |
 
