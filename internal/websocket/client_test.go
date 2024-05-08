@@ -10,8 +10,9 @@ import (
 )
 
 var hostPortNoPortTests = []struct {
-	u                    *url.URL
-	hostPort, hostNoPort string
+	u          *url.URL
+	hostPort   string
+	hostNoPort string
 }{
 	{&url.URL{Scheme: "ws", Host: "example.com"}, "example.com:80", "example.com"},
 	{&url.URL{Scheme: "wss", Host: "example.com"}, "example.com:443", "example.com"},

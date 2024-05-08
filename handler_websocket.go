@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/cancelctx"
+	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/timers"
 	"github.com/centrifugal/centrifuge/internal/websocket"
 
+	"github.com/Yiling-J/theine-go"
 	"github.com/centrifugal/protocol"
 )
 
@@ -60,6 +62,15 @@ type WebsocketConfig struct {
 	// WebsocketCompression enabled and compression negotiated with client.
 	CompressionMinSize int
 
+	// PreparedMessageCacheMaxSize when greater than zero enables caching of WebSocket prepared
+	// messages and sets the maximum size of that cache in bytes. When cache is on – Centrifuge
+	// uses prepared WebSocket messages for connections with compression. This generally
+	// introduces overhead but at the same time may drastically reduce compression memory
+	// and CPU spikes during broadcasts. See also BenchmarkWsBroadcastCompressionCache.
+	// This option is EXPERIMENTAL, do not use in production. Contact maintainers if it
+	// works well for your use case, and you want to enable it in production.
+	PreparedMessageCacheMaxSize int64
+
 	PingPongConfig
 }
 
@@ -67,9 +78,10 @@ type WebsocketConfig struct {
 // is a bidirectional connection between a client and a server for low-latency
 // communication.
 type WebsocketHandler struct {
-	node    *Node
-	upgrade *websocket.Upgrader
-	config  WebsocketConfig
+	node          *Node
+	upgrade       *websocket.Upgrader
+	config        WebsocketConfig
+	preparedCache *theine.Cache[string, *websocket.PreparedMessage]
 }
 
 var writeBufferPool = &sync.Pool{}
@@ -91,10 +103,15 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	} else {
 		upgrade.CheckOrigin = sameHostOriginCheck(node)
 	}
+	var cache *theine.Cache[string, *websocket.PreparedMessage]
+	if config.PreparedMessageCacheMaxSize > 0 {
+		cache, _ = theine.NewBuilder[string, *websocket.PreparedMessage](config.PreparedMessageCacheMaxSize).Build()
+	}
 	return &WebsocketHandler{
-		node:    node,
-		config:  config,
-		upgrade: upgrade,
+		node:          node,
+		config:        config,
+		upgrade:       upgrade,
+		preparedCache: cache,
 	}
 }
 
@@ -154,7 +171,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if useFramePingPong {
 		pongWait := framePingInterval * 10 / 9
 		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
-		conn.SetPongHandler(func(string) error {
+		conn.SetPongHandler(func([]byte) error {
 			_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 			return nil
 		})
@@ -167,6 +184,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
 			protoType:          protoType,
+			preparedCache:      s.preparedCache,
 		}
 
 		graceCh := make(chan struct{})
@@ -208,7 +226,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 
 		if useFramePingPong {
-			conn.SetPingHandler(nil)
 			conn.SetPongHandler(nil)
 		}
 
@@ -280,6 +297,7 @@ type websocketTransportOptions struct {
 	pingPong           PingPongConfig
 	writeTimeout       time.Duration
 	compressionMinSize int
+	preparedCache      *theine.Cache[string, *websocket.PreparedMessage]
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}, useNativePingPong bool) *websocketTransport {
@@ -341,8 +359,11 @@ func (t *websocketTransport) PingPongConfig() PingPongConfig {
 }
 
 func (t *websocketTransport) writeData(data []byte) error {
+	usePreparedMessage := t.conn.IsCompressionNegotiated()
 	if t.opts.compressionMinSize > 0 {
-		t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
+		enableCompression := len(data) > t.opts.compressionMinSize
+		usePreparedMessage = enableCompression
+		t.conn.EnableWriteCompression(enableCompression)
 	}
 	var messageType = websocket.TextMessage
 	if t.Protocol() == ProtocolTypeProtobuf {
@@ -351,10 +372,29 @@ func (t *websocketTransport) writeData(data []byte) error {
 	if t.opts.writeTimeout > 0 {
 		_ = t.conn.SetWriteDeadline(time.Now().Add(t.opts.writeTimeout))
 	}
-	err := t.conn.WriteMessage(messageType, data)
-	if err != nil {
-		return err
+
+	if t.opts.preparedCache != nil && usePreparedMessage {
+		key := convert.BytesToString(data)
+		preparedMessage, ok := t.opts.preparedCache.Get(key)
+		if !ok {
+			var err error
+			preparedMessage, err = websocket.NewPreparedMessage(messageType, data)
+			if err != nil {
+				return err
+			}
+			t.opts.preparedCache.SetWithTTL(key, preparedMessage, int64(len(data)), time.Second)
+		}
+		err := t.conn.WritePreparedMessage(preparedMessage)
+		if err != nil {
+			return err
+		}
+	} else {
+		err := t.conn.WriteMessage(messageType, data)
+		if err != nil {
+			return err
+		}
 	}
+
 	if t.opts.writeTimeout > 0 {
 		_ = t.conn.SetWriteDeadline(time.Time{})
 	}

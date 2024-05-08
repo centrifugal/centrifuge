@@ -173,7 +173,7 @@ func TestControl(t *testing.T) {
 					continue
 				}
 				var actualMessage string
-				rc.SetPongHandler(func(s string) error { actualMessage = s; return nil })
+				rc.SetPongHandler(func(s []byte) error { actualMessage = string(s); return nil })
 				_, _, _ = rc.NextReader()
 				if actualMessage != message {
 					t.Errorf("%s: pong=%q, want %q", name, actualMessage, message)
