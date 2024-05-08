@@ -10,8 +10,12 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
+
+	"github.com/centrifugal/centrifuge/internal/convert"
 )
 
 var keyGUID = []byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
@@ -21,6 +25,30 @@ func computeAcceptKey(challengeKey string) string {
 	h.Write([]byte(challengeKey))
 	h.Write(keyGUID)
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+var acceptKeyBufferPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, sha1.Size)
+		return &b
+	},
+}
+
+func encodeAcceptKey(challengeKey string, p []byte) []byte {
+	h := sha1.New()
+	h.Write(convert.StringToBytes(challengeKey))
+	h.Write(keyGUID)
+
+	bufPtr := acceptKeyBufferPool.Get().(*[]byte)
+	defer acceptKeyBufferPool.Put(bufPtr)
+	*bufPtr = (*bufPtr)[:0]
+	sum := h.Sum(*bufPtr)
+
+	// replace with base64.AppendEncode when we can depend on Go 1.22.
+	n := base64.StdEncoding.EncodedLen(len(sum))
+	p = slices.Grow(p, n)
+	base64.StdEncoding.Encode(p[len(p):][:n], sum)
+	return p[:len(p)+n]
 }
 
 func generateChallengeKey() (string, error) {
@@ -289,10 +317,10 @@ func isValidChallengeKey(s string) bool {
 	// A |Sec-WebSocket-Key| header field with a base64-encoded (see
 	// Section 4 of [RFC4648]) value that, when decoded, is 16 bytes in
 	// length.
-
-	if s == "" {
+	if len(s) != 24 { // 16 bytes should always be 24 characters long when base64 encoded.
 		return false
 	}
-	decoded, err := base64.StdEncoding.DecodeString(s)
-	return err == nil && len(decoded) == 16
+	buf := make([]byte, 16) // Pre-allocated buffer for 16 bytes.
+	n, err := base64.StdEncoding.Decode(buf, []byte(s))
+	return err == nil && n == 16
 }

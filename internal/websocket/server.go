@@ -161,7 +161,7 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 
 	subprotocol := u.selectSubprotocol(r, responseHeader)
 
-	// Negotiate PMCE
+	// Negotiate PMCE.
 	var compress bool
 	if u.EnableCompression {
 		for _, ext := range parseExtensions(r.Header) {
@@ -217,7 +217,9 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	p = p[:0]
 
 	p = append(p, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "...)
-	p = append(p, computeAcceptKey(challengeKey)...)
+	p = encodeAcceptKey(challengeKey, p)
+
+	//p = append(p, computeAcceptKey(challengeKey)...)
 	p = append(p, "\r\n"...)
 	if subprotocol != "" {
 		p = append(p, "Sec-WebSocket-Protocol: "...)
