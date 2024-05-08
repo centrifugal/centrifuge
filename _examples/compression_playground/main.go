@@ -35,10 +35,10 @@ func simulateMatch(ctx context.Context, num int32, node *centrifuge.Node, usePro
 	}
 
 	totalSimulationTime := 1                                             // Total time for the simulation in seconds
-	totalEvents := 20                                                    // Total number of events to simulate
+	totalEvents := 30                                                    // Total number of events to simulate
 	eventInterval := float64(totalSimulationTime) / float64(totalEvents) // Time between events
 
-	r := rand.New(rand.NewSource(27))
+	r := rand.New(rand.NewSource(37))
 
 	for i := 0; i < totalEvents; i++ {
 		// Sleep between events
@@ -73,7 +73,6 @@ func simulateMatch(ctx context.Context, num int32, node *centrifuge.Node, usePro
 		}
 		if err != nil {
 			log.Fatal(err)
-
 		}
 		ch := "match:js:1"
 		if useProtobufPayload {
