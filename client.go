@@ -3108,6 +3108,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	}
 	deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
 	if !channelHasFlag(channelContext.flags, flagPositioning) {
+		// Publication with Offset, but client does not use positioning.
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			c.mu.Unlock()
 			return nil
@@ -3135,18 +3136,9 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
 	pubEpoch := sp.Epoch
-	if pubEpoch != channelContext.streamPosition.Epoch {
+	if pubEpoch != channelContext.streamPosition.Epoch || pubOffset != nextExpectedOffset {
 		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
-		}
-		// Oops: sth lost, let client reconnect/resubscribe to recover its state.
-		go func() { c.handleInsufficientState(ch, serverSide) }()
-		c.mu.Unlock()
-		return nil
-	}
-	if pubOffset != nextExpectedOffset {
-		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
+			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
 		}
 		// Oops: sth lost, let client reconnect/resubscribe to recover its state.
 		go func() { c.handleInsufficientState(ch, serverSide) }()

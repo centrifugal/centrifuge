@@ -1031,7 +1031,7 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 			}
 			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, delta, pubFromProto(&prevPub))
 		} else {
-			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, false, nil)
+			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, delta, nil)
 		}
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo

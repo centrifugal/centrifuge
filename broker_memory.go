@@ -107,19 +107,9 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 	}
 	var prevPub *Publication
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {
-		if opts.UseDelta {
-			pubs, _, err := b.historyHub.get(ch, HistoryOptions{Filter: HistoryFilter{
-				Limit:   1,
-				Reverse: true,
-			}, MetaTTL: opts.HistoryMetaTTL})
-			if err != nil {
-				return StreamPosition{}, false, fmt.Errorf("error getting previous publication from stream: %w", err)
-			}
-			if len(pubs) > 0 {
-				prevPub = pubs[0]
-			}
-		}
-		streamTop, err := b.historyHub.add(ch, pub, opts)
+		var err error
+		var streamTop StreamPosition
+		streamTop, prevPub, err = b.historyHub.add(ch, pub, opts)
 		if err != nil {
 			return StreamPosition{}, false, err
 		}
@@ -253,6 +243,10 @@ func newHistoryHub(historyMetaTTL time.Duration, closeCh chan struct{}) *history
 	}
 }
 
+func (h *historyHub) close() {
+	close(h.closeCh)
+}
+
 func (h *historyHub) runCleanups() {
 	go h.expireStreams()
 	go h.removeStreams()
@@ -338,9 +332,23 @@ func (h *historyHub) expireStreams() {
 	}
 }
 
-func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (StreamPosition, error) {
+func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (StreamPosition, *Publication, error) {
 	h.Lock()
 	defer h.Unlock()
+
+	var prevPub *Publication // May be nil is there were no previous publications.
+	if opts.UseDelta {
+		pubs, _, err := h.getLocked(ch, HistoryOptions{Filter: HistoryFilter{
+			Limit:   1,
+			Reverse: true,
+		}, MetaTTL: opts.HistoryMetaTTL})
+		if err != nil {
+			return StreamPosition{}, nil, fmt.Errorf("error getting previous publication from stream: %w", err)
+		}
+		if len(pubs) > 0 {
+			prevPub = pubs[0]
+		}
+	}
 
 	var offset uint64
 	var epoch string
@@ -381,7 +389,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 	}
 	pub.Offset = offset
 
-	return StreamPosition{Offset: offset, Epoch: epoch}, nil
+	return StreamPosition{Offset: offset, Epoch: epoch}, prevPub, nil
 }
 
 // Lock must be held outside.
@@ -404,7 +412,11 @@ func getPosition(stream *memstream.Stream) StreamPosition {
 func (h *historyHub) get(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	h.Lock()
 	defer h.Unlock()
+	return h.getLocked(ch, opts)
+}
 
+// Lock must be held outside.
+func (h *historyHub) getLocked(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
 	filter := opts.Filter
 
 	historyMetaTTL := opts.MetaTTL

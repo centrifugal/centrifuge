@@ -5,6 +5,7 @@ package centrifuge
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"math/rand"
 	"net"
 	"os"
@@ -1023,6 +1024,100 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout waiting for PUB/SUB leave message")
 	}
+}
+
+type testDeltaPublishHandle struct {
+	ch      string
+	pub     *Publication
+	sp      StreamPosition
+	delta   bool
+	prevPub *Publication
+}
+
+func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
+	redisConf := testRedisConf()
+
+	prefix := getUniquePrefix()
+
+	ch := "test" + uuid.NewString()
+
+	node1, _ := New(Config{})
+	s, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+	b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix:               prefix,
+		Shards:               []*RedisShard{s},
+		numPubSubSubscribers: 4,
+		numPubSubProcessors:  2,
+	})
+	node1.SetBroker(b1)
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b1)
+
+	msgNum := 2
+	var numPublications int64
+	pubCh := make(chan struct{})
+	var resultsMu sync.Mutex
+	results := make([]testDeltaPublishHandle, 0, msgNum)
+
+	brokerEventHandler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error {
+			return nil
+		},
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			resultsMu.Lock()
+			defer resultsMu.Unlock()
+			results = append(results, testDeltaPublishHandle{
+				ch:      ch,
+				pub:     pub,
+				sp:      sp,
+				delta:   delta,
+				prevPub: prevPub,
+			})
+			c := atomic.AddInt64(&numPublications, 1)
+			if c == int64(msgNum) {
+				close(pubCh)
+			}
+			return nil
+		},
+	}
+	_ = b1.Run(brokerEventHandler)
+
+	require.NoError(t, b1.Subscribe(ch))
+
+	node2, _ := New(Config{})
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+
+	b2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s2},
+	})
+	node2.SetBroker(b2)
+	_ = node2.Run()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b2)
+
+	for i := 0; i < msgNum; i++ {
+		sp, err := node2.Publish(ch, []byte("123"),
+			WithHistory(1, time.Minute), WithDelta(true))
+		require.NoError(t, err)
+		require.Equal(t, sp.Offset, uint64(i+1))
+	}
+
+	select {
+	case <-pubCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB message")
+	}
+
+	resultsMu.Lock()
+	defer resultsMu.Unlock()
+	require.Len(t, results, msgNum)
+	require.True(t, results[0].delta)
+	require.True(t, results[1].delta)
+	require.Nil(t, results[0].prevPub)
+	require.NotNil(t, results[1].prevPub)
 }
 
 func TestRedisClusterShardedPubSub(t *testing.T) {
