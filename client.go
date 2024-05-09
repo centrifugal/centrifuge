@@ -3137,6 +3137,10 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	pubOffset := pub.Offset
 	pubEpoch := sp.Epoch
 	if pubEpoch != channelContext.streamPosition.Epoch || pubOffset != nextExpectedOffset {
+		// We can introduce an option to mark connection with insufficient state flag instead
+		// of disconnecting it immediately. In that case connection will eventually reconnect
+		// due to periodic sync. While connection channel is in the insufficient state we must
+		// skip publications coming to it. This mode may be useful to spread the resubscribe load.
 		if c.node.logger.enabled(LogLevelDebug) {
 			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
 		}

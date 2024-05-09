@@ -1416,36 +1416,7 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 	return historyResult.StreamPosition, nil
 }
 
-//func (c *Client) isValidPosition(streamTop StreamPosition, nowUnix int64, ch string) bool {
-//	c.mu.Lock()
-//	if c.status == statusClosed {
-//		c.mu.Unlock()
-//		return true
-//	}
-//	chCtx, ok := c.channels[ch]
-//	if !ok || !channelHasFlag(chCtx.flags, flagSubscribed) {
-//		c.mu.Unlock()
-//		return true
-//	}
-//	position := chCtx.streamPosition
-//	c.mu.Unlock()
-//
-//	isValidPosition := streamTop.Epoch == position.Epoch && position.Offset >= streamTop.Offset
-//	if isValidPosition {
-//		c.mu.Lock()
-//		if chContext, ok := c.channels[ch]; ok {
-//			chContext.positionCheckTime = nowUnix
-//			c.channels[ch] = chContext
-//		}
-//		c.mu.Unlock()
-//		return true
-//	}
-//
-//	return false
-//}
-
-func (n *Node) checkPosition(ch string, position StreamPosition, historyMetaTTL time.Duration) (bool, error) {
-	n.metrics.incActionCount("add_subscription")
+func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration) (bool, error) {
 	mu := n.subLock(ch)
 	mu.Lock()
 	medium, ok := n.mediums[ch]
@@ -1457,9 +1428,9 @@ func (n *Node) checkPosition(ch string, position StreamPosition, historyMetaTTL 
 			// Will be checked later.
 			return false, err
 		}
-		return streamTop.Epoch == position.Epoch && position.Offset == streamTop.Offset, nil
+		return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
 	}
-	validPosition := medium.CheckPosition(historyMetaTTL, position, n.config.ClientChannelPositionCheckDelay)
+	validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
 	return validPosition, nil
 }
 

@@ -32,6 +32,8 @@ type TestBroker struct {
 	publishJoinCount    int32
 	publishLeaveCount   int32
 	publishControlCount int32
+
+	historyFunc func(_ string, _ HistoryOptions) ([]*Publication, StreamPosition, error)
 }
 
 func NewTestBroker() *TestBroker {
@@ -91,7 +93,10 @@ func (e *TestBroker) Unsubscribe(_ string) error {
 	return nil
 }
 
-func (e *TestBroker) History(_ string, _ HistoryOptions) ([]*Publication, StreamPosition, error) {
+func (e *TestBroker) History(ch string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+	if e.historyFunc != nil {
+		return e.historyFunc(ch, opts)
+	}
 	if e.errorOnHistory {
 		return nil, StreamPosition{}, errors.New("boom")
 	}
@@ -1343,4 +1348,38 @@ func TestNode_OnCommandRead(t *testing.T) {
 	case <-time.After(time.Second):
 		require.Fail(t, "timeout subscribe")
 	}
+}
+
+func TestNodeCheckPosition(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	broker := NewTestBroker()
+	broker.historyFunc = func(channel string, opts HistoryOptions) ([]*Publication, StreamPosition, error) {
+		return nil, StreamPosition{
+			Offset: 20, Epoch: "test",
+		}, nil
+	}
+	node.SetBroker(broker)
+
+	isValid, err := node.checkPosition("test", StreamPosition{
+		Offset: 20,
+		Epoch:  "test",
+	}, 200*time.Second)
+	require.NoError(t, err)
+	require.True(t, isValid)
+
+	isValid, err = node.checkPosition("test", StreamPosition{
+		Offset: 19,
+		Epoch:  "test",
+	}, 200*time.Second)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	isValid, err = node.checkPosition("test", StreamPosition{
+		Offset: 20,
+		Epoch:  "test_new",
+	}, 200*time.Second)
+	require.NoError(t, err)
+	require.False(t, isValid)
 }

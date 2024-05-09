@@ -5,7 +5,6 @@ package centrifuge
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"math/rand"
 	"net"
 	"os"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 

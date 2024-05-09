@@ -268,22 +268,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//go func() {
-	//	var num int32
-	//	for {
-	//		num++
-	//		simulateMatch(context.Background(), num, node, false)
-	//	}
-	//}()
-	//
-	//go func() {
-	//	var num int32
-	//	for {
-	//		num++
-	//		simulateMatch(context.Background(), num, node, true)
-	//	}
-	//}()
-
 	// Now configure HTTP routes.
 
 	http.Handle("/connection/websocket/no_compression", auth(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
