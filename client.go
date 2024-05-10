@@ -2323,6 +2323,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	if c.transport.Emulation() {
 		res.Node = c.node.ID()
 	}
+	if c.node.config.ClientConnectIncludeServerTime {
+		res.Time = time.Now().UnixMilli()
+	}
 
 	// Client successfully connected.
 	c.mu.Lock()

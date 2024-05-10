@@ -269,6 +269,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 func TestClientConnectContextCredentials(t *testing.T) {
 	node := defaultTestNode()
 	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.config.ClientConnectIncludeServerTime = true
 
 	transport := newTestTransport(func() {})
 	ctx := context.Background()
@@ -284,6 +285,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	result := extractConnectReply(rwWrapper.replies)
 	require.Equal(t, false, result.Expires)
 	require.Equal(t, uint32(0), result.Ttl)
+	require.NotZero(t, result.TimeMs)
 	require.True(t, client.authenticated)
 	require.Equal(t, "42", client.UserID())
 }
