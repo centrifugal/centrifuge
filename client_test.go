@@ -285,7 +285,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	result := extractConnectReply(rwWrapper.replies)
 	require.Equal(t, false, result.Expires)
 	require.Equal(t, uint32(0), result.Ttl)
-	require.NotZero(t, result.TimeMs)
+	require.NotZero(t, result.Time)
 	require.True(t, client.authenticated)
 	require.Equal(t, "42", client.UserID())
 }
