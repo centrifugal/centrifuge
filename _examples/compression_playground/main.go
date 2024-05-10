@@ -140,13 +140,6 @@ func main() {
 			log.Println(entry.Message, entry.Fields)
 		},
 		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
-		//GetChannelLayerOptions: func(channel string) (centrifuge.ChannelMediumOptions, bool) {
-		//	return centrifuge.ChannelMediumOptions{
-		//		//KeepLatestPublication: true,
-		//		//EnableQueue:           true,
-		//		//BroadcastDelay:        500 * time.Millisecond,
-		//	}, true
-		//},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -202,29 +195,10 @@ func main() {
 			useProtobufPayload = true
 		}
 
-		//go func() {
-		//	time.Sleep(500 * time.Millisecond)
-		//	client.Disconnect(centrifuge.DisconnectForceReconnect)
-		//}()
-
 		go func() {
 			log.Printf("using protobuf payload: %v", useProtobufPayload)
 			simulateMatch(client.Context(), 0, node, useProtobufPayload)
 		}()
-
-		//client.OnCacheEmpty(func(event centrifuge.CacheEmptyEvent) centrifuge.CacheEmptyReply {
-		//	simulateMatch(context.Background(), 0, node)
-		//	//go func() {
-		//	//	num := 0
-		//	//	for {
-		//	//
-		//	//		num++
-		//	//		time.Sleep(5 * time.Second)
-		//	//	}
-		//	//}()
-		//	fmt.Println("simulated")
-		//	return centrifuge.CacheEmptyReply{Populated: true}
-		//})
 
 		// Set SubscribeHandler to react on every channel subscription attempt
 		// initiated by a client. Here you can theoretically return an error or

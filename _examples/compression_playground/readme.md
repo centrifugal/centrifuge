@@ -1,6 +1,10 @@
 This is a sample simulation of football match where the entire state is sent into WebSocket connection upon every
 match event.
 
+The goal is to compare different compression strategies for WebSocket data transfer. Please note, that results
+depend a lot on the data you send. You may get absolutely different results for your data. Still we hope this
+example gives some insights on how to choose the best compression strategy and what to expect from Centrifuge.
+
 Results with different configurations for total data sent over the interface from server to client,
 caught with WireShark filter:
 
