@@ -18,19 +18,19 @@ import (
 // can provide significant benefits in terms of overall system efficiency and flexibility.
 type ChannelMediumOptions struct {
 	// EnableQueue for incoming publications. This can be useful to reduce PUB/SUB message processing time
-	// (as we put it into a single cache layer queue instead of each individual connection queue), reduce
+	// (as we put it into a single medium layer queue instead of each individual connection queue), reduce
 	// channel broadcast contention (when one channel waits for broadcast of another channel to finish),
 	// and also opens a road to broadcast tweaks – such as BroadcastDelay and delta between several
 	// publications (deltas require both BroadcastDelay and KeepLatestPublication to be enabled).
 	EnableQueue bool
-	// QueueMaxSize is a maximum size of the queue used in channel cache (in bytes). If zero, 16MB default
+	// QueueMaxSize is a maximum size of the queue used in channel medium (in bytes). If zero, 16MB default
 	// is used. If max size reached, new publications will be dropped.
 	QueueMaxSize int
 
 	// BroadcastDelay controls the delay before Publication broadcast. On time tick Centrifugo broadcasts
 	// only the latest publication in the channel if any. Useful to reduce/smooth the number of messages sent
 	// to clients when publication contains the entire state. If zero, all publications will be sent to clients
-	// without delay logic involved on channel cache level. BroadcastDelay option requires (!) EnableQueue to be
+	// without delay logic involved on channel medium level. BroadcastDelay option requires (!) EnableQueue to be
 	// enabled, as we can not afford delays during broadcast from the PUB/SUB layer. BroadcastDelay must not be
 	// used in channels with positioning/recovery on.
 	BroadcastDelay time.Duration
@@ -40,11 +40,11 @@ type ChannelMediumOptions struct {
 	// Probably it may be used for fast recovery also, but need to consider edge cases for races.
 	KeepLatestPublication bool
 
-	// EnablePositionSync when true delegates connection position checks to the channel cache. In that case
+	// EnablePositionSync when true delegates connection position checks to the channel medium. In that case
 	// check is only performed no more often than once in Config.ClientChannelPositionCheckDelay thus reducing
 	// the load on broker in cases when channel has many subscribers. When message loss is detected medium layer
 	// tells caller about this and also marks all channel subscribers with insufficient state flag. By default,
-	// cache is not used for sync – in that case each individual connection syncs position independently.
+	// medium is not used for sync – in that case each individual connection syncs position independently.
 	EnablePositionSync bool
 }
 
