@@ -572,10 +572,9 @@ type dataValue struct {
 	delta     bool
 }
 
-// broadcastPublication sends message to all clients subscribed on channel.
+// broadcastPublication sends message to all clients subscribed on a channel.
 func (h *subShard) broadcastPublication(channel string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	fullPub := pubToProto(pub)
-
 	dataByKey := make(map[broadcastKey]dataValue)
 
 	h.mu.RLock()
@@ -683,36 +682,38 @@ func (h *subShard) broadcastPublication(channel string, pub *Publication, sp Str
 				}
 			}
 
-			if key.ProtocolType == protocol.TypeJSON {
-				if sub.client.transport.Unidirectional() {
-					push := &protocol.Push{Channel: channel, Pub: deltaPub}
-					var err error
-					deltaData, err = protocol.DefaultJsonPushEncoder.Encode(push)
-					if err != nil {
-						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+			if key.DeltaType != deltaTypeNone {
+				if key.ProtocolType == protocol.TypeJSON {
+					if sub.client.transport.Unidirectional() {
+						push := &protocol.Push{Channel: channel, Pub: deltaPub}
+						var err error
+						deltaData, err = protocol.DefaultJsonPushEncoder.Encode(push)
+						if err != nil {
+							jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+						}
+					} else {
+						push := &protocol.Push{Channel: channel, Pub: deltaPub}
+						var err error
+						deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+						if err != nil {
+							jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+						}
 					}
-				} else {
-					push := &protocol.Push{Channel: channel, Pub: deltaPub}
-					var err error
-					deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
-					if err != nil {
-						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-					}
-				}
-			} else if key.ProtocolType == protocol.TypeProtobuf {
-				if sub.client.transport.Unidirectional() {
-					push := &protocol.Push{Channel: channel, Pub: deltaPub}
-					var err error
-					deltaData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
-					if err != nil {
-						return err
-					}
-				} else {
-					push := &protocol.Push{Channel: channel, Pub: deltaPub}
-					var err error
-					deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
-					if err != nil {
-						return err
+				} else if key.ProtocolType == protocol.TypeProtobuf {
+					if sub.client.transport.Unidirectional() {
+						push := &protocol.Push{Channel: channel, Pub: deltaPub}
+						var err error
+						deltaData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+						if err != nil {
+							return err
+						}
+					} else {
+						push := &protocol.Push{Channel: channel, Pub: deltaPub}
+						var err error
+						deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+						if err != nil {
+							return err
+						}
 					}
 				}
 			}
