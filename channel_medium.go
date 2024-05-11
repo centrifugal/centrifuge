@@ -152,7 +152,7 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 	}
 
 	prevPub := qp.prevPub
-	if c.options.KeepLatestPublication && c.latestPublication != nil {
+	if c.options.KeepLatestPublication {
 		prevPub = c.latestPublication
 	}
 	if c.options.BroadcastDelay > 0 && !c.options.KeepLatestPublication {
