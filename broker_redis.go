@@ -710,10 +710,6 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		script = b.addHistoryStreamScript
 	}
 
-	if opts.UseDelta && b.config.UseLists {
-		return StreamPosition{}, false, errors.New("delta is not supported when using Redis lists for history")
-	}
-
 	var useDelta string
 	if opts.UseDelta {
 		useDelta = "1"
@@ -1029,9 +1025,9 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 			if err != nil {
 				return err
 			}
-			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, delta, pubFromProto(&prevPub))
+			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, pubFromProto(&prevPub))
 		} else {
-			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, delta, nil)
+			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, nil)
 		}
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo

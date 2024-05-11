@@ -507,8 +507,9 @@ func deltaTestNode() *Node {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableRecovery: true,
-					RecoveryMode:   RecoveryModeCache,
+					EnableRecovery:    true,
+					RecoveryMode:      RecoveryModeCache,
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
 				},
 			}, nil)
 		})
@@ -557,7 +558,6 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 			n.config.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
-			n.config.AllowedDeltaTypes = []DeltaType{DeltaTypeFossil}
 			defer func() { _ = n.Shutdown(context.Background()) }()
 
 			ctx, cancelFn := context.WithCancel(context.Background())
@@ -573,20 +573,20 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 			require.NoError(t, err)
 
 			// Broadcast to non-existing channel.
-			err = n.hub.broadcastPublicationDelta(
+			err = n.hub.broadcastPublication(
 				"non_existing_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
-				nil,
 				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+				nil,
 			)
 			require.NoError(t, err)
 
 			// Broadcast to existing channel.
-			err = n.hub.broadcastPublicationDelta(
+			err = n.hub.broadcastPublication(
 				"test_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
-				nil,
 				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+				nil,
 			)
 			require.NoError(t, err)
 
@@ -603,11 +603,11 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 			}
 
 			// Broadcast same data to existing channel.
-			err = n.hub.broadcastPublicationDelta(
+			err = n.hub.broadcastPublication(
 				"test_channel",
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 2},
-				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
 				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
 			)
 			require.NoError(t, err)
 

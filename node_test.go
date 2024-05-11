@@ -1175,7 +1175,7 @@ func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	handler := &brokerEventHandler{node: node}
 	require.Panics(t, func() {
-		_ = handler.HandlePublication("test", nil, StreamPosition{}, false, nil)
+		_ = handler.HandlePublication("test", nil, StreamPosition{}, nil)
 	})
 	require.Panics(t, func() {
 		_ = handler.HandleJoin("test", nil)

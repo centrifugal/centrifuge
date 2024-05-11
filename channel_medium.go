@@ -20,7 +20,7 @@ type ChannelMediumOptions struct {
 	// EnableQueue for incoming publications. This can be useful to reduce PUB/SUB message processing time
 	// (as we put it into a single medium layer queue instead of each individual connection queue), reduce
 	// channel broadcast contention (when one channel waits for broadcast of another channel to finish),
-	// and also opens a road to broadcast tweaks – such as BroadcastDelay and delta between several
+	// and also opens a road for broadcast tweaks – such as BroadcastDelay and delta between several
 	// publications (deltas require both BroadcastDelay and KeepLatestPublication to be enabled).
 	EnableQueue bool
 	// QueueMaxSize is a maximum size of the queue used in channel medium (in bytes). If zero, 16MB default
@@ -35,9 +35,9 @@ type ChannelMediumOptions struct {
 	// used in channels with positioning/recovery on.
 	BroadcastDelay time.Duration
 
-	// KeepLatestPublication enables keeping latest publication in channel medium layer. This is required
-	// for supporting deltas when BroadcastDelay > 0.
-	// Probably it may be used for fast recovery also, but need to consider edge cases for races.
+	// KeepLatestPublication enables keeping latest publication which was broadcasted to channel subscribers on
+	// this Node in channel medium layer in the case when channel history is not used. This is helpful for supporting
+	// deltas in at most once scenario.
 	KeepLatestPublication bool
 
 	// EnablePositionSync when true delegates connection position checks to the channel medium. In that case
@@ -65,26 +65,18 @@ type channelMedium struct {
 	// We must synchronize broadcast method between general publications and insufficient state notifications.
 	// Only used when queue is disabled.
 	broadcastMu sync.Mutex
-	// latestPublication is an initial publication in channel or publication last sent to connections.
+	// latestPublication is a publication last sent to connections on this Node.
 	latestPublication *Publication
-	// latestStreamPosition is an initial stream position or stream position lastly sent.
-	latestStreamPosition StreamPosition
-	// latestQueuedStreamPosition is a stream position of the latest queued publication.
-	latestQueuedStreamPosition StreamPosition
 	// positionCheckTime is a time (Unix Nanoseconds) when last position check was performed.
 	positionCheckTime int64
 }
 
 type node interface {
-	handlePublication(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error
-	streamTopLatestPub(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error)
+	handlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error
+	streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
 }
 
-func newChannelMedium(
-	channel string,
-	node node,
-	options ChannelMediumOptions,
-) (*channelMedium, error) {
+func newChannelMedium(channel string, node node, options ChannelMediumOptions) (*channelMedium, error) {
 	c := &channelMedium{
 		channel:           channel,
 		node:              node,
@@ -107,17 +99,15 @@ func newChannelMedium(
 type queuedPub struct {
 	pub                 *Publication
 	sp                  StreamPosition
-	delta               bool
 	prevPub             *Publication
 	isInsufficientState bool
 }
 
 const defaultChannelLayerQueueMaxSize = 16 * 1024 * 1024
 
-func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) {
-	bp := queuedPub{pub: pub, sp: sp, delta: delta, prevPub: prevPub}
+func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition, prevPub *Publication) {
+	bp := queuedPub{pub: pub, sp: sp, prevPub: prevPub}
 	c.mu.Lock()
-	c.latestQueuedStreamPosition = sp
 	c.positionCheckTime = channelMediumTimeNow().UnixNano()
 	c.mu.Unlock()
 
@@ -137,10 +127,9 @@ func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition
 	}
 }
 
-func (c *channelMedium) broadcastInsufficientState(currentStreamTop StreamPosition, latestPublication *Publication) {
-	bp := queuedPub{pub: latestPublication, sp: currentStreamTop, delta: false, isInsufficientState: true, prevPub: nil}
+func (c *channelMedium) broadcastInsufficientState() {
+	bp := queuedPub{prevPub: nil, isInsufficientState: true}
 	c.mu.Lock()
-	c.latestQueuedStreamPosition = currentStreamTop
 	c.positionCheckTime = channelMediumTimeNow().UnixNano()
 	c.mu.Unlock()
 	if c.options.EnableQueue {
@@ -157,32 +146,23 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 	pubToBroadcast := qp.pub
 	spToBroadcast := qp.sp
 	if qp.isInsufficientState {
-		pubToBroadcast = &Publication{
-			Offset: math.MaxUint64,
-		}
+		// using math.MaxUint64 as a special offset to trigger insufficient state.
+		pubToBroadcast = &Publication{Offset: math.MaxUint64}
 		spToBroadcast.Offset = math.MaxUint64
 	}
 
 	prevPub := qp.prevPub
-	if qp.delta && c.options.KeepLatestPublication {
+	if c.options.KeepLatestPublication && c.latestPublication != nil {
 		prevPub = c.latestPublication
 	}
-	delta := qp.delta
 	if c.options.BroadcastDelay > 0 && !c.options.KeepLatestPublication {
-		delta = false
-	}
-	if qp.isInsufficientState {
-		delta = false
 		prevPub = nil
 	}
-	_ = c.node.handlePublication(
-		c.channel, pubToBroadcast, spToBroadcast, delta, prevPub)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if qp.sp.Offset > c.latestStreamPosition.Offset {
-		c.latestStreamPosition = qp.sp
+	if qp.isInsufficientState {
+		prevPub = nil
 	}
-	if c.options.KeepLatestPublication {
+	_ = c.node.handlePublication(c.channel, pubToBroadcast, spToBroadcast, prevPub)
+	if c.options.KeepLatestPublication && !qp.isInsufficientState {
 		c.latestPublication = qp.pub
 	}
 }
@@ -251,38 +231,34 @@ func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPositi
 	if !needCheckPosition {
 		return true
 	}
-	latestPublication, streamTop, validPosition, err := c.checkPositionWithRetry(historyMetaTTL, clientPosition)
+	_, validPosition, err := c.checkPositionWithRetry(historyMetaTTL, clientPosition)
 	if err != nil {
 		// Will be checked later.
 		return true
 	}
 	if !validPosition {
-		c.broadcastInsufficientState(streamTop, latestPublication)
+		c.broadcastInsufficientState()
 	}
 	return validPosition
 }
 
-func (c *channelMedium) checkPositionWithRetry(historyMetaTTL time.Duration, clientPosition StreamPosition) (*Publication, StreamPosition, bool, error) {
-	latestPub, sp, validPosition, err := c.checkPositionOnce(historyMetaTTL, clientPosition)
+func (c *channelMedium) checkPositionWithRetry(historyMetaTTL time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
+	sp, validPosition, err := c.checkPositionOnce(historyMetaTTL, clientPosition)
 	if err != nil || !validPosition {
 		return c.checkPositionOnce(historyMetaTTL, clientPosition)
 	}
-	return latestPub, sp, validPosition, err
+	return sp, validPosition, err
 }
 
-func (c *channelMedium) checkPositionOnce(historyMetaTTL time.Duration, clientPosition StreamPosition) (*Publication, StreamPosition, bool, error) {
-	latestPublication, streamTop, err := c.node.streamTopLatestPub(c.channel, historyMetaTTL)
+func (c *channelMedium) checkPositionOnce(historyMetaTTL time.Duration, clientPosition StreamPosition) (StreamPosition, bool, error) {
+	streamTop, err := c.node.streamTop(c.channel, historyMetaTTL)
 	if err != nil {
-		return nil, StreamPosition{}, false, err
+		return StreamPosition{}, false, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	position := c.latestQueuedStreamPosition
-	if position.Offset == 0 {
-		position = clientPosition
-	}
-	isValidPosition := streamTop.Epoch == position.Epoch && position.Offset == streamTop.Offset
-	return latestPublication, streamTop, isValidPosition, nil
+	isValidPosition := streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset
+	return streamTop, isValidPosition, nil
 }
 
 func (c *channelMedium) close() {

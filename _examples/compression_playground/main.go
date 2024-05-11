@@ -139,7 +139,13 @@ func main() {
 		LogHandler: func(entry centrifuge.LogEntry) {
 			log.Println(entry.Message, entry.Fields)
 		},
-		AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
+		//GetChannelMediumOptions: func(channel string) (centrifuge.ChannelMediumOptions, bool) {
+		//	return centrifuge.ChannelMediumOptions{
+		//		KeepLatestPublication: true,
+		//		EnableQueue:           true,
+		//		BroadcastDelay:        500 * time.Millisecond,
+		//	}, true
+		//},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -211,8 +217,9 @@ func main() {
 			log.Printf("client subscribes on channel %s", e.Channel)
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
-					EnableRecovery: true,
-					RecoveryMode:   centrifuge.RecoveryModeCache,
+					EnableRecovery:    true,
+					RecoveryMode:      centrifuge.RecoveryModeCache,
+					AllowedDeltaTypes: []centrifuge.DeltaType{centrifuge.DeltaTypeFossil},
 				},
 			}, nil)
 		})

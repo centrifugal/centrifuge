@@ -683,36 +683,17 @@ func (n *Node) handleControl(data []byte) error {
 	return nil
 }
 
-func (n *Node) handlePublicationViaMedium(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
-	mu := n.subLock(ch)
-	mu.Lock()
-	medium, ok := n.mediums[ch]
-	mu.Unlock()
-	if ok {
-		medium.broadcastPublication(pub, sp, delta, prevPub)
-		return nil
-	}
-	return n.handlePublication(ch, pub, sp, delta, prevPub)
-}
-
 // handlePublication handles messages published into channel and
 // coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	n.metrics.incMessagesReceived("publication")
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	if delta {
-		err := n.hub.broadcastPublicationDelta(ch, pub, prevPub, sp)
-		if err != nil {
-			n.Log(newLogEntry(LogLevelError, "error broadcast delta", map[string]any{"error": err.Error()}))
-		}
-		return err
-	}
-	return n.hub.BroadcastPublication(ch, pub, sp)
+	return n.hub.broadcastPublication(ch, pub, sp, prevPub)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -1613,14 +1594,21 @@ type brokerEventHandler struct {
 }
 
 // HandlePublication coming from Broker.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
 	if h.node.config.GetChannelMediumOptions != nil {
-		return h.node.handlePublicationViaMedium(ch, pub, sp, delta, prevPub)
+		mu := h.node.subLock(ch)
+		mu.Lock()
+		medium, ok := h.node.mediums[ch]
+		mu.Unlock()
+		if ok {
+			medium.broadcastPublication(pub, sp, prevPub)
+			return nil
+		}
 	}
-	return h.node.handlePublication(ch, pub, sp, delta, prevPub)
+	return h.node.handlePublication(ch, pub, sp, prevPub)
 }
 
 // HandleJoin coming from Broker.

@@ -96,6 +96,12 @@ type SubscribeOptions struct {
 	// meta information expiration time.
 	HistoryMetaTTL time.Duration
 
+	// AllowedDeltaTypes is a whitelist of DeltaType subscribers can negotiate. At this point Centrifuge
+	// only supports DeltaTypeFossil. If zero value – clients won't be able to negotiate delta encoding
+	// within a channel and will receive full data in publications.
+	// Delta encoding is an EXPERIMENTAL feature and may be changed.
+	AllowedDeltaTypes []DeltaType
+
 	// clientID to subscribe.
 	clientID string
 	// sessionID to subscribe.

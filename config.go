@@ -109,12 +109,6 @@ type Config struct {
 	// transport_messages_received_size.
 	ChannelNamespaceLabelForTransportMessagesReceived bool
 
-	// AllowedDeltaTypes is a whitelist of DeltaType subscribers can use. At this point Centrifuge
-	// only supports DeltaTypeFossil. If zero value – clients won't be able to negotiate delta encoding
-	// and will receive full data in publications.
-	// Delta encoding is an EXPERIMENTAL feature and may be changed.
-	AllowedDeltaTypes []DeltaType
-
 	// GetChannelMediumOptions is a way to provide ChannelMediumOptions for specific channel.
 	// This function is called each time new channel appears on the Node. If it returns false
 	// then no medium layer will be used for the channel.

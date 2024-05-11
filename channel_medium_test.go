@@ -23,23 +23,22 @@ func setupChannelMedium(t testing.TB, options ChannelMediumOptions, node node) *
 }
 
 type mockNode struct {
-	// Store function outputs and any state needed for testing
-	handlePublicationFunc  func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error
-	streamTopLatestPubFunc func(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error)
+	handlePublicationFunc func(channel string, pub *Publication, sp StreamPosition, prevPub *Publication) error
+	streamTopFunc         func(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
 }
 
-func (m *mockNode) handlePublication(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error {
+func (m *mockNode) handlePublication(channel string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	if m.handlePublicationFunc != nil {
-		return m.handlePublicationFunc(channel, pub, sp, delta, prevPublication)
+		return m.handlePublicationFunc(channel, pub, sp, prevPub)
 	}
 	return nil
 }
 
-func (m *mockNode) streamTopLatestPub(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
-	if m.streamTopLatestPubFunc != nil {
-		return m.streamTopLatestPubFunc(ch, historyMetaTTL)
+func (m *mockNode) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
+	if m.streamTopFunc != nil {
+		return m.streamTopFunc(ch, historyMetaTTL)
 	}
-	return nil, StreamPosition{}, nil
+	return StreamPosition{}, nil
 }
 
 func TestChannelMediumHandlePublication(t *testing.T) {
@@ -69,7 +68,7 @@ func TestChannelMediumHandlePublication(t *testing.T) {
 			doneCh := make(chan struct{})
 
 			cache := setupChannelMedium(t, options, &mockNode{
-				handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error {
+				handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, prevPublication *Publication) error {
 					close(doneCh)
 					return nil
 				},
@@ -78,7 +77,7 @@ func TestChannelMediumHandlePublication(t *testing.T) {
 			pub := &Publication{Data: []byte("test data")}
 			sp := StreamPosition{Offset: 1}
 
-			cache.broadcastPublication(pub, sp, false, nil)
+			cache.broadcastPublication(pub, sp, nil)
 
 			select {
 			case <-doneCh:
@@ -96,7 +95,7 @@ func TestChannelMediumInsufficientState(t *testing.T) {
 	}
 	doneCh := make(chan struct{})
 	medium := setupChannelMedium(t, options, &mockNode{
-		handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, delta bool, prevPublication *Publication) error {
+		handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, prevPublication *Publication) error {
 			require.Equal(t, uint64(math.MaxUint64), pub.Offset)
 			require.Equal(t, uint64(math.MaxUint64), sp.Offset)
 			close(doneCh)
@@ -105,7 +104,7 @@ func TestChannelMediumInsufficientState(t *testing.T) {
 	})
 
 	// Simulate the behavior when the state is marked as insufficient
-	medium.broadcastInsufficientState(StreamPosition{Offset: 2}, &Publication{})
+	medium.broadcastInsufficientState()
 
 	select {
 	case <-doneCh:
@@ -121,11 +120,11 @@ func TestChannelMediumPositionSync(t *testing.T) {
 	doneCh := make(chan struct{})
 	var closeOnce sync.Once
 	medium := setupChannelMedium(t, options, &mockNode{
-		streamTopLatestPubFunc: func(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
+		streamTopFunc: func(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 			closeOnce.Do(func() {
 				close(doneCh)
 			})
-			return nil, StreamPosition{}, nil
+			return StreamPosition{}, nil
 		},
 	})
 	originalGetter := channelMediumTimeNow
@@ -149,15 +148,15 @@ func TestChannelMediumPositionSyncRetry(t *testing.T) {
 	var closeOnce sync.Once
 	numCalls := 0
 	medium := setupChannelMedium(t, options, &mockNode{
-		streamTopLatestPubFunc: func(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
+		streamTopFunc: func(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 			if numCalls == 0 {
 				numCalls++
-				return nil, StreamPosition{}, errors.New("boom")
+				return StreamPosition{}, errors.New("boom")
 			}
 			closeOnce.Do(func() {
 				close(doneCh)
 			})
-			return nil, StreamPosition{}, nil
+			return StreamPosition{}, nil
 		},
 	})
 	originalGetter := channelMediumTimeNow

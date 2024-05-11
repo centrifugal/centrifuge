@@ -135,13 +135,13 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
 // Usually this is NOT what you need since in most cases you should use Node.Publish method which
 // uses a Broker to deliver publications to all Nodes in a cluster and maintains publication history
 // in a channel with incremental offset. By calling BroadcastPublication messages will only be sent
-// to the current node subscribers without any defined offset semantics.
+// to the current node subscribers without any defined offset semantics, without delta support.
 func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pubToProto(pub), sp)
+	return h.broadcastPublication(ch, pub, sp, nil)
 }
 
-func (h *Hub) broadcastPublicationDelta(ch string, pub *Publication, prevPub *Publication, sp StreamPosition) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublicationDelta(ch, pub, prevPub, sp)
+func (h *Hub) broadcastPublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pub, sp, prevPub)
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
@@ -481,6 +481,7 @@ func (h *connShard) NumUsers() int {
 type DeltaType string
 
 const (
+	deltaTypeNone DeltaType = ""
 	// DeltaTypeFossil is Fossil delta encoding. See https://fossil-scm.org/home/doc/tip/www/delta_encoder_algorithm.wiki.
 	DeltaTypeFossil DeltaType = "fossil"
 )
@@ -571,8 +572,8 @@ type dataValue struct {
 	delta     bool
 }
 
-// broadcastPublicationDelta sends message to all clients subscribed on channel trying to use deltas.
-func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, prevPub *Publication, sp StreamPosition) error {
+// broadcastPublication sends message to all clients subscribed on channel.
+func (h *subShard) broadcastPublication(channel string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	fullPub := pubToProto(pub)
 
 	dataByKey := make(map[broadcastKey]dataValue)
@@ -716,103 +717,14 @@ func (h *subShard) broadcastPublicationDelta(channel string, pub *Publication, p
 				}
 			}
 
-			value = dataValue{data: data, deltaData: deltaData}
+			value = dataValue{data: data, deltaData: deltaData, delta: key.DeltaType != deltaTypeNone}
 			dataByKey[key] = value
 		}
 		if sub.client.transport.Protocol() == ProtocolTypeJSON && jsonEncodeErr != nil {
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
 		}
-		value.delta = true
 		_ = sub.client.writePublication(channel, fullPub, value, sp)
-	}
-	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
-		// Log that we had clients with inappropriate protocol, and point to the first such client.
-		h.logger.log(NewLogEntry(LogLevelWarn, "inappropriate protocol publication", map[string]any{
-			"channel": channel,
-			"user":    jsonEncodeErr.user,
-			"client":  jsonEncodeErr.client,
-			"error":   jsonEncodeErr.error,
-		}))
-	}
-	return nil
-}
-
-// broadcastPublication sends message to all clients subscribed on channel.
-func (h *subShard) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	channelSubscribers, ok := h.subs[channel]
-	if !ok {
-		return nil
-	}
-
-	var (
-		jsonReply     []byte
-		protobufReply []byte
-
-		jsonPush     []byte
-		protobufPush []byte
-
-		jsonEncodeErr *encodeError
-	)
-
-	for _, sub := range channelSubscribers {
-		protoType := sub.client.Transport().Protocol().toProto()
-		if protoType == protocol.TypeJSON {
-			if jsonEncodeErr != nil {
-				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
-				continue
-			}
-			if sub.client.transport.Unidirectional() {
-				if jsonPush == nil {
-					push := &protocol.Push{Channel: channel, Pub: pub}
-					var err error
-					jsonPush, err = protocol.DefaultJsonPushEncoder.Encode(push)
-					if err != nil {
-						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
-						continue
-					}
-				}
-				_ = sub.client.writePublicationNoDelta(channel, pub, jsonPush, sp)
-			} else {
-				if jsonReply == nil {
-					push := &protocol.Push{Channel: channel, Pub: pub}
-					var err error
-					jsonReply, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
-					if err != nil {
-						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
-						continue
-					}
-				}
-				_ = sub.client.writePublicationNoDelta(channel, pub, jsonReply, sp)
-			}
-		} else if protoType == protocol.TypeProtobuf {
-			if sub.client.transport.Unidirectional() {
-				if protobufPush == nil {
-					push := &protocol.Push{Channel: channel, Pub: pub}
-					var err error
-					protobufPush, err = protocol.DefaultProtobufPushEncoder.Encode(push)
-					if err != nil {
-						return err
-					}
-				}
-				_ = sub.client.writePublicationNoDelta(channel, pub, protobufPush, sp)
-			} else {
-				if protobufReply == nil {
-					push := &protocol.Push{Channel: channel, Pub: pub}
-					var err error
-					protobufReply, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
-					if err != nil {
-						return err
-					}
-				}
-				_ = sub.client.writePublicationNoDelta(channel, pub, protobufReply, sp)
-			}
-		}
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.

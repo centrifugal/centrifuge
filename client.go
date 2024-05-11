@@ -2762,7 +2762,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	sub := subInfo{client: c, deltaType: ""}
 	if req.Delta != "" {
 		dt := DeltaType(req.Delta)
-		if slices.Contains(c.node.config.AllowedDeltaTypes, dt) {
+		if slices.Contains(reply.Options.AllowedDeltaTypes, dt) {
 			res.Delta = true
 		}
 		sub.deltaType = dt
