@@ -886,9 +886,11 @@ func BenchmarkHub_Contention(b *testing.B) {
 var broadcastBenches = []struct {
 	NumSubscribers int
 }{
+	{1},
+	{10},
+	{100},
 	{1000},
 	{10000},
-	{100000},
 }
 
 // BenchmarkHub_MassiveBroadcast allows estimating time to broadcast
@@ -899,7 +901,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 
 	for _, tt := range broadcastBenches {
 		numSubscribers := tt.NumSubscribers
-		b.Run(fmt.Sprintf("%d", numSubscribers), func(b *testing.B) {
+		b.Run(fmt.Sprintf("subscribers_%d", numSubscribers), func(b *testing.B) {
 			b.ReportAllocs()
 			n := defaultTestNodeBenchmark(b)
 
