@@ -150,7 +150,7 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 		spToBroadcast.Offset = math.MaxUint64
 	}
 	prevPub := qp.prevPub
-	useInMemoryLatestPub := c.options.KeepLatestPublication && prevPub == nil && qp.pub.Offset == 0 && !qp.isInsufficientState
+	useInMemoryLatestPub := c.options.KeepLatestPublication && prevPub == nil && !qp.isInsufficientState && qp.pub.Offset == 0
 	if useInMemoryLatestPub {
 		prevPub = c.latestPublication
 	}
