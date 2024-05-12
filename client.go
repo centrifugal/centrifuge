@@ -3099,7 +3099,7 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 	}
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data preparedData, sp StreamPosition) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
@@ -3134,7 +3134,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		//	}
 		//	c.mu.Unlock()
 		//}
-		return c.transportEnqueue(data.fullData, ch, protocol.FrameTypePushPublication)
+		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
@@ -3161,8 +3161,8 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	if data.delta && deltaAllowed {
-		return c.transportEnqueue(data.deltaData, ch, protocol.FrameTypePushPublication)
+	if prep.delta && deltaAllowed {
+		return c.transportEnqueue(prep.deltaData, ch, protocol.FrameTypePushPublication)
 	}
 	if !deltaAllowed {
 		c.mu.Lock()
@@ -3172,7 +3172,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		}
 		c.mu.Unlock()
 	}
-	return c.transportEnqueue(data.fullData, ch, protocol.FrameTypePushPublication)
+	return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {

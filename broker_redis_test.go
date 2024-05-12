@@ -685,7 +685,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	b := NewTestRedisBroker(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	defer stopRedisBroker(b)
-	err := b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+	err := b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 		require.Equal(t, "test", ch)
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
@@ -693,7 +693,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	}}, b.messageChannelID(b.shards[0].shard, "test"), []byte("__p1:16901:xyz__dsdsd"))
 	require.Error(t, err)
 
-	err = b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+	err = b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 		return nil
 	}}, b.messageChannelID(b.shards[0].shard, "test"), []byte("__p1:16901"))
 	require.Error(t, err)
@@ -704,7 +704,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	data, err := pub.MarshalVT()
 	require.NoError(t, err)
 	var publicationHandlerCalled bool
-	err = b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+	err = b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 		publicationHandlerCalled = true
 		require.Equal(t, "test", ch)
 		require.Equal(t, uint64(16901), sp.Offset)
@@ -959,7 +959,7 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 		HandleControlFunc: func(bytes []byte) error {
 			return nil
 		},
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 			c := atomic.AddInt64(&numPublications, 1)
 			if c == int64(msgNum) {
 				close(pubCh)
@@ -1030,7 +1030,6 @@ type testDeltaPublishHandle struct {
 	ch      string
 	pub     *Publication
 	sp      StreamPosition
-	delta   bool
 	prevPub *Publication
 }
 
@@ -1064,14 +1063,13 @@ func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
 		HandleControlFunc: func(bytes []byte) error {
 			return nil
 		},
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 			resultsMu.Lock()
 			defer resultsMu.Unlock()
 			results = append(results, testDeltaPublishHandle{
 				ch:      ch,
 				pub:     pub,
 				sp:      sp,
-				delta:   delta,
 				prevPub: prevPub,
 			})
 			c := atomic.AddInt64(&numPublications, 1)
@@ -1114,8 +1112,6 @@ func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
 	resultsMu.Lock()
 	defer resultsMu.Unlock()
 	require.Len(t, results, msgNum)
-	require.True(t, results[0].delta)
-	require.True(t, results[1].delta)
 	require.Nil(t, results[0].prevPub)
 	require.NotNil(t, results[1].prevPub)
 }
@@ -1160,7 +1156,7 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 		HandleControlFunc: func(bytes []byte) error {
 			return nil
 		},
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 			c := atomic.AddInt64(&numPublications, 1)
 			if c == int64(msgNum) {
 				close(pubCh)
@@ -1788,7 +1784,7 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 				HandleControlFunc: func(bytes []byte) error {
 					return nil
 				},
-				HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+				HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 					pubCh <- struct{}{}
 					return nil
 				},
