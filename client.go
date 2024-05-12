@@ -3197,14 +3197,13 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 
 			if deltaAllowed {
 				return c.transportEnqueue(prep.localDeltaData, ch, protocol.FrameTypePushPublication)
-			} else {
-				c.mu.Lock()
-				if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-					chCtx.flags |= flagDeltaAllowed
-					c.channels[ch] = chCtx
-				}
-				c.mu.Unlock()
 			}
+			c.mu.Lock()
+			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+				chCtx.flags |= flagDeltaAllowed
+				c.channels[ch] = chCtx
+			}
+			c.mu.Unlock()
 		}
 		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 	}
