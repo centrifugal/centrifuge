@@ -137,11 +137,11 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
 // in a channel with incremental offset. By calling BroadcastPublication messages will only be sent
 // to the current node subscribers without any defined offset semantics, without delta support.
 func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition) error {
-	return h.broadcastPublication(ch, pub, sp, nil)
+	return h.broadcastPublication(ch, sp, pub, nil, nil)
 }
 
-func (h *Hub) broadcastPublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pub, sp, prevPub)
+func (h *Hub) broadcastPublication(ch string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, sp, pub, prevPub, localPrevPub)
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
@@ -560,22 +560,94 @@ type encodeError struct {
 	error  error
 }
 
-type broadcastKey struct {
+type preparedKey struct {
 	ProtocolType   protocol.Type
 	Unidirectional bool
 	DeltaType      DeltaType
 }
 
 type preparedData struct {
-	fullData  []byte
-	deltaData []byte
-	delta     bool
+	fullData        []byte
+	brokerDeltaData []byte
+	localDeltaData  []byte
+	deltaSub        bool
+}
+
+func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
+	deltaPub := fullPub
+	if prevPub != nil && key.DeltaType == DeltaTypeFossil {
+		patch := fdelta.Create(prevPub.Data, fullPub.Data)
+		if key.ProtocolType == protocol.TypeJSON {
+			deltaPub = &protocol.Publication{
+				Offset: fullPub.Offset,
+				Data:   json.Escape(convert.BytesToString(patch)),
+				Info:   fullPub.Info,
+				Tags:   fullPub.Tags,
+				Delta:  true,
+			}
+		} else {
+			deltaPub = &protocol.Publication{
+				Offset: fullPub.Offset,
+				Data:   patch,
+				Info:   fullPub.Info,
+				Tags:   fullPub.Tags,
+				Delta:  true,
+			}
+		}
+	} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
+		// In JSON and Fossil case we need to send full state in JSON string format.
+		deltaPub = &protocol.Publication{
+			Offset: fullPub.Offset,
+			Data:   json.Escape(convert.BytesToString(fullPub.Data)),
+			Info:   fullPub.Info,
+			Tags:   fullPub.Tags,
+		}
+	}
+	return deltaPub
+}
+
+func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protocol.Publication, jsonEncodeErr *encodeError) ([]byte, error) {
+	var deltaData []byte
+	if key.ProtocolType == protocol.TypeJSON {
+		if sub.client.transport.Unidirectional() {
+			push := &protocol.Push{Channel: channel, Pub: deltaPub}
+			var err error
+			deltaData, err = protocol.DefaultJsonPushEncoder.Encode(push)
+			if err != nil {
+				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+			}
+		} else {
+			push := &protocol.Push{Channel: channel, Pub: deltaPub}
+			var err error
+			deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+			if err != nil {
+				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+			}
+		}
+	} else if key.ProtocolType == protocol.TypeProtobuf {
+		if sub.client.transport.Unidirectional() {
+			push := &protocol.Push{Channel: channel, Pub: deltaPub}
+			var err error
+			deltaData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			push := &protocol.Push{Channel: channel, Pub: deltaPub}
+			var err error
+			deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return deltaData, nil
 }
 
 // broadcastPublication sends message to all clients subscribed on a channel.
-func (h *subShard) broadcastPublication(channel string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
+func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
 	fullPub := pubToProto(pub)
-	dataByKey := make(map[broadcastKey]preparedData)
+	preparedDataByKey := make(map[preparedKey]preparedData)
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -590,45 +662,34 @@ func (h *subShard) broadcastPublication(channel string, pub *Publication, sp Str
 	)
 
 	for _, sub := range channelSubscribers {
-		key := broadcastKey{
+		key := preparedKey{
 			ProtocolType:   sub.client.Transport().Protocol().toProto(),
 			Unidirectional: sub.client.transport.Unidirectional(),
 			DeltaType:      sub.deltaType,
 		}
-		value, valueFound := dataByKey[key]
-		if !valueFound {
-			deltaPub := fullPub
-			if prevPub != nil && key.DeltaType == DeltaTypeFossil {
-				patch := fdelta.Create(prevPub.Data, fullPub.Data)
-				if key.ProtocolType == protocol.TypeJSON {
-					deltaPub = &protocol.Publication{
-						Offset: fullPub.Offset,
-						Data:   json.Escape(convert.BytesToString(patch)),
-						Info:   fullPub.Info,
-						Tags:   fullPub.Tags,
-						Delta:  true,
-					}
-				} else {
-					deltaPub = &protocol.Publication{
-						Offset: fullPub.Offset,
-						Data:   patch,
-						Info:   fullPub.Info,
-						Tags:   fullPub.Tags,
-						Delta:  true,
-					}
+		prepValue, prepDataFound := preparedDataByKey[key]
+		if !prepDataFound {
+			var brokerDeltaPub *protocol.Publication
+			if fullPub.Offset > 0 {
+				brokerDeltaPub = getDeltaPub(prevPub, fullPub, key)
+			}
+			localDeltaPub := getDeltaPub(localPrevPub, fullPub, key)
+
+			var brokerDeltaData []byte
+			var localDeltaData []byte
+			if key.DeltaType != deltaTypeNone {
+				var err error
+				brokerDeltaData, err = getDeltaData(sub, key, channel, brokerDeltaPub, jsonEncodeErr)
+				if err != nil {
+					return err
 				}
-			} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
-				// In JSON and Fossil case we need to send full state in JSON string format.
-				deltaPub = &protocol.Publication{
-					Offset: fullPub.Offset,
-					Data:   json.Escape(convert.BytesToString(fullPub.Data)),
-					Info:   fullPub.Info,
-					Tags:   fullPub.Tags,
+				localDeltaData, err = getDeltaData(sub, key, channel, localDeltaPub, jsonEncodeErr)
+				if err != nil {
+					return err
 				}
 			}
 
-			var data []byte
-			var deltaData []byte
+			var fullData []byte
 
 			if key.ProtocolType == protocol.TypeJSON {
 				if sub.client.transport.Unidirectional() {
@@ -643,7 +704,7 @@ func (h *subShard) broadcastPublication(channel string, pub *Publication, sp Str
 					}
 					push := &protocol.Push{Channel: channel, Pub: pubToUse}
 					var err error
-					data, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					fullData, err = protocol.DefaultJsonPushEncoder.Encode(push)
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
@@ -659,7 +720,7 @@ func (h *subShard) broadcastPublication(channel string, pub *Publication, sp Str
 					}
 					push := &protocol.Push{Channel: channel, Pub: pubToUse}
 					var err error
-					data, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					fullData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
@@ -668,64 +729,33 @@ func (h *subShard) broadcastPublication(channel string, pub *Publication, sp Str
 				if sub.client.transport.Unidirectional() {
 					push := &protocol.Push{Channel: channel, Pub: fullPub}
 					var err error
-					data, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					fullData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
 					if err != nil {
 						return err
 					}
 				} else {
 					push := &protocol.Push{Channel: channel, Pub: fullPub}
 					var err error
-					data, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					fullData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
 						return err
 					}
 				}
 			}
 
-			if key.DeltaType != deltaTypeNone {
-				if key.ProtocolType == protocol.TypeJSON {
-					if sub.client.transport.Unidirectional() {
-						push := &protocol.Push{Channel: channel, Pub: deltaPub}
-						var err error
-						deltaData, err = protocol.DefaultJsonPushEncoder.Encode(push)
-						if err != nil {
-							jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-						}
-					} else {
-						push := &protocol.Push{Channel: channel, Pub: deltaPub}
-						var err error
-						deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
-						if err != nil {
-							jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
-						}
-					}
-				} else if key.ProtocolType == protocol.TypeProtobuf {
-					if sub.client.transport.Unidirectional() {
-						push := &protocol.Push{Channel: channel, Pub: deltaPub}
-						var err error
-						deltaData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
-						if err != nil {
-							return err
-						}
-					} else {
-						push := &protocol.Push{Channel: channel, Pub: deltaPub}
-						var err error
-						deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
-						if err != nil {
-							return err
-						}
-					}
-				}
+			prepValue = preparedData{
+				fullData:        fullData,
+				brokerDeltaData: brokerDeltaData,
+				localDeltaData:  localDeltaData,
+				deltaSub:        key.DeltaType != deltaTypeNone,
 			}
-
-			value = preparedData{fullData: data, deltaData: deltaData, delta: key.DeltaType != deltaTypeNone}
-			dataByKey[key] = value
+			preparedDataByKey[key] = prepValue
 		}
 		if sub.client.transport.Protocol() == ProtocolTypeJSON && jsonEncodeErr != nil {
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
 		}
-		_ = sub.client.writePublication(channel, fullPub, value, sp)
+		_ = sub.client.writePublication(channel, fullPub, prepValue, sp)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.

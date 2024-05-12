@@ -17,9 +17,7 @@ import (
 // can provide significant benefits in terms of overall system efficiency and flexibility.
 type ChannelMediumOptions struct {
 	// KeepLatestPublication enables keeping latest publication which was broadcasted to channel subscribers on
-	// this Node in the channel medium layer in the case when channel history is not used. This is helpful for
-	// supporting deltas in at most once scenario. Note, for publications with Offset or when previous Publication
-	// comes from the broker level KeepLatestPublication won't be used.
+	// this Node in the channel medium layer. This is helpful for supporting deltas in at most once scenario.
 	KeepLatestPublication bool
 
 	// EnablePositionSync when true delegates connection position checks to the channel medium. In that case
@@ -45,7 +43,7 @@ type ChannelMediumOptions struct {
 	// to clients when publication contains the entire state. If zero, all publications will be sent to clients
 	// without delay logic involved on channel medium level. BroadcastDelay option requires (!) EnableQueue to be
 	// enabled, as we can not afford delays during broadcast from the PUB/SUB layer. BroadcastDelay must not be
-	// used in channels with positioning/recovery on.
+	// used in channels with positioning/recovery on since it skips publications.
 	broadcastDelay time.Duration
 }
 
@@ -73,7 +71,7 @@ type channelMedium struct {
 }
 
 type node interface {
-	handlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error
+	handlePublication(ch string, sp StreamPosition, pub, prevPub *Publication, memPrevPub *Publication) error
 	streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
 }
 
@@ -149,10 +147,12 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 		pubToBroadcast = &Publication{Offset: math.MaxUint64}
 		spToBroadcast.Offset = math.MaxUint64
 	}
+
 	prevPub := qp.prevPub
-	useInMemoryLatestPub := c.options.KeepLatestPublication && prevPub == nil && !qp.isInsufficientState && qp.pub.Offset == 0
-	if useInMemoryLatestPub {
-		prevPub = c.latestPublication
+	var localPrevPub *Publication
+	useLocalLatestPub := c.options.KeepLatestPublication && !qp.isInsufficientState
+	if useLocalLatestPub {
+		localPrevPub = c.latestPublication
 	}
 	if c.options.broadcastDelay > 0 && !c.options.KeepLatestPublication {
 		prevPub = nil
@@ -160,8 +160,8 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 	if qp.isInsufficientState {
 		prevPub = nil
 	}
-	_ = c.node.handlePublication(c.channel, pubToBroadcast, spToBroadcast, prevPub)
-	if useInMemoryLatestPub {
+	_ = c.node.handlePublication(c.channel, spToBroadcast, pubToBroadcast, prevPub, localPrevPub)
+	if useLocalLatestPub {
 		c.latestPublication = qp.pub
 	}
 }

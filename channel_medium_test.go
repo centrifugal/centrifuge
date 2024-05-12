@@ -23,13 +23,13 @@ func setupChannelMedium(t testing.TB, options ChannelMediumOptions, node node) *
 }
 
 type mockNode struct {
-	handlePublicationFunc func(channel string, pub *Publication, sp StreamPosition, prevPub *Publication) error
+	handlePublicationFunc func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error
 	streamTopFunc         func(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
 }
 
-func (m *mockNode) handlePublication(channel string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
+func (m *mockNode) handlePublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
 	if m.handlePublicationFunc != nil {
-		return m.handlePublicationFunc(channel, pub, sp, prevPub)
+		return m.handlePublicationFunc(channel, sp, pub, prevPub, localPrevPub)
 	}
 	return nil
 }
@@ -68,7 +68,7 @@ func TestChannelMediumHandlePublication(t *testing.T) {
 			doneCh := make(chan struct{})
 
 			cache := setupChannelMedium(t, options, &mockNode{
-				handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, prevPublication *Publication) error {
+				handlePublicationFunc: func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
 					close(doneCh)
 					return nil
 				},
@@ -95,7 +95,7 @@ func TestChannelMediumInsufficientState(t *testing.T) {
 	}
 	doneCh := make(chan struct{})
 	medium := setupChannelMedium(t, options, &mockNode{
-		handlePublicationFunc: func(channel string, pub *Publication, sp StreamPosition, prevPublication *Publication) error {
+		handlePublicationFunc: func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
 			require.Equal(t, uint64(math.MaxUint64), pub.Offset)
 			require.Equal(t, uint64(math.MaxUint64), sp.Offset)
 			close(doneCh)

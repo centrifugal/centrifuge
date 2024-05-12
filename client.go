@@ -2759,13 +2759,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		c.pubSubSync.StartBuffering(channel)
 	}
 
-	sub := subInfo{client: c, deltaType: ""}
+	sub := subInfo{client: c, deltaType: deltaTypeNone}
 	if req.Delta != "" {
 		dt := DeltaType(req.Delta)
 		if slices.Contains(reply.Options.AllowedDeltaTypes, dt) {
 			res.Delta = true
+			sub.deltaType = dt
 		}
-		sub.deltaType = dt
 	}
 	err := c.node.addSubscription(channel, sub)
 	if err != nil {
@@ -3118,22 +3118,17 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 			// This is a special pub to trigger insufficient state. Noop in non-positioning case.
 			return nil
 		}
-		// Centrifuge does not support deltas in this case for now. Without positioning there could be a
-		// message loss (because Broker's PUB/SUB is at most once), which we can't detect here, so prevPub
-		// coming from the broker level can be different from what client connection actually received.
-		// It seems possible to implement delta for this path using channel medium layer – but need to
-		// distinguish broker and in-memory deltas and use in-memory one here.
-		//if data.delta && deltaAllowed {
-		//	return c.transportEnqueue(data.deltaData, ch, protocol.FrameTypePushPublication)
-		//}
-		//if !deltaAllowed {
-		//	c.mu.Lock()
-		//	if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-		//		chCtx.flags |= flagDeltaAllowed
-		//		c.channels[ch] = chCtx
-		//	}
-		//	c.mu.Unlock()
-		//}
+		if prep.deltaSub {
+			if deltaAllowed {
+				return c.transportEnqueue(prep.localDeltaData, ch, protocol.FrameTypePushPublication)
+			}
+			c.mu.Lock()
+			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+				chCtx.flags |= flagDeltaAllowed
+				c.channels[ch] = chCtx
+			}
+			c.mu.Unlock()
+		}
 		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
@@ -3161,10 +3156,10 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	if prep.delta && deltaAllowed {
-		return c.transportEnqueue(prep.deltaData, ch, protocol.FrameTypePushPublication)
-	}
-	if !deltaAllowed {
+	if prep.deltaSub {
+		if deltaAllowed {
+			return c.transportEnqueue(prep.brokerDeltaData, ch, protocol.FrameTypePushPublication)
+		}
 		c.mu.Lock()
 		if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
 			chCtx.flags |= flagDeltaAllowed
@@ -3176,7 +3171,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
-	return c.writePublication(ch, pub, preparedData{fullData: data, deltaData: nil, delta: false}, sp)
+	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition) error {
@@ -3188,7 +3183,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			return nil
 		}
 
-		if prep.delta {
+		if prep.deltaSub {
 			// For this path (no Offset) delta may come from channel medium layer, so that we can use it
 			// here if allowed for the connection.
 			c.mu.RLock()
@@ -3201,7 +3196,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			c.mu.RUnlock()
 
 			if deltaAllowed {
-				return c.transportEnqueue(prep.deltaData, ch, protocol.FrameTypePushPublication)
+				return c.transportEnqueue(prep.localDeltaData, ch, protocol.FrameTypePushPublication)
 			} else {
 				c.mu.Lock()
 				if chCtx, chCtxOK := c.channels[ch]; chCtxOK {

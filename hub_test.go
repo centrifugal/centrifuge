@@ -520,6 +520,23 @@ func deltaTestNode() *Node {
 	return n
 }
 
+func deltaTestNodeNoRecovery() *Node {
+	n := defaultNodeNoHandlers()
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				},
+			}, nil)
+		})
+		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
+			cb(PublishReply{}, nil)
+		})
+	})
+	return n
+}
+
 func newTestSubscribedClientWithTransportDelta(t *testing.T, ctx context.Context, n *Node, transport Transport, userID, chanID string, deltaType DeltaType) *Client {
 	client := newTestConnectedClientWithTransport(t, ctx, n, transport, userID)
 	subscribeClientDelta(t, client, chanID, deltaType)
@@ -572,20 +589,11 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 			res, err := n.History("test_channel")
 			require.NoError(t, err)
 
-			// Broadcast to non-existing channel.
-			err = n.hub.broadcastPublication(
-				"non_existing_channel",
-				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
-				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
-				nil,
-			)
-			require.NoError(t, err)
-
-			// Broadcast to existing channel.
 			err = n.hub.broadcastPublication(
 				"test_channel",
-				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
 				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+				nil,
 				nil,
 			)
 			require.NoError(t, err)
@@ -605,9 +613,167 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 			// Broadcast same data to existing channel.
 			err = n.hub.broadcastPublication(
 				"test_channel",
-				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 2},
 				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 2},
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+				nil,
+			)
+			require.NoError(t, err)
+
+		LOOP2:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						require.Fail(t, "should not receive same data twice - delta expected")
+					}
+					break LOOP2
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink 2")
+				}
+			}
+		})
+	}
+}
+
+func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
+	tcs := []struct {
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := deltaTestNodeNoRecovery()
+			n.config.GetChannelNamespaceLabel = func(channel string) string {
+				return channel
+			}
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.sink = make(chan []byte, 100)
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransportDelta(
+				t, ctx, n, transport, "42", "test_channel", DeltaTypeFossil)
+
+			res, err := n.History("test_channel")
+			require.NoError(t, err)
+
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
+			}
+
+			// Broadcast same data to existing channel.
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 2},
+				nil,
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+			)
+			require.NoError(t, err)
+
+		LOOP2:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						require.Fail(t, "should not receive same data twice - delta expected")
+					}
+					break LOOP2
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink 2")
+				}
+			}
+		})
+	}
+}
+
+func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
+	tcs := []struct {
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := deltaTestNodeNoRecovery()
+			n.config.GetChannelNamespaceLabel = func(channel string) string {
+				return channel
+			}
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.sink = make(chan []byte, 100)
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransportDelta(
+				t, ctx, n, transport, "42", "test_channel", DeltaTypeFossil)
+
+			err := n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
+			}
+
+			// Broadcast same data to existing channel.
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				nil,
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
 			)
 			require.NoError(t, err)
 
@@ -905,23 +1071,16 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 			b.ReportAllocs()
 			n := defaultTestNodeBenchmark(b)
 
-			numChannels := 64
-			channels := make([]string, 0, numChannels)
+			channel := "broadcast"
 
-			for i := 0; i < numChannels; i++ {
-				channels = append(channels, "broadcast"+strconv.Itoa(i))
-			}
-
-			sink := make(chan []byte, 1024)
+			sink := make(chan []byte, 10000)
 
 			for i := 0; i < numSubscribers; i++ {
 				t := newTestTransport(func() {})
 				t.setSink(sink)
 				c := newTestConnectedClientWithTransport(b, context.Background(), n, t, "12")
 				_ = n.hub.add(c)
-				for _, ch := range channels {
-					_, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
-				}
+				_, _ = n.hub.addSub(channel, subInfo{client: c, deltaType: ""})
 			}
 
 			b.ResetTimer()
@@ -939,7 +1098,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 						}
 					}
 				}()
-				_ = n.hub.BroadcastPublication(channels[i%numChannels], pub, streamPosition)
+				_ = n.hub.broadcastPublication(channel, streamPosition, pub, nil, nil)
 				wg.Wait()
 			}
 		})
