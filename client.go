@@ -3099,7 +3099,7 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 	}
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data preparedData, sp StreamPosition) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
@@ -3115,21 +3115,26 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		}
 		c.mu.Unlock()
 		if pub.Offset == math.MaxUint64 {
-			// This is a special pub to trigger insufficient state.
+			// This is a special pub to trigger insufficient state. Noop in non-positioning case.
 			return nil
 		}
-		if data.delta && deltaAllowed {
-			return c.transportEnqueue(data.deltaData, ch, protocol.FrameTypePushPublication)
-		}
-		if !deltaAllowed {
-			c.mu.Lock()
-			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
-				chCtx.flags |= flagDeltaAllowed
-				c.channels[ch] = chCtx
-			}
-			c.mu.Unlock()
-		}
-		return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
+		// Centrifuge does not support deltas in this case for now. Without positioning there could be a
+		// message loss (because Broker's PUB/SUB is at most once), which we can't detect here, so prevPub
+		// coming from the broker level can be different from what client connection actually received.
+		// It seems possible to implement delta for this path using channel medium layer – but need to
+		// distinguish broker and in-memory deltas and use in-memory one here.
+		//if data.delta && deltaAllowed {
+		//	return c.transportEnqueue(data.deltaData, ch, protocol.FrameTypePushPublication)
+		//}
+		//if !deltaAllowed {
+		//	c.mu.Lock()
+		//	if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+		//		chCtx.flags |= flagDeltaAllowed
+		//		c.channels[ch] = chCtx
+		//	}
+		//	c.mu.Unlock()
+		//}
+		return c.transportEnqueue(data.fullData, ch, protocol.FrameTypePushPublication)
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
@@ -3167,14 +3172,14 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		}
 		c.mu.Unlock()
 	}
-	return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
+	return c.transportEnqueue(data.fullData, ch, protocol.FrameTypePushPublication)
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
-	return c.writePublication(ch, pub, dataValue{data: data, deltaData: nil, delta: false}, sp)
+	return c.writePublication(ch, pub, preparedData{fullData: data, deltaData: nil, delta: false}, sp)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, data dataValue, sp StreamPosition) error {
+func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition) error {
 	if c.node.LogEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
@@ -3183,7 +3188,9 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data dat
 			return nil
 		}
 
-		if data.delta {
+		if prep.delta {
+			// For this path (no Offset) delta may come from channel medium layer, so that we can use it
+			// here if allowed for the connection.
 			c.mu.RLock()
 			channelContext, ok := c.channels[ch]
 			if !ok {
@@ -3194,7 +3201,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data dat
 			c.mu.RUnlock()
 
 			if deltaAllowed {
-				return c.transportEnqueue(data.deltaData, ch, protocol.FrameTypePushPublication)
+				return c.transportEnqueue(prep.deltaData, ch, protocol.FrameTypePushPublication)
 			} else {
 				c.mu.Lock()
 				if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
@@ -3204,10 +3211,10 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data dat
 				c.mu.Unlock()
 			}
 		}
-		return c.transportEnqueue(data.data, ch, protocol.FrameTypePushPublication)
+		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, data, sp)
+		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp)
 	})
 	return nil
 }

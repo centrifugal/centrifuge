@@ -44,22 +44,22 @@ func (m *mockNode) streamTop(ch string, historyMetaTTL time.Duration) (StreamPos
 func TestChannelMediumHandlePublication(t *testing.T) {
 	optionSet := []ChannelMediumOptions{
 		{
-			EnableQueue:           false,
+			enableQueue:           false,
 			KeepLatestPublication: false,
 		},
 		{
-			EnableQueue:           true,
+			enableQueue:           true,
 			KeepLatestPublication: false,
 		},
 		{
-			EnableQueue:           true,
+			enableQueue:           true,
 			KeepLatestPublication: false,
-			BroadcastDelay:        10 * time.Millisecond,
+			broadcastDelay:        10 * time.Millisecond,
 		},
 		{
-			EnableQueue:           true,
+			enableQueue:           true,
 			KeepLatestPublication: true,
-			BroadcastDelay:        10 * time.Millisecond,
+			broadcastDelay:        10 * time.Millisecond,
 		},
 	}
 
@@ -90,7 +90,7 @@ func TestChannelMediumHandlePublication(t *testing.T) {
 
 func TestChannelMediumInsufficientState(t *testing.T) {
 	options := ChannelMediumOptions{
-		EnableQueue:           true,
+		enableQueue:           true,
 		KeepLatestPublication: true,
 	}
 	doneCh := make(chan struct{})

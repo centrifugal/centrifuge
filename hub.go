@@ -566,8 +566,8 @@ type broadcastKey struct {
 	DeltaType      DeltaType
 }
 
-type dataValue struct {
-	data      []byte
+type preparedData struct {
+	fullData  []byte
 	deltaData []byte
 	delta     bool
 }
@@ -575,7 +575,7 @@ type dataValue struct {
 // broadcastPublication sends message to all clients subscribed on a channel.
 func (h *subShard) broadcastPublication(channel string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	fullPub := pubToProto(pub)
-	dataByKey := make(map[broadcastKey]dataValue)
+	dataByKey := make(map[broadcastKey]preparedData)
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -718,7 +718,7 @@ func (h *subShard) broadcastPublication(channel string, pub *Publication, sp Str
 				}
 			}
 
-			value = dataValue{data: data, deltaData: deltaData, delta: key.DeltaType != deltaTypeNone}
+			value = preparedData{fullData: data, deltaData: deltaData, delta: key.DeltaType != deltaTypeNone}
 			dataByKey[key] = value
 		}
 		if sub.client.transport.Protocol() == ProtocolTypeJSON && jsonEncodeErr != nil {

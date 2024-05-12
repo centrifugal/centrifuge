@@ -1,7 +1,7 @@
 package centrifuge
 
 import (
-	"fmt"
+	"errors"
 	"math"
 	"sync"
 	"time"
@@ -13,31 +13,13 @@ import (
 // Note, channel medium layer is very unstable at the moment – do not use it in production!
 // Channel medium layer is an optional per-channel intermediary between Broker PUB/SUB and Client
 // connections. This intermediary layer may be used for various per-channel tweaks and optimizations.
-// Channel medium comes with memory overhead depending on ChannelMediumOptions, and may consume one
-// additional goroutine per channel if ChannelMediumOptions.EnableQueue is used. At the same time it
+// Channel medium comes with memory overhead depending on ChannelMediumOptions. At the same time, it
 // can provide significant benefits in terms of overall system efficiency and flexibility.
 type ChannelMediumOptions struct {
-	// EnableQueue for incoming publications. This can be useful to reduce PUB/SUB message processing time
-	// (as we put it into a single medium layer queue instead of each individual connection queue), reduce
-	// channel broadcast contention (when one channel waits for broadcast of another channel to finish),
-	// and also opens a road for broadcast tweaks – such as BroadcastDelay and delta between several
-	// publications (deltas require both BroadcastDelay and KeepLatestPublication to be enabled).
-	EnableQueue bool
-	// QueueMaxSize is a maximum size of the queue used in channel medium (in bytes). If zero, 16MB default
-	// is used. If max size reached, new publications will be dropped.
-	QueueMaxSize int
-
-	// BroadcastDelay controls the delay before Publication broadcast. On time tick Centrifugo broadcasts
-	// only the latest publication in the channel if any. Useful to reduce/smooth the number of messages sent
-	// to clients when publication contains the entire state. If zero, all publications will be sent to clients
-	// without delay logic involved on channel medium level. BroadcastDelay option requires (!) EnableQueue to be
-	// enabled, as we can not afford delays during broadcast from the PUB/SUB layer. BroadcastDelay must not be
-	// used in channels with positioning/recovery on.
-	BroadcastDelay time.Duration
-
 	// KeepLatestPublication enables keeping latest publication which was broadcasted to channel subscribers on
-	// this Node in channel medium layer in the case when channel history is not used. This is helpful for supporting
-	// deltas in at most once scenario.
+	// this Node in the channel medium layer in the case when channel history is not used. This is helpful for
+	// supporting deltas in at most once scenario. Note, for publications with Offset or when previous Publication
+	// comes from the broker level KeepLatestPublication won't be used.
 	KeepLatestPublication bool
 
 	// EnablePositionSync when true delegates connection position checks to the channel medium. In that case
@@ -46,6 +28,25 @@ type ChannelMediumOptions struct {
 	// tells caller about this and also marks all channel subscribers with insufficient state flag. By default,
 	// medium is not used for sync – in that case each individual connection syncs position independently.
 	EnablePositionSync bool
+
+	// EnableQueue for incoming publications. This can be useful to reduce PUB/SUB message processing time
+	// (as we put it into a single medium layer queue instead of each individual connection queue), reduce
+	// channel broadcast contention (when one channel waits for broadcast of another channel to finish),
+	// and also opens a road for broadcast tweaks – such as BroadcastDelay and delta between several
+	// publications (deltas require both BroadcastDelay and KeepLatestPublication to be enabled). This costs
+	// additional goroutine.
+	enableQueue bool
+	// QueueMaxSize is a maximum size of the queue used in channel medium (in bytes). If zero, 16MB default
+	// is used. If max size reached, new publications will be dropped.
+	queueMaxSize int
+
+	// BroadcastDelay controls the delay before Publication broadcast. On time tick Centrifugo broadcasts
+	// only the latest publication in the channel if any. Useful to reduce/smooth the number of messages sent
+	// to clients when publication contains the entire state. If zero, all publications will be sent to clients
+	// without delay logic involved on channel medium level. BroadcastDelay option requires (!) EnableQueue to be
+	// enabled, as we can not afford delays during broadcast from the PUB/SUB layer. BroadcastDelay must not be
+	// used in channels with positioning/recovery on.
+	broadcastDelay time.Duration
 }
 
 // Keep global to save 8 byte per-channel. Must be only changed by tests.
@@ -77,6 +78,9 @@ type node interface {
 }
 
 func newChannelMedium(channel string, node node, options ChannelMediumOptions) (*channelMedium, error) {
+	if options.broadcastDelay > 0 && !options.enableQueue {
+		return nil, errors.New("broadcast delay can only be used with queue enabled")
+	}
 	c := &channelMedium{
 		channel:           channel,
 		node:              node,
@@ -84,13 +88,8 @@ func newChannelMedium(channel string, node node, options ChannelMediumOptions) (
 		closeCh:           make(chan struct{}),
 		positionCheckTime: channelMediumTimeNow().UnixNano(),
 	}
-	if options.EnableQueue {
+	if options.enableQueue {
 		c.messages = newPublicationQueue(2)
-	}
-	if options.BroadcastDelay > 0 && !options.EnableQueue {
-		return nil, fmt.Errorf("broadcast delay can only be used with queue enabled")
-	}
-	if c.options.EnableQueue {
 		go c.writer()
 	}
 	return c, nil
@@ -111,10 +110,10 @@ func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition
 	c.positionCheckTime = channelMediumTimeNow().UnixNano()
 	c.mu.Unlock()
 
-	if c.options.EnableQueue {
+	if c.options.enableQueue {
 		queueMaxSize := defaultChannelLayerQueueMaxSize
-		if c.options.QueueMaxSize > 0 {
-			queueMaxSize = c.options.QueueMaxSize
+		if c.options.queueMaxSize > 0 {
+			queueMaxSize = c.options.queueMaxSize
 		}
 		if c.messages.Size() > queueMaxSize {
 			return
@@ -132,7 +131,7 @@ func (c *channelMedium) broadcastInsufficientState() {
 	c.mu.Lock()
 	c.positionCheckTime = channelMediumTimeNow().UnixNano()
 	c.mu.Unlock()
-	if c.options.EnableQueue {
+	if c.options.enableQueue {
 		// TODO: possibly support c.messages.dropQueued() for this path ?
 		c.messages.Add(queuedPublication{Publication: bp})
 	} else {
@@ -150,26 +149,26 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 		pubToBroadcast = &Publication{Offset: math.MaxUint64}
 		spToBroadcast.Offset = math.MaxUint64
 	}
-
 	prevPub := qp.prevPub
-	if c.options.KeepLatestPublication {
+	useInMemoryLatestPub := c.options.KeepLatestPublication && prevPub == nil && qp.pub.Offset == 0 && !qp.isInsufficientState
+	if useInMemoryLatestPub {
 		prevPub = c.latestPublication
 	}
-	if c.options.BroadcastDelay > 0 && !c.options.KeepLatestPublication {
+	if c.options.broadcastDelay > 0 && !c.options.KeepLatestPublication {
 		prevPub = nil
 	}
 	if qp.isInsufficientState {
 		prevPub = nil
 	}
 	_ = c.node.handlePublication(c.channel, pubToBroadcast, spToBroadcast, prevPub)
-	if c.options.KeepLatestPublication && !qp.isInsufficientState {
+	if useInMemoryLatestPub {
 		c.latestPublication = qp.pub
 	}
 }
 
 func (c *channelMedium) writer() {
 	for {
-		if ok := c.waitSendPub(c.options.BroadcastDelay); !ok {
+		if ok := c.waitSendPub(c.options.broadcastDelay); !ok {
 			return
 		}
 	}
