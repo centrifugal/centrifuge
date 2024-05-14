@@ -31,7 +31,10 @@ if meta_expire ~= '0' then
   redis.call("expire", meta_key, meta_expire)
 end
 
-local prev_message_payload = redis.call("lindex", list_key, 0) or ""
+local prev_message_payload = ""
+if use_delta == "1" then
+    prev_message_payload = redis.call("lindex", list_key, 0) or ""
+end
 
 local payload = "__" .. "p1:" .. top_offset .. ":" .. current_epoch .. "__" .. message_payload
 redis.call("lpush", list_key, payload)
