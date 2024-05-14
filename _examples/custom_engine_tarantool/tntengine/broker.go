@@ -721,7 +721,7 @@ func (b *Broker) handleMessage(eventHandler centrifuge.BrokerEventHandler, msg p
 			}
 		}
 		_ = eventHandler.HandlePublication(
-			msg.Channel, pub, centrifuge.StreamPosition{Offset: msg.Offset, Epoch: msg.Epoch}, false, nil)
+			msg.Channel, pub, centrifuge.StreamPosition{Offset: msg.Offset, Epoch: msg.Epoch}, nil)
 	case "j":
 		var info protocol.ClientInfo
 		err := info.UnmarshalVT(msg.Info)

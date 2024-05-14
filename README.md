@@ -27,6 +27,8 @@ Library highlights:
 * Possibility to register a custom PUB/SUB Broker and PresenceManager implementations
 * Option to register custom Transport, like [Centrifugo does with WebTransport](https://centrifugal.dev/docs/transports/webtransport)
 * Message recovery mechanism for channels to survive PUB/SUB delivery problems, short network disconnects or node restart
+* Cache channels – a way to quickly deliver latest publication from channel history to the client upon subscription
+* Delta compression for publications inside a channel to reduce bandwidth usage
 * Out-of-the-box Prometheus instrumentation
 * Client SDKs for main application environments all following [single behaviour spec](https://centrifugal.dev/docs/transports/client_api) (see list of SDKs below).
 

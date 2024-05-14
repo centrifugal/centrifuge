@@ -232,7 +232,7 @@ func (c *channelMedium) CheckPosition(historyMetaTTL time.Duration, clientPositi
 	}
 	_, validPosition, err := c.checkPositionWithRetry(historyMetaTTL, clientPosition)
 	if err != nil {
-		// Will be checked later.
+		// Position will be checked again later.
 		return true
 	}
 	if !validPosition {
