@@ -1,7 +1,9 @@
 This is a sample simulation of football match where the entire state is sent into WebSocket connection upon every
-match event.
+match event. The example is not very idiomatic because we try to simulate various modes thus several different
+files were required. In practice, you will have JSON or Protobuf case only, and there is no need to tweak behaviour
+over URL params like we do here.
 
-The goal is to compare different compression strategies for WebSocket data transfer. Please note, that results
+The goal was to compare different compression strategies for WebSocket data transfer. Please note, that results
 depend a lot on the data you send. You may get absolutely different results for your data. Still we hope this
 example gives some insights on how to choose the best compression strategy and what to expect from Centrifuge.
 

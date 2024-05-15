@@ -58,6 +58,9 @@
                     debug: true,
                 });
 
+                // We are using cache recovery feature in the example, passing since: {} allows to trigger recovery
+                // on initial subscribe. For cache recovery the previous stream position does not matter - server
+                // just tries to extract latest publication from channel history and send it to client.
                 let subOptions = {
                     since: {},
                 }
