@@ -10,6 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
+
+	"github.com/centrifugal/protocol"
+	"github.com/segmentio/encoding/json"
+	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -444,10 +449,10 @@ func TestHubBroadcastPublication(t *testing.T) {
 		protocolVersion ProtocolVersion
 		uni             bool
 	}{
-		{name: "JSON-V2", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
-		{name: "Protobuf-V2", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
-		{name: "JSON-V2-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
-		{name: "Protobuf-V2-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "JSON", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
 	}
 
 	for _, tc := range tcs {
@@ -490,6 +495,298 @@ func TestHubBroadcastPublication(t *testing.T) {
 					}
 				case <-time.After(2 * time.Second):
 					t.Fatal("no data in sink")
+				}
+			}
+		})
+	}
+}
+
+func deltaTestNode() *Node {
+	n := defaultNodeNoHandlers()
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableRecovery:    true,
+					RecoveryMode:      RecoveryModeCache,
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				},
+			}, nil)
+		})
+		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
+			cb(PublishReply{}, nil)
+		})
+	})
+	return n
+}
+
+func deltaTestNodeNoRecovery() *Node {
+	n := defaultNodeNoHandlers()
+	n.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					AllowedDeltaTypes: []DeltaType{DeltaTypeFossil},
+				},
+			}, nil)
+		})
+		client.OnPublish(func(e PublishEvent, cb PublishCallback) {
+			cb(PublishReply{}, nil)
+		})
+	})
+	return n
+}
+
+func newTestSubscribedClientWithTransportDelta(t *testing.T, ctx context.Context, n *Node, transport Transport, userID, chanID string, deltaType DeltaType) *Client {
+	client := newTestConnectedClientWithTransport(t, ctx, n, transport, userID)
+	subscribeClientDelta(t, client, chanID, deltaType)
+	require.True(t, n.hub.NumSubscribers(chanID) > 0)
+	require.Contains(t, client.channels, chanID)
+	return client
+}
+
+func subscribeClientDelta(t testing.TB, client *Client, ch string, deltaType DeltaType) *protocol.SubscribeResult {
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: ch,
+		Delta:   string(deltaType),
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Nil(t, rwWrapper.replies[0].Error)
+	return rwWrapper.replies[0].Subscribe
+}
+
+func TestHubBroadcastPublicationDelta(t *testing.T) {
+	tcs := []struct {
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := deltaTestNode()
+			n.config.GetChannelNamespaceLabel = func(channel string) string {
+				return channel
+			}
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.sink = make(chan []byte, 100)
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransportDelta(
+				t, ctx, n, transport, "42", "test_channel", DeltaTypeFossil)
+
+			res, err := n.History("test_channel")
+			require.NoError(t, err)
+
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
+			}
+
+			// Broadcast same data to existing channel.
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 2},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+				nil,
+			)
+			require.NoError(t, err)
+
+		LOOP2:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						require.Fail(t, "should not receive same data twice - delta expected")
+					}
+					break LOOP2
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink 2")
+				}
+			}
+		})
+	}
+}
+
+func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
+	tcs := []struct {
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := deltaTestNodeNoRecovery()
+			n.config.GetChannelNamespaceLabel = func(channel string) string {
+				return channel
+			}
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.sink = make(chan []byte, 100)
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransportDelta(
+				t, ctx, n, transport, "42", "test_channel", DeltaTypeFossil)
+
+			res, err := n.History("test_channel")
+			require.NoError(t, err)
+
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
+			}
+
+			// Broadcast same data to existing channel.
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 2},
+				nil,
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+			)
+			require.NoError(t, err)
+
+		LOOP2:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						require.Fail(t, "should not receive same data twice - delta expected")
+					}
+					break LOOP2
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink 2")
+				}
+			}
+		})
+	}
+}
+
+func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
+	tcs := []struct {
+		name            string
+		protocolType    ProtocolType
+		protocolVersion ProtocolVersion
+		uni             bool
+	}{
+		{name: "JSON", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2},
+		{name: "Protobuf", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2},
+		{name: "JSON-uni", protocolType: ProtocolTypeJSON, protocolVersion: ProtocolVersion2, uni: true},
+		{name: "Protobuf-uni", protocolType: ProtocolTypeProtobuf, protocolVersion: ProtocolVersion2, uni: true},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			n := deltaTestNodeNoRecovery()
+			n.config.GetChannelNamespaceLabel = func(channel string) string {
+				return channel
+			}
+			defer func() { _ = n.Shutdown(context.Background()) }()
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			transport := newTestTransport(cancelFn)
+			transport.sink = make(chan []byte, 100)
+			transport.setProtocolType(tc.protocolType)
+			transport.setProtocolVersion(tc.protocolVersion)
+			transport.setUnidirectional(tc.uni)
+			newTestSubscribedClientWithTransportDelta(
+				t, ctx, n, transport, "42", "test_channel", DeltaTypeFossil)
+
+			err := n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+
+		LOOP:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						break LOOP
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink")
+				}
+			}
+
+			// Broadcast same data to existing channel.
+			err = n.hub.broadcastPublication(
+				"test_channel",
+				StreamPosition{},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				nil,
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+			)
+			require.NoError(t, err)
+
+		LOOP2:
+			for {
+				select {
+				case data := <-transport.sink:
+					if strings.Contains(string(data), "broadcast_data") {
+						require.Fail(t, "should not receive same data twice - delta expected")
+					}
+					break LOOP2
+				case <-time.After(2 * time.Second):
+					t.Fatal("no data in sink 2")
 				}
 			}
 		})
@@ -621,8 +918,8 @@ func TestHubSubscriptions(t *testing.T) {
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 
-	_, _ = h.addSub("test1", c)
-	_, _ = h.addSub("test2", c)
+	_, _ = h.addSub("test1", subInfo{client: c, deltaType: ""})
+	_, _ = h.addSub("test2", subInfo{client: c, deltaType: ""})
 	require.Equal(t, 2, h.NumChannels())
 	require.Contains(t, h.Channels(), "test1")
 	require.Contains(t, h.Channels(), "test2")
@@ -664,7 +961,7 @@ func TestUserConnections(t *testing.T) {
 	_ = h.add(c)
 
 	connections := h.UserConnections(c.UserID())
-	require.Equal(t, h.connShards[index(c.UserID(), numHubShards)].conns, connections)
+	require.Equal(t, h.connShards[index(c.UserID(), numHubShards)].clients, connections)
 }
 
 func TestHubSharding(t *testing.T) {
@@ -687,7 +984,7 @@ func TestHubSharding(t *testing.T) {
 			require.NoError(t, err)
 			_ = n.hub.add(c)
 			for _, ch := range channels {
-				_, _ = n.hub.addSub(ch, c)
+				_, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
 			}
 		}
 	}
@@ -726,7 +1023,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 		_ = n.hub.add(c)
 		clients = append(clients, c)
 		for _, ch := range channels {
-			_, _ = n.hub.addSub(ch, c)
+			_, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
 		}
 	}
 
@@ -746,7 +1043,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 				defer wg.Done()
 				_ = n.hub.BroadcastPublication(channels[(i+numChannels/2)%numChannels], pub, streamPosition)
 			}()
-			_, _ = n.hub.addSub(channels[i%numChannels], clients[i%numClients])
+			_, _ = n.hub.addSub(channels[i%numChannels], subInfo{client: clients[i%numClients], deltaType: ""})
 			wg.Wait()
 		}
 	})
@@ -755,9 +1052,11 @@ func BenchmarkHub_Contention(b *testing.B) {
 var broadcastBenches = []struct {
 	NumSubscribers int
 }{
+	{1},
+	{10},
+	{100},
 	{1000},
 	{10000},
-	{100000},
 }
 
 // BenchmarkHub_MassiveBroadcast allows estimating time to broadcast
@@ -768,27 +1067,20 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 
 	for _, tt := range broadcastBenches {
 		numSubscribers := tt.NumSubscribers
-		b.Run(fmt.Sprintf("%d", numSubscribers), func(b *testing.B) {
+		b.Run(fmt.Sprintf("subscribers_%d", numSubscribers), func(b *testing.B) {
 			b.ReportAllocs()
 			n := defaultTestNodeBenchmark(b)
 
-			numChannels := 64
-			channels := make([]string, 0, numChannels)
+			channel := "broadcast"
 
-			for i := 0; i < numChannels; i++ {
-				channels = append(channels, "broadcast"+strconv.Itoa(i))
-			}
-
-			sink := make(chan []byte, 1024)
+			sink := make(chan []byte, 10000)
 
 			for i := 0; i < numSubscribers; i++ {
 				t := newTestTransport(func() {})
 				t.setSink(sink)
 				c := newTestConnectedClientWithTransport(b, context.Background(), n, t, "12")
 				_ = n.hub.add(c)
-				for _, ch := range channels {
-					_, _ = n.hub.addSub(ch, c)
-				}
+				_, _ = n.hub.addSub(channel, subInfo{client: c, deltaType: ""})
 			}
 
 			b.ResetTimer()
@@ -806,7 +1098,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 						}
 					}
 				}()
-				_ = n.hub.BroadcastPublication(channels[i%numChannels], pub, streamPosition)
+				_ = n.hub.broadcastPublication(channel, streamPosition, pub, nil, nil)
 				wg.Wait()
 			}
 		})
@@ -898,4 +1190,125 @@ func TestHubBroadcastInappropriateProtocol_Leave(t *testing.T) {
 		client := newTestSubscribedClientV2(t, n, "42", "test_channel")
 		testFunc(client)
 	})
+}
+
+var testJsonData = []byte(`{
+   "_id":"662fb7df5110d6e8e9942fb2",
+   "index":0,
+   "guid":"a100afc6-fc35-47fd-8e3e-e8e9a81629ec",
+   "isActive":true,
+   "balance":"$2,784.25",
+   "picture":"http://placehold.it/32x32",
+   "age":21,
+   "eyeColor":"green",
+   "name":"Lois Norris",
+   "gender":"female",
+   "company":"ORGANICA",
+   "email":"loisnorris@organica.com",
+   "phone":"+1 (939) 451-2349",
+   "address":"774 Ide Court, Sabillasville, Virginia, 4034",
+   "about":"Cupidatat reprehenderit laboris aute pariatur nulla exercitation. Commodo aliqua cupidatat consectetur aliquip. Id irure nisi qui ullamco culpa reprehenderit nisi sunt consequat ipsum. Velit officia sint id voluptate anim. Sunt duis duis consequat mollit incididunt laborum enim amet ad aliqua esse nulla. Aliqua nulla adipisicing ad aliquip ut. Nostrud mollit ex aute magna culpa ea exercitation qui ex.\r\n",
+   "registered":"2023-02-28T11:09:34 -02:00",
+   "latitude":24.054483,
+   "longitude":38.953522,
+   "tags":[
+      "consequat",
+      "adipisicing",
+      "eiusmod",
+      "ipsum",
+      "enim",
+      "et",
+      "voluptate"
+   ],
+   "friends":[
+      {
+         "id":0,
+         "name":"Kaufman Randall"
+      },
+      {
+         "id":1,
+         "name":"Byrd Cooley"
+      },
+      {
+         "id":2,
+         "name":"Obrien William"
+      }
+   ],
+   "greeting":"Hello, Lois Norris! You have 9 unread messages.",
+   "favoriteFruit":"banana"
+}`)
+
+// Has some changes (in tags field, in friends field).
+var testNewJsonData = []byte(`{
+   "_id":"662fb7df5110d6e8e9942fb2",
+   "index":0,
+   "guid":"a100afc6-fc35-47fd-8e3e-e8e9a81629ec",
+   "isActive":true,
+   "balance":"$2,784.25",
+   "picture":"http://placehold.it/32x32",
+   "age":21,
+   "eyeColor":"green",
+   "name":"Lois Norris",
+   "gender":"female",
+   "company":"ORGANICA",
+   "email":"loisnorris@organica.com",
+   "phone":"+1 (939) 451-2349",
+   "address":"774 Ide Court, Sabillasville, Virginia, 4034",
+   "about":"Cupidatat reprehenderit laboris aute pariatur nulla exercitation. Commodo aliqua cupidatat consectetur aliquip. Id irure nisi qui ullamco culpa reprehenderit nisi sunt consequat ipsum. Velit officia sint id voluptate anim. Sunt duis duis consequat mollit incididunt laborum enim amet ad aliqua esse nulla. Aliqua nulla adipisicing ad aliquip ut. Nostrud mollit ex aute magna culpa ea exercitation qui ex.\r\n",
+   "registered":"2023-02-28T11:09:34 -02:00",
+   "latitude":24.054483,
+   "longitude":38.953522,
+   "tags":[
+      "consequat",
+      "adipisicing",
+      "eiusmod"
+   ],
+   "friends":[
+      {
+         "id":0,
+         "name":"Kaufman Randall"
+      },
+      {
+         "id":1,
+         "name":"Byrd Cooley"
+      }
+   ],
+   "greeting":"Hello, Lois Norris! You have 9 unread messages.",
+   "favoriteFruit":"banana"
+}`)
+
+func TestJsonStringEncode(t *testing.T) {
+	testBenchmarkDeltaFossilPatch = fdelta.Create(testJsonData, testNewJsonData)
+	if len(testBenchmarkDeltaFossilPatch) == 0 {
+		t.Fatal("empty fossil patch")
+	}
+	testDeltaJsonData, err := json.Marshal(convert.BytesToString(testBenchmarkDeltaFossilPatch))
+	require.NoError(t, err)
+	require.NotNil(t, testDeltaJsonData)
+
+	alternativeDeltaJsonData := json.Escape(convert.BytesToString(testBenchmarkDeltaFossilPatch))
+	require.Equal(t, testDeltaJsonData, alternativeDeltaJsonData)
+}
+
+var testBenchmarkEncodeData []byte
+
+func BenchmarkEncodeJSONString(b *testing.B) {
+	jsonData := []byte(`{"input": "test"}`)
+	for i := 0; i < b.N; i++ {
+		testBenchmarkEncodeData = json.Escape(convert.BytesToString(jsonData))
+		if len(testBenchmarkEncodeData) == 0 {
+			b.Fatal("empty data")
+		}
+	}
+}
+
+var testBenchmarkDeltaFossilPatch []byte
+
+func BenchmarkDeltaFossil(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		testBenchmarkDeltaFossilPatch = fdelta.Create(testJsonData, testNewJsonData)
+		if len(testBenchmarkDeltaFossilPatch) == 0 {
+			b.Fatal("empty fossil patch")
+		}
+	}
 }

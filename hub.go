@@ -5,7 +5,11 @@ import (
 	"io"
 	"sync"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
+
 	"github.com/centrifugal/protocol"
+	"github.com/segmentio/encoding/json"
+	fdelta "github.com/shadowspore/fossil-delta"
 )
 
 const numHubShards = 64
@@ -86,15 +90,15 @@ func (h *Hub) remove(c *Client) error {
 
 // Connections returns all user connections to the current Node.
 func (h *Hub) Connections() map[string]*Client {
-	conns := make(map[string]*Client)
+	connections := make(map[string]*Client)
 	for _, shard := range h.connShards {
 		shard.mu.RLock()
-		for clientID, c := range shard.conns {
-			conns[clientID] = c
+		for clientID, c := range shard.clients {
+			connections[clientID] = c
 		}
 		shard.mu.RUnlock()
 	}
-	return conns
+	return connections
 }
 
 // UserConnections returns all user connections to the current Node.
@@ -118,8 +122,8 @@ func (h *Hub) disconnect(userID string, disconnect Disconnect, clientID, session
 	return h.connShards[index(userID, numHubShards)].disconnect(userID, disconnect, clientID, sessionID, whitelist)
 }
 
-func (h *Hub) addSub(ch string, c *Client) (bool, error) {
-	return h.subShards[index(ch, numHubShards)].addSub(ch, c)
+func (h *Hub) addSub(ch string, sub subInfo) (bool, error) {
+	return h.subShards[index(ch, numHubShards)].addSub(ch, sub)
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
@@ -131,9 +135,13 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
 // Usually this is NOT what you need since in most cases you should use Node.Publish method which
 // uses a Broker to deliver publications to all Nodes in a cluster and maintains publication history
 // in a channel with incremental offset. By calling BroadcastPublication messages will only be sent
-// to the current node subscribers without any defined offset semantics.
+// to the current node subscribers without any defined offset semantics, without delta support.
 func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, pubToProto(pub), sp)
+	return h.broadcastPublication(ch, sp, pub, nil, nil)
+}
+
+func (h *Hub) broadcastPublication(ch string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, sp, pub, prevPub, localPrevPub)
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
@@ -201,15 +209,15 @@ func (h *Hub) NumChannels() int {
 type connShard struct {
 	mu sync.RWMutex
 	// match client ID with actual client connection.
-	conns map[string]*Client
+	clients map[string]*Client
 	// registry to hold active client connections grouped by user.
 	users map[string]map[string]struct{}
 }
 
 func newConnShard() *connShard {
 	return &connShard{
-		conns: make(map[string]*Client),
-		users: make(map[string]map[string]struct{}),
+		clients: make(map[string]*Client),
+		users:   make(map[string]map[string]struct{}),
 	}
 }
 
@@ -225,8 +233,8 @@ func (h *connShard) shutdown(ctx context.Context, sem chan struct{}) error {
 	h.mu.RLock()
 	// At this moment node won't accept new client connections, so we can
 	// safely copy existing clients and release lock.
-	clients := make([]*Client, 0, len(h.conns))
-	for _, client := range h.conns {
+	clients := make([]*Client, 0, len(h.clients))
+	for _, client := range h.clients {
 		clients = append(clients, client)
 	}
 	h.mu.RUnlock()
@@ -394,16 +402,16 @@ func (h *connShard) userConnections(userID string) map[string]*Client {
 		return map[string]*Client{}
 	}
 
-	conns := make(map[string]*Client, len(userConnections))
+	connections := make(map[string]*Client, len(userConnections))
 	for uid := range userConnections {
-		c, ok := h.conns[uid]
+		c, ok := h.clients[uid]
 		if !ok {
 			continue
 		}
-		conns[uid] = c
+		connections[uid] = c
 	}
 
-	return conns
+	return connections
 }
 
 // Add connection into clientHub connections registry.
@@ -414,7 +422,7 @@ func (h *connShard) add(c *Client) error {
 	uid := c.ID()
 	user := c.UserID()
 
-	h.conns[uid] = c
+	h.clients[uid] = c
 
 	if _, ok := h.users[user]; !ok {
 		h.users[user] = make(map[string]struct{})
@@ -431,7 +439,7 @@ func (h *connShard) remove(c *Client) error {
 	uid := c.ID()
 	user := c.UserID()
 
-	delete(h.conns, uid)
+	delete(h.clients, uid)
 
 	// try to find connection to delete, return early if not found.
 	if _, ok := h.users[user]; !ok {
@@ -470,32 +478,49 @@ func (h *connShard) NumUsers() int {
 	return len(h.users)
 }
 
+type DeltaType string
+
+const (
+	deltaTypeNone DeltaType = ""
+	// DeltaTypeFossil is Fossil delta encoding. See https://fossil-scm.org/home/doc/tip/www/delta_encoder_algorithm.wiki.
+	DeltaTypeFossil DeltaType = "fossil"
+)
+
+var stringToDeltaType = map[string]DeltaType{
+	"fossil": DeltaTypeFossil,
+}
+
+type subInfo struct {
+	client    *Client
+	deltaType DeltaType
+}
+
 type subShard struct {
 	mu sync.RWMutex
-	// registry to hold active subscriptions of clients to channels.
-	subs   map[string]map[string]*Client
+	// registry to hold active subscriptions of clients to channels with some additional info.
+	subs   map[string]map[string]subInfo
 	logger *logger
 }
 
 func newSubShard(logger *logger) *subShard {
 	return &subShard{
-		subs:   make(map[string]map[string]*Client),
+		subs:   make(map[string]map[string]subInfo),
 		logger: logger,
 	}
 }
 
 // addSub adds connection into clientHub subscriptions registry.
-func (h *subShard) addSub(ch string, c *Client) (bool, error) {
+func (h *subShard) addSub(ch string, sub subInfo) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	uid := c.ID()
+	uid := sub.client.ID()
 
 	_, ok := h.subs[ch]
 	if !ok {
-		h.subs[ch] = make(map[string]*Client)
+		h.subs[ch] = make(map[string]subInfo)
 	}
-	h.subs[ch][uid] = c
+	h.subs[ch][uid] = sub
 	if !ok {
 		return true, nil
 	}
@@ -535,8 +560,95 @@ type encodeError struct {
 	error  error
 }
 
-// broadcastPublication sends message to all clients subscribed on channel.
-func (h *subShard) broadcastPublication(channel string, pub *protocol.Publication, sp StreamPosition) error {
+type preparedKey struct {
+	ProtocolType   protocol.Type
+	Unidirectional bool
+	DeltaType      DeltaType
+}
+
+type preparedData struct {
+	fullData        []byte
+	brokerDeltaData []byte
+	localDeltaData  []byte
+	deltaSub        bool
+}
+
+func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
+	deltaPub := fullPub
+	if prevPub != nil && key.DeltaType == DeltaTypeFossil {
+		patch := fdelta.Create(prevPub.Data, fullPub.Data)
+		if key.ProtocolType == protocol.TypeJSON {
+			deltaPub = &protocol.Publication{
+				Offset: fullPub.Offset,
+				Data:   json.Escape(convert.BytesToString(patch)),
+				Info:   fullPub.Info,
+				Tags:   fullPub.Tags,
+				Delta:  true,
+			}
+		} else {
+			deltaPub = &protocol.Publication{
+				Offset: fullPub.Offset,
+				Data:   patch,
+				Info:   fullPub.Info,
+				Tags:   fullPub.Tags,
+				Delta:  true,
+			}
+		}
+	} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
+		// In JSON and Fossil case we need to send full state in JSON string format.
+		deltaPub = &protocol.Publication{
+			Offset: fullPub.Offset,
+			Data:   json.Escape(convert.BytesToString(fullPub.Data)),
+			Info:   fullPub.Info,
+			Tags:   fullPub.Tags,
+		}
+	}
+	return deltaPub
+}
+
+func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protocol.Publication, jsonEncodeErr *encodeError) ([]byte, error) {
+	var deltaData []byte
+	if key.ProtocolType == protocol.TypeJSON {
+		if sub.client.transport.Unidirectional() {
+			push := &protocol.Push{Channel: channel, Pub: deltaPub}
+			var err error
+			deltaData, err = protocol.DefaultJsonPushEncoder.Encode(push)
+			if err != nil {
+				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+			}
+		} else {
+			push := &protocol.Push{Channel: channel, Pub: deltaPub}
+			var err error
+			deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+			if err != nil {
+				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+			}
+		}
+	} else if key.ProtocolType == protocol.TypeProtobuf {
+		if sub.client.transport.Unidirectional() {
+			push := &protocol.Push{Channel: channel, Pub: deltaPub}
+			var err error
+			deltaData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			push := &protocol.Push{Channel: channel, Pub: deltaPub}
+			var err error
+			deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return deltaData, nil
+}
+
+// broadcastPublication sends message to all clients subscribed on a channel.
+func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
+	fullPub := pubToProto(pub)
+	preparedDataByKey := make(map[preparedKey]preparedData)
+
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -546,70 +658,104 @@ func (h *subShard) broadcastPublication(channel string, pub *protocol.Publicatio
 	}
 
 	var (
-		jsonReply     []byte
-		protobufReply []byte
-
-		jsonPush     []byte
-		protobufPush []byte
-
 		jsonEncodeErr *encodeError
 	)
 
-	for _, c := range channelSubscribers {
-		protoType := c.Transport().Protocol().toProto()
-		if protoType == protocol.TypeJSON {
-			if jsonEncodeErr != nil {
-				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
-				continue
-			}
-			if c.transport.Unidirectional() {
-				if jsonPush == nil {
-					push := &protocol.Push{Channel: channel, Pub: pub}
-					var err error
-					jsonPush, err = protocol.DefaultJsonPushEncoder.Encode(push)
-					if err != nil {
-						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
-						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
-						continue
-					}
-				}
-				_ = c.writePublication(channel, pub, jsonPush, sp)
-			} else {
-				if jsonReply == nil {
-					push := &protocol.Push{Channel: channel, Pub: pub}
-					var err error
-					jsonReply, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
-					if err != nil {
-						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
-						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
-						continue
-					}
-				}
-				_ = c.writePublication(channel, pub, jsonReply, sp)
-			}
-		} else if protoType == protocol.TypeProtobuf {
-			if c.transport.Unidirectional() {
-				if protobufPush == nil {
-					push := &protocol.Push{Channel: channel, Pub: pub}
-					var err error
-					protobufPush, err = protocol.DefaultProtobufPushEncoder.Encode(push)
-					if err != nil {
-						return err
-					}
-				}
-				_ = c.writePublication(channel, pub, protobufPush, sp)
-			} else {
-				if protobufReply == nil {
-					push := &protocol.Push{Channel: channel, Pub: pub}
-					var err error
-					protobufReply, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
-					if err != nil {
-						return err
-					}
-				}
-				_ = c.writePublication(channel, pub, protobufReply, sp)
-			}
+	for _, sub := range channelSubscribers {
+		key := preparedKey{
+			ProtocolType:   sub.client.Transport().Protocol().toProto(),
+			Unidirectional: sub.client.transport.Unidirectional(),
+			DeltaType:      sub.deltaType,
 		}
+		prepValue, prepDataFound := preparedDataByKey[key]
+		if !prepDataFound {
+			var brokerDeltaPub *protocol.Publication
+			if fullPub.Offset > 0 {
+				brokerDeltaPub = getDeltaPub(prevPub, fullPub, key)
+			}
+			localDeltaPub := getDeltaPub(localPrevPub, fullPub, key)
+
+			var brokerDeltaData []byte
+			var localDeltaData []byte
+			if key.DeltaType != deltaTypeNone {
+				var err error
+				brokerDeltaData, err = getDeltaData(sub, key, channel, brokerDeltaPub, jsonEncodeErr)
+				if err != nil {
+					return err
+				}
+				localDeltaData, err = getDeltaData(sub, key, channel, localDeltaPub, jsonEncodeErr)
+				if err != nil {
+					return err
+				}
+			}
+
+			var fullData []byte
+
+			if key.ProtocolType == protocol.TypeJSON {
+				if sub.client.transport.Unidirectional() {
+					pubToUse := fullPub
+					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
+						pubToUse = &protocol.Publication{
+							Offset: fullPub.Offset,
+							Data:   json.Escape(convert.BytesToString(fullPub.Data)),
+							Info:   fullPub.Info,
+							Tags:   fullPub.Tags,
+						}
+					}
+					push := &protocol.Push{Channel: channel, Pub: pubToUse}
+					var err error
+					fullData, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					if err != nil {
+						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+					}
+				} else {
+					pubToUse := fullPub
+					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
+						pubToUse = &protocol.Publication{
+							Offset: fullPub.Offset,
+							Data:   json.Escape(convert.BytesToString(fullPub.Data)),
+							Info:   fullPub.Info,
+							Tags:   fullPub.Tags,
+						}
+					}
+					push := &protocol.Push{Channel: channel, Pub: pubToUse}
+					var err error
+					fullData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					if err != nil {
+						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+					}
+				}
+			} else if key.ProtocolType == protocol.TypeProtobuf {
+				if sub.client.transport.Unidirectional() {
+					push := &protocol.Push{Channel: channel, Pub: fullPub}
+					var err error
+					fullData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					if err != nil {
+						return err
+					}
+				} else {
+					push := &protocol.Push{Channel: channel, Pub: fullPub}
+					var err error
+					fullData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			prepValue = preparedData{
+				fullData:        fullData,
+				brokerDeltaData: brokerDeltaData,
+				localDeltaData:  localDeltaData,
+				deltaSub:        key.DeltaType != deltaTypeNone,
+			}
+			preparedDataByKey[key] = prepValue
+		}
+		if sub.client.transport.Protocol() == ProtocolTypeJSON && jsonEncodeErr != nil {
+			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
+			continue
+		}
+		_ = sub.client.writePublication(channel, fullPub, prepValue, sp)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
@@ -643,40 +789,40 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 		jsonEncodeErr *encodeError
 	)
 
-	for _, c := range channelSubscribers {
-		protoType := c.Transport().Protocol().toProto()
+	for _, sub := range channelSubscribers {
+		protoType := sub.client.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonEncodeErr != nil {
-				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 				continue
 			}
-			if c.transport.Unidirectional() {
+			if sub.client.transport.Unidirectional() {
 				if jsonPush == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
 					var err error
 					jsonPush, err = protocol.DefaultJsonPushEncoder.Encode(push)
 					if err != nil {
-						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
-						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 						continue
 					}
 				}
-				_ = c.writeJoin(channel, join, jsonPush)
+				_ = sub.client.writeJoin(channel, join, jsonPush)
 			} else {
 				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
 					var err error
 					jsonReply, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
-						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
-						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 						continue
 					}
 				}
-				_ = c.writeJoin(channel, join, jsonReply)
+				_ = sub.client.writeJoin(channel, join, jsonReply)
 			}
 		} else if protoType == protocol.TypeProtobuf {
-			if c.transport.Unidirectional() {
+			if sub.client.transport.Unidirectional() {
 				if protobufPush == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
 					var err error
@@ -685,7 +831,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						return err
 					}
 				}
-				_ = c.writeJoin(channel, join, protobufPush)
+				_ = sub.client.writeJoin(channel, join, protobufPush)
 			} else {
 				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
@@ -695,7 +841,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						return err
 					}
 				}
-				_ = c.writeJoin(channel, join, protobufReply)
+				_ = sub.client.writeJoin(channel, join, protobufReply)
 			}
 		}
 	}
@@ -731,40 +877,40 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 		jsonEncodeErr *encodeError
 	)
 
-	for _, c := range channelSubscribers {
-		protoType := c.Transport().Protocol().toProto()
+	for _, sub := range channelSubscribers {
+		protoType := sub.client.Transport().Protocol().toProto()
 		if protoType == protocol.TypeJSON {
 			if jsonEncodeErr != nil {
-				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 				continue
 			}
-			if c.transport.Unidirectional() {
+			if sub.client.transport.Unidirectional() {
 				if jsonPush == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
 					var err error
 					jsonPush, err = protocol.DefaultJsonPushEncoder.Encode(push)
 					if err != nil {
-						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
-						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 						continue
 					}
 				}
-				_ = c.writeLeave(channel, leave, jsonPush)
+				_ = sub.client.writeLeave(channel, leave, jsonPush)
 			} else {
 				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
 					var err error
 					jsonReply, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
 					if err != nil {
-						jsonEncodeErr = &encodeError{client: c.ID(), user: c.UserID(), error: err}
-						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
+						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
+						go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 						continue
 					}
 				}
-				_ = c.writeLeave(channel, leave, jsonReply)
+				_ = sub.client.writeLeave(channel, leave, jsonReply)
 			}
 		} else if protoType == protocol.TypeProtobuf {
-			if c.transport.Unidirectional() {
+			if sub.client.transport.Unidirectional() {
 				if protobufPush == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
 					var err error
@@ -773,7 +919,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						return err
 					}
 				}
-				_ = c.writeLeave(channel, leave, protobufPush)
+				_ = sub.client.writeLeave(channel, leave, protobufPush)
 			} else {
 				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
@@ -783,7 +929,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						return err
 					}
 				}
-				_ = c.writeLeave(channel, leave, protobufReply)
+				_ = sub.client.writeLeave(channel, leave, protobufReply)
 			}
 		}
 	}
@@ -834,9 +980,9 @@ func (h *subShard) Channels() []string {
 func (h *subShard) NumSubscribers(ch string) int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	conns, ok := h.subs[ch]
+	clients, ok := h.subs[ch]
 	if !ok {
 		return 0
 	}
-	return len(conns)
+	return len(clients)
 }

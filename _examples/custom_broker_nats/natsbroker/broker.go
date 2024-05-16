@@ -192,7 +192,7 @@ func (b *NatsBroker) handleClientMessage(subject string, data []byte) error {
 		if err != nil {
 			return err
 		}
-		_ = b.eventHandler.HandlePublication(channel, &pub, centrifuge.StreamPosition{})
+		_ = b.eventHandler.HandlePublication(channel, &pub, centrifuge.StreamPosition{}, nil)
 	case joinPushType:
 		var info centrifuge.ClientInfo
 		err := json.Unmarshal(p.Data, &info)

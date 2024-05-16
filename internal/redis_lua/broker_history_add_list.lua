@@ -9,6 +9,7 @@ local meta_expire = ARGV[5]
 local new_epoch_if_empty = ARGV[6]
 local publish_command = ARGV[7]
 local result_key_expire = ARGV[8]
+local use_delta = ARGV[9]
 
 if result_key_expire ~= '' then
     local cached_result = redis.call("hmget", result_key, "e", "s")
@@ -30,12 +31,20 @@ if meta_expire ~= '0' then
   redis.call("expire", meta_key, meta_expire)
 end
 
+local prev_message_payload = ""
+if use_delta == "1" then
+    prev_message_payload = redis.call("lindex", list_key, 0) or ""
+end
+
 local payload = "__" .. "p1:" .. top_offset .. ":" .. current_epoch .. "__" .. message_payload
 redis.call("lpush", list_key, payload)
 redis.call("ltrim", list_key, 0, ltrim_right_bound)
 redis.call("expire", list_key, list_ttl)
 
 if channel ~= '' then
+  if use_delta == "1" then
+    payload = "__" .. "d1:" .. top_offset .. ":" .. current_epoch .. ":" .. #prev_message_payload .. ":" .. prev_message_payload .. ":" .. #message_payload .. ":" .. message_payload
+  end
   redis.call(publish_command, channel, payload)
 end
 

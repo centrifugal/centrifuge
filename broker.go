@@ -35,7 +35,7 @@ type ClientInfo struct {
 // BrokerEventHandler can handle messages received from PUB/SUB system.
 type BrokerEventHandler interface {
 	// HandlePublication to handle received Publications.
-	HandlePublication(ch string, pub *Publication, sp StreamPosition) error
+	HandlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error
 	// HandleJoin to handle received Join messages.
 	HandleJoin(ch string, info *ClientInfo) error
 	// HandleLeave to handle received Leave messages.
@@ -112,6 +112,8 @@ type PublishOptions struct {
 	// with second precision, so don't set something less than one second here. By default,
 	// Centrifuge uses 5 minutes as idempotent result TTL.
 	IdempotentResultTTL time.Duration
+	// UseDelta enables using delta encoding for the publication.
+	UseDelta bool
 }
 
 // Broker is responsible for PUB/SUB mechanics.

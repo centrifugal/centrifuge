@@ -22,6 +22,13 @@ func TestWithIdempotencyKey(t *testing.T) {
 	require.Equal(t, "ik", opts.IdempotencyKey)
 }
 
+func TestWithDelta(t *testing.T) {
+	opt := WithDelta(true)
+	opts := &PublishOptions{}
+	opt(opts)
+	require.True(t, opts.UseDelta)
+}
+
 func TestWithIdempotentResultTTL(t *testing.T) {
 	opt := WithIdempotentResultTTL(time.Minute)
 	opts := &PublishOptions{}
@@ -48,6 +55,7 @@ func TestSubscribeOptions(t *testing.T) {
 		WithSubscribeSession("session"),
 		WithSubscribeClient("test"),
 		WithSubscribeSource(4),
+		WithRecoveryMode(RecoveryModeCache),
 	}
 	opts := &SubscribeOptions{}
 	for _, opt := range subscribeOpts {
@@ -63,6 +71,7 @@ func TestSubscribeOptions(t *testing.T) {
 	require.Equal(t, "test", opts.clientID)
 	require.Equal(t, "session", opts.sessionID)
 	require.Equal(t, uint8(4), opts.Source)
+	require.Equal(t, RecoveryModeCache, opts.RecoveryMode)
 }
 
 func TestWithDisconnect(t *testing.T) {

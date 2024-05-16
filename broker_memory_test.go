@@ -141,7 +141,7 @@ func TestMemoryBrokerPublishIdempotent(t *testing.T) {
 	numPubs := 0
 
 	e.eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 			numPubs++
 			return nil
 		},
@@ -169,7 +169,7 @@ func TestMemoryBrokerPublishIdempotentWithHistory(t *testing.T) {
 	numPubs := 0
 
 	e.eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 			numPubs++
 			return nil
 		},
@@ -229,10 +229,10 @@ func TestMemoryHistoryHub(t *testing.T) {
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
-	_, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
 
 	hist, _, err := h.get(ch1, HistoryOptions{
 		Filter: HistoryFilter{
@@ -271,10 +271,10 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 0, len(hist))
 
 	// test history messages limit
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
 	hist, _, err = h.get(ch1, HistoryOptions{
 		Filter: HistoryFilter{
 			Limit: -1,
@@ -291,8 +291,8 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 1, len(hist))
 
 	// test history limit greater than history size
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 	hist, _, err = h.get(ch1, HistoryOptions{
 		Filter: HistoryFilter{
 			Limit: 2,
@@ -312,10 +312,10 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	h.RLock()
 	require.Equal(t, int64(0), h.nextRemoveCheck)
 	h.RUnlock()
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
-	_, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
+	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
 	h.RLock()
 	require.True(t, h.nextRemoveCheck > 0)
 	require.Equal(t, 2, len(h.streams))
@@ -350,10 +350,10 @@ func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
 	h.RLock()
 	require.Equal(t, int64(0), h.nextRemoveCheck)
 	h.RUnlock()
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
-	_, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
-	_, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
-	_, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
 	h.RLock()
 	require.True(t, h.nextRemoveCheck > 0)
 	require.Equal(t, 2, len(h.streams))
@@ -545,19 +545,33 @@ type recoverTest struct {
 	Sleep             int
 	Limit             int
 	Recovered         bool
+	RecoveryMode      RecoveryMode
 }
 
 var clientRecoverTests = []recoverTest{
-	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true},
-	{"from_position", 10, 60, 10, 8, 2, 0, 0, true},
-	{"from_position_limited", 10, 60, 10, 5, 0, 0, 2, false},
-	{"from_position_with_server_limit", 10, 60, 10, 5, 0, 0, 1, false},
-	{"from_position_that_already_gone", 10, 60, 20, 8, 0, 0, 0, false},
-	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false},
-	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true},
-	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true},
-	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, 0, false},
-	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true},
+	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true, RecoveryModeStream},
+	{"from_position", 10, 60, 10, 8, 2, 0, 0, true, RecoveryModeStream},
+	{"from_position_limited", 10, 60, 10, 5, 0, 0, 2, false, RecoveryModeStream},
+	{"from_position_with_server_limit", 10, 60, 10, 5, 0, 0, 1, false, RecoveryModeStream},
+	{"from_position_that_already_gone", 10, 60, 20, 8, 0, 0, 0, false, RecoveryModeStream},
+	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false, RecoveryModeStream},
+	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true, RecoveryModeStream},
+	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true, RecoveryModeStream},
+	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, 0, false, RecoveryModeStream},
+	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true, RecoveryModeStream},
+	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true, RecoveryModeStream},
+
+	{"cache_empty_stream", 10, 60, 0, 0, 0, 0, 0, false, RecoveryModeCache},
+	{"cache_from_position", 10, 60, 10, 8, 1, 0, 0, true, RecoveryModeCache},
+	{"cache_from_position_limited", 10, 60, 10, 5, 1, 0, 2, true, RecoveryModeCache},
+	{"cache_from_position_with_server_limit", 10, 60, 10, 5, 1, 0, 1, true, RecoveryModeCache},
+	{"cache_from_position_that_already_gone", 10, 60, 20, 8, 1, 0, 0, true, RecoveryModeCache},
+	{"cache_from_position_that_not_exist_yet", 10, 60, 20, 108, 1, 0, 0, true, RecoveryModeCache},
+	{"cache_same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true, RecoveryModeCache},
+	{"cache_empty_position_recover_expected", 10, 60, 4, 0, 1, 0, 0, true, RecoveryModeCache},
+	{"cache_from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, 0, false, RecoveryModeCache},
+	{"cache_from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true, RecoveryModeCache},
+	{"cache_from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true, RecoveryModeCache},
 }
 
 type recoverTestChannel struct {
@@ -576,7 +590,7 @@ func TestClientSubscribeRecover(t *testing.T) {
 			node.config.RecoveryMaxPublicationLimit = tt.Limit
 			node.OnConnect(func(client *Client) {
 				client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
-					opts := SubscribeOptions{EnableRecovery: true}
+					opts := SubscribeOptions{EnableRecovery: true, RecoveryMode: tt.RecoveryMode}
 					cb(SubscribeReply{Options: opts}, nil)
 				})
 			})
@@ -615,8 +629,8 @@ func TestClientSubscribeRecover(t *testing.T) {
 				require.Nil(t, disconnect)
 				require.Nil(t, rwWrapper.replies[0].Error)
 				res := extractSubscribeResult(rwWrapper.replies)
-				require.Equal(t, tt.NumRecovered, len(res.Publications))
 				require.Equal(t, tt.Recovered, res.Recovered)
+				require.Equal(t, tt.NumRecovered, len(res.Publications))
 				if len(res.Publications) > 1 {
 					require.True(t, res.Publications[0].Offset < res.Publications[1].Offset)
 				}
@@ -753,4 +767,20 @@ func BenchmarkMemoryBrokerHistoryIteration(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		it.testHistoryIteration(b, e.node, startPosition)
 	}
+}
+
+func TestMemoryHistoryHubPrevPub(t *testing.T) {
+	t.Parallel()
+	h := newHistoryHub(0, make(chan struct{}))
+	h.runCleanups()
+	h.RLock()
+	require.Equal(t, 0, len(h.streams))
+	h.RUnlock()
+	defer h.close()
+	ch1 := "channel1"
+	pub := newTestPublication()
+	_, prevPub, _ := h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, UseDelta: true})
+	require.Nil(t, prevPub)
+	_, prevPub, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, UseDelta: true})
+	require.NotNil(t, prevPub)
 }

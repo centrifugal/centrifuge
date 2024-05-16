@@ -47,20 +47,21 @@ type metrics struct {
 	messagesSentCountLeave       prometheus.Counter
 	messagesSentCountControl     prometheus.Counter
 
-	actionCountAddClient        prometheus.Counter
-	actionCountRemoveClient     prometheus.Counter
-	actionCountAddSub           prometheus.Counter
-	actionCountRemoveSub        prometheus.Counter
-	actionCountAddPresence      prometheus.Counter
-	actionCountRemovePresence   prometheus.Counter
-	actionCountPresence         prometheus.Counter
-	actionCountPresenceStats    prometheus.Counter
-	actionCountHistory          prometheus.Counter
-	actionCountHistoryRecover   prometheus.Counter
-	actionCountHistoryStreamTop prometheus.Counter
-	actionCountHistoryRemove    prometheus.Counter
-	actionCountSurvey           prometheus.Counter
-	actionCountNotify           prometheus.Counter
+	actionCountAddClient                 prometheus.Counter
+	actionCountRemoveClient              prometheus.Counter
+	actionCountAddSub                    prometheus.Counter
+	actionCountRemoveSub                 prometheus.Counter
+	actionCountAddPresence               prometheus.Counter
+	actionCountRemovePresence            prometheus.Counter
+	actionCountPresence                  prometheus.Counter
+	actionCountPresenceStats             prometheus.Counter
+	actionCountHistory                   prometheus.Counter
+	actionCountHistoryRecover            prometheus.Counter
+	actionCountHistoryStreamTop          prometheus.Counter
+	actionCountHistoryStreamTopLatestPub prometheus.Counter
+	actionCountHistoryRemove             prometheus.Counter
+	actionCountSurvey                    prometheus.Counter
+	actionCountNotify                    prometheus.Counter
 
 	recoverCountYes prometheus.Counter
 	recoverCountNo  prometheus.Counter
@@ -283,6 +284,8 @@ func (m *metrics) incActionCount(action string) {
 		m.actionCountHistoryRecover.Inc()
 	case "history_stream_top":
 		m.actionCountHistoryStreamTop.Inc()
+	case "history_stream_top_latest_pub":
+		m.actionCountHistoryStreamTopLatestPub.Inc()
 	case "history_remove":
 		m.actionCountHistoryRemove.Inc()
 	case "survey":
@@ -465,6 +468,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	m.actionCountHistory = m.actionCount.WithLabelValues("history")
 	m.actionCountHistoryRecover = m.actionCount.WithLabelValues("history_recover")
 	m.actionCountHistoryStreamTop = m.actionCount.WithLabelValues("history_stream_top")
+	m.actionCountHistoryStreamTopLatestPub = m.actionCount.WithLabelValues("history_stream_top_latest_pub")
 	m.actionCountHistoryRemove = m.actionCount.WithLabelValues("history_remove")
 	m.actionCountSurvey = m.actionCount.WithLabelValues("survey")
 	m.actionCountNotify = m.actionCount.WithLabelValues("notify")

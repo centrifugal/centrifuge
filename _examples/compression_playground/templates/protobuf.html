@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title></title>
+    <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.X.X/dist/protobuf.js"></script>
+    <link rel="stylesheet" href="/static/app.css">
+    <script type="text/javascript" src="https://unpkg.com/centrifuge@5.2.0-beta.1/dist/centrifuge.protobuf.js"></script>
+    <script type="text/javascript">
+        window.addEventListener('load', function() {
+            const url = new URL(window.location.href);
+            const params = url.searchParams;
+
+            const protocol = params.get('protocol'); // "json | protobuf"
+            const payload = params.get('payload'); // "json | protobuf"
+            const compression = params.get('compression'); // "yes | no"
+            const delta = params.get('delta'); // "yes | no"
+            const delay = params.get('delay'); // "yes | no"
+
+            protobuf.load("/static/app.proto", function(err, root) {
+                if (err) throw err;
+
+                let wsEndpoint = "ws://localhost:8000/connection/websocket/no_compression?v=1";
+                if (compression === "yes") {
+                    wsEndpoint = "ws://localhost:8000/connection/websocket/with_compression?v=1";
+                }
+
+                if (payload === "protobuf") {
+                    wsEndpoint += "&payload=protobuf";
+                }
+
+                if (delay === "yes") {
+                    wsEndpoint += "&delay=yes";
+                }
+
+                const Match = root.lookupType("centrifugal.centrifuge.examples.compression_playground.Match");
+
+                let channel = "match:pb:1";
+                if (payload === "json") {
+                    channel = "match:js:1";
+                }
+
+                function render(data) {
+                    const app = document.getElementById('app');
+                    const matchNumber = data.id || 0;
+                    const homeTeamName = data.homeTeam.name;
+                    const awayTeamName = data.awayTeam.name;
+                    const homeTeamScore = data.homeTeam.score || 0;
+                    const awayTeamScore = data.awayTeam.score || 0;
+
+                    // Clear previous content.
+                    app.innerHTML = '';
+
+                    const scoreDisplay = document.createElement('div');
+                    scoreDisplay.innerHTML = `<h2>Score for match #${matchNumber}</h2>
+                                  <p>${homeTeamName} ${homeTeamScore} - ${awayTeamScore} ${awayTeamName}</p>`;
+                    app.appendChild(scoreDisplay);
+                }
+
+                const centrifuge = new Centrifuge(wsEndpoint, {
+                    debug: true,
+                });
+
+                let subOptions = {
+                    since: {},
+                }
+
+                if (delta === "yes") {
+                    subOptions.delta = "fossil";
+                }
+
+                // subscribe on channel and bind various event listeners. Actual
+                // subscription request will be sent after client connects to
+                // a server.
+                const sub = centrifuge.newSubscription(channel, subOptions);
+
+                sub.on("publication", (ctx) => {
+                    let matchData = ctx.data;
+                    if (protocol === "protobuf" && payload === "json") {
+                        const matchJSON = new TextDecoder("utf-8").decode(matchData);
+                        matchData = JSON.parse(matchJSON)
+                    } else if (protocol === "protobuf" && payload === "protobuf") {
+                        const message = Match.decode(matchData);
+                        matchData = Match.toObject(message, {
+                            longs: String,
+                            enums: String,
+                            bytes: String,
+                        });
+                    }
+                    render(matchData);
+                })
+
+                sub.subscribe();
+                centrifuge.connect();
+            });
+        });
+    </script>
+</head>
+<body>
+    <a href="/">Home</a>
+    <div id="app"></div>
+</body>
+</html>
