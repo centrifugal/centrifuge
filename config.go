@@ -20,6 +20,10 @@ type Config struct {
 	// aggregation. It's not reasonable to have it less than one second.
 	// Zero value means 60 * time.Second.
 	NodeInfoMetricsAggregateInterval time.Duration
+	// ClientConnectIncludeServerTime tells Centrifuge to append `time` field to Connect result of client protocol.
+	// This field contains Unix timestamp in milliseconds and represents current server time. By default, server time
+	// is not included.
+	ClientConnectIncludeServerTime bool
 	// ClientPresenceUpdateInterval sets an interval how often connected
 	// clients update presence information.
 	// Zero value means 25 * time.Second.
