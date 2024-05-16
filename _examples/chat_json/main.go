@@ -250,11 +250,12 @@ func main() {
 
 	server := &http.Server{
 		Handler:      mux,
-		Addr:         ":" + strconv.Itoa(*port),
+		Addr:         "127.0.0.1:" + strconv.Itoa(*port),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
+	log.Print("Starting server, visit http://localhost:8000")
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)

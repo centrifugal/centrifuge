@@ -650,6 +650,46 @@ func TestClientSubscribeBrokerErrorOnRecoverHistory(t *testing.T) {
 	}
 }
 
+func TestClientSubscribeDeltaNotAllowed(t *testing.T) {
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client := newTestConnectedClientWithTransport(t, ctx, n, transport, "42")
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_channel",
+		Delta:   string(DeltaTypeFossil),
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(rwWrapper.replies))
+	require.Nil(t, rwWrapper.replies[0].Error)
+	res := extractSubscribeResult(rwWrapper.replies)
+	require.False(t, res.Delta)
+}
+
+func TestClientSubscribeUnknownDelta(t *testing.T) {
+	n := deltaTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.sink = make(chan []byte, 100)
+	transport.setProtocolType(ProtocolTypeJSON)
+	transport.setProtocolVersion(ProtocolVersion2)
+	client := newTestConnectedClientWithTransport(t, ctx, n, transport, "42")
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test_channel",
+		Delta:   "invalid",
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.Equal(t, DisconnectBadRequest, err)
+}
+
 func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch string) {
 	t.Parallel()
 	broker := NewTestBroker()
@@ -678,9 +718,9 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 
-	err = node.handlePublication("test", &Publication{
+	err = node.handlePublication("test", StreamPosition{offset, epoch}, &Publication{
 		Offset: offset,
-	}, StreamPosition{offset, epoch})
+	}, nil, nil)
 	require.NoError(t, err)
 
 	select {
@@ -1505,7 +1545,7 @@ func TestClientPublishNotAvailable(t *testing.T) {
 
 type testBrokerEventHandler struct {
 	// Publication must register callback func to handle Publications received.
-	HandlePublicationFunc func(ch string, pub *Publication, sp StreamPosition) error
+	HandlePublicationFunc func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error
 	// Join must register callback func to handle Join messages received.
 	HandleJoinFunc func(ch string, info *ClientInfo) error
 	// Leave must register callback func to handle Leave messages received.
@@ -1514,9 +1554,9 @@ type testBrokerEventHandler struct {
 	HandleControlFunc func([]byte) error
 }
 
-func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
+func (b *testBrokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	if b.HandlePublicationFunc != nil {
-		return b.HandlePublicationFunc(ch, pub, sp)
+		return b.HandlePublicationFunc(ch, pub, sp, prevPub)
 	}
 	return nil
 }
@@ -1562,7 +1602,7 @@ func TestClientPublishHandler(t *testing.T) {
 	connectClientV2(t, client)
 
 	node.broker.(*MemoryBroker).eventHandler = &testBrokerEventHandler{
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 			var msg testClientMessage
 			err := json.Unmarshal(pub.Data, &msg)
 			require.NoError(t, err)
@@ -2997,81 +3037,12 @@ func TestClientCheckPosition(t *testing.T) {
 	}
 	node.mu.Unlock()
 
-	// no recover.
+	// no flagPositioning.
 	got := client.checkPosition(300*time.Second, "channel", ChannelContext{})
 	require.True(t, got)
 
 	// not initial, not time to check.
 	got = client.checkPosition(300*time.Second, "channel", ChannelContext{positionCheckTime: 50, flags: flagPositioning})
-	require.True(t, got)
-}
-
-func TestClientIsValidPosition(t *testing.T) {
-	node := defaultTestNode()
-	defer func() { _ = node.Shutdown(context.Background()) }()
-
-	client := newTestClient(t, node, "42")
-
-	node.mu.Lock()
-	node.nowTimeGetter = func() time.Time {
-		return time.Unix(200, 0)
-	}
-	node.mu.Unlock()
-
-	client.channels = map[string]ChannelContext{
-		"example": {
-			flags:             flagSubscribed,
-			positionCheckTime: 50,
-			streamPosition: StreamPosition{
-				Offset: 20,
-				Epoch:  "test",
-			},
-		},
-	}
-
-	got := client.isValidPosition(StreamPosition{
-		Offset: 20,
-		Epoch:  "test",
-	}, 200, "example")
-	require.True(t, got)
-	require.Equal(t, int64(200), client.channels["example"].positionCheckTime)
-
-	got = client.isValidPosition(StreamPosition{
-		Offset: 19,
-		Epoch:  "test",
-	}, 210, "example")
-	require.True(t, got)
-	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
-
-	got = client.isValidPosition(StreamPosition{
-		Offset: 21,
-		Epoch:  "test",
-	}, 220, "example")
-	require.False(t, got)
-	require.Equal(t, int64(210), client.channels["example"].positionCheckTime)
-
-	client.channels = map[string]ChannelContext{
-		"example": {
-			positionCheckTime: 50,
-			streamPosition: StreamPosition{
-				Offset: 20,
-				Epoch:  "test",
-			},
-		},
-	}
-	// no subscribed flag.
-	got = client.isValidPosition(StreamPosition{
-		Offset: 21,
-		Epoch:  "test",
-	}, 220, "example")
-	require.True(t, got)
-
-	_ = client.close(DisconnectConnectionClosed)
-	// closed client.
-	got = client.isValidPosition(StreamPosition{
-		Offset: 21,
-		Epoch:  "test",
-	}, 220, "example")
 	require.True(t, got)
 }
 
@@ -3082,7 +3053,7 @@ func TestErrLogLevel(t *testing.T) {
 
 func errLogLevel(err error) LogLevel {
 	logLevel := LogLevelInfo
-	if err != ErrorNotAvailable {
+	if !errors.Is(err, ErrorNotAvailable) {
 		logLevel = LogLevelError
 	}
 	return logLevel

@@ -83,6 +83,8 @@ type Node struct {
 	nodeInfoSendHandler NodeInfoSendHandler
 
 	emulationSurveyHandler *emulationSurveyHandler
+
+	mediums map[string]*channelMedium
 }
 
 const (
@@ -162,6 +164,7 @@ func New(c Config) (*Node, error) {
 		subDissolver:   dissolve.New(numSubDissolverWorkers),
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
+		mediums:        map[string]*channelMedium{},
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
@@ -683,14 +686,14 @@ func (n *Node) handleControl(data []byte) error {
 // handlePublication handles messages published into channel and
 // coming from Broker. The goal of method is to deliver this message
 // to all clients on this node currently subscribed to channel.
-func (n *Node) handlePublication(ch string, pub *Publication, sp StreamPosition) error {
+func (n *Node) handlePublication(ch string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
 	n.metrics.incMessagesReceived("publication")
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	return n.hub.BroadcastPublication(ch, pub, sp)
+	return n.hub.broadcastPublication(ch, sp, pub, prevPub, localPrevPub)
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -971,19 +974,37 @@ func (n *Node) removeClient(c *Client) error {
 
 // addSubscription registers subscription of connection on channel in both
 // Hub and Broker.
-func (n *Node) addSubscription(ch string, c *Client) error {
+func (n *Node) addSubscription(ch string, sub subInfo) error {
 	n.metrics.incActionCount("add_subscription")
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	first, err := n.hub.addSub(ch, c)
+	first, err := n.hub.addSub(ch, sub)
 	if err != nil {
 		return err
 	}
 	if first {
+		if n.config.GetChannelMediumOptions != nil {
+			mediumOptions, ok := n.config.GetChannelMediumOptions(ch)
+			if ok {
+				medium, err := newChannelMedium(ch, n, mediumOptions)
+				if err != nil {
+					return err
+				}
+				n.mediums[ch] = medium
+			}
+		}
+
 		err := n.broker.Subscribe(ch)
 		if err != nil {
-			_, _ = n.hub.removeSub(ch, c)
+			_, _ = n.hub.removeSub(ch, sub.client)
+			if n.config.GetChannelMediumOptions != nil {
+				medium, ok := n.mediums[ch]
+				if ok {
+					medium.close()
+					delete(n.mediums, ch)
+				}
+			}
 			return err
 		}
 	}
@@ -1017,6 +1038,12 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 				if err != nil {
 					// Cool down a bit since broker is not ready to process unsubscription.
 					time.Sleep(500 * time.Millisecond)
+				} else {
+					medium, ok := n.mediums[ch]
+					if ok {
+						medium.close()
+						delete(n.mediums, ch)
+					}
 				}
 				return err
 			}
@@ -1337,6 +1364,29 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 	}), WithHistoryMetaTTL(historyMetaTTL))
 }
 
+// recoverCache recovers last publication in channel.
+func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
+	n.metrics.incActionCount("history_recover")
+	return n.streamTopLatestPub(ch, historyMetaTTL)
+}
+
+// streamTopLatestPub returns latest publication in channel with actual stream position.
+func (n *Node) streamTopLatestPub(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
+	n.metrics.incActionCount("history_stream_top_latest_pub")
+	hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
+		Limit:   1,
+		Reverse: true,
+	}), WithHistoryMetaTTL(historyMetaTTL))
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+	var latestPublication *Publication
+	if len(hr.Publications) > 0 {
+		latestPublication = hr.Publications[0]
+	}
+	return latestPublication, hr.StreamPosition, nil
+}
+
 // streamTop returns current stream top StreamPosition for a channel.
 func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error) {
 	n.metrics.incActionCount("history_stream_top")
@@ -1345,6 +1395,24 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 		return StreamPosition{}, err
 	}
 	return historyResult.StreamPosition, nil
+}
+
+func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration) (bool, error) {
+	mu := n.subLock(ch)
+	mu.Lock()
+	medium, ok := n.mediums[ch]
+	mu.Unlock()
+	if !ok || !medium.options.EnablePositionSync {
+		// No medium for channel or position sync disabled – we then check position over Broker.
+		streamTop, err := n.streamTop(ch, historyMetaTTL)
+		if err != nil {
+			// Will be checked later.
+			return false, err
+		}
+		return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
+	}
+	validPosition := medium.CheckPosition(historyMetaTTL, clientPosition, n.config.ClientChannelPositionCheckDelay)
+	return validPosition, nil
 }
 
 // RemoveHistory removes channel history.
@@ -1480,6 +1548,7 @@ type eventHub struct {
 	transportWriteHandler   TransportWriteHandler
 	commandReadHandler      CommandReadHandler
 	commandProcessedHandler CommandProcessedHandler
+	cacheEmptyHandler       CacheEmptyHandler
 }
 
 // OnConnecting allows setting ConnectingHandler.
@@ -1512,16 +1581,34 @@ func (n *Node) OnCommandProcessed(handler CommandProcessedHandler) {
 	n.clientEvents.commandProcessedHandler = handler
 }
 
+// OnCacheEmpty allows setting CacheEmptyHandler.
+// CacheEmptyHandler called when client subscribes on a channel with RecoveryModeCache but there is no
+// cached value in channel. In response to this handler it's possible to tell Centrifuge what to do with
+// subscribe request – keep it, or return error.
+func (n *Node) OnCacheEmpty(h CacheEmptyHandler) {
+	n.clientEvents.cacheEmptyHandler = h
+}
+
 type brokerEventHandler struct {
 	node *Node
 }
 
 // HandlePublication coming from Broker.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition) error {
+func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
-	return h.node.handlePublication(ch, pub, sp)
+	if h.node.config.GetChannelMediumOptions != nil {
+		mu := h.node.subLock(ch)
+		mu.Lock()
+		medium, ok := h.node.mediums[ch]
+		mu.Unlock()
+		if ok {
+			medium.broadcastPublication(pub, sp, prevPub)
+			return nil
+		}
+	}
+	return h.node.handlePublication(ch, sp, pub, prevPub, nil)
 }
 
 // HandleJoin coming from Broker.

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="d3.v7.min.js"></script>
+    <script type="text/javascript" src="centrifuge.js"></script>
+    <title>Speedometer Visualization</title>
+    <style>
+        body {
+            font-family: 'Arial Black', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #1e1e1e;
+        }
+        #speedometer {
+            position: relative;
+        }
+        .speedometer {
+            font: 14px 'Arial Black', sans-serif;
+        }
+        .speedometer circle {
+            fill: #333;
+            stroke: #ff4500;
+            stroke-width: 6;
+        }
+        .speedometer line {
+            stroke: #ff4500;
+            stroke-width: 6;
+            stroke-linecap: round;
+        }
+        .speedometer line {
+            stroke: #ff4500;
+            stroke-width: 6;
+            stroke-linecap: round;
+        }
+        .speedometer .tick {
+            fill: #fcd8d4;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        .speedometer .circle-background {
+            fill: #ff4500;
+        }
+    </style>
+</head>
+<body>
+<div id="speedometer"></div>
+<script type="text/javascript">
+    const width = 400, height = 400, radius = Math.min(width, height) / 2 - 3;
+    const needleLength = radius * 0.9;
+    const speedRange = 180; // Speed range in degrees (from -90 to 90)
+
+    const speedometer = d3.select("#speedometer").append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .append("g")
+        .attr("transform", `translate(${width / 2},${height / 2})`)
+        .attr("class", "speedometer");
+
+    speedometer.append("circle")
+        .attr("r", radius)
+        .attr("class", "circle");
+
+    const scale = d3.scaleLinear()
+        .domain([0, 200]) // Assuming the speed range is 0 to 200
+        .range([-speedRange / 2, speedRange / 2]);
+
+    speedometer.selectAll(".tick")
+        .data(scale.ticks(10))
+        .enter().append("text")
+        .attr("class", "tick")
+        .attr("x", d => Math.cos((scale(d) - 90) * Math.PI / 180) * (radius - 30))
+        .attr("y", d => Math.sin((scale(d) - 90) * Math.PI / 180) * (radius - 30))
+        .attr("text-anchor", "middle")
+        .attr("alignment-baseline", "middle")
+        .text(d => d);
+
+    let lineRendered = false;
+    const line = speedometer.append("line")
+        .attr("x1", 0)
+        .attr("y1", 0)
+        .attr("x2", 0)
+        .attr("y2", -needleLength)
+        .attr("class", "line")
+        .style("opacity", 0);  // Initially set the needle to be invisible
+
+    // Add a circle at the base of the needle
+    speedometer.append("circle")
+        .attr("cx", 0)
+        .attr("cy", 0)
+        .attr("r", 10)
+        .attr("stroke-width", 2);
+
+    function updateSpeedometer(speed) {
+        const degrees = scale(speed);
+
+        let duration = 110;
+        if (!lineRendered) {
+            // On first render move to the desired speed without animation duration.
+            duration = 0;
+        }
+
+        line
+            .transition()
+            .duration(duration)
+            .attr("transform", `rotate(${degrees})`);
+
+        if (!lineRendered) {
+            line.style("opacity", 1);
+            lineRendered = true;
+        }
+    }
+
+    const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {});
+
+    // We are using cache recovery feature in the example, passing since: {} allows to trigger recovery
+    // on initial subscribe. For cache recovery the previous stream position does not matter - server
+    // just tries to extract latest publication from channel history and send it to client.
+    const sub = centrifuge.newSubscription("speed", {
+        since: {},
+    });
+
+    sub.on("publication", (ctx) => {
+        updateSpeedometer(ctx.data.speed);
+    })
+
+    sub.subscribe();
+    centrifuge.connect();
+</script>
+</body>
+</html>

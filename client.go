@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/saferand"
@@ -15,6 +18,7 @@ import (
 	"github.com/centrifugal/protocol"
 	"github.com/google/uuid"
 	"github.com/segmentio/encoding/json"
+	fdelta "github.com/shadowspore/fossil-delta"
 )
 
 // Empty Replies/Pushes for pings.
@@ -136,6 +140,7 @@ const (
 	flagPositioning
 	flagServerSide
 	flagClientSideRefresh
+	flagDeltaAllowed
 )
 
 // ChannelContext contains extra context for channel connection subscribed to.
@@ -527,11 +532,11 @@ func (c *Client) checkPong() {
 func (c *Client) addPingUpdate(isFirst bool, scheduleNext bool) {
 	delay := c.pingInterval
 	if isFirst {
-		// Send first ping in random interval between 0 and PingInterval to
+		// Send first ping in random interval between PingInterval/2 and PingInterval to
 		// spread ping-pongs in time (useful when many connections reconnect
 		// almost immediately).
 		pingNanoseconds := c.pingInterval.Nanoseconds()
-		delay = time.Duration(randSource.Int63n(pingNanoseconds)) * time.Nanosecond
+		delay = time.Duration(pingNanoseconds/2) + time.Duration(randSource.Int63n(pingNanoseconds/2))*time.Nanosecond
 	}
 	c.nextPing = time.Now().Add(delay).UnixNano()
 	if scheduleNext {
@@ -737,16 +742,6 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 		historyMetaTTL = time.Duration(chCtx.metaTTLSeconds) * time.Second
 	}
 
-	streamTop, err := c.node.streamTop(ch, historyMetaTTL)
-	if err != nil {
-		// Check later.
-		return true
-	}
-
-	return c.isValidPosition(streamTop, nowUnix, ch)
-}
-
-func (c *Client) isValidPosition(streamTop StreamPosition, nowUnix int64, ch string) bool {
 	c.mu.Lock()
 	if c.status == statusClosed {
 		c.mu.Unlock()
@@ -760,18 +755,20 @@ func (c *Client) isValidPosition(streamTop StreamPosition, nowUnix int64, ch str
 	position := chCtx.streamPosition
 	c.mu.Unlock()
 
-	isValidPosition := streamTop.Epoch == position.Epoch && position.Offset >= streamTop.Offset
-	if isValidPosition {
+	validPosition, err := c.node.checkPosition(ch, position, historyMetaTTL)
+	if err != nil {
+		// Check later.
+		return true
+	}
+	if validPosition {
 		c.mu.Lock()
 		if chContext, ok := c.channels[ch]; ok {
 			chContext.positionCheckTime = nowUnix
 			c.channels[ch] = chContext
 		}
 		c.mu.Unlock()
-		return true
 	}
-
-	return false
+	return validPosition
 }
 
 // ID returns unique client connection id.
@@ -1611,6 +1608,17 @@ func (c *Client) onSubscribeError(channel string) {
 func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	if c.eventHub.subscribeHandler == nil {
 		return ErrorNotAvailable
+	}
+
+	if req.Channel == "" {
+		return c.logDisconnectBadRequest("channel required for subscribe")
+	}
+
+	if req.Delta != "" {
+		_, ok := stringToDeltaType[req.Delta]
+		if !ok {
+			return c.logDisconnectBadRequest("unknown delta type in subscribe request: " + req.Delta)
+		}
 	}
 
 	replyError, disconnect := c.validateSubscribeRequest(req)
@@ -2669,7 +2677,7 @@ type subscribeContext struct {
 	channelContext ChannelContext
 }
 
-func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isStreamRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
 
@@ -2689,6 +2697,26 @@ func isRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string)
 			(cmdEpoch == "" || latestEpoch == cmdEpoch)
 	}
 
+	return recoveredPubs, recovered
+}
+
+func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+	latestOffset := currentSP.Offset
+	latestEpoch := currentSP.Epoch
+	var recovered bool
+	recoveredPubs := make([]*protocol.Publication, 0, 1)
+	if latestPub != nil {
+		publication := latestPub
+		recovered = publication.Offset == latestOffset
+		skipPublication := cmdOffset > 0 && cmdOffset == latestOffset && cmdEpoch == latestEpoch
+		if recovered && !skipPublication {
+			protoPub := pubToProto(publication)
+			recoveredPubs = append(recoveredPubs, protoPub)
+		}
+	} else if cmdOffset > 0 && latestOffset == cmdOffset && cmdEpoch == latestEpoch {
+		// Client already had state, which has not been modified since.
+		recovered = true
+	}
 	return recoveredPubs, recovered
 }
 
@@ -2734,7 +2762,15 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		c.pubSubSync.StartBuffering(channel)
 	}
 
-	err := c.node.addSubscription(channel, c)
+	sub := subInfo{client: c, deltaType: deltaTypeNone}
+	if req.Delta != "" {
+		dt := DeltaType(req.Delta)
+		if slices.Contains(reply.Options.AllowedDeltaTypes, dt) {
+			res.Delta = true
+			sub.deltaType = dt
+		}
+	}
+	err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.pubSubSync.StopBuffering(channel)
@@ -2762,6 +2798,16 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	)
 
 	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
+		handleErr := func(err error) subscribeContext {
+			c.pubSubSync.StopBuffering(channel)
+			var clientErr *Error
+			if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
+				return errorDisconnectContext(clientErr, nil)
+			}
+			ctx.disconnect = &DisconnectServerError
+			return ctx
+		}
+
 		res.Positioned = true
 		if reply.Options.EnableRecovery {
 			res.Recoverable = true
@@ -2770,45 +2816,74 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		if reply.Options.EnableRecovery && req.Recover {
 			cmdOffset := req.Offset
 			cmdEpoch := req.Epoch
+			recoveryMode := reply.Options.RecoveryMode
 
 			// Client provided subscribe request with recover flag on. Try to recover missed
-			// publications automatically from history (we suppose here that history configured wisely).
-			historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
-			if err != nil {
-				if errors.Is(err, ErrorUnrecoverablePosition) {
-					// Result contains stream position in case of ErrorUnrecoverablePosition
-					// during recovery.
-					latestOffset = historyResult.Offset
-					latestEpoch = historyResult.Epoch
-					res.Recovered = false
-					c.node.metrics.incRecover(res.Recovered)
-				} else {
-					c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-					c.pubSubSync.StopBuffering(channel)
-					if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
-						return errorDisconnectContext(clientErr, nil)
+			// publications automatically from history (we assume here that the history configured wisely).
+
+			if recoveryMode == RecoveryModeCache {
+				latestPub, currentSP, err := c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+				if err != nil {
+					c.node.logger.log(newLogEntry(LogLevelError, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+					return handleErr(err)
+				}
+				latestOffset = currentSP.Offset
+				latestEpoch = currentSP.Epoch
+				var recovered bool
+				recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
+				res.Recovered = recovered
+				if latestPub == nil && c.node.clientEvents.cacheEmptyHandler != nil {
+					cacheReply, err := c.node.clientEvents.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
+					if err != nil {
+						c.node.logger.log(newLogEntry(LogLevelError, "error on cache empty", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+						return handleErr(err)
 					}
-					ctx.disconnect = &DisconnectServerError
-					return ctx
+					if cacheReply.Populated && !recovered {
+						// One more chance to recover in case we know cache was populated.
+						latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+						if err != nil {
+							c.node.logger.log(newLogEntry(LogLevelError, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+							return handleErr(err)
+						}
+						latestOffset = currentSP.Offset
+						latestEpoch = currentSP.Epoch
+						recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
+						res.Recovered = recovered
+						c.node.metrics.incRecover(res.Recovered)
+					} else {
+						c.node.metrics.incRecover(res.Recovered)
+					}
+				} else {
+					c.node.metrics.incRecover(res.Recovered)
 				}
 			} else {
-				latestOffset = historyResult.Offset
-				latestEpoch = historyResult.Epoch
-				var recovered bool
-				recoveredPubs, recovered = isRecovered(historyResult, cmdOffset, cmdEpoch)
-				res.Recovered = recovered
-				c.node.metrics.incRecover(res.Recovered)
+				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
+				if err != nil {
+					if errors.Is(err, ErrorUnrecoverablePosition) {
+						// Result contains stream position in case of ErrorUnrecoverablePosition
+						// during recovery.
+						latestOffset = historyResult.Offset
+						latestEpoch = historyResult.Epoch
+						res.Recovered = false
+						c.node.metrics.incRecover(res.Recovered)
+					} else {
+						c.node.logger.log(newLogEntry(LogLevelError, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+						return handleErr(err)
+					}
+				} else {
+					latestOffset = historyResult.Offset
+					latestEpoch = historyResult.Epoch
+					var recovered bool
+					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch)
+					res.Recovered = recovered
+					c.node.metrics.incRecover(res.Recovered)
+				}
 			}
 		} else {
 			streamTop, err := c.node.streamTop(channel, reply.Options.HistoryMetaTTL)
 			if err != nil {
 				c.node.logger.log(newLogEntry(LogLevelError, "error getting stream state for channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-				c.pubSubSync.StopBuffering(channel)
-				if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
-					return errorDisconnectContext(clientErr, nil)
-				}
-				ctx.disconnect = &DisconnectServerError
-				return ctx
+				return handleErr(err)
 			}
 			latestOffset = streamTop.Offset
 			latestEpoch = streamTop.Epoch
@@ -2825,6 +2900,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			ctx.disconnect = &DisconnectInsufficientState
 			return ctx
 		}
+		if reply.Options.RecoveryMode == RecoveryModeCache && len(recoveredPubs) > 1 && req.Delta == "" {
+			// In RecoveryModeCache case client is only interested in last message. So if delta encoding is
+			// not used then we can only send the last publication.
+			recoveredPubs = recoveredPubs[len(recoveredPubs)-1:]
+		}
 	}
 
 	if len(recoveredPubs) > 0 {
@@ -2838,14 +2918,22 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 	}
 
+	var channelFlags uint8
+
 	if res.Recovered {
 		// Only append recovered publications in case continuity in a channel can be achieved.
-		res.Publications = recoveredPubs
-		// In case of successful recovery attach stream position from request to subscribe response.
+		if res.Delta && req.Delta == string(DeltaTypeFossil) {
+			res.Publications = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
+			// Allow delta for the following real-time publications since recovery is successful
+			// and makeRecoveredPubsDeltaFossil already created publication with base data if required.
+			channelFlags |= flagDeltaAllowed
+		} else {
+			res.Publications = recoveredPubs
+		}
+		// In case of successful recovery attach stream offset from request to subscribe response.
 		// This simplifies client implementation as it doesn't need to distinguish between cases when
 		// subscribe response has recovered publications, or it has no recovered publications.
 		// Valid stream position will be then caught up upon processing publications.
-		res.Epoch = req.Epoch
 		res.Offset = req.Offset
 	}
 	res.WasRecovering = req.Recover
@@ -2870,7 +2958,6 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		defer c.handleCommandFinished(cmd, protocol.FrameTypeSubscribe, nil, protoReply, started)
 	}
 
-	var channelFlags uint8
 	channelFlags |= flagSubscribed
 	if serverSide {
 		channelFlags |= flagServerSide
@@ -2931,6 +3018,53 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	return ctx
 }
 
+func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publication) []*protocol.Publication {
+	if len(recoveredPubs) == 0 {
+		return nil
+	}
+	prevPub := recoveredPubs[0]
+	if c.transport.Protocol() == ProtocolTypeJSON {
+		// For JSON case we need to use JSON string (js) for data.
+		pub := &protocol.Publication{
+			Offset: prevPub.Offset,
+			Info:   prevPub.Info,
+			Tags:   prevPub.Tags,
+			Data:   json.Escape(convert.BytesToString(prevPub.Data)),
+			Delta:  false,
+		}
+		recoveredPubs[0] = pub
+	}
+	// Probably during recovery we should not make deltas? This is something to investigate, in
+	// RecoveryModeCache case this won't be used since there is only one publication max recovered.
+	if len(recoveredPubs) > 1 {
+		for i, pub := range recoveredPubs[1:] {
+			patch := fdelta.Create(prevPub.Data, pub.Data)
+			var deltaPub *protocol.Publication
+			if c.transport.Protocol() == ProtocolTypeJSON {
+				// For JSON case we need to use JSON string (js) for patch.
+				deltaPub = &protocol.Publication{
+					Offset: pub.Offset,
+					Data:   json.Escape(convert.BytesToString(patch)),
+					Info:   pub.Info,
+					Tags:   pub.Tags,
+					Delta:  true,
+				}
+			} else {
+				deltaPub = &protocol.Publication{
+					Offset: pub.Offset,
+					Data:   patch,
+					Info:   pub.Info,
+					Tags:   pub.Tags,
+					Delta:  true,
+				}
+			}
+			recoveredPubs[i+1] = deltaPub
+			prevPub = recoveredPubs[i]
+		}
+	}
+	return recoveredPubs
+}
+
 func (c *Client) releaseSubscribeCommandReply(reply *protocol.Reply) {
 	protocol.ReplyPool.ReleaseSubscribeReply(reply)
 }
@@ -2968,38 +3102,50 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 	}
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
 		c.mu.Unlock()
 		return nil
 	}
+	deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
 	if !channelHasFlag(channelContext.flags, flagPositioning) {
+		// Publication with Offset, but client does not use positioning.
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			c.mu.Unlock()
 			return nil
 		}
 		c.mu.Unlock()
-		return c.transportEnqueue(data, ch, protocol.FrameTypePushPublication)
+		if pub.Offset == math.MaxUint64 {
+			// This is a special pub to trigger insufficient state. Noop in non-positioning case.
+			return nil
+		}
+		if prep.deltaSub {
+			if deltaAllowed {
+				return c.transportEnqueue(prep.localDeltaData, ch, protocol.FrameTypePushPublication)
+			}
+			c.mu.Lock()
+			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+				chCtx.flags |= flagDeltaAllowed
+				c.channels[ch] = chCtx
+			}
+			c.mu.Unlock()
+		}
+		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
 	pubEpoch := sp.Epoch
-	if pubEpoch != channelContext.streamPosition.Epoch {
+	if pubEpoch != channelContext.streamPosition.Epoch || pubOffset != nextExpectedOffset {
+		// We can introduce an option to mark connection with insufficient state flag instead
+		// of disconnecting it immediately. In that case connection will eventually reconnect
+		// due to periodic sync. While connection channel is in the insufficient state we must
+		// skip publications coming to it. This mode may be useful to spread the resubscribe load.
 		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
-		}
-		// Oops: sth lost, let client reconnect/resubscribe to recover its state.
-		go func() { c.handleInsufficientState(ch, serverSide) }()
-		c.mu.Unlock()
-		return nil
-	}
-	if pubOffset != nextExpectedOffset {
-		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
+			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
 		}
 		// Oops: sth lost, let client reconnect/resubscribe to recover its state.
 		go func() { c.handleInsufficientState(ch, serverSide) }()
@@ -3013,10 +3159,25 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
-	return c.transportEnqueue(data, ch, protocol.FrameTypePushPublication)
+	if prep.deltaSub {
+		if deltaAllowed {
+			return c.transportEnqueue(prep.brokerDeltaData, ch, protocol.FrameTypePushPublication)
+		}
+		c.mu.Lock()
+		if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+			chCtx.flags |= flagDeltaAllowed
+			c.channels[ch] = chCtx
+		}
+		c.mu.Unlock()
+	}
+	return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
+func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
+	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp)
+}
+
+func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition) error {
 	if c.node.LogEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
@@ -3024,10 +3185,33 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, data []b
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 			return nil
 		}
-		return c.transportEnqueue(data, ch, protocol.FrameTypePushPublication)
+
+		if prep.deltaSub {
+			// For this path (no Offset) delta may come from channel medium layer, so that we can use it
+			// here if allowed for the connection.
+			c.mu.RLock()
+			channelContext, ok := c.channels[ch]
+			if !ok {
+				c.mu.RUnlock()
+				return nil
+			}
+			deltaAllowed := channelHasFlag(channelContext.flags, flagDeltaAllowed)
+			c.mu.RUnlock()
+
+			if deltaAllowed {
+				return c.transportEnqueue(prep.localDeltaData, ch, protocol.FrameTypePushPublication)
+			}
+			c.mu.Lock()
+			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
+				chCtx.flags |= flagDeltaAllowed
+				c.channels[ch] = chCtx
+			}
+			c.mu.Unlock()
+		}
+		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, data, sp)
+		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp)
 	})
 	return nil
 }

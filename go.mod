@@ -5,14 +5,15 @@ go 1.21
 require (
 	github.com/FZambia/eagle v0.1.0
 	github.com/Yiling-J/theine-go v0.3.2
-	github.com/centrifugal/protocol v0.12.2-0.20240510082212-95d0d6be417a
+	github.com/centrifugal/protocol v0.13.0
 	github.com/google/uuid v1.6.0
-	github.com/prometheus/client_golang v1.19.0
-	github.com/redis/rueidis v1.0.36
+	github.com/prometheus/client_golang v1.19.1
+	github.com/redis/rueidis v1.0.37
 	github.com/segmentio/encoding v0.4.0
+	github.com/shadowspore/fossil-delta v0.0.0-20240102155221-e3a8590b820b
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/sync v0.7.0
-	google.golang.org/protobuf v1.34.0
+	google.golang.org/protobuf v1.34.1
 )
 
 require (

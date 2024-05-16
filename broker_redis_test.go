@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -684,7 +685,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	b := NewTestRedisBroker(t, node, getUniquePrefix(), false)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	defer stopRedisBroker(b)
-	err := b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+	err := b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 		require.Equal(t, "test", ch)
 		require.Equal(t, uint64(16901), sp.Offset)
 		require.Equal(t, "xyz", sp.Epoch)
@@ -692,7 +693,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	}}, b.messageChannelID(b.shards[0].shard, "test"), []byte("__p1:16901:xyz__dsdsd"))
 	require.Error(t, err)
 
-	err = b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+	err = b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 		return nil
 	}}, b.messageChannelID(b.shards[0].shard, "test"), []byte("__p1:16901"))
 	require.Error(t, err)
@@ -703,7 +704,7 @@ func TestRedisBrokerHandlePubSubMessage(t *testing.T) {
 	data, err := pub.MarshalVT()
 	require.NoError(t, err)
 	var publicationHandlerCalled bool
-	err = b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+	err = b.handleRedisClientMessage(&testBrokerEventHandler{HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 		publicationHandlerCalled = true
 		require.Equal(t, "test", ch)
 		require.Equal(t, uint64(16901), sp.Offset)
@@ -744,7 +745,7 @@ func BenchmarkRedisExtractPushData(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, sp, ok := extractPushData(data)
+		_, _, sp, _, _, ok := extractPushData(data)
 		if !ok {
 			b.Fatal("wrong data")
 		}
@@ -759,55 +760,40 @@ func BenchmarkRedisExtractPushData(b *testing.B) {
 
 func TestRedisExtractPushData(t *testing.T) {
 	data := []byte(`__p1:16901:xyz.123__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, sp, ok := extractPushData(data)
+	pushData, pushType, sp, _, _, ok := extractPushData(data)
 	require.True(t, ok)
 	require.Equal(t, pubPushType, pushType)
 	require.Equal(t, uint64(16901), sp.Offset)
 	require.Equal(t, "xyz.123", sp.Epoch)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
-	data = []byte(`__16901__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, sp, ok = extractPushData(data)
-	require.True(t, ok)
-	require.Equal(t, pubPushType, pushType)
-	require.Equal(t, uint64(16901), sp.Offset)
-	require.Equal(t, "", sp.Epoch)
-	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
-
 	data = []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, sp, ok = extractPushData(data)
+	pushData, pushType, sp, _, _, ok = extractPushData(data)
 	require.True(t, ok)
 	require.Equal(t, pubPushType, pushType)
 	require.Equal(t, uint64(0), sp.Offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
-	data = []byte(`__4294967337__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, sp, ok = extractPushData(data)
-	require.True(t, ok)
-	require.Equal(t, pubPushType, pushType)
-	require.Equal(t, uint64(4294967337), sp.Offset)
-	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
-
 	data = []byte(`__j__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, sp, ok = extractPushData(data)
+	pushData, pushType, sp, _, _, ok = extractPushData(data)
 	require.True(t, ok)
 	require.Equal(t, joinPushType, pushType)
 	require.Equal(t, uint64(0), sp.Offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`__l__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	pushData, pushType, sp, ok = extractPushData(data)
+	pushData, pushType, sp, _, _, ok = extractPushData(data)
 	require.True(t, ok)
 	require.Equal(t, leavePushType, pushType)
 	require.Equal(t, uint64(0), sp.Offset)
 	require.Equal(t, []byte(`\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`), pushData)
 
 	data = []byte(`____\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	_, _, _, ok = extractPushData(data)
+	_, _, _, _, _, ok = extractPushData(data)
 	require.False(t, ok)
 
 	data = []byte(`__a__\x12\nchat:index\x1aU\"\x0e{\"input\":\"__\"}*C\n\x0242\x12$37cb00a9-bcfa-4284-a1ae-607c7da3a8f4\x1a\x15{\"name\": \"Alexander\"}\"\x00`)
-	_, _, _, ok = extractPushData(data)
+	_, _, _, _, _, ok = extractPushData(data)
 	require.False(t, ok)
 }
 
@@ -973,7 +959,7 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 		HandleControlFunc: func(bytes []byte) error {
 			return nil
 		},
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 			c := atomic.AddInt64(&numPublications, 1)
 			if c == int64(msgNum) {
 				close(pubCh)
@@ -1040,6 +1026,96 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 	}
 }
 
+type testDeltaPublishHandle struct {
+	ch      string
+	pub     *Publication
+	sp      StreamPosition
+	prevPub *Publication
+}
+
+func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
+	redisConf := testRedisConf()
+
+	prefix := getUniquePrefix()
+
+	ch := "test" + uuid.NewString()
+
+	node1, _ := New(Config{})
+	s, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+	b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix:               prefix,
+		Shards:               []*RedisShard{s},
+		numPubSubSubscribers: 4,
+		numPubSubProcessors:  2,
+	})
+	node1.SetBroker(b1)
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b1)
+
+	msgNum := 2
+	var numPublications int64
+	pubCh := make(chan struct{})
+	var resultsMu sync.Mutex
+	results := make([]testDeltaPublishHandle, 0, msgNum)
+
+	brokerEventHandler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error {
+			return nil
+		},
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
+			resultsMu.Lock()
+			defer resultsMu.Unlock()
+			results = append(results, testDeltaPublishHandle{
+				ch:      ch,
+				pub:     pub,
+				sp:      sp,
+				prevPub: prevPub,
+			})
+			c := atomic.AddInt64(&numPublications, 1)
+			if c == int64(msgNum) {
+				close(pubCh)
+			}
+			return nil
+		},
+	}
+	_ = b1.Run(brokerEventHandler)
+
+	require.NoError(t, b1.Subscribe(ch))
+
+	node2, _ := New(Config{})
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+
+	b2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s2},
+	})
+	node2.SetBroker(b2)
+	_ = node2.Run()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b2)
+
+	for i := 0; i < msgNum; i++ {
+		sp, err := node2.Publish(ch, []byte("123"),
+			WithHistory(1, time.Minute), WithDelta(true))
+		require.NoError(t, err)
+		require.Equal(t, sp.Offset, uint64(i+1))
+	}
+
+	select {
+	case <-pubCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB message")
+	}
+
+	resultsMu.Lock()
+	defer resultsMu.Unlock()
+	require.Len(t, results, msgNum)
+	require.Nil(t, results[0].prevPub)
+	require.NotNil(t, results[1].prevPub)
+}
+
 func TestRedisClusterShardedPubSub(t *testing.T) {
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
@@ -1080,7 +1156,7 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 		HandleControlFunc: func(bytes []byte) error {
 			return nil
 		},
-		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 			c := atomic.AddInt64(&numPublications, 1)
 			if c == int64(msgNum) {
 				close(pubCh)
@@ -1536,22 +1612,22 @@ func testRedisClientSubscribeRecover(t *testing.T, tt recoverTest, useStreams bo
 
 	historyResult, err := node.recoverHistory(channel, StreamPosition{tt.SinceOffset, streamTop.Epoch}, 0)
 	require.NoError(t, err)
-	recoveredPubs, recovered := isRecovered(historyResult, tt.SinceOffset, streamTop.Epoch)
+	recoveredPubs, recovered := isStreamRecovered(historyResult, tt.SinceOffset, streamTop.Epoch)
 	require.Equal(t, tt.NumRecovered, len(recoveredPubs))
 	require.Equal(t, tt.Recovered, recovered)
 }
 
 var brokerRecoverTests = []recoverTest{
-	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true},
-	{"from_position", 10, 60, 10, 8, 2, 0, 0, true},
-	{"from_position_limited", 10, 60, 10, 5, 2, 0, 2, false},
-	{"from_position_with_server_limit", 10, 60, 10, 5, 1, 0, 1, false},
-	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, 0, false},
-	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false},
-	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true},
-	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true},
-	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, 0, false},
-	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true},
+	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true, RecoveryModeStream},
+	{"from_position", 10, 60, 10, 8, 2, 0, 0, true, RecoveryModeStream},
+	{"from_position_limited", 10, 60, 10, 5, 2, 0, 2, false, RecoveryModeStream},
+	{"from_position_with_server_limit", 10, 60, 10, 5, 1, 0, 1, false, RecoveryModeStream},
+	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, 0, false, RecoveryModeStream},
+	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false, RecoveryModeStream},
+	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true, RecoveryModeStream},
+	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true, RecoveryModeStream},
+	{"from_position_in_expired_stream", 10, 1, 10, 8, 0, 3, 0, false, RecoveryModeStream},
+	{"from_same_position_in_expired_stream", 10, 1, 1, 1, 0, 3, 0, true, RecoveryModeStream},
 }
 
 func TestRedisClientSubscribeRecoverStreams(t *testing.T) {
@@ -1708,7 +1784,7 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 				HandleControlFunc: func(bytes []byte) error {
 					return nil
 				},
-				HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition) error {
+				HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
 					pubCh <- struct{}{}
 					return nil
 				},
@@ -1880,6 +1956,79 @@ func TestPreShardedSlots(t *testing.T) {
 				nodeIndexCounts[nodeIndex]++
 			}
 			t.Logf("%s: %v", t.Name(), nodeIndexCounts)
+		})
+	}
+}
+
+func TestParseDeltaPush(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		expectError    bool
+		expectedResult *deltaPublicationPush
+	}{
+		{
+			name:        "valid data with colon in payload",
+			input:       "d1:1234567890:epoch1:4:test:18:payload:with:colon",
+			expectError: false,
+			expectedResult: &deltaPublicationPush{
+				Offset:            1234567890,
+				Epoch:             "epoch1",
+				PrevPayloadLength: 4,
+				PrevPayload:       "test",
+				PayloadLength:     18,
+				Payload:           "payload:with:colon",
+			},
+		},
+		{
+			name:        "valid data with empty payload",
+			input:       "d1:1234567890:epoch2:0::0:",
+			expectError: false,
+			expectedResult: &deltaPublicationPush{
+				Offset:            1234567890,
+				Epoch:             "epoch2",
+				PrevPayloadLength: 0,
+				PrevPayload:       "",
+				PayloadLength:     0,
+				Payload:           "",
+			},
+		},
+		{
+			name:        "invalid format - missing parts",
+			input:       "d1:123456:epoch3",
+			expectError: true,
+		},
+		{
+			name:        "invalid offset",
+			input:       "d1:notanumber:epoch4:4:test:5:hello",
+			expectError: true,
+		},
+		{
+			name:        "invalid prev payload length",
+			input:       "d1:12:epoch4:invalid:test:5:hello",
+			expectError: true,
+		},
+		{
+			name:        "invalid prev payload length",
+			input:       "d1:12:epoch4:4:test:invalid:hello",
+			expectError: true,
+		},
+		{
+			name:        "invalid format no payload",
+			input:       "d1:12:epoch4:4:test:5:",
+			expectError: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := parseDeltaPush(tc.input)
+			if tc.expectError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.expectedResult, result)
+			}
 		})
 	}
 }

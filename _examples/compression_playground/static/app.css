@@ -1,0 +1,48 @@
+html, body {
+    height: 100%;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: 'Arial', sans-serif;
+    background-color: #f0f0f0;
+    color: #333;
+}
+
+#app {
+    width: 100%;
+    max-width: 800px; /* Larger width for better display of big elements */
+    padding: 40px;
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+    background-color: white;
+    border-radius: 10px;
+    margin: 20px;
+}
+
+#app li {
+    margin-bottom: 5px;
+}
+
+#app h2 {
+    font-size: 36px; /* Larger heading */
+    color: #444;
+    margin-bottom: 30px;
+}
+
+#app p {
+    font-size: 28px; /* Larger font size for the scores */
+    line-height: 1.6;
+    margin: 20px 0;
+    color: #555;
+}
+
+/* Styling for team names to make them stand out */
+#app p span.team-name {
+    font-weight: bold;
+}
+
+/* Making the scores pop out even more */
+#app p span.team-score {
+    color: #d9534f; /* A vibrant color for the scores */
+    font-weight: bold;
+}

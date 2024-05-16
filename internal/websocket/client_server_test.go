@@ -72,24 +72,24 @@ func newTLSServer(t *testing.T) *cstServer {
 
 func (t cstHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != cstPath {
-		t.Logf("path=%v, want %v", r.URL.Path, cstPath)
+		//t.Logf("path=%v, want %v", r.URL.Path, cstPath)
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 	if r.URL.RawQuery != cstRawQuery {
-		t.Logf("query=%v, want %v", r.URL.RawQuery, cstRawQuery)
+		//t.Logf("query=%v, want %v", r.URL.RawQuery, cstRawQuery)
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 	subprotos := Subprotocols(r)
 	if !reflect.DeepEqual(subprotos, cstDialer.Subprotocols) {
-		t.Logf("subprotols=%v, want %v", subprotos, cstDialer.Subprotocols)
+		//t.Logf("subprotols=%v, want %v", subprotos, cstDialer.Subprotocols)
 		http.Error(w, "bad protocol", http.StatusBadRequest)
 		return
 	}
 	ws, subprotocol, err := cstUpgrader.Upgrade(w, r, http.Header{"Set-Cookie": {"sessionID=1234"}})
 	if err != nil {
-		t.Logf("Upgrade: %v", err)
+		//t.Logf("Upgrade: %v", err)
 		return
 	}
 	defer func() {
@@ -97,26 +97,26 @@ func (t cstHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if subprotocol != "p1" {
-		t.Logf("Subprotocol() = %s, want p1", subprotocol)
+		//t.Logf("Subprotocol() = %s, want p1", subprotocol)
 		_ = ws.Close()
 		return
 	}
 	op, rd, err := ws.NextReader()
 	if err != nil {
-		t.Logf("NextReader: %v", err)
+		//t.Logf("NextReader: %v", err)
 		return
 	}
 	wr, err := ws.NextWriter(op)
 	if err != nil {
-		t.Logf("NextWriter: %v", err)
+		//t.Logf("NextWriter: %v", err)
 		return
 	}
 	if _, err = io.Copy(wr, rd); err != nil {
-		t.Logf("NextWriter: %v", err)
+		//t.Logf("Copy: %v", err)
 		return
 	}
 	if err := wr.Close(); err != nil {
-		t.Logf("Close: %v", err)
+		//t.Logf("Close: %v", err)
 		return
 	}
 }

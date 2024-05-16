@@ -24,6 +24,13 @@ func WithIdempotencyKey(key string) PublishOption {
 	}
 }
 
+// WithDelta tells Broker to use delta streaming.
+func WithDelta(enabled bool) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.UseDelta = enabled
+	}
+}
+
 // WithIdempotentResultTTL sets the time of expiration for results of idempotent publications.
 // See PublishOptions.IdempotentResultTTL for more description and defaults.
 func WithIdempotentResultTTL(ttl time.Duration) PublishOption {
@@ -78,6 +85,8 @@ type SubscribeOptions struct {
 	// Make sure you are using EnableRecovery in channels that maintain Publication
 	// history stream.
 	EnableRecovery bool
+	// RecoveryMode is by default RecoveryModeStream, but can be also RecoveryModeCache.
+	RecoveryMode RecoveryMode
 	// Data to send to a client with Subscribe Push.
 	Data []byte
 	// RecoverSince will try to subscribe a client and recover from a certain StreamPosition.
@@ -86,6 +95,12 @@ type SubscribeOptions struct {
 	// HistoryMetaTTL allows to override default (set in Config.HistoryMetaTTL) history
 	// meta information expiration time.
 	HistoryMetaTTL time.Duration
+
+	// AllowedDeltaTypes is a whitelist of DeltaType subscribers can negotiate. At this point Centrifuge
+	// only supports DeltaTypeFossil. If zero value – clients won't be able to negotiate delta encoding
+	// within a channel and will receive full data in publications.
+	// Delta encoding is an EXPERIMENTAL feature and may be changed.
+	AllowedDeltaTypes []DeltaType
 
 	// clientID to subscribe.
 	clientID string
@@ -145,6 +160,20 @@ func WithPositioning(enabled bool) SubscribeOption {
 func WithRecovery(enabled bool) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.EnableRecovery = enabled
+	}
+}
+
+type RecoveryMode int32
+
+const (
+	RecoveryModeStream RecoveryMode = 0
+	RecoveryModeCache  RecoveryMode = 1
+)
+
+// WithRecoveryMode ...
+func WithRecoveryMode(mode RecoveryMode) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.RecoveryMode = mode
 	}
 }
 

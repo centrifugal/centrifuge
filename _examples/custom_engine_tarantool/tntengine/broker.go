@@ -720,7 +720,8 @@ func (b *Broker) handleMessage(eventHandler centrifuge.BrokerEventHandler, msg p
 				pub.Info = infoFromProto(&info)
 			}
 		}
-		_ = eventHandler.HandlePublication(msg.Channel, pub, centrifuge.StreamPosition{Offset: msg.Offset, Epoch: msg.Epoch})
+		_ = eventHandler.HandlePublication(
+			msg.Channel, pub, centrifuge.StreamPosition{Offset: msg.Offset, Epoch: msg.Epoch}, nil)
 	case "j":
 		var info protocol.ClientInfo
 		err := info.UnmarshalVT(msg.Info)
@@ -796,7 +797,12 @@ func (b *Broker) runControlPubSub(s *Shard, eventHandler centrifuge.BrokerEventH
 				case n := <-workCh:
 					err := eventHandler.HandleControl(n.Data)
 					if err != nil {
-						b.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error handling control message", map[string]any{"error": err.Error()}))
+						b.node.Log(
+							centrifuge.NewLogEntry(
+								centrifuge.LogLevelError, "error handling control message",
+								map[string]any{"error": err.Error()},
+							),
+						)
 						continue
 					}
 				}
