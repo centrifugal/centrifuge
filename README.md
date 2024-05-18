@@ -5,11 +5,18 @@
 
 **This library has no v1 release, API may change.** Before v1 release patch version updates only have backwards compatible changes and fixes, minor version updates can have backwards-incompatible API changes. Master branch can have unreleased code. Only two last Go minor versions are officially supported by this library.
 
-Centrifuge library is a real-time core of [Centrifugo](https://github.com/centrifugal/centrifugo) server. It's a general purpose real-time messaging library for Go programming language. Real-time messaging can help create interactive applications where events are delivered to online users with minimal delay. Chats apps, live comments, multiplayer games, real-time data visualizations, collaborative tools, etc. can all be built on top of Centrifuge library.
+The Centrifuge library is a general purpose real-time messaging library for Go programming language. Real-time messaging can help create interactive applications where events are delivered to online users with milliseconds delay. Chats apps, live comments, multiplayer games, real-time data visualizations, telemetry, collaborative tools, etc. can all be built on top of Centrifuge library.
 
-The library is built on top of efficient client-server protocol schema and exposes various real-time oriented primitives for a developer. Centrifuge solves problems developers may come across when building complex real-time applications – like scalability to many server nodes, proper persistent connection management and invalidation, fast reconnect with message recovery, WebSocket fallback options (without sticky sessions requirement in distributed scenario).
+The library is built on top of efficient client-server protocol schema and exposes various real-time oriented primitives for a developer. Centrifuge solves problems developers may come across when building complex real-time applications – like scalability to many server nodes, proper persistent connection management and invalidation, subscription multiplexing, fast reconnect with message recovery, WebSocket fallback options (without sticky sessions requirement in distributed scenario). And it all comes with ready to use client SDKs for both web and mobile development. See the full list of highlighs below.
 
-Library highlights:
+Centrifuge library is used by:
+
+* [Centrifugo](https://github.com/centrifugal/centrifugo) - the main product of Centrifugal Labs. Centrifuge was decoupled into separate library from Centrifugo at some point.
+* [Grafana](https://github.com/grafana/grafana) - the most popular observability platform. Centrifuge library powers Grafana Live subsystem to stream data to panels. See cool demo of [WebSocket telemetry from the Assetto Corsa](https://www.youtube.com/watch?v=dzgXph_pRJ0) racing simulator to the Grafana dashboard.
+
+## Why using Centrifuge
+
+As said, Centrifuge provides a lot of top of raw WebSocket transport. Important library highlights:
 
 * Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.dev/blog/2020/02/10/million-connections-with-centrifugo)
 * WebSocket bidirectional transport using JSON or binary Protobuf formats, both based on a [strict Protobuf schema](https://github.com/centrifugal/protocol/blob/master/definitions/client.proto). Code generation is used to push both JSON and Protobuf serialization performance to the limits
@@ -28,8 +35,8 @@ Library highlights:
 * Option to register custom Transport, like [Centrifugo does with WebTransport](https://centrifugal.dev/docs/transports/webtransport)
 * Message recovery mechanism for channels to survive PUB/SUB delivery problems, short network disconnects or node restart
 * Cache channels – a way to quickly deliver latest publication from channel history to the client upon subscription
-* Delta compression for publications inside a channel to reduce bandwidth usage
-* Out-of-the-box Prometheus instrumentation
+* Delta compression using [Fossil](https://fossil-scm.org/home/doc/tip/www/delta_format.wiki) algorithm for publications inside a channel to reduce bandwidth usage
+* Out-of-the-box observability using Prometheus instrumentation
 * Client SDKs for main application environments all following [single behaviour spec](https://centrifugal.dev/docs/transports/client_api) (see list of SDKs below).
 
 ### Real-time SDK
