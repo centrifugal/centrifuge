@@ -614,6 +614,12 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		Info: infoToProto(opts.ClientInfo),
 		Tags: opts.Tags,
 	}
+	if opts.HistorySize <= 0 || opts.HistoryTTL <= 0 {
+		// In no history case we communicate delta flag over Publication field. This field is then
+		// cleaned up before passing to the Node layer when handling Redis message.
+		protoPub.Delta = opts.UseDelta
+	}
+
 	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {
 		return StreamPosition{}, false, err
@@ -1019,15 +1025,21 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 			// it to unmarshalled Publication.
 			pub.Offset = sp.Offset
 		}
+		if pub.Delta {
+			// In at most once scenario we are passing delta in Publication itself. But need to clean it
+			// before passing further.
+			delta = true
+			pub.Delta = false
+		}
 		if delta && len(prevPayload) > 0 {
 			var prevPub protocol.Publication
 			err = prevPub.UnmarshalVT(prevPayload)
 			if err != nil {
 				return err
 			}
-			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, pubFromProto(&prevPub))
+			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, true, pubFromProto(&prevPub))
 		} else {
-			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, nil)
+			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, delta, nil)
 		}
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo

@@ -77,7 +77,7 @@ func TestChannelMediumHandlePublication(t *testing.T) {
 			pub := &Publication{Data: []byte("test data")}
 			sp := StreamPosition{Offset: 1}
 
-			cache.broadcastPublication(pub, sp, nil)
+			cache.broadcastPublication(pub, sp, false, nil)
 
 			select {
 			case <-doneCh:

@@ -1594,7 +1594,7 @@ type brokerEventHandler struct {
 }
 
 // HandlePublication coming from Broker.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, prevPub *Publication) error {
+func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
@@ -1604,7 +1604,7 @@ func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp S
 		medium, ok := h.node.mediums[ch]
 		mu.Unlock()
 		if ok {
-			medium.broadcastPublication(pub, sp, prevPub)
+			medium.broadcastPublication(pub, sp, delta, prevPub)
 			return nil
 		}
 	}
