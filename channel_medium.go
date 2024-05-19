@@ -97,13 +97,14 @@ type queuedPub struct {
 	pub                 *Publication
 	sp                  StreamPosition
 	prevPub             *Publication
+	delta               bool
 	isInsufficientState bool
 }
 
 const defaultChannelLayerQueueMaxSize = 16 * 1024 * 1024
 
-func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition, prevPub *Publication) {
-	bp := queuedPub{pub: pub, sp: sp, prevPub: prevPub}
+func (c *channelMedium) broadcastPublication(pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) {
+	bp := queuedPub{pub: pub, sp: sp, prevPub: prevPub, delta: delta}
 	c.mu.Lock()
 	c.positionCheckTime = channelMediumTimeNow().UnixNano()
 	c.mu.Unlock()
@@ -151,7 +152,7 @@ func (c *channelMedium) broadcast(qp queuedPub) {
 	prevPub := qp.prevPub
 	var localPrevPub *Publication
 	useLocalLatestPub := c.options.KeepLatestPublication && !qp.isInsufficientState
-	if useLocalLatestPub {
+	if useLocalLatestPub && qp.delta {
 		localPrevPub = c.latestPublication
 	}
 	if c.options.broadcastDelay > 0 && !c.options.KeepLatestPublication {
