@@ -985,8 +985,8 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 	}
 	if first {
 		if n.config.GetChannelMediumOptions != nil {
-			mediumOptions, ok := n.config.GetChannelMediumOptions(ch)
-			if ok {
+			mediumOptions := n.config.GetChannelMediumOptions(ch)
+			if mediumOptions.isMediumEnabled() {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
 					return err

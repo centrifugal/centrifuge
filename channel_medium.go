@@ -47,6 +47,10 @@ type ChannelMediumOptions struct {
 	broadcastDelay time.Duration
 }
 
+func (o ChannelMediumOptions) isMediumEnabled() bool {
+	return o.SharedPositionSync || o.KeepLatestPublication || o.enableQueue || o.broadcastDelay > 0
+}
+
 // Keep global to save 8 byte per-channel. Must be only changed by tests.
 var channelMediumTimeNow = time.Now
 

@@ -114,10 +114,9 @@ type Config struct {
 	ChannelNamespaceLabelForTransportMessagesReceived bool
 
 	// GetChannelMediumOptions is a way to provide ChannelMediumOptions for specific channel.
-	// This function is called each time new channel appears on the Node. If it returns false
-	// then no medium layer will be used for the channel.
+	// This function is called each time new channel appears on the Node.
 	// See the doc comment for ChannelMediumOptions for more details about channel medium concept.
-	GetChannelMediumOptions func(channel string) (ChannelMediumOptions, bool)
+	GetChannelMediumOptions func(channel string) ChannelMediumOptions
 }
 
 const (
