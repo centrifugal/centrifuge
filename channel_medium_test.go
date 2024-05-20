@@ -115,7 +115,7 @@ func TestChannelMediumInsufficientState(t *testing.T) {
 
 func TestChannelMediumPositionSync(t *testing.T) {
 	options := ChannelMediumOptions{
-		EnablePositionSync: true,
+		SharedPositionSync: true,
 	}
 	doneCh := make(chan struct{})
 	var closeOnce sync.Once
@@ -142,7 +142,7 @@ func TestChannelMediumPositionSync(t *testing.T) {
 
 func TestChannelMediumPositionSyncRetry(t *testing.T) {
 	options := ChannelMediumOptions{
-		EnablePositionSync: true,
+		SharedPositionSync: true,
 	}
 	doneCh := make(chan struct{})
 	var closeOnce sync.Once

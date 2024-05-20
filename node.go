@@ -1402,7 +1402,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 	mu.Lock()
 	medium, ok := n.mediums[ch]
 	mu.Unlock()
-	if !ok || !medium.options.EnablePositionSync {
+	if !ok || !medium.options.SharedPositionSync {
 		// No medium for channel or position sync disabled – we then check position over Broker.
 		streamTop, err := n.streamTop(ch, historyMetaTTL)
 		if err != nil {

@@ -20,12 +20,12 @@ type ChannelMediumOptions struct {
 	// this Node in the channel medium layer. This is helpful for supporting deltas in at most once scenario.
 	KeepLatestPublication bool
 
-	// EnablePositionSync when true delegates connection position checks to the channel medium. In that case
+	// SharedPositionSync when true delegates connection position checks to the channel medium. In that case
 	// check is only performed no more often than once in Config.ClientChannelPositionCheckDelay thus reducing
 	// the load on broker in cases when channel has many subscribers. When message loss is detected medium layer
 	// tells caller about this and also marks all channel subscribers with insufficient state flag. By default,
 	// medium is not used for sync – in that case each individual connection syncs position independently.
-	EnablePositionSync bool
+	SharedPositionSync bool
 
 	// EnableQueue for incoming publications. This can be useful to reduce PUB/SUB message processing time
 	// (as we put it into a single medium layer queue instead of each individual connection queue), reduce
