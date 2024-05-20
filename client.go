@@ -2461,6 +2461,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 		Pong:    res.Pong,
 		Session: res.Session,
 		Node:    res.Node,
+		Time:    res.Time,
 	}
 	return &protocol.Reply{
 		Push: &protocol.Push{
