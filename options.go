@@ -163,7 +163,7 @@ func WithRecovery(enabled bool) SubscribeOption {
 	}
 }
 
-type RecoveryMode int32
+type RecoveryMode uint8
 
 const (
 	RecoveryModeStream RecoveryMode = 0
