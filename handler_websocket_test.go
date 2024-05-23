@@ -825,8 +825,8 @@ func TestWsBroadcastCompressionCache(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			mux := http.NewServeMux()
 			mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
-				Compression:                 true,
-				PreparedMessageCacheMaxSize: bm.cacheSizeMB * 1024 * 1024,
+				Compression:                         true,
+				CompressionPreparedMessageCacheSize: bm.cacheSizeMB * 1024 * 1024,
 			})))
 			server := httptest.NewServer(mux)
 			defer server.Close()
@@ -881,8 +881,8 @@ func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
 
 			mux := http.NewServeMux()
 			mux.Handle("/connection/websocket", testAuthMiddleware(NewWebsocketHandler(n, WebsocketConfig{
-				Compression:                 true,
-				PreparedMessageCacheMaxSize: bm.cacheSizeMB * 1024 * 1024,
+				Compression:                         true,
+				CompressionPreparedMessageCacheSize: bm.cacheSizeMB * 1024 * 1024,
 			})))
 			server := httptest.NewServer(mux)
 			defer server.Close()
