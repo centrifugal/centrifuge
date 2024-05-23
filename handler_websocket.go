@@ -62,14 +62,13 @@ type WebsocketConfig struct {
 	// WebsocketCompression enabled and compression negotiated with client.
 	CompressionMinSize int
 
-	// PreparedMessageCacheMaxSize when greater than zero enables caching of WebSocket prepared
-	// messages and sets the maximum size of that cache in bytes. When cache is on – Centrifuge
-	// uses prepared WebSocket messages for connections with compression. This generally
-	// introduces overhead but at the same time may drastically reduce compression memory
-	// and CPU spikes during broadcasts. See also BenchmarkWsBroadcastCompressionCache.
+	// CompressionPreparedMessageCacheSize when greater than zero tells Centrifuge to use
+	// prepared WebSocket messages for connections with compression. This generally introduces
+	// overhead but at the same time may drastically reduce compression memory and CPU spikes
+	// during broadcasts. See also BenchmarkWsBroadcastCompressionCache.
 	// This option is EXPERIMENTAL, do not use in production. Contact maintainers if it
 	// works well for your use case, and you want to enable it in production.
-	PreparedMessageCacheMaxSize int64
+	CompressionPreparedMessageCacheSize int64
 
 	PingPongConfig
 }
@@ -104,8 +103,8 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 		upgrade.CheckOrigin = sameHostOriginCheck(node)
 	}
 	var cache *theine.Cache[string, *websocket.PreparedMessage]
-	if config.PreparedMessageCacheMaxSize > 0 {
-		cache, _ = theine.NewBuilder[string, *websocket.PreparedMessage](config.PreparedMessageCacheMaxSize).Build()
+	if config.CompressionPreparedMessageCacheSize > 0 {
+		cache, _ = theine.NewBuilder[string, *websocket.PreparedMessage](config.CompressionPreparedMessageCacheSize).Build()
 	}
 	return &WebsocketHandler{
 		node:          node,
