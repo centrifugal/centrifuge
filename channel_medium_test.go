@@ -42,34 +42,51 @@ func (m *mockNode) streamTop(ch string, historyMetaTTL time.Duration) (StreamPos
 }
 
 func TestChannelMediumHandlePublication(t *testing.T) {
-	optionSet := []ChannelMediumOptions{
+	var testCases = []struct {
+		numPublications int
+		options         ChannelMediumOptions
+	}{
 		{
-			enableQueue:           false,
-			KeepLatestPublication: false,
+			numPublications: 10,
+			options: ChannelMediumOptions{
+				enableQueue:           false,
+				KeepLatestPublication: false,
+			},
 		},
 		{
-			enableQueue:           true,
-			KeepLatestPublication: false,
+			numPublications: 10,
+			options: ChannelMediumOptions{
+				enableQueue:           true,
+				KeepLatestPublication: false,
+			},
 		},
 		{
-			enableQueue:           true,
-			KeepLatestPublication: false,
-			broadcastDelay:        10 * time.Millisecond,
+			numPublications: 1,
+			options: ChannelMediumOptions{
+				enableQueue:           true,
+				KeepLatestPublication: false,
+				broadcastDelay:        10 * time.Millisecond,
+			},
 		},
 		{
-			enableQueue:           true,
-			KeepLatestPublication: true,
-			broadcastDelay:        10 * time.Millisecond,
+			numPublications: 1,
+			options: ChannelMediumOptions{
+				enableQueue:           true,
+				KeepLatestPublication: true,
+				broadcastDelay:        10 * time.Millisecond,
+			},
 		},
 	}
 
-	for i, options := range optionSet {
+	for i, tt := range testCases {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			doneCh := make(chan struct{})
+			numPublications := tt.numPublications
 
-			cache := setupChannelMedium(t, options, &mockNode{
+			doneCh := make(chan struct{}, numPublications)
+
+			cache := setupChannelMedium(t, tt.options, &mockNode{
 				handlePublicationFunc: func(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
-					close(doneCh)
+					doneCh <- struct{}{}
 					return nil
 				},
 			})
@@ -77,12 +94,16 @@ func TestChannelMediumHandlePublication(t *testing.T) {
 			pub := &Publication{Data: []byte("test data")}
 			sp := StreamPosition{Offset: 1}
 
-			cache.broadcastPublication(pub, sp, false, nil)
+			for i := 0; i < numPublications; i++ {
+				cache.broadcastPublication(pub, sp, false, nil)
+			}
 
-			select {
-			case <-doneCh:
-			case <-time.After(5 * time.Second):
-				require.Fail(t, "handlePublicationFunc was not called")
+			for i := 0; i < numPublications; i++ {
+				select {
+				case <-doneCh:
+				case <-time.After(5 * time.Second):
+					require.Fail(t, "handlePublicationFunc was not called")
+				}
 			}
 		})
 	}

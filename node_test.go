@@ -224,6 +224,7 @@ func defaultTestNodeBenchmark(b *testing.B) *Node {
 
 func defaultTestNode() *Node {
 	n := defaultNodeNoHandlers()
+	n.OnCommandProcessed(func(client *Client, event CommandProcessedEvent) {})
 	n.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{}, nil)

@@ -56,6 +56,7 @@ func TestSubscribeOptions(t *testing.T) {
 		WithSubscribeClient("test"),
 		WithSubscribeSource(4),
 		WithRecoveryMode(RecoveryModeCache),
+		WithSubscribeHistoryMetaTTL(24 * time.Hour),
 	}
 	opts := &SubscribeOptions{}
 	for _, opt := range subscribeOpts {
@@ -72,6 +73,7 @@ func TestSubscribeOptions(t *testing.T) {
 	require.Equal(t, "session", opts.sessionID)
 	require.Equal(t, uint8(4), opts.Source)
 	require.Equal(t, RecoveryModeCache, opts.RecoveryMode)
+	require.Equal(t, 24*time.Hour, opts.HistoryMetaTTL)
 }
 
 func TestWithDisconnect(t *testing.T) {

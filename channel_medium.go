@@ -350,29 +350,6 @@ func (q *publicationQueue) Close() {
 	q.cond.Broadcast()
 }
 
-// CloseRemaining will close the queue and return all entries in the queue.
-// All goroutines in wait() will return.
-func (q *publicationQueue) CloseRemaining() []queuedPublication {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.closed {
-		return []queuedPublication{}
-	}
-	rem := make([]queuedPublication, 0, q.cnt)
-	for q.cnt > 0 {
-		i := q.nodes[q.head]
-		q.head = (q.head + 1) % len(q.nodes)
-		q.cnt--
-		rem = append(rem, i)
-	}
-	q.closed = true
-	q.cnt = 0
-	q.nodes = nil
-	q.size = 0
-	q.cond.Broadcast()
-	return rem
-}
-
 // Closed returns true if the queue has been closed
 // The call cannot guarantee that the queue hasn't been
 // closed while the function returns, so only "true" has a definite meaning.
@@ -424,14 +401,6 @@ func (q *publicationQueue) Remove() (queuedPublication, bool) {
 
 	q.mu.Unlock()
 	return i, true
-}
-
-// Cap returns the capacity (without allocations)
-func (q *publicationQueue) Cap() int {
-	q.mu.RLock()
-	c := cap(q.nodes)
-	q.mu.RUnlock()
-	return c
 }
 
 // Len returns the current length of the queue.
