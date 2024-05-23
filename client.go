@@ -2944,10 +2944,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		protoReply, err := c.getSubscribeCommandReply(res)
 		if err != nil {
 			c.node.logger.log(newLogEntry(LogLevelError, "error encoding subscribe", map[string]any{"error": err.Error()}))
-			if !serverSide {
-				// Will be called later in case of server side sub.
-				c.pubSubSync.StopBuffering(channel)
-			}
+			c.pubSubSync.StopBuffering(channel) // Will be called later in case of server side sub.
 			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
