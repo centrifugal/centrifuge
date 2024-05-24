@@ -708,6 +708,9 @@ func (c *Client) updatePresence() {
 		checkDelay := config.ClientChannelPositionCheckDelay
 		if checkDelay > 0 && !c.checkPosition(checkDelay, channel, channelContext) {
 			serverSide := channelHasFlag(channelContext.flags, flagServerSide)
+			if c.node.logger.enabled(LogLevelDebug) {
+				c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state from periodic check", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			}
 			if c.isAsyncUnsubscribe(serverSide) {
 				go func(ch string) { c.handleAsyncUnsubscribe(ch, unsubscribeInsufficientState) }(channel)
 				continue
@@ -908,6 +911,7 @@ func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {
 		return err
 	}
 	_ = c.transportEnqueue(replyData, ch, protocol.FrameTypePushUnsubscribe)
+	c.node.metrics.incServerUnsubscribe(unsub.Code)
 	return nil
 }
 
