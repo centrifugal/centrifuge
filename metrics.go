@@ -27,6 +27,7 @@ type metrics struct {
 	numChannelsGauge              prometheus.Gauge
 	numNodesGauge                 prometheus.Gauge
 	replyErrorCount               *prometheus.CounterVec
+	serverUnsubscribeCount        *prometheus.CounterVec
 	serverDisconnectCount         *prometheus.CounterVec
 	commandDurationSummary        *prometheus.SummaryVec
 	surveyDurationSummary         *prometheus.SummaryVec
@@ -230,6 +231,10 @@ func (m *metrics) incServerDisconnect(code uint32) {
 	m.serverDisconnectCount.WithLabelValues(strconv.FormatUint(uint64(code), 10)).Inc()
 }
 
+func (m *metrics) incServerUnsubscribe(code uint32) {
+	m.serverUnsubscribeCount.WithLabelValues(strconv.FormatUint(uint64(code), 10)).Inc()
+}
+
 func (m *metrics) incMessagesSent(msgType string) {
 	switch msgType {
 	case "publication":
@@ -390,6 +395,13 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Number of errors in replies sent to clients.",
 	}, []string{"method", "code"})
 
+	m.serverUnsubscribeCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "num_server_unsubscribes",
+		Help:      "Number of server initiated unsubscribes.",
+	}, []string{"code"})
+
 	m.serverDisconnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
@@ -527,6 +539,9 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		return nil, err
 	}
 	if err := registry.Register(m.replyErrorCount); err != nil && !errors.As(err, &alreadyRegistered) {
+		return nil, err
+	}
+	if err := registry.Register(m.serverUnsubscribeCount); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
 	if err := registry.Register(m.serverDisconnectCount); err != nil && !errors.As(err, &alreadyRegistered) {
