@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title></title>
+    <style>
+        body, html {height: 100%;margin: 0;display: flex;justify-content: center;align-items: center;background-color: #f0f8ff;font-family: Roboto, Arial, sans-serif;}
+        #counter {font-size: 160px;font-weight: bold;color: #ff6347;}
+    </style>
+</head>
+<body>
+    <div id="counter"></div>
+    <script type="text/javascript" src="https://unpkg.com/centrifuge@5.2.0-beta.1/dist/centrifuge.js"></script>
+    <script type="text/javascript" src="rtdocument.js"></script>
+    <script type="text/javascript">
+        window.addEventListener('load', function() {
+            const counterContainer = document.getElementById("counter");
+
+            const client = new Centrifuge('ws://localhost:8000/connection/websocket', {});
+            const subscription = client.newSubscription('counter', {});
+
+            const realTimeDocument = new RealTimeDocument({
+                subscription,
+                load: async () => {
+                    const response = await fetch('/api/counter');
+                    const result = await response.json();
+                    return { document: result.value, version: result.version };
+                },
+                applyUpdate: (document, update) => {
+                    console.log("Applying update", update, "to", document);
+                    return update.value;
+                },
+                compareVersion: (publication, currentVersion) => {
+                    const newVersion = publication.data.version;
+                    return newVersion > currentVersion ? newVersion : null;
+                },
+                onChange: (document) => {
+                    console.log("Counter changed", document);
+                    counterContainer.textContent = document;
+                },
+                debug: true,
+            });
+            client.connect();
+
+            // Note – we can call sync even before connect.
+            realTimeDocument.startSync();
+        });
+    </script>
+</body>
+</html>
