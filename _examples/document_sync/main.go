@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,11 +17,20 @@ import (
 	"github.com/centrifugal/centrifuge"
 )
 
-// Counter is a document we sync here. For counter Version always matches Value – but
-// that's not the rule for other more complex documents of course.
+// Counter is a document we sync here. Returned when loading full state.
 type Counter struct {
 	Version int `json:"version"`
 	Value   int `json:"value"`
+}
+
+// CounterUpdate represents real-time message we send to the channel.
+// Note that we send increments here, not a counter value, to make sure the document is
+// properly synchronized when we send changes, not a full state. For the counter we could
+// send just an actual value to the channel – we do not make it here intentionally to
+// demonstrate the proper data sync.
+type CounterUpdate struct {
+	Version   int `json:"version"`
+	Increment int `json:"increment"`
 }
 
 var (
@@ -125,6 +135,8 @@ func main() {
 }
 
 func getCounterHandler(w http.ResponseWriter, _ *http.Request) {
+	// Emulate delay to ensure data is still synchronized properly and only necessary updates are handled.
+	time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
 	counterLock.RLock()
 	defer counterLock.RUnlock()
 	w.Header().Set("Content-Type", "application/json")
@@ -136,27 +148,28 @@ func simulateCounterIncrease(ctx context.Context, node *centrifuge.Node) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(250 * time.Millisecond):
 			counterLock.Lock()
+			increment := rand.Intn(10)
 			counter.Version++
-			counter.Value++
+			counter.Value += increment
 			// Publishing under the lock here which is generally not good, but we want
 			// to emulate transactional outbox or CDC guarantees.
-			err := publishToChannel(node)
+			err := publishToChannel(node, counter.Version, increment)
 			if err != nil {
 				// Emulate transaction rollback.
 				log.Println("publish to channel error", err)
 				counter.Version--
-				counter.Value--
+				counter.Value -= increment
 			}
 			counterLock.Unlock()
 		}
 	}
 }
 
-func publishToChannel(node *centrifuge.Node) error {
-	data, _ := json.Marshal(counter)
+func publishToChannel(node *centrifuge.Node, version int, increment int) error {
+	data, _ := json.Marshal(CounterUpdate{Version: version, Increment: increment})
 	_, err := node.Publish(exampleChannel, data,
-		centrifuge.WithHistory(100, 10*time.Second))
+		centrifuge.WithHistory(20, 10*time.Second))
 	return err
 }

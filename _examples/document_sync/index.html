@@ -28,7 +28,8 @@
                 },
                 applyUpdate: (document, update) => {
                     console.log("Applying update", update, "to", document);
-                    return update.value;
+                    document += update.increment
+                    return document
                 },
                 compareVersion: (publication, currentVersion) => {
                     const newVersion = publication.data.version;

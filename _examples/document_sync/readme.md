@@ -1,4 +1,8 @@
-This example demonstrates a real-time document synchronization. To achieve it we are using a helper class RealTimeDocument – we delegate Centrifuge Subscription to it, also a function to load the document and its version. Subscription channel must uniquely correlate with the document we want to sync. 
+This example demonstrates a real-time document synchronization.
+
+Note, this example assumes that conflicts are resolved during transaction on server side and only committed updates are sent in real-time. This still differs from CRDT approach and offline-first applications.
+
+To achieve it we are using a helper class `RealTimeDocument` – we delegate Centrifuge Subscription to it, also a function to load the document and its version. Subscription channel must uniquely correlate with the document we want to sync.
 
 We also provide a couple of additional functions to apply real-time updates to the current document version and compare versions (to ensure we are not applying non-actual real-time updates to the state).
 
@@ -8,10 +12,12 @@ Keep in mind, that messages must be sent to Centrifugo channel in the correct ve
 
 The important thing here is that we should first subscribe to the channel, then load the document from the backend. This helps to not miss intermediary updates, happening between document load and subscription request. If we can guarantee that all updates eventually reach Centrifugo (and in case of transactional outbox or CDC we can) – then the sync will work properly.
 
+Note that we send increments here, not counter value, and value is always properly synchronized. For the counter we could send just an actual value to the channel – we do not want making it here to demonstrate proper data sync.
+
 To start the example run the following command from the example directory:
 
 ```
 go run main.go
 ```
 
-Then go to http://localhost:8000 to see it in action. Open a couple of browser windows.
+Then go to http://localhost:8000 to see it in action. Open a couple of browser windows. 
