@@ -80,27 +80,6 @@ func main() {
 		LogHandler: handleLog,
 	})
 
-	redisShardConfigs := []centrifuge.RedisShardConfig{
-		{Address: "localhost:6379"},
-	}
-	var redisShards []*centrifuge.RedisShard
-	for _, redisConf := range redisShardConfigs {
-		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
-		if err != nil {
-			log.Fatal(err)
-		}
-		redisShards = append(redisShards, redisShard)
-	}
-
-	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-		// And configure a couple of shards to use.
-		Shards: redisShards,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	node.SetBroker(broker)
-
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
