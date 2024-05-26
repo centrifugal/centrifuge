@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/centrifugal/centrifuge/internal/convert"
 
 	"github.com/centrifugal/protocol"
@@ -153,7 +155,10 @@ func (t *testTransport) Close(disconnect Disconnect) error {
 }
 
 func TestHub(t *testing.T) {
-	h := newHub(nil)
+	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	require.NoError(t, err)
+
+	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	c.user = "test"
@@ -896,10 +901,12 @@ func TestHubBroadcastLeave(t *testing.T) {
 }
 
 func TestHubShutdown(t *testing.T) {
-	h := newHub(nil)
-	err := h.shutdown(context.Background())
+	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
 	require.NoError(t, err)
-	h = newHub(nil)
+	h := newHub(nil, m, 0)
+	err = h.shutdown(context.Background())
+	require.NoError(t, err)
+	h = newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	_ = h.add(c)
@@ -914,7 +921,9 @@ func TestHubShutdown(t *testing.T) {
 }
 
 func TestHubSubscriptions(t *testing.T) {
-	h := newHub(nil)
+	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	require.NoError(t, err)
+	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 
@@ -955,7 +964,9 @@ func TestHubSubscriptions(t *testing.T) {
 }
 
 func TestUserConnections(t *testing.T) {
-	h := newHub(nil)
+	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	require.NoError(t, err)
+	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	_ = h.add(c)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 
@@ -23,13 +24,13 @@ type Hub struct {
 }
 
 // newHub initializes Hub.
-func newHub(logger *logger) *Hub {
+func newHub(logger *logger, metrics *metrics, maxTimeLagMilli int64) *Hub {
 	h := &Hub{
 		sessions: map[string]*Client{},
 	}
 	for i := 0; i < numHubShards; i++ {
 		h.connShards[i] = newConnShard()
-		h.subShards[i] = newSubShard(logger)
+		h.subShards[i] = newSubShard(logger, metrics, maxTimeLagMilli)
 	}
 	return h
 }
@@ -498,14 +499,18 @@ type subInfo struct {
 type subShard struct {
 	mu sync.RWMutex
 	// registry to hold active subscriptions of clients to channels with some additional info.
-	subs   map[string]map[string]subInfo
-	logger *logger
+	subs            map[string]map[string]subInfo
+	maxTimeLagMilli int64
+	logger          *logger
+	metrics         *metrics
 }
 
-func newSubShard(logger *logger) *subShard {
+func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64) *subShard {
 	return &subShard{
-		subs:   make(map[string]map[string]subInfo),
-		logger: logger,
+		subs:            make(map[string]map[string]subInfo),
+		logger:          logger,
+		metrics:         metrics,
+		maxTimeLagMilli: maxTimeLagMilli,
 	}
 }
 
@@ -646,6 +651,7 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 
 // broadcastPublication sends message to all clients subscribed on a channel.
 func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
+	pubTime := pub.Time
 	fullPub := pubToProto(pub)
 	preparedDataByKey := make(map[preparedKey]preparedData)
 
@@ -755,7 +761,18 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
 		}
-		_ = sub.client.writePublication(channel, fullPub, prepValue, sp)
+
+		// Check lag in PUB/SUB processing. We use it to notify subscribers with positioning enabled
+		// about insufficient state in the stream.
+		var maxLagExceeded bool
+		if pubTime > 0 {
+			timeLagMilli := time.Now().UnixMilli() - pubTime
+			h.metrics.observePubSubTimeLag(timeLagMilli)
+			if h.maxTimeLagMilli > 0 && timeLagMilli > h.maxTimeLagMilli {
+				maxLagExceeded = true
+			}
+		}
+		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.

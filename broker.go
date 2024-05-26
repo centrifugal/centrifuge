@@ -17,6 +17,8 @@ type Publication struct {
 	// Tags contains a map with custom key-values attached to a Publication. Tags map
 	// will be delivered to a client.
 	Tags map[string]string
+	// Optional time of publication as Unix timestamp milliseconds.
+	Time int64
 }
 
 // ClientInfo contains information about client connection.

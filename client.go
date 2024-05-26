@@ -732,10 +732,7 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 	}
 	nowUnix := c.node.nowTimeGetter().Unix()
 
-	isInitialCheck := chCtx.positionCheckTime == 0
-	isTimeToCheck := nowUnix-chCtx.positionCheckTime > int64(checkDelay.Seconds())
-	needCheckPosition := isInitialCheck || isTimeToCheck
-
+	needCheckPosition := nowUnix-chCtx.positionCheckTime > int64(checkDelay.Seconds())
 	if !needCheckPosition {
 		return true
 	}
@@ -3104,7 +3101,7 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 	}
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition) error {
+func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
@@ -3141,6 +3138,20 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
 	pubEpoch := sp.Epoch
+	if maxLagExceeded {
+		// PUB/SUB lag is too big.
+		// We can introduce an option to mark connection with insufficient state flag instead
+		// of disconnecting it immediately. In that case connection will eventually reconnect
+		// due to periodic sync. While connection channel is in the insufficient state we must
+		// skip publications coming to it. This mode may be useful to spread the resubscribe load.
+		if c.node.logger.enabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (lag)", map[string]any{"channel": ch, "user": c.user, "client": c.uid}))
+		}
+		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
+		go func() { c.handleInsufficientState(ch, serverSide) }()
+		c.mu.Unlock()
+		return nil
+	}
 	if pubEpoch != channelContext.streamPosition.Epoch {
 		// Wrong stream epoch is always a signal of insufficient state.
 		// We can introduce an option to mark connection with insufficient state flag instead
@@ -3196,10 +3207,10 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
-	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp)
+	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp, false)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition) error {
+func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool) error {
 	if c.node.LogEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
@@ -3233,7 +3244,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp)
+		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded)
 	})
 	return nil
 }
@@ -3374,7 +3385,8 @@ func (c *Client) logWriteInternalErrorFlush(ch string, frameType protocol.FrameT
 }
 
 func toClientErr(err error) *Error {
-	if clientErr, ok := err.(*Error); ok {
+	var clientErr *Error
+	if errors.As(err, &clientErr) {
 		return clientErr
 	}
 	return ErrorInternal

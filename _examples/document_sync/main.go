@@ -15,6 +15,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Counter is a document we sync here. Returned when loading full state.
@@ -135,6 +136,7 @@ func main() {
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.HandleFunc("/api/counter", getCounterHandler)
+	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	counter = Counter{Version: 0, Value: 0}
