@@ -652,6 +652,19 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 // broadcastPublication sends message to all clients subscribed on a channel.
 func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
 	pubTime := pub.Time
+	// Check lag in PUB/SUB processing. We use it to notify subscribers with positioning enabled
+	// about insufficient state in the stream.
+	var maxLagExceeded bool
+	now := time.Now()
+	var timeLagMilli int64
+	if pubTime > 0 {
+		timeLagMilli = now.UnixMilli() - pubTime
+		if h.maxTimeLagMilli > 0 && timeLagMilli > h.maxTimeLagMilli {
+			maxLagExceeded = true
+		}
+		h.metrics.observePubSubDeliveryLag(timeLagMilli)
+	}
+
 	fullPub := pubToProto(pub)
 	preparedDataByKey := make(map[preparedKey]preparedData)
 
@@ -762,16 +775,6 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 			continue
 		}
 
-		// Check lag in PUB/SUB processing. We use it to notify subscribers with positioning enabled
-		// about insufficient state in the stream.
-		var maxLagExceeded bool
-		if pubTime > 0 {
-			timeLagMilli := time.Now().UnixMilli() - pubTime
-			h.metrics.observePubSubTimeLag(timeLagMilli)
-			if h.maxTimeLagMilli > 0 && timeLagMilli > h.maxTimeLagMilli {
-				maxLagExceeded = true
-			}
-		}
 		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
@@ -783,6 +786,8 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 			"error":   jsonEncodeErr.error,
 		}))
 	}
+
+	h.metrics.observeBroadcastDuration(now)
 	return nil
 }
 

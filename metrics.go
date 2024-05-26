@@ -84,7 +84,8 @@ type metrics struct {
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
 
-	pubSubTimeLagHistogram prometheus.Histogram
+	pubSubDeliveryLagHistogram prometheus.Histogram
+	broadcastDurationHistogram prometheus.Histogram
 }
 
 func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration) {
@@ -119,11 +120,15 @@ func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Du
 	observer.Observe(d.Seconds())
 }
 
-func (m *metrics) observePubSubTimeLag(lagTimeMilli int64) {
+func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64) {
 	if lagTimeMilli < 0 {
 		lagTimeMilli = -lagTimeMilli
 	}
-	m.pubSubTimeLagHistogram.Observe(float64(lagTimeMilli) / 1000)
+	m.pubSubDeliveryLagHistogram.Observe(float64(lagTimeMilli) / 1000)
+}
+
+func (m *metrics) observeBroadcastDuration(started time.Time) {
+	m.broadcastDurationHistogram.Observe(time.Since(started).Seconds())
 }
 
 func (m *metrics) setBuildInfo(version string) {
@@ -468,13 +473,23 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Size in bytes of messages received from client connections over specific transport.",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
-	m.pubSubTimeLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	m.pubSubDeliveryLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
-		Name:      "pub_sub_time_lag_seconds",
-		Help:      "Pub sub time lag in seconds",
+		Name:      "pub_sub_delivery_lag_seconds",
+		Help:      "Pub sub delivery lag in seconds",
 		Buckets:   []float64{0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000, 2.000, 5.000, 10.000},
 	})
+	m.broadcastDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "broadcast_duration_seconds",
+		Help:      "Broadcast duration in seconds",
+		Buckets: []float64{
+			0.000001, 0.000005, 0.000010, 0.000050, 0.000100, 0.000250, 0.000500, // Microsecond resolution.
+			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
+			1.0, 2.5, 5.0, 10.0, // Second resolution.
+		}})
 
 	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication")
 	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join")
@@ -588,7 +603,10 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	if err := registry.Register(m.surveyDurationSummary); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.pubSubTimeLagHistogram); err != nil && !errors.As(err, &alreadyRegistered) {
+	if err := registry.Register(m.pubSubDeliveryLagHistogram); err != nil && !errors.As(err, &alreadyRegistered) {
+		return nil, err
+	}
+	if err := registry.Register(m.broadcastDurationHistogram); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
 	return m, nil
