@@ -656,9 +656,8 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 	// about insufficient state in the stream.
 	var maxLagExceeded bool
 	now := time.Now()
-	var timeLagMilli int64
 	if pubTime > 0 {
-		timeLagMilli = now.UnixMilli() - pubTime
+		timeLagMilli := now.UnixMilli() - pubTime
 		if h.maxTimeLagMilli > 0 && timeLagMilli > h.maxTimeLagMilli {
 			maxLagExceeded = true
 		}
