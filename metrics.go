@@ -83,6 +83,8 @@ type metrics struct {
 	commandDurationRefresh       prometheus.Observer
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
+
+	pubSubTimeLagHistogram prometheus.Histogram
 }
 
 func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration) {
@@ -115,6 +117,13 @@ func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Du
 		observer = m.commandDurationUnknown
 	}
 	observer.Observe(d.Seconds())
+}
+
+func (m *metrics) observePubSubTimeLag(lagTimeMilli int64) {
+	if lagTimeMilli < 0 {
+		lagTimeMilli = -lagTimeMilli
+	}
+	m.pubSubTimeLagHistogram.Observe(float64(lagTimeMilli) / 1000)
 }
 
 func (m *metrics) setBuildInfo(version string) {
@@ -459,6 +468,14 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Size in bytes of messages received from client connections over specific transport.",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
+	m.pubSubTimeLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "pub_sub_time_lag_seconds",
+		Help:      "Pub sub time lag in seconds",
+		Buckets:   []float64{0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000, 2.000, 5.000, 10.000},
+	})
+
 	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication")
 	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join")
 	m.messagesReceivedCountLeave = m.messagesReceivedCount.WithLabelValues("leave")
@@ -569,6 +586,9 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		return nil, err
 	}
 	if err := registry.Register(m.surveyDurationSummary); err != nil && !errors.As(err, &alreadyRegistered) {
+		return nil, err
+	}
+	if err := registry.Register(m.pubSubTimeLagHistogram); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
 	return m, nil

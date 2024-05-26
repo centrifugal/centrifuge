@@ -183,8 +183,9 @@ func nodeWithPresenceManager(presenceManager PresenceManager) *Node {
 
 func defaultNodeNoHandlers() *Node {
 	n, err := New(Config{
-		LogLevel:   LogLevelTrace,
-		LogHandler: func(entry LogEntry) {},
+		LogLevel:                        LogLevelTrace,
+		LogHandler:                      func(entry LogEntry) {},
+		ClientChannelPositionMaxTimeLag: 5 * time.Second,
 	})
 	if err != nil {
 		panic(err)

@@ -17,7 +17,6 @@ var (
 )
 
 func handlePush(push *clientproto.Push) {
-	log.Printf("push received (type %d, channel %s, data %s", push.Type, push.Channel, fmt.Sprintf("%#v", string(push.Data)))
 	if push.Connect != nil {
 		log.Printf("connected to a server with ID: %s", push.Connect.Client)
 	} else if push.Pub != nil {
@@ -25,7 +24,7 @@ func handlePush(push *clientproto.Push) {
 	} else if push.Disconnect != nil {
 		log.Printf("disconnected from a server: %s", push.Disconnect.Reason)
 	} else {
-		log.Println("push type handling not implemented")
+		log.Printf("push type handling not implemented: %v", push)
 	}
 }
 

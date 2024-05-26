@@ -153,7 +153,6 @@ func New(c Config) (*Node, error) {
 		uid:            uid,
 		nodes:          newNodeRegistry(uid),
 		config:         c,
-		hub:            newHub(lg),
 		startedAt:      time.Now().Unix(),
 		shutdownCh:     make(chan struct{}),
 		logger:         lg,
@@ -173,6 +172,8 @@ func New(c Config) (*Node, error) {
 	} else {
 		n.metrics = m
 	}
+
+	n.hub = newHub(lg, n.metrics, c.ClientChannelPositionMaxTimeLag.Milliseconds())
 
 	b, err := NewMemoryBroker(n, MemoryBrokerConfig{})
 	if err != nil {
@@ -1253,6 +1254,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		Data:   pub.Data,
 		Info:   infoFromProto(pub.GetInfo()),
 		Tags:   pub.GetTags(),
+		Time:   pub.Time,
 	}
 }
 

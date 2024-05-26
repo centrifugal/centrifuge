@@ -48,6 +48,12 @@ type Config struct {
 	// will be disconnected with DisconnectInsufficientState.
 	// Zero value means 40 * time.Second.
 	ClientChannelPositionCheckDelay time.Duration
+	// Maximum allowed time lag for publications for subscribers with positioning on.
+	// When exceeded we mark connection with insufficient state. By default, not used - i.e.
+	// Centrifuge does not take lag into account for positioning.
+	// See also pub_sub_time_lag_seconds as a helpful metric.
+	ClientChannelPositionMaxTimeLag time.Duration
+
 	// ClientQueueMaxSize is a maximum size of client's message queue in
 	// bytes. After this queue size exceeded Centrifuge closes client's connection.
 	// Zero value means 1048576 bytes (1MB).

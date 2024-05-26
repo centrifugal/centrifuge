@@ -48,7 +48,7 @@ class RealTimeDocument {
                 return;
             }
             // Process new messages immediately if initial state is already loaded.
-            const newVersion = this.#compareVersion(ctx, this.#version);
+            const newVersion = this.#compareVersion(this.#version, ctx.data);
             if (newVersion === null) {
                 this.#debugLog("Skip real-time publication", ctx);
                 return;
@@ -143,7 +143,7 @@ class RealTimeDocument {
 
     #processBufferedMessages() {
         this.#messageBuffer.forEach((msg) => {
-            const newVersion = this.#compareVersion(msg, this.#version);
+            const newVersion = this.#compareVersion(this.#version, msg.data);
             if (newVersion) {
                 this.#document = this.#applyUpdate(this.#document, msg.data);
                 this.#version = newVersion;

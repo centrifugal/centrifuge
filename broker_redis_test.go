@@ -1965,13 +1965,13 @@ func TestParseDeltaPush(t *testing.T) {
 		name           string
 		input          string
 		expectError    bool
-		expectedResult *deltaPublicationPush
+		expectedResult deltaPublicationPush
 	}{
 		{
 			name:        "valid data with colon in payload",
 			input:       "d1:1234567890:epoch1:4:test:18:payload:with:colon",
 			expectError: false,
-			expectedResult: &deltaPublicationPush{
+			expectedResult: deltaPublicationPush{
 				Offset:            1234567890,
 				Epoch:             "epoch1",
 				PrevPayloadLength: 4,
@@ -1984,7 +1984,7 @@ func TestParseDeltaPush(t *testing.T) {
 			name:        "valid data with empty payload",
 			input:       "d1:1234567890:epoch2:0::0:",
 			expectError: false,
-			expectedResult: &deltaPublicationPush{
+			expectedResult: deltaPublicationPush{
 				Offset:            1234567890,
 				Epoch:             "epoch2",
 				PrevPayloadLength: 0,
