@@ -31,8 +31,8 @@
                     document += update.increment
                     return document
                 },
-                compareVersion: (publication, currentVersion) => {
-                    const newVersion = publication.data.version;
+                compareVersion: (currentVersion, update) => {
+                    const newVersion = update.version;
                     return newVersion > currentVersion ? newVersion : null;
                 },
                 onChange: (document) => {

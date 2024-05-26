@@ -1363,7 +1363,11 @@ func extractPushData(data []byte) ([]byte, pushType, StreamPosition, bool, []byt
 		// d1:offset:epoch:prev_payload_length:prev_payload:payload_length:payload
 		stringContent := convert.BytesToString(content)
 		parsedDelta, err := parseDeltaPush(stringContent)
-		return convert.StringToBytes(parsedDelta.Payload), pubPushType, StreamPosition{Epoch: parsedDelta.Epoch, Offset: parsedDelta.Offset}, true, convert.StringToBytes(parsedDelta.PrevPayload), err == nil
+		if err != nil {
+			// Unexpected error.
+			return nil, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
+		}
+		return convert.StringToBytes(parsedDelta.Payload), pubPushType, StreamPosition{Epoch: parsedDelta.Epoch, Offset: parsedDelta.Offset}, true, convert.StringToBytes(parsedDelta.PrevPayload), true
 	default:
 		// Unknown content type.
 		return nil, pubPushType, StreamPosition{Epoch: epoch, Offset: offset}, false, nil, false
@@ -1379,11 +1383,11 @@ type deltaPublicationPush struct {
 	Payload           string
 }
 
-func parseDeltaPush(input string) (*deltaPublicationPush, error) {
+func parseDeltaPush(input string) (deltaPublicationPush, error) {
 	// d1:offset:epoch:prev_payload_length:prev_payload:payload_length:payload
 	const prefix = "d1:"
 	if !strings.HasPrefix(input, prefix) {
-		return nil, fmt.Errorf("input does not start with the expected prefix")
+		return deltaPublicationPush{}, fmt.Errorf("input does not start with the expected prefix")
 	}
 	input = input[len(prefix):] // Remove prefix
 
@@ -1391,11 +1395,11 @@ func parseDeltaPush(input string) (*deltaPublicationPush, error) {
 
 	idx := strings.IndexByte(input, ':')
 	if idx == -1 {
-		return nil, fmt.Errorf("invalid format, missing offset")
+		return deltaPublicationPush{}, fmt.Errorf("invalid format, missing offset")
 	}
 	offset, err := strconv.ParseUint(input[:idx], 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing offset: %v", err)
+		return deltaPublicationPush{}, fmt.Errorf("error parsing offset: %v", err)
 	}
 	input = input[idx+1:]
 
@@ -1403,7 +1407,7 @@ func parseDeltaPush(input string) (*deltaPublicationPush, error) {
 
 	idx = strings.IndexByte(input, ':')
 	if idx == -1 {
-		return nil, fmt.Errorf("invalid format, missing epoch")
+		return deltaPublicationPush{}, fmt.Errorf("invalid format, missing epoch")
 	}
 	epoch := input[:idx]
 	input = input[idx+1:]
@@ -1412,18 +1416,18 @@ func parseDeltaPush(input string) (*deltaPublicationPush, error) {
 
 	idx = strings.IndexByte(input, ':')
 	if idx == -1 {
-		return nil, fmt.Errorf("invalid format, missing prev payload length")
+		return deltaPublicationPush{}, fmt.Errorf("invalid format, missing prev payload length")
 	}
 	prevPayloadLength, err := strconv.Atoi(input[:idx])
 	if err != nil {
-		return nil, fmt.Errorf("error parsing prev payload length: %v", err)
+		return deltaPublicationPush{}, fmt.Errorf("error parsing prev payload length: %v", err)
 	}
 
 	input = input[idx+1:]
 
 	// Extract prev_payload based on prev_payload_length
 	if len(input) < prevPayloadLength {
-		return nil, fmt.Errorf("input is shorter than expected prev payload length")
+		return deltaPublicationPush{}, fmt.Errorf("input is shorter than expected prev payload length")
 	}
 	prevPayload := input[:prevPayloadLength]
 	input = input[prevPayloadLength+1:]
@@ -1431,21 +1435,21 @@ func parseDeltaPush(input string) (*deltaPublicationPush, error) {
 	// payload_length:payload
 	idx = strings.IndexByte(input, ':')
 	if idx == -1 {
-		return nil, fmt.Errorf("invalid format, missing payload")
+		return deltaPublicationPush{}, fmt.Errorf("invalid format, missing payload")
 	}
 	payloadLength, err := strconv.Atoi(input[:idx])
 	if err != nil {
-		return nil, fmt.Errorf("error parsing payload_length: %v", err)
+		return deltaPublicationPush{}, fmt.Errorf("error parsing payload_length: %v", err)
 	}
 	input = input[idx+1:]
 
 	// Extract payload based on payload_length
 	if len(input) < payloadLength {
-		return nil, fmt.Errorf("input is shorter than expected payload length")
+		return deltaPublicationPush{}, fmt.Errorf("input is shorter than expected payload length")
 	}
 	payload := input[:payloadLength]
 
-	return &deltaPublicationPush{
+	return deltaPublicationPush{
 		Offset:            offset,
 		Epoch:             epoch,
 		PrevPayloadLength: prevPayloadLength,

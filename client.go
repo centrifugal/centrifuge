@@ -3141,16 +3141,36 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	nextExpectedOffset := currentPositionOffset + 1
 	pubOffset := pub.Offset
 	pubEpoch := sp.Epoch
-	if pubEpoch != channelContext.streamPosition.Epoch || pubOffset != nextExpectedOffset {
+	if pubEpoch != channelContext.streamPosition.Epoch {
+		// Wrong stream epoch is always a signal of insufficient state.
 		// We can introduce an option to mark connection with insufficient state flag instead
 		// of disconnecting it immediately. In that case connection will eventually reconnect
 		// due to periodic sync. While connection channel is in the insufficient state we must
 		// skip publications coming to it. This mode may be useful to spread the resubscribe load.
 		if c.node.logger.enabled(LogLevelDebug) {
-			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
+			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (epoch)", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "epoch": pubEpoch, "expectedEpoch": channelContext.streamPosition.Epoch}))
 		}
-		// Oops: sth lost, let client reconnect/resubscribe to recover its state.
+		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
 		go func() { c.handleInsufficientState(ch, serverSide) }()
+		c.mu.Unlock()
+		return nil
+	}
+	if pubOffset > nextExpectedOffset {
+		// Missed message detected.
+		// We can introduce an option to mark connection with insufficient state flag instead
+		// of disconnecting it immediately. In that case connection will eventually reconnect
+		// due to periodic sync. While connection channel is in the insufficient state we must
+		// skip publications coming to it. This mode may be useful to spread the resubscribe load.
+		if c.node.logger.enabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "client insufficient state (offset)", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "offset": pubOffset, "expectedOffset": nextExpectedOffset}))
+		}
+		// Tell client about insufficient state, can reconnect/resubscribe to recover the state.
+		go func() { c.handleInsufficientState(ch, serverSide) }()
+		c.mu.Unlock()
+		return nil
+	} else if pubOffset < nextExpectedOffset {
+		// Epoch is correct, but due to the lag in PUB/SUB processing we received non-actual update
+		// here. Safe to just skip for the subscriber.
 		c.mu.Unlock()
 		return nil
 	}
