@@ -84,7 +84,7 @@ type metrics struct {
 	commandDurationSubRefresh    prometheus.Observer
 	commandDurationUnknown       prometheus.Observer
 
-	pubSubDeliveryLagHistogram prometheus.Histogram
+	pubSubLagHistogram         prometheus.Histogram
 	broadcastDurationHistogram prometheus.Histogram
 }
 
@@ -124,7 +124,7 @@ func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64) {
 	if lagTimeMilli < 0 {
 		lagTimeMilli = -lagTimeMilli
 	}
-	m.pubSubDeliveryLagHistogram.Observe(float64(lagTimeMilli) / 1000)
+	m.pubSubLagHistogram.Observe(float64(lagTimeMilli) / 1000)
 }
 
 func (m *metrics) observeBroadcastDuration(started time.Time) {
@@ -473,11 +473,11 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Size in bytes of messages received from client connections over specific transport.",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
-	m.pubSubDeliveryLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	m.pubSubLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
-		Name:      "pub_sub_delivery_lag_seconds",
-		Help:      "Pub sub delivery lag in seconds",
+		Name:      "pub_sub_lag_seconds",
+		Help:      "Pub sub lag in seconds",
 		Buckets:   []float64{0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000, 2.000, 5.000, 10.000},
 	})
 	m.broadcastDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
@@ -603,7 +603,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 	if err := registry.Register(m.surveyDurationSummary); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
-	if err := registry.Register(m.pubSubDeliveryLagHistogram); err != nil && !errors.As(err, &alreadyRegistered) {
+	if err := registry.Register(m.pubSubLagHistogram); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
 	if err := registry.Register(m.broadcastDurationHistogram); err != nil && !errors.As(err, &alreadyRegistered) {
