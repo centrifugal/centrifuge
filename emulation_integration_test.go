@@ -35,7 +35,7 @@ func TestEmulation_DifferentNodes(t *testing.T) {
 		})
 	})
 
-	redisConf := testRedisConf()
+	redisConf := testSingleRedisConf()
 
 	s, err := NewRedisShard(n1, redisConf)
 	require.NoError(t, err)
