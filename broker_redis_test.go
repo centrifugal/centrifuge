@@ -180,8 +180,8 @@ type historyRedisTest struct {
 var historyRedisTests = []historyRedisTest{
 	{"rd_single_list", false, false, 6379},
 	{"rd_single_strm", true, false, 6379},
-	{"df_single_list", false, false, 7369},
-	{"df_single_strm", true, false, 7369},
+	{"df_single_list", false, false, 7379},
+	{"df_single_strm", true, false, 7379},
 	{"rd_cluster_list", false, true, 0},
 	{"rd_cluster_strm", true, true, 0},
 }
@@ -194,7 +194,7 @@ type noHistoryRedisTest struct {
 
 var noHistoryRedisTests = []noHistoryRedisTest{
 	{"rd_single", false, 6379},
-	{"df_single", false, 7369},
+	{"df_single", false, 7379},
 	{"rd_cluster", false, 0},
 }
 
