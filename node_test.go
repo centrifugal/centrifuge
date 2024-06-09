@@ -1385,3 +1385,27 @@ func TestNodeCheckPosition(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, isValid)
 }
+
+func TestGetBroker(t *testing.T) {
+	node := defaultTestNode()
+	customBroker := NewTestBroker()
+	node.config.GetBroker = func(channel string) (Broker, bool) {
+		if channel == "test" {
+			return nil, false
+		}
+		return customBroker, true
+	}
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	broker := NewTestBroker()
+	node.SetBroker(broker)
+
+	_, err := node.Publish("test", []byte("{}"))
+	require.NoError(t, err)
+	require.Equal(t, int32(1), broker.publishCount)
+
+	_, err = node.Publish("test2", []byte("{}"))
+	require.NoError(t, err)
+	require.Equal(t, int32(1), broker.publishCount)
+	require.Equal(t, int32(1), customBroker.publishCount)
+}

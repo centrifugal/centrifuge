@@ -727,7 +727,7 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 		opt(pubOpts)
 	}
 	n.metrics.incMessagesSent("publication")
-	streamPos, fromCache, err := n.broker.Publish(ch, data, *pubOpts)
+	streamPos, fromCache, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -767,14 +767,14 @@ func (n *Node) Publish(channel string, data []byte, opts ...PublishOption) (Publ
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishJoin(ch string, info *ClientInfo) error {
 	n.metrics.incMessagesSent("join")
-	return n.broker.PublishJoin(ch, info)
+	return n.getBroker(ch).PublishJoin(ch, info)
 }
 
 // publishLeave allows publishing join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 	n.metrics.incMessagesSent("leave")
-	return n.broker.PublishLeave(ch, info)
+	return n.getBroker(ch).PublishLeave(ch, info)
 }
 
 var errNotificationHandlerNotRegistered = errors.New("notification handler not registered")
@@ -996,7 +996,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 			}
 		}
 
-		err := n.broker.Subscribe(ch)
+		err := n.getBroker(ch).Subscribe(ch)
 		if err != nil {
 			_, _ = n.hub.removeSub(ch, sub.client)
 			if n.config.GetChannelMediumOptions != nil {
@@ -1035,7 +1035,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			defer mu.Unlock()
 			empty := n.hub.NumSubscribers(ch) == 0
 			if empty {
-				err := n.broker.Unsubscribe(ch)
+				err := n.getBroker(ch).Unsubscribe(ch)
 				if err != nil {
 					// Cool down a bit since broker is not ready to process unsubscription.
 					time.Sleep(500 * time.Millisecond)
@@ -1294,11 +1294,21 @@ type HistoryResult struct {
 	Publications []*Publication
 }
 
+func (n *Node) getBroker(ch string) Broker {
+	if n.config.GetBroker != nil {
+		if broker, ok := n.config.GetBroker(ch); ok {
+			return broker
+		}
+	}
+	return n.broker
+}
+
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 	if opts.Filter.Reverse && opts.Filter.Since != nil && opts.Filter.Since.Offset == 0 {
 		return HistoryResult{}, ErrorBadRequest
 	}
-	pubs, streamTop, err := n.broker.History(ch, *opts)
+
+	pubs, streamTop, err := n.getBroker(ch).History(ch, *opts)
 	if err != nil {
 		return HistoryResult{}, err
 	}
@@ -1420,7 +1430,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 // RemoveHistory removes channel history.
 func (n *Node) RemoveHistory(ch string) error {
 	n.metrics.incActionCount("history_remove")
-	return n.broker.RemoveHistory(ch)
+	return n.getBroker(ch).RemoveHistory(ch)
 }
 
 type nodeRegistry struct {
