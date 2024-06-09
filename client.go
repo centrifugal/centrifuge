@@ -3038,24 +3038,21 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 	if len(recoveredPubs) > 1 {
 		for i, pub := range recoveredPubs[1:] {
 			patch := fdelta.Create(prevPub.Data, pub.Data)
-			var deltaPub *protocol.Publication
+			delta := true
+			deltaData := patch
+			if len(patch) >= len(pub.Data) {
+				delta = false
+				deltaData = pub.Data
+			}
 			if c.transport.Protocol() == ProtocolTypeJSON {
-				// For JSON case we need to use JSON string (js) for patch.
-				deltaPub = &protocol.Publication{
-					Offset: pub.Offset,
-					Data:   json.Escape(convert.BytesToString(patch)),
-					Info:   pub.Info,
-					Tags:   pub.Tags,
-					Delta:  true,
-				}
-			} else {
-				deltaPub = &protocol.Publication{
-					Offset: pub.Offset,
-					Data:   patch,
-					Info:   pub.Info,
-					Tags:   pub.Tags,
-					Delta:  true,
-				}
+				deltaData = json.Escape(convert.BytesToString(deltaData))
+			}
+			deltaPub := &protocol.Publication{
+				Offset: pub.Offset,
+				Data:   deltaData,
+				Info:   pub.Info,
+				Tags:   pub.Tags,
+				Delta:  delta,
 			}
 			recoveredPubs[i+1] = deltaPub
 			prevPub = recoveredPubs[i]
