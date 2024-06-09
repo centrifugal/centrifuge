@@ -582,22 +582,21 @@ func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key prepar
 	deltaPub := fullPub
 	if prevPub != nil && key.DeltaType == DeltaTypeFossil {
 		patch := fdelta.Create(prevPub.Data, fullPub.Data)
+		delta := true
+		deltaData := patch
+		if len(patch) >= len(fullPub.Data) {
+			delta = false
+			deltaData = fullPub.Data
+		}
 		if key.ProtocolType == protocol.TypeJSON {
-			deltaPub = &protocol.Publication{
-				Offset: fullPub.Offset,
-				Data:   json.Escape(convert.BytesToString(patch)),
-				Info:   fullPub.Info,
-				Tags:   fullPub.Tags,
-				Delta:  true,
-			}
-		} else {
-			deltaPub = &protocol.Publication{
-				Offset: fullPub.Offset,
-				Data:   patch,
-				Info:   fullPub.Info,
-				Tags:   fullPub.Tags,
-				Delta:  true,
-			}
+			deltaData = json.Escape(convert.BytesToString(deltaData))
+		}
+		deltaPub = &protocol.Publication{
+			Offset: fullPub.Offset,
+			Data:   deltaData,
+			Info:   fullPub.Info,
+			Tags:   fullPub.Tags,
+			Delta:  delta,
 		}
 	} else if prevPub == nil && key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 		// In JSON and Fossil case we need to send full state in JSON string format.
