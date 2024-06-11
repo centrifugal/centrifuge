@@ -21,6 +21,10 @@ type Publication struct {
 	// we use it for calculating PUB/SUB time lag, it's not exposed to the client
 	// protocol.
 	Time int64
+	// Channel is only set when subscription channel does not match channel in Publication.
+	// This is a case for wildcard subscriptions. Client SDK then should use this channel
+	// in PublicationContext.
+	Channel string
 }
 
 // ClientInfo contains information about client connection.

@@ -674,6 +674,10 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 		return nil
 	}
 
+	if pub.Channel != channel {
+		fullPub.Channel = pub.Channel
+	}
+
 	var (
 		jsonEncodeErr *encodeError
 	)
@@ -713,10 +717,11 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 					pubToUse := fullPub
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 						pubToUse = &protocol.Publication{
-							Offset: fullPub.Offset,
-							Data:   json.Escape(convert.BytesToString(fullPub.Data)),
-							Info:   fullPub.Info,
-							Tags:   fullPub.Tags,
+							Offset:  fullPub.Offset,
+							Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+							Info:    fullPub.Info,
+							Tags:    fullPub.Tags,
+							Channel: fullPub.Channel,
 						}
 					}
 					push := &protocol.Push{Channel: channel, Pub: pubToUse}
@@ -729,10 +734,11 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 					pubToUse := fullPub
 					if key.ProtocolType == protocol.TypeJSON && key.DeltaType == DeltaTypeFossil {
 						pubToUse = &protocol.Publication{
-							Offset: fullPub.Offset,
-							Data:   json.Escape(convert.BytesToString(fullPub.Data)),
-							Info:   fullPub.Info,
-							Tags:   fullPub.Tags,
+							Offset:  fullPub.Offset,
+							Data:    json.Escape(convert.BytesToString(fullPub.Data)),
+							Info:    fullPub.Info,
+							Tags:    fullPub.Tags,
+							Channel: fullPub.Channel,
 						}
 					}
 					push := &protocol.Push{Channel: channel, Pub: pubToUse}
