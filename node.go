@@ -232,7 +232,7 @@ func (n *Node) Hub() *Hub {
 // Run performs node startup actions. At moment must be called once on start
 // after Broker set to Node.
 func (n *Node) Run() error {
-	if err := n.broker.Run(&brokerEventHandler{n}); err != nil {
+	if err := n.broker.Run(n); err != nil {
 		return err
 	}
 	err := n.initMetrics()
@@ -1606,40 +1606,40 @@ type brokerEventHandler struct {
 }
 
 // HandlePublication coming from Broker.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
-	if h.node.config.GetChannelMediumOptions != nil {
-		mu := h.node.subLock(ch)
+	if n.config.GetChannelMediumOptions != nil {
+		mu := n.subLock(ch)
 		mu.Lock()
-		medium, ok := h.node.mediums[ch]
+		medium, ok := n.mediums[ch]
 		mu.Unlock()
 		if ok {
 			medium.broadcastPublication(pub, sp, delta, prevPub)
 			return nil
 		}
 	}
-	return h.node.handlePublication(ch, sp, pub, prevPub, nil)
+	return n.handlePublication(ch, sp, pub, prevPub, nil)
 }
 
 // HandleJoin coming from Broker.
-func (h *brokerEventHandler) HandleJoin(ch string, info *ClientInfo) error {
+func (n *Node) HandleJoin(ch string, info *ClientInfo) error {
 	if info == nil {
 		panic("nil join ClientInfo received, this must never happen")
 	}
-	return h.node.handleJoin(ch, info)
+	return n.handleJoin(ch, info)
 }
 
 // HandleLeave coming from Broker.
-func (h *brokerEventHandler) HandleLeave(ch string, info *ClientInfo) error {
+func (n *Node) HandleLeave(ch string, info *ClientInfo) error {
 	if info == nil {
 		panic("nil leave ClientInfo received, this must never happen")
 	}
-	return h.node.handleLeave(ch, info)
+	return n.handleLeave(ch, info)
 }
 
 // HandleControl coming from Broker.
-func (h *brokerEventHandler) HandleControl(data []byte) error {
-	return h.node.handleControl(data)
+func (n *Node) HandleControl(data []byte) error {
+	return n.handleControl(data)
 }
