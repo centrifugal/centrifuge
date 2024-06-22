@@ -6,7 +6,7 @@ services:
     ports:
       - "6379:6379"
   dragonflydb:
-    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.18.1
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.19.0
     ports:
       - "7379:6379"
   sentinel:
