@@ -1147,22 +1147,36 @@ func (n *Node) Refresh(userID string, opts ...RefreshOption) error {
 	return n.pubRefresh(userID, *refreshOpts)
 }
 
-// addPresence proxies presence adding to PresenceManager.
-func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
+func (n *Node) getPresenceManager(ch string) PresenceManager {
+	if n.config.GetPresenceManager != nil {
+		if presenceManager, ok := n.config.GetPresenceManager(ch); ok {
+			return presenceManager
+		}
+	}
 	if n.presenceManager == nil {
 		return nil
 	}
+	return n.presenceManager
+}
+
+// addPresence proxies presence adding to PresenceManager.
+func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
+	presenceManager := n.getPresenceManager(ch)
+	if presenceManager == nil {
+		return nil
+	}
 	n.metrics.incActionCount("add_presence")
-	return n.presenceManager.AddPresence(ch, uid, info)
+	return presenceManager.AddPresence(ch, uid, info)
 }
 
 // removePresence proxies presence removing to PresenceManager.
 func (n *Node) removePresence(ch string, clientID string, userID string) error {
-	if n.presenceManager == nil {
+	presenceManager := n.getPresenceManager(ch)
+	if presenceManager == nil {
 		return nil
 	}
 	n.metrics.incActionCount("remove_presence")
-	return n.presenceManager.RemovePresence(ch, clientID, userID)
+	return presenceManager.RemovePresence(ch, clientID, userID)
 }
 
 var (
@@ -1176,8 +1190,8 @@ type PresenceResult struct {
 	Presence map[string]*ClientInfo
 }
 
-func (n *Node) presence(ch string) (PresenceResult, error) {
-	presence, err := n.presenceManager.Presence(ch)
+func (n *Node) presence(ch string, presenceManager PresenceManager) (PresenceResult, error) {
+	presence, err := presenceManager.Presence(ch)
 	if err != nil {
 		return PresenceResult{}, err
 	}
@@ -1186,17 +1200,18 @@ func (n *Node) presence(ch string) (PresenceResult, error) {
 
 // Presence returns a map with information about active clients in channel.
 func (n *Node) Presence(ch string) (PresenceResult, error) {
-	if n.presenceManager == nil {
+	presenceManager := n.getPresenceManager(ch)
+	if presenceManager == nil {
 		return PresenceResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("presence")
 	if n.config.UseSingleFlight {
 		result, err, _ := presenceGroup.Do(ch, func() (any, error) {
-			return n.presence(ch)
+			return n.presence(ch, presenceManager)
 		})
 		return result.(PresenceResult), err
 	}
-	return n.presence(ch)
+	return n.presence(ch, presenceManager)
 }
 
 func infoFromProto(v *protocol.ClientInfo) *ClientInfo {
@@ -1263,8 +1278,8 @@ type PresenceStatsResult struct {
 	PresenceStats
 }
 
-func (n *Node) presenceStats(ch string) (PresenceStatsResult, error) {
-	presenceStats, err := n.presenceManager.PresenceStats(ch)
+func (n *Node) presenceStats(ch string, presenceManager PresenceManager) (PresenceStatsResult, error) {
+	presenceStats, err := presenceManager.PresenceStats(ch)
 	if err != nil {
 		return PresenceStatsResult{}, err
 	}
@@ -1273,17 +1288,18 @@ func (n *Node) presenceStats(ch string) (PresenceStatsResult, error) {
 
 // PresenceStats returns presence stats from PresenceManager.
 func (n *Node) PresenceStats(ch string) (PresenceStatsResult, error) {
-	if n.presenceManager == nil {
+	presenceManager := n.getPresenceManager(ch)
+	if presenceManager == nil {
 		return PresenceStatsResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("presence_stats")
 	if n.config.UseSingleFlight {
 		result, err, _ := presenceStatsGroup.Do(ch, func() (any, error) {
-			return n.presenceStats(ch)
+			return n.presenceStats(ch, presenceManager)
 		})
 		return result.(PresenceStatsResult), err
 	}
-	return n.presenceStats(ch)
+	return n.presenceStats(ch, presenceManager)
 }
 
 // HistoryResult contains Publications and current stream top StreamPosition.

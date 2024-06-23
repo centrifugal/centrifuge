@@ -132,6 +132,12 @@ type Config struct {
 	// custom Broker instances. When GetBroker returns false as the second argument then Node will
 	// use the default Broker for the channel.
 	GetBroker func(channel string) (Broker, bool)
+	// GetPresenceManager when set allows returning a custom PresenceManager to use for a specific
+	// channel. If not set then the default Node's PresenceManager is always used for all channels.
+	// A proper PresenceManager shutdown is the responsibility of application because Node does not
+	// know about custom PresenceManager instances. When GetPresenceManager returns false as the second
+	// argument then Node will use the default PresenceManager for the channel.
+	GetPresenceManager func(channel string) (PresenceManager, bool)
 }
 
 const (
