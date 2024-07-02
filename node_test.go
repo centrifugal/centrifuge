@@ -1408,3 +1408,25 @@ func TestGetBroker(t *testing.T) {
 	require.Equal(t, int32(1), broker.publishCount)
 	require.Equal(t, int32(1), customBroker.publishCount)
 }
+
+func TestGetPresenceManager(t *testing.T) {
+	node := defaultTestNode()
+	customPresenceManager := NewTestPresenceManager()
+	node.config.GetPresenceManager = func(channel string) (PresenceManager, bool) {
+		if channel == "test" {
+			return nil, false
+		}
+		return customPresenceManager, true
+	}
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	pm := NewTestPresenceManager()
+	pm.errorOnPresence = true
+	node.SetPresenceManager(pm)
+
+	_, err := node.Presence("test")
+	require.Error(t, err)
+
+	_, err = node.Presence("test2")
+	require.NoError(t, err)
+}
