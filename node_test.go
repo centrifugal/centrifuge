@@ -1175,15 +1175,14 @@ func TestSingleFlightPresence(t *testing.T) {
 func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	handler := &brokerEventHandler{node: node}
 	require.Panics(t, func() {
-		_ = handler.HandlePublication("test", nil, StreamPosition{}, false, nil)
+		_ = node.HandlePublication("test", nil, StreamPosition{}, false, nil)
 	})
 	require.Panics(t, func() {
-		_ = handler.HandleJoin("test", nil)
+		_ = node.HandleJoin("test", nil)
 	})
 	require.Panics(t, func() {
-		_ = handler.HandleLeave("test", nil)
+		_ = node.HandleLeave("test", nil)
 	})
 }
 

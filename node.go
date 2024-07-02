@@ -1617,10 +1617,6 @@ func (n *Node) OnCacheEmpty(h CacheEmptyHandler) {
 	n.clientEvents.cacheEmptyHandler = h
 }
 
-type brokerEventHandler struct {
-	node *Node
-}
-
 // HandlePublication coming from Broker.
 func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
