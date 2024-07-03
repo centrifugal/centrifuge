@@ -12,7 +12,7 @@ import (
 )
 
 // Helper function to create a channelMedium with options.
-func setupChannelMedium(t testing.TB, options ChannelMediumOptions, node node) *channelMedium {
+func setupChannelMedium(t testing.TB, options ChannelMediumOptions, node nodeSubset) *channelMedium {
 	t.Helper()
 	channel := "testChannel"
 	cache, err := newChannelMedium(channel, node, options)
