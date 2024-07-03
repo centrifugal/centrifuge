@@ -1175,15 +1175,14 @@ func TestSingleFlightPresence(t *testing.T) {
 func TestBrokerEventHandler_PanicsOnNil(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
-	handler := &brokerEventHandler{node: node}
 	require.Panics(t, func() {
-		_ = handler.HandlePublication("test", nil, StreamPosition{}, false, nil)
+		_ = node.HandlePublication("test", nil, StreamPosition{}, false, nil)
 	})
 	require.Panics(t, func() {
-		_ = handler.HandleJoin("test", nil)
+		_ = node.HandleJoin("test", nil)
 	})
 	require.Panics(t, func() {
-		_ = handler.HandleLeave("test", nil)
+		_ = node.HandleLeave("test", nil)
 	})
 }
 
@@ -1384,4 +1383,50 @@ func TestNodeCheckPosition(t *testing.T) {
 	}, 200*time.Second)
 	require.NoError(t, err)
 	require.False(t, isValid)
+}
+
+func TestGetBroker(t *testing.T) {
+	node := defaultTestNode()
+	customBroker := NewTestBroker()
+	node.config.GetBroker = func(channel string) (Broker, bool) {
+		if channel == "test" {
+			return nil, false
+		}
+		return customBroker, true
+	}
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	broker := NewTestBroker()
+	node.SetBroker(broker)
+
+	_, err := node.Publish("test", []byte("{}"))
+	require.NoError(t, err)
+	require.Equal(t, int32(1), broker.publishCount)
+
+	_, err = node.Publish("test2", []byte("{}"))
+	require.NoError(t, err)
+	require.Equal(t, int32(1), broker.publishCount)
+	require.Equal(t, int32(1), customBroker.publishCount)
+}
+
+func TestGetPresenceManager(t *testing.T) {
+	node := defaultTestNode()
+	customPresenceManager := NewTestPresenceManager()
+	node.config.GetPresenceManager = func(channel string) (PresenceManager, bool) {
+		if channel == "test" {
+			return nil, false
+		}
+		return customPresenceManager, true
+	}
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	pm := NewTestPresenceManager()
+	pm.errorOnPresence = true
+	node.SetPresenceManager(pm)
+
+	_, err := node.Presence("test")
+	require.Error(t, err)
+
+	_, err = node.Presence("test2")
+	require.NoError(t, err)
 }

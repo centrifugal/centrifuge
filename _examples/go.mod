@@ -7,7 +7,7 @@ replace github.com/centrifugal/centrifuge => ../
 require (
 	github.com/FZambia/tarantool v0.2.2
 	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/protocol v0.13.3
+	github.com/centrifugal/protocol v0.13.4-0.20240702174651-e8db704aa2d2
 	github.com/cristalhq/jwt/v5 v5.4.0
 	github.com/dchest/uniuri v1.2.0
 	github.com/gin-contrib/sessions v0.0.3
@@ -71,7 +71,7 @@ require (
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/quic-go/qpack v0.4.0 // indirect
-	github.com/redis/rueidis v1.0.39 // indirect
+	github.com/redis/rueidis v1.0.40 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.4.0 // indirect
 	github.com/shadowspore/fossil-delta v0.0.0-20240102155221-e3a8590b820b // indirect

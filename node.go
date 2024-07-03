@@ -232,7 +232,7 @@ func (n *Node) Hub() *Hub {
 // Run performs node startup actions. At moment must be called once on start
 // after Broker set to Node.
 func (n *Node) Run() error {
-	if err := n.broker.Run(&brokerEventHandler{n}); err != nil {
+	if err := n.broker.Run(n); err != nil {
 		return err
 	}
 	err := n.initMetrics()
@@ -727,7 +727,7 @@ func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishRe
 		opt(pubOpts)
 	}
 	n.metrics.incMessagesSent("publication")
-	streamPos, fromCache, err := n.broker.Publish(ch, data, *pubOpts)
+	streamPos, fromCache, err := n.getBroker(ch).Publish(ch, data, *pubOpts)
 	if err != nil {
 		return PublishResult{}, err
 	}
@@ -767,14 +767,14 @@ func (n *Node) Publish(channel string, data []byte, opts ...PublishOption) (Publ
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishJoin(ch string, info *ClientInfo) error {
 	n.metrics.incMessagesSent("join")
-	return n.broker.PublishJoin(ch, info)
+	return n.getBroker(ch).PublishJoin(ch, info)
 }
 
 // publishLeave allows publishing join message into channel when someone subscribes on it
 // or leave message when someone unsubscribes from channel.
 func (n *Node) publishLeave(ch string, info *ClientInfo) error {
 	n.metrics.incMessagesSent("leave")
-	return n.broker.PublishLeave(ch, info)
+	return n.getBroker(ch).PublishLeave(ch, info)
 }
 
 var errNotificationHandlerNotRegistered = errors.New("notification handler not registered")
@@ -996,7 +996,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 			}
 		}
 
-		err := n.broker.Subscribe(ch)
+		err := n.getBroker(ch).Subscribe(ch)
 		if err != nil {
 			_, _ = n.hub.removeSub(ch, sub.client)
 			if n.config.GetChannelMediumOptions != nil {
@@ -1035,7 +1035,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			defer mu.Unlock()
 			empty := n.hub.NumSubscribers(ch) == 0
 			if empty {
-				err := n.broker.Unsubscribe(ch)
+				err := n.getBroker(ch).Unsubscribe(ch)
 				if err != nil {
 					// Cool down a bit since broker is not ready to process unsubscription.
 					time.Sleep(500 * time.Millisecond)
@@ -1147,22 +1147,36 @@ func (n *Node) Refresh(userID string, opts ...RefreshOption) error {
 	return n.pubRefresh(userID, *refreshOpts)
 }
 
-// addPresence proxies presence adding to PresenceManager.
-func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
+func (n *Node) getPresenceManager(ch string) PresenceManager {
+	if n.config.GetPresenceManager != nil {
+		if presenceManager, ok := n.config.GetPresenceManager(ch); ok {
+			return presenceManager
+		}
+	}
 	if n.presenceManager == nil {
 		return nil
 	}
+	return n.presenceManager
+}
+
+// addPresence proxies presence adding to PresenceManager.
+func (n *Node) addPresence(ch string, uid string, info *ClientInfo) error {
+	presenceManager := n.getPresenceManager(ch)
+	if presenceManager == nil {
+		return nil
+	}
 	n.metrics.incActionCount("add_presence")
-	return n.presenceManager.AddPresence(ch, uid, info)
+	return presenceManager.AddPresence(ch, uid, info)
 }
 
 // removePresence proxies presence removing to PresenceManager.
 func (n *Node) removePresence(ch string, clientID string, userID string) error {
-	if n.presenceManager == nil {
+	presenceManager := n.getPresenceManager(ch)
+	if presenceManager == nil {
 		return nil
 	}
 	n.metrics.incActionCount("remove_presence")
-	return n.presenceManager.RemovePresence(ch, clientID, userID)
+	return presenceManager.RemovePresence(ch, clientID, userID)
 }
 
 var (
@@ -1176,8 +1190,8 @@ type PresenceResult struct {
 	Presence map[string]*ClientInfo
 }
 
-func (n *Node) presence(ch string) (PresenceResult, error) {
-	presence, err := n.presenceManager.Presence(ch)
+func (n *Node) presence(ch string, presenceManager PresenceManager) (PresenceResult, error) {
+	presence, err := presenceManager.Presence(ch)
 	if err != nil {
 		return PresenceResult{}, err
 	}
@@ -1186,17 +1200,18 @@ func (n *Node) presence(ch string) (PresenceResult, error) {
 
 // Presence returns a map with information about active clients in channel.
 func (n *Node) Presence(ch string) (PresenceResult, error) {
-	if n.presenceManager == nil {
+	presenceManager := n.getPresenceManager(ch)
+	if presenceManager == nil {
 		return PresenceResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("presence")
 	if n.config.UseSingleFlight {
 		result, err, _ := presenceGroup.Do(ch, func() (any, error) {
-			return n.presence(ch)
+			return n.presence(ch, presenceManager)
 		})
 		return result.(PresenceResult), err
 	}
-	return n.presence(ch)
+	return n.presence(ch, presenceManager)
 }
 
 func infoFromProto(v *protocol.ClientInfo) *ClientInfo {
@@ -1263,8 +1278,8 @@ type PresenceStatsResult struct {
 	PresenceStats
 }
 
-func (n *Node) presenceStats(ch string) (PresenceStatsResult, error) {
-	presenceStats, err := n.presenceManager.PresenceStats(ch)
+func (n *Node) presenceStats(ch string, presenceManager PresenceManager) (PresenceStatsResult, error) {
+	presenceStats, err := presenceManager.PresenceStats(ch)
 	if err != nil {
 		return PresenceStatsResult{}, err
 	}
@@ -1273,17 +1288,18 @@ func (n *Node) presenceStats(ch string) (PresenceStatsResult, error) {
 
 // PresenceStats returns presence stats from PresenceManager.
 func (n *Node) PresenceStats(ch string) (PresenceStatsResult, error) {
-	if n.presenceManager == nil {
+	presenceManager := n.getPresenceManager(ch)
+	if presenceManager == nil {
 		return PresenceStatsResult{}, ErrorNotAvailable
 	}
 	n.metrics.incActionCount("presence_stats")
 	if n.config.UseSingleFlight {
 		result, err, _ := presenceStatsGroup.Do(ch, func() (any, error) {
-			return n.presenceStats(ch)
+			return n.presenceStats(ch, presenceManager)
 		})
 		return result.(PresenceStatsResult), err
 	}
-	return n.presenceStats(ch)
+	return n.presenceStats(ch, presenceManager)
 }
 
 // HistoryResult contains Publications and current stream top StreamPosition.
@@ -1294,11 +1310,21 @@ type HistoryResult struct {
 	Publications []*Publication
 }
 
+func (n *Node) getBroker(ch string) Broker {
+	if n.config.GetBroker != nil {
+		if broker, ok := n.config.GetBroker(ch); ok {
+			return broker
+		}
+	}
+	return n.broker
+}
+
 func (n *Node) history(ch string, opts *HistoryOptions) (HistoryResult, error) {
 	if opts.Filter.Reverse && opts.Filter.Since != nil && opts.Filter.Since.Offset == 0 {
 		return HistoryResult{}, ErrorBadRequest
 	}
-	pubs, streamTop, err := n.broker.History(ch, *opts)
+
+	pubs, streamTop, err := n.getBroker(ch).History(ch, *opts)
 	if err != nil {
 		return HistoryResult{}, err
 	}
@@ -1420,7 +1446,7 @@ func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMe
 // RemoveHistory removes channel history.
 func (n *Node) RemoveHistory(ch string) error {
 	n.metrics.incActionCount("history_remove")
-	return n.broker.RemoveHistory(ch)
+	return n.getBroker(ch).RemoveHistory(ch)
 }
 
 type nodeRegistry struct {
@@ -1591,45 +1617,41 @@ func (n *Node) OnCacheEmpty(h CacheEmptyHandler) {
 	n.clientEvents.cacheEmptyHandler = h
 }
 
-type brokerEventHandler struct {
-	node *Node
-}
-
 // HandlePublication coming from Broker.
-func (h *brokerEventHandler) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
 	if pub == nil {
 		panic("nil Publication received, this must never happen")
 	}
-	if h.node.config.GetChannelMediumOptions != nil {
-		mu := h.node.subLock(ch)
+	if n.config.GetChannelMediumOptions != nil {
+		mu := n.subLock(ch)
 		mu.Lock()
-		medium, ok := h.node.mediums[ch]
+		medium, ok := n.mediums[ch]
 		mu.Unlock()
 		if ok {
 			medium.broadcastPublication(pub, sp, delta, prevPub)
 			return nil
 		}
 	}
-	return h.node.handlePublication(ch, sp, pub, prevPub, nil)
+	return n.handlePublication(ch, sp, pub, prevPub, nil)
 }
 
 // HandleJoin coming from Broker.
-func (h *brokerEventHandler) HandleJoin(ch string, info *ClientInfo) error {
+func (n *Node) HandleJoin(ch string, info *ClientInfo) error {
 	if info == nil {
 		panic("nil join ClientInfo received, this must never happen")
 	}
-	return h.node.handleJoin(ch, info)
+	return n.handleJoin(ch, info)
 }
 
 // HandleLeave coming from Broker.
-func (h *brokerEventHandler) HandleLeave(ch string, info *ClientInfo) error {
+func (n *Node) HandleLeave(ch string, info *ClientInfo) error {
 	if info == nil {
 		panic("nil leave ClientInfo received, this must never happen")
 	}
-	return h.node.handleLeave(ch, info)
+	return n.handleLeave(ch, info)
 }
 
 // HandleControl coming from Broker.
-func (h *brokerEventHandler) HandleControl(data []byte) error {
-	return h.node.handleControl(data)
+func (n *Node) HandleControl(data []byte) error {
+	return n.handleControl(data)
 }

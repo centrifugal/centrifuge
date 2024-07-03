@@ -123,6 +123,21 @@ type Config struct {
 	// This function is called each time new channel appears on the Node.
 	// See the doc comment for ChannelMediumOptions for more details about channel medium concept.
 	GetChannelMediumOptions func(channel string) ChannelMediumOptions
+
+	// GetBroker when set allows returning a custom Broker to use for a specific channel. If not set
+	// then the default Node's Broker is always used for all channels. Also, Node's default Broker is
+	// always used for control channels. It's the responsibility of an application to call Broker.Run
+	// method of all brokers except the default one (called automatically inside Node.Run). Also, a
+	// proper Broker shutdown is the responsibility of application because Node does not know about
+	// custom Broker instances. When GetBroker returns false as the second argument then Node will
+	// use the default Broker for the channel.
+	GetBroker func(channel string) (Broker, bool)
+	// GetPresenceManager when set allows returning a custom PresenceManager to use for a specific
+	// channel. If not set then the default Node's PresenceManager is always used for all channels.
+	// A proper PresenceManager shutdown is the responsibility of application because Node does not
+	// know about custom PresenceManager instances. When GetPresenceManager returns false as the second
+	// argument then Node will use the default PresenceManager for the channel.
+	GetPresenceManager func(channel string) (PresenceManager, bool)
 }
 
 const (
