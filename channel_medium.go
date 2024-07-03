@@ -58,7 +58,7 @@ var channelMediumTimeNow = time.Now
 // subscriber leaves the channel on the Node.
 type channelMedium struct {
 	channel string
-	node    node
+	node    nodeSubset
 	options ChannelMediumOptions
 
 	mu      sync.RWMutex
@@ -74,12 +74,12 @@ type channelMedium struct {
 	positionCheckTime int64
 }
 
-type node interface {
-	handlePublication(ch string, sp StreamPosition, pub, prevPub *Publication, memPrevPub *Publication) error
+type nodeSubset interface {
+	handlePublication(ch string, sp StreamPosition, pub, prevPub *Publication, localPrevPub *Publication) error
 	streamTop(ch string, historyMetaTTL time.Duration) (StreamPosition, error)
 }
 
-func newChannelMedium(channel string, node node, options ChannelMediumOptions) (*channelMedium, error) {
+func newChannelMedium(channel string, node nodeSubset, options ChannelMediumOptions) (*channelMedium, error) {
 	if options.broadcastDelay > 0 && !options.enableQueue {
 		return nil, errors.New("broadcast delay can only be used with queue enabled")
 	}
