@@ -3804,11 +3804,20 @@ func asyncSubscribeClient(t testing.TB, client *Client, ch string) {
 	require.NoError(t, err)
 }
 
+// Not looking at unsubscribe result - just execute subscribe command.
+func asyncUnsubscribeClient(t testing.TB, client *Client, ch string) {
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleUnsubscribe(&protocol.UnsubscribeRequest{
+		Channel: ch,
+	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+}
+
 func TestClientUnsubscribeDuringSubscribe(t *testing.T) {
 	t.Parallel()
 	node := defaultNodeNoHandlers()
-	subscribedCh := make(chan struct{}, 2)
-	unsubscribedCh := make(chan struct{}, 2)
+	subscribedCh := make(chan struct{}, 1)
+	unsubscribedCh := make(chan struct{}, 1)
 	node.OnConnect(func(client *Client) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			go func() {
@@ -3828,16 +3837,12 @@ func TestClientUnsubscribeDuringSubscribe(t *testing.T) {
 	client := newTestClient(t, node, "42")
 	connectClientV2(t, client)
 	asyncSubscribeClient(t, client, "test")
-	client.Unsubscribe("test")
+	asyncUnsubscribeClient(t, client, "test")
 	client.mu.Lock()
 	_, ok := client.channels["test"]
 	client.mu.Unlock()
 	require.False(t, ok)
 	waitWithTimeout(t, unsubscribedCh)
-	asyncSubscribeClient(t, client, "test")
-	err := client.close(DisconnectForceNoReconnect)
-	waitWithTimeout(t, unsubscribedCh)
-	require.NoError(t, err)
 }
 
 func TestClientUnsubscribeDuringSubscribeWithError(t *testing.T) {
@@ -3862,12 +3867,42 @@ func TestClientUnsubscribeDuringSubscribeWithError(t *testing.T) {
 	client := newTestClient(t, node, "42")
 	connectClientV2(t, client)
 	asyncSubscribeClient(t, client, "test")
-	client.Unsubscribe("test")
+	asyncUnsubscribeClient(t, client, "test")
 	client.mu.Lock()
 	_, ok := client.channels["test"]
 	client.mu.Unlock()
 	require.False(t, ok)
 	waitWithTimeout(t, subscribedCh)
+	err := client.close(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+}
+
+func TestClientUnsubscribeDuringSubscribeCorrectChannels(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	subscribedCh := make(chan struct{})
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			go func() {
+				time.Sleep(1000 * time.Millisecond)
+				cb(SubscribeReply{}, nil)
+				close(subscribedCh)
+			}()
+		})
+		client.OnUnsubscribe(func(e UnsubscribeEvent) {
+		})
+	})
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	connectClientV2(t, client)
+	asyncSubscribeClient(t, client, "test")
+	asyncUnsubscribeClient(t, client, "test")
+	client.mu.Lock()
+	_, ok := client.channels["test"]
+	client.mu.Unlock()
+	require.False(t, ok)
+	<-subscribedCh
+	require.Equal(t, 0, node.Hub().NumChannels())
 	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
 }
