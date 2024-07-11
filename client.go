@@ -3353,6 +3353,14 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 				return nil
 			}
 		case <-time.After(maxWaitTimeout):
+			c.mu.Lock()
+			currentChCtx, ok := c.channels[channel]
+			if ok && currentChCtx.subscribingCh != nil {
+				close(currentChCtx.subscribingCh)
+				currentChCtx.subscribingCh = nil
+				c.channels[channel] = currentChCtx
+			}
+			c.mu.Unlock()
 			go func() {
 				_ = c.close(DisconnectServerError)
 			}()
@@ -3362,6 +3370,10 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	}
 
 	c.mu.Lock()
+	currentChCtx, ok := c.channels[channel]
+	if ok && currentChCtx.subscribingCh != nil {
+		close(currentChCtx.subscribingCh)
+	}
 	delete(c.channels, channel)
 	c.mu.Unlock()
 
