@@ -609,6 +609,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	client, _ := newClient(newCtx, node, transport)
 	connectClientV2(b, client)
 	rwWrapper := testReplyWriterWrapper()
+	client.channels[channel] = ChannelContext{}
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
 	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)

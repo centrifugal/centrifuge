@@ -783,6 +783,26 @@ func TestClientSubscribeValidateErrors(t *testing.T) {
 	require.Equal(t, DisconnectBadRequest, err)
 }
 
+func TestClientSubscribeNoChannelContext(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	transport := newTestTransport(func() {})
+	transport.sink = make(chan []byte, 100)
+	ctx := context.Background()
+	newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+	client, _ := newClient(newCtx, node, transport)
+
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+
+	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
+		Channel: "test",
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
+	require.Equal(t, &DisconnectServerError, subCtx.disconnect)
+}
+
 func TestClientSubscribeReceivePublication(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
@@ -797,6 +817,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 
+	client.channels["test"] = ChannelContext{}
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
 	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
@@ -837,6 +858,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 
+	client.channels["test"] = ChannelContext{}
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
 	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
@@ -3102,6 +3124,7 @@ func TestClientTransportWriteError(t *testing.T) {
 			connectClientV2(t, client)
 
 			rwWrapper := testReplyWriterWrapper()
+			client.channels["test"] = ChannelContext{}
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: "test",
 			}, SubscribeReply{}, &protocol.Command{}, false, time.Time{}, rwWrapper.rw)
