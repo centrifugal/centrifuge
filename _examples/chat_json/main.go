@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"io"
+	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,6 +26,10 @@ var port = flag.Int("port", 8000, "Port to bind app to")
 type clientMessage struct {
 	Timestamp int64  `json:"timestamp"`
 	Input     string `json:"input"`
+}
+
+func init() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 }
 
 func handleLog(e centrifuge.LogEntry) {
@@ -69,10 +74,32 @@ func channelSubscribeAllowed(channel string) bool {
 
 func main() {
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:       centrifuge.LogLevelInfo,
+		LogLevel:       centrifuge.LogLevelError,
 		LogHandler:     handleLog,
 		HistoryMetaTTL: 24 * time.Hour,
 	})
+
+	redisShardConfigs := []centrifuge.RedisShardConfig{
+		{Address: "localhost:6379"},
+		//{Address: "localhost:6380"},
+	}
+	var redisShards []*centrifuge.RedisShard
+	for _, redisConf := range redisShardConfigs {
+		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
+		if err != nil {
+			log.Fatal(err)
+		}
+		redisShards = append(redisShards, redisShard)
+	}
+
+	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
+		// And configure a couple of shards to use.
+		Shards: redisShards,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	node.SetBroker(broker)
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
@@ -83,33 +110,42 @@ func main() {
 				"#" + cred.UserID: {
 					EnableRecovery: true,
 					EmitPresence:   true,
-					EmitJoinLeave:  true,
-					PushJoinLeave:  true,
+					//EmitJoinLeave:  true,
+					//PushJoinLeave:  true,
 				},
 			},
 		}, nil
 	})
 
+	go func() {
+		for {
+			time.Sleep(1000 * time.Millisecond)
+			fmt.Println("NUM CLIENT-SIDE SUBSCRIBERS", node.Hub().NumSubscribers(exampleChannel))
+			fmt.Println("NUM SERVER-SIDE SUBSCRIBERS", node.Hub().NumSubscribers("#42"))
+			fmt.Println("NUM CLIENTS", node.Hub().NumClients())
+		}
+	}()
+
+	go func() {
+		for {
+			time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+			err := node.Unsubscribe("42", exampleChannel, centrifuge.WithCustomUnsubscribe(centrifuge.Unsubscribe{
+				Code: centrifuge.UnsubscribeCodeInsufficient,
+			}))
+			if err != nil {
+				log.Printf("error unsubscribing from channel: %s", err)
+			}
+		}
+	}()
+
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
 		log.Printf("[user %s] connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
-		// Event handler should not block, so start separate goroutine to
-		// periodically send messages to client.
 		go func() {
-			for {
-				select {
-				case <-client.Context().Done():
-					return
-				case <-time.After(5 * time.Second):
-					err := client.Send([]byte(`{"time": "` + strconv.FormatInt(time.Now().Unix(), 10) + `"}`))
-					if err != nil {
-						if err == io.EOF {
-							return
-						}
-						log.Printf("error sending message: %s", err)
-					}
-				}
+			if rand.Intn(100) > 50 {
+				time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+				client.Disconnect(centrifuge.DisconnectForceReconnect)
 			}
 		}()
 
@@ -122,20 +158,24 @@ func main() {
 		})
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			log.Printf("[user %s] subscribes on %s", client.UserID(), e.Channel)
+			log.Printf("client %s [user %s] subscribes on %s", client.ID(), client.UserID(), e.Channel)
 
 			if !channelSubscribeAllowed(e.Channel) {
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
 			}
 
+			time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+
+			log.Printf("client %s [user %s] allowed to subscribe on %s", client.ID(), client.UserID(), e.Channel)
+
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
 					EnableRecovery: true,
 					EmitPresence:   true,
-					EmitJoinLeave:  true,
-					PushJoinLeave:  true,
-					Data:           []byte(`{"msg": "welcome"}`),
+					//EmitJoinLeave:  true,
+					//PushJoinLeave:  true,
+					Data: []byte(`{"msg": "welcome"}`),
 				},
 			}, nil)
 		})
