@@ -968,14 +968,11 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 	c.mu.Unlock()
 
-	if len(channels) > 0 {
-		// Unsubscribe from all channels.
-		unsub := unsubscribeDisconnect
-		for channel := range channels {
-			err := c.unsubscribe(channel, unsub, &disconnect)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			}
+	// Unsubscribe from all channels.
+	for channel := range channels {
+		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 
@@ -2777,7 +2774,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	if !serverSide {
 		c.mu.Lock()
 		_, ok := c.channels[channel]
-		if !ok {
+		if !ok || c.status == statusClosed {
 			c.mu.Unlock()
 			c.pubSubSync.StopBuffering(channel)
 			ctx.disconnect = &DisconnectServerError
@@ -2785,12 +2782,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		c.mu.Unlock()
 	}
-
 	err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.pubSubSync.StopBuffering(channel)
-		if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
+		var clientErr *Error
+		if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
 			return errorDisconnectContext(clientErr, nil)
 		}
 		ctx.disconnect = &DisconnectServerError
@@ -2799,14 +2796,11 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	if !serverSide {
 		c.mu.Lock()
 		_, ok := c.channels[channel]
-		if !ok {
-			_, ok := c.channels[channel]
-			if !ok {
-				c.mu.Unlock()
-				c.pubSubSync.StopBuffering(channel)
-				ctx.disconnect = &DisconnectServerError
-				return ctx
-			}
+		if !ok || c.status == statusClosed {
+			c.mu.Unlock()
+			c.pubSubSync.StopBuffering(channel)
+			ctx.disconnect = &DisconnectServerError
+			return ctx
 		}
 		c.mu.Unlock()
 	}

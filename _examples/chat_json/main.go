@@ -138,6 +138,18 @@ func main() {
 		}
 	}()
 
+	go func() {
+		for {
+			time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+			err := node.Unsubscribe("42", "#42", centrifuge.WithCustomUnsubscribe(centrifuge.Unsubscribe{
+				Code: centrifuge.UnsubscribeCodeInsufficient,
+			}))
+			if err != nil {
+				log.Printf("error unsubscribing from channel: %s", err)
+			}
+		}
+	}()
+
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
 		log.Printf("[user %s] connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
