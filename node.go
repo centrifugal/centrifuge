@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -977,9 +976,6 @@ func (n *Node) removeClient(c *Client) error {
 // addSubscription registers subscription of connection on channel in both
 // Hub and Broker.
 func (n *Node) addSubscription(ch string, sub subInfo) error {
-	if rand.Intn(100) > 50 {
-		return errors.New("boom")
-	}
 	n.metrics.incActionCount("add_subscription")
 	mu := n.subLock(ch)
 	mu.Lock()
