@@ -86,6 +86,7 @@ type metrics struct {
 
 	pubSubLagHistogram         prometheus.Histogram
 	broadcastDurationHistogram prometheus.Histogram
+	pingPongDurationHistogram  prometheus.Histogram
 }
 
 func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration) {
@@ -129,6 +130,10 @@ func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64) {
 
 func (m *metrics) observeBroadcastDuration(started time.Time) {
 	m.broadcastDurationHistogram.Observe(time.Since(started).Seconds())
+}
+
+func (m *metrics) observePingPongDuration(duration time.Duration) {
+	m.pingPongDurationHistogram.Observe(duration.Seconds())
 }
 
 func (m *metrics) setBuildInfo(version string) {
@@ -438,6 +443,17 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Count of recover operations.",
 	}, []string{"recovered"})
 
+	m.pingPongDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "ping_pong_duration_seconds",
+		Help:      "Ping/Pong duration in seconds",
+		Buckets: []float64{
+			0.000100, 0.000250, 0.000500, // Microsecond resolution.
+			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
+			1.0, 2.5, 5.0, 10.0, // Second resolution.
+		}})
+
 	m.transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
@@ -580,6 +596,9 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		return nil, err
 	}
 	if err := registry.Register(m.recoverCount); err != nil && !errors.As(err, &alreadyRegistered) {
+		return nil, err
+	}
+	if err := registry.Register(m.pingPongDurationHistogram); err != nil && !errors.As(err, &alreadyRegistered) {
 		return nil, err
 	}
 	if err := registry.Register(m.transportConnectCount); err != nil && !errors.As(err, &alreadyRegistered) {
