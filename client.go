@@ -968,14 +968,11 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 	c.mu.Unlock()
 
-	if len(channels) > 0 {
-		// Unsubscribe from all channels.
-		unsub := unsubscribeDisconnect
-		for channel := range channels {
-			err := c.unsubscribe(channel, unsub, &disconnect)
-			if err != nil {
-				c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
-			}
+	// Unsubscribe from all channels.
+	for channel := range channels {
+		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
+		if err != nil {
+			c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribing client from channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		}
 	}
 
@@ -2773,15 +2770,39 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			sub.deltaType = dt
 		}
 	}
+
+	if !serverSide {
+		c.mu.Lock()
+		_, ok := c.channels[channel]
+		if !ok || c.status == statusClosed {
+			c.mu.Unlock()
+			c.pubSubSync.StopBuffering(channel)
+			ctx.disconnect = &DisconnectServerError
+			return ctx
+		}
+		c.mu.Unlock()
+	}
 	err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newLogEntry(LogLevelError, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.pubSubSync.StopBuffering(channel)
-		if clientErr, ok := err.(*Error); ok && clientErr != ErrorInternal {
+		var clientErr *Error
+		if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
 			return errorDisconnectContext(clientErr, nil)
 		}
 		ctx.disconnect = &DisconnectServerError
 		return ctx
+	}
+	if !serverSide {
+		c.mu.Lock()
+		_, ok := c.channels[channel]
+		if !ok || c.status == statusClosed {
+			c.mu.Unlock()
+			c.pubSubSync.StopBuffering(channel)
+			ctx.disconnect = &DisconnectServerError
+			return ctx
+		}
+		c.mu.Unlock()
 	}
 
 	if reply.Options.EmitPresence {
@@ -3313,8 +3334,10 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	if !serverSide && !isSubscribed && subscribingCh != nil {
 		// If client is not yet subscribed on a client-side channel, and subscribe
 		// command is in progress - we need to wait for it to finish before proceeding.
-		// If client hits subscribe or unsubscribe timeouts – it reconnects, so we never
-		// hang long here.
+		// We hang no longer than maxWaitTimeout here, if timeout happens - it's a signal
+		// of server malfunction since long subscribes should not happen. In this case,
+		// we disconnect client to let it re-init the state from scratch.
+		maxWaitTimeout := 5 * time.Second
 		select {
 		case <-subscribingCh:
 			c.mu.RLock()
@@ -3323,12 +3346,28 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 			if !ok {
 				return nil
 			}
-		case <-c.Context().Done():
+		case <-time.After(maxWaitTimeout):
+			c.mu.Lock()
+			currentChCtx, ok := c.channels[channel]
+			if ok && currentChCtx.subscribingCh != nil {
+				close(currentChCtx.subscribingCh)
+				currentChCtx.subscribingCh = nil
+				c.channels[channel] = currentChCtx
+			}
+			c.mu.Unlock()
+			go func() {
+				_ = c.close(DisconnectServerError)
+			}()
+			c.node.logger.log(newLogEntry(LogLevelError, "timeout waiting for subscribe to finish", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			return nil
 		}
 	}
 
 	c.mu.Lock()
+	currentChCtx, ok := c.channels[channel]
+	if ok && currentChCtx.subscribingCh != nil {
+		close(currentChCtx.subscribingCh)
+	}
 	delete(c.channels, channel)
 	c.mu.Unlock()
 
