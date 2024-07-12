@@ -495,7 +495,7 @@ func getPingData(uni bool, protoType ProtocolType) []byte {
 
 func (c *Client) sendPing() {
 	c.mu.Lock()
-	c.lastPing = time.Now().Unix()
+	c.lastPing = time.Now().UnixNano()
 	c.mu.Unlock()
 	unidirectional := c.transport.Unidirectional()
 	_ = c.transportEnqueue(getPingData(unidirectional, c.transport.Protocol()), "", protocol.FrameTypeServerPing)
@@ -518,6 +518,7 @@ func (c *Client) checkPong() {
 	}
 	lastSeen := c.lastSeen
 	c.mu.RUnlock()
+	c.node.metrics.observePingPongDuration(time.Duration(lastSeen-lastPing) * time.Nanosecond)
 	if lastSeen < lastPing {
 		go func() { c.Disconnect(DisconnectNoPong) }()
 		return
@@ -1180,7 +1181,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 		// upon receiving pong we change a sign of lastPing value. This way we can handle
 		// unnecessary pongs sent by the client and still use lastPing value in Client.checkPong.
 		c.lastPing = -c.lastPing
-		c.lastSeen = time.Now().Unix()
+		c.lastSeen = time.Now().UnixNano()
 		c.mu.Unlock()
 		return nil, true
 	}
