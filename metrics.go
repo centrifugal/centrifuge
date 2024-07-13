@@ -86,7 +86,7 @@ type metrics struct {
 
 	pubSubLagHistogram         prometheus.Histogram
 	broadcastDurationHistogram prometheus.Histogram
-	pingPongDurationHistogram  prometheus.Histogram
+	pingPongDurationHistogram  *prometheus.HistogramVec
 }
 
 func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration) {
@@ -132,8 +132,8 @@ func (m *metrics) observeBroadcastDuration(started time.Time) {
 	m.broadcastDurationHistogram.Observe(time.Since(started).Seconds())
 }
 
-func (m *metrics) observePingPongDuration(duration time.Duration) {
-	m.pingPongDurationHistogram.Observe(duration.Seconds())
+func (m *metrics) observePingPongDuration(duration time.Duration, transport string) {
+	m.pingPongDurationHistogram.WithLabelValues(transport).Observe(duration.Seconds())
 }
 
 func (m *metrics) setBuildInfo(version string) {
@@ -443,7 +443,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 		Help:      "Count of recover operations.",
 	}, []string{"recovered"})
 
-	m.pingPongDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+	m.pingPongDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "ping_pong_duration_seconds",
@@ -452,7 +452,7 @@ func initMetricsRegistry(registry prometheus.Registerer, metricsNamespace string
 			0.000100, 0.000250, 0.000500, // Microsecond resolution.
 			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
-		}})
+		}}, []string{"transport"})
 
 	m.transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,

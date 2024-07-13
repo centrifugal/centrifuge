@@ -518,7 +518,7 @@ func (c *Client) checkPong() {
 	}
 	lastSeen := c.lastSeen
 	c.mu.RUnlock()
-	c.node.metrics.observePingPongDuration(time.Duration(lastSeen-lastPing) * time.Nanosecond)
+	c.node.metrics.observePingPongDuration(time.Duration(lastSeen-lastPing)*time.Nanosecond, c.transport.Name())
 	if lastSeen < lastPing {
 		go func() { c.Disconnect(DisconnectNoPong) }()
 		return
