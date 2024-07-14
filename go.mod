@@ -8,7 +8,7 @@ require (
 	github.com/centrifugal/protocol v0.13.4-0.20240702174651-e8db704aa2d2
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.19.1
-	github.com/redis/rueidis v1.0.40
+	github.com/redis/rueidis v1.0.41
 	github.com/segmentio/encoding v0.4.0
 	github.com/shadowspore/fossil-delta v0.0.0-20240102155221-e3a8590b820b
 	github.com/stretchr/testify v1.9.0
