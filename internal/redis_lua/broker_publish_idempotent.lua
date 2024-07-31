@@ -8,7 +8,7 @@ if result_key_expire ~= '' then
     local stream_meta = redis.call("hmget", result_key, "e", "s")
     local result_epoch, result_offset = stream_meta[1], stream_meta[2]
     if result_epoch ~= false then
-        return {result_offset, result_epoch}
+        return { result_offset, result_epoch }
     end
 end
 
