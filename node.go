@@ -84,11 +84,13 @@ type Node struct {
 
 	emulationSurveyHandler *emulationSurveyHandler
 
-	mediums map[string]*channelMedium
+	mediums     map[string]*channelMedium
+	mediumLocks map[int]*sync.Mutex // Sharded locks for mediums map.
 }
 
 const (
 	numSubLocks            = 16384
+	numMediumLocks         = 16384
 	numSubDissolverWorkers = 64
 )
 
@@ -136,6 +138,11 @@ func New(c Config) (*Node, error) {
 		subLocks[i] = &sync.Mutex{}
 	}
 
+	mediumLocks := make(map[int]*sync.Mutex, numMediumLocks)
+	for i := 0; i < numMediumLocks; i++ {
+		mediumLocks[i] = &sync.Mutex{}
+	}
+
 	if c.Name == "" {
 		hostname, err := os.Hostname()
 		if err != nil {
@@ -164,6 +171,7 @@ func New(c Config) (*Node, error) {
 		nowTimeGetter:  nowtime.Get,
 		surveyRegistry: make(map[uint64]chan survey),
 		mediums:        map[string]*channelMedium{},
+		mediumLocks:    mediumLocks,
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
@@ -212,6 +220,10 @@ func (n *Node) ID() string {
 
 func (n *Node) subLock(ch string) *sync.Mutex {
 	return n.subLocks[index(ch, numSubLocks)]
+}
+
+func (n *Node) mediumLock(ch string) *sync.Mutex {
+	return n.mediumLocks[index(ch, numMediumLocks)]
 }
 
 // SetBroker allows setting Broker implementation to use.
@@ -990,9 +1002,13 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 			if mediumOptions.isMediumEnabled() {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
+					_, _ = n.hub.removeSub(ch, sub.client)
 					return err
 				}
+				mediumMu := n.mediumLock(ch)
+				mediumMu.Lock()
 				n.mediums[ch] = medium
+				mediumMu.Unlock()
 			}
 		}
 
@@ -1000,11 +1016,14 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 		if err != nil {
 			_, _ = n.hub.removeSub(ch, sub.client)
 			if n.config.GetChannelMediumOptions != nil {
+				mediumMu := n.mediumLock(ch)
+				mediumMu.Lock()
 				medium, ok := n.mediums[ch]
 				if ok {
 					medium.close()
 					delete(n.mediums, ch)
 				}
+				mediumMu.Unlock()
 			}
 			return err
 		}
@@ -1040,10 +1059,15 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 					// Cool down a bit since broker is not ready to process unsubscription.
 					time.Sleep(500 * time.Millisecond)
 				} else {
-					medium, ok := n.mediums[ch]
-					if ok {
-						medium.close()
-						delete(n.mediums, ch)
+					if n.config.GetChannelMediumOptions != nil {
+						mediumMu := n.mediumLock(ch)
+						mediumMu.Lock()
+						medium, ok := n.mediums[ch]
+						if ok {
+							medium.close()
+							delete(n.mediums, ch)
+						}
+						mediumMu.Unlock()
 					}
 				}
 				return err
@@ -1623,7 +1647,7 @@ func (n *Node) HandlePublication(ch string, pub *Publication, sp StreamPosition,
 		panic("nil Publication received, this must never happen")
 	}
 	if n.config.GetChannelMediumOptions != nil {
-		mu := n.subLock(ch)
+		mu := n.mediumLock(ch) // Note, avoid using subLock in HandlePublication – this leads to the deadlock.
 		mu.Lock()
 		medium, ok := n.mediums[ch]
 		mu.Unlock()

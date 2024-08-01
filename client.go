@@ -518,11 +518,11 @@ func (c *Client) checkPong() {
 	}
 	lastSeen := c.lastSeen
 	c.mu.RUnlock()
-	c.node.metrics.observePingPongDuration(time.Duration(lastSeen-lastPing)*time.Nanosecond, c.transport.Name())
 	if lastSeen < lastPing {
 		go func() { c.Disconnect(DisconnectNoPong) }()
 		return
 	}
+	c.node.metrics.observePingPongDuration(time.Duration(lastSeen-lastPing)*time.Nanosecond, c.transport.Name())
 	c.mu.Lock()
 	c.nextPong = 0
 	c.scheduleNextTimer()
@@ -1176,6 +1176,9 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 		if c.lastPing <= 0 {
 			// No ping was issued, unnecessary pong.
 			c.mu.Unlock()
+			if c.node.LogEnabled(LogLevelDebug) {
+				c.node.logger.log(newLogEntry(LogLevelDebug, "disconnect client due to unnecessary pong", map[string]any{"client": c.ID(), "user": c.UserID()}))
+			}
 			return &DisconnectBadRequest, false
 		}
 		// upon receiving pong we change a sign of lastPing value. This way we can handle
