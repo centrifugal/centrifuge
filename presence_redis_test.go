@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -425,13 +426,16 @@ func BenchmarkRedisPresence_ManyCh(b *testing.B) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 			b.SetParallelism(getBenchParallelism())
-			_ = pm.AddPresence("channel", "uid", &ClientInfo{})
-			j := int32(0)
+			for i := 0; i < 100; i++ {
+				_ = pm.AddPresence("channel", uuid.NewString(), &ClientInfo{
+					ClientID: uuid.NewString(),
+					UserID:   uuid.NewString(),
+				})
+			}
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					jj := atomic.AddInt32(&j, 1)
-					channel := "channel" + strconv.Itoa(int(jj)%benchmarkNumDifferentChannels)
+					channel := "channel"
 					_, err := pm.Presence(channel)
 					if err != nil {
 						b.Fatal(err)
