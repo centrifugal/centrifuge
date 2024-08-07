@@ -52,6 +52,12 @@ type RedisPresenceManagerConfig struct {
 	// Redis side instead of loading the entire presence information. By default, user mapping
 	// is not maintained.
 	EnableUserMapping func(channel string) bool
+
+	// UseHashFieldTTL allows using HEXPIRE command to set TTL for hash field. It's only available
+	// since Redis 7.4.0 thus disabled by default. Using hash field TTL can be useful to avoid
+	// maintaining expiration index in ZSET – so both useful from the throughput and memory usage
+	// perspective.
+	UseHashFieldTTL bool
 }
 
 var (
@@ -131,7 +137,10 @@ func (m *RedisPresenceManager) addPresenceScriptKeysArgs(s *RedisShard, ch strin
 
 	expireAt := time.Now().Unix() + int64(expire)
 	useUserMapping := m.useUserMappingArg(ch)
-	args := []string{strconv.Itoa(expire), strconv.FormatInt(expireAt, 10), uid, convert.BytesToString(infoBytes), info.UserID, useUserMapping}
+	args := []string{
+		strconv.Itoa(expire), strconv.FormatInt(expireAt, 10), uid,
+		convert.BytesToString(infoBytes), info.UserID, useUserMapping, m.useHashFieldTTLArg(),
+	}
 
 	return keys, args, nil
 }
@@ -142,6 +151,14 @@ func (m *RedisPresenceManager) useUserMappingArg(ch string) string {
 		useUserMapping = "1"
 	}
 	return useUserMapping
+}
+
+func (m *RedisPresenceManager) useHashFieldTTLArg() string {
+	useHashFieldTTL := "0"
+	if m.config.UseHashFieldTTL {
+		useHashFieldTTL = "1"
+	}
+	return useHashFieldTTL
 }
 
 func (m *RedisPresenceManager) addPresence(s *RedisShard, ch string, uid string, info *ClientInfo) error {
@@ -170,7 +187,7 @@ func (m *RedisPresenceManager) removePresenceScriptKeysArgs(s *RedisShard, ch st
 	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
 
 	useUserMapping := m.useUserMappingArg(ch)
-	args := []string{uid, userID, useUserMapping}
+	args := []string{uid, userID, useUserMapping, m.useHashFieldTTLArg()}
 	return keys, args, nil
 }
 
@@ -197,7 +214,7 @@ func (m *RedisPresenceManager) presenceScriptKeysArgs(s *RedisShard, ch string) 
 	keys := []string{string(setKey), string(hashKey)}
 
 	now := int(time.Now().Unix())
-	args := []string{strconv.Itoa(now)}
+	args := []string{strconv.Itoa(now), m.useHashFieldTTLArg()}
 
 	return keys, args, nil
 }
@@ -210,7 +227,7 @@ func (m *RedisPresenceManager) presenceStatsScriptKeysArgs(s *RedisShard, ch str
 	keys := []string{string(setKey), string(hashKey), string(userSetKey), string(userHashKey)}
 
 	now := int(time.Now().Unix())
-	args := []string{strconv.Itoa(now)}
+	args := []string{strconv.Itoa(now), m.useHashFieldTTLArg()}
 
 	return keys, args, nil
 }

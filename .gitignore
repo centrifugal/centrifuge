@@ -7,3 +7,4 @@ vendor/
 *.snap.inprogress
 devdata/
 *.orig
+.luarc.json

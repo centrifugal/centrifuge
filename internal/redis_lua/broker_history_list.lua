@@ -9,22 +9,22 @@ local stream_meta = redis.call("hmget", meta_key, "e", "s")
 local current_epoch, top_offset = stream_meta[1], stream_meta[2]
 
 if current_epoch == false then
-  current_epoch = new_epoch_if_empty
-  top_offset = 0
-  redis.call("hset", meta_key, "e", current_epoch)
+    current_epoch = new_epoch_if_empty
+    top_offset = 0
+    redis.call("hset", meta_key, "e", current_epoch)
 end
 
 if top_offset == false then
-  top_offset = 0
+    top_offset = 0
 end
 
 if meta_expire ~= '0' then
-  redis.call("expire", meta_key, meta_expire)
+    redis.call("expire", meta_key, meta_expire)
 end
 
 local pubs = nil
 if include_publications ~= "0" then
-  pubs = redis.call("lrange", list_key, 0, list_right_bound)
+    pubs = redis.call("lrange", list_key, 0, list_right_bound)
 end
 
-return {top_offset, current_epoch, pubs}
+return { top_offset, current_epoch, pubs }
