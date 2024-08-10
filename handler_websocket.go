@@ -14,8 +14,8 @@ import (
 	"github.com/centrifugal/centrifuge/internal/timers"
 	"github.com/centrifugal/centrifuge/internal/websocket"
 
-	"github.com/Yiling-J/theine-go"
 	"github.com/centrifugal/protocol"
+	"github.com/maypok86/otter"
 )
 
 // WebsocketConfig represents config for WebsocketHandler.
@@ -80,7 +80,7 @@ type WebsocketHandler struct {
 	node          *Node
 	upgrade       *websocket.Upgrader
 	config        WebsocketConfig
-	preparedCache *theine.Cache[string, *websocket.PreparedMessage]
+	preparedCache *otter.Cache[string, *websocket.PreparedMessage]
 }
 
 var writeBufferPool = &sync.Pool{}
@@ -102,9 +102,16 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	} else {
 		upgrade.CheckOrigin = sameHostOriginCheck(node)
 	}
-	var cache *theine.Cache[string, *websocket.PreparedMessage]
+
+	var cache *otter.Cache[string, *websocket.PreparedMessage]
 	if config.CompressionPreparedMessageCacheSize > 0 {
-		cache, _ = theine.NewBuilder[string, *websocket.PreparedMessage](config.CompressionPreparedMessageCacheSize).Build()
+		c, _ := otter.MustBuilder[string, *websocket.PreparedMessage](int(config.CompressionPreparedMessageCacheSize)).
+			Cost(func(key string, value *websocket.PreparedMessage) uint32 {
+				return 2 * uint32(len(key))
+			}).
+			WithTTL(time.Second).
+			Build()
+		cache = &c
 	}
 	return &WebsocketHandler{
 		node:          node,
@@ -296,7 +303,7 @@ type websocketTransportOptions struct {
 	pingPong           PingPongConfig
 	writeTimeout       time.Duration
 	compressionMinSize int
-	preparedCache      *theine.Cache[string, *websocket.PreparedMessage]
+	preparedCache      *otter.Cache[string, *websocket.PreparedMessage]
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}, useNativePingPong bool) *websocketTransport {
@@ -381,7 +388,7 @@ func (t *websocketTransport) writeData(data []byte) error {
 			if err != nil {
 				return err
 			}
-			t.opts.preparedCache.SetWithTTL(key, preparedMessage, int64(len(data)), time.Second)
+			t.opts.preparedCache.Set(key, preparedMessage)
 		}
 		err := t.conn.WritePreparedMessage(preparedMessage)
 		if err != nil {
