@@ -5,6 +5,7 @@ go 1.21
 replace github.com/centrifugal/centrifuge => ../
 
 require (
+	github.com/FZambia/tarantool v0.2.2
 	github.com/centrifugal/centrifuge v0.8.2
 	github.com/centrifugal/protocol v0.13.4
 	github.com/cristalhq/jwt/v5 v5.4.0
@@ -12,6 +13,7 @@ require (
 	github.com/gin-contrib/sessions v0.0.3
 	github.com/gin-gonic/gin v1.10.0
 	github.com/gobwas/ws v1.3.2
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/sessions v1.3.0
 	github.com/gorilla/websocket v1.5.0
@@ -20,6 +22,7 @@ require (
 	github.com/prometheus/client_golang v1.19.1
 	github.com/quic-go/quic-go v0.42.0
 	github.com/stretchr/testify v1.9.0
+	github.com/vmihailenco/msgpack/v5 v5.3.1
 	golang.org/x/oauth2 v0.22.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2
@@ -49,7 +52,6 @@ require (
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/context v1.1.1 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
@@ -79,6 +81,7 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.uber.org/mock v0.4.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.23.0 // indirect
