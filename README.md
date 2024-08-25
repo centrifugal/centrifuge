@@ -220,7 +220,7 @@ Also create file `index.html` near `main.go` with content:
             
             const input = document.getElementById("input");
             input.addEventListener('keyup', function(e) {
-                if (e.key === "ENTER") {
+                if (e.key === "Enter") {
                     e.preventDefault();
                     sub.publish(this.value);
                     input.value = '';
