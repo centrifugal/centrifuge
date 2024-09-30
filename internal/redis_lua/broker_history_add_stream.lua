@@ -49,7 +49,20 @@ if use_delta == "1" then
     end
 end
 
-redis.call("xadd", stream_key, "MAXLEN", stream_size, top_offset, "d", message_payload)
+local had_error = false
+
+local status, _ = pcall(function()
+    return redis.call("xadd", stream_key, "MAXLEN", stream_size, top_offset, "d", message_payload)
+end)
+if current_epoch == new_epoch_if_empty and not status then
+    -- If an error occurred, delete the stream and re-add the message, this may happen when
+    -- meta key is evicted by Redis LRU/LFU strategies and the error like "The ID specified
+    -- in XADD is equal or smaller than the target stream top item" is returned. Clients will
+    -- be unsubscribed with the insufficent state in this case.
+    prev_message_payload = ""
+    redis.call("del", stream_key)
+    redis.call("xadd", stream_key, "MAXLEN", stream_size, top_offset, "d", message_payload)
+end
 redis.call("expire", stream_key, stream_ttl)
 
 if channel ~= '' then
