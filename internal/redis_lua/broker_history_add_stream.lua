@@ -49,8 +49,6 @@ if use_delta == "1" then
     end
 end
 
-local had_error = false
-
 local status, _ = pcall(function()
     return redis.call("xadd", stream_key, "MAXLEN", stream_size, top_offset, "d", message_payload)
 end)
