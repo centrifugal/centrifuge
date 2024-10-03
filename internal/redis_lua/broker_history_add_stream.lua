@@ -32,7 +32,7 @@ if meta_expire ~= '0' then
 end
 
 local prev_message_payload = ""
-if use_delta == "1" then
+if use_delta == "1" and top_offset ~= 1 then
     local prev_entries = redis.call("xrevrange", stream_key, "+", "-", "COUNT", 1)
     if #prev_entries > 0 then
         prev_message_payload = prev_entries[1][2]["d"]
@@ -47,6 +47,14 @@ if use_delta == "1" then
             end
         end
     end
+end
+
+if top_offset == 1 then
+    -- If a new epoch starts, try to delete existing stream, this may be important when
+    -- meta key is evicted by Redis LRU/LFU strategies. So we emulating eviction of stream key
+    -- here to keep meta key and stream keys consistent.
+    redis.call("del", stream_key)
+    prev_message_payload = ""
 end
 
 redis.call("xadd", stream_key, "MAXLEN", stream_size, top_offset, "d", message_payload)
