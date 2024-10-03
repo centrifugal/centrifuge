@@ -50,9 +50,9 @@ if use_delta == "1" and top_offset ~= 1 then
 end
 
 if top_offset == 1 then
-    -- If a new epoch starts, try to delete existing stream, this may be important when
-    -- meta key is evicted by Redis LRU/LFU strategies. So we emulating eviction of stream key
-    -- here to keep meta key and stream keys consistent.
+    -- If a new epoch starts (thus top_offset is 1), try to delete the existing stream, this may
+    -- be important when the meta key is evicted by Redis LRU/LFU strategies. So we are emulating
+    -- an eviction of stream key here.
     redis.call("del", stream_key)
     prev_message_payload = ""
 end
