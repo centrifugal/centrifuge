@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
+	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1330,13 +1331,67 @@ func newTestClientCustomTransport(t testing.TB, ctx context.Context, node *Node,
 }
 
 func newTestClientV2(t testing.TB, node *Node, userID string) *Client {
+	return newTestClientV2Protocol(t, node, userID, ProtocolTypeJSON)
+}
+
+func newTestClientV2Protocol(t testing.TB, node *Node, userID string, protocol ProtocolType) *Client {
 	ctx, cancelFn := context.WithCancel(context.Background())
 	transport := newTestTransport(cancelFn)
 	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setProtocolType(protocol)
 	newCtx := SetCredentials(ctx, &Credentials{UserID: userID})
 	client, err := newClient(newCtx, node, transport)
 	require.NoError(t, err)
 	return client
+}
+
+func TestFossilRecoveredPubs(t *testing.T) {
+	t.Parallel()
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClientV2Protocol(t, node, "42", ProtocolTypeProtobuf)
+
+	pubs := client.makeRecoveredPubsDeltaFossil([]*protocol.Publication{})
+	require.Len(t, pubs, 0)
+
+	pubs = client.makeRecoveredPubsDeltaFossil([]*protocol.Publication{
+		{
+			Offset: 1,
+			Data:   []byte("test"),
+		},
+	})
+	require.Len(t, pubs, 1)
+	require.False(t, pubs[0].Delta)
+
+	pubs = client.makeRecoveredPubsDeltaFossil([]*protocol.Publication{
+		{
+			Offset: 1,
+			Data:   []byte("This is a message to test Fossil: I just subscribed to channel"),
+		},
+		{
+			Offset: 2,
+			Data:   []byte("This is a message to test Fossil: Hi from Java"),
+		},
+		{
+			Offset: 3,
+			Data:   []byte("This is a message to test Fossil: I just subscribed to channel"),
+		},
+	})
+	require.Len(t, pubs, 3)
+	require.False(t, pubs[0].Delta)
+	require.True(t, pubs[1].Delta)
+	require.True(t, pubs[2].Delta)
+
+	data := pubs[0].Data
+	require.Equal(t, []byte("This is a message to test Fossil: I just subscribed to channel"), []byte(data))
+
+	data1, err := fdelta.Apply(data, pubs[1].Data)
+	require.NoError(t, err)
+	require.Equal(t, []byte("This is a message to test Fossil: Hi from Java"), data1)
+
+	data2, err := fdelta.Apply(data1, pubs[2].Data)
+	require.NoError(t, err)
+	require.Equal(t, []byte("This is a message to test Fossil: I just subscribed to channel"), data2)
 }
 
 func TestClientUnsubscribeClientSide(t *testing.T) {
