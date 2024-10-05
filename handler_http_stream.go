@@ -90,7 +90,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.node.LogEnabled(LogLevelDebug) {
 		h.node.Log(NewLogEntry(LogLevelDebug, "client connection established", map[string]any{"transport": transport.Name(), "client": c.ID()}))
 		defer func(started time.Time) {
-			h.node.Log(NewLogEntry(LogLevelDebug, "client connection completed", map[string]any{"duration": time.Since(started), "transport": transport.Name(), "client": c.ID()}))
+			h.node.Log(NewLogEntry(LogLevelDebug, "client connection completed", map[string]any{"duration": time.Since(started).String(), "transport": transport.Name(), "client": c.ID()}))
 		}(time.Now())
 	}
 
