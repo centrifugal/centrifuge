@@ -323,7 +323,7 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	defer func() { _ = closeFn() }()
 	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": websocketTransportName}))
 	defer func(started time.Time) {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started)}))
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started).String()}))
 	}(time.Now())
 
 	for {
