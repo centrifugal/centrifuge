@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/segmentio/encoding/json"
 	fdelta "github.com/shadowspore/fossil-delta"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Empty Replies/Pushes for pings.
@@ -1017,24 +1018,33 @@ func (c *Client) traceInCmd(cmd *protocol.Command) {
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
-	jsonBytes, _ := json.Marshal(cmd)
-	c.node.logger.log(newLogEntry(LogLevelTrace, "<--", map[string]any{"client": c.ID(), "user": user, "command": string(jsonBytes)}))
+	jsonBytes, err := json.Marshal(cmd)
+	if err != nil {
+		jsonBytes, _ = protojson.Marshal(cmd)
+	}
+	c.node.logger.log(newLogEntry(LogLevelTrace, "<-in--", map[string]any{"client": c.ID(), "user": user, "command": string(jsonBytes)}))
 }
 
 func (c *Client) traceOutReply(rep *protocol.Reply) {
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
-	jsonBytes, _ := json.Marshal(rep)
-	c.node.logger.log(newLogEntry(LogLevelTrace, "-->", map[string]any{"client": c.ID(), "user": user, "reply": string(jsonBytes)}))
+	jsonBytes, err := json.Marshal(rep)
+	if err != nil {
+		jsonBytes, _ = protojson.Marshal(rep)
+	}
+	c.node.logger.log(newLogEntry(LogLevelTrace, "-out->", map[string]any{"client": c.ID(), "user": user, "reply": string(jsonBytes)}))
 }
 
 func (c *Client) traceOutPush(push *protocol.Push) {
 	c.mu.RLock()
 	user := c.user
 	c.mu.RUnlock()
-	jsonBytes, _ := json.Marshal(push)
-	c.node.logger.log(newLogEntry(LogLevelTrace, "-->", map[string]any{"client": c.ID(), "user": user, "push": string(jsonBytes)}))
+	jsonBytes, err := json.Marshal(push)
+	if err != nil {
+		jsonBytes, _ = protojson.Marshal(push)
+	}
+	c.node.logger.log(newLogEntry(LogLevelTrace, "-out->", map[string]any{"client": c.ID(), "user": user, "push": string(jsonBytes)}))
 }
 
 // Lock must be held outside.
@@ -3088,8 +3098,8 @@ func (c *Client) makeRecoveredPubsDeltaFossil(recoveredPubs []*protocol.Publicat
 				Tags:   pub.Tags,
 				Delta:  delta,
 			}
+			prevPub = recoveredPubs[i+1]
 			recoveredPubs[i+1] = deltaPub
-			prevPub = recoveredPubs[i]
 		}
 	}
 	return recoveredPubs
