@@ -895,6 +895,7 @@ func (c *Client) Unsubscribe(ch string, unsubscribe ...Unsubscribe) {
 
 	err := c.unsubscribe(ch, unsub, nil)
 	if err != nil {
+		c.node.logger.log(newLogEntry(LogLevelError, "error unsubscribe", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		go c.Disconnect(DisconnectServerError)
 		return
 	}
@@ -1387,6 +1388,7 @@ func (c *Client) expire() {
 					_ = c.close(t)
 					return
 				default:
+					c.node.logger.log(newLogEntry(LogLevelError, "unexpected error from refresh handler", map[string]any{"user": c.user, "client": c.uid, "error": err.Error()}))
 					_ = c.close(DisconnectServerError)
 					return
 				}
@@ -2791,6 +2793,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		if !ok || c.status == statusClosed {
 			c.mu.Unlock()
 			c.pubSubSync.StopBuffering(channel)
+			c.node.logger.log(newLogEntry(LogLevelError, "client closed or unsubscribed before adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
@@ -2813,6 +2816,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		if !ok || c.status == statusClosed {
 			c.mu.Unlock()
 			c.pubSubSync.StopBuffering(channel)
+			c.node.logger.log(newLogEntry(LogLevelError, "client closed or unsubscribed after adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			ctx.disconnect = &DisconnectServerError
 			return ctx
 		}
@@ -3132,6 +3136,7 @@ func (c *Client) handleInsufficientStateDisconnect() {
 func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 	err := c.unsubscribe(ch, unsub, nil)
 	if err != nil {
+		c.node.logger.log(newLogEntry(LogLevelError, "error async unsubscribing", map[string]any{"channel": ch, "user": c.user, "client": c.uid, "error": err.Error()}))
 		_ = c.close(DisconnectServerError)
 		return
 	}
