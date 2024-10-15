@@ -330,13 +330,22 @@ func extractUnidirectionalDisconnect(err error) Disconnect {
 	}
 }
 
-// Connect supposed to be called from unidirectional transport layer to pass
-// initial information about connection and thus initiate Node.OnConnecting
+// UnidirectionalConnect supposed to be called only from a unidirectional transport layer
+// to pass initial information about connection and thus initiate Node.OnConnecting
 // event. Bidirectional transport initiate connecting workflow automatically
 // since client passes Connect command upon successful connection establishment
-// with a server.
+// with a server. If there is an error during connect method processing Centrifuge
+// extracts Disconnect from it and closes the connection with that Disconnect message.
 func (c *Client) Connect(req ConnectRequest) {
-	c.unidirectionalConnect(req.toProto(), 0)
+	// unidirectionalConnect never returns errors when errorToDisconnect is true.
+	_ = c.unidirectionalConnect(req.toProto(), 0, true)
+}
+
+// ConnectNoDisconnect is the same as Client.Connect but does not try to extract Disconnect
+// code from the error returned by the connect logic, instead it just returns the error
+// to the caller. This error must be handled on the Transport level.
+func (c *Client) ConnectWithoutDisconnect(req ConnectRequest) error {
+	return c.unidirectionalConnect(req.toProto(), 0, false)
 }
 
 func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
@@ -371,7 +380,7 @@ func (c *Client) issueCommandProcessedEvent(event CommandProcessedEvent) {
 	}
 }
 
-func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, connectCmdSize int) {
+func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, connectCmdSize int, errorToDisconnect bool) error {
 	started := time.Now()
 
 	var cmd *protocol.Command
@@ -385,28 +394,41 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, 
 		cmd = &protocol.Command{Id: 1, Connect: connectRequest}
 		err := c.issueCommandReadEvent(cmd, connectCmdSize)
 		if err != nil {
-			d := extractUnidirectionalDisconnect(err)
-			go func() { _ = c.close(d) }()
-			if c.node.clientEvents.commandProcessedHandler != nil {
-				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &d, nil, started)
+			if errorToDisconnect {
+				d := extractUnidirectionalDisconnect(err)
+				if c.node.clientEvents.commandProcessedHandler != nil {
+					c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &d, nil, started)
+				}
+				go func() { _ = c.close(d) }()
+				return nil
 			}
-			return
+			if c.node.clientEvents.commandProcessedHandler != nil {
+				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &DisconnectConnectionClosed, nil, started)
+			}
+			return err
 		}
 	}
 	_, err := c.connectCmd(connectRequest, nil, time.Time{}, nil)
 	if err != nil {
-		d := extractUnidirectionalDisconnect(err)
-		go func() { _ = c.close(d) }()
-		if c.node.clientEvents.commandProcessedHandler != nil {
-			c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &d, nil, started)
+		if errorToDisconnect {
+			d := extractUnidirectionalDisconnect(err)
+			if c.node.clientEvents.commandProcessedHandler != nil {
+				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &d, nil, started)
+			}
+			go func() { _ = c.close(d) }()
+			return nil
 		}
-		return
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &DisconnectConnectionClosed, nil, started)
+		}
+		return err
 	}
 	if c.node.clientEvents.commandProcessedHandler != nil {
 		c.handleCommandFinished(cmd, protocol.FrameTypeConnect, nil, nil, started)
 	}
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
+	return nil
 }
 
 func (c *Client) onTimerOp() {
