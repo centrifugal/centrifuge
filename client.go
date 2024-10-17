@@ -1063,6 +1063,25 @@ func (c *Client) clientInfo(ch string) *ClientInfo {
 	}
 }
 
+func redactToken(cmd *protocol.Command) *protocol.Command {
+	redacted := "*** REDACTED ***"
+
+	if cmd.Connect != nil {
+		cmd.Connect.Token = redacted
+	}
+	if cmd.Subscribe != nil {
+		cmd.Subscribe.Token = redacted
+	}
+	if cmd.Refresh != nil {
+		cmd.Refresh.Token = redacted
+	}
+	if cmd.SubRefresh != nil {
+		cmd.SubRefresh.Token = redacted
+	}
+
+	return cmd
+}
+
 // HandleCommand processes a single protocol.Command. Supposed to be called only
 // from a transport connection reader.
 func (c *Client) HandleCommand(cmd *protocol.Command, cmdProtocolSize int) bool {
@@ -1098,7 +1117,7 @@ func (c *Client) HandleCommand(cmd *protocol.Command, cmdProtocolSize int) bool 
 	}
 	if disconnect != nil {
 		if disconnect.Code != DisconnectConnectionClosed.Code {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]any{"command": fmt.Sprintf("%v", cmd), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]any{"command": fmt.Sprintf("%v", redactToken(cmd)), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 		}
 		go func() { _ = c.close(*disconnect) }()
 		return false
