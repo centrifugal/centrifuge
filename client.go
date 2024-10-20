@@ -330,7 +330,7 @@ func extractUnidirectionalDisconnect(err error) Disconnect {
 	}
 }
 
-// UnidirectionalConnect supposed to be called only from a unidirectional transport layer
+// Connect supposed to be called only from a unidirectional transport layer
 // to pass initial information about connection and thus initiate Node.OnConnecting
 // event. Bidirectional transport initiate connecting workflow automatically
 // since client passes Connect command upon successful connection establishment
@@ -343,8 +343,8 @@ func (c *Client) Connect(req ConnectRequest) {
 
 // ConnectNoDisconnect is the same as Client.Connect but does not try to extract Disconnect
 // code from the error returned by the connect logic, instead it just returns the error
-// to the caller. This error must be handled on the Transport level.
-func (c *Client) ConnectWithoutDisconnect(req ConnectRequest) error {
+// to the caller. This error must be handled by the caller on the Transport level.
+func (c *Client) ConnectNoDisconnect(req ConnectRequest) error {
 	return c.unidirectionalConnect(req.toProto(), 0, false)
 }
 

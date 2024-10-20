@@ -3984,3 +3984,35 @@ func TestClientUnsubscribeDuringSubscribeCorrectChannels(t *testing.T) {
 	err := client.close(DisconnectForceNoReconnect)
 	require.NoError(t, err)
 }
+
+func TestClientConnectNoDisconnect(t *testing.T) {
+	t.Parallel()
+	errBoom := errors.New("boom")
+
+	testCases := []struct {
+		Name string
+		Err  error
+	}{
+		{"nil", nil},
+		{"error", errBoom},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := defaultTestNode()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+
+			node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+				return ConnectReply{}, tt.Err
+			})
+			transport := newTestTransport(func() {})
+			transport.setUnidirectional(true)
+			transport.sink = make(chan []byte, 100)
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+			err := client.ConnectNoDisconnect(ConnectRequest{})
+			require.Equal(t, tt.Err, err)
+		})
+	}
+}
