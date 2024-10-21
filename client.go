@@ -353,10 +353,14 @@ func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
 		Code:   d.Code,
 		Reason: d.Reason,
 	}
+	push := &protocol.Push{
+		Disconnect: disconnect,
+	}
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(push)
+	}
 	return c.encodeReply(&protocol.Reply{
-		Push: &protocol.Push{
-			Disconnect: disconnect,
-		},
+		Push: push,
 	})
 }
 
@@ -2446,6 +2450,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				return nil, DisconnectServerError
 			}
 			c.writeEncodedPush(protoReply, rw, "", protocol.FrameTypePushConnect)
+			if c.node.LogEnabled(LogLevelTrace) {
+				c.traceOutPush(&protocol.Push{Connect: protoReply.Push.Connect})
+			}
 		}
 	} else {
 		protoReply, err := c.getConnectCommandReply(res)
@@ -2642,11 +2649,15 @@ func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeRe
 		Positioned:  res.GetPositioned(),
 		Data:        res.Data,
 	}
+	push := &protocol.Push{
+		Channel:   channel,
+		Subscribe: sub,
+	}
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(push)
+	}
 	return c.encodeReply(&protocol.Reply{
-		Push: &protocol.Push{
-			Channel:   channel,
-			Subscribe: sub,
-		},
+		Push: push,
 	})
 }
 
