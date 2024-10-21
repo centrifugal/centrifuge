@@ -3985,7 +3985,7 @@ func TestClientUnsubscribeDuringSubscribeCorrectChannels(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestClientConnectNoDisconnect(t *testing.T) {
+func TestClientConnectNoErrorToDisconnect(t *testing.T) {
 	t.Parallel()
 	errBoom := errors.New("boom")
 
@@ -4011,7 +4011,7 @@ func TestClientConnectNoDisconnect(t *testing.T) {
 			ctx := context.Background()
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 			client, _ := newClient(newCtx, node, transport)
-			err := client.ConnectNoDisconnect(ConnectRequest{})
+			err := client.ConnectNoErrorToDisconnect(ConnectRequest{})
 			require.Equal(t, tt.Err, err)
 		})
 	}

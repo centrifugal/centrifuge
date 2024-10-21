@@ -341,10 +341,10 @@ func (c *Client) Connect(req ConnectRequest) {
 	_ = c.unidirectionalConnect(req.toProto(), 0, true)
 }
 
-// ConnectNoDisconnect is the same as Client.Connect but does not try to extract Disconnect
-// code from the error returned by the connect logic, instead it just returns the error
-// to the caller. This error must be handled by the caller on the Transport level.
-func (c *Client) ConnectNoDisconnect(req ConnectRequest) error {
+// ConnectNoErrorToDisconnect is the same as Client.Connect but does not try to extract
+// Disconnect code from the error returned by the connect logic, instead it just returns
+// the error to the caller. This error must be handled by the caller on the Transport level.
+func (c *Client) ConnectNoErrorToDisconnect(req ConnectRequest) error {
 	return c.unidirectionalConnect(req.toProto(), 0, false)
 }
 
@@ -394,32 +394,26 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, 
 		cmd = &protocol.Command{Id: 1, Connect: connectRequest}
 		err := c.issueCommandReadEvent(cmd, connectCmdSize)
 		if err != nil {
+			if c.node.clientEvents.commandProcessedHandler != nil {
+				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, err, nil, started)
+			}
 			if errorToDisconnect {
 				d := extractUnidirectionalDisconnect(err)
-				if c.node.clientEvents.commandProcessedHandler != nil {
-					c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &d, nil, started)
-				}
 				go func() { _ = c.close(d) }()
 				return nil
-			}
-			if c.node.clientEvents.commandProcessedHandler != nil {
-				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &DisconnectConnectionClosed, nil, started)
 			}
 			return err
 		}
 	}
 	_, err := c.connectCmd(connectRequest, nil, time.Time{}, nil)
 	if err != nil {
+		if c.node.clientEvents.commandProcessedHandler != nil {
+			c.handleCommandFinished(cmd, protocol.FrameTypeConnect, err, nil, started)
+		}
 		if errorToDisconnect {
 			d := extractUnidirectionalDisconnect(err)
-			if c.node.clientEvents.commandProcessedHandler != nil {
-				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &d, nil, started)
-			}
 			go func() { _ = c.close(d) }()
 			return nil
-		}
-		if c.node.clientEvents.commandProcessedHandler != nil {
-			c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &DisconnectConnectionClosed, nil, started)
 		}
 		return err
 	}
@@ -1134,12 +1128,12 @@ func isPong(cmd *protocol.Command) bool {
 	return cmd.Id == 0 && cmd.Send == nil
 }
 
-func (c *Client) handleCommandFinished(cmd *protocol.Command, frameType protocol.FrameType, disconnect *Disconnect, reply *protocol.Reply, started time.Time) {
+func (c *Client) handleCommandFinished(cmd *protocol.Command, frameType protocol.FrameType, err error, reply *protocol.Reply, started time.Time) {
 	defer func() {
 		c.node.metrics.observeCommandDuration(frameType, time.Since(started))
 	}()
 	if c.node.clientEvents.commandProcessedHandler != nil {
-		event := newCommandProcessedEvent(cmd, disconnect, reply, started)
+		event := newCommandProcessedEvent(cmd, err, reply, started)
 		c.issueCommandProcessedEvent(event)
 	}
 }
@@ -1151,13 +1145,13 @@ func (c *Client) handleCommandDispatchError(ch string, cmd *protocol.Command, fr
 	switch t := err.(type) {
 	case *Disconnect:
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, t, nil, started)
+			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return t, false
 	case Disconnect:
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, &t, nil, started)
+			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return &t, false
@@ -1170,7 +1164,7 @@ func (c *Client) handleCommandDispatchError(ch string, cmd *protocol.Command, fr
 		errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
 		c.writeError(ch, frameType, cmd, errorReply, nil)
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, nil, errorReply, started)
+			event := newCommandProcessedEvent(cmd, err, errorReply, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return nil, cmd.Connect == nil
