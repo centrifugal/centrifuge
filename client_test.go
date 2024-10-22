@@ -3121,6 +3121,21 @@ func TestClientCheckPosition(t *testing.T) {
 	// not initial, not time to check.
 	got = client.checkPosition(300*time.Second, "channel", ChannelContext{positionCheckTime: 50, flags: flagPositioning})
 	require.True(t, got)
+
+	// not subscribed.
+	got = client.checkPosition(100*time.Second, "channel", ChannelContext{
+		positionCheckTime: 50, flags: flagPositioning, metaTTLSeconds: 10,
+	})
+	require.True(t, got)
+
+	// closed client.
+	client.mu.Lock()
+	client.status = statusClosed
+	client.mu.Unlock()
+	got = client.checkPosition(100*time.Second, "channel", ChannelContext{
+		positionCheckTime: 50, flags: flagPositioning, metaTTLSeconds: 10,
+	})
+	require.True(t, got)
 }
 
 func TestErrLogLevel(t *testing.T) {
@@ -3990,17 +4005,24 @@ func TestClientConnectNoErrorToDisconnect(t *testing.T) {
 	errBoom := errors.New("boom")
 
 	testCases := []struct {
-		Name string
-		Err  error
+		Name           string
+		Err            error
+		CommandReadErr error
 	}{
-		{"nil", nil},
-		{"error", errBoom},
+		{"nil", nil, nil},
+		{"error", errBoom, nil},
+		{"cmd_read_error", nil, errBoom},
 	}
 
 	for _, tt := range testCases {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := defaultTestNode()
 			defer func() { _ = node.Shutdown(context.Background()) }()
+
+			node.OnCommandRead(func(client *Client, event CommandReadEvent) error {
+				require.NotNil(t, event.Command.Connect)
+				return tt.CommandReadErr
+			})
 
 			node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
 				return ConnectReply{}, tt.Err
@@ -4012,7 +4034,59 @@ func TestClientConnectNoErrorToDisconnect(t *testing.T) {
 			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
 			client, _ := newClient(newCtx, node, transport)
 			err := client.ConnectNoErrorToDisconnect(ConnectRequest{})
-			require.Equal(t, tt.Err, err)
+			if tt.Err != nil {
+				require.Equal(t, tt.Err, err)
+			} else if tt.CommandReadErr != nil {
+				require.Equal(t, tt.CommandReadErr, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestClientConnect(t *testing.T) {
+	t.Parallel()
+	errBoom := errors.New("boom")
+
+	testCases := []struct {
+		Name           string
+		Err            error
+		CommandReadErr error
+	}{
+		{"nil", nil, nil},
+		{"error", errBoom, nil},
+		{"cmd_read_error", nil, errBoom},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := defaultTestNode()
+			defer func() { _ = node.Shutdown(context.Background()) }()
+
+			node.OnCommandRead(func(client *Client, event CommandReadEvent) error {
+				require.NotNil(t, event.Command.Connect)
+				return tt.CommandReadErr
+			})
+
+			node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+				return ConnectReply{}, tt.Err
+			})
+
+			transport := newTestTransport(func() {})
+			transport.setUnidirectional(true)
+			transport.sink = make(chan []byte, 100)
+			ctx := context.Background()
+			newCtx := SetCredentials(ctx, &Credentials{UserID: "42"})
+			client, _ := newClient(newCtx, node, transport)
+			client.Connect(ConnectRequest{})
+			if tt.Err != nil || tt.CommandReadErr != nil {
+				msg := <-transport.sink
+				require.True(t, strings.HasPrefix(string(msg), `{"disconnect"`))
+			} else {
+				msg := <-transport.sink
+				require.True(t, strings.HasPrefix(string(msg), `{"connect"`))
+			}
 		})
 	}
 }
