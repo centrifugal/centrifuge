@@ -2109,30 +2109,30 @@ func (c *Client) writeError(ch string, frameType protocol.FrameType, cmd *protoc
 	c.writeEncodedCommandReply(ch, frameType, cmd, errorReply, rw)
 }
 
-func (c *Client) writeDisconnectOrErrorFlush(ch string, frameType protocol.FrameType, cmd *protocol.Command, replyError error, started time.Time, rw *replyWriter) {
+func (c *Client) writeDisconnectOrErrorFlush(ch string, frameType protocol.FrameType, cmd *protocol.Command, err error, started time.Time, rw *replyWriter) {
 	defer func() {
 		c.node.metrics.observeCommandDuration(frameType, time.Since(started))
 	}()
-	switch t := replyError.(type) {
+	switch t := err.(type) {
 	case *Disconnect:
 		go func() { _ = c.close(*t) }()
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, t, nil, started)
+			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return
 	case Disconnect:
 		go func() { _ = c.close(t) }()
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, &t, nil, started)
+			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return
 	default:
-		errorReply := &protocol.Reply{Error: toClientErr(replyError).toProto()}
+		errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
 		c.writeError(ch, frameType, cmd, errorReply, rw)
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, nil, errorReply, started)
+			event := newCommandProcessedEvent(cmd, err, errorReply, started)
 			c.issueCommandProcessedEvent(event)
 		}
 	}
