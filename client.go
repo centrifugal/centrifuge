@@ -330,13 +330,23 @@ func extractUnidirectionalDisconnect(err error) Disconnect {
 	}
 }
 
-// Connect supposed to be called from unidirectional transport layer to pass
-// initial information about connection and thus initiate Node.OnConnecting
+// Connect supposed to be called only from a unidirectional transport layer
+// to pass initial information about connection and thus initiate Node.OnConnecting
 // event. Bidirectional transport initiate connecting workflow automatically
 // since client passes Connect command upon successful connection establishment
-// with a server.
+// with a server. If there is an error during connect method processing Centrifuge
+// extracts Disconnect from it and closes the connection with that Disconnect message.
 func (c *Client) Connect(req ConnectRequest) {
-	c.unidirectionalConnect(req.toProto(), 0)
+	// unidirectionalConnect never returns errors when errorToDisconnect is true.
+	_ = c.unidirectionalConnect(req.toProto(), 0, true)
+}
+
+// ConnectNoErrorToDisconnect is the same as Client.Connect but does not try to extract
+// Disconnect code from the error returned by the connect logic, instead it just returns
+// the error to the caller. This error must be handled by the caller on the Transport level,
+// and the connection must be closed on Transport level upon receiving an error.
+func (c *Client) ConnectNoErrorToDisconnect(req ConnectRequest) error {
+	return c.unidirectionalConnect(req.toProto(), 0, false)
 }
 
 func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
@@ -344,10 +354,14 @@ func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
 		Code:   d.Code,
 		Reason: d.Reason,
 	}
+	push := &protocol.Push{
+		Disconnect: disconnect,
+	}
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(push)
+	}
 	return c.encodeReply(&protocol.Reply{
-		Push: &protocol.Push{
-			Disconnect: disconnect,
-		},
+		Push: push,
 	})
 }
 
@@ -371,7 +385,7 @@ func (c *Client) issueCommandProcessedEvent(event CommandProcessedEvent) {
 	}
 }
 
-func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, connectCmdSize int) {
+func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, connectCmdSize int, errorToDisconnect bool) error {
 	started := time.Now()
 
 	var cmd *protocol.Command
@@ -385,28 +399,35 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, 
 		cmd = &protocol.Command{Id: 1, Connect: connectRequest}
 		err := c.issueCommandReadEvent(cmd, connectCmdSize)
 		if err != nil {
-			d := extractUnidirectionalDisconnect(err)
-			go func() { _ = c.close(d) }()
 			if c.node.clientEvents.commandProcessedHandler != nil {
-				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &d, nil, started)
+				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, err, nil, started)
 			}
-			return
+			if errorToDisconnect {
+				d := extractUnidirectionalDisconnect(err)
+				go func() { _ = c.close(d) }()
+				return nil
+			}
+			return err
 		}
 	}
 	_, err := c.connectCmd(connectRequest, nil, time.Time{}, nil)
 	if err != nil {
-		d := extractUnidirectionalDisconnect(err)
-		go func() { _ = c.close(d) }()
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			c.handleCommandFinished(cmd, protocol.FrameTypeConnect, &d, nil, started)
+			c.handleCommandFinished(cmd, protocol.FrameTypeConnect, err, nil, started)
 		}
-		return
+		if errorToDisconnect {
+			d := extractUnidirectionalDisconnect(err)
+			go func() { _ = c.close(d) }()
+			return nil
+		}
+		return err
 	}
 	if c.node.clientEvents.commandProcessedHandler != nil {
 		c.handleCommandFinished(cmd, protocol.FrameTypeConnect, nil, nil, started)
 	}
 	c.triggerConnect()
 	c.scheduleOnConnectTimers()
+	return nil
 }
 
 func (c *Client) onTimerOp() {
@@ -1112,12 +1133,12 @@ func isPong(cmd *protocol.Command) bool {
 	return cmd.Id == 0 && cmd.Send == nil
 }
 
-func (c *Client) handleCommandFinished(cmd *protocol.Command, frameType protocol.FrameType, disconnect *Disconnect, reply *protocol.Reply, started time.Time) {
+func (c *Client) handleCommandFinished(cmd *protocol.Command, frameType protocol.FrameType, err error, reply *protocol.Reply, started time.Time) {
 	defer func() {
 		c.node.metrics.observeCommandDuration(frameType, time.Since(started))
 	}()
 	if c.node.clientEvents.commandProcessedHandler != nil {
-		event := newCommandProcessedEvent(cmd, disconnect, reply, started)
+		event := newCommandProcessedEvent(cmd, err, reply, started)
 		c.issueCommandProcessedEvent(event)
 	}
 }
@@ -1129,13 +1150,13 @@ func (c *Client) handleCommandDispatchError(ch string, cmd *protocol.Command, fr
 	switch t := err.(type) {
 	case *Disconnect:
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, t, nil, started)
+			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return t, false
 	case Disconnect:
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, &t, nil, started)
+			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return &t, false
@@ -1148,7 +1169,7 @@ func (c *Client) handleCommandDispatchError(ch string, cmd *protocol.Command, fr
 		errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
 		c.writeError(ch, frameType, cmd, errorReply, nil)
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, nil, errorReply, started)
+			event := newCommandProcessedEvent(cmd, err, errorReply, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return nil, cmd.Connect == nil
@@ -2089,30 +2110,30 @@ func (c *Client) writeError(ch string, frameType protocol.FrameType, cmd *protoc
 	c.writeEncodedCommandReply(ch, frameType, cmd, errorReply, rw)
 }
 
-func (c *Client) writeDisconnectOrErrorFlush(ch string, frameType protocol.FrameType, cmd *protocol.Command, replyError error, started time.Time, rw *replyWriter) {
+func (c *Client) writeDisconnectOrErrorFlush(ch string, frameType protocol.FrameType, cmd *protocol.Command, err error, started time.Time, rw *replyWriter) {
 	defer func() {
 		c.node.metrics.observeCommandDuration(frameType, time.Since(started))
 	}()
-	switch t := replyError.(type) {
+	switch t := err.(type) {
 	case *Disconnect:
 		go func() { _ = c.close(*t) }()
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, t, nil, started)
+			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return
 	case Disconnect:
 		go func() { _ = c.close(t) }()
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, &t, nil, started)
+			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return
 	default:
-		errorReply := &protocol.Reply{Error: toClientErr(replyError).toProto()}
+		errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
 		c.writeError(ch, frameType, cmd, errorReply, rw)
 		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, nil, errorReply, started)
+			event := newCommandProcessedEvent(cmd, err, errorReply, started)
 			c.issueCommandProcessedEvent(event)
 		}
 	}
@@ -2430,6 +2451,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				return nil, DisconnectServerError
 			}
 			c.writeEncodedPush(protoReply, rw, "", protocol.FrameTypePushConnect)
+			if c.node.LogEnabled(LogLevelTrace) {
+				c.traceOutPush(&protocol.Push{Connect: protoReply.Push.Connect})
+			}
 		}
 	} else {
 		protoReply, err := c.getConnectCommandReply(res)
@@ -2626,11 +2650,15 @@ func (c *Client) getSubscribePushReply(channel string, res *protocol.SubscribeRe
 		Positioned:  res.GetPositioned(),
 		Data:        res.Data,
 	}
+	push := &protocol.Push{
+		Channel:   channel,
+		Subscribe: sub,
+	}
+	if c.node.LogEnabled(LogLevelTrace) {
+		c.traceOutPush(push)
+	}
 	return c.encodeReply(&protocol.Reply{
-		Push: &protocol.Push{
-			Channel:   channel,
-			Subscribe: sub,
-		},
+		Push: push,
 	})
 }
 

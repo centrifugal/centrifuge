@@ -8,3 +8,4 @@ ignore:
   - "internal/controlpb/control*"  # generated code
   - "client_experimental.go"  # experimental code
   - "internal/websocket/*"  # embedded Gorilla WebSocket fork
+  - "internal/websocket/examples/autobahn/*"  # embedded Gorilla WebSocket fork
