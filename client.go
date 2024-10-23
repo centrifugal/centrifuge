@@ -343,7 +343,8 @@ func (c *Client) Connect(req ConnectRequest) {
 
 // ConnectNoErrorToDisconnect is the same as Client.Connect but does not try to extract
 // Disconnect code from the error returned by the connect logic, instead it just returns
-// the error to the caller. This error must be handled by the caller on the Transport level.
+// the error to the caller. This error must be handled by the caller on the Transport level,
+// and the connection must be closed on Transport level upon receiving an error.
 func (c *Client) ConnectNoErrorToDisconnect(req ConnectRequest) error {
 	return c.unidirectionalConnect(req.toProto(), 0, false)
 }
