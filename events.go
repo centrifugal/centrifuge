@@ -463,22 +463,22 @@ type CommandReadHandler func(*Client, CommandReadEvent) error
 type CommandProcessedEvent struct {
 	// Command which was processed. May be pooled - see comment of CommandProcessedEvent.
 	Command *protocol.Command
-	// Disconnect may be set if Command processing resulted into disconnection.
-	Disconnect *Disconnect
+	// Error may be set to non-nil if Command processing resulted into error.
+	Error error
 	// Reply to the command. Reply may be pooled - see comment of CommandProcessedEvent.
-	// This Reply may be nil in the following cases:
+	// This Reply may be nil, for example in the following cases:
 	// 1. For Send command since send commands do not have replies
-	// 2. When Disconnect field of CommandProcessedEvent is not nil
-	// 3. When unidirectional transport connects (we create Connect Command artificially
-	// with id: 1 and we never send replies to unidirectional transport, only pushes).
+	// 2. When command processing resulted into disconnection of the client without sending a reply.
+	// 3. When unidirectional transport connects (Centrifuge creates Connect Command artificially
+	//    with id: 1 and never sends replies to the unidirectional transport, only pushes).
 	Reply *protocol.Reply
 	// Started is a time command was passed to Client for processing.
 	Started time.Time
 }
 
 // newCommandProcessedEvent is a helper to create CommandProcessedEvent.
-func newCommandProcessedEvent(command *protocol.Command, disconnect *Disconnect, reply *protocol.Reply, started time.Time) CommandProcessedEvent {
-	return CommandProcessedEvent{Command: command, Disconnect: disconnect, Reply: reply, Started: started}
+func newCommandProcessedEvent(command *protocol.Command, err error, reply *protocol.Reply, started time.Time) CommandProcessedEvent {
+	return CommandProcessedEvent{Command: command, Error: err, Reply: reply, Started: started}
 }
 
 // CommandProcessedHandler allows setting a callback which will be called after

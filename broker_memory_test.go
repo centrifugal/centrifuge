@@ -588,6 +588,11 @@ func TestClientSubscribeRecover(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := defaultNodeNoHandlers()
 			node.config.RecoveryMaxPublicationLimit = tt.Limit
+
+			node.OnCacheEmpty(func(event CacheEmptyEvent) (CacheEmptyReply, error) {
+				return CacheEmptyReply{}, nil
+			})
+
 			node.OnConnect(func(client *Client) {
 				client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
 					opts := SubscribeOptions{EnableRecovery: true, RecoveryMode: tt.RecoveryMode}
