@@ -25,7 +25,7 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.3.1
 	golang.org/x/oauth2 v0.22.0
 	google.golang.org/grpc v1.65.0
-	google.golang.org/protobuf v1.34.2
+	google.golang.org/protobuf v1.35.1
 	nhooyr.io/websocket v1.8.10
 )
 
