@@ -2233,16 +2233,28 @@ func TestClientCloseUnauthenticated(t *testing.T) {
 }
 
 func TestExtractUnidirectionalDisconnect(t *testing.T) {
-	d := extractUnidirectionalDisconnect(errors.New("test"))
+	t.Parallel()
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+	d := client.extractUnidirectionalDisconnect(errors.New("test"))
 	require.Equal(t, DisconnectServerError, d)
-	d = extractUnidirectionalDisconnect(ErrorLimitExceeded)
+	d = client.extractUnidirectionalDisconnect(ErrorLimitExceeded)
 	require.Equal(t, DisconnectServerError, d)
-	d = extractUnidirectionalDisconnect(DisconnectChannelLimit)
+	d = client.extractUnidirectionalDisconnect(DisconnectChannelLimit)
 	require.Equal(t, DisconnectChannelLimit, d)
-	d = extractUnidirectionalDisconnect(DisconnectServerError)
+	d = client.extractUnidirectionalDisconnect(DisconnectServerError)
 	require.Equal(t, DisconnectServerError, d)
-	d = extractUnidirectionalDisconnect(ErrorExpired)
+	d = client.extractUnidirectionalDisconnect(ErrorExpired)
 	require.Equal(t, DisconnectExpired, d)
+
+	// Test additional mapping through the Config.
+	node.config.UnidirectionalCodeToDisconnect = map[uint32]Disconnect{
+		400: DisconnectBadRequest,
+	}
+	d = client.extractUnidirectionalDisconnect(&Error{Code: 400})
+	require.Equal(t, DisconnectBadRequest, d)
 }
 
 func TestClientHandleEmptyData(t *testing.T) {
