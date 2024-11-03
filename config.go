@@ -138,6 +138,9 @@ type Config struct {
 	// know about custom PresenceManager instances. When GetPresenceManager returns false as the second
 	// argument then Node will use the default PresenceManager for the channel.
 	GetPresenceManager func(channel string) (PresenceManager, bool)
+	// Tell Centrifuge how to transform connect error codes to disconnect objects for unidirectional
+	// transports. If not set then the default mapping is used.
+	UnidirectionalCodeToDisconnect map[uint32]Disconnect
 }
 
 const (

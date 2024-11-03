@@ -307,21 +307,26 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	return client, func() error { return client.close(DisconnectConnectionClosed) }, nil
 }
 
-var uniErrorCodeToDisconnect = map[uint32]Disconnect{
+var defaultUniErrorCodeToDisconnect = map[uint32]Disconnect{
 	ErrorExpired.Code:          DisconnectExpired,
 	ErrorTokenExpired.Code:     DisconnectExpired,
 	ErrorTooManyRequests.Code:  DisconnectTooManyRequests,
 	ErrorPermissionDenied.Code: DisconnectPermissionDenied,
 }
 
-func extractUnidirectionalDisconnect(err error) Disconnect {
+func (c *Client) extractUnidirectionalDisconnect(err error) Disconnect {
 	switch t := err.(type) {
 	case *Disconnect:
 		return *t
 	case Disconnect:
 		return t
 	case *Error:
-		if d, ok := uniErrorCodeToDisconnect[t.Code]; ok {
+		if c.node.config.UnidirectionalCodeToDisconnect != nil {
+			if d, ok := c.node.config.UnidirectionalCodeToDisconnect[t.Code]; ok {
+				return d
+			}
+		}
+		if d, ok := defaultUniErrorCodeToDisconnect[t.Code]; ok {
 			return d
 		}
 		return DisconnectServerError
@@ -403,7 +408,7 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, 
 				c.handleCommandFinished(cmd, protocol.FrameTypeConnect, err, nil, started)
 			}
 			if errorToDisconnect {
-				d := extractUnidirectionalDisconnect(err)
+				d := c.extractUnidirectionalDisconnect(err)
 				go func() { _ = c.close(d) }()
 				return nil
 			}
@@ -416,7 +421,7 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, 
 			c.handleCommandFinished(cmd, protocol.FrameTypeConnect, err, nil, started)
 		}
 		if errorToDisconnect {
-			d := extractUnidirectionalDisconnect(err)
+			d := c.extractUnidirectionalDisconnect(err)
 			go func() { _ = c.close(d) }()
 			return nil
 		}
