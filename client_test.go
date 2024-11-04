@@ -4102,3 +4102,66 @@ func TestClientConnect(t *testing.T) {
 		})
 	}
 }
+
+func TestRedactToken(t *testing.T) {
+	redacted := "*** REDACTED ***"
+
+	tests := []struct {
+		name     string
+		input    *protocol.Command
+		expected *protocol.Command
+	}{
+		{
+			name: "Redact Connect Token",
+			input: &protocol.Command{
+				Connect: &protocol.ConnectRequest{Token: "original-token"},
+			},
+			expected: &protocol.Command{
+				Connect: &protocol.ConnectRequest{Token: redacted},
+			},
+		},
+		{
+			name: "Redact Subscribe Token",
+			input: &protocol.Command{
+				Subscribe: &protocol.SubscribeRequest{Token: "original-token"},
+			},
+			expected: &protocol.Command{
+				Subscribe: &protocol.SubscribeRequest{Token: redacted},
+			},
+		},
+		{
+			name: "Redact Refresh Token",
+			input: &protocol.Command{
+				Refresh: &protocol.RefreshRequest{Token: "original-token"},
+			},
+			expected: &protocol.Command{
+				Refresh: &protocol.RefreshRequest{Token: redacted},
+			},
+		},
+		{
+			name: "Redact SubRefresh Token",
+			input: &protocol.Command{
+				SubRefresh: &protocol.SubRefreshRequest{Token: "original-token"},
+			},
+			expected: &protocol.Command{
+				SubRefresh: &protocol.SubRefreshRequest{Token: redacted},
+			},
+		},
+		{
+			name: "No Tokens to Redact",
+			input: &protocol.Command{
+				Presence: &protocol.PresenceRequest{}, // Commands without token fields
+			},
+			expected: &protocol.Command{
+				Presence: &protocol.PresenceRequest{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := redactToken(tt.input)
+			require.Equal(t, tt.expected, result, "Tokens should be correctly redacted")
+		})
+	}
+}
