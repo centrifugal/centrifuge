@@ -2264,6 +2264,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			Name:      req.Name,
 			Version:   req.Version,
 			Transport: c.transport,
+			Headers:   req.Headers,
 		}
 		if len(req.Subs) > 0 {
 			channels := make([]string, 0, len(req.Subs))
