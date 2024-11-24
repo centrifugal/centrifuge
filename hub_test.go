@@ -153,7 +153,7 @@ func (t *testTransport) Close(disconnect Disconnect) error {
 }
 
 func TestHub(t *testing.T) {
-	m, err := initMetricsRegistry(MetricsConfig{
+	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
@@ -901,7 +901,7 @@ func TestHubBroadcastLeave(t *testing.T) {
 }
 
 func TestHubShutdown(t *testing.T) {
-	m, err := initMetricsRegistry(MetricsConfig{
+	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
@@ -923,7 +923,7 @@ func TestHubShutdown(t *testing.T) {
 }
 
 func TestHubSubscriptions(t *testing.T) {
-	m, err := initMetricsRegistry(MetricsConfig{
+	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
@@ -968,7 +968,7 @@ func TestHubSubscriptions(t *testing.T) {
 }
 
 func TestUserConnections(t *testing.T) {
-	m, err := initMetricsRegistry(MetricsConfig{
+	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)

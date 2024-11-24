@@ -11,7 +11,7 @@ import (
 )
 
 func BenchmarkTransportMessagesSent(b *testing.B) {
-	m, err := initMetricsRegistry(MetricsConfig{
+	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
 	require.NoError(b, err)
@@ -27,7 +27,7 @@ func BenchmarkTransportMessagesSent(b *testing.B) {
 }
 
 func BenchmarkTransportMessagesReceived(b *testing.B) {
-	m, err := initMetricsRegistry(MetricsConfig{
+	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
 	require.NoError(b, err)
@@ -43,7 +43,7 @@ func BenchmarkTransportMessagesReceived(b *testing.B) {
 }
 
 func BenchmarkCommandDuration(b *testing.B) {
-	m, err := initMetricsRegistry(MetricsConfig{
+	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
@@ -63,7 +63,7 @@ func BenchmarkCommandDuration(b *testing.B) {
 }
 
 func BenchmarkIncReplyError(b *testing.B) {
-	m, err := initMetricsRegistry(MetricsConfig{
+	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
@@ -82,7 +82,7 @@ func BenchmarkIncReplyError(b *testing.B) {
 }
 
 func TestMetrics(t *testing.T) {
-	_, err := initMetricsRegistry(MetricsConfig{
+	_, err := newMetricsRegistry(MetricsConfig{
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
@@ -131,7 +131,7 @@ func TestMetrics(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			m, err := initMetricsRegistry(MetricsConfig{
+			m, err := newMetricsRegistry(MetricsConfig{
 				MetricsNamespace:          tc.metricsNamespace,
 				GetChannelNamespaceLabel:  tc.getChannelNamespaceLabel,
 				ChannelNamespaceCacheSize: tc.channelNamespaceCacheSize,

@@ -97,312 +97,7 @@ type metrics struct {
 	codeStrings map[uint32]string
 }
 
-func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration, ch string) {
-	if ch != "" && m.config.GetChannelNamespaceLabel != nil {
-		m.commandDurationSummary.WithLabelValues(frameType.String(), m.getChannelNamespaceLabel(ch)).Observe(d.Seconds())
-		return
-	}
-
-	var observer prometheus.Observer
-
-	switch frameType {
-	case protocol.FrameTypeConnect:
-		observer = m.commandDurationConnect
-	case protocol.FrameTypeSubscribe:
-		observer = m.commandDurationSubscribe
-	case protocol.FrameTypeUnsubscribe:
-		observer = m.commandDurationUnsubscribe
-	case protocol.FrameTypePublish:
-		observer = m.commandDurationPublish
-	case protocol.FrameTypePresence:
-		observer = m.commandDurationPresence
-	case protocol.FrameTypePresenceStats:
-		observer = m.commandDurationPresenceStats
-	case protocol.FrameTypeHistory:
-		observer = m.commandDurationHistory
-	case protocol.FrameTypeSend:
-		observer = m.commandDurationSend
-	case protocol.FrameTypeRPC:
-		observer = m.commandDurationRPC
-	case protocol.FrameTypeRefresh:
-		observer = m.commandDurationRefresh
-	case protocol.FrameTypeSubRefresh:
-		observer = m.commandDurationSubRefresh
-	default:
-		observer = m.commandDurationUnknown
-	}
-	observer.Observe(d.Seconds())
-}
-
-func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64) {
-	if lagTimeMilli < 0 {
-		lagTimeMilli = -lagTimeMilli
-	}
-	m.pubSubLagHistogram.Observe(float64(lagTimeMilli) / 1000)
-}
-
-func (m *metrics) observeBroadcastDuration(started time.Time, ch string) {
-	if m.config.GetChannelNamespaceLabel != nil {
-		m.broadcastDurationHistogram.WithLabelValues("publication", m.getChannelNamespaceLabel(ch)).Observe(time.Since(started).Seconds())
-		return
-	}
-	m.broadcastDurationHistogram.WithLabelValues("publication", m.getChannelNamespaceLabel(ch)).Observe(time.Since(started).Seconds())
-}
-
-func (m *metrics) observePingPongDuration(duration time.Duration, transport string) {
-	m.pingPongDurationHistogram.WithLabelValues(transport).Observe(duration.Seconds())
-}
-
-func (m *metrics) setBuildInfo(version string) {
-	m.buildInfoGauge.WithLabelValues(version).Set(1)
-}
-
-func (m *metrics) setNumClients(n float64) {
-	m.numClientsGauge.Set(n)
-}
-
-func (m *metrics) setNumUsers(n float64) {
-	m.numUsersGauge.Set(n)
-}
-
-func (m *metrics) setNumSubscriptions(n float64) {
-	m.numSubsGauge.Set(n)
-}
-
-func (m *metrics) setNumChannels(n float64) {
-	m.numChannelsGauge.Set(n)
-}
-
-func (m *metrics) setNumNodes(n float64) {
-	m.numNodesGauge.Set(n)
-}
-
-func (m *metrics) getChannelNamespaceLabel(ch string) string {
-	if ch == "" {
-		return ""
-	}
-	nsLabel := ""
-	if m.config.GetChannelNamespaceLabel == nil {
-		return nsLabel
-	}
-	if m.nsCache == nil {
-		return m.config.GetChannelNamespaceLabel(ch)
-	}
-	var cached bool
-	if nsLabel, cached = m.nsCache.Get(ch); cached {
-		return nsLabel
-	}
-	nsLabel = m.config.GetChannelNamespaceLabel(ch)
-	m.nsCache.Set(ch, nsLabel)
-	return nsLabel
-}
-
-func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch string) {
-	m.replyErrorCount.WithLabelValues(frameType.String(), m.getCodeLabel(code), m.getChannelNamespaceLabel(ch)).Inc()
-}
-
-func (m *metrics) incRecover(success bool, ch string) {
-	if m.config.GetChannelNamespaceLabel != nil {
-		if success {
-			m.recoverCount.WithLabelValues("yes", m.getChannelNamespaceLabel(ch)).Inc()
-		} else {
-			m.recoverCount.WithLabelValues("no", m.getChannelNamespaceLabel(ch)).Inc()
-		}
-		return
-	}
-	if success {
-		m.recoverCountYes.Inc()
-	} else {
-		m.recoverCountNo.Inc()
-	}
-}
-
-func (m *metrics) incTransportConnect(transport string) {
-	switch transport {
-	case transportWebsocket:
-		m.transportConnectCountWebsocket.Inc()
-	case transportSSE:
-		m.transportConnectCountSSE.Inc()
-	case transportHTTPStream:
-		m.transportConnectCountHTTPStream.Inc()
-	default:
-		m.transportConnectCount.WithLabelValues(transport).Inc()
-	}
-}
-
-type transportMessageLabels struct {
-	Transport        string
-	ChannelNamespace string
-	FrameType        string
-}
-
-type transportMessagesSent struct {
-	counterSent     prometheus.Counter
-	counterSentSize prometheus.Counter
-}
-
-type transportMessagesReceived struct {
-	counterReceived     prometheus.Counter
-	counterReceivedSize prometheus.Counter
-}
-
-var (
-	transportMessagesSentCache     sync.Map
-	transportMessagesReceivedCache sync.Map
-)
-
-func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channel string, size int) {
-	channelNamespace := ""
-	if channel != "" && m.config.GetChannelNamespaceLabel != nil {
-		channelNamespace = m.getChannelNamespaceLabel(channel)
-	}
-	labels := transportMessageLabels{
-		Transport:        transport,
-		ChannelNamespace: channelNamespace,
-		FrameType:        frameType.String(),
-	}
-	counters, ok := transportMessagesSentCache.Load(labels)
-	if !ok {
-		counterSent := m.transportMessagesSent.WithLabelValues(transport, labels.FrameType, channelNamespace)
-		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, labels.FrameType, channelNamespace)
-		counters = transportMessagesSent{
-			counterSent:     counterSent,
-			counterSentSize: counterSentSize,
-		}
-		transportMessagesSentCache.Store(labels, counters)
-	}
-	counters.(transportMessagesSent).counterSent.Inc()
-	counters.(transportMessagesSent).counterSentSize.Add(float64(size))
-}
-
-func (m *metrics) incTransportMessagesReceived(transport string, frameType protocol.FrameType, channel string, size int) {
-	channelNamespace := ""
-	if channel != "" && m.config.GetChannelNamespaceLabel != nil {
-		channelNamespace = m.getChannelNamespaceLabel(channel)
-	}
-	labels := transportMessageLabels{
-		Transport:        transport,
-		ChannelNamespace: channelNamespace,
-		FrameType:        frameType.String(),
-	}
-	counters, ok := transportMessagesReceivedCache.Load(labels)
-	if !ok {
-		counterReceived := m.transportMessagesReceived.WithLabelValues(transport, labels.FrameType, channelNamespace)
-		counterReceivedSize := m.transportMessagesReceivedSize.WithLabelValues(transport, labels.FrameType, channelNamespace)
-		counters = transportMessagesReceived{
-			counterReceived:     counterReceived,
-			counterReceivedSize: counterReceivedSize,
-		}
-		transportMessagesReceivedCache.Store(labels, counters)
-	}
-	counters.(transportMessagesReceived).counterReceived.Inc()
-	counters.(transportMessagesReceived).counterReceivedSize.Add(float64(size))
-}
-
-func (m *metrics) getCodeLabel(code uint32) string {
-	codeStr, ok := m.codeStrings[code]
-	if !ok {
-		return strconv.FormatUint(uint64(code), 10)
-	}
-	return codeStr
-}
-
-func (m *metrics) incServerDisconnect(code uint32) {
-	m.serverDisconnectCount.WithLabelValues(m.getCodeLabel(code)).Inc()
-}
-
-func (m *metrics) incServerUnsubscribe(code uint32, ch string) {
-	m.serverUnsubscribeCount.WithLabelValues(m.getCodeLabel(code), m.getChannelNamespaceLabel(ch)).Inc()
-}
-
-func (m *metrics) incMessagesSent(msgType string, ch string) {
-	if m.config.GetChannelNamespaceLabel != nil {
-		m.messagesSentCount.WithLabelValues(msgType, m.getChannelNamespaceLabel(ch)).Inc()
-		return
-	}
-	switch msgType {
-	case "publication":
-		m.messagesSentCountPublication.Inc()
-	case "join":
-		m.messagesSentCountJoin.Inc()
-	case "leave":
-		m.messagesSentCountLeave.Inc()
-	case "control":
-		m.messagesSentCountControl.Inc()
-	default:
-		m.messagesSentCount.WithLabelValues(msgType, "").Inc()
-	}
-}
-
-func (m *metrics) incMessagesReceived(msgType string, ch string) {
-	if m.config.GetChannelNamespaceLabel != nil {
-		m.messagesReceivedCount.WithLabelValues(msgType, m.getChannelNamespaceLabel(ch)).Inc()
-		return
-	}
-	switch msgType {
-	case "publication":
-		m.messagesReceivedCountPublication.Inc()
-	case "join":
-		m.messagesReceivedCountJoin.Inc()
-	case "leave":
-		m.messagesReceivedCountLeave.Inc()
-	case "control":
-		m.messagesReceivedCountControl.Inc()
-	default:
-		m.messagesReceivedCount.WithLabelValues(msgType, "").Inc()
-	}
-}
-
-func (m *metrics) incActionCount(action string, ch string) {
-	if m.config.GetChannelNamespaceLabel != nil {
-		m.actionCount.WithLabelValues(action, m.getChannelNamespaceLabel(ch)).Inc()
-		return
-	}
-	switch action {
-	case "survey":
-		m.actionCountSurvey.Inc()
-	case "notify":
-		m.actionCountNotify.Inc()
-	case "add_client":
-		m.actionCountAddClient.Inc()
-	case "remove_client":
-		m.actionCountRemoveClient.Inc()
-	case "add_subscription":
-		m.actionCountAddSub.Inc()
-	case "broker_subscribe":
-		m.actionCountBrokerSubscribe.Inc()
-	case "remove_subscription":
-		m.actionCountRemoveSub.Inc()
-	case "broker_unsubscribe":
-		m.actionCountBrokerUnsubscribe.Inc()
-	case "add_presence":
-		m.actionCountAddPresence.Inc()
-	case "remove_presence":
-		m.actionCountRemovePresence.Inc()
-	case "presence":
-		m.actionCountPresence.Inc()
-	case "presence_stats":
-		m.actionCountPresenceStats.Inc()
-	case "history":
-		m.actionCountHistory.Inc()
-	case "history_recover":
-		m.actionCountHistoryRecover.Inc()
-	case "history_recover_cache":
-		m.actionCountHistoryRecoverCache.Inc()
-	case "history_stream_top":
-		m.actionCountHistoryStreamTop.Inc()
-	case "history_remove":
-		m.actionCountHistoryRemove.Inc()
-	default:
-		// unknown action, skip.
-	}
-}
-
-func (m *metrics) observeSurveyDuration(op string, d time.Duration) {
-	m.surveyDurationSummary.WithLabelValues(op).Observe(d.Seconds())
-}
-
-func initMetricsRegistry(config MetricsConfig) (*metrics, error) {
+func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
@@ -440,7 +135,7 @@ func initMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	}
 
 	codeStrings := make(map[uint32]string)
-	for i := uint32(0); i <= 10000; i++ {
+	for i := uint32(0); i <= 5000; i++ {
 		codeStrings[i] = strconv.FormatUint(uint64(i), 10)
 	}
 
@@ -705,4 +400,303 @@ func initMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		}
 	}
 	return m, nil
+}
+
+func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration, ch string) {
+	if ch != "" && m.config.GetChannelNamespaceLabel != nil {
+		m.commandDurationSummary.WithLabelValues(frameType.String(), m.getChannelNamespaceLabel(ch)).Observe(d.Seconds())
+		return
+	}
+
+	var observer prometheus.Observer
+
+	switch frameType {
+	case protocol.FrameTypeConnect:
+		observer = m.commandDurationConnect
+	case protocol.FrameTypeSubscribe:
+		observer = m.commandDurationSubscribe
+	case protocol.FrameTypeUnsubscribe:
+		observer = m.commandDurationUnsubscribe
+	case protocol.FrameTypePublish:
+		observer = m.commandDurationPublish
+	case protocol.FrameTypePresence:
+		observer = m.commandDurationPresence
+	case protocol.FrameTypePresenceStats:
+		observer = m.commandDurationPresenceStats
+	case protocol.FrameTypeHistory:
+		observer = m.commandDurationHistory
+	case protocol.FrameTypeSend:
+		observer = m.commandDurationSend
+	case protocol.FrameTypeRPC:
+		observer = m.commandDurationRPC
+	case protocol.FrameTypeRefresh:
+		observer = m.commandDurationRefresh
+	case protocol.FrameTypeSubRefresh:
+		observer = m.commandDurationSubRefresh
+	default:
+		observer = m.commandDurationUnknown
+	}
+	observer.Observe(d.Seconds())
+}
+
+func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64) {
+	if lagTimeMilli < 0 {
+		lagTimeMilli = -lagTimeMilli
+	}
+	m.pubSubLagHistogram.Observe(float64(lagTimeMilli) / 1000)
+}
+
+func (m *metrics) observeBroadcastDuration(started time.Time, ch string) {
+	if m.config.GetChannelNamespaceLabel != nil {
+		m.broadcastDurationHistogram.WithLabelValues("publication", m.getChannelNamespaceLabel(ch)).Observe(time.Since(started).Seconds())
+		return
+	}
+	m.broadcastDurationHistogram.WithLabelValues("publication", m.getChannelNamespaceLabel(ch)).Observe(time.Since(started).Seconds())
+}
+
+func (m *metrics) observePingPongDuration(duration time.Duration, transport string) {
+	m.pingPongDurationHistogram.WithLabelValues(transport).Observe(duration.Seconds())
+}
+
+func (m *metrics) setBuildInfo(version string) {
+	m.buildInfoGauge.WithLabelValues(version).Set(1)
+}
+
+func (m *metrics) setNumClients(n float64) {
+	m.numClientsGauge.Set(n)
+}
+
+func (m *metrics) setNumUsers(n float64) {
+	m.numUsersGauge.Set(n)
+}
+
+func (m *metrics) setNumSubscriptions(n float64) {
+	m.numSubsGauge.Set(n)
+}
+
+func (m *metrics) setNumChannels(n float64) {
+	m.numChannelsGauge.Set(n)
+}
+
+func (m *metrics) setNumNodes(n float64) {
+	m.numNodesGauge.Set(n)
+}
+
+func (m *metrics) getChannelNamespaceLabel(ch string) string {
+	if ch == "" {
+		return ""
+	}
+	nsLabel := ""
+	if m.config.GetChannelNamespaceLabel == nil {
+		return nsLabel
+	}
+	if m.nsCache == nil {
+		return m.config.GetChannelNamespaceLabel(ch)
+	}
+	var cached bool
+	if nsLabel, cached = m.nsCache.Get(ch); cached {
+		return nsLabel
+	}
+	nsLabel = m.config.GetChannelNamespaceLabel(ch)
+	m.nsCache.Set(ch, nsLabel)
+	return nsLabel
+}
+
+func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch string) {
+	m.replyErrorCount.WithLabelValues(frameType.String(), m.getCodeLabel(code), m.getChannelNamespaceLabel(ch)).Inc()
+}
+
+func (m *metrics) incRecover(success bool, ch string) {
+	if m.config.GetChannelNamespaceLabel != nil {
+		if success {
+			m.recoverCount.WithLabelValues("yes", m.getChannelNamespaceLabel(ch)).Inc()
+		} else {
+			m.recoverCount.WithLabelValues("no", m.getChannelNamespaceLabel(ch)).Inc()
+		}
+		return
+	}
+	if success {
+		m.recoverCountYes.Inc()
+	} else {
+		m.recoverCountNo.Inc()
+	}
+}
+
+func (m *metrics) incTransportConnect(transport string) {
+	switch transport {
+	case transportWebsocket:
+		m.transportConnectCountWebsocket.Inc()
+	case transportSSE:
+		m.transportConnectCountSSE.Inc()
+	case transportHTTPStream:
+		m.transportConnectCountHTTPStream.Inc()
+	default:
+		m.transportConnectCount.WithLabelValues(transport).Inc()
+	}
+}
+
+type transportMessageLabels struct {
+	Transport        string
+	ChannelNamespace string
+	FrameType        string
+}
+
+type transportMessagesSent struct {
+	counterSent     prometheus.Counter
+	counterSentSize prometheus.Counter
+}
+
+type transportMessagesReceived struct {
+	counterReceived     prometheus.Counter
+	counterReceivedSize prometheus.Counter
+}
+
+var (
+	transportMessagesSentCache     sync.Map
+	transportMessagesReceivedCache sync.Map
+)
+
+func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channel string, size int) {
+	channelNamespace := m.getChannelNamespaceLabel(channel)
+	labels := transportMessageLabels{
+		Transport:        transport,
+		ChannelNamespace: channelNamespace,
+		FrameType:        frameType.String(),
+	}
+	counters, ok := transportMessagesSentCache.Load(labels)
+	if !ok {
+		counterSent := m.transportMessagesSent.WithLabelValues(transport, labels.FrameType, channelNamespace)
+		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, labels.FrameType, channelNamespace)
+		counters = transportMessagesSent{
+			counterSent:     counterSent,
+			counterSentSize: counterSentSize,
+		}
+		transportMessagesSentCache.Store(labels, counters)
+	}
+	counters.(transportMessagesSent).counterSent.Inc()
+	counters.(transportMessagesSent).counterSentSize.Add(float64(size))
+}
+
+func (m *metrics) incTransportMessagesReceived(transport string, frameType protocol.FrameType, channel string, size int) {
+	channelNamespace := m.getChannelNamespaceLabel(channel)
+	labels := transportMessageLabels{
+		Transport:        transport,
+		ChannelNamespace: channelNamespace,
+		FrameType:        frameType.String(),
+	}
+	counters, ok := transportMessagesReceivedCache.Load(labels)
+	if !ok {
+		counterReceived := m.transportMessagesReceived.WithLabelValues(transport, labels.FrameType, channelNamespace)
+		counterReceivedSize := m.transportMessagesReceivedSize.WithLabelValues(transport, labels.FrameType, channelNamespace)
+		counters = transportMessagesReceived{
+			counterReceived:     counterReceived,
+			counterReceivedSize: counterReceivedSize,
+		}
+		transportMessagesReceivedCache.Store(labels, counters)
+	}
+	counters.(transportMessagesReceived).counterReceived.Inc()
+	counters.(transportMessagesReceived).counterReceivedSize.Add(float64(size))
+}
+
+func (m *metrics) getCodeLabel(code uint32) string {
+	codeStr, ok := m.codeStrings[code]
+	if !ok {
+		return strconv.FormatUint(uint64(code), 10)
+	}
+	return codeStr
+}
+
+func (m *metrics) incServerDisconnect(code uint32) {
+	m.serverDisconnectCount.WithLabelValues(m.getCodeLabel(code)).Inc()
+}
+
+func (m *metrics) incServerUnsubscribe(code uint32, ch string) {
+	m.serverUnsubscribeCount.WithLabelValues(m.getCodeLabel(code), m.getChannelNamespaceLabel(ch)).Inc()
+}
+
+func (m *metrics) incMessagesSent(msgType string, ch string) {
+	if m.config.GetChannelNamespaceLabel != nil {
+		m.messagesSentCount.WithLabelValues(msgType, m.getChannelNamespaceLabel(ch)).Inc()
+		return
+	}
+	switch msgType {
+	case "publication":
+		m.messagesSentCountPublication.Inc()
+	case "join":
+		m.messagesSentCountJoin.Inc()
+	case "leave":
+		m.messagesSentCountLeave.Inc()
+	case "control":
+		m.messagesSentCountControl.Inc()
+	default:
+		m.messagesSentCount.WithLabelValues(msgType, "").Inc()
+	}
+}
+
+func (m *metrics) incMessagesReceived(msgType string, ch string) {
+	if m.config.GetChannelNamespaceLabel != nil {
+		m.messagesReceivedCount.WithLabelValues(msgType, m.getChannelNamespaceLabel(ch)).Inc()
+		return
+	}
+	switch msgType {
+	case "publication":
+		m.messagesReceivedCountPublication.Inc()
+	case "join":
+		m.messagesReceivedCountJoin.Inc()
+	case "leave":
+		m.messagesReceivedCountLeave.Inc()
+	case "control":
+		m.messagesReceivedCountControl.Inc()
+	default:
+		m.messagesReceivedCount.WithLabelValues(msgType, "").Inc()
+	}
+}
+
+func (m *metrics) incActionCount(action string, ch string) {
+	if m.config.GetChannelNamespaceLabel != nil {
+		m.actionCount.WithLabelValues(action, m.getChannelNamespaceLabel(ch)).Inc()
+		return
+	}
+	switch action {
+	case "survey":
+		m.actionCountSurvey.Inc()
+	case "notify":
+		m.actionCountNotify.Inc()
+	case "add_client":
+		m.actionCountAddClient.Inc()
+	case "remove_client":
+		m.actionCountRemoveClient.Inc()
+	case "add_subscription":
+		m.actionCountAddSub.Inc()
+	case "broker_subscribe":
+		m.actionCountBrokerSubscribe.Inc()
+	case "remove_subscription":
+		m.actionCountRemoveSub.Inc()
+	case "broker_unsubscribe":
+		m.actionCountBrokerUnsubscribe.Inc()
+	case "add_presence":
+		m.actionCountAddPresence.Inc()
+	case "remove_presence":
+		m.actionCountRemovePresence.Inc()
+	case "presence":
+		m.actionCountPresence.Inc()
+	case "presence_stats":
+		m.actionCountPresenceStats.Inc()
+	case "history":
+		m.actionCountHistory.Inc()
+	case "history_recover":
+		m.actionCountHistoryRecover.Inc()
+	case "history_recover_cache":
+		m.actionCountHistoryRecoverCache.Inc()
+	case "history_stream_top":
+		m.actionCountHistoryStreamTop.Inc()
+	case "history_remove":
+		m.actionCountHistoryRemove.Inc()
+	default:
+		m.actionCount.WithLabelValues(action, "").Inc()
+	}
+}
+
+func (m *metrics) observeSurveyDuration(op string, d time.Duration) {
+	m.surveyDurationSummary.WithLabelValues(op).Observe(d.Seconds())
 }

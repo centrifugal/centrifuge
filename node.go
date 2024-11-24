@@ -175,7 +175,7 @@ func New(c Config) (*Node, error) {
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
-	m, err := initMetricsRegistry(c.Metrics)
+	m, err := newMetricsRegistry(c.Metrics)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing metrics: %v", err)
 	}
