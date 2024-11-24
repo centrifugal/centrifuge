@@ -2070,7 +2070,7 @@ func TestParseDeltaPush(t *testing.T) {
 // 1000 streams with 200 messages in each stream, each message 500 bytes => 121MB in Redis.
 // 1000 streams with 400 messages in each stream, each message 500 bytes => 242MB in Redis.
 func TestRedisMemoryUsage(t *testing.T) {
-	//t.Skip()
+	t.Skip()
 	numStreams := 1000
 	numMessagesInStream := 400
 	messageSizeBytes := 500
