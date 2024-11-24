@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/centrifugal/centrifuge/internal/convert"
 
 	"github.com/centrifugal/protocol"
@@ -155,7 +153,9 @@ func (t *testTransport) Close(disconnect Disconnect) error {
 }
 
 func TestHub(t *testing.T) {
-	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	m, err := initMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
 	require.NoError(t, err)
 
 	h := newHub(nil, m, 0)
@@ -463,7 +463,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := defaultTestNode()
-			n.config.GetChannelNamespaceLabel = func(channel string) string {
+			n.config.Metrics.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()
@@ -577,7 +577,7 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := deltaTestNode()
-			n.config.GetChannelNamespaceLabel = func(channel string) string {
+			n.config.Metrics.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()
@@ -657,7 +657,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := deltaTestNodeNoRecovery()
-			n.config.GetChannelNamespaceLabel = func(channel string) string {
+			n.config.Metrics.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()
@@ -737,7 +737,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := deltaTestNodeNoRecovery()
-			n.config.GetChannelNamespaceLabel = func(channel string) string {
+			n.config.Metrics.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()
@@ -901,7 +901,9 @@ func TestHubBroadcastLeave(t *testing.T) {
 }
 
 func TestHubShutdown(t *testing.T) {
-	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	m, err := initMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	err = h.shutdown(context.Background())
@@ -921,7 +923,9 @@ func TestHubShutdown(t *testing.T) {
 }
 
 func TestHubSubscriptions(t *testing.T) {
-	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	m, err := initMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
@@ -964,7 +968,9 @@ func TestHubSubscriptions(t *testing.T) {
 }
 
 func TestUserConnections(t *testing.T) {
-	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	m, err := initMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))

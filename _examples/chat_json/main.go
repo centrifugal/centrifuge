@@ -68,11 +68,19 @@ func channelSubscribeAllowed(channel string) bool {
 }
 
 func main() {
-	node, _ := centrifuge.New(centrifuge.Config{
+	node, err := centrifuge.New(centrifuge.Config{
 		LogLevel:       centrifuge.LogLevelInfo,
 		LogHandler:     handleLog,
 		HistoryMetaTTL: 24 * time.Hour,
+		Metrics: centrifuge.MetricsConfig{
+			GetChannelNamespaceLabel: func(channel string) string {
+				return channel
+			},
+		},
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)

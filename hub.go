@@ -791,7 +791,7 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 		}))
 	}
 
-	h.metrics.observeBroadcastDuration(now)
+	h.metrics.observeBroadcastDuration(now, channel)
 	return nil
 }
 
