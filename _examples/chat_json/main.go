@@ -72,11 +72,6 @@ func main() {
 		LogLevel:       centrifuge.LogLevelInfo,
 		LogHandler:     handleLog,
 		HistoryMetaTTL: 24 * time.Hour,
-		Metrics: centrifuge.MetricsConfig{
-			GetChannelNamespaceLabel: func(channel string) string {
-				return channel
-			},
-		},
 	})
 	if err != nil {
 		log.Fatal(err)
