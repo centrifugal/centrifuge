@@ -48,27 +48,6 @@ type metrics struct {
 	messagesSentCountLeave       prometheus.Counter
 	messagesSentCountControl     prometheus.Counter
 
-	actionCountSurvey              prometheus.Counter
-	actionCountNotify              prometheus.Counter
-	actionCountAddClient           prometheus.Counter
-	actionCountRemoveClient        prometheus.Counter
-	actionCountAddSub              prometheus.Counter
-	actionCountBrokerSubscribe     prometheus.Counter
-	actionCountRemoveSub           prometheus.Counter
-	actionCountBrokerUnsubscribe   prometheus.Counter
-	actionCountAddPresence         prometheus.Counter
-	actionCountRemovePresence      prometheus.Counter
-	actionCountPresence            prometheus.Counter
-	actionCountPresenceStats       prometheus.Counter
-	actionCountHistory             prometheus.Counter
-	actionCountHistoryRecover      prometheus.Counter
-	actionCountHistoryRecoverCache prometheus.Counter
-	actionCountHistoryStreamTop    prometheus.Counter
-	actionCountHistoryRemove       prometheus.Counter
-
-	recoverCountYes prometheus.Counter
-	recoverCountNo  prometheus.Counter
-
 	transportConnectCountWebsocket  prometheus.Counter
 	transportConnectCountSSE        prometheus.Counter
 	transportConnectCountHTTPStream prometheus.Counter
@@ -87,14 +66,23 @@ type metrics struct {
 	commandDurationUnknown       prometheus.Observer
 
 	broadcastDurationHistogram *prometheus.HistogramVec
-
-	pubSubLagHistogram        prometheus.Histogram
-	pingPongDurationHistogram *prometheus.HistogramVec
+	pubSubLagHistogram         prometheus.Histogram
+	pingPongDurationHistogram  *prometheus.HistogramVec
 
 	config MetricsConfig
 
-	nsCache     *otter.Cache[string, string]
-	codeStrings map[uint32]string
+	transportMessagesSentCache     sync.Map
+	transportMessagesReceivedCache sync.Map
+	commandDurationCache           sync.Map
+	replyErrorCache                sync.Map
+	actionCache                    sync.Map
+	recoverCache                   sync.Map
+	unsubscribeCache               sync.Map
+	disconnectCache                sync.Map
+	messagesSentCache              sync.Map
+	messagesReceivedCache          sync.Map
+	nsCache                        *otter.Cache[string, string]
+	codeStrings                    map[uint32]string
 }
 
 func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
@@ -326,27 +314,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.messagesSentCountLeave = m.messagesSentCount.WithLabelValues("leave", "")
 	m.messagesSentCountControl = m.messagesSentCount.WithLabelValues("control", "")
 
-	m.actionCountAddClient = m.actionCount.WithLabelValues("add_client", "")
-	m.actionCountRemoveClient = m.actionCount.WithLabelValues("remove_client", "")
-	m.actionCountAddSub = m.actionCount.WithLabelValues("add_subscription", "")
-	m.actionCountBrokerSubscribe = m.actionCount.WithLabelValues("broker_subscribe", "")
-	m.actionCountRemoveSub = m.actionCount.WithLabelValues("remove_subscription", "")
-	m.actionCountBrokerUnsubscribe = m.actionCount.WithLabelValues("broker_unsubscribe", "")
-	m.actionCountAddPresence = m.actionCount.WithLabelValues("add_presence", "")
-	m.actionCountRemovePresence = m.actionCount.WithLabelValues("remove_presence", "")
-	m.actionCountPresence = m.actionCount.WithLabelValues("presence", "")
-	m.actionCountPresenceStats = m.actionCount.WithLabelValues("presence_stats", "")
-	m.actionCountHistory = m.actionCount.WithLabelValues("history", "")
-	m.actionCountHistoryRecover = m.actionCount.WithLabelValues("history_recover", "")
-	m.actionCountHistoryRecoverCache = m.actionCount.WithLabelValues("history_recover_cache", "")
-	m.actionCountHistoryStreamTop = m.actionCount.WithLabelValues("history_stream_top", "")
-	m.actionCountHistoryRemove = m.actionCount.WithLabelValues("history_remove", "")
-	m.actionCountSurvey = m.actionCount.WithLabelValues("survey", "")
-	m.actionCountNotify = m.actionCount.WithLabelValues("notify", "")
-
-	m.recoverCountYes = m.recoverCount.WithLabelValues("yes", "")
-	m.recoverCountNo = m.recoverCount.WithLabelValues("no", "")
-
 	m.transportConnectCountWebsocket = m.transportConnectCount.WithLabelValues(transportWebsocket)
 	m.transportConnectCountHTTPStream = m.transportConnectCount.WithLabelValues(transportHTTPStream)
 	m.transportConnectCountSSE = m.transportConnectCount.WithLabelValues(transportSSE)
@@ -402,9 +369,44 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	return m, nil
 }
 
+func (m *metrics) getChannelNamespaceLabel(ch string) string {
+	if ch == "" {
+		return ""
+	}
+	nsLabel := ""
+	if m.config.GetChannelNamespaceLabel == nil {
+		return nsLabel
+	}
+	if m.nsCache == nil {
+		return m.config.GetChannelNamespaceLabel(ch)
+	}
+	var cached bool
+	if nsLabel, cached = m.nsCache.Get(ch); cached {
+		return nsLabel
+	}
+	nsLabel = m.config.GetChannelNamespaceLabel(ch)
+	m.nsCache.Set(ch, nsLabel)
+	return nsLabel
+}
+
+type commandDurationLabels struct {
+	ChannelNamespace string
+	FrameType        protocol.FrameType
+}
+
 func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration, ch string) {
 	if ch != "" && m.config.GetChannelNamespaceLabel != nil {
-		m.commandDurationSummary.WithLabelValues(frameType.String(), m.getChannelNamespaceLabel(ch)).Observe(d.Seconds())
+		channelNamespace := m.getChannelNamespaceLabel(ch)
+		labels := commandDurationLabels{
+			ChannelNamespace: channelNamespace,
+			FrameType:        frameType,
+		}
+		summary, ok := m.commandDurationCache.Load(labels)
+		if !ok {
+			summary = m.commandDurationSummary.WithLabelValues(frameType.String(), channelNamespace)
+			m.commandDurationCache.Store(labels, summary)
+		}
+		summary.(prometheus.Observer).Observe(d.Seconds())
 		return
 	}
 
@@ -482,44 +484,50 @@ func (m *metrics) setNumNodes(n float64) {
 	m.numNodesGauge.Set(n)
 }
 
-func (m *metrics) getChannelNamespaceLabel(ch string) string {
-	if ch == "" {
-		return ""
-	}
-	nsLabel := ""
-	if m.config.GetChannelNamespaceLabel == nil {
-		return nsLabel
-	}
-	if m.nsCache == nil {
-		return m.config.GetChannelNamespaceLabel(ch)
-	}
-	var cached bool
-	if nsLabel, cached = m.nsCache.Get(ch); cached {
-		return nsLabel
-	}
-	nsLabel = m.config.GetChannelNamespaceLabel(ch)
-	m.nsCache.Set(ch, nsLabel)
-	return nsLabel
+type replyErrorLabels struct {
+	FrameType        protocol.FrameType
+	ChannelNamespace string
+	Code             string
 }
 
 func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch string) {
-	m.replyErrorCount.WithLabelValues(frameType.String(), m.getCodeLabel(code), m.getChannelNamespaceLabel(ch)).Inc()
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := replyErrorLabels{
+		ChannelNamespace: channelNamespace,
+		FrameType:        frameType,
+		Code:             m.getCodeLabel(code),
+	}
+	counter, ok := m.replyErrorCache.Load(labels)
+	if !ok {
+		counter = m.replyErrorCount.WithLabelValues(frameType.String(), labels.Code, channelNamespace)
+		m.replyErrorCache.Store(labels, counter)
+	}
+	counter.(prometheus.Counter).Inc()
+}
+
+type recoverLabels struct {
+	ChannelNamespace string
+	Success          string
 }
 
 func (m *metrics) incRecover(success bool, ch string) {
-	if m.config.GetChannelNamespaceLabel != nil {
-		if success {
-			m.recoverCount.WithLabelValues("yes", m.getChannelNamespaceLabel(ch)).Inc()
-		} else {
-			m.recoverCount.WithLabelValues("no", m.getChannelNamespaceLabel(ch)).Inc()
-		}
-		return
-	}
+	var successStr string
 	if success {
-		m.recoverCountYes.Inc()
+		successStr = "yes"
 	} else {
-		m.recoverCountNo.Inc()
+		successStr = "no"
 	}
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := recoverLabels{
+		ChannelNamespace: channelNamespace,
+		Success:          successStr,
+	}
+	counter, ok := m.recoverCache.Load(labels)
+	if !ok {
+		counter = m.recoverCount.WithLabelValues(successStr, channelNamespace)
+		m.recoverCache.Store(labels, counter)
+	}
+	counter.(prometheus.Counter).Inc()
 }
 
 func (m *metrics) incTransportConnect(transport string) {
@@ -551,11 +559,6 @@ type transportMessagesReceived struct {
 	counterReceivedSize prometheus.Counter
 }
 
-var (
-	transportMessagesSentCache     sync.Map
-	transportMessagesReceivedCache sync.Map
-)
-
 func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channel string, size int) {
 	channelNamespace := m.getChannelNamespaceLabel(channel)
 	labels := transportMessageLabels{
@@ -563,7 +566,7 @@ func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.
 		ChannelNamespace: channelNamespace,
 		FrameType:        frameType.String(),
 	}
-	counters, ok := transportMessagesSentCache.Load(labels)
+	counters, ok := m.transportMessagesSentCache.Load(labels)
 	if !ok {
 		counterSent := m.transportMessagesSent.WithLabelValues(transport, labels.FrameType, channelNamespace)
 		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, labels.FrameType, channelNamespace)
@@ -571,7 +574,7 @@ func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.
 			counterSent:     counterSent,
 			counterSentSize: counterSentSize,
 		}
-		transportMessagesSentCache.Store(labels, counters)
+		m.transportMessagesSentCache.Store(labels, counters)
 	}
 	counters.(transportMessagesSent).counterSent.Inc()
 	counters.(transportMessagesSent).counterSentSize.Add(float64(size))
@@ -584,7 +587,7 @@ func (m *metrics) incTransportMessagesReceived(transport string, frameType proto
 		ChannelNamespace: channelNamespace,
 		FrameType:        frameType.String(),
 	}
-	counters, ok := transportMessagesReceivedCache.Load(labels)
+	counters, ok := m.transportMessagesReceivedCache.Load(labels)
 	if !ok {
 		counterReceived := m.transportMessagesReceived.WithLabelValues(transport, labels.FrameType, channelNamespace)
 		counterReceivedSize := m.transportMessagesReceivedSize.WithLabelValues(transport, labels.FrameType, channelNamespace)
@@ -592,7 +595,7 @@ func (m *metrics) incTransportMessagesReceived(transport string, frameType proto
 			counterReceived:     counterReceived,
 			counterReceivedSize: counterReceivedSize,
 		}
-		transportMessagesReceivedCache.Store(labels, counters)
+		m.transportMessagesReceivedCache.Store(labels, counters)
 	}
 	counters.(transportMessagesReceived).counterReceived.Inc()
 	counters.(transportMessagesReceived).counterReceivedSize.Add(float64(size))
@@ -606,17 +609,57 @@ func (m *metrics) getCodeLabel(code uint32) string {
 	return codeStr
 }
 
+type disconnectLabels struct {
+	Code string
+}
+
 func (m *metrics) incServerDisconnect(code uint32) {
-	m.serverDisconnectCount.WithLabelValues(m.getCodeLabel(code)).Inc()
+	labels := disconnectLabels{
+		Code: m.getCodeLabel(code),
+	}
+	counter, ok := m.disconnectCache.Load(labels)
+	if !ok {
+		counter = m.serverDisconnectCount.WithLabelValues(labels.Code)
+		m.disconnectCache.Store(labels, counter)
+	}
+	counter.(prometheus.Counter).Inc()
+}
+
+type unsubscribeLabels struct {
+	Code             string
+	ChannelNamespace string
 }
 
 func (m *metrics) incServerUnsubscribe(code uint32, ch string) {
-	m.serverUnsubscribeCount.WithLabelValues(m.getCodeLabel(code), m.getChannelNamespaceLabel(ch)).Inc()
+	labels := unsubscribeLabels{
+		Code:             m.getCodeLabel(code),
+		ChannelNamespace: m.getChannelNamespaceLabel(ch),
+	}
+	counter, ok := m.unsubscribeCache.Load(labels)
+	if !ok {
+		counter = m.serverUnsubscribeCount.WithLabelValues(labels.Code, labels.ChannelNamespace)
+		m.unsubscribeCache.Store(labels, counter)
+	}
+	counter.(prometheus.Counter).Inc()
+}
+
+type messageSentLabels struct {
+	MsgType          string
+	ChannelNamespace string
 }
 
 func (m *metrics) incMessagesSent(msgType string, ch string) {
 	if m.config.GetChannelNamespaceLabel != nil {
-		m.messagesSentCount.WithLabelValues(msgType, m.getChannelNamespaceLabel(ch)).Inc()
+		labels := messageSentLabels{
+			MsgType:          msgType,
+			ChannelNamespace: m.getChannelNamespaceLabel(ch),
+		}
+		counter, ok := m.messagesSentCache.Load(labels)
+		if !ok {
+			counter = m.messagesSentCount.WithLabelValues(msgType, labels.ChannelNamespace)
+			m.messagesSentCache.Store(labels, counter)
+		}
+		counter.(prometheus.Counter).Inc()
 		return
 	}
 	switch msgType {
@@ -633,9 +676,23 @@ func (m *metrics) incMessagesSent(msgType string, ch string) {
 	}
 }
 
+type messageReceivedLabels struct {
+	MsgType          string
+	ChannelNamespace string
+}
+
 func (m *metrics) incMessagesReceived(msgType string, ch string) {
 	if m.config.GetChannelNamespaceLabel != nil {
-		m.messagesReceivedCount.WithLabelValues(msgType, m.getChannelNamespaceLabel(ch)).Inc()
+		labels := messageReceivedLabels{
+			MsgType:          msgType,
+			ChannelNamespace: m.getChannelNamespaceLabel(ch),
+		}
+		counter, ok := m.messagesReceivedCache.Load(labels)
+		if !ok {
+			counter = m.messagesReceivedCount.WithLabelValues(msgType, labels.ChannelNamespace)
+			m.messagesReceivedCache.Store(labels, counter)
+		}
+		counter.(prometheus.Counter).Inc()
 		return
 	}
 	switch msgType {
@@ -652,49 +709,23 @@ func (m *metrics) incMessagesReceived(msgType string, ch string) {
 	}
 }
 
+type actionLabels struct {
+	Action           string
+	ChannelNamespace string
+}
+
 func (m *metrics) incActionCount(action string, ch string) {
-	if m.config.GetChannelNamespaceLabel != nil {
-		m.actionCount.WithLabelValues(action, m.getChannelNamespaceLabel(ch)).Inc()
-		return
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := actionLabels{
+		ChannelNamespace: channelNamespace,
+		Action:           action,
 	}
-	switch action {
-	case "survey":
-		m.actionCountSurvey.Inc()
-	case "notify":
-		m.actionCountNotify.Inc()
-	case "add_client":
-		m.actionCountAddClient.Inc()
-	case "remove_client":
-		m.actionCountRemoveClient.Inc()
-	case "add_subscription":
-		m.actionCountAddSub.Inc()
-	case "broker_subscribe":
-		m.actionCountBrokerSubscribe.Inc()
-	case "remove_subscription":
-		m.actionCountRemoveSub.Inc()
-	case "broker_unsubscribe":
-		m.actionCountBrokerUnsubscribe.Inc()
-	case "add_presence":
-		m.actionCountAddPresence.Inc()
-	case "remove_presence":
-		m.actionCountRemovePresence.Inc()
-	case "presence":
-		m.actionCountPresence.Inc()
-	case "presence_stats":
-		m.actionCountPresenceStats.Inc()
-	case "history":
-		m.actionCountHistory.Inc()
-	case "history_recover":
-		m.actionCountHistoryRecover.Inc()
-	case "history_recover_cache":
-		m.actionCountHistoryRecoverCache.Inc()
-	case "history_stream_top":
-		m.actionCountHistoryStreamTop.Inc()
-	case "history_remove":
-		m.actionCountHistoryRemove.Inc()
-	default:
-		m.actionCount.WithLabelValues(action, "").Inc()
+	counter, ok := m.actionCache.Load(labels)
+	if !ok {
+		counter = m.actionCount.WithLabelValues(action, channelNamespace)
+		m.actionCache.Store(labels, counter)
 	}
+	counter.(prometheus.Counter).Inc()
 }
 
 func (m *metrics) observeSurveyDuration(op string, d time.Duration) {

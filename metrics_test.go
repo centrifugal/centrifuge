@@ -81,6 +81,82 @@ func BenchmarkIncReplyError(b *testing.B) {
 	})
 }
 
+func BenchmarkIncActionCount(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			m.incActionCount("history", "channel"+strconv.Itoa(i%1024))
+			i++
+		}
+	})
+}
+
+func BenchmarkIncRecover(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			m.incRecover(true, "channel"+strconv.Itoa(i%1024))
+			i++
+		}
+	})
+}
+
+func BenchmarkIncDisconnect(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			m.incServerDisconnect(3000)
+			i++
+		}
+	})
+}
+
+func BenchmarkIncUnsubscribe(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+	})
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%1024))
+			i++
+		}
+	})
+}
+
 func TestMetrics(t *testing.T) {
 	_, err := newMetricsRegistry(MetricsConfig{
 		GetChannelNamespaceLabel: func(channel string) string {
