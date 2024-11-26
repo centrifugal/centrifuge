@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/partition"
+
 	_ "embed"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
@@ -530,7 +532,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 			chIDs := make([]channelID, 0, estimatedCap)
 
 			for _, ch := range channels {
-				if b.getShard(ch).shard == s.shard && ((useShardedPubSub && consistentIndex(ch, b.config.numClusterShards) == clusterShardIndex && index(ch, b.config.numPubSubShards) == psShardIndex && index(ch, b.config.numPubSubSubscribers) == subscriberIndex) || (index(ch, b.config.numPubSubShards) == psShardIndex && index(ch, b.config.numPubSubSubscribers) == subscriberIndex)) {
+				if b.getShard(ch).shard == s.shard && ((useShardedPubSub && b.getClusterPartition(ch) == clusterShardIndex && index(ch, b.config.numPubSubShards) == psShardIndex && index(ch, b.config.numPubSubSubscribers) == subscriberIndex) || (index(ch, b.config.numPubSubShards) == psShardIndex && index(ch, b.config.numPubSubSubscribers) == subscriberIndex)) {
 					chIDs = append(chIDs, b.messageChannelID(s.shard, ch))
 				}
 			}
@@ -927,9 +929,17 @@ func (b *RedisBroker) removeHistory(s *shardWrapper, ch string) error {
 
 func (b *RedisBroker) messageChannelID(s *RedisShard, ch string) channelID {
 	if b.useShardedPubSub(s) {
-		ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.numClusterShards)) + "}." + ch
+		ch = "{" + b.getPartition(ch) + "}." + ch
 	}
 	return channelID(b.messagePrefix + ch)
+}
+
+func (b *RedisBroker) getClusterPartition(ch string) int {
+	return int(partition.Compute(ch, uint16(b.config.numClusterShards)))
+}
+
+func (b *RedisBroker) getPartition(ch string) string {
+	return strconv.Itoa(b.getClusterPartition(ch))
 }
 
 func (b *RedisBroker) pubSubShardChannelID(clusterShardIndex int, psShardIndex int, useShardedPubSub bool) channelID {
@@ -946,7 +956,7 @@ func (b *RedisBroker) nodeChannelID(nodeID string) channelID {
 func (b *RedisBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) channelID {
 	if s.useCluster {
 		if b.config.numClusterShards > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.numClusterShards)) + "}." + ch
+			ch = "{" + b.getPartition(ch) + "}." + ch
 		} else {
 			ch = "{" + ch + "}"
 		}
@@ -957,7 +967,7 @@ func (b *RedisBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey st
 func (b *RedisBroker) historyListKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
 		if b.config.numClusterShards > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.numClusterShards)) + "}." + ch
+			ch = "{" + b.getPartition(ch) + "}." + ch
 		} else {
 			ch = "{" + ch + "}"
 		}
@@ -968,7 +978,7 @@ func (b *RedisBroker) historyListKey(s *RedisShard, ch string) channelID {
 func (b *RedisBroker) historyStreamKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
 		if b.config.numClusterShards > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.numClusterShards)) + "}." + ch
+			ch = "{" + b.getPartition(ch) + "}." + ch
 		} else {
 			ch = "{" + ch + "}"
 		}
@@ -979,7 +989,7 @@ func (b *RedisBroker) historyStreamKey(s *RedisShard, ch string) channelID {
 func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 	if s.useCluster {
 		if b.config.numClusterShards > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.numClusterShards)) + "}." + ch
+			ch = "{" + b.getPartition(ch) + "}." + ch
 		} else {
 			ch = "{" + ch + "}"
 		}
