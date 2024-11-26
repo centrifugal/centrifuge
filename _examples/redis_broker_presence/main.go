@@ -98,6 +98,13 @@ func main() {
 	redisShardConfigs := []centrifuge.RedisShardConfig{
 		{Address: "localhost:6379"},
 		//{Address: "localhost:6380"},
+		//{
+		//	ClusterAddresses:  []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		//},
+		//{
+		//	SentinelAddresses:  []string{"localhost:26379"},
+		//	SentinelMasterName: "mymaster",
+		//},
 	}
 	var redisShards []*centrifuge.RedisShard
 	for _, redisConf := range redisShardConfigs {
