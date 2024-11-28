@@ -31,72 +31,112 @@ type RedisShard struct {
 	closeCh    chan struct{}
 	closeOnce  sync.Once
 	useCluster bool
+	finalOpts  rueidis.ClientOption
 }
 
-func confFromAddress(address string, conf RedisShardConfig) (RedisShardConfig, error) {
-	if !strings.HasPrefix(address, "tcp://") && !strings.HasPrefix(address, "redis://") && !strings.HasPrefix(address, "unix://") {
-		if host, port, err := net.SplitHostPort(address); err == nil && host != "" && port != "" {
-			conf.network = "tcp"
-			conf.address = address
-			return conf, nil
+var knownRedisURLPrefixes = []string{
+	"redis://",
+	"unix://",
+	"tcp://",
+}
+
+func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.ClientOption, error) {
+	hasKnownURLPrefix := false
+	for _, prefix := range knownRedisURLPrefixes {
+		if strings.HasPrefix(address, prefix) {
+			hasKnownURLPrefix = true
+			break
 		}
-		return conf, errors.New("malformed connection address")
+	}
+	if !hasKnownURLPrefix {
+		if host, port, err := net.SplitHostPort(address); err == nil && host != "" && port != "" {
+			options.InitAddress = []string{address}
+			return options, nil
+		}
+		return options, errors.New("malformed connection address, must be Redis URL or host:port")
 	}
 	u, err := url.Parse(address)
 	if err != nil {
-		return conf, errors.New("malformed connection address")
+		return options, fmt.Errorf("malformed connection address, not a valid URL: %w", err)
 	}
+
+	var addresses []string
+
 	switch u.Scheme {
 	case "tcp", "redis":
-		conf.network = "tcp"
-		conf.address = u.Host
+		addresses = []string{u.Host}
 		if u.Path != "" {
 			db, err := strconv.Atoi(strings.TrimPrefix(u.Path, "/"))
 			if err != nil {
-				return conf, fmt.Errorf("can't parse Redis DB number from connection address")
+				return options, fmt.Errorf("can't parse Redis DB number from connection address: %s is not a number", u.Path)
 			}
-			conf.DB = db
+			options.SelectDB = db
 		}
 	case "unix":
-		conf.network = "unix"
-		conf.address = u.Path
-	default:
-		return conf, errors.New("connection address should have tcp://, redis:// or unix:// scheme")
+		addresses = []string{u.Path}
+		options.DialFn = func(s string, d *net.Dialer, c *tls.Config) (net.Conn, error) {
+			return d.Dial("unix", s)
+		}
 	}
 	if u.User != nil {
 		if u.User.Username() != "" {
-			conf.User = u.User.Username()
+			options.Username = u.User.Username()
 		}
 		if pass, ok := u.User.Password(); ok {
-			conf.Password = pass
+			options.Password = pass
 		}
 	}
-	return conf, nil
+	query := u.Query()
+	addresses = append(addresses, query["addr"]...)
+
+	if query.Has("connect_timeout") {
+		to, err := time.ParseDuration(query.Get("connect_timeout"))
+		if err != nil {
+			return options, fmt.Errorf("invalid connect timeout: %q", query.Get("connect_timeout"))
+		}
+		options.Dialer.Timeout = to
+	}
+	if query.Has("io_timeout") {
+		to, err := time.ParseDuration(query.Get("io_timeout"))
+		if err != nil {
+			return options, fmt.Errorf("invalid io timeout: %q", query.Get("io_timeout"))
+		}
+		options.ConnWriteTimeout = to
+	}
+	if query.Has("tls_enabled") && options.TLSConfig == nil {
+		options.TLSConfig = &tls.Config{}
+	}
+	if query.Has("force_resp2") {
+		val, err := strconv.ParseBool(query.Get("force_resp2"))
+		if err != nil {
+			return options, fmt.Errorf("invalid force_resp2 value: %q", query.Get("force_resp2"))
+		}
+		options.AlwaysRESP2 = val
+	}
+	if query.Has("sentinel_master_name") {
+		options.Sentinel.MasterSet = query.Get("sentinel_master_name")
+	}
+	if query.Has("sentinel_user") {
+		options.Sentinel.Username = query.Get("sentinel_user")
+	}
+	if query.Has("sentinel_password") {
+		options.Sentinel.Password = query.Get("sentinel_password")
+	}
+	if query.Has("sentinel_tls_enabled") && options.Sentinel.TLSConfig == nil {
+		options.Sentinel.TLSConfig = &tls.Config{}
+	}
+	options.InitAddress = addresses
+	return options, nil
 }
 
 // NewRedisShard initializes new Redis shard.
 func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
-	var err error
-	if conf.Address != "" {
-		conf, err = confFromAddress(conf.Address, conf)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	if conf.ConnectTimeout == 0 {
 		conf.ConnectTimeout = defaultRedisConnectTimeout
 	}
 	if conf.IOTimeout == 0 {
 		conf.IOTimeout = defaultRedisIOTimeout
 	}
-
-	shard := &RedisShard{
-		config:     conf,
-		useCluster: len(conf.ClusterAddresses) > 0,
-		closeCh:    make(chan struct{}),
-	}
-
 	options := rueidis.ClientOption{
 		SelectDB:         conf.DB,
 		ConnWriteTimeout: conf.IOTimeout,
@@ -109,6 +149,9 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		AlwaysPipelining: true,
 		AlwaysRESP2:      conf.ForceRESP2,
 		MaxFlushDelay:    100 * time.Microsecond,
+		Dialer: net.Dialer{
+			Timeout: conf.ConnectTimeout,
+		},
 	}
 
 	if len(conf.SentinelAddresses) > 0 {
@@ -123,21 +166,23 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	} else if len(conf.ClusterAddresses) > 0 {
 		options.InitAddress = conf.ClusterAddresses
 	} else {
-		if conf.network == "unix" {
-			options.DialFn = func(s string, d *net.Dialer, c *tls.Config) (net.Conn, error) {
-				return d.Dial("unix", s)
-			}
+		var err error
+		options, err = optionsFromAddress(conf.Address, options)
+		if err != nil {
+			return nil, fmt.Errorf("error processing Redis address: %v", err)
 		}
-		options.InitAddress = []string{conf.address}
-	}
-
-	options.Dialer = net.Dialer{
-		Timeout: conf.ConnectTimeout,
 	}
 
 	client, err := rueidis.NewClient(options)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating Redis client: %v", err)
+	}
+
+	shard := &RedisShard{
+		config:     conf,
+		useCluster: len(conf.ClusterAddresses) > 0,
+		closeCh:    make(chan struct{}),
+		finalOpts:  options,
 	}
 
 	shard.client = client
@@ -199,9 +244,6 @@ type RedisShardConfig struct {
 	// By default, Redis client tries to detect supported Redis protocol automatically
 	// trying RESP3 first.
 	ForceRESP2 bool
-
-	network string
-	address string
 }
 
 func (s *RedisShard) Close() {
@@ -212,7 +254,7 @@ func (s *RedisShard) Close() {
 }
 
 func (s *RedisShard) string() string {
-	return s.config.address
+	return strings.Join(s.finalOpts.InitAddress, ",")
 }
 
 // consistentIndex is an adapted function from https://github.com/dgryski/go-jump

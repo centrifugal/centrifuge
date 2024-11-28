@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -126,17 +127,23 @@ type RedisBrokerConfig struct {
 	// broker will use Redis Cluster with sharded PUB/SUB feature available in
 	// Redis >= 7: https://redis.io/docs/manual/pubsub/#sharded-pubsub
 	//
-	// To achieve PUB/SUB efficiency RedisBroker reduces possible Redis Cluster
+	// To achieve sharded PUB/SUB efficiency RedisBroker reduces 16384 Redis Cluster
 	// slots to the numClusterShards value and starts a separate PUB/SUB for each
-	// shard (i.e. for each slot). By default, sharded PUB/SUB is not used in
-	// Redis Cluster case - Centrifuge uses globally distributed PUBLISH commands
-	// in Redis Cluster where each publish is distributed to all nodes in Redis Cluster.
+	// shard. This is necessary because in Centrifuge case one node can work with
+	// thousands of different channels – and we can't afford running a separate
+	// PUB/SUB connections for 16384 slots. We need to re-use connections and make sure
+	// that all channels in the connection point to the same Redis Cluster slot.
+	//
+	// By default, sharded PUB/SUB is not used in Redis Cluster case - Centrifuge uses
+	// globally distributed PUBLISH commands in Redis Cluster where each publish is
+	// distributed to all nodes in Redis Cluster.
 	//
 	// Note (!), that turning on numClusterShards will cause Centrifuge to generate
 	// different keys and Redis channels than in the base Redis Cluster mode since
 	// we need to control slots and be sure our subscriber routines work with the
 	// same Redis Cluster slot - thus making it possible to subscribe over a single
 	// connection.
+	// May be tested using CENTRIFUGE_EXPERIMENTAL_REDIS_NUM_CLUSTER_SHARDS env var.
 	numClusterShards int
 }
 
@@ -152,6 +159,15 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 
 	if config.Prefix == "" {
 		config.Prefix = "centrifuge"
+	}
+
+	numClusterShardsEnv := "CENTRIFUGE_EXPERIMENTAL_REDIS_NUM_CLUSTER_SHARDS"
+	if os.Getenv(numClusterShardsEnv) != "" {
+		numClusterShards, err := strconv.Atoi(os.Getenv(numClusterShardsEnv))
+		if err != nil {
+			return nil, fmt.Errorf("error parsing %s: %w", numClusterShardsEnv, err)
+		}
+		config.numClusterShards = numClusterShards
 	}
 
 	if config.numPubSubShards == 0 {
@@ -436,11 +452,11 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 
 	if b.node.LogEnabled(LogLevelDebug) {
 		logValues := map[string]any{
-			"shard":         s.shard.string(),
-			"numProcessors": numProcessors,
+			"shard":          s.shard.string(),
+			"num_processors": numProcessors,
 		}
 		if useShardedPubSub {
-			logValues["clusterShardIndex"] = clusterShardIndex
+			logValues["cluster_shard_index"] = clusterShardIndex
 		}
 		b.node.Log(NewLogEntry(LogLevelDebug, "running Redis PUB/SUB", logValues))
 		defer func() {
