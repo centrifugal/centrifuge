@@ -13,11 +13,12 @@ import (
 
 func TestOptionsFromAddress(t *testing.T) {
 	tests := []struct {
-		name           string
-		address        string
-		inputOptions   rueidis.ClientOption
-		expectedError  error
-		expectedOutput rueidis.ClientOption
+		name              string
+		address           string
+		inputOptions      rueidis.ClientOption
+		expectedError     error
+		expectedOutput    rueidis.ClientOption
+		expectedIsCluster bool
 	}{
 		{
 			name:          "Valid TCP address with host:port",
@@ -49,6 +50,16 @@ func TestOptionsFromAddress(t *testing.T) {
 				InitAddress: []string{"127.0.0.1:6379"},
 				SelectDB:    2,
 			},
+		},
+		{
+			name:          "Redis Cluster URL with DB number",
+			address:       "redis+cluster://127.0.0.1:6379",
+			inputOptions:  rueidis.ClientOption{},
+			expectedError: nil,
+			expectedOutput: rueidis.ClientOption{
+				InitAddress: []string{"127.0.0.1:6379"},
+			},
+			expectedIsCluster: true,
 		},
 		{
 			name:          "Redis URL with invalid DB number",
@@ -143,7 +154,7 @@ func TestOptionsFromAddress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := optionsFromAddress(tt.address, tt.inputOptions)
+			output, isCluster, err := optionsFromAddress(tt.address, tt.inputOptions)
 
 			if tt.expectedError != nil {
 				require.Error(t, err)
@@ -151,13 +162,14 @@ func TestOptionsFromAddress(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tt.expectedOutput, output)
+				require.Equal(t, tt.expectedIsCluster, isCluster)
 			}
 		})
 	}
 }
 
 func TestOptionsFromAddressUnix(t *testing.T) {
-	output, err := optionsFromAddress("unix:///tmp/redis.sock", rueidis.ClientOption{})
+	output, _, err := optionsFromAddress("unix:///tmp/redis.sock", rueidis.ClientOption{})
 	require.NoError(t, err)
 	require.Equal(t, output.InitAddress, []string{"/tmp/redis.sock"})
 	require.NotNil(t, output.DialFn)

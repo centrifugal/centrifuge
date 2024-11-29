@@ -26,21 +26,23 @@ const (
 )
 
 type RedisShard struct {
-	config     RedisShardConfig
-	client     rueidis.Client
-	closeCh    chan struct{}
-	closeOnce  sync.Once
-	useCluster bool
-	finalOpts  rueidis.ClientOption
+	config    RedisShardConfig
+	client    rueidis.Client
+	closeCh   chan struct{}
+	closeOnce sync.Once
+	isCluster bool
+	finalOpts rueidis.ClientOption
 }
 
 var knownRedisURLPrefixes = []string{
 	"redis://",
+	"redis+sentinel://",
+	"redis+cluster://",
 	"unix://",
 	"tcp://",
 }
 
-func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.ClientOption, error) {
+func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.ClientOption, bool, error) {
 	hasKnownURLPrefix := false
 	for _, prefix := range knownRedisURLPrefixes {
 		if strings.HasPrefix(address, prefix) {
@@ -51,24 +53,24 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.C
 	if !hasKnownURLPrefix {
 		if host, port, err := net.SplitHostPort(address); err == nil && host != "" && port != "" {
 			options.InitAddress = []string{address}
-			return options, nil
+			return options, false, nil
 		}
-		return options, errors.New("malformed connection address, must be Redis URL or host:port")
+		return options, false, errors.New("malformed connection address, must be Redis URL or host:port")
 	}
 	u, err := url.Parse(address)
 	if err != nil {
-		return options, fmt.Errorf("malformed connection address, not a valid URL: %w", err)
+		return options, false, fmt.Errorf("malformed connection address, not a valid URL: %w", err)
 	}
 
 	var addresses []string
 
 	switch u.Scheme {
-	case "tcp", "redis":
+	case "tcp", "redis", "redis+sentinel", "redis+cluster":
 		addresses = []string{u.Host}
 		if u.Path != "" {
 			db, err := strconv.Atoi(strings.TrimPrefix(u.Path, "/"))
 			if err != nil {
-				return options, fmt.Errorf("can't parse Redis DB number from connection address: %s is not a number", u.Path)
+				return options, false, fmt.Errorf("can't parse Redis DB number from connection address: %s is not a number", u.Path)
 			}
 			options.SelectDB = db
 		}
@@ -92,14 +94,14 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.C
 	if query.Has("connect_timeout") {
 		to, err := time.ParseDuration(query.Get("connect_timeout"))
 		if err != nil {
-			return options, fmt.Errorf("invalid connect timeout: %q", query.Get("connect_timeout"))
+			return options, false, fmt.Errorf("invalid connect timeout: %q", query.Get("connect_timeout"))
 		}
 		options.Dialer.Timeout = to
 	}
 	if query.Has("io_timeout") {
 		to, err := time.ParseDuration(query.Get("io_timeout"))
 		if err != nil {
-			return options, fmt.Errorf("invalid io timeout: %q", query.Get("io_timeout"))
+			return options, false, fmt.Errorf("invalid io timeout: %q", query.Get("io_timeout"))
 		}
 		options.ConnWriteTimeout = to
 	}
@@ -109,7 +111,7 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.C
 	if query.Has("force_resp2") {
 		val, err := strconv.ParseBool(query.Get("force_resp2"))
 		if err != nil {
-			return options, fmt.Errorf("invalid force_resp2 value: %q", query.Get("force_resp2"))
+			return options, false, fmt.Errorf("invalid force_resp2 value: %q", query.Get("force_resp2"))
 		}
 		options.AlwaysRESP2 = val
 	}
@@ -125,8 +127,11 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.C
 	if query.Has("sentinel_tls_enabled") && options.Sentinel.TLSConfig == nil {
 		options.Sentinel.TLSConfig = &tls.Config{}
 	}
+	if u.Scheme == "redis+sentinel" && options.Sentinel.MasterSet == "" {
+		return options, false, errors.New("sentinel master name must be configured for Redis Sentinel setup")
+	}
 	options.InitAddress = addresses
-	return options, nil
+	return options, u.Scheme == "redis+cluster", nil
 }
 
 // NewRedisShard initializes new Redis shard.
@@ -154,6 +159,8 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		},
 	}
 
+	var isCluster bool
+
 	if len(conf.SentinelAddresses) > 0 {
 		options.InitAddress = conf.SentinelAddresses
 		options.Sentinel = rueidis.SentinelOption{
@@ -164,10 +171,11 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 			ClientName: conf.SentinelClientName,
 		}
 	} else if len(conf.ClusterAddresses) > 0 {
+		isCluster = true
 		options.InitAddress = conf.ClusterAddresses
 	} else {
 		var err error
-		options, err = optionsFromAddress(conf.Address, options)
+		options, isCluster, err = optionsFromAddress(conf.Address, options)
 		if err != nil {
 			return nil, fmt.Errorf("error processing Redis address: %v", err)
 		}
@@ -179,10 +187,10 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	shard := &RedisShard{
-		config:     conf,
-		useCluster: len(conf.ClusterAddresses) > 0,
-		closeCh:    make(chan struct{}),
-		finalOpts:  options,
+		config:    conf,
+		isCluster: isCluster,
+		closeCh:   make(chan struct{}),
+		finalOpts: options,
 	}
 
 	shard.client = client
@@ -191,23 +199,34 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 
 // RedisShardConfig contains Redis connection options.
 type RedisShardConfig struct {
-	// Address is a Redis server connection address.
-	// This can be:
+	// Address is a Redis server connection address. Address can be:
 	// - host:port
-	// - tcp://[[:password]@]host:port[/db][?option1=value1&optionN=valueN]
-	// - redis://[[:password]@]host:port[/db][?option1=value1&optionN=valueN]
-	// - unix://[[:password]@]path[?option1=value1&optionN=valueN]
+	// - tcp://[[[user]:password]@]host:port[/db][?option1=value1&optionN=valueN]
+	// - redis://[[[user]:password]@]host:port[/db][?option1=value1&optionN=valueN]
+	// - unix://[[[user]:password]@]path[?option1=value1&optionN=valueN]
+	// It's also possible to use Address with redis+sentinel:// and redis+cluster://
+	// schemes when connecting to Redis Sentinel and Redis Cluster respectively.
+	// Examples:
+	// - redis+sentinel://[[[user]:password]@]host:port?sentinel_master_name=mymaster
+	// - redis+cluster://[[[user]:password]@]host:port[?addr=host2:port2&addr=host3:port3]
+	// If you need to connect to Redis Cluster then you need to provide ClusterAddresses
+	// or must use redis+cluster:// scheme in Address.
+	// If you need to connect to Redis Sentinel then you need to provide SentinelAddresses
+	// or must use redis+sentinel:// scheme in Address.
+	// I.e. Centrifuge requires you to explicitly specify the type of Redis setup you want
+	// to connect to.
 	Address string
-
-	// ClusterAddresses is a slice of seed cluster addrs for this shard.
+	// ClusterAddresses is a slice of seed cluster addresses to connect to.
 	// Each address should be in form of host:port. If ClusterAddresses set then
-	// RedisShardConfig.Address not used.
+	// RedisShardConfig.Address not used at all.
 	ClusterAddresses []string
-
 	// SentinelAddresses is a slice of Sentinel addresses. Each address should
 	// be in form of host:port. If set then Redis address will be automatically
-	// discovered from Sentinel.
+	// discovered from Sentinel. For Sentinel the name of the master instance
+	// Sentinel monitors (SentinelMasterName) must be provided. If SentinelAddresses
+	// set then RedisShardConfig.Address not used at all.
 	SentinelAddresses []string
+
 	// SentinelMasterName is a name of Redis instance master Sentinel monitors.
 	SentinelMasterName string
 	// SentinelUser is a user for Sentinel ACL-based auth.
@@ -219,14 +238,14 @@ type RedisShardConfig struct {
 	// SentinelTLSConfig is a TLS configuration for Sentinel connections.
 	SentinelTLSConfig *tls.Config
 
-	// DB is Redis database number. If not set then database 0 used. Does not make sense in Redis Cluster case.
+	// DB is Redis database number. If not set then database 0 used.
+	// Does not make sense in Redis Cluster case.
 	DB int
 	// User is a username for Redis ACL-based auth.
 	User string
-	// Password is password to use when connecting to Redis database.
-	// If zero then password not used.
+	// Password is password to use when connecting to Redis. If zero then password not used.
 	Password string
-	// ClientName for established connections. See https://redis.io/commands/client-setname/
+	// ClientName for established connections with Redis. See https://redis.io/commands/client-setname/
 	ClientName string
 	// TLSConfig contains connection TLS configuration.
 	TLSConfig *tls.Config
