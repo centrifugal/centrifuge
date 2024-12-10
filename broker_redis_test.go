@@ -1590,9 +1590,10 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 			broker := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
-			rawData := []byte("{}")
-			numMessages := 1000
-			numMissing := 5
+			rawData := []byte(randString(800))
+
+			numMessages := 10
+			numMissing := 10
 			for i := 1; i <= numMessages; i++ {
 				_, _, err := broker.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
@@ -2059,6 +2060,35 @@ func TestParseDeltaPush(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tc.expectedResult, result)
+			}
+		})
+	}
+}
+
+// 1000 streams with 100 messages in each stream, each message 500 bytes => 63MB in Redis.
+// 2000 streams with 100 messages in each stream, each message 500 bytes => 126MB in Redis.
+// 1000 streams with 200 messages in each stream, each message 500 bytes => 121MB in Redis.
+// 1000 streams with 400 messages in each stream, each message 500 bytes => 242MB in Redis.
+func TestRedisMemoryUsage(t *testing.T) {
+	t.Skip()
+	numStreams := 1000
+	numMessagesInStream := 400
+	messageSizeBytes := 500
+	for _, tt := range historyRedisTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := testNode(t)
+			broker := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisBroker(broker)
+			rawData := []byte(randString(messageSizeBytes))
+			for i := 0; i < numStreams; i++ {
+				for j := 0; j < numMessagesInStream; j++ {
+					_, _, err := broker.Publish("channel"+strconv.Itoa(i), rawData, PublishOptions{
+						HistorySize: numMessagesInStream,
+						HistoryTTL:  100 * time.Second,
+					})
+					require.NoError(t, err)
+				}
 			}
 		})
 	}
