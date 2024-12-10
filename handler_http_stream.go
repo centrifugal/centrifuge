@@ -40,6 +40,10 @@ const streamingResponseWriteTimeout = time.Second
 
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.node.metrics.incTransportConnect(transportHTTPStream)
+	h.node.metrics.incTransportConnectionsInflight(transportHTTPStream)
+	defer func() {
+		h.node.metrics.decTransportConnectionsInflight(transportHTTPStream)
+	}()
 
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)

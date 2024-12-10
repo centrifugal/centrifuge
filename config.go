@@ -168,6 +168,10 @@ type MetricsConfig struct {
 	// ChannelNamespaceCacheTTL sets the time after which resolved channel namespace for a channel
 	// will expire in the cache. If zero – default TTL 10 seconds is used.
 	ChannelNamespaceCacheTTL time.Duration
+
+	// AdditionalTransportNames is an optional list of additional transport names for a metrics system
+	// to be aware of. It helps to initialize transport related metrics with zero values.
+	AdditionalTransportNames []string
 }
 
 // PingPongConfig allows configuring application level ping-pong behavior.

@@ -41,6 +41,10 @@ const defaultMaxSSEBodySize = 64 * 1024
 
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.node.metrics.incTransportConnect(transportSSE)
+	h.node.metrics.incTransportConnectionsInflight(transportSSE)
+	defer func() {
+		h.node.metrics.decTransportConnectionsInflight(transportSSE)
+	}()
 
 	var requestData []byte
 	if r.Method == http.MethodGet {
