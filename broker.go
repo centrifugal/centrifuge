@@ -38,6 +38,8 @@ type ClientInfo struct {
 	// ChanInfo is additional information about connection in context of
 	// channel subscription.
 	ChanInfo []byte
+	// SubscribedAt is an optional Unix timestamp milliseconds when client subscribed to channel.
+	SubscribedAt int64
 }
 
 // BrokerEventHandler can handle messages received from PUB/SUB system.
