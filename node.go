@@ -1683,3 +1683,21 @@ func (n *Node) HandleLeave(ch string, info *ClientInfo) error {
 func (n *Node) HandleControl(data []byte) error {
 	return n.handleControl(data)
 }
+
+// IncTransportConnectionsInflight increments number of transport connections inflight built-in gauge.
+// Only useful if you are using a custom transport. For built-in transports this is done automatically.
+func (n *Node) IncTransportConnectionsInflight(transportName string) {
+	n.metrics.incTransportConnectionsInflight(transportName)
+}
+
+// DecTransportConnectionsInflight decrements number of transport connections inflight built-in gauge.
+// Only useful if you are using a custom transport. For built-in transports this is done automatically.
+func (n *Node) DecTransportConnectionsInflight(transportName string) {
+	n.metrics.decTransportConnectionsInflight(transportName)
+}
+
+// IncTransportConnectCounter increments number of transport connect attempts built-in counter.
+// Only useful if you are using a custom transport. For built-in transports this is done automatically.
+func (n *Node) IncTransportConnectCounter(transportName string) {
+	n.metrics.incTransportConnect(transportName)
+}
