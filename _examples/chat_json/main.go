@@ -136,6 +136,8 @@ func main() {
 					EmitJoinLeave:  true,
 					PushJoinLeave:  true,
 					Data:           []byte(`{"msg": "welcome"}`),
+
+					PresenceAttachSubscribedAt: true,
 				},
 			}, nil)
 		})

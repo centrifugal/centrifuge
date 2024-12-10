@@ -102,6 +102,11 @@ type SubscribeOptions struct {
 	// Delta encoding is an EXPERIMENTAL feature and may be changed.
 	AllowedDeltaTypes []DeltaType
 
+	// PresenceAttachSubscribedAt enables attaching time when client subscribed to a channel
+	// to presence information (as Unix timestamp milliseconds). This can be useful to know
+	// how long a particular client is subscribed to a channel.
+	PresenceAttachSubscribedAt bool
+
 	// clientID to subscribe.
 	clientID string
 	// sessionID to subscribe.
