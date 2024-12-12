@@ -27,6 +27,8 @@ type metrics struct {
 	numChannelsGauge              prometheus.Gauge
 	numNodesGauge                 prometheus.Gauge
 	replyErrorCount               *prometheus.CounterVec
+	connectionsInflight           *prometheus.GaugeVec
+	subscriptionsInflight         *prometheus.GaugeVec
 	serverUnsubscribeCount        *prometheus.CounterVec
 	serverDisconnectCount         *prometheus.CounterVec
 	commandDurationSummary        *prometheus.SummaryVec
@@ -37,7 +39,6 @@ type metrics struct {
 	transportMessagesSentSize     *prometheus.CounterVec
 	transportMessagesReceived     *prometheus.CounterVec
 	transportMessagesReceivedSize *prometheus.CounterVec
-	transportConnectionsInflight  *prometheus.GaugeVec
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -49,12 +50,9 @@ type metrics struct {
 	messagesSentCountLeave       prometheus.Counter
 	messagesSentCountControl     prometheus.Counter
 
-	transportConnectCountWebsocket         prometheus.Counter
-	transportConnectCountSSE               prometheus.Counter
-	transportConnectCountHTTPStream        prometheus.Counter
-	transportConnectionsInflightWebsocket  prometheus.Gauge
-	transportConnectionsInflightSSE        prometheus.Gauge
-	transportConnectionsInflightHTTPStream prometheus.Gauge
+	transportConnectCountWebsocket  prometheus.Counter
+	transportConnectCountSSE        prometheus.Counter
+	transportConnectCountHTTPStream prometheus.Counter
 
 	commandDurationConnect       prometheus.Observer
 	commandDurationSubscribe     prometheus.Observer
@@ -255,18 +253,25 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, []string{"transport"})
 
+	m.connectionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "connections_inflight",
+		Help:      "Number of inflight client connections.",
+	}, []string{"transport", "client_name", "client_version"})
+
+	m.subscriptionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "subscriptions_inflight",
+		Help:      "Number of inflight client subscriptions.",
+	}, []string{"client_name", "channel_namespace"})
+
 	m.transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "connect_count",
 		Help:      "Number of connect attempts to specific transport.",
-	}, []string{"transport"})
-
-	m.transportConnectionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "inflight_connections",
-		Help:      "Number of inflight connections over specific transport.",
 	}, []string{"transport"})
 
 	m.transportMessagesSent = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -329,14 +334,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.transportConnectCountHTTPStream = m.transportConnectCount.WithLabelValues(transportHTTPStream)
 	m.transportConnectCountSSE = m.transportConnectCount.WithLabelValues(transportSSE)
 
-	m.transportConnectionsInflightWebsocket = m.transportConnectionsInflight.WithLabelValues(transportWebsocket)
-	m.transportConnectionsInflightHTTPStream = m.transportConnectionsInflight.WithLabelValues(transportHTTPStream)
-	m.transportConnectionsInflightSSE = m.transportConnectionsInflight.WithLabelValues(transportSSE)
-	for _, transportName := range config.AdditionalTransportNames {
-		m.transportConnectCount.WithLabelValues(transportName).Add(0)
-		m.transportConnectionsInflight.WithLabelValues(transportName).Set(0)
-	}
-
 	labelForMethod := func(frameType protocol.FrameType) string {
 		return frameType.String()
 	}
@@ -367,12 +364,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.numNodesGauge,
 		m.commandDurationSummary,
 		m.replyErrorCount,
+		m.connectionsInflight,
+		m.subscriptionsInflight,
 		m.serverUnsubscribeCount,
 		m.serverDisconnectCount,
 		m.recoverCount,
 		m.pingPongDurationHistogram,
 		m.transportConnectCount,
-		m.transportConnectionsInflight,
 		m.transportMessagesSent,
 		m.transportMessagesSentSize,
 		m.transportMessagesReceived,
@@ -459,32 +457,6 @@ func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Du
 		observer = m.commandDurationUnknown
 	}
 	observer.Observe(d.Seconds())
-}
-
-func (m *metrics) incTransportConnectionsInflight(transport string) {
-	switch transport {
-	case transportWebsocket:
-		m.transportConnectionsInflightWebsocket.Inc()
-	case transportSSE:
-		m.transportConnectionsInflightSSE.Inc()
-	case transportHTTPStream:
-		m.transportConnectionsInflightHTTPStream.Inc()
-	default:
-		m.transportConnectionsInflight.WithLabelValues(transport).Inc()
-	}
-}
-
-func (m *metrics) decTransportConnectionsInflight(transport string) {
-	switch transport {
-	case transportWebsocket:
-		m.transportConnectionsInflightWebsocket.Dec()
-	case transportSSE:
-		m.transportConnectionsInflightSSE.Dec()
-	case transportHTTPStream:
-		m.transportConnectionsInflightHTTPStream.Dec()
-	default:
-		m.transportConnectionsInflight.WithLabelValues(transport).Dec()
-	}
 }
 
 func (m *metrics) observePubSubDeliveryLag(lagTimeMilli int64) {

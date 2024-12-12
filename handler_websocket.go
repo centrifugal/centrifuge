@@ -123,7 +123,6 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 
 func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	s.node.metrics.incTransportConnect(transportWebsocket)
-	s.node.metrics.incTransportConnectionsInflight(transportWebsocket)
 
 	var protoType = ProtocolTypeJSON
 	var useFramePingPong bool
@@ -149,7 +148,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	conn, subProtocol, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
-		s.node.metrics.decTransportConnectionsInflight(transportWebsocket)
 		return
 	}
 
@@ -187,9 +185,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
-		defer func() {
-			s.node.metrics.decTransportConnectionsInflight(transportWebsocket)
-		}()
 		opts := websocketTransportOptions{
 			pingPong:           s.config.PingPongConfig,
 			writeTimeout:       writeTimeout,

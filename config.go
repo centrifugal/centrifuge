@@ -169,9 +169,16 @@ type MetricsConfig struct {
 	// will expire in the cache. If zero – default TTL 10 seconds is used.
 	ChannelNamespaceCacheTTL time.Duration
 
-	// AdditionalTransportNames is an optional list of additional transport names for a metrics system
-	// to be aware of. It helps to initialize transport related metrics with zero values.
-	AdditionalTransportNames []string
+	// RegisteredClientNames is an optional list of known client names which will be allowed to be
+	// attached as labels to metrics. If client passed a name which is not in the list – then Centrifuge
+	// will use string "unregistered" as a client_name label. We need to be strict here to avoid
+	// Prometheus cardinality issues.
+	RegisteredClientNames []string
+	// CheckRegisteredClientVersion is a function to check whether the version passed by a client with a
+	// particular name is valid and can be used in metric values. When function is not set or returns
+	// false Centrifuge will use "unregistered" value for a client version. Note, the name argument here
+	// is an original name of client passed to Centrifuge.
+	CheckRegisteredClientVersion func(clientName string, clientVersion string) bool
 }
 
 // PingPongConfig allows configuring application level ping-pong behavior.

@@ -246,6 +246,8 @@ type Client struct {
 	info              []byte
 	storage           map[string]any
 	storageMu         sync.Mutex
+	metricName        string // Make a unique.Handle.
+	metricVersion     string // Make a unique.Handle.
 	authenticated     bool
 	clientSideRefresh bool
 	status            status
@@ -1010,10 +1012,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	c.mu.RUnlock()
 
 	if authenticated {
-		err := c.node.removeClient(c)
-		if err != nil {
-			c.node.logger.log(newLogEntry(LogLevelError, "error removing client", map[string]any{"user": c.user, "client": c.uid, "error": err.Error()}))
-		}
+		c.node.removeClient(c)
 	}
 
 	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
@@ -2227,6 +2226,20 @@ func (c *Client) unlockServerSideSubscriptions(subCtxMap map[string]subscribeCon
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
 func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) (*protocol.ConnectResult, error) {
+	var metricClientName string
+	if req.Name != "" {
+		metricClientName = "unregistered"
+		if slices.Contains(c.node.config.Metrics.RegisteredClientNames, req.Name) {
+			metricClientName = req.Name
+		}
+	}
+	var metricClientVersion string
+	if req.Version != "" {
+		metricClientVersion = "unregistered"
+		if c.node.config.Metrics.CheckRegisteredClientVersion != nil && c.node.config.Metrics.CheckRegisteredClientVersion(req.Name, req.Version) {
+			metricClientVersion = req.Version
+		}
+	}
 	c.mu.RLock()
 	authenticated := c.authenticated
 	closed := c.status == statusClosed
@@ -2393,14 +2406,15 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	// Client successfully connected.
 	c.mu.Lock()
-	c.authenticated = true
-	c.mu.Unlock()
-
-	err := c.node.addClient(c)
-	if err != nil {
-		c.node.logger.log(newLogEntry(LogLevelError, "error adding client", map[string]any{"client": c.uid, "error": err.Error()}))
-		return nil, DisconnectServerError
+	if c.status == statusClosed {
+		c.mu.Unlock()
+		return nil, DisconnectConnectionClosed
 	}
+	c.authenticated = true
+	c.metricName = metricClientName
+	c.metricVersion = metricClientVersion
+	c.node.addClient(c)
+	c.mu.Unlock()
 
 	if !clientSideRefresh {
 		// Server will do refresh itself.

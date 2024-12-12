@@ -982,21 +982,26 @@ func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string
 
 // addClient registers authenticated connection in clientConnectionHub
 // this allows to make operations with user connection on demand.
-func (n *Node) addClient(c *Client) error {
+func (n *Node) addClient(c *Client) {
 	n.metrics.incActionCount("add_client", "")
-	return n.hub.add(c)
+	n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), c.metricName, c.metricVersion).Inc()
+	n.hub.add(c)
 }
 
 // removeClient removes client connection from connection registry.
-func (n *Node) removeClient(c *Client) error {
+func (n *Node) removeClient(c *Client) {
 	n.metrics.incActionCount("remove_client", "")
-	return n.hub.remove(c)
+	removed := n.hub.remove(c)
+	if removed {
+		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), c.metricName, c.metricVersion).Dec()
+	}
 }
 
 // addSubscription registers subscription of connection on channel in both
 // Hub and Broker.
 func (n *Node) addSubscription(ch string, sub subInfo) error {
 	n.metrics.incActionCount("add_subscription", ch)
+	n.metrics.subscriptionsInflight.WithLabelValues(sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)).Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1047,9 +1052,9 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	empty, err := n.hub.removeSub(ch, c)
-	if err != nil {
-		return err
+	empty, wasRemoved := n.hub.removeSub(ch, c)
+	if wasRemoved {
+		n.metrics.subscriptionsInflight.WithLabelValues(c.metricName, n.metrics.getChannelNamespaceLabel(ch)).Dec()
 	}
 	if empty {
 		submittedAt := time.Now()
@@ -1682,22 +1687,4 @@ func (n *Node) HandleLeave(ch string, info *ClientInfo) error {
 // HandleControl coming from Broker.
 func (n *Node) HandleControl(data []byte) error {
 	return n.handleControl(data)
-}
-
-// IncTransportConnectionsInflight increments number of transport connections inflight built-in gauge.
-// Only useful if you are using a custom transport. For built-in transports this is done automatically.
-func (n *Node) IncTransportConnectionsInflight(transportName string) {
-	n.metrics.incTransportConnectionsInflight(transportName)
-}
-
-// DecTransportConnectionsInflight decrements number of transport connections inflight built-in gauge.
-// Only useful if you are using a custom transport. For built-in transports this is done automatically.
-func (n *Node) DecTransportConnectionsInflight(transportName string) {
-	n.metrics.decTransportConnectionsInflight(transportName)
-}
-
-// IncTransportConnectCounter increments number of transport connect attempts built-in counter.
-// Only useful if you are using a custom transport. For built-in transports this is done automatically.
-func (n *Node) IncTransportConnectCounter(transportName string) {
-	n.metrics.incTransportConnect(transportName)
 }
