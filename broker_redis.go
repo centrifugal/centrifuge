@@ -103,6 +103,11 @@ type RedisBrokerConfig struct {
 	// Iteration over history in reversed order not supported with lists.
 	UseLists bool
 
+	// Subscribe on replica Redis nodes. This only works for Redis Cluster
+	// and Sentinel setups and requires replica client to be initialized in
+	// each RedisShard using RedisShardConfig.InitReplicaClient.
+	SubscribeOnReplica bool
+
 	// SkipPubSub enables mode when Redis broker only saves history, without
 	// publishing to channels and using PUB/SUB.
 	SkipPubSub bool
@@ -144,6 +149,14 @@ type RedisBrokerConfig struct {
 func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	if len(config.Shards) == 0 {
 		return nil, errors.New("broker: no Redis shards provided in configuration")
+	}
+
+	if config.SubscribeOnReplica {
+		for i, s := range config.Shards {
+			if s.replicaClient == nil {
+				return nil, fmt.Errorf("broker: SubscribeOnReplica enabled but no replica client initialized in shard[%d] (InitReplicaClient option)", i)
+			}
+		}
 	}
 
 	if len(config.Shards) > 1 {
@@ -379,7 +392,12 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	}
 	defer closeDoneOnce()
 
-	conn, cancel := s.client.Dedicate()
+	client := s.client
+	if b.config.SubscribeOnReplica {
+		client = s.replicaClient
+	}
+
+	conn, cancel := client.Dedicate()
 	defer cancel()
 	defer conn.Close()
 
@@ -485,7 +503,12 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 		}(processingCh)
 	}
 
-	conn, cancel := s.shard.client.Dedicate()
+	client := s.shard.client
+	if b.config.SubscribeOnReplica {
+		client = s.shard.replicaClient
+	}
+
+	conn, cancel := client.Dedicate()
 	defer cancel()
 	defer conn.Close()
 
