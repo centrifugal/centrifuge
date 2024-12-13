@@ -26,13 +26,13 @@ const (
 )
 
 type RedisShard struct {
-	config    RedisShardConfig
-	client    rueidis.Client
+	config        RedisShardConfig
+	client        rueidis.Client
 	replicaClient rueidis.Client
-	closeCh   chan struct{}
-	closeOnce sync.Once
-	isCluster bool
->>>>>>> v0.34.0_dev
+	closeCh       chan struct{}
+	closeOnce     sync.Once
+	isCluster     bool
+	finalOpts     rueidis.ClientOption
 }
 
 var knownRedisURLPrefixes = []string{
@@ -203,7 +203,6 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		}
 		shard.replicaClient = replicaClient
 	}
-
 
 	return shard, nil
 }
