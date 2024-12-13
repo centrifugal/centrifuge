@@ -28,10 +28,11 @@ const (
 type RedisShard struct {
 	config    RedisShardConfig
 	client    rueidis.Client
+	replicaClient rueidis.Client
 	closeCh   chan struct{}
 	closeOnce sync.Once
 	isCluster bool
-	finalOpts rueidis.ClientOption
+>>>>>>> v0.34.0_dev
 }
 
 var knownRedisURLPrefixes = []string{
@@ -181,11 +182,6 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		}
 	}
 
-	client, err := rueidis.NewClient(options)
-	if err != nil {
-		return nil, fmt.Errorf("error creating Redis client: %v", err)
-	}
-
 	shard := &RedisShard{
 		config:    conf,
 		isCluster: isCluster,
@@ -193,7 +189,22 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		finalOpts: options,
 	}
 
+	client, err := rueidis.NewClient(options)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Redis client: %v", err)
+	}
 	shard.client = client
+
+	if conf.InitReplicaClient {
+		options.ReplicaOnly = true
+		replicaClient, err := rueidis.NewClient(options)
+		if err != nil {
+			return nil, fmt.Errorf("error creating Redis replica client: %w", err)
+		}
+		shard.replicaClient = replicaClient
+	}
+
+
 	return shard, nil
 }
 
@@ -263,6 +274,12 @@ type RedisShardConfig struct {
 	// By default, Redis client tries to detect supported Redis protocol automatically
 	// trying RESP3 first.
 	ForceRESP2 bool
+
+	// InitReplicaClient once set to true will initialize replica client for this shard.
+	// Replica client can then be used for read-only operations from replica nodes in Redis
+	// Cluster or Redis Sentinel setups. Replica client will be initialized with the same
+	// options as the main client but with ReplicaOnly option set to true.
+	InitReplicaClient bool
 }
 
 func (s *RedisShard) Close() {
