@@ -2,6 +2,8 @@ package centrifuge
 
 import (
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Config contains Node configuration options.
@@ -53,7 +55,6 @@ type Config struct {
 	// Centrifuge does not take lag into account for positioning.
 	// See also pub_sub_time_lag_seconds as a helpful metric.
 	ClientChannelPositionMaxTimeLag time.Duration
-
 	// ClientQueueMaxSize is a maximum size of client's message queue in
 	// bytes. After this queue size exceeded Centrifuge closes client's connection.
 	// Zero value means 1048576 bytes (1MB).
@@ -99,31 +100,12 @@ type Config struct {
 	// When zero Centrifuge uses default 30 days which we believe is more than enough
 	// for most use cases.
 	HistoryMetaTTL time.Duration
-
-	// MetricsNamespace is a Prometheus metrics namespace to use for internal metrics.
-	// If not set then the default namespace name "centrifuge" will be used.
-	MetricsNamespace string
-	// GetChannelNamespaceLabel if set will be used by Centrifuge to extract channel_namespace
-	// label for some channel related metrics. Make sure to maintain low cardinality of returned
-	// values to avoid issues with Prometheus performance. This function may introduce sufficient
-	// overhead since it's called in hot paths - so it should be fast. Usage of this function for
-	// specific metrics must be enabled over ChannelNamespaceLabelForTransportMessagesSent and
-	// ChannelNamespaceLabelForTransportMessagesReceived options.
-	GetChannelNamespaceLabel func(channel string) string
-	// ChannelNamespaceLabelForTransportMessagesSent enables using GetChannelNamespaceLabel
-	// function for extracting channel_namespace label for transport_messages_sent and
-	// transport_messages_sent_size.
-	ChannelNamespaceLabelForTransportMessagesSent bool
-	// ChannelNamespaceLabelForTransportMessagesReceived enables using GetChannelNamespaceLabel
-	// function for extracting channel_namespace label for transport_messages_received and
-	// transport_messages_received_size.
-	ChannelNamespaceLabelForTransportMessagesReceived bool
-
+	// Metrics is MetricsConfig to configure Prometheus metrics provided by Centrifuge.
+	Metrics MetricsConfig
 	// GetChannelMediumOptions is a way to provide ChannelMediumOptions for specific channel.
 	// This function is called each time new channel appears on the Node.
 	// See the doc comment for ChannelMediumOptions for more details about channel medium concept.
 	GetChannelMediumOptions func(channel string) ChannelMediumOptions
-
 	// GetBroker when set allows returning a custom Broker to use for a specific channel. If not set
 	// then the default Node's Broker is always used for all channels. Also, Node's default Broker is
 	// always used for control channels. It's the responsibility of an application to call Broker.Run
@@ -155,6 +137,49 @@ const (
 	// considered actual.
 	nodeInfoMaxDelay = nodeInfoPublishInterval*2 + time.Second
 )
+
+// RegistererGatherer defines an interface that combines Registerer and Gatherer from Prometheus.
+// Prometheus Registry implements both interfaces.
+type RegistererGatherer interface {
+	prometheus.Registerer
+	prometheus.Gatherer
+}
+
+type MetricsConfig struct {
+	// MetricsNamespace is a Prometheus metrics namespace to use for Centrifuge metrics.
+	// If not set then the default metrics namespace name "centrifuge" will be used.
+	MetricsNamespace string
+	// RegistererGatherer is a Prometheus registerer and gatherer. If not set then a
+	// prometheus.DefaultRegisterer and prometheus.DefaultGatherer will be used.
+	RegistererGatherer RegistererGatherer
+
+	// GetChannelNamespaceLabel if set will be used by Centrifuge to extract channel_namespace
+	// label for channel related metrics. Make sure to maintain low cardinality of returned values
+	// to avoid issues with Prometheus performance. This function may introduce sufficient overhead
+	// since it's called in hot paths - so it should be fast. By default, Centrifuge uses cache
+	// of resolved channel namespace labels to avoid calling this function too often. See below
+	// ChannelNamespaceCacheSize and ChannelNamespaceCacheTTL options to tweak the cache behavior.
+	GetChannelNamespaceLabel func(channel string) string
+	// ChannelNamespaceCacheSize sets the size of the cache for channel namespace label resolution.
+	// Zero value will use cache size equal to 4096. Set -1 to disable cache (in that case make sure
+	// your GetChannelNamespaceLabel is fast and ideally does not allocate because it's called in hot
+	// paths).
+	ChannelNamespaceCacheSize int
+	// ChannelNamespaceCacheTTL sets the time after which resolved channel namespace for a channel
+	// will expire in the cache. If zero – default TTL 10 seconds is used.
+	ChannelNamespaceCacheTTL time.Duration
+
+	// RegisteredClientNames is an optional list of known client names which will be allowed to be
+	// attached as labels to metrics. If client passed a name which is not in the list – then Centrifuge
+	// will use string "unregistered" as a client_name label. We need to be strict here to avoid
+	// Prometheus cardinality issues.
+	RegisteredClientNames []string
+	// CheckRegisteredClientVersion is a function to check whether the version passed by a client with a
+	// particular name is valid and can be used in metric values. When function is not set or returns
+	// false Centrifuge will use "unregistered" value for a client version. Note, the name argument here
+	// is an original name of client passed to Centrifuge.
+	CheckRegisteredClientVersion func(clientName string, clientVersion string) bool
+}
 
 // PingPongConfig allows configuring application level ping-pong behavior.
 // Note that in current implementation PingPongConfig.PingInterval must be greater than PingPongConfig.PongTimeout.
