@@ -27,6 +27,8 @@ type metrics struct {
 	numChannelsGauge              prometheus.Gauge
 	numNodesGauge                 prometheus.Gauge
 	replyErrorCount               *prometheus.CounterVec
+	connectionsInflight           *prometheus.GaugeVec
+	subscriptionsInflight         *prometheus.GaugeVec
 	serverUnsubscribeCount        *prometheus.CounterVec
 	serverDisconnectCount         *prometheus.CounterVec
 	commandDurationSummary        *prometheus.SummaryVec
@@ -68,6 +70,8 @@ type metrics struct {
 	broadcastDurationHistogram *prometheus.HistogramVec
 	pubSubLagHistogram         prometheus.Histogram
 	pingPongDurationHistogram  *prometheus.HistogramVec
+
+	redisBrokerPubSubErrors *prometheus.CounterVec
 
 	config MetricsConfig
 
@@ -251,11 +255,25 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, []string{"transport"})
 
+	m.connectionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "connections_inflight",
+		Help:      "Number of inflight client connections.",
+	}, []string{"transport", "client_name", "client_version"})
+
+	m.subscriptionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "subscriptions_inflight",
+		Help:      "Number of inflight client subscriptions.",
+	}, []string{"client_name", "channel_namespace"})
+
 	m.transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "connect_count",
-		Help:      "Number of connections to specific transport.",
+		Help:      "Number of connect attempts to specific transport.",
 	}, []string{"transport"})
 
 	m.transportMessagesSent = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -269,7 +287,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_sent_size",
-		Help:      "Size in bytes of messages sent to client connections over specific transport.",
+		Help:      "Size in bytes of messages sent to client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -283,7 +301,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_received_size",
-		Help:      "Size in bytes of messages received from client connections over specific transport.",
+		Help:      "Size in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.pubSubLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
@@ -303,6 +321,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, // Millisecond resolution.
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, []string{"type", "channel_namespace"})
+
+	m.redisBrokerPubSubErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "broker",
+		Name:      "redis_pub_sub_errors",
+		Help:      "Number of times there was an error in Redis PUB/SUB connection.",
+	}, []string{"error"})
 
 	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication", "")
 	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join", "")
@@ -348,6 +373,8 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.numNodesGauge,
 		m.commandDurationSummary,
 		m.replyErrorCount,
+		m.connectionsInflight,
+		m.subscriptionsInflight,
 		m.serverUnsubscribeCount,
 		m.serverDisconnectCount,
 		m.recoverCount,
@@ -361,12 +388,17 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.surveyDurationSummary,
 		m.pubSubLagHistogram,
 		m.broadcastDurationHistogram,
+		m.redisBrokerPubSubErrors,
 	} {
 		if err := registerer.Register(collector); err != nil && !errors.As(err, &alreadyRegistered) {
 			return nil, err
 		}
 	}
 	return m, nil
+}
+
+func (m *metrics) incRedisBrokerPubSubErrors(error string) {
+	m.redisBrokerPubSubErrors.WithLabelValues(error).Inc()
 }
 
 func (m *metrics) getChannelNamespaceLabel(ch string) string {
