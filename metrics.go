@@ -71,6 +71,8 @@ type metrics struct {
 	pubSubLagHistogram         prometheus.Histogram
 	pingPongDurationHistogram  *prometheus.HistogramVec
 
+	redisBrokerPubSubErrors *prometheus.CounterVec
+
 	config MetricsConfig
 
 	transportMessagesSentCache     sync.Map
@@ -320,6 +322,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, []string{"type", "channel_namespace"})
 
+	m.redisBrokerPubSubErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "broker",
+		Name:      "redis_pub_sub_errors",
+		Help:      "Number of times there was an error in Redis PUB/SUB connection.",
+	}, []string{"error"})
+
 	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication", "")
 	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join", "")
 	m.messagesReceivedCountLeave = m.messagesReceivedCount.WithLabelValues("leave", "")
@@ -379,12 +388,17 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.surveyDurationSummary,
 		m.pubSubLagHistogram,
 		m.broadcastDurationHistogram,
+		m.redisBrokerPubSubErrors,
 	} {
 		if err := registerer.Register(collector); err != nil && !errors.As(err, &alreadyRegistered) {
 			return nil, err
 		}
 	}
 	return m, nil
+}
+
+func (m *metrics) incRedisBrokerPubSubErrors(error string) {
+	m.redisBrokerPubSubErrors.WithLabelValues(error).Inc()
 }
 
 func (m *metrics) getChannelNamespaceLabel(ch string) string {
