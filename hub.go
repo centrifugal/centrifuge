@@ -80,6 +80,7 @@ func (h *Hub) add(c *Client) {
 }
 
 // Remove connection from clientHub connections registry.
+// Returns true if found and really removed from registry.
 func (h *Hub) remove(c *Client) bool {
 	h.sessionsMu.Lock()
 	if c.sessionID() != "" {
@@ -432,6 +433,7 @@ func (h *connShard) add(c *Client) {
 }
 
 // Remove connection from clientHub connections registry.
+// Returns true if found and really removed from registry.
 func (h *connShard) remove(c *Client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -532,6 +534,8 @@ func (h *subShard) addSub(ch string, sub subInfo) (bool, error) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
+// Returns true if channel does not have any subscribers left in first return value.
+// Returns true if found and really removed from registry in second return value.
 func (h *subShard) removeSub(ch string, c *Client) (bool, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
