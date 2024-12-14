@@ -32,7 +32,7 @@ type RedisShard struct {
 	closeCh       chan struct{}
 	closeOnce     sync.Once
 	isCluster     bool
-	finalOpts     rueidis.ClientOption
+	finalAddress  []string
 }
 
 var knownRedisURLPrefixes = []string{
@@ -107,7 +107,13 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.C
 		options.ConnWriteTimeout = to
 	}
 	if query.Has("tls_enabled") && options.TLSConfig == nil {
-		options.TLSConfig = &tls.Config{}
+		val, err := strconv.ParseBool(query.Get("tls_enabled"))
+		if err != nil {
+			return options, false, fmt.Errorf("invalid tls_enabled value: %q", query.Get("tls_enabled"))
+		}
+		if val {
+			options.TLSConfig = &tls.Config{}
+		}
 	}
 	if query.Has("force_resp2") {
 		val, err := strconv.ParseBool(query.Get("force_resp2"))
@@ -126,7 +132,13 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.C
 		options.Sentinel.Password = query.Get("sentinel_password")
 	}
 	if query.Has("sentinel_tls_enabled") && options.Sentinel.TLSConfig == nil {
-		options.Sentinel.TLSConfig = &tls.Config{}
+		val, err := strconv.ParseBool(query.Get("sentinel_tls_enabled"))
+		if err != nil {
+			return options, false, fmt.Errorf("invalid sentinel_tls_enabled value: %q", query.Get("sentinel_tls_enabled"))
+		}
+		if val {
+			options.Sentinel.TLSConfig = &tls.Config{}
+		}
 	}
 	if u.Scheme == "redis+sentinel" && options.Sentinel.MasterSet == "" {
 		return options, false, errors.New("sentinel master name must be configured for Redis Sentinel setup")
@@ -183,10 +195,10 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	shard := &RedisShard{
-		config:    conf,
-		isCluster: isCluster,
-		closeCh:   make(chan struct{}),
-		finalOpts: options,
+		config:       conf,
+		isCluster:    isCluster,
+		closeCh:      make(chan struct{}),
+		finalAddress: options.InitAddress,
 	}
 
 	client, err := rueidis.NewClient(options)
@@ -289,7 +301,7 @@ func (s *RedisShard) Close() {
 }
 
 func (s *RedisShard) string() string {
-	return strings.Join(s.finalOpts.InitAddress, ",")
+	return strings.Join(s.finalAddress, ",")
 }
 
 // consistentIndex is an adapted function from https://github.com/dgryski/go-jump
