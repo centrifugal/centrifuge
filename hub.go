@@ -70,17 +70,18 @@ func (h *Hub) shutdown(ctx context.Context) error {
 }
 
 // Add connection into clientHub connections registry.
-func (h *Hub) add(c *Client) error {
+func (h *Hub) add(c *Client) {
 	h.sessionsMu.Lock()
 	if c.sessionID() != "" {
 		h.sessions[c.sessionID()] = c
 	}
 	h.sessionsMu.Unlock()
-	return h.connShards[index(c.UserID(), numHubShards)].add(c)
+	h.connShards[index(c.UserID(), numHubShards)].add(c)
 }
 
 // Remove connection from clientHub connections registry.
-func (h *Hub) remove(c *Client) error {
+// Returns true if found and really removed from registry.
+func (h *Hub) remove(c *Client) bool {
 	h.sessionsMu.Lock()
 	if c.sessionID() != "" {
 		delete(h.sessions, c.sessionID())
@@ -128,7 +129,7 @@ func (h *Hub) addSub(ch string, sub subInfo) (bool, error) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-func (h *Hub) removeSub(ch string, c *Client) (bool, error) {
+func (h *Hub) removeSub(ch string, c *Client) (bool, bool) {
 	return h.subShards[index(ch, numHubShards)].removeSub(ch, c)
 }
 
@@ -416,7 +417,7 @@ func (h *connShard) userConnections(userID string) map[string]*Client {
 }
 
 // Add connection into clientHub connections registry.
-func (h *connShard) add(c *Client) error {
+func (h *connShard) add(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -429,11 +430,11 @@ func (h *connShard) add(c *Client) error {
 		h.users[user] = make(map[string]struct{})
 	}
 	h.users[user][uid] = struct{}{}
-	return nil
 }
 
 // Remove connection from clientHub connections registry.
-func (h *connShard) remove(c *Client) error {
+// Returns true if found and really removed from registry.
+func (h *connShard) remove(c *Client) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -444,10 +445,10 @@ func (h *connShard) remove(c *Client) error {
 
 	// try to find connection to delete, return early if not found.
 	if _, ok := h.users[user]; !ok {
-		return nil
+		return false
 	}
 	if _, ok := h.users[user][uid]; !ok {
-		return nil
+		return false
 	}
 
 	// actually remove connection from hub.
@@ -458,7 +459,7 @@ func (h *connShard) remove(c *Client) error {
 		delete(h.users, user)
 	}
 
-	return nil
+	return true
 }
 
 // NumClients returns total number of client connections.
@@ -533,7 +534,9 @@ func (h *subShard) addSub(ch string, sub subInfo) (bool, error) {
 }
 
 // removeSub removes connection from clientHub subscriptions registry.
-func (h *subShard) removeSub(ch string, c *Client) (bool, error) {
+// Returns true if channel does not have any subscribers left in first return value.
+// Returns true if found and really removed from registry in second return value.
+func (h *subShard) removeSub(ch string, c *Client) (bool, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -541,10 +544,10 @@ func (h *subShard) removeSub(ch string, c *Client) (bool, error) {
 
 	// try to find subscription to delete, return early if not found.
 	if _, ok := h.subs[ch]; !ok {
-		return true, nil
+		return true, false
 	}
 	if _, ok := h.subs[ch][uid]; !ok {
-		return true, nil
+		return true, false
 	}
 
 	// actually remove subscription from hub.
@@ -553,10 +556,10 @@ func (h *subShard) removeSub(ch string, c *Client) (bool, error) {
 	// clean up subs map if it's needed.
 	if len(h.subs[ch]) == 0 {
 		delete(h.subs, ch)
-		return true, nil
+		return true, true
 	}
 
-	return false, nil
+	return false, true
 }
 
 type encodeError struct {
@@ -791,7 +794,7 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 		}))
 	}
 
-	h.metrics.observeBroadcastDuration(now)
+	h.metrics.observeBroadcastDuration(now, channel)
 	return nil
 }
 
