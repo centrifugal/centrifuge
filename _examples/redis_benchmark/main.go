@@ -33,7 +33,7 @@ type Config struct {
 	PublishRateLimit     int `envconfig:"PUBLISH_RATE" default:"50000"`
 	SubscribeRateLimit   int `envconfig:"SUBSCRIBE_RATE" default:"50000"`
 	UnsubscribeRateLimit int `envconfig:"UNSUBSCRIBE_RATE" default:"50000"`
-	HistoryRateLimit     int `envconfig:"HISTORY_RATE" default:"50000"`
+	HistoryRateLimit     int `envconfig:"HISTORY_RATE" default:"0"`
 
 	MessageSize int `envconfig:"MESSAGE_SIZE" default:"128"`
 }
