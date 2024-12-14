@@ -5,6 +5,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -22,11 +23,7 @@ import (
 type Config struct {
 	Port int `envconfig:"PORT" default:"8000"`
 
-	RedisAddress   []string `envconfig:"REDIS_ADDRESS" default:"127.0.0.1:6379"`
-	ClusterAddress []string `envconfig:"REDIS_CLUSTER_ADDRESS" default:""`
-
-	RedisUser string `envconfig:"REDIS_USER" default:""`
-	RedisPass string `envconfig:"REDIS_PASSWORD" default:""`
+	RedisAddress []string `envconfig:"REDIS_ADDRESS" default:"127.0.0.1:6379"`
 
 	HistorySize int           `envconfig:"HISTORY_SIZE" default:"0"`
 	HistoryTTL  time.Duration `envconfig:"HISTORY_TTL" default:"60s"`
@@ -75,7 +72,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("%#v", cfg)
+
+	log.Printf("NUM_DIFFERENT_CHANNELS=%d, MESSAGE_SIZE=%d, HISTORY_SIZE=%d, HISTORY_TTL=%s, "+
+		"PUBLISH_RATE=%d, SUBSCRIBE_RATE=%d, UNSUBSCRIBE_RATE=%d, HISTORY_RATE=%d", cfg.NumDifferentChannels,
+		cfg.MessageSize, cfg.HistorySize, cfg.HistoryTTL, cfg.PublishRateLimit, cfg.SubscribeRateLimit,
+		cfg.UnsubscribeRateLimit, cfg.HistoryRateLimit)
 
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelError,
@@ -94,25 +95,15 @@ func main() {
 
 	var redisShardConfigs []centrifuge.RedisShardConfig
 
-	if len(cfg.ClusterAddress) > 0 {
-		log.Printf("Using %d isolated Redis clusters", len(cfg.ClusterAddress))
-		for _, addr := range cfg.ClusterAddress {
-			redisShardConfigs = append(redisShardConfigs, centrifuge.RedisShardConfig{
-				ClusterAddresses: []string{addr},
-			})
+	for _, addr := range cfg.RedisAddress {
+		if u, err := url.Parse(addr); err != nil {
+			log.Printf("connecting to Redis: %s", addr)
+		} else {
+			log.Printf("connecting to Redis: %s", u.Redacted())
 		}
-	} else {
-		log.Printf("Using %d isolated Redis instances", len(cfg.RedisAddress))
-		for _, addr := range cfg.RedisAddress {
-			redisShardConfigs = append(redisShardConfigs, centrifuge.RedisShardConfig{
-				Address: addr,
-			})
-		}
-	}
-
-	for i := range redisShardConfigs {
-		redisShardConfigs[i].User = cfg.RedisUser
-		redisShardConfigs[i].Password = cfg.RedisPass
+		redisShardConfigs = append(redisShardConfigs, centrifuge.RedisShardConfig{
+			Address: addr,
+		})
 	}
 
 	var redisShards []*centrifuge.RedisShard
