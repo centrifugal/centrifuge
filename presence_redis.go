@@ -351,28 +351,28 @@ func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 func (m *RedisPresenceManager) presenceHashKey(s *RedisShard, ch string) channelID {
-	if s.useCluster {
+	if s.isCluster {
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.data." + ch)
 }
 
 func (m *RedisPresenceManager) presenceSetKey(s *RedisShard, ch string) channelID {
-	if s.useCluster {
+	if s.isCluster {
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.expire." + ch)
 }
 
 func (m *RedisPresenceManager) userSetKey(s *RedisShard, ch string) channelID {
-	if s.useCluster {
+	if s.isCluster {
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.user.expire." + ch)
 }
 
 func (m *RedisPresenceManager) userHashKey(s *RedisShard, ch string) channelID {
-	if s.useCluster {
+	if s.isCluster {
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.user.clients." + ch)
