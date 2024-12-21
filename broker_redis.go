@@ -386,7 +386,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	numProcessors := runtime.NumCPU()
 
 	// Run workers to spread message processing work over worker goroutines.
-	workCh := make(chan rueidis.PubSubMessage)
+	workCh := make(chan rueidis.PubSubMessage, controlPubSubProcessorBufferSize)
 	for i := 0; i < numProcessors; i++ {
 		go func() {
 			for {
@@ -408,6 +408,13 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 			select {
 			case workCh <- msg:
 			case <-done:
+			default:
+				// Buffer is full, drop the message. It's expected that PUB/SUB layer
+				// only provides at most once delivery guarantee.
+				// Blocking here will block Redis connection read loop which is not a
+				// good thing and can lead to slower command processing and potentially
+				// to deadlocks (see https://github.com/redis/rueidis/issues/596).
+				// TODO: add metric here.
 			}
 		},
 	})
@@ -426,9 +433,15 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		if err != nil {
 			b.node.Log(NewLogEntry(LogLevelError, "control pub/sub error", map[string]any{"error": err.Error()}))
 		}
+	case <-done:
 	case <-s.closeCh:
 	}
 }
+
+const (
+	pubSubProcessorBufferSize        = 4096
+	controlPubSubProcessorBufferSize = 4096
+)
 
 func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
 	numProcessors := b.config.numPubSubProcessors
@@ -460,7 +473,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	// Run PUB/SUB message processors to spread received message processing work over worker goroutines.
 	processors := make(map[int]chan rueidis.PubSubMessage)
 	for i := 0; i < numProcessors; i++ {
-		processingCh := make(chan rueidis.PubSubMessage)
+		processingCh := make(chan rueidis.PubSubMessage, pubSubProcessorBufferSize)
 		processors[i] = processingCh
 		go func(ch chan rueidis.PubSubMessage) {
 			for {
@@ -489,6 +502,15 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 			select {
 			case processors[index(msg.Channel, numProcessors)] <- msg:
 			case <-done:
+			default:
+				// Buffer is full, drop the message. It's expected that PUB/SUB layer
+				// only provides at most once delivery guarantee.
+				// Centrifuge has offset check mechanism to handle possible message loss
+				// for channels where positioning is enabled.
+				// Blocking here will block Redis connection read loop which is not a
+				// good thing and can lead to slower command processing and potentially
+				// to deadlocks (see https://github.com/redis/rueidis/issues/596).
+				// TODO: add metric here.
 			}
 		},
 		OnSubscription: func(s rueidis.PubSubSubscription) {
@@ -590,11 +612,12 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	}()
 
 	select {
-	case err := <-wait:
+	case err = <-wait:
 		startOnce(err)
 		if err != nil {
 			b.node.Log(NewLogEntry(LogLevelError, "pub/sub error", map[string]any{"error": err.Error()}))
 		}
+	case <-done:
 	case <-s.shard.closeCh:
 	}
 }
