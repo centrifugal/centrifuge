@@ -2063,3 +2063,172 @@ func TestParseDeltaPush(t *testing.T) {
 		})
 	}
 }
+
+// See https://github.com/centrifugal/centrifugo/issues/925.
+// If there is a deadlock – test will hang.
+func TestRedisClientSubscribeRecoveryServerSubs(t *testing.T) {
+	isInTest = true
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+	node := nodeWithRedisBroker(t, true, false, 6379)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	defer stopRedisBroker(node.broker.(*RedisBroker))
+
+	channel1 := testChannelRedisClientSubscribeRecoveryDeadlock1
+	channel2 := testChannelRedisClientSubscribeRecoveryDeadlock2
+
+	for _, ch := range []string{channel1, channel2} {
+		go func(channel string) {
+			i := 0
+			for {
+				_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(1000, time.Second))
+				if err != nil {
+					if !strings.Contains(err.Error(), "rueidis client is closing") {
+						require.NoError(t, err)
+					}
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+				i++
+			}
+		}(ch)
+	}
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Subscriptions: map[string]SubscribeOptions{
+				channel1: {EnableRecovery: true},
+				channel2: {EnableRecovery: true},
+			},
+		}, nil
+	})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{EnableRecovery: true},
+			}, nil)
+		})
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 1; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := newTestClient(t, node, "42")
+			rwWrapper := testReplyWriterWrapper()
+			_, err := client.connectCmd(&protocol.ConnectRequest{
+				Subs: map[string]*protocol.SubscribeRequest{},
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.Nil(t, rwWrapper.replies[0].Error)
+			require.True(t, client.authenticated)
+			_ = extractConnectReply(rwWrapper.replies)
+			client.triggerConnect()
+			client.scheduleOnConnectTimers()
+		}()
+	}
+
+	waitGroupWithTimeout(t, &wg, 5*time.Second)
+}
+
+func waitGroupWithTimeout(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
+	c := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(c)
+	}()
+	select {
+	case <-c:
+	case <-time.After(timeout):
+		require.Fail(t, "timeout")
+	}
+}
+
+// Similar to TestRedisClientSubscribeRecoveryServerSubs test, but uses client-side subscriptions.
+func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+	node := nodeWithRedisBroker(t, true, false, 6379)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	defer stopRedisBroker(node.broker.(*RedisBroker))
+
+	channel1 := "TestRedisClientSubscribeRecovery1"
+	channel2 := "TestRedisClientSubscribeRecovery2"
+
+	for _, channel := range []string{channel1, channel2} {
+		go func(channel string) {
+			i := 0
+			for {
+				_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(1000, time.Second))
+				if err != nil {
+					if !strings.Contains(err.Error(), "rueidis client is closing") {
+						require.NoError(t, err)
+					}
+					return
+				}
+				i++
+			}
+		}(channel)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{EnableRecovery: true},
+			}, nil)
+		})
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := newTestClient(t, node, "42")
+			connectClientV2(t, client)
+			rwWrapper := testReplyWriterWrapper()
+			err := client.handleSubscribe(&protocol.SubscribeRequest{
+				Channel: channel1,
+				Recover: true,
+				Epoch:   "",
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.Equal(t, 1, len(rwWrapper.replies))
+			require.Nil(t, rwWrapper.replies[0].Error)
+			res := extractSubscribeResult(rwWrapper.replies)
+			require.Empty(t, res.Offset)
+			require.NotZero(t, res.Epoch)
+			require.True(t, res.Recovered)
+
+			err = client.handleUnsubscribe(&protocol.UnsubscribeRequest{
+				Channel: channel1,
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.Equal(t, 2, len(rwWrapper.replies))
+			require.Nil(t, rwWrapper.replies[0].Error)
+
+			err = client.handleSubscribe(&protocol.SubscribeRequest{
+				Channel: channel1,
+				Recover: true,
+				Epoch:   "",
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.Equal(t, 3, len(rwWrapper.replies))
+			require.Nil(t, rwWrapper.replies[0].Error)
+			res = extractSubscribeResult(rwWrapper.replies)
+			require.Empty(t, res.Offset)
+			require.NotZero(t, res.Epoch)
+			require.True(t, res.Recovered)
+		}()
+	}
+
+	wg.Wait()
+}
