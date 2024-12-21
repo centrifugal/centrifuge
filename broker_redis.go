@@ -113,6 +113,10 @@ type RedisBrokerConfig struct {
 	// publishing to channels and using PUB/SUB.
 	SkipPubSub bool
 
+	// Name of broker, for observability purposes – i.e. becomes part of metrics/logs.
+	// By default, empty string is used.
+	Name string
+
 	// numShardedPubSubPartitions when greater than zero allows turning on a mode in which
 	// broker will use Redis Cluster with sharded PUB/SUB feature available in
 	// Redis >= 7: https://redis.io/docs/manual/pubsub/#sharded-pubsub
@@ -168,7 +172,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	}
 
 	if len(config.Shards) > 1 {
-		n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("broker: Redis sharding enabled: %d shards", len(config.Shards))))
+		n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("broker: Redis sharding enabled: %d shards", len(config.Shards)), map[string]any{"broker_name": config.Name}))
 	}
 
 	if config.Prefix == "" {
@@ -392,9 +396,9 @@ func (b *RedisBroker) Close(_ context.Context) error {
 }
 
 func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHandler, startOnce func(error)) {
-	b.node.Log(NewLogEntry(LogLevelDebug, "running Redis control PUB/SUB", map[string]any{"shard": s.string()}))
+	b.node.Log(NewLogEntry(LogLevelDebug, "running Redis control PUB/SUB", map[string]any{"broker_name": b.config.Name, "shard": s.string()}))
 	defer func() {
-		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", map[string]any{"shard": s.string()}))
+		b.node.Log(NewLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", map[string]any{"broker_name": b.config.Name, "shard": s.string()}))
 	}()
 
 	controlChannel := b.controlChannel
@@ -431,8 +435,9 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 				case msg := <-workCh:
 					err := eventHandler.HandleControl(convert.StringToBytes(msg.Message))
 					if err != nil {
-						b.node.metrics.redisBrokerPubSubErrors.WithLabelValues("handle_control_message").Inc()
-						b.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]any{"error": err.Error()}))
+
+						b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "handle_control_message")
+						b.node.Log(NewLogEntry(LogLevelError, "error handling control message", map[string]any{"broker_name": b.config.Name, "error": err.Error()}))
 					}
 				}
 			}
@@ -447,7 +452,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 			case <-done:
 				return
 			case <-ticker.C:
-				b.node.metrics.redisBrokerPubSubBufferedMessages.WithLabelValues("control", "0").Set(float64(len(workCh)))
+				b.node.metrics.redisBrokerPubSubBufferedMessages.WithLabelValues(b.config.Name, "control", "0").Set(float64(len(workCh)))
 			}
 		}
 	}()
@@ -463,7 +468,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 				// Blocking here will block Redis connection read loop which is not a
 				// good thing and can lead to slower command processing and potentially
 				// to deadlocks (see https://github.com/redis/rueidis/issues/596).
-				b.node.metrics.redisBrokerPubSubDroppedMessages.WithLabelValues("control").Inc()
+				b.node.metrics.redisBrokerPubSubDroppedMessages.WithLabelValues(b.config.Name, "control").Inc()
 			}
 		},
 	})
@@ -471,8 +476,8 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	err := conn.Do(context.Background(), conn.B().Subscribe().Channel(controlChannel, nodeChannel).Build()).Error()
 	if err != nil {
 		startOnce(err)
-		b.node.metrics.incRedisBrokerPubSubErrors("subscribe_control_channel")
-		b.node.Log(NewLogEntry(LogLevelError, "control pub/sub subscribe error", map[string]any{"error": err.Error(), "shard": s.string()}))
+		b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "subscribe_control_channel")
+		b.node.Log(NewLogEntry(LogLevelError, "control pub/sub subscribe error", map[string]any{"broker_name": b.config.Name, "error": err.Error(), "shard": s.string()}))
 		return
 	}
 
@@ -481,8 +486,8 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 	select {
 	case err := <-wait:
 		if err != nil {
-			b.node.metrics.incRedisBrokerPubSubErrors("control_connection")
-			b.node.Log(NewLogEntry(LogLevelError, "control pub/sub connection error", map[string]any{"error": err.Error(), "shard": s.string()}))
+			b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "control_connection")
+			b.node.Log(NewLogEntry(LogLevelError, "control pub/sub connection error", map[string]any{"broker_name": b.config.Name, "error": err.Error(), "shard": s.string()}))
 		}
 	case <-done:
 	case <-s.closeCh:
@@ -505,6 +510,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 			"shard":          s.shard.string(),
 			"num_processors": numProcessors,
 			"pub_sub_shard":  shardChannel,
+			"broker_name":    b.config.Name,
 		}
 		if useShardedPubSub {
 			logValues["cluster_shard_index"] = clusterShardIndex
@@ -537,8 +543,8 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 				case msg := <-ch:
 					err := b.handleRedisClientMessage(eventHandler, channelID(msg.Channel), convert.StringToBytes(msg.Message))
 					if err != nil {
-						b.node.metrics.incRedisBrokerPubSubErrors("handle_client_message")
-						b.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]any{"error": err.Error(), "pub_sub_shard": shardChannel}))
+						b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "handle_client_message")
+						b.node.Log(NewLogEntry(LogLevelError, "error handling client message", map[string]any{"broker_name": b.config.Name, "error": err.Error(), "pub_sub_shard": shardChannel}))
 						continue
 					}
 				}
@@ -555,7 +561,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 				return
 			case <-ticker.C:
 				for i := 0; i < numProcessors; i++ {
-					b.node.metrics.redisBrokerPubSubBufferedMessages.WithLabelValues("client", strconv.Itoa(i)).Set(float64(len(processors[i])))
+					b.node.metrics.redisBrokerPubSubBufferedMessages.WithLabelValues(b.config.Name, "client", strconv.Itoa(i)).Set(float64(len(processors[i])))
 				}
 			}
 		}
@@ -583,7 +589,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 				// Blocking here will block Redis connection read loop which is not a
 				// good thing and can lead to slower command processing and potentially
 				// to deadlocks (see https://github.com/redis/rueidis/issues/596).
-				b.node.metrics.redisBrokerPubSubDroppedMessages.WithLabelValues("client").Inc()
+				b.node.metrics.redisBrokerPubSubDroppedMessages.WithLabelValues(b.config.Name, "client").Inc()
 			}
 		},
 		OnSubscription: func(ps rueidis.PubSubSubscription) {
@@ -592,7 +598,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 			}
 			if ps.Kind == "sunsubscribe" && ps.Channel == shardChannel {
 				// Helps to handle slot migration.
-				b.node.Log(NewLogEntry(LogLevelInfo, "pub/sub restart due to slot migration", map[string]any{"pub_sub_shard": shardChannel, "shard": s.shard.string()}))
+				b.node.Log(NewLogEntry(LogLevelInfo, "pub/sub restart due to slot migration", map[string]any{"broker_name": b.config.Name, "pub_sub_shard": shardChannel, "shard": s.shard.string()}))
 				closeDoneOnce()
 			}
 		},
@@ -606,8 +612,8 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	}
 	if err != nil {
 		startOnce(err)
-		b.node.metrics.incRedisBrokerPubSubErrors("subscribe_shard_channel")
-		b.node.Log(NewLogEntry(LogLevelError, "pub/sub subscribe error", map[string]any{"error": err.Error(), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
+		b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "subscribe_shard_channel")
+		b.node.Log(NewLogEntry(LogLevelError, "pub/sub subscribe error", map[string]any{"broker_name": b.config.Name, "error": err.Error(), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
 		return
 	}
 
@@ -645,7 +651,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 				if len(batch) > 0 && i%redisSubscribeBatchLimit == 0 {
 					err := subscribeBatch(batch)
 					if err != nil {
-						b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]any{"error": err.Error(), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
+						b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]any{"broker_name": b.config.Name, "error": err.Error(), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
 						closeDoneOnce()
 						return
 					}
@@ -656,8 +662,8 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 			if len(batch) > 0 {
 				err := subscribeBatch(batch)
 				if err != nil {
-					b.node.metrics.incRedisBrokerPubSubErrors("subscribe_channel")
-					b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]any{"error": err.Error(), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
+					b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "subscribe_channel")
+					b.node.Log(NewLogEntry(LogLevelError, "error subscribing", map[string]any{"broker_name": b.config.Name, "error": err.Error(), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
 					closeDoneOnce()
 					return
 				}
@@ -668,7 +674,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	go func() {
 		wg.Wait()
 		if len(channels) > 0 && b.node.LogEnabled(LogLevelDebug) {
-			b.node.Log(NewLogEntry(LogLevelDebug, "resubscribed to channels", map[string]any{"elapsed": time.Since(started).String(), "num_channels": len(channels), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
+			b.node.Log(NewLogEntry(LogLevelDebug, "resubscribed to channels", map[string]any{"broker_name": b.config.Name, "elapsed": time.Since(started).String(), "num_channels": len(channels), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
 		}
 		select {
 		case <-done:
@@ -691,8 +697,8 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 	case err = <-wait:
 		startOnce(err)
 		if err != nil {
-			b.node.metrics.incRedisBrokerPubSubErrors("connection")
-			b.node.Log(NewLogEntry(LogLevelError, "pub/sub connection error", map[string]any{"error": err.Error(), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
+			b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "connection")
+			b.node.Log(NewLogEntry(LogLevelError, "pub/sub connection error", map[string]any{"broker_name": b.config.Name, "error": err.Error(), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
 		}
 	case <-done:
 	case <-s.shard.closeCh:
@@ -939,7 +945,7 @@ func (b *RedisBroker) Subscribe(ch string) error {
 
 func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
 	if b.node.LogEnabled(LogLevelDebug) {
-		b.node.Log(NewLogEntry(LogLevelDebug, "subscribe node on channel", map[string]any{"channel": ch}))
+		b.node.Log(NewLogEntry(LogLevelDebug, "subscribe node on channel", map[string]any{"broker_name": b.config.Name, "channel": ch}))
 	}
 	psShardIndex := index(ch, b.config.numSubscribeShards)
 	var clusterShardIndex int
@@ -971,7 +977,7 @@ func (b *RedisBroker) Unsubscribe(ch string) error {
 
 func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
 	if b.node.LogEnabled(LogLevelDebug) {
-		b.node.Log(NewLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]any{"channel": ch}))
+		b.node.Log(NewLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]any{"broker_name": b.config.Name, "channel": ch}))
 	}
 	psShardIndex := index(ch, b.config.numSubscribeShards)
 	var clusterShardIndex int

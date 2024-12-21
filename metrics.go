@@ -330,24 +330,24 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Subsystem: "broker",
 		Name:      "redis_pub_sub_errors",
 		Help:      "Number of times there was an error in Redis PUB/SUB connection.",
-	}, []string{"error"})
+	}, []string{"broker_name", "error"})
 
 	m.redisBrokerPubSubDroppedMessages = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "broker",
 		Name:      "redis_pub_sub_dropped_messages",
 		Help:      "Number of dropped messages on application level in Redis PUB/SUB.",
-	}, []string{"channel_type"})
+	}, []string{"broker_name", "channel_type"})
 
 	m.redisBrokerPubSubBufferedMessages = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "broker",
 		Name:      "redis_pub_sub_buffered_messages",
 		Help:      "Number of messages buffered in Redis PUB/SUB.",
-	}, []string{"channel_type", "pub_sub_processor"})
+	}, []string{"broker_name", "channel_type", "pub_sub_processor"})
 
-	m.redisBrokerPubSubDroppedMessages.WithLabelValues("control").Add(0)
-	m.redisBrokerPubSubDroppedMessages.WithLabelValues("client").Add(0)
+	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "control").Add(0)
+	m.redisBrokerPubSubDroppedMessages.WithLabelValues("", "client").Add(0)
 
 	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication", "")
 	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join", "")
@@ -419,8 +419,8 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	return m, nil
 }
 
-func (m *metrics) incRedisBrokerPubSubErrors(error string) {
-	m.redisBrokerPubSubErrors.WithLabelValues(error).Inc()
+func (m *metrics) incRedisBrokerPubSubErrors(name string, error string) {
+	m.redisBrokerPubSubErrors.WithLabelValues(name, error).Inc()
 }
 
 func (m *metrics) getChannelNamespaceLabel(ch string) string {
