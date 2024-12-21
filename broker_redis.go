@@ -439,6 +439,19 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 		}()
 	}
 
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				b.node.metrics.redisBrokerPubSubBufferedMessages.WithLabelValues("control", "0").Set(float64(len(workCh)))
+			}
+		}
+	}()
+
 	wait := conn.SetPubSubHooks(rueidis.PubSubHooks{
 		OnMessage: func(msg rueidis.PubSubMessage) {
 			select {
@@ -450,7 +463,7 @@ func (b *RedisBroker) runControlPubSub(s *RedisShard, eventHandler BrokerEventHa
 				// Blocking here will block Redis connection read loop which is not a
 				// good thing and can lead to slower command processing and potentially
 				// to deadlocks (see https://github.com/redis/rueidis/issues/596).
-				// TODO: add metric here.
+				b.node.metrics.redisBrokerPubSubDroppedMessages.WithLabelValues("control").Inc()
 			}
 		},
 	})
@@ -533,6 +546,21 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 		}(processingCh)
 	}
 
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				for i := 0; i < numProcessors; i++ {
+					b.node.metrics.redisBrokerPubSubBufferedMessages.WithLabelValues("client", strconv.Itoa(i)).Set(float64(len(processors[i])))
+				}
+			}
+		}
+	}()
+
 	client := s.shard.client
 	if b.config.SubscribeOnReplica {
 		client = s.shard.replicaClient
@@ -555,7 +583,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 				// Blocking here will block Redis connection read loop which is not a
 				// good thing and can lead to slower command processing and potentially
 				// to deadlocks (see https://github.com/redis/rueidis/issues/596).
-				// TODO: add metric here.
+				b.node.metrics.redisBrokerPubSubDroppedMessages.WithLabelValues("client").Inc()
 			}
 		},
 		OnSubscription: func(ps rueidis.PubSubSubscription) {

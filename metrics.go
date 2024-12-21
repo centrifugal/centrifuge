@@ -71,7 +71,9 @@ type metrics struct {
 	pubSubLagHistogram         prometheus.Histogram
 	pingPongDurationHistogram  *prometheus.HistogramVec
 
-	redisBrokerPubSubErrors *prometheus.CounterVec
+	redisBrokerPubSubErrors           *prometheus.CounterVec
+	redisBrokerPubSubDroppedMessages  *prometheus.CounterVec
+	redisBrokerPubSubBufferedMessages *prometheus.GaugeVec
 
 	config MetricsConfig
 
@@ -311,6 +313,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Pub sub lag in seconds",
 		Buckets:   []float64{0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.200, 0.500, 1.000, 2.000, 5.000, 10.000},
 	})
+
 	m.broadcastDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
@@ -328,6 +331,23 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Name:      "redis_pub_sub_errors",
 		Help:      "Number of times there was an error in Redis PUB/SUB connection.",
 	}, []string{"error"})
+
+	m.redisBrokerPubSubDroppedMessages = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "broker",
+		Name:      "redis_pub_sub_dropped_messages",
+		Help:      "Number of dropped messages on application level in Redis PUB/SUB.",
+	}, []string{"channel_type"})
+
+	m.redisBrokerPubSubBufferedMessages = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "broker",
+		Name:      "redis_pub_sub_buffered_messages",
+		Help:      "Number of messages buffered in Redis PUB/SUB.",
+	}, []string{"channel_type", "pub_sub_processor"})
+
+	m.redisBrokerPubSubDroppedMessages.WithLabelValues("control").Add(0)
+	m.redisBrokerPubSubDroppedMessages.WithLabelValues("client").Add(0)
 
 	m.messagesReceivedCountPublication = m.messagesReceivedCount.WithLabelValues("publication", "")
 	m.messagesReceivedCountJoin = m.messagesReceivedCount.WithLabelValues("join", "")
@@ -389,6 +409,8 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.pubSubLagHistogram,
 		m.broadcastDurationHistogram,
 		m.redisBrokerPubSubErrors,
+		m.redisBrokerPubSubDroppedMessages,
+		m.redisBrokerPubSubBufferedMessages,
 	} {
 		if err := registerer.Register(collector); err != nil && !errors.As(err, &alreadyRegistered) {
 			return nil, err
