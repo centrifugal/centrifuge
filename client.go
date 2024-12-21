@@ -2223,6 +2223,15 @@ func (c *Client) unlockServerSideSubscriptions(subCtxMap map[string]subscribeCon
 	}
 }
 
+// isInTest may be true during Centrifuge test run. We use it to inject code required to
+// cover various edge case scenarios.
+var isInTest = false
+
+const (
+	testChannelRedisClientSubscribeRecoveryDeadlock1 = "TestRedisClientSubscribeRecoveryDeadlock1"
+	testChannelRedisClientSubscribeRecoveryDeadlock2 = "TestRedisClientSubscribeRecoveryDeadlock2"
+)
+
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
 func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) (*protocol.ConnectResult, error) {
@@ -2447,6 +2456,12 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					subCmd.Recover = subReq.Recover
 					subCmd.Offset = subReq.Offset
 					subCmd.Epoch = subReq.Epoch
+				}
+				if isInTest && ch == testChannelRedisClientSubscribeRecoveryDeadlock2 { // Only for tests.
+					select {
+					case <-time.After(time.Second):
+					case <-c.Context().Done():
+					}
 				}
 				subCtx := c.subscribeCmd(subCmd, SubscribeReply{Options: opts}, nil, true, started, nil)
 				subMu.Lock()
