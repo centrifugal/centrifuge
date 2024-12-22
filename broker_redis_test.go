@@ -110,7 +110,7 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	if numClusterShardsStr != "" {
 		num, err := strconv.Atoi(numClusterShardsStr)
 		require.NoError(tb, err)
-		brokerConfig.numClusterShards = num
+		brokerConfig.numShardedPubSubPartitions = num
 	}
 
 	e, err := NewRedisBroker(n, brokerConfig)
@@ -500,7 +500,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
-			if b.shards[0].shard.useCluster {
+			if b.shards[0].shard.isCluster {
 				t.Skip("Channels command is not supported when Redis Cluster is used")
 			}
 
@@ -994,7 +994,7 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 			b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
-				numPubSubSubscribers: 4,
+				numResubscribeShards: 4,
 				numPubSubProcessors:  2,
 			})
 			node1.SetBroker(b1)
@@ -1104,7 +1104,7 @@ func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
 			b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
-				numPubSubSubscribers: 4,
+				numResubscribeShards: 4,
 				numPubSubProcessors:  2,
 			})
 			node1.SetBroker(b1)
@@ -1189,10 +1189,10 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	s, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
 	b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
-		Prefix:           prefix,
-		Shards:           []*RedisShard{s},
-		numPubSubShards:  2,
-		numClusterShards: 9,
+		Prefix:                     prefix,
+		Shards:                     []*RedisShard{s},
+		numSubscribeShards:         2,
+		numShardedPubSubPartitions: 9,
 	})
 	node1.SetBroker(b1)
 	defer func() { _ = node1.Shutdown(context.Background()) }()
@@ -1249,10 +1249,10 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	require.NoError(t, err)
 
 	b2, _ := NewRedisBroker(node2, RedisBrokerConfig{
-		Prefix:           prefix,
-		Shards:           []*RedisShard{s2},
-		numPubSubShards:  2,
-		numClusterShards: 9,
+		Prefix:                     prefix,
+		Shards:                     []*RedisShard{s2},
+		numSubscribeShards:         2,
+		numShardedPubSubPartitions: 9,
 	})
 	node2.SetBroker(b2)
 	_ = node2.Run()
@@ -1590,9 +1590,10 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 			broker := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
-			rawData := []byte("{}")
-			numMessages := 1000
-			numMissing := 5
+			rawData := []byte(randString(800))
+
+			numMessages := 10
+			numMissing := 10
 			for i := 1; i <= numMessages; i++ {
 				_, _, err := broker.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
@@ -1770,8 +1771,8 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 }
 
 type throughputTest struct {
-	NumPubSubShards      int
-	NumPubSubSubscribers int
+	NumSubscribeShards   int
+	NumResubscribeShards int
 	NumPubSubProcessors  int
 	Port                 int
 }
@@ -1787,7 +1788,7 @@ var throughputTests = []throughputTest{
 
 func BenchmarkPubSubThroughput(b *testing.B) {
 	for _, tt := range throughputTests {
-		b.Run(fmt.Sprintf("%dsh_%dsub_%dproc_%d", tt.NumPubSubShards, tt.NumPubSubSubscribers, tt.NumPubSubProcessors, tt.Port), func(b *testing.B) {
+		b.Run(fmt.Sprintf("%dsh_%dsub_%dproc_%d", tt.NumSubscribeShards, tt.NumResubscribeShards, tt.NumPubSubProcessors, tt.Port), func(b *testing.B) {
 			redisConf := testSingleRedisConf(tt.Port)
 
 			node1, _ := New(Config{})
@@ -1801,8 +1802,8 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 			b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
-				numPubSubShards:      tt.NumPubSubShards,
-				numPubSubSubscribers: tt.NumPubSubSubscribers,
+				numSubscribeShards:   tt.NumSubscribeShards,
+				numResubscribeShards: tt.NumResubscribeShards,
 				numPubSubProcessors:  tt.NumPubSubProcessors,
 			})
 			defer stopRedisBroker(b1)
@@ -2062,4 +2063,202 @@ func TestParseDeltaPush(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 1000 streams with 100 messages in each stream, each message 500 bytes => 63MB in Redis.
+// 2000 streams with 100 messages in each stream, each message 500 bytes => 126MB in Redis.
+// 1000 streams with 200 messages in each stream, each message 500 bytes => 121MB in Redis.
+// 1000 streams with 400 messages in each stream, each message 500 bytes => 242MB in Redis.
+func TestRedisMemoryUsage(t *testing.T) {
+	t.Skip()
+	numStreams := 1000
+	numMessagesInStream := 400
+	messageSizeBytes := 500
+	for _, tt := range historyRedisTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := testNode(t)
+			broker := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisBroker(broker)
+			rawData := []byte(randString(messageSizeBytes))
+			for i := 0; i < numStreams; i++ {
+				for j := 0; j < numMessagesInStream; j++ {
+					_, _, err := broker.Publish("channel"+strconv.Itoa(i), rawData, PublishOptions{
+						HistorySize: numMessagesInStream,
+						HistoryTTL:  100 * time.Second,
+					})
+					require.NoError(t, err)
+				}
+			}
+		})
+	}
+}
+
+// See https://github.com/centrifugal/centrifugo/issues/925.
+// If there is a deadlock – test will hang.
+func TestRedisClientSubscribeRecoveryServerSubs(t *testing.T) {
+	isInTest = true
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+	node := nodeWithRedisBroker(t, true, false, 6379)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	defer stopRedisBroker(node.broker.(*RedisBroker))
+
+	channel1 := testChannelRedisClientSubscribeRecoveryDeadlock1
+	channel2 := testChannelRedisClientSubscribeRecoveryDeadlock2
+
+	for _, ch := range []string{channel1, channel2} {
+		go func(channel string) {
+			i := 0
+			for {
+				_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(1000, time.Second))
+				if err != nil {
+					if !strings.Contains(err.Error(), "rueidis client is closing") {
+						require.NoError(t, err)
+					}
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+				i++
+			}
+		}(ch)
+	}
+
+	node.OnConnecting(func(ctx context.Context, event ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			Subscriptions: map[string]SubscribeOptions{
+				channel1: {EnableRecovery: true},
+				channel2: {EnableRecovery: true},
+			},
+		}, nil
+	})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{EnableRecovery: true},
+			}, nil)
+		})
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 1; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := newTestClient(t, node, "42")
+			rwWrapper := testReplyWriterWrapper()
+			_, err := client.connectCmd(&protocol.ConnectRequest{
+				Subs: map[string]*protocol.SubscribeRequest{},
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.Nil(t, rwWrapper.replies[0].Error)
+			require.True(t, client.authenticated)
+			_ = extractConnectReply(rwWrapper.replies)
+			client.triggerConnect()
+			client.scheduleOnConnectTimers()
+		}()
+	}
+
+	waitGroupWithTimeout(t, &wg, 5*time.Second)
+}
+
+func waitGroupWithTimeout(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
+	c := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(c)
+	}()
+	select {
+	case <-c:
+	case <-time.After(timeout):
+		require.Fail(t, "timeout")
+	}
+}
+
+// Similar to TestRedisClientSubscribeRecoveryServerSubs test, but uses client-side subscriptions.
+func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+	node := nodeWithRedisBroker(t, true, false, 6379)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	defer stopRedisBroker(node.broker.(*RedisBroker))
+
+	channel1 := "TestRedisClientSubscribeRecovery1"
+	channel2 := "TestRedisClientSubscribeRecovery2"
+
+	for _, channel := range []string{channel1, channel2} {
+		go func(channel string) {
+			i := 0
+			for {
+				_, err := node.Publish(channel, []byte(`{"n": `+strconv.Itoa(i)+`}`), WithHistory(1000, time.Second))
+				if err != nil {
+					if !strings.Contains(err.Error(), "rueidis client is closing") {
+						require.NoError(t, err)
+					}
+					return
+				}
+				i++
+			}
+		}(channel)
+	}
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{
+				Options: SubscribeOptions{EnableRecovery: true},
+			}, nil)
+		})
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := newTestClient(t, node, "42")
+			connectClientV2(t, client)
+			rwWrapper := testReplyWriterWrapper()
+			err := client.handleSubscribe(&protocol.SubscribeRequest{
+				Channel: channel1,
+				Recover: true,
+				Epoch:   "",
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.Equal(t, 1, len(rwWrapper.replies))
+			require.Nil(t, rwWrapper.replies[0].Error)
+			res := extractSubscribeResult(rwWrapper.replies)
+			require.Empty(t, res.Offset)
+			require.NotZero(t, res.Epoch)
+			require.True(t, res.Recovered)
+
+			err = client.handleUnsubscribe(&protocol.UnsubscribeRequest{
+				Channel: channel1,
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.Equal(t, 2, len(rwWrapper.replies))
+			require.Nil(t, rwWrapper.replies[0].Error)
+
+			err = client.handleSubscribe(&protocol.SubscribeRequest{
+				Channel: channel1,
+				Recover: true,
+				Epoch:   "",
+			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+			require.NoError(t, err)
+			require.Equal(t, 3, len(rwWrapper.replies))
+			require.Nil(t, rwWrapper.replies[0].Error)
+			res = extractSubscribeResult(rwWrapper.replies)
+			require.Empty(t, res.Offset)
+			require.NotZero(t, res.Epoch)
+			require.True(t, res.Recovered)
+		}()
+	}
+
+	wg.Wait()
 }

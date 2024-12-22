@@ -79,7 +79,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	err = s.emuLayer.Emulate(&req)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelError, "error processing emulation request", map[string]any{"req": &req, "error": err.Error()}))
-		if err == errNodeNotFound {
+		if errors.Is(err, errNodeNotFound) {
 			rw.WriteHeader(http.StatusNotFound)
 		} else {
 			rw.WriteHeader(http.StatusInternalServerError)
@@ -126,17 +126,22 @@ func newEmulationSurveyHandler(node *Node) *emulationSurveyHandler {
 	return &emulationSurveyHandler{node: node}
 }
 
+const (
+	emulationErrorCodeBadRequest = 1
+	emulationErrorCodeNoSession  = 2
+)
+
 func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallback) {
 	var req protocol.EmulationRequest
 	err := req.UnmarshalVT(e.Data)
 	if err != nil {
 		h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request", map[string]any{"data": string(e.Data), "error": err.Error()}))
-		cb(SurveyReply{Code: 1})
+		cb(SurveyReply{Code: emulationErrorCodeBadRequest})
 		return
 	}
 	client, ok := h.node.Hub().clientBySession(req.Session)
 	if !ok {
-		cb(SurveyReply{Code: 2})
+		cb(SurveyReply{Code: emulationErrorCodeNoSession})
 		return
 	}
 	var data []byte
@@ -145,7 +150,7 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 		err = json.Unmarshal(req.Data, &d)
 		if err != nil {
 			h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request data", map[string]any{"data": string(req.Data), "error": err.Error()}))
-			cb(SurveyReply{Code: 3})
+			cb(SurveyReply{Code: emulationErrorCodeBadRequest})
 			return
 		}
 		data = []byte(d)
