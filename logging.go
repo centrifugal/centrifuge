@@ -64,7 +64,7 @@ func buildLogEntry(level LogLevel, err error, message string, fields ...map[stri
 
 // newLogEntry creates new LogEntry.
 func newLogEntry(level LogLevel, message string, fields ...map[string]any) LogEntry {
-	return newLogEntry(level, message, fields...)
+	return buildLogEntry(level, nil, message, fields...)
 }
 
 // newErrorLogEntry creates new LogEntry with LogLevelError and error attached to it.
