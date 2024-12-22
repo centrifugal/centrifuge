@@ -140,6 +140,12 @@ func WithEmitPresence(enabled bool) SubscribeOption {
 	}
 }
 
+func WithPresenceAttachSubscribedAt(enabled bool) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.PresenceAttachSubscribedAt = enabled
+	}
+}
+
 // WithEmitJoinLeave ...
 func WithEmitJoinLeave(enabled bool) SubscribeOption {
 	return func(opts *SubscribeOptions) {

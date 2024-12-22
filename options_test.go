@@ -47,6 +47,7 @@ func TestSubscribeOptions(t *testing.T) {
 	subscribeOpts := []SubscribeOption{
 		WithExpireAt(1),
 		WithEmitPresence(true),
+		WithPresenceAttachSubscribedAt(true),
 		WithEmitJoinLeave(true),
 		WithPushJoinLeave(true),
 		WithPositioning(true),
@@ -64,6 +65,7 @@ func TestSubscribeOptions(t *testing.T) {
 	}
 	require.Equal(t, int64(1), opts.ExpireAt)
 	require.True(t, opts.EmitPresence)
+	require.True(t, opts.PresenceAttachSubscribedAt)
 	require.True(t, opts.EmitJoinLeave)
 	require.True(t, opts.PushJoinLeave)
 	require.True(t, opts.EnablePositioning)
