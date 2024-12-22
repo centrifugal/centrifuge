@@ -69,7 +69,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		err = json.Unmarshal(data, &req)
 	}
 	if err != nil {
-		if s.node.LogEnabled(LogLevelInfo) {
+		if s.node.logEnabled(LogLevelInfo) {
 			s.node.logger.log(newLogEntry(LogLevelInfo, "can't unmarshal emulation request", map[string]any{"error": err.Error(), "data": string(data)}))
 		}
 		rw.WriteHeader(http.StatusBadRequest)
@@ -78,7 +78,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	err = s.emuLayer.Emulate(&req)
 	if err != nil {
-		s.node.logger.log(newLogEntry(LogLevelError, "error processing emulation request", map[string]any{"req": &req, "error": err.Error()}))
+		s.node.logger.log(newErrorLogEntry(err, "error processing emulation request", map[string]any{"req": &req, "error": err.Error()}))
 		if errors.Is(err, errNodeNotFound) {
 			rw.WriteHeader(http.StatusNotFound)
 		} else {
@@ -135,7 +135,7 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 	var req protocol.EmulationRequest
 	err := req.UnmarshalVT(e.Data)
 	if err != nil {
-		h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request", map[string]any{"data": string(e.Data), "error": err.Error()}))
+		h.node.logger.log(newErrorLogEntry(err, "error unmarshal emulation request", map[string]any{"data": string(e.Data), "error": err.Error()}))
 		cb(SurveyReply{Code: emulationErrorCodeBadRequest})
 		return
 	}
@@ -149,7 +149,7 @@ func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallbac
 		var d string
 		err = json.Unmarshal(req.Data, &d)
 		if err != nil {
-			h.node.logger.log(newLogEntry(LogLevelError, "error unmarshal emulation request data", map[string]any{"data": string(req.Data), "error": err.Error()}))
+			h.node.logger.log(newErrorLogEntry(err, "error unmarshal emulation request data", map[string]any{"data": string(req.Data), "error": err.Error()}))
 			cb(SurveyReply{Code: emulationErrorCodeBadRequest})
 			return
 		}

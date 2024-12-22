@@ -786,7 +786,7 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
-		h.logger.log(NewLogEntry(LogLevelWarn, "inappropriate protocol publication", map[string]any{
+		h.logger.log(newLogEntry(LogLevelWarn, "inappropriate protocol publication", map[string]any{
 			"channel": channel,
 			"user":    jsonEncodeErr.user,
 			"client":  jsonEncodeErr.client,
@@ -876,7 +876,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
-		h.logger.log(NewLogEntry(LogLevelWarn, "inappropriate protocol join", map[string]any{
+		h.logger.log(newLogEntry(LogLevelWarn, "inappropriate protocol join", map[string]any{
 			"channel": channel,
 			"user":    jsonEncodeErr.user,
 			"client":  jsonEncodeErr.client,
@@ -964,7 +964,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
-		h.logger.log(NewLogEntry(LogLevelWarn, "inappropriate protocol leave", map[string]any{
+		h.logger.log(newLogEntry(LogLevelWarn, "inappropriate protocol leave", map[string]any{
 			"channel": channel,
 			"user":    jsonEncodeErr.user,
 			"client":  jsonEncodeErr.client,

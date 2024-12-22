@@ -249,12 +249,12 @@ func (n *Node) Run() error {
 	}
 	err := n.initMetrics()
 	if err != nil {
-		n.logger.log(newLogEntry(LogLevelError, "error on init metrics", map[string]any{"error": err.Error()}))
+		n.logger.log(newErrorLogEntry(err, "error on init metrics", map[string]any{"error": err.Error()}))
 		return err
 	}
 	err = n.pubNode("")
 	if err != nil {
-		n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]any{"error": err.Error()}))
+		n.logger.log(newErrorLogEntry(err, "error publishing node control command", map[string]any{"error": err.Error()}))
 		return err
 	}
 	go n.sendNodePing()
@@ -263,13 +263,8 @@ func (n *Node) Run() error {
 	return n.subDissolver.Run()
 }
 
-// Log allows logging a LogEntry.
-func (n *Node) Log(entry LogEntry) {
-	n.logger.log(entry)
-}
-
-// LogEnabled allows check whether a LogLevel enabled or not.
-func (n *Node) LogEnabled(level LogLevel) bool {
+// logEnabled allows check whether a LogLevel enabled or not.
+func (n *Node) logEnabled(level LogLevel) bool {
 	return n.logger.enabled(level)
 }
 
@@ -391,7 +386,7 @@ func (n *Node) sendNodePing() {
 		case <-time.After(nodeInfoPublishInterval):
 			err := n.pubNode("")
 			if err != nil {
-				n.logger.log(newLogEntry(LogLevelError, "error publishing node control command", map[string]any{"error": err.Error()}))
+				n.logger.log(newErrorLogEntry(err, "error publishing node control command", map[string]any{"error": err.Error()}))
 			}
 		}
 	}
@@ -658,7 +653,7 @@ func (n *Node) handleControl(data []byte) error {
 
 	cmd, err := n.controlDecoder.DecodeCommand(data)
 	if err != nil {
-		n.logger.log(newLogEntry(LogLevelError, "error decoding control command", map[string]any{"error": err.Error()}))
+		n.logger.log(newErrorLogEntry(err, "error decoding control command", map[string]any{"error": err.Error()}))
 		return err
 	}
 
@@ -700,7 +695,7 @@ func (n *Node) handleControl(data []byte) error {
 		cmd := cmd.Refresh
 		return n.hub.refresh(cmd.User, cmd.Client, cmd.Session, WithRefreshExpired(cmd.Expired), WithRefreshExpireAt(cmd.ExpireAt), WithRefreshInfo(cmd.Info))
 	}
-	n.logger.log(newLogEntry(LogLevelError, "unknown control command", map[string]any{"command": fmt.Sprintf("%#v", cmd)}))
+	n.logger.log(newErrorLogEntry(err, "unknown control command", map[string]any{"command": fmt.Sprintf("%#v", cmd)}))
 	return nil
 }
 
@@ -893,7 +888,7 @@ func (n *Node) pubNode(nodeID string) error {
 
 	err := n.nodeCmd(node)
 	if err != nil {
-		n.logger.log(newLogEntry(LogLevelError, "error handling node command", map[string]any{"error": err.Error()}))
+		n.logger.log(newErrorLogEntry(err, "error handling node command", map[string]any{"error": err.Error()}))
 	}
 
 	return n.publishControl(cmd, nodeID)
