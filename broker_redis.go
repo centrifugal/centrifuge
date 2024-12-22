@@ -504,7 +504,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 
 	shardChannel := string(b.pubSubShardChannelID(clusterShardIndex, psShardIndex, useShardedPubSub))
 
-	if b.node.logger.logEnabled(LogLevelDebug) {
+	if b.node.logEnabled(LogLevelDebug) {
 		logValues := map[string]any{
 			"shard":          s.shard.string(),
 			"num_processors": numProcessors,
@@ -672,7 +672,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, eventHandler BrokerEventHandler
 
 	go func() {
 		wg.Wait()
-		if len(channels) > 0 && b.node.logger.logEnabled(LogLevelDebug) {
+		if len(channels) > 0 && b.node.logEnabled(LogLevelDebug) {
 			b.node.logger.log(newLogEntry(LogLevelDebug, "resubscribed to channels", map[string]any{"broker_name": b.config.Name, "elapsed": time.Since(started).String(), "num_channels": len(channels), "shard": s.shard.string(), "pub_sub_shard": shardChannel}))
 		}
 		select {
@@ -943,7 +943,7 @@ func (b *RedisBroker) Subscribe(ch string) error {
 }
 
 func (b *RedisBroker) subscribe(s *shardWrapper, ch string) error {
-	if b.node.logger.logEnabled(LogLevelDebug) {
+	if b.node.logEnabled(LogLevelDebug) {
 		b.node.logger.log(newLogEntry(LogLevelDebug, "subscribe node on channel", map[string]any{"broker_name": b.config.Name, "channel": ch}))
 	}
 	psShardIndex := index(ch, b.config.numSubscribeShards)
@@ -975,7 +975,7 @@ func (b *RedisBroker) Unsubscribe(ch string) error {
 }
 
 func (b *RedisBroker) unsubscribe(s *shardWrapper, ch string) error {
-	if b.node.logger.logEnabled(LogLevelDebug) {
+	if b.node.logEnabled(LogLevelDebug) {
 		b.node.logger.log(newLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]any{"broker_name": b.config.Name, "channel": ch}))
 	}
 	psShardIndex := index(ch, b.config.numSubscribeShards)
