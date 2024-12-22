@@ -150,6 +150,7 @@ type ChannelContext struct {
 	subscribingCh     chan struct{}
 	info              []byte
 	expireAt          int64
+	subscribedAt      int64
 	positionCheckTime int64
 	metaTTLSeconds    int64
 	streamPosition    StreamPosition
@@ -635,10 +636,11 @@ func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
 	}
 	c.mu.RUnlock()
 	return c.node.addPresence(ch, c.uid, &ClientInfo{
-		ClientID: c.uid,
-		UserID:   c.user,
-		ConnInfo: c.info,
-		ChanInfo: chCtx.info,
+		ClientID:     c.uid,
+		UserID:       c.user,
+		ConnInfo:     c.info,
+		ChanInfo:     chCtx.info,
+		SubscribedAt: chCtx.subscribedAt,
 	})
 }
 
@@ -2833,11 +2835,16 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 	channel := req.Channel
 
+	var subscribedAt int64
+	if reply.Options.PresenceAttachSubscribedAt {
+		subscribedAt = time.Now().UnixMilli()
+	}
 	info := &ClientInfo{
-		ClientID: c.uid,
-		UserID:   c.user,
-		ConnInfo: c.info,
-		ChanInfo: reply.Options.ChannelInfo,
+		ClientID:     c.uid,
+		UserID:       c.user,
+		ConnInfo:     c.info,
+		ChanInfo:     reply.Options.ChannelInfo,
+		SubscribedAt: subscribedAt,
 	}
 
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
@@ -3097,6 +3104,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		},
 		metaTTLSeconds: int64(reply.Options.HistoryMetaTTL.Seconds()),
 		Source:         reply.Options.Source,
+	}
+	if reply.Options.PresenceAttachSubscribedAt {
+		channelContext.subscribedAt = subscribedAt
 	}
 	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {
 		channelContext.positionCheckTime = time.Now().Unix()
