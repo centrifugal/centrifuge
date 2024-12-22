@@ -1846,6 +1846,34 @@ func TestClientPresence(t *testing.T) {
 	require.Nil(t, rwWrapper.replies[0].Error)
 }
 
+func TestClientPresenceAttachSubscribedAtNotSet(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+		cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true, PresenceAttachSubscribedAt: false}}, nil)
+	})
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
+	resp, err := node.Presence("test")
+	require.NoError(t, err)
+	require.Zero(t, resp.Presence[client.ID()].SubscribedAt)
+}
+
+func TestClientPresenceAttachSubscribedAt(t *testing.T) {
+	node := defaultNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	client := newTestClient(t, node, "42")
+	client.OnSubscribe(func(event SubscribeEvent, cb SubscribeCallback) {
+		cb(SubscribeReply{Options: SubscribeOptions{EmitPresence: true, PresenceAttachSubscribedAt: true}}, nil)
+	})
+	connectClientV2(t, client)
+	subscribeClientV2(t, client, "test")
+	resp, err := node.Presence("test")
+	require.NoError(t, err)
+	require.NotZero(t, resp.Presence[client.ID()].SubscribedAt)
+}
+
 func TestClientPresenceTakeover(t *testing.T) {
 	node := defaultNodeNoHandlers()
 	defer func() { _ = node.Shutdown(context.Background()) }()
