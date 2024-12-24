@@ -297,8 +297,8 @@ func TestNodeLogHandler(t *testing.T) {
 		},
 	})
 	// Debug should not be logged.
-	n.Log(NewLogEntry(LogLevelDebug, "test1", nil))
-	n.Log(NewLogEntry(LogLevelInfo, "test2", nil))
+	n.logger.log(newLogEntry(LogLevelDebug, "test1", nil))
+	n.logger.log(newLogEntry(LogLevelInfo, "test2", nil))
 	select {
 	case <-doneCh:
 	case <-time.After(5 * time.Second):
@@ -329,8 +329,8 @@ func TestNode_LogEnabled(t *testing.T) {
 		LogLevel:   LogLevelInfo,
 		LogHandler: func(entry LogEntry) {},
 	})
-	require.False(t, n.LogEnabled(LogLevelDebug))
-	require.True(t, n.LogEnabled(LogLevelInfo))
+	require.False(t, n.logEnabled(LogLevelDebug))
+	require.True(t, n.logEnabled(LogLevelInfo))
 }
 
 func TestNode_RunError(t *testing.T) {

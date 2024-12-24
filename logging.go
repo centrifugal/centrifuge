@@ -45,10 +45,11 @@ type LogEntry struct {
 	Level   LogLevel
 	Message string
 	Fields  map[string]any
+	Error   error
 }
 
-// newLogEntry helps to create Entry.
-func newLogEntry(level LogLevel, message string, fields ...map[string]any) LogEntry {
+// buildLogEntry helps to create Entry.
+func buildLogEntry(level LogLevel, err error, message string, fields ...map[string]any) LogEntry {
 	var f map[string]any
 	if len(fields) > 0 {
 		f = fields[0]
@@ -57,12 +58,18 @@ func newLogEntry(level LogLevel, message string, fields ...map[string]any) LogEn
 		Level:   level,
 		Message: message,
 		Fields:  f,
+		Error:   err,
 	}
 }
 
-// NewLogEntry creates new LogEntry.
-func NewLogEntry(level LogLevel, message string, fields ...map[string]any) LogEntry {
-	return newLogEntry(level, message, fields...)
+// newLogEntry creates new LogEntry.
+func newLogEntry(level LogLevel, message string, fields ...map[string]any) LogEntry {
+	return buildLogEntry(level, nil, message, fields...)
+}
+
+// newErrorLogEntry creates new LogEntry with LogLevelError and error attached to it.
+func newErrorLogEntry(err error, message string, fields ...map[string]any) LogEntry {
+	return buildLogEntry(LogLevelError, err, message, fields...)
 }
 
 // LogHandler handles log entries - i.e. writes into correct destination if necessary.

@@ -154,7 +154,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if compression {
 		err := conn.SetCompressionLevel(compressionLevel)
 		if err != nil {
-			s.node.logger.log(newLogEntry(LogLevelError, "websocket error setting compression level", map[string]any{"error": err.Error()}))
+			s.node.logger.log(newErrorLogEntry(err, "websocket error setting compression level", map[string]any{"error": err.Error()}))
 		}
 	}
 
@@ -208,12 +208,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
 		if err != nil {
-			s.node.logger.log(newLogEntry(LogLevelError, "error creating client", map[string]any{"transport": transportWebsocket}))
+			s.node.logger.log(newErrorLogEntry(err, "error creating client", map[string]any{"transport": transportWebsocket}))
 			return
 		}
 		defer func() { _ = closeFn() }()
 
-		if s.node.LogEnabled(LogLevelDebug) {
+		if s.node.logEnabled(LogLevelDebug) {
 			s.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": transportWebsocket}))
 			defer func(started time.Time) {
 				s.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": transportWebsocket, "duration": time.Since(started).String()}))
