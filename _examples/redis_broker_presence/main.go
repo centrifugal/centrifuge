@@ -14,6 +14,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
@@ -98,6 +99,13 @@ func main() {
 	redisShardConfigs := []centrifuge.RedisShardConfig{
 		{Address: "localhost:6379"},
 		//{Address: "localhost:6380"},
+		//{
+		//	ClusterAddresses:  []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		//},
+		//{
+		//	SentinelAddresses:  []string{"localhost:26379"},
+		//	SentinelMasterName: "mymaster",
+		//},
 	}
 	var redisShards []*centrifuge.RedisShard
 	for _, redisConf := range redisShardConfigs {
@@ -147,6 +155,7 @@ func main() {
 	}()
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {

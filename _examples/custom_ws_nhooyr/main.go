@@ -294,10 +294,9 @@ func (t *customWebsocketTransport) Close(disconnect centrifuge.Disconnect) error
 }
 
 func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-
 	conn, err := websocket.Accept(rw, r, &websocket.AcceptOptions{})
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
+		log.Printf("error accepting websocket connection: %v", err)
 		return
 	}
 
@@ -317,14 +316,10 @@ func (s *customWebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 
 	c, closeFn, err := centrifuge.NewClient(r.Context(), s.node, transport)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]any{"transport": websocketTransportName}))
+		log.Printf("error creating client: %v", err)
 		return
 	}
 	defer func() { _ = closeFn() }()
-	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": websocketTransportName}))
-	defer func(started time.Time) {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": websocketTransportName, "duration": time.Since(started).String()}))
-	}(time.Now())
 
 	for {
 		_, data, err := conn.Read(context.Background())

@@ -28,6 +28,10 @@ type ConnectEvent struct {
 	// the final list of server-side subscriptions for a connection which
 	// can differ from the Channels list.
 	Channels []string
+	// Headers can be set by SDK to pass custom key-value headers from
+	// client to server. It's up to the application to decide what to do
+	// with these headers.
+	Headers map[string]string
 }
 
 // ConnectReply contains reaction to ConnectEvent.
