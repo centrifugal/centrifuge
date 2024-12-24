@@ -51,8 +51,18 @@ type LogEntry struct {
 // buildLogEntry helps to create Entry.
 func buildLogEntry(level LogLevel, err error, message string, fields ...map[string]any) LogEntry {
 	var f map[string]any
-	if len(fields) > 0 {
+	if len(fields) == 0 {
 		f = fields[0]
+	} else if len(fields) > 0 {
+		f = make(map[string]any)
+		for _, field := range fields {
+			for k, v := range field {
+				f[k] = v
+			}
+		}
+	}
+	if err != nil {
+		f["error"] = err.Error()
 	}
 	return LogEntry{
 		Level:   level,
