@@ -49,10 +49,6 @@ type metrics struct {
 	messagesSentCountLeave       prometheus.Counter
 	messagesSentCountControl     prometheus.Counter
 
-	transportConnectCountWebsocket  prometheus.Counter
-	transportConnectCountSSE        prometheus.Counter
-	transportConnectCountHTTPStream prometheus.Counter
-
 	commandDurationConnect       prometheus.Observer
 	commandDurationSubscribe     prometheus.Observer
 	commandDurationUnsubscribe   prometheus.Observer
