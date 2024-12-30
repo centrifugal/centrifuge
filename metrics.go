@@ -34,7 +34,6 @@ type metrics struct {
 	commandDurationSummary        *prometheus.SummaryVec
 	surveyDurationSummary         *prometheus.SummaryVec
 	recoverCount                  *prometheus.CounterVec
-	transportConnectCount         *prometheus.CounterVec
 	transportMessagesSent         *prometheus.CounterVec
 	transportMessagesSentSize     *prometheus.CounterVec
 	transportMessagesReceived     *prometheus.CounterVec
@@ -271,13 +270,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of inflight client subscriptions.",
 	}, []string{"client_name", "channel_namespace"})
 
-	m.transportConnectCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "connect_count",
-		Help:      "Number of connect attempts to specific transport.",
-	}, []string{"transport"})
-
 	m.transportMessagesSent = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
@@ -359,10 +351,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.messagesSentCountLeave = m.messagesSentCount.WithLabelValues("leave", "")
 	m.messagesSentCountControl = m.messagesSentCount.WithLabelValues("control", "")
 
-	m.transportConnectCountWebsocket = m.transportConnectCount.WithLabelValues(transportWebsocket)
-	m.transportConnectCountHTTPStream = m.transportConnectCount.WithLabelValues(transportHTTPStream)
-	m.transportConnectCountSSE = m.transportConnectCount.WithLabelValues(transportSSE)
-
 	labelForMethod := func(frameType protocol.FrameType) string {
 		return frameType.String()
 	}
@@ -399,7 +387,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.serverDisconnectCount,
 		m.recoverCount,
 		m.pingPongDurationHistogram,
-		m.transportConnectCount,
 		m.transportMessagesSent,
 		m.transportMessagesSentSize,
 		m.transportMessagesReceived,
@@ -582,19 +569,6 @@ func (m *metrics) incRecover(success bool, ch string) {
 		m.recoverCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()
-}
-
-func (m *metrics) incTransportConnect(transport string) {
-	switch transport {
-	case transportWebsocket:
-		m.transportConnectCountWebsocket.Inc()
-	case transportSSE:
-		m.transportConnectCountSSE.Inc()
-	case transportHTTPStream:
-		m.transportConnectCountHTTPStream.Inc()
-	default:
-		m.transportConnectCount.WithLabelValues(transport).Inc()
-	}
 }
 
 type transportMessageLabels struct {

@@ -39,9 +39,7 @@ const defaultMaxHTTPStreamingBodySize = 64 * 1024
 const streamingResponseWriteTimeout = time.Second
 
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.node.metrics.incTransportConnect(transportHTTPStream)
-
-	if r.Method == http.MethodOptions {
+	if r.Method == http.MethodOptions { // For pre-flight browser requests.
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -88,9 +86,9 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer close(transport.closedCh) // need to execute this after client closeFn.
 
 	if h.node.logEnabled(LogLevelDebug) {
-		h.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]any{"transport": transport.Name(), "client": c.ID()}))
+		h.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]any{"transport": transportHTTPStream, "client": c.ID()}))
 		defer func(started time.Time) {
-			h.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]any{"duration": time.Since(started).String(), "transport": transport.Name(), "client": c.ID()}))
+			h.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]any{"duration": time.Since(started).String(), "transport": transportHTTPStream, "client": c.ID()}))
 		}(time.Now())
 	}
 

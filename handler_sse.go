@@ -40,8 +40,6 @@ const connectUrlParam = "cf_connect"
 const defaultMaxSSEBodySize = 64 * 1024
 
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.node.metrics.incTransportConnect(transportSSE)
-
 	var requestData []byte
 	if r.Method == http.MethodGet {
 		requestDataString := r.URL.Query().Get(connectUrlParam)
@@ -78,7 +76,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
-		h.node.logger.log(newErrorLogEntry(err, "error create client", map[string]any{"error": err.Error(), "transport": "uni_sse"}))
+		h.node.logger.log(newErrorLogEntry(err, "error create client", map[string]any{"error": err.Error(), "transport": transportSSE}))
 		return
 	}
 	defer func() { _ = closeFn() }()
