@@ -249,9 +249,6 @@ func TestMetrics(t *testing.T) {
 				m.observePubSubDeliveryLag(100)
 				m.observePubSubDeliveryLag(-10)
 				m.observePingPongDuration(time.Second, transportWebsocket)
-				for _, transport := range []string{transportWebsocket, transportSSE, transportHTTPStream, "unknown"} {
-					m.incTransportConnect(transport)
-				}
 				m.incServerDisconnect(3000)
 				m.incServerDisconnect(30000)
 				m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%2))
