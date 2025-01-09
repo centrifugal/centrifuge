@@ -110,7 +110,7 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	if numClusterShardsStr != "" {
 		num, err := strconv.Atoi(numClusterShardsStr)
 		require.NoError(tb, err)
-		brokerConfig.numShardedPubSubPartitions = num
+		brokerConfig.NumShardedPubSubPartitions = num
 	}
 
 	e, err := NewRedisBroker(n, brokerConfig)
@@ -1192,7 +1192,7 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 		Prefix:                     prefix,
 		Shards:                     []*RedisShard{s},
 		numSubscribeShards:         2,
-		numShardedPubSubPartitions: 9,
+		NumShardedPubSubPartitions: 9,
 	})
 	node1.SetBroker(b1)
 	defer func() { _ = node1.Shutdown(context.Background()) }()
@@ -1252,7 +1252,7 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 		Prefix:                     prefix,
 		Shards:                     []*RedisShard{s2},
 		numSubscribeShards:         2,
-		numShardedPubSubPartitions: 9,
+		NumShardedPubSubPartitions: 9,
 	})
 	node2.SetBroker(b2)
 	_ = node2.Run()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"github.com/quic-go/quic-go/http3"
 	"log"
 	"net/http"
 	"os"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/quic-go/quic-go/http3"
 )
 
 var (
@@ -78,35 +78,6 @@ func main() {
 		LogLevel:   centrifuge.LogLevelInfo,
 		LogHandler: handleLog,
 	})
-
-	redisShardConfigs := []centrifuge.RedisShardConfig{
-		{Address: "localhost:6379"},
-	}
-	var redisShards []*centrifuge.RedisShard
-	for _, redisConf := range redisShardConfigs {
-		redisShard, err := centrifuge.NewRedisShard(node, redisConf)
-		if err != nil {
-			log.Fatal(err)
-		}
-		redisShards = append(redisShards, redisShard)
-	}
-
-	broker, err := centrifuge.NewRedisBroker(node, centrifuge.RedisBrokerConfig{
-		// And configure a couple of shards to use.
-		Shards: redisShards,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	node.SetBroker(broker)
-
-	presenceManager, err := centrifuge.NewRedisPresenceManager(node, centrifuge.RedisPresenceManagerConfig{
-		Shards: redisShards,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	node.SetPresenceManager(presenceManager)
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
@@ -236,11 +207,12 @@ func main() {
 	mux.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
-		if err := http3.ListenAndServe(":"+strconv.Itoa(*port), "certs/localhost.pem", "certs/localhost-key.pem", mux); err != nil {
+		if err := http3.ListenAndServeTLS("0.0.0.0:"+strconv.Itoa(*port), "certs/localhost.pem", "certs/localhost-key.pem", mux); err != nil {
 			log.Fatal(err)
 		}
 	}()
 
+	log.Println("running, open https://localhost:" + strconv.Itoa(*port))
 	waitExitSignal(node)
 	log.Println("bye!")
 }
