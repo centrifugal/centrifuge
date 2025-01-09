@@ -8,7 +8,7 @@ replace github.com/centrifugal/centrifuge => ../
 
 require (
 	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/protocol v0.13.5-0.20241111155425-6c360178091e
+	github.com/centrifugal/protocol v0.14.0
 	github.com/cristalhq/jwt/v5 v5.4.0
 	github.com/dchest/uniuri v1.2.0
 	github.com/gin-contrib/sessions v0.0.3
