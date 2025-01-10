@@ -138,14 +138,14 @@ func TestOptionsFromAddress(t *testing.T) {
 			expectedError: errors.New("invalid force_resp2 value: \"xs\""),
 		},
 		{
-			name:          "Redis URL with invalid init replica client",
-			address:       "redis://127.0.0.1:6379?init_replica_client=xs",
+			name:          "Redis URL with invalid replica_client_enabled",
+			address:       "redis://127.0.0.1:6379?replica_client_enabled=xs",
 			inputOptions:  rueidis.ClientOption{},
-			expectedError: errors.New("invalid init_replica_client value: \"xs\""),
+			expectedError: errors.New("invalid replica_client_enabled value: \"xs\""),
 		},
 		{
-			name:         "Redis URL with valid init replica client",
-			address:      "redis+cluster://127.0.0.1:6379?init_replica_client=true",
+			name:         "Redis URL with valid replica_client_enabled",
+			address:      "redis+cluster://127.0.0.1:6379?replica_client_enabled=true",
 			inputOptions: rueidis.ClientOption{},
 			expectedOutput: rueidis.ClientOption{
 				InitAddress: []string{"127.0.0.1:6379"},
