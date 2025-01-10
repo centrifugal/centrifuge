@@ -13,12 +13,14 @@ import (
 
 func TestOptionsFromAddress(t *testing.T) {
 	tests := []struct {
-		name              string
-		address           string
-		inputOptions      rueidis.ClientOption
-		expectedError     error
-		expectedOutput    rueidis.ClientOption
-		expectedIsCluster bool
+		name                string
+		address             string
+		inputOptions        rueidis.ClientOption
+		expectedError       error
+		expectedOutput      rueidis.ClientOption
+		expectedIsCluster   bool
+		expectedIsSentinel  bool
+		expectedInitReplica bool
 	}{
 		{
 			name:          "Valid TCP address with host:port",
@@ -136,8 +138,25 @@ func TestOptionsFromAddress(t *testing.T) {
 			expectedError: errors.New("invalid force_resp2 value: \"xs\""),
 		},
 		{
+			name:          "Redis URL with invalid init replica client",
+			address:       "redis://127.0.0.1:6379?init_replica_client=xs",
+			inputOptions:  rueidis.ClientOption{},
+			expectedError: errors.New("invalid init_replica_client value: \"xs\""),
+		},
+		{
+			name:         "Redis URL with valid init replica client",
+			address:      "redis+cluster://127.0.0.1:6379?init_replica_client=true",
+			inputOptions: rueidis.ClientOption{},
+			expectedOutput: rueidis.ClientOption{
+				InitAddress: []string{"127.0.0.1:6379"},
+			},
+			expectedError:       nil,
+			expectedIsCluster:   true,
+			expectedInitReplica: true,
+		},
+		{
 			name:          "Redis URL with Sentinel query parameters",
-			address:       "redis://127.0.0.1:6379?sentinel_master_name=mymaster&sentinel_user=user&sentinel_password=pass&sentinel_tls_enabled=true",
+			address:       "redis+sentinel://127.0.0.1:6379?sentinel_master_name=mymaster&sentinel_user=user&sentinel_password=pass&sentinel_tls_enabled=true",
 			inputOptions:  rueidis.ClientOption{},
 			expectedError: nil,
 			expectedOutput: rueidis.ClientOption{
@@ -149,30 +168,33 @@ func TestOptionsFromAddress(t *testing.T) {
 					TLSConfig: &tls.Config{},
 				},
 			},
+			expectedIsSentinel: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, isCluster, err := optionsFromAddress(tt.address, tt.inputOptions)
-
+			opts, err := optionsFromAddress(tt.address, tt.inputOptions)
 			if tt.expectedError != nil {
 				require.Error(t, err)
 				require.EqualError(t, err, tt.expectedError.Error())
 			} else {
+				output, isCluster, isSentinel := opts.ClientOption, opts.IsCluster, opts.IsSentinel
 				require.NoError(t, err)
 				require.Equal(t, tt.expectedOutput, output)
 				require.Equal(t, tt.expectedIsCluster, isCluster)
+				require.Equal(t, tt.expectedIsSentinel, isSentinel)
+				require.Equal(t, tt.expectedInitReplica, opts.InitReplicaClient)
 			}
 		})
 	}
 }
 
 func TestOptionsFromAddressUnix(t *testing.T) {
-	output, _, err := optionsFromAddress("unix:///tmp/redis.sock", rueidis.ClientOption{})
+	opts, err := optionsFromAddress("unix:///tmp/redis.sock", rueidis.ClientOption{})
 	require.NoError(t, err)
-	require.Equal(t, output.InitAddress, []string{"/tmp/redis.sock"})
-	require.NotNil(t, output.DialFn)
-	_, err = output.DialFn("", &net.Dialer{}, &tls.Config{})
+	require.Equal(t, opts.ClientOption.InitAddress, []string{"/tmp/redis.sock"})
+	require.NotNil(t, opts.ClientOption.DialFn)
+	_, err = opts.ClientOption.DialFn("", &net.Dialer{}, &tls.Config{})
 	require.Error(t, err)
 }

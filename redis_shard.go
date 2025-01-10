@@ -43,7 +43,16 @@ var knownRedisURLPrefixes = []string{
 	"tcp://",
 }
 
-func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.ClientOption, bool, error) {
+type fromAddressOptions struct {
+	ClientOption      rueidis.ClientOption
+	IsCluster         bool
+	IsSentinel        bool
+	InitReplicaClient bool
+}
+
+func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddressOptions, error) {
+	result := fromAddressOptions{ClientOption: options}
+
 	hasKnownURLPrefix := false
 	for _, prefix := range knownRedisURLPrefixes {
 		if strings.HasPrefix(address, prefix) {
@@ -51,16 +60,18 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.C
 			break
 		}
 	}
+
 	if !hasKnownURLPrefix {
 		if host, port, err := net.SplitHostPort(address); err == nil && host != "" && port != "" {
-			options.InitAddress = []string{address}
-			return options, false, nil
+			result.ClientOption.InitAddress = []string{address}
+			return result, nil
 		}
-		return options, false, errors.New("malformed connection address, must be Redis URL or host:port")
+		return result, errors.New("malformed connection address, must be Redis URL or host:port")
 	}
+
 	u, err := url.Parse(address)
 	if err != nil {
-		return options, false, fmt.Errorf("malformed connection address, not a valid URL: %w", err)
+		return result, fmt.Errorf("malformed connection address, not a valid URL: %w", err)
 	}
 
 	var addresses []string
@@ -71,80 +82,101 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (rueidis.C
 		if u.Path != "" {
 			db, err := strconv.Atoi(strings.TrimPrefix(u.Path, "/"))
 			if err != nil {
-				return options, false, fmt.Errorf("can't parse Redis DB number from connection address: %s is not a number", u.Path)
+				return result, fmt.Errorf("can't parse Redis DB number from connection address: %s is not a number", u.Path)
 			}
-			options.SelectDB = db
+			result.ClientOption.SelectDB = db
 		}
 	case "unix":
 		addresses = []string{u.Path}
-		options.DialFn = func(s string, d *net.Dialer, c *tls.Config) (net.Conn, error) {
+		result.ClientOption.DialFn = func(s string, d *net.Dialer, c *tls.Config) (net.Conn, error) {
 			return d.Dial("unix", s)
 		}
 	}
+
 	if u.User != nil {
 		if u.User.Username() != "" {
-			options.Username = u.User.Username()
+			result.ClientOption.Username = u.User.Username()
 		}
 		if pass, ok := u.User.Password(); ok {
-			options.Password = pass
+			result.ClientOption.Password = pass
 		}
 	}
+
 	query := u.Query()
 	addresses = append(addresses, query["addr"]...)
 
 	if query.Has("connect_timeout") {
 		to, err := time.ParseDuration(query.Get("connect_timeout"))
 		if err != nil {
-			return options, false, fmt.Errorf("invalid connect timeout: %q", query.Get("connect_timeout"))
+			return result, fmt.Errorf("invalid connect timeout: %q", query.Get("connect_timeout"))
 		}
-		options.Dialer.Timeout = to
+		result.ClientOption.Dialer.Timeout = to
 	}
+
 	if query.Has("io_timeout") {
 		to, err := time.ParseDuration(query.Get("io_timeout"))
 		if err != nil {
-			return options, false, fmt.Errorf("invalid io timeout: %q", query.Get("io_timeout"))
+			return result, fmt.Errorf("invalid io timeout: %q", query.Get("io_timeout"))
 		}
-		options.ConnWriteTimeout = to
+		result.ClientOption.ConnWriteTimeout = to
 	}
-	if query.Has("tls_enabled") && options.TLSConfig == nil {
+
+	if query.Has("tls_enabled") && result.ClientOption.TLSConfig == nil {
 		val, err := strconv.ParseBool(query.Get("tls_enabled"))
 		if err != nil {
-			return options, false, fmt.Errorf("invalid tls_enabled value: %q", query.Get("tls_enabled"))
+			return result, fmt.Errorf("invalid tls_enabled value: %q", query.Get("tls_enabled"))
 		}
 		if val {
-			options.TLSConfig = &tls.Config{}
+			result.ClientOption.TLSConfig = &tls.Config{}
 		}
 	}
+
 	if query.Has("force_resp2") {
 		val, err := strconv.ParseBool(query.Get("force_resp2"))
 		if err != nil {
-			return options, false, fmt.Errorf("invalid force_resp2 value: %q", query.Get("force_resp2"))
+			return result, fmt.Errorf("invalid force_resp2 value: %q", query.Get("force_resp2"))
 		}
-		options.AlwaysRESP2 = val
+		result.ClientOption.AlwaysRESP2 = val
 	}
+
 	if query.Has("sentinel_master_name") {
-		options.Sentinel.MasterSet = query.Get("sentinel_master_name")
+		result.ClientOption.Sentinel.MasterSet = query.Get("sentinel_master_name")
 	}
+
 	if query.Has("sentinel_user") {
-		options.Sentinel.Username = query.Get("sentinel_user")
+		result.ClientOption.Sentinel.Username = query.Get("sentinel_user")
 	}
+
 	if query.Has("sentinel_password") {
-		options.Sentinel.Password = query.Get("sentinel_password")
+		result.ClientOption.Sentinel.Password = query.Get("sentinel_password")
 	}
-	if query.Has("sentinel_tls_enabled") && options.Sentinel.TLSConfig == nil {
+
+	if query.Has("sentinel_tls_enabled") && result.ClientOption.Sentinel.TLSConfig == nil {
 		val, err := strconv.ParseBool(query.Get("sentinel_tls_enabled"))
 		if err != nil {
-			return options, false, fmt.Errorf("invalid sentinel_tls_enabled value: %q", query.Get("sentinel_tls_enabled"))
+			return result, fmt.Errorf("invalid sentinel_tls_enabled value: %q", query.Get("sentinel_tls_enabled"))
 		}
 		if val {
-			options.Sentinel.TLSConfig = &tls.Config{}
+			result.ClientOption.Sentinel.TLSConfig = &tls.Config{}
 		}
 	}
-	if u.Scheme == "redis+sentinel" && options.Sentinel.MasterSet == "" {
-		return options, false, errors.New("sentinel master name must be configured for Redis Sentinel setup")
+
+	if query.Has("init_replica_client") {
+		val, err := strconv.ParseBool(query.Get("init_replica_client"))
+		if err != nil {
+			return result, fmt.Errorf("invalid init_replica_client value: %q", query.Get("init_replica_client"))
+		}
+		result.InitReplicaClient = val
 	}
-	options.InitAddress = addresses
-	return options, u.Scheme == "redis+cluster", nil
+
+	if u.Scheme == "redis+sentinel" && result.ClientOption.Sentinel.MasterSet == "" {
+		return result, errors.New("sentinel master name must be configured for Redis Sentinel setup")
+	}
+
+	result.ClientOption.InitAddress = addresses
+	result.IsCluster = u.Scheme == "redis+cluster"
+	result.IsSentinel = u.Scheme == "redis+sentinel"
+	return result, nil
 }
 
 // NewRedisShard initializes new Redis shard.
@@ -173,8 +205,11 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 
 	var isCluster bool
+	var isSentinel bool
+	initReplicaClient := conf.InitReplicaClient
 
 	if len(conf.SentinelAddresses) > 0 {
+		isSentinel = true
 		options.InitAddress = conf.SentinelAddresses
 		options.Sentinel = rueidis.SentinelOption{
 			TLSConfig:  conf.SentinelTLSConfig,
@@ -188,10 +223,12 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		options.InitAddress = conf.ClusterAddresses
 	} else {
 		var err error
-		options, isCluster, err = optionsFromAddress(conf.Address, options)
+		addressOpts, err := optionsFromAddress(conf.Address, options)
 		if err != nil {
 			return nil, fmt.Errorf("error processing Redis address: %v", err)
 		}
+		options, isCluster, isSentinel, initReplicaClient =
+			addressOpts.ClientOption, addressOpts.IsCluster, addressOpts.IsSentinel, addressOpts.InitReplicaClient
 	}
 
 	shard := &RedisShard{
@@ -201,13 +238,20 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		finalAddress: options.InitAddress,
 	}
 
+	if isSentinel && options.Sentinel.MasterSet == "" {
+		return nil, errors.New("sentinel master name must be configured for Redis Sentinel setup")
+	}
+
 	client, err := rueidis.NewClient(options)
 	if err != nil {
 		return nil, fmt.Errorf("error creating Redis client: %v", err)
 	}
 	shard.client = client
 
-	if conf.InitReplicaClient {
+	if initReplicaClient {
+		if !isCluster && !isSentinel {
+			return nil, errors.New("replica client may be initialized only in cluster and sentinel mode")
+		}
 		options.ReplicaOnly = true
 		replicaClient, err := rueidis.NewClient(options)
 		if err != nil {
@@ -288,8 +332,9 @@ type RedisShardConfig struct {
 
 	// InitReplicaClient once set to true will initialize replica client for this shard.
 	// Replica client can then be used for read-only operations from replica nodes in Redis
-	// Cluster or Redis Sentinel setups. Replica client will be initialized with the same
-	// options as the main client but with ReplicaOnly option set to true.
+	// Cluster or Redis Sentinel setups (single Redis is not allowed). Replica client will
+	// be initialized with the same options as the main client but with ReplicaOnly option
+	// set to true.
 	InitReplicaClient bool
 }
 
