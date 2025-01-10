@@ -106,7 +106,7 @@ type RedisBrokerConfig struct {
 
 	// Subscribe on replica Redis nodes. This only works for Redis Cluster
 	// and Sentinel setups and requires replica client to be initialized in
-	// each RedisShard using RedisShardConfig.InitReplicaClient.
+	// each RedisShard using RedisShardConfig.ReplicaClientEnabled.
 	SubscribeOnReplica bool
 
 	// SkipPubSub enables mode when Redis broker only saves history, without
@@ -164,7 +164,7 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 	if config.SubscribeOnReplica {
 		for i, s := range config.Shards {
 			if s.replicaClient == nil {
-				return nil, fmt.Errorf("broker: SubscribeOnReplica enabled but no replica client initialized in shard[%d] (InitReplicaClient option)", i)
+				return nil, fmt.Errorf("broker: SubscribeOnReplica enabled but no replica client initialized in shard[%d] (ReplicaClientEnabled option)", i)
 			}
 		}
 	}

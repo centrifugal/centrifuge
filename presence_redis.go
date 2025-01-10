@@ -61,7 +61,7 @@ type RedisPresenceManagerConfig struct {
 
 	// ReadFromReplica enables reading presence information from replica Redis servers.
 	// This only works in Redis Cluster and Sentinel setups and requires replica client
-	// to be initialized in each RedisShard using RedisShardConfig.InitReplicaClient.
+	// to be initialized in each RedisShard using RedisShardConfig.ReplicaClientEnabled.
 	ReadFromReplica bool
 }
 
@@ -92,7 +92,7 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	if config.ReadFromReplica {
 		for i, s := range config.Shards {
 			if s.replicaClient == nil {
-				return nil, fmt.Errorf("presence: ReadFromReplica enabled but no replica client initialized in shard[%d] (InitReplicaClient option)", i)
+				return nil, fmt.Errorf("presence: ReadFromReplica enabled but no replica client initialized in shard[%d] (ReplicaClientEnabled option)", i)
 			}
 		}
 	}

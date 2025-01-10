@@ -184,7 +184,7 @@ func TestOptionsFromAddress(t *testing.T) {
 				require.Equal(t, tt.expectedOutput, output)
 				require.Equal(t, tt.expectedIsCluster, isCluster)
 				require.Equal(t, tt.expectedIsSentinel, isSentinel)
-				require.Equal(t, tt.expectedInitReplica, opts.InitReplicaClient)
+				require.Equal(t, tt.expectedInitReplica, opts.ReplicaClientEnabled)
 			}
 		})
 	}

@@ -44,10 +44,10 @@ var knownRedisURLPrefixes = []string{
 }
 
 type fromAddressOptions struct {
-	ClientOption      rueidis.ClientOption
-	IsCluster         bool
-	IsSentinel        bool
-	InitReplicaClient bool
+	ClientOption         rueidis.ClientOption
+	IsCluster            bool
+	IsSentinel           bool
+	ReplicaClientEnabled bool
 }
 
 func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddressOptions, error) {
@@ -161,12 +161,12 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 		}
 	}
 
-	if query.Has("init_replica_client") {
-		val, err := strconv.ParseBool(query.Get("init_replica_client"))
+	if query.Has("replica_client_enabled") {
+		val, err := strconv.ParseBool(query.Get("replica_client_enabled"))
 		if err != nil {
-			return result, fmt.Errorf("invalid init_replica_client value: %q", query.Get("init_replica_client"))
+			return result, fmt.Errorf("invalid replica_client_enabled value: %q", query.Get("replica_client_enabled"))
 		}
-		result.InitReplicaClient = val
+		result.ReplicaClientEnabled = val
 	}
 
 	if u.Scheme == "redis+sentinel" && result.ClientOption.Sentinel.MasterSet == "" {
@@ -206,7 +206,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 
 	var isCluster bool
 	var isSentinel bool
-	initReplicaClient := conf.InitReplicaClient
+	replicaClientEnabled := conf.ReplicaClientEnabled
 
 	if len(conf.SentinelAddresses) > 0 {
 		isSentinel = true
@@ -227,8 +227,8 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error processing Redis address: %v", err)
 		}
-		options, isCluster, isSentinel, initReplicaClient =
-			addressOpts.ClientOption, addressOpts.IsCluster, addressOpts.IsSentinel, addressOpts.InitReplicaClient
+		options, isCluster, isSentinel, replicaClientEnabled =
+			addressOpts.ClientOption, addressOpts.IsCluster, addressOpts.IsSentinel, addressOpts.ReplicaClientEnabled
 	}
 
 	shard := &RedisShard{
@@ -248,9 +248,9 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	}
 	shard.client = client
 
-	if initReplicaClient {
+	if replicaClientEnabled {
 		if !isCluster && !isSentinel {
-			return nil, errors.New("replica client may be initialized only in cluster and sentinel mode")
+			return nil, errors.New("replica client may be enabled only in cluster and sentinel mode")
 		}
 		options.ReplicaOnly = true
 		replicaClient, err := rueidis.NewClient(options)
@@ -330,12 +330,12 @@ type RedisShardConfig struct {
 	// trying RESP3 first.
 	ForceRESP2 bool
 
-	// InitReplicaClient once set to true will initialize replica client for this shard.
+	// ReplicaClientEnabled once set to true will initialize replica client for this shard.
 	// Replica client can then be used for read-only operations from replica nodes in Redis
 	// Cluster or Redis Sentinel setups (single Redis is not allowed). Replica client will
 	// be initialized with the same options as the main client but with ReplicaOnly option
 	// set to true.
-	InitReplicaClient bool
+	ReplicaClientEnabled bool
 }
 
 func (s *RedisShard) Close() {
