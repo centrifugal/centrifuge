@@ -110,7 +110,7 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	if numClusterShardsStr != "" {
 		num, err := strconv.Atoi(numClusterShardsStr)
 		require.NoError(tb, err)
-		brokerConfig.numClusterShards = num
+		brokerConfig.NumShardedPubSubPartitions = num
 	}
 
 	e, err := NewRedisBroker(n, brokerConfig)
@@ -500,7 +500,7 @@ func TestRedisBrokerSubscribeUnsubscribe(t *testing.T) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(b)
 
-			if b.shards[0].shard.useCluster {
+			if b.shards[0].shard.isCluster {
 				t.Skip("Channels command is not supported when Redis Cluster is used")
 			}
 
@@ -994,7 +994,7 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 			b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
-				numPubSubSubscribers: 4,
+				numResubscribeShards: 4,
 				numPubSubProcessors:  2,
 			})
 			node1.SetBroker(b1)
@@ -1104,7 +1104,7 @@ func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
 			b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
-				numPubSubSubscribers: 4,
+				numResubscribeShards: 4,
 				numPubSubProcessors:  2,
 			})
 			node1.SetBroker(b1)
@@ -1189,10 +1189,10 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	s, err := NewRedisShard(node1, redisConf)
 	require.NoError(t, err)
 	b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
-		Prefix:           prefix,
-		Shards:           []*RedisShard{s},
-		numPubSubShards:  2,
-		numClusterShards: 9,
+		Prefix:                     prefix,
+		Shards:                     []*RedisShard{s},
+		numSubscribeShards:         2,
+		NumShardedPubSubPartitions: 9,
 	})
 	node1.SetBroker(b1)
 	defer func() { _ = node1.Shutdown(context.Background()) }()
@@ -1249,10 +1249,10 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	require.NoError(t, err)
 
 	b2, _ := NewRedisBroker(node2, RedisBrokerConfig{
-		Prefix:           prefix,
-		Shards:           []*RedisShard{s2},
-		numPubSubShards:  2,
-		numClusterShards: 9,
+		Prefix:                     prefix,
+		Shards:                     []*RedisShard{s2},
+		numSubscribeShards:         2,
+		NumShardedPubSubPartitions: 9,
 	})
 	node2.SetBroker(b2)
 	_ = node2.Run()
@@ -1590,9 +1590,10 @@ func BenchmarkRedisRecover_1Ch(b *testing.B) {
 			broker := newTestRedisBroker(b, node, tt.UseStreams, tt.UseCluster, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisBroker(broker)
-			rawData := []byte("{}")
-			numMessages := 1000
-			numMissing := 5
+			rawData := []byte(randString(800))
+
+			numMessages := 10
+			numMissing := 10
 			for i := 1; i <= numMessages; i++ {
 				_, _, err := broker.Publish("channel", rawData, PublishOptions{HistorySize: numMessages, HistoryTTL: 300 * time.Second})
 				require.NoError(b, err)
@@ -1770,8 +1771,8 @@ func BenchmarkRedisHistoryIteration(b *testing.B) {
 }
 
 type throughputTest struct {
-	NumPubSubShards      int
-	NumPubSubSubscribers int
+	NumSubscribeShards   int
+	NumResubscribeShards int
 	NumPubSubProcessors  int
 	Port                 int
 }
@@ -1787,7 +1788,7 @@ var throughputTests = []throughputTest{
 
 func BenchmarkPubSubThroughput(b *testing.B) {
 	for _, tt := range throughputTests {
-		b.Run(fmt.Sprintf("%dsh_%dsub_%dproc_%d", tt.NumPubSubShards, tt.NumPubSubSubscribers, tt.NumPubSubProcessors, tt.Port), func(b *testing.B) {
+		b.Run(fmt.Sprintf("%dsh_%dsub_%dproc_%d", tt.NumSubscribeShards, tt.NumResubscribeShards, tt.NumPubSubProcessors, tt.Port), func(b *testing.B) {
 			redisConf := testSingleRedisConf(tt.Port)
 
 			node1, _ := New(Config{})
@@ -1801,8 +1802,8 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 			b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
-				numPubSubShards:      tt.NumPubSubShards,
-				numPubSubSubscribers: tt.NumPubSubSubscribers,
+				numSubscribeShards:   tt.NumSubscribeShards,
+				numResubscribeShards: tt.NumResubscribeShards,
 				numPubSubProcessors:  tt.NumPubSubProcessors,
 			})
 			defer stopRedisBroker(b1)
@@ -2059,6 +2060,35 @@ func TestParseDeltaPush(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tc.expectedResult, result)
+			}
+		})
+	}
+}
+
+// 1000 streams with 100 messages in each stream, each message 500 bytes => 63MB in Redis.
+// 2000 streams with 100 messages in each stream, each message 500 bytes => 126MB in Redis.
+// 1000 streams with 200 messages in each stream, each message 500 bytes => 121MB in Redis.
+// 1000 streams with 400 messages in each stream, each message 500 bytes => 242MB in Redis.
+func TestRedisMemoryUsage(t *testing.T) {
+	t.Skip()
+	numStreams := 1000
+	numMessagesInStream := 400
+	messageSizeBytes := 500
+	for _, tt := range historyRedisTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := testNode(t)
+			broker := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisBroker(broker)
+			rawData := []byte(randString(messageSizeBytes))
+			for i := 0; i < numStreams; i++ {
+				for j := 0; j < numMessagesInStream; j++ {
+					_, _, err := broker.Publish("channel"+strconv.Itoa(i), rawData, PublishOptions{
+						HistorySize: numMessagesInStream,
+						HistoryTTL:  100 * time.Second,
+					})
+					require.NoError(t, err)
+				}
 			}
 		})
 	}

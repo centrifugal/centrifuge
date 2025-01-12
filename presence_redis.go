@@ -58,6 +58,11 @@ type RedisPresenceManagerConfig struct {
 	// maintaining expiration index in ZSET – so both useful from the throughput and memory usage
 	// perspective.
 	UseHashFieldTTL bool
+
+	// ReadFromReplica enables reading presence information from replica Redis servers.
+	// This only works in Redis Cluster and Sentinel setups and requires replica client
+	// to be initialized in each RedisShard using RedisShardConfig.ReplicaClientEnabled.
+	ReadFromReplica bool
 }
 
 var (
@@ -80,8 +85,20 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		return nil, errors.New("presence: no Redis shards provided in configuration")
 	}
 
+	if config.ReadFromReplica && !config.UseHashFieldTTL {
+		return nil, errors.New("presence: ReadFromReplica requires UseHashFieldTTL to be enabled")
+	}
+
+	if config.ReadFromReplica {
+		for i, s := range config.Shards {
+			if s.replicaClient == nil {
+				return nil, fmt.Errorf("presence: ReadFromReplica enabled but no replica client initialized in shard[%d] (ReplicaClientEnabled option)", i)
+			}
+		}
+	}
+
 	if len(config.Shards) > 1 {
-		n.Log(NewLogEntry(LogLevelInfo, fmt.Sprintf("presence: Redis sharding enabled: %d shards", len(config.Shards))))
+		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("presence: Redis sharding enabled: %d shards", len(config.Shards))))
 	}
 
 	if config.Prefix == "" {
@@ -237,7 +254,11 @@ func (m *RedisPresenceManager) presence(s *RedisShard, ch string) (map[string]*C
 	if err != nil {
 		return nil, err
 	}
-	resp, err := m.presenceScript.Exec(context.Background(), s.client, keys, args).ToArray()
+	client := s.client
+	if m.config.ReadFromReplica {
+		client = s.replicaClient
+	}
+	resp, err := m.presenceScript.Exec(context.Background(), client, keys, args).ToArray()
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +294,12 @@ func (m *RedisPresenceManager) presenceStats(s *RedisShard, ch string) (Presence
 	if err != nil {
 		return PresenceStats{}, err
 	}
-	replies, err := m.presenceStatsScript.Exec(context.Background(), s.client, keys, args).ToArray()
+	client := s.client
+	if m.config.ReadFromReplica {
+		client = s.replicaClient
+	}
+
+	replies, err := m.presenceStatsScript.Exec(context.Background(), client, keys, args).ToArray()
 	if err != nil {
 		return PresenceStats{}, err
 	}
@@ -325,28 +351,28 @@ func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 func (m *RedisPresenceManager) presenceHashKey(s *RedisShard, ch string) channelID {
-	if s.useCluster {
+	if s.isCluster {
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.data." + ch)
 }
 
 func (m *RedisPresenceManager) presenceSetKey(s *RedisShard, ch string) channelID {
-	if s.useCluster {
+	if s.isCluster {
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.expire." + ch)
 }
 
 func (m *RedisPresenceManager) userSetKey(s *RedisShard, ch string) channelID {
-	if s.useCluster {
+	if s.isCluster {
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.user.expire." + ch)
 }
 
 func (m *RedisPresenceManager) userHashKey(s *RedisShard, ch string) channelID {
-	if s.useCluster {
+	if s.isCluster {
 		ch = "{" + ch + "}"
 	}
 	return channelID(m.config.Prefix + ".presence.user.clients." + ch)

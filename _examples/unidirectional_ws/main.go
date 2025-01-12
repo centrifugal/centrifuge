@@ -450,14 +450,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	conn, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
+		log.Println(err)
 		return
 	}
 
 	if compression {
 		err := conn.SetCompressionLevel(compressionLevel)
 		if err != nil {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "websocket error setting compression level", map[string]any{"error": err.Error()}))
+			log.Printf("error setting compression level: %v", err)
 		}
 	}
 
@@ -510,15 +510,10 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 		c, closeFn, err := centrifuge.NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
 		if err != nil {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelError, "error creating client", map[string]any{"transport": transport.Name()}))
+			log.Printf("error creating client: %v", err)
 			return
 		}
 		defer func() { _ = closeFn() }()
-
-		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection established", map[string]any{"client": c.ID(), "transport": transport.Name()}))
-		defer func(started time.Time) {
-			s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "client connection completed", map[string]any{"client": c.ID(), "transport": transport.Name(), "duration": time.Since(started).String()}))
-		}(time.Now())
 
 		_, data, err := conn.ReadMessage()
 		if err != nil {

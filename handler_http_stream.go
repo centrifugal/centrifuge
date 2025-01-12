@@ -39,9 +39,7 @@ const defaultMaxHTTPStreamingBodySize = 64 * 1024
 const streamingResponseWriteTimeout = time.Second
 
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.node.metrics.incTransportConnect(transportHTTPStream)
-
-	if r.Method == http.MethodOptions {
+	if r.Method == http.MethodOptions { // For pre-flight browser requests.
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -61,7 +59,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var err error
 		requestData, err = io.ReadAll(r.Body)
 		if err != nil {
-			h.node.Log(NewLogEntry(LogLevelInfo, "error reading http stream request body", map[string]any{"error": err.Error()}))
+			h.node.logger.log(newLogEntry(LogLevelInfo, "error reading http stream request body", map[string]any{"error": err.Error()}))
 			if len(requestData) >= maxBytesSize {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
@@ -81,16 +79,16 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
-		h.node.Log(NewLogEntry(LogLevelError, "error create client", map[string]any{"error": err.Error(), "transport": transportHTTPStream}))
+		h.node.logger.log(newErrorLogEntry(err, "error create client", map[string]any{"error": err.Error(), "transport": transportHTTPStream}))
 		return
 	}
 	defer func() { _ = closeFn() }()
 	defer close(transport.closedCh) // need to execute this after client closeFn.
 
-	if h.node.LogEnabled(LogLevelDebug) {
-		h.node.Log(NewLogEntry(LogLevelDebug, "client connection established", map[string]any{"transport": transport.Name(), "client": c.ID()}))
+	if h.node.logEnabled(LogLevelDebug) {
+		h.node.logger.log(newLogEntry(LogLevelDebug, "client connection established", map[string]any{"transport": transportHTTPStream, "client": c.ID()}))
 		defer func(started time.Time) {
-			h.node.Log(NewLogEntry(LogLevelDebug, "client connection completed", map[string]any{"duration": time.Since(started).String(), "transport": transport.Name(), "client": c.ID()}))
+			h.node.logger.log(newLogEntry(LogLevelDebug, "client connection completed", map[string]any{"duration": time.Since(started).String(), "transport": transportHTTPStream, "client": c.ID()}))
 		}(time.Now())
 	}
 

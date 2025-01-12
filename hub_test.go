@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/centrifugal/centrifuge/internal/convert"
 
 	"github.com/centrifugal/protocol"
@@ -155,17 +153,18 @@ func (t *testTransport) Close(disconnect Disconnect) error {
 }
 
 func TestHub(t *testing.T) {
-	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
 	require.NoError(t, err)
 
 	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	c.user = "test"
-	err = h.remove(c)
-	require.NoError(t, err)
-	err = h.add(c)
-	require.NoError(t, err)
+	removed := h.remove(c)
+	require.False(t, removed)
+	h.add(c)
 	conns := h.UserConnections("test")
 	require.Equal(t, 1, len(conns))
 	require.Equal(t, 1, h.NumClients())
@@ -173,13 +172,13 @@ func TestHub(t *testing.T) {
 
 	validUID := c.uid
 	c.uid = "invalid"
-	err = h.remove(c)
-	require.NoError(t, err)
+	removed = h.remove(c)
+	require.False(t, removed)
 	require.Len(t, h.UserConnections("test"), 1)
 
 	c.uid = validUID
-	err = h.remove(c)
-	require.NoError(t, err)
+	removed = h.remove(c)
+	require.True(t, removed)
 	require.Len(t, h.UserConnections("test"), 0)
 }
 
@@ -463,7 +462,7 @@ func TestHubBroadcastPublication(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := defaultTestNode()
-			n.config.GetChannelNamespaceLabel = func(channel string) string {
+			n.config.Metrics.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()
@@ -577,7 +576,7 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := deltaTestNode()
-			n.config.GetChannelNamespaceLabel = func(channel string) string {
+			n.config.Metrics.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()
@@ -657,7 +656,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := deltaTestNodeNoRecovery()
-			n.config.GetChannelNamespaceLabel = func(channel string) string {
+			n.config.Metrics.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()
@@ -737,7 +736,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			n := deltaTestNodeNoRecovery()
-			n.config.GetChannelNamespaceLabel = func(channel string) string {
+			n.config.Metrics.GetChannelNamespaceLabel = func(channel string) string {
 				return channel
 			}
 			defer func() { _ = n.Shutdown(context.Background()) }()
@@ -901,7 +900,9 @@ func TestHubBroadcastLeave(t *testing.T) {
 }
 
 func TestHubShutdown(t *testing.T) {
-	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	err = h.shutdown(context.Background())
@@ -909,7 +910,7 @@ func TestHubShutdown(t *testing.T) {
 	h = newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
-	_ = h.add(c)
+	h.add(c)
 
 	err = h.shutdown(context.Background())
 	require.NoError(t, err)
@@ -921,7 +922,9 @@ func TestHubShutdown(t *testing.T) {
 }
 
 func TestHubSubscriptions(t *testing.T) {
-	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
@@ -936,27 +939,27 @@ func TestHubSubscriptions(t *testing.T) {
 	require.NotZero(t, h.NumSubscribers("test2"))
 
 	// Not exited sub.
-	removed, err := h.removeSub("not_existed", c)
-	require.NoError(t, err)
-	require.True(t, removed)
+	empty, wasRemoved := h.removeSub("not_existed", c)
+	require.True(t, empty)
+	require.False(t, wasRemoved)
 
 	// Exited sub with invalid uid.
 	validUID := c.uid
 	c.uid = "invalid"
-	removed, err = h.removeSub("test1", c)
-	require.NoError(t, err)
-	require.True(t, removed)
+	empty, wasRemoved = h.removeSub("test1", c)
+	require.True(t, empty)
+	require.False(t, wasRemoved)
 	c.uid = validUID
 
 	// Exited sub.
-	removed, err = h.removeSub("test1", c)
-	require.NoError(t, err)
-	require.True(t, removed)
+	empty, wasRemoved = h.removeSub("test1", c)
+	require.True(t, empty)
+	require.True(t, wasRemoved)
 
 	// Exited sub.
-	removed, err = h.removeSub("test2", c)
-	require.NoError(t, err)
-	require.True(t, removed)
+	empty, wasRemoved = h.removeSub("test2", c)
+	require.True(t, empty)
+	require.True(t, wasRemoved)
 
 	require.Equal(t, h.NumChannels(), 0)
 	require.Zero(t, h.NumSubscribers("test1"))
@@ -964,12 +967,14 @@ func TestHubSubscriptions(t *testing.T) {
 }
 
 func TestUserConnections(t *testing.T) {
-	m, err := initMetricsRegistry(prometheus.DefaultRegisterer, "test")
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
-	_ = h.add(c)
+	h.add(c)
 
 	connections := h.UserConnections(c.UserID())
 	require.Equal(t, h.connShards[index(c.UserID(), numHubShards)].clients, connections)
@@ -993,7 +998,7 @@ func TestHubSharding(t *testing.T) {
 			require.NoError(t, err)
 			c.user = strconv.Itoa(i)
 			require.NoError(t, err)
-			_ = n.hub.add(c)
+			n.hub.add(c)
 			for _, ch := range channels {
 				_, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
 			}
@@ -1031,7 +1036,7 @@ func BenchmarkHub_Contention(b *testing.B) {
 
 	for i := 0; i < numClients; i++ {
 		c := newTestConnectedClientWithTransport(b, context.Background(), n, newTestTransport(func() {}), "12")
-		_ = n.hub.add(c)
+		n.hub.add(c)
 		clients = append(clients, c)
 		for _, ch := range channels {
 			_, _ = n.hub.addSub(ch, subInfo{client: c, deltaType: ""})
@@ -1090,7 +1095,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 				t := newTestTransport(func() {})
 				t.setSink(sink)
 				c := newTestConnectedClientWithTransport(b, context.Background(), n, t, "12")
-				_ = n.hub.add(c)
+				n.hub.add(c)
 				_, _ = n.hub.addSub(channel, subInfo{client: c, deltaType: ""})
 			}
 
