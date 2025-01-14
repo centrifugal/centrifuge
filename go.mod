@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter v1.2.4
 	github.com/prometheus/client_golang v1.20.5
-	github.com/redis/rueidis v1.0.52
+	github.com/redis/rueidis v1.0.53
 	github.com/segmentio/encoding v0.4.1
 	github.com/shadowspore/fossil-delta v0.0.0-20240102155221-e3a8590b820b
 	github.com/stretchr/testify v1.10.0
