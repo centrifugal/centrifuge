@@ -86,14 +86,18 @@ type metrics struct {
 	codeStrings                    map[uint32]string
 }
 
+func getMetricsNamespace(config MetricsConfig) string {
+	if config.MetricsNamespace == "" {
+		return defaultMetricsNamespace
+	}
+	return config.MetricsNamespace
+}
+
 func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
-	metricsNamespace := config.MetricsNamespace
-	if metricsNamespace == "" {
-		metricsNamespace = defaultMetricsNamespace
-	}
+	metricsNamespace := getMetricsNamespace(config)
 
 	var registerer prometheus.Registerer
 	if config.RegistererGatherer != nil {

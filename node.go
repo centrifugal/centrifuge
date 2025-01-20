@@ -352,25 +352,26 @@ func (n *Node) initMetrics() error {
 
 	metricsSink := make(chan eagle.Metrics)
 	n.metricsExporter = eagle.New(eagle.Config{
-		Gatherer: gatherer,
-		Interval: n.config.NodeInfoMetricsAggregateInterval,
-		Sink:     metricsSink,
+		Gatherer:        gatherer,
+		Interval:        n.config.NodeInfoMetricsAggregateInterval,
+		Sink:            metricsSink,
+		PrefixWhitelist: []string{getMetricsNamespace(n.config.Metrics)},
 	})
-	metrics, err := n.metricsExporter.Export()
+	initialMetricsSnapshot, err := n.metricsExporter.Export()
 	if err != nil {
 		return err
 	}
 	n.metricsMu.Lock()
-	n.metricsSnapshot = &metrics
+	n.metricsSnapshot = &initialMetricsSnapshot
 	n.metricsMu.Unlock()
 	go func() {
 		for {
 			select {
 			case <-n.NotifyShutdown():
 				return
-			case metrics := <-metricsSink:
+			case metricsSnapshot := <-metricsSink:
 				n.metricsMu.Lock()
-				n.metricsSnapshot = &metrics
+				n.metricsSnapshot = &metricsSnapshot
 				n.metricsMu.Unlock()
 			}
 		}
