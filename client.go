@@ -1170,33 +1170,26 @@ func (c *Client) handleCommandDispatchError(ch string, cmd *protocol.Command, fr
 	defer func() {
 		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch)
 	}()
-	switch t := err.(type) {
-	case *Disconnect:
+	disconnect, ok := disconnectFromError(err)
+	if ok {
 		if c.node.clientEvents.commandProcessedHandler != nil {
 			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
-		return t, false
-	case Disconnect:
-		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, err, nil, started)
-			c.issueCommandProcessedEvent(event)
-		}
-		return &t, false
-	default:
-		if cmd.Connect != nil {
-			c.mu.Lock()
-			c.unusable = true
-			c.mu.Unlock()
-		}
-		errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
-		c.writeError(ch, frameType, cmd, errorReply, nil)
-		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, err, errorReply, started)
-			c.issueCommandProcessedEvent(event)
-		}
-		return nil, cmd.Connect == nil
+		return disconnect, false
 	}
+	if cmd.Connect != nil {
+		c.mu.Lock()
+		c.unusable = true
+		c.mu.Unlock()
+	}
+	errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
+	c.writeError(ch, frameType, cmd, errorReply, nil)
+	if c.node.clientEvents.commandProcessedHandler != nil {
+		event := newCommandProcessedEvent(cmd, err, errorReply, started)
+		c.issueCommandProcessedEvent(event)
+	}
+	return nil, cmd.Connect == nil
 }
 
 func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnect, bool) {
@@ -2133,28 +2126,20 @@ func (c *Client) writeDisconnectOrErrorFlush(ch string, frameType protocol.Frame
 	defer func() {
 		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch)
 	}()
-	switch t := err.(type) {
-	case *Disconnect:
-		go func() { _ = c.close(*t) }()
+	disconnect, ok := disconnectFromError(err)
+	if ok {
+		go func() { _ = c.close(*disconnect) }()
 		if c.node.clientEvents.commandProcessedHandler != nil {
 			event := newCommandProcessedEvent(cmd, err, nil, started)
 			c.issueCommandProcessedEvent(event)
 		}
 		return
-	case Disconnect:
-		go func() { _ = c.close(t) }()
-		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, err, nil, started)
-			c.issueCommandProcessedEvent(event)
-		}
-		return
-	default:
-		errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
-		c.writeError(ch, frameType, cmd, errorReply, rw)
-		if c.node.clientEvents.commandProcessedHandler != nil {
-			event := newCommandProcessedEvent(cmd, err, errorReply, started)
-			c.issueCommandProcessedEvent(event)
-		}
+	}
+	errorReply := &protocol.Reply{Error: toClientErr(err).toProto()}
+	c.writeError(ch, frameType, cmd, errorReply, rw)
+	if c.node.clientEvents.commandProcessedHandler != nil {
+		event := newCommandProcessedEvent(cmd, err, errorReply, started)
+		c.issueCommandProcessedEvent(event)
 	}
 }
 
@@ -2576,12 +2561,10 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				writeMu.Lock()
 				defer writeMu.Unlock()
 				if err := c.transport.Write(item.Data); err != nil {
-					switch v := err.(type) {
-					case *Disconnect:
-						go func() { _ = c.close(*v) }()
-					case Disconnect:
-						go func() { _ = c.close(v) }()
-					default:
+					disconnect, ok := disconnectFromError(err)
+					if ok {
+						go func() { _ = c.close(*disconnect) }()
+					} else {
 						go func() { _ = c.close(DisconnectWriteError) }()
 					}
 					return err
@@ -2603,12 +2586,10 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				writeMu.Lock()
 				defer writeMu.Unlock()
 				if err := c.transport.WriteMany(messages...); err != nil {
-					switch v := err.(type) {
-					case *Disconnect:
-						go func() { _ = c.close(*v) }()
-					case Disconnect:
-						go func() { _ = c.close(v) }()
-					default:
+					disconnect, ok := disconnectFromError(err)
+					if ok {
+						go func() { _ = c.close(*disconnect) }()
+					} else {
 						go func() { _ = c.close(DisconnectWriteError) }()
 					}
 					return err
@@ -3525,4 +3506,16 @@ func toClientErr(err error) *Error {
 		return clientErr
 	}
 	return ErrorInternal
+}
+
+func disconnectFromError(err error) (*Disconnect, bool) {
+	var disconnect *Disconnect
+	if errors.As(err, &disconnect) {
+		return disconnect, true
+	}
+	var disconnectValue Disconnect
+	if errors.As(err, &disconnectValue) {
+		return &disconnectValue, true
+	}
+	return nil, false
 }
