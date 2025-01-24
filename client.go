@@ -317,24 +317,23 @@ var defaultUniErrorCodeToDisconnect = map[uint32]Disconnect{
 }
 
 func (c *Client) extractUnidirectionalDisconnect(err error) Disconnect {
-	switch t := err.(type) {
-	case *Disconnect:
-		return *t
-	case Disconnect:
-		return t
-	case *Error:
+	disconnect, ok := disconnectFromError(err)
+	if ok {
+		return *disconnect
+	}
+	var clientErr *Error
+	if errors.As(err, &clientErr) {
 		if c.node.config.UnidirectionalCodeToDisconnect != nil {
-			if d, ok := c.node.config.UnidirectionalCodeToDisconnect[t.Code]; ok {
+			if d, found := c.node.config.UnidirectionalCodeToDisconnect[clientErr.Code]; found {
 				return d
 			}
 		}
-		if d, ok := defaultUniErrorCodeToDisconnect[t.Code]; ok {
+		if d, found := defaultUniErrorCodeToDisconnect[clientErr.Code]; found {
 			return d
 		}
 		return DisconnectServerError
-	default:
-		return DisconnectServerError
 	}
+	return DisconnectServerError
 }
 
 // Connect supposed to be called only from a unidirectional transport layer
@@ -1413,18 +1412,14 @@ func (c *Client) expire() {
 	if !clientSideRefresh && c.eventHub.refreshHandler != nil {
 		cb := func(reply RefreshReply, err error) {
 			if err != nil {
-				switch t := err.(type) {
-				case *Disconnect:
-					_ = c.close(*t)
-					return
-				case Disconnect:
-					_ = c.close(t)
-					return
-				default:
-					c.node.logger.log(newErrorLogEntry(err, "unexpected error from refresh handler", map[string]any{"user": c.user, "client": c.uid, "error": err.Error()}))
-					_ = c.close(DisconnectServerError)
+				disconnect, ok := disconnectFromError(err)
+				if ok {
+					_ = c.close(*disconnect)
 					return
 				}
+				c.node.logger.log(newErrorLogEntry(err, "unexpected error from refresh handler", map[string]any{"user": c.user, "client": c.uid, "error": err.Error()}))
+				_ = c.close(DisconnectServerError)
+				return
 			}
 			if reply.Expired {
 				_ = c.close(DisconnectExpired)
