@@ -4165,3 +4165,52 @@ func TestRedactToken(t *testing.T) {
 		})
 	}
 }
+
+func TestWrappedDisconnect(t *testing.T) {
+	t.Run("Pointer to Disconnect no wrap", func(t *testing.T) {
+		originalDisconnect := &Disconnect{
+			Code:   1001,
+			Reason: "Test disconnect",
+		}
+
+		d, ok := disconnectFromError(originalDisconnect)
+		require.True(t, ok)
+		require.Equal(t, uint32(1001), d.Code, "disconnect code should match")
+		require.Equal(t, "Test disconnect", d.Reason, "disconnect reason should match")
+	})
+
+	t.Run("Value of Disconnect no wrap", func(t *testing.T) {
+		originalDisconnect := Disconnect{
+			Code:   1001,
+			Reason: "Test disconnect",
+		}
+		d, ok := disconnectFromError(originalDisconnect)
+		require.True(t, ok)
+		require.Equal(t, uint32(1001), d.Code, "disconnect code should match")
+		require.Equal(t, "Test disconnect", d.Reason, "disconnect reason should match")
+	})
+
+	t.Run("Pointer to Disconnect", func(t *testing.T) {
+		originalDisconnect := &Disconnect{
+			Code:   1001,
+			Reason: "Test disconnect",
+		}
+		wrappedErr := fmt.Errorf("wrapped error: %w", originalDisconnect)
+		d, ok := disconnectFromError(wrappedErr)
+		require.True(t, ok)
+		require.Equal(t, uint32(1001), d.Code, "disconnect code should match")
+		require.Equal(t, "Test disconnect", d.Reason, "disconnect reason should match")
+	})
+
+	t.Run("Value of Disconnect", func(t *testing.T) {
+		originalDisconnect := Disconnect{
+			Code:   1001,
+			Reason: "Test disconnect",
+		}
+		wrappedErr := fmt.Errorf("wrapped error: %w", originalDisconnect)
+		d, ok := disconnectFromError(wrappedErr)
+		require.True(t, ok)
+		require.Equal(t, uint32(1001), d.Code, "disconnect code should match")
+		require.Equal(t, "Test disconnect", d.Reason, "disconnect reason should match")
+	})
+}
