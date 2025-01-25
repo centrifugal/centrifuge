@@ -1090,16 +1090,16 @@ func (c *Client) clientInfo(ch string) *ClientInfo {
 func redactToken(cmd *protocol.Command) *protocol.Command {
 	redacted := "*** REDACTED ***"
 
-	if cmd.Connect != nil {
+	if cmd.Connect != nil && cmd.Connect.Token != "" {
 		cmd.Connect.Token = redacted
 	}
-	if cmd.Subscribe != nil {
+	if cmd.Subscribe != nil && cmd.Subscribe.Token != "" {
 		cmd.Subscribe.Token = redacted
 	}
-	if cmd.Refresh != nil {
+	if cmd.Refresh != nil && cmd.Refresh.Token != "" {
 		cmd.Refresh.Token = redacted
 	}
-	if cmd.SubRefresh != nil {
+	if cmd.SubRefresh != nil && cmd.SubRefresh.Token != "" {
 		cmd.SubRefresh.Token = redacted
 	}
 
