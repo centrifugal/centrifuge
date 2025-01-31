@@ -306,7 +306,7 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 	if !b.config.UseLists {
 		// Check whether Redis Streams supported.
-		if result := shard.client.Do(context.Background(), shard.client.B().Xrange().Key("_").Start("0-0").End("0-0").Build()); result.Error() != nil {
+		if result := shard.client.Do(context.Background(), shard.client.B().Xrange().Key(b.config.Prefix+".__.check.stream").Start("0-0").End("0-0").Build()); result.Error() != nil {
 			if strings.Contains(result.Error().Error(), "unknown command") {
 				return errors.New("STREAM only available since Redis >= 5, consider upgrading Redis or using LIST structure for history")
 			}
@@ -315,7 +315,7 @@ func (b *RedisBroker) checkCapabilities(shard *RedisShard) error {
 	}
 	if b.useShardedPubSub(shard) {
 		// Check whether Redis Cluster sharded PUB/SUB supported.
-		if result := shard.client.Do(context.Background(), shard.client.B().Spublish().Channel(b.config.Prefix+"._").Message("").Build()); result.Error() != nil {
+		if result := shard.client.Do(context.Background(), shard.client.B().Spublish().Channel(b.config.Prefix+".__check.spublish").Message("").Build()); result.Error() != nil {
 			if strings.Contains(result.Error().Error(), "unknown command") {
 				return errors.New("this Redis version does not support cluster sharded PUB/SUB feature")
 			}
