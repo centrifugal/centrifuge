@@ -1087,11 +1087,16 @@ func (c *Client) clientInfo(ch string) *ClientInfo {
 	}
 }
 
-func redactToken(cmd *protocol.Command) *protocol.Command {
-	redacted := "*** REDACTED ***"
+const redacted = "<REDACTED>"
 
+func redactCommand(cmd *protocol.Command) *protocol.Command {
 	if cmd.Connect != nil && cmd.Connect.Token != "" {
 		cmd.Connect.Token = redacted
+	}
+	if cmd.Connect != nil && len(cmd.Connect.Headers) > 0 {
+		for k := range cmd.Connect.Headers {
+			cmd.Connect.Headers[k] = redacted
+		}
 	}
 	if cmd.Subscribe != nil && cmd.Subscribe.Token != "" {
 		cmd.Subscribe.Token = redacted
@@ -1141,7 +1146,7 @@ func (c *Client) HandleCommand(cmd *protocol.Command, cmdProtocolSize int) bool 
 	}
 	if disconnect != nil {
 		if disconnect.Code != DisconnectConnectionClosed.Code {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]any{"command": fmt.Sprintf("%v", redactToken(cmd)), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
+			c.node.logger.log(newLogEntry(LogLevelInfo, "disconnect after handling command", map[string]any{"command": fmt.Sprintf("%v", redactCommand(cmd)), "client": c.ID(), "user": c.UserID(), "reason": disconnect.Reason}))
 		}
 		go func() { _ = c.close(*disconnect) }()
 		return false
@@ -1331,7 +1336,7 @@ func (c *Client) writeEncodedCommandReply(ch string, frameType protocol.FrameTyp
 	rep.Id = cmd.Id
 	if rep.Error != nil {
 		if c.node.logEnabled(LogLevelInfo) {
-			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]any{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", redactToken(cmd)), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]any{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", redactCommand(cmd)), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
 		}
 		c.node.metrics.incReplyError(frameType, rep.Error.Code, ch)
 	}
