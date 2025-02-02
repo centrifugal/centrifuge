@@ -4103,9 +4103,7 @@ func TestClientConnect(t *testing.T) {
 	}
 }
 
-func TestRedactToken(t *testing.T) {
-	redacted := "*** REDACTED ***"
-
+func TestRedactCommand(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    *protocol.Command
@@ -4118,6 +4116,19 @@ func TestRedactToken(t *testing.T) {
 			},
 			expected: &protocol.Command{
 				Connect: &protocol.ConnectRequest{Token: redacted},
+			},
+		},
+		{
+			name: "Redact Connect Headers",
+			input: &protocol.Command{
+				Connect: &protocol.ConnectRequest{Headers: map[string]string{
+					"Authorization": "Bearer XXX",
+				}},
+			},
+			expected: &protocol.Command{
+				Connect: &protocol.ConnectRequest{Headers: map[string]string{
+					"Authorization": redacted,
+				}},
 			},
 		},
 		{
@@ -4160,7 +4171,7 @@ func TestRedactToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := redactToken(tt.input)
+			result := redactCommand(tt.input)
 			require.Equal(t, tt.expected, result, "Tokens should be correctly redacted")
 		})
 	}
