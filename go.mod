@@ -2,6 +2,8 @@ module github.com/centrifugal/centrifuge
 
 go 1.21
 
+replace github.com/centrifugal/protocol => ../protocol
+
 require (
 	github.com/FZambia/eagle v0.2.0
 	github.com/centrifugal/protocol v0.14.0
