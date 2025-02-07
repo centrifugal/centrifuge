@@ -51,7 +51,7 @@ func (t *benchmarkTransport) inc(num int) {
 func (t *benchmarkTransport) writeCombined(items ...queue.Item) error {
 	buffers := make([][]byte, len(items))
 	for i := 0; i < len(items); i++ {
-		buffers[i] = items[i].Data
+		buffers[i] = items[i].Event.Data
 	}
 	_, err := t.f.Write(bytes.Join(buffers, []byte("\n")))
 	if err != nil {
@@ -62,7 +62,7 @@ func (t *benchmarkTransport) writeCombined(items ...queue.Item) error {
 }
 
 func (t *benchmarkTransport) writeSingle(item queue.Item) error {
-	_, err := t.f.Write(item.Data)
+	_, err := t.f.Write(item.Event.Data)
 	if err != nil {
 		panic(err)
 	}
@@ -77,7 +77,7 @@ func (t *benchmarkTransport) close() error {
 func runWrite(w *writer, t *benchmarkTransport) {
 	go func() {
 		for j := 0; j < numQueueMessages; j++ {
-			w.messages.Add(queue.Item{Data: t.buf})
+			w.messages.Add(queue.Item{Event: queue.TransportWriteEvent{Data: t.buf}})
 		}
 	}()
 	<-t.ch
@@ -164,7 +164,7 @@ func TestWriter(t *testing.T) {
 	}, 0)
 	go w.run(0, 4)
 
-	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
+	disconnect := w.enqueue(queue.Item{Event: queue.TransportWriteEvent{Data: []byte("test")}})
 	require.Nil(t, disconnect)
 	<-transport.ch
 	require.Equal(t, transport.count, 1)
@@ -188,7 +188,7 @@ func TestWriterWriteMany(t *testing.T) {
 	maxMessagesInFrame := 4
 	numMessages := 4 * maxMessagesInFrame
 	for i := 0; i < numMessages; i++ {
-		disconnect := w.enqueue(queue.Item{Data: []byte("test")})
+		disconnect := w.enqueue(queue.Item{Event: queue.TransportWriteEvent{Data: []byte("test")}})
 		require.Nil(t, disconnect)
 	}
 
@@ -227,7 +227,7 @@ func TestWriterWriteRemaining(t *testing.T) {
 	maxMessagesInFrame := 4
 	numMessages := 4 * maxMessagesInFrame
 	for i := 0; i < numMessages; i++ {
-		disconnect := w.enqueue(queue.Item{Data: []byte("test")})
+		disconnect := w.enqueue(queue.Item{Event: queue.TransportWriteEvent{Data: []byte("test")}})
 		require.Nil(t, disconnect)
 	}
 
@@ -254,7 +254,7 @@ func TestWriterDisconnectSlow(t *testing.T) {
 	}, 0)
 	defer func() { _ = w.close(true) }()
 
-	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
+	disconnect := w.enqueue(queue.Item{Event: queue.TransportWriteEvent{Data: []byte("test")}})
 	require.Equal(t, DisconnectSlow.Code, disconnect.Code)
 }
 
@@ -269,7 +269,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 	go w.run(0, 0)
 	_ = w.close(true)
 
-	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
+	disconnect := w.enqueue(queue.Item{Event: queue.TransportWriteEvent{Data: []byte("test")}})
 	require.Equal(t, DisconnectConnectionClosed.Code, disconnect.Code)
 }
 
@@ -292,7 +292,7 @@ func TestWriterWriteError(t *testing.T) {
 
 	defer func() { _ = w.close(true) }()
 
-	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
+	disconnect := w.enqueue(queue.Item{Event: queue.TransportWriteEvent{Data: []byte("test")}})
 	require.NotNil(t, disconnect)
 
 	go func() {

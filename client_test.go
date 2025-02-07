@@ -263,7 +263,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, DisconnectBadRequest, err)
 }
 
@@ -281,7 +281,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	result := extractConnectReply(rwWrapper.replies)
 	require.Equal(t, false, result.Expires)
@@ -312,7 +312,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	client.triggerConnect()
 	client.expire()
@@ -342,7 +342,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	client.expire()
 	require.False(t, client.status == statusClosed)
@@ -368,7 +368,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 }
 
@@ -800,7 +800,7 @@ func TestClientSubscribeNoChannelContext(t *testing.T) {
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
+	}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Equal(t, &DisconnectServerError, subCtx.disconnect)
 }
 
@@ -821,7 +821,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 	client.channels["test"] = ChannelContext{}
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
+	}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -862,7 +862,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 	client.channels["test"] = ChannelContext{}
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
+	}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -929,7 +929,7 @@ func TestUserConnectionLimit(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	anotherClient, _ := newClient(newCtx, node, transport)
-	_, err := anotherClient.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := anotherClient.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, DisconnectConnectionLimit, err)
 }
 
@@ -2449,7 +2449,7 @@ func TestClientConnectExpiredError(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 	require.False(t, client.authenticated)
 }
@@ -3209,7 +3209,7 @@ func TestClientTransportWriteError(t *testing.T) {
 			client.channels["test"] = ChannelContext{}
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: "test",
-			}, SubscribeReply{}, &protocol.Command{}, false, time.Time{}, rwWrapper.rw)
+			}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Time{}, rwWrapper.rw)
 			require.Nil(t, subCtx.disconnect)
 			require.Nil(t, subCtx.err)
 			require.Nil(t, rwWrapper.replies[0].Error)
@@ -3569,7 +3569,7 @@ func TestClientOnStateSnapshot(t *testing.T) {
 
 func connectClientV2(t testing.TB, client *Client) {
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
