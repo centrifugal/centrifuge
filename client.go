@@ -1346,7 +1346,7 @@ func (c *Client) writeEncodedCommandReply(ch string, frameType protocol.FrameTyp
 	protoType := c.transport.Protocol().toProto()
 	replyEncoder := protocol.GetReplyEncoder(protoType)
 
-	replyData, releaseFn, err := replyEncoder.EncodeNoCopy(rep)
+	replyData, err := replyEncoder.Encode(rep)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error encoding reply", map[string]any{"reply": fmt.Sprintf("%v", rep), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
 		go func() { _ = c.close(DisconnectInappropriateProtocol) }()
@@ -1359,7 +1359,6 @@ func (c *Client) writeEncodedCommandReply(ch string, frameType protocol.FrameTyp
 			Data:      replyData,
 			FrameType: frameType,
 		},
-		DoneFn: releaseFn,
 	}
 	if ch != "" && c.node.config.Metrics.GetChannelNamespaceLabel != nil {
 		item.Event.Channel = ch

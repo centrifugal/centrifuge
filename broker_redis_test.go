@@ -2151,7 +2151,7 @@ func TestRedisClientSubscribeRecoveryServerSubs(t *testing.T) {
 			defer wg.Done()
 			client := newTestClient(t, node, "42")
 			rwWrapper := testReplyWriterWrapper()
-			_, err := client.connectCmd(&protocol.ConnectRequest{
+			err := client.connectCmd(&protocol.ConnectRequest{
 				Subs: map[string]*protocol.SubscribeRequest{},
 			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 			require.NoError(t, err)

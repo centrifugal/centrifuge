@@ -4225,3 +4225,50 @@ func TestWrappedDisconnect(t *testing.T) {
 		require.Equal(t, "Test disconnect", d.Reason, "disconnect reason should match")
 	})
 }
+
+func benchNodeNoHandlers() *Node {
+	n, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(entry LogEntry) {},
+	})
+	if err != nil {
+		panic(err)
+	}
+	err = n.Run()
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func BenchmarkClientRPC(b *testing.B) {
+	node := benchNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(client *Client) {
+		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
+			callback(RPCReply{
+				Data: []byte(`{}`),
+			}, nil)
+		})
+	})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setPing(-1, 0)
+	sink := make(chan []byte, 100)
+	transport.setSink(sink)
+	client := newTestClientCustomTransport(b, ctx, node, transport, "42")
+	connectClientV2(b, client)
+	<-sink
+	cmd := &protocol.Command{
+		Id: 2,
+		Rpc: &protocol.RPCRequest{
+			Data: []byte(`{"key":"valuevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevalue"}`),
+		},
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		client.HandleCommand(cmd, 2)
+		<-sink
+	}
+}
