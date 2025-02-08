@@ -4257,18 +4257,26 @@ func BenchmarkClientRPC(b *testing.B) {
 	transport.setPing(-1, 0)
 	sink := make(chan []byte, 100)
 	transport.setSink(sink)
+	transport.setProtocolType(ProtocolTypeProtobuf)
 	client := newTestClientCustomTransport(b, ctx, node, transport, "42")
 	connectClientV2(b, client)
 	<-sink
-	cmd := &protocol.Command{
+	rpcCmd := &protocol.Command{
 		Id: 2,
 		Rpc: &protocol.RPCRequest{
 			Data: []byte(`{"key":"valuevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevalue"}`),
 		},
 	}
+	frame, err := protocol.NewProtobufCommandEncoder().Encode(rpcCmd)
+	require.NoError(b, err)
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.HandleCommand(cmd, 2)
+		decoder := protocol.GetStreamCommandDecoder(protocol.TypeProtobuf, bytes.NewReader(frame))
+		cmd, cmdProtocolSize, err := decoder.Decode()
+		require.NoError(b, err)
+		client.HandleCommand(cmd, cmdProtocolSize)
 		<-sink
+		protocol.PutStreamCommandDecoder(protocol.TypeProtobuf, decoder)
 	}
 }

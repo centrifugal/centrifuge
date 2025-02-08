@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/readerpool"
 
 	"github.com/centrifugal/protocol"
+	"github.com/segmentio/encoding/json"
 )
 
 // EmulationConfig is a config for EmulationHandler.
@@ -64,9 +64,9 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	var req protocol.EmulationRequest
 	if r.Header.Get("Content-Type") == "application/octet-stream" {
-		err = req.UnmarshalVT(data)
+		err = req.UnmarshalVTUnsafe(data)
 	} else {
-		err = json.Unmarshal(data, &req)
+		_, err = json.Parse(data, &req, json.ZeroCopy)
 	}
 	if err != nil {
 		if s.node.logEnabled(LogLevelInfo) {
@@ -133,7 +133,7 @@ const (
 
 func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallback) {
 	var req protocol.EmulationRequest
-	err := req.UnmarshalVT(e.Data)
+	err := req.UnmarshalVTUnsafe(e.Data)
 	if err != nil {
 		h.node.logger.log(newErrorLogEntry(err, "error unmarshal emulation request", map[string]any{"data": string(e.Data), "error": err.Error()}))
 		cb(SurveyReply{Code: emulationErrorCodeBadRequest})

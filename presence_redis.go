@@ -280,7 +280,7 @@ func mapStringClientInfo(result []rueidis.RedisMessage) (map[string]*ClientInfo,
 			return nil, errors.New("value is not string")
 		}
 		var f protocol.ClientInfo
-		err = f.UnmarshalVT(convert.StringToBytes(value))
+		err = f.UnmarshalVTUnsafe(convert.StringToBytes(value))
 		if err != nil {
 			return nil, errors.New("can not unmarshal value to ClientInfo")
 		}

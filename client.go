@@ -192,6 +192,8 @@ type ConnectRequest struct {
 	Version string
 	// Subs is a map with channel subscription state (for recovery on connect).
 	Subs map[string]SubscribeRequest
+	// Headers represent headers which may be used for headers emulation feature.
+	Headers map[string]string
 }
 
 // SubscribeRequest contains state of subscription to a channel.
@@ -213,6 +215,7 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 		Data:    r.Data,
 		Name:    r.Name,
 		Version: r.Version,
+		Headers: r.Headers,
 	}
 	if len(r.Subs) > 0 {
 		subs := make(map[string]*protocol.SubscribeRequest, len(r.Subs))
@@ -1707,6 +1710,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 
 		res := protocol.SubscribeResultFromVTPool()
 		defer res.ReturnToVTPool()
+
 		ctx := c.subscribeCmd(req, res, reply, cmd, false, started, rw)
 
 		if ctx.disconnect != nil {

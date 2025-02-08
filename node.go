@@ -1266,6 +1266,21 @@ func infoFromProto(v *protocol.ClientInfo) *ClientInfo {
 	return info
 }
 
+func fillProtocolInfo(v *ClientInfo, r *protocol.ClientInfo) {
+	info := &protocol.ClientInfo{
+		Client: v.ClientID,
+		User:   v.UserID,
+	}
+	r.Client = v.ClientID
+	r.User = v.UserID
+	if len(v.ConnInfo) > 0 {
+		info.ConnInfo = v.ConnInfo
+	}
+	if len(v.ChanInfo) > 0 {
+		info.ChanInfo = v.ChanInfo
+	}
+}
+
 func infoToProto(v *ClientInfo) *protocol.ClientInfo {
 	if v == nil {
 		return nil

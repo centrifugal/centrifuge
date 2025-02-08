@@ -1799,13 +1799,14 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 
 			prefix := getUniquePrefix()
 
-			b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+			b1, err := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
 				numSubscribeShards:   tt.NumSubscribeShards,
 				numResubscribeShards: tt.NumResubscribeShards,
 				numPubSubProcessors:  tt.NumPubSubProcessors,
 			})
+			require.NoError(b, err)
 			defer stopRedisBroker(b1)
 
 			node1.SetBroker(b1)
