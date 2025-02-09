@@ -6,20 +6,10 @@ import (
 	"github.com/centrifugal/protocol"
 )
 
-type TransportWriteEvent struct {
-	// Data represents single Centrifuge protocol message which is going to be sent
-	// into the connection. For unidirectional transports this is an encoded protocol.Push
-	// type, for bidirectional transports this is an encoded protocol.Reply type.
-	Data []byte
-	// Channel will be set if TransportWriteEvent relates to some channel.
-	Channel string
-	// FrameType tells what is being sent inside Data.
-	FrameType protocol.FrameType
-}
-
 type Item struct {
-	Event  TransportWriteEvent
-	DoneFn func()
+	Data      []byte
+	Channel   string
+	FrameType protocol.FrameType
 }
 
 // Queue is an unbounded queue of Item.
@@ -78,7 +68,7 @@ func (q *Queue) Add(i Item) bool {
 	}
 	q.nodes[q.tail] = i
 	q.tail = (q.tail + 1) % len(q.nodes)
-	q.size += len(i.Event.Data)
+	q.size += len(i.Data)
 	q.cnt++
 	q.cond.Signal()
 	q.mu.Unlock()
@@ -161,7 +151,7 @@ func (q *Queue) Remove() (Item, bool) {
 	i := q.nodes[q.head]
 	q.head = (q.head + 1) % len(q.nodes)
 	q.cnt--
-	q.size -= len(i.Event.Data)
+	q.size -= len(i.Data)
 
 	if n := len(q.nodes) / 2; n >= q.initCap && q.cnt <= n {
 		q.resize(n)

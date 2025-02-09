@@ -621,13 +621,11 @@ func (c *Client) closeStale() {
 
 func (c *Client) transportEnqueue(data []byte, ch string, frameType protocol.FrameType) error {
 	item := queue.Item{
-		Event: queue.TransportWriteEvent{
-			Data:      data,
-			FrameType: frameType,
-		},
+		Data:      data,
+		FrameType: frameType,
 	}
 	if c.node.config.Metrics.GetChannelNamespaceLabel != nil {
-		item.Event.Channel = ch
+		item.Channel = ch
 	}
 	disconnect := c.messageWriter.enqueue(item)
 	if disconnect != nil {
@@ -1371,13 +1369,11 @@ func (c *Client) writeEncodedCommandReply(ch string, frameType protocol.FrameTyp
 
 	// Note: avoid adding *Reply to item since it's pooled.
 	item := queue.Item{
-		Event: queue.TransportWriteEvent{
-			Data:      replyData,
-			FrameType: frameType,
-		},
+		Data:      replyData,
+		FrameType: frameType,
 	}
 	if ch != "" && c.node.config.Metrics.GetChannelNamespaceLabel != nil {
-		item.Event.Channel = ch
+		item.Channel = ch
 	}
 
 	if c.replyWithoutQueue {
@@ -2587,22 +2583,17 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 		messageWriterConf := writerConfig{
 			MaxQueueSize: c.node.config.ClientQueueMaxSize,
 			WriteFn: func(item queue.Item) error {
-				defer func() {
-					if item.DoneFn != nil {
-						item.DoneFn()
-					}
-				}()
-				c.node.metrics.incTransportMessagesSent(c.transport.Name(), item.Event.FrameType, item.Event.Channel, len(item.Event.Data))
+				c.node.metrics.incTransportMessagesSent(c.transport.Name(), item.FrameType, item.Channel, len(item.Data))
 
 				if c.node.clientEvents.transportWriteHandler != nil {
-					pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(item.Event))
+					pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(item))
 					if !pass {
 						return nil
 					}
 				}
 				writeMu.Lock()
 				defer writeMu.Unlock()
-				if err := c.transport.Write(item.Event.Data); err != nil {
+				if err := c.transport.Write(item.Data); err != nil {
 					disconnect, ok := disconnectFromError(err)
 					if ok {
 						go func() { _ = c.close(*disconnect) }()
@@ -2614,23 +2605,16 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				return nil
 			},
 			WriteManyFn: func(items ...queue.Item) error {
-				defer func() {
-					for _, item := range items {
-						if item.DoneFn != nil {
-							item.DoneFn()
-						}
-					}
-				}()
 				messages := make([][]byte, 0, len(items))
 				for i := 0; i < len(items); i++ {
 					if c.node.clientEvents.transportWriteHandler != nil {
-						pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(items[i].Event))
+						pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(items[i]))
 						if !pass {
 							continue
 						}
 					}
-					messages = append(messages, items[i].Event.Data)
-					c.node.metrics.incTransportMessagesSent(c.transport.Name(), items[i].Event.FrameType, items[i].Event.Channel, len(items[i].Event.Data))
+					messages = append(messages, items[i].Data)
+					c.node.metrics.incTransportMessagesSent(c.transport.Name(), items[i].FrameType, items[i].Channel, len(items[i].Data))
 				}
 				writeMu.Lock()
 				defer writeMu.Unlock()
