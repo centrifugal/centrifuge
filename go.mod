@@ -11,10 +11,10 @@ require (
 	github.com/prometheus/client_golang v1.20.5
 	github.com/redis/rueidis v1.0.54
 	github.com/segmentio/encoding v0.4.1
-	github.com/shadowspore/fossil-delta v0.0.0-20240102155221-e3a8590b820b
+	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/sync v0.11.0
-	google.golang.org/protobuf v1.36.4
+	google.golang.org/protobuf v1.36.5
 )
 
 require (
