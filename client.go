@@ -1910,6 +1910,7 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 
 		res := protocol.PublishResultFromVTPool()
 		defer res.ReturnToVTPool()
+
 		protoReply, err := c.getPublishCommandReply(res)
 		if err != nil {
 			c.logWriteInternalErrorFlush(channel, protocol.FrameTypePublish, cmd, err, "error encoding publish", started, rw)
