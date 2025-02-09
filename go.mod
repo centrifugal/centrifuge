@@ -6,7 +6,7 @@ toolchain go1.23.4
 
 require (
 	github.com/FZambia/eagle v0.2.0
-	github.com/centrifugal/protocol v0.15.0
+	github.com/centrifugal/protocol v0.16.0
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter v1.2.4
 	github.com/planetscale/vtprotobuf v0.6.0

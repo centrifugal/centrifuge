@@ -2202,6 +2202,7 @@ func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
 					}
 					return
 				}
+				time.Sleep(10 * time.Millisecond)
 				i++
 			}
 		}(channel)
@@ -2244,7 +2245,7 @@ func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
 			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 			require.NoError(t, err)
 			require.Equal(t, 2, len(rwWrapper.replies))
-			require.Nil(t, rwWrapper.replies[0].Error)
+			require.Nil(t, rwWrapper.replies[1].Error)
 
 			err = client.handleSubscribe(&protocol.SubscribeRequest{
 				Channel: channel1,
@@ -2253,7 +2254,7 @@ func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
 			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 			require.NoError(t, err)
 			require.Equal(t, 3, len(rwWrapper.replies))
-			require.Nil(t, rwWrapper.replies[0].Error)
+			require.Nil(t, rwWrapper.replies[2].Error)
 			res = extractSubscribeResult(rwWrapper.replies)
 			require.Empty(t, res.Offset)
 			require.NotZero(t, res.Epoch)

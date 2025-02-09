@@ -612,7 +612,7 @@ func newFakeConn(b testing.TB, node *Node, channel string, protoType ProtocolTyp
 	client.channels[channel] = ChannelContext{}
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: channel,
-	}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(b, subCtx.disconnect)
 }
 

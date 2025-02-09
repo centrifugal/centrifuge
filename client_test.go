@@ -800,7 +800,7 @@ func TestClientSubscribeNoChannelContext(t *testing.T) {
 
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Equal(t, &DisconnectServerError, subCtx.disconnect)
 }
 
@@ -821,7 +821,7 @@ func TestClientSubscribeReceivePublication(t *testing.T) {
 	client.channels["test"] = ChannelContext{}
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -862,7 +862,7 @@ func TestClientSubscribeReceivePublicationWithOffset(t *testing.T) {
 	client.channels["test"] = ChannelContext{}
 	subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 		Channel: "test",
-	}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
+	}, SubscribeReply{}, &protocol.Command{}, false, time.Now(), rwWrapper.rw)
 	require.Nil(t, subCtx.disconnect)
 	require.Nil(t, rwWrapper.replies[0].Error)
 
@@ -3209,7 +3209,7 @@ func TestClientTransportWriteError(t *testing.T) {
 			client.channels["test"] = ChannelContext{}
 			subCtx := client.subscribeCmd(&protocol.SubscribeRequest{
 				Channel: "test",
-			}, protocol.SubscribeResultFromVTPool(), SubscribeReply{}, &protocol.Command{}, false, time.Time{}, rwWrapper.rw)
+			}, SubscribeReply{}, &protocol.Command{}, false, time.Time{}, rwWrapper.rw)
 			require.Nil(t, subCtx.disconnect)
 			require.Nil(t, subCtx.err)
 			require.Nil(t, rwWrapper.replies[0].Error)

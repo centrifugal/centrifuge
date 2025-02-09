@@ -1717,10 +1717,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 			return
 		}
 
-		res := protocol.SubscribeResultFromVTPool()
-		defer res.ReturnToVTPool()
-
-		ctx := c.subscribeCmd(req, res, reply, cmd, false, started, rw)
+		ctx := c.subscribeCmd(req, reply, cmd, false, started, rw)
 
 		if ctx.disconnect != nil {
 			c.onSubscribeError(req.Channel)
@@ -1904,9 +1901,7 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 			}
 		}
 
-		res := protocol.PublishResultFromVTPool()
-		defer res.ReturnToVTPool()
-
+		res := &protocol.PublishResult{}
 		protoReply, err := c.getPublishCommandReply(res)
 		if err != nil {
 			c.logWriteInternalErrorFlush(channel, protocol.FrameTypePublish, cmd, err, "error encoding publish", started, rw)
@@ -2188,9 +2183,9 @@ func (c *Client) handleRPC(req *protocol.RPCRequest, cmd *protocol.Command, star
 			c.writeDisconnectOrErrorFlush("", protocol.FrameTypeRPC, cmd, err, started, rw)
 			return
 		}
-		result := protocol.RPCResultFromVTPool()
-		defer result.ReturnToVTPool()
-		result.Data = reply.Data
+		result := &protocol.RPCResult{
+			Data: reply.Data,
+		}
 		protoReply, err := c.getRPCCommandReply(result)
 		if err != nil {
 			c.logWriteInternalErrorFlush("", protocol.FrameTypeRPC, cmd, err, "error encoding rpc", started, rw)
@@ -2402,8 +2397,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 	c.mu.RUnlock()
 
-	res := protocol.ConnectResultFromVTPool()
-	defer res.ReturnToVTPool()
+	res := &protocol.ConnectResult{}
 	res.Version = version
 	res.Expires = expires
 	res.Ttl = ttl
@@ -2475,8 +2469,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					case <-c.Context().Done():
 					}
 				}
-				subscribeResult := protocol.SubscribeResultFromVTPool() // Need to return only after connect reply written.
-				subCtx := c.subscribeCmd(subCmd, subscribeResult, SubscribeReply{Options: opts}, nil, true, started, nil)
+				subCtx := c.subscribeCmd(subCmd, SubscribeReply{Options: opts}, nil, true, started, nil)
 				subMu.Lock()
 				subs[ch] = subCtx.result
 				subCtxMap[ch] = subCtx
@@ -2490,12 +2483,6 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			}(ch, opts)
 		}
 		wg.Wait()
-
-		defer func() {
-			for _, sub := range subs {
-				sub.ReturnToVTPool()
-			}
-		}()
 
 		if subDisconnect != nil || subError != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
@@ -2670,9 +2657,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 		subCmd.Offset = subscribeOpts.RecoverSince.Offset
 		subCmd.Epoch = subscribeOpts.RecoverSince.Epoch
 	}
-	res := protocol.SubscribeResultFromVTPool()
-	defer res.ReturnToVTPool()
-	subCtx := c.subscribeCmd(subCmd, res, SubscribeReply{
+	subCtx := c.subscribeCmd(subCmd, SubscribeReply{
 		Options: *subscribeOpts,
 	}, nil, true, time.Time{}, nil)
 	if subCtx.err != nil {
@@ -2826,8 +2811,10 @@ func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffse
 // on channel, if channel is private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
-func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, res *protocol.SubscribeResult, reply SubscribeReply, cmd *protocol.Command, serverSide bool, started time.Time, rw *replyWriter) subscribeContext {
+func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeReply, cmd *protocol.Command, serverSide bool, started time.Time, rw *replyWriter) subscribeContext {
 	ctx := subscribeContext{}
+
+	res := &protocol.SubscribeResult{}
 
 	if reply.Options.ExpireAt > 0 {
 		ttl := reply.Options.ExpireAt - time.Now().Unix()
