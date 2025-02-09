@@ -64,7 +64,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	var req protocol.EmulationRequest
 	if r.Header.Get("Content-Type") == "application/octet-stream" {
-		err = req.UnmarshalVTUnsafe(data)
+		err = req.UnmarshalVT(data)
 	} else {
 		_, err = json.Parse(data, &req, json.ZeroCopy)
 	}
@@ -133,7 +133,7 @@ const (
 
 func (h *emulationSurveyHandler) HandleEmulation(e SurveyEvent, cb SurveyCallback) {
 	var req protocol.EmulationRequest
-	err := req.UnmarshalVTUnsafe(e.Data)
+	err := req.UnmarshalVT(e.Data)
 	if err != nil {
 		h.node.logger.log(newErrorLogEntry(err, "error unmarshal emulation request", map[string]any{"data": string(e.Data), "error": err.Error()}))
 		cb(SurveyReply{Code: emulationErrorCodeBadRequest})

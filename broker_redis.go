@@ -1118,7 +1118,7 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 	channel := b.extractChannel(chID)
 	if pushType == pubPushType {
 		var pub protocol.Publication
-		err := pub.UnmarshalVTUnsafe(pushData)
+		err := pub.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
@@ -1136,7 +1136,7 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 		}
 		if delta && len(prevPayload) > 0 {
 			var prevPub protocol.Publication
-			err = prevPub.UnmarshalVTUnsafe(prevPayload)
+			err = prevPub.UnmarshalVT(prevPayload)
 			if err != nil {
 				return err
 			}
@@ -1146,14 +1146,14 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 		}
 	} else if pushType == joinPushType {
 		var info protocol.ClientInfo
-		err := info.UnmarshalVTUnsafe(pushData)
+		err := info.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
 		_ = eventHandler.HandleJoin(channel, infoFromProto(&info))
 	} else if pushType == leavePushType {
 		var info protocol.ClientInfo
-		err := info.UnmarshalVTUnsafe(pushData)
+		err := info.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
@@ -1265,7 +1265,7 @@ func (b *RedisBroker) historyStream(s *RedisShard, ch string, opts HistoryOption
 				return nil, StreamPosition{}, err
 			}
 			var pub protocol.Publication
-			err = pub.UnmarshalVTUnsafe(pushData)
+			err = pub.UnmarshalVT(pushData)
 			if err != nil {
 				return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 			}
@@ -1335,7 +1335,7 @@ func (b *RedisBroker) historyList(s *RedisShard, ch string, filter HistoryFilter
 		}
 
 		var pub protocol.Publication
-		err = pub.UnmarshalVTUnsafe(pushData)
+		err = pub.UnmarshalVT(pushData)
 		if err != nil {
 			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Pub: %v", err)
 		}
