@@ -2,8 +2,6 @@ module github.com/centrifugal/centrifuge/_examples
 
 go 1.23
 
-toolchain go1.23.4
-
 replace github.com/centrifugal/centrifuge => ../
 
 require (

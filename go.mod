@@ -2,8 +2,6 @@ module github.com/centrifugal/centrifuge
 
 go 1.22.0
 
-toolchain go1.23.4
-
 require (
 	github.com/FZambia/eagle v0.2.0
 	github.com/centrifugal/protocol v0.16.0
