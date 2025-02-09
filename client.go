@@ -2495,8 +2495,8 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		wg.Wait()
 
 		defer func() {
-			for _, sub := range subCtxMap {
-				sub.result.ReturnToVTPool()
+			for _, sub := range subs {
+				sub.ReturnToVTPool()
 			}
 		}()
 
