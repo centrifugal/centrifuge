@@ -346,8 +346,7 @@ func (c *Client) extractUnidirectionalDisconnect(err error) Disconnect {
 // with a server. If there is an error during connect method processing Centrifuge
 // extracts Disconnect from it and closes the connection with that Disconnect message.
 func (c *Client) Connect(req ConnectRequest) {
-	// unidirectionalConnect never returns errors when errorToDisconnect is true.
-	_ = c.unidirectionalConnect(req.toProto(), 0, true)
+	c.ProtocolConnect(req.toProto())
 }
 
 // ConnectNoErrorToDisconnect is the same as Client.Connect but does not try to extract
@@ -355,7 +354,20 @@ func (c *Client) Connect(req ConnectRequest) {
 // the error to the caller. This error must be handled by the caller on the Transport level,
 // and the connection must be closed on Transport level upon receiving an error.
 func (c *Client) ConnectNoErrorToDisconnect(req ConnectRequest) error {
-	return c.unidirectionalConnect(req.toProto(), 0, false)
+	return c.ProtocolConnectNoErrorToDisconnect(req.toProto())
+}
+
+// ProtocolConnect accepts protocol.ConnectRequest directly. It adds dependency to protocol package,
+// so prefer using Connect or ConnectNoErrorToDisconnect methods until necessary.
+func (c *Client) ProtocolConnect(req *protocol.ConnectRequest) {
+	// unidirectionalConnect never returns errors when errorToDisconnect is true.
+	_ = c.unidirectionalConnect(req, req.SizeVT(), true)
+}
+
+// ProtocolConnectNoErrorToDisconnect accepts protocol.ConnectRequest directly. It adds dependency to
+// protocol package, so prefer ConnectNoErrorToDisconnect methods until necessary.
+func (c *Client) ProtocolConnectNoErrorToDisconnect(req *protocol.ConnectRequest) error {
+	return c.unidirectionalConnect(req, req.SizeVT(), false)
 }
 
 func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
@@ -1026,7 +1038,8 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 
 	// close writer and send messages remaining in writer queue if any.
-	_ = c.messageWriter.close(disconnect != DisconnectConnectionClosed && disconnect != DisconnectSlow)
+	flushRemaining := disconnect.Code != DisconnectConnectionClosed.Code && disconnect.Code != DisconnectSlow.Code
+	_ = c.messageWriter.close(flushRemaining)
 
 	_ = c.transport.Close(disconnect)
 
@@ -2449,8 +2462,6 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 		wg.Add(len(subscriptions))
 		for ch, opts := range subscriptions {
-			subscribeResult := protocol.SubscribeResultFromVTPool()
-			defer subscribeResult.ReturnToVTPool()
 			go func(ch string, opts SubscribeOptions) {
 				defer wg.Done()
 				subCmd := &protocol.SubscribeRequest{
@@ -2467,6 +2478,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					case <-c.Context().Done():
 					}
 				}
+				subscribeResult := protocol.SubscribeResultFromVTPool() // Need to return only after connect reply written.
 				subCtx := c.subscribeCmd(subCmd, subscribeResult, SubscribeReply{Options: opts}, nil, true, started, nil)
 				subMu.Lock()
 				subs[ch] = subCtx.result
@@ -2481,6 +2493,12 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			}(ch, opts)
 		}
 		wg.Wait()
+
+		defer func() {
+			for _, sub := range subCtxMap {
+				sub.result.ReturnToVTPool()
+			}
+		}()
 
 		if subDisconnect != nil || subError != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
