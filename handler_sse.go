@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/readerpool"
 )
 
@@ -40,6 +41,12 @@ const connectUrlParam = "cf_connect"
 const defaultMaxSSEBodySize = 64 * 1024
 
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	_, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "expected http.ResponseWriter to be http.Flusher", http.StatusInternalServerError)
+		return
+	}
+
 	var requestData []byte
 	if r.Method == http.MethodGet {
 		requestDataString := r.URL.Query().Get(connectUrlParam)
@@ -101,10 +108,6 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expire", "0")
 	w.WriteHeader(http.StatusOK)
 
-	_, ok := w.(http.Flusher)
-	if !ok {
-		return
-	}
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 	_, err = w.Write([]byte("\r\n"))
@@ -124,14 +127,16 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-transport.disconnectCh:
 			return
-		case data, ok := <-transport.messages:
-			if !ok {
+		case messages, messagesOK := <-transport.messages:
+			if !messagesOK {
 				return
 			}
 			_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
-			_, err = w.Write([]byte("data: " + string(data) + "\n\n"))
-			if err != nil {
-				return
+			for _, msg := range messages {
+				_, err := w.Write(convert.StringToBytes("data: " + convert.BytesToString(msg) + "\n\n"))
+				if err != nil {
+					return
+				}
 			}
 			_ = rc.Flush()
 			_ = rc.SetWriteDeadline(time.Time{})
@@ -146,7 +151,7 @@ const (
 type sseTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
-	messages     chan []byte
+	messages     chan [][]byte
 	disconnectCh chan struct{}
 	closedCh     chan struct{}
 	config       sseTransportConfig
@@ -159,7 +164,7 @@ type sseTransportConfig struct {
 
 func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport {
 	return &sseTransport{
-		messages:     make(chan []byte),
+		messages:     make(chan [][]byte),
 		disconnectCh: make(chan struct{}),
 		closedCh:     make(chan struct{}),
 		req:          req,
@@ -210,12 +215,9 @@ func (t *sseTransport) WriteMany(messages ...[]byte) error {
 	if t.closed {
 		return nil
 	}
-	for i := 0; i < len(messages); i++ {
-		select {
-		case t.messages <- messages[i]:
-		case <-t.closedCh:
-			return nil
-		}
+	select {
+	case t.messages <- messages:
+	case <-t.closedCh:
 	}
 	return nil
 }
