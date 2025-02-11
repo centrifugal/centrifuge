@@ -2462,6 +2462,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					subCmd.Recover = subReq.Recover
 					subCmd.Offset = subReq.Offset
 					subCmd.Epoch = subReq.Epoch
+					subCmd.Delta = subReq.Delta
 				}
 				if isInTest && ch == testChannelRedisClientSubscribeRecoveryDeadlock2 { // Only for tests.
 					select {
