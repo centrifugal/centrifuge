@@ -5,6 +5,10 @@ services:
     image: redis:${REDIS_VERSION:-7}-alpine
     ports:
       - "6379:6379"
+  valkey:
+    image: valkey/valkey:${VALKEY_VERSION:-8}-alpine
+    ports:
+      - "8379:6379"
   dragonflydb:
     image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.19.0
     ports:
@@ -36,3 +40,18 @@ services:
       - "7000:7000"
       - "7001:7001"
       - "7002:7002"
+  valkey-cluster:
+    image: valkey/valkey:${VALKEY_VERSION:-8}-alpine
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        valkey-server --port 8000 --save "" --appendonly no --cluster-enabled yes --cluster-config-file 8000.conf &
+        valkey-server --port 8001 --save "" --appendonly no --cluster-enabled yes --cluster-config-file 8001.conf &
+        valkey-server --port 8002 --save "" --appendonly no --cluster-enabled yes --cluster-config-file 8002.conf &
+        while ! valkey-cli --cluster create 127.0.0.1:8000 127.0.0.1:8001 127.0.0.1:8002 --cluster-yes; do sleep 1; done
+        wait
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
