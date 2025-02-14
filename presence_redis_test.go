@@ -16,7 +16,7 @@ import (
 
 func newTestRedisPresenceManager(tb testing.TB, n *Node, useCluster bool, userMapping, hashFieldTTL bool, port int) *RedisPresenceManager {
 	if useCluster {
-		return NewTestRedisPresenceManagerClusterWithPrefix(tb, n, getUniquePrefix(), userMapping)
+		return NewTestRedisPresenceManagerClusterWithPrefix(tb, n, getUniquePrefix(), userMapping, port)
 	}
 	return NewTestRedisPresenceManagerWithPrefix(tb, n, getUniquePrefix(), userMapping, hashFieldTTL, port)
 }
@@ -50,9 +50,9 @@ func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string
 	return pm
 }
 
-func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix string, userMapping bool) *RedisPresenceManager {
+func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix string, userMapping bool, port int) *RedisPresenceManager {
 	redisConf := RedisShardConfig{
-		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		ClusterAddresses: []string{"localhost:" + strconv.Itoa(port), "localhost:" + strconv.Itoa(port+1), "localhost:" + strconv.Itoa(port+2)},
 		IOTimeout:        10 * time.Second,
 	}
 	s, err := NewRedisShard(n, redisConf)
@@ -84,7 +84,9 @@ type redisPresenceTest struct {
 var redisPresenceTests = []redisPresenceTest{
 	{"rd_single", false, 6379},
 	{"df_single", false, 7379},
-	{"rd_cluster", true, 0},
+	{"vk_single", false, 8379},
+	{"rd_cluster", true, 7000},
+	{"vk_cluster", true, 8000},
 }
 
 func excludeClusterPresenceTests(tests []redisPresenceTest) []redisPresenceTest {

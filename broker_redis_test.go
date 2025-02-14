@@ -26,7 +26,7 @@ func getUniquePrefix() string {
 
 func newTestRedisBroker(tb testing.TB, n *Node, useStreams bool, useCluster bool, port int) *RedisBroker {
 	if useCluster {
-		return NewTestRedisBrokerCluster(tb, n, getUniquePrefix(), useStreams)
+		return NewTestRedisBrokerCluster(tb, n, getUniquePrefix(), useStreams, port)
 	}
 	return NewTestRedisBroker(tb, n, getUniquePrefix(), useStreams, port)
 }
@@ -77,7 +77,7 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool, 
 	return e
 }
 
-func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams bool) *RedisBroker {
+func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams bool, port int) *RedisBroker {
 	tb.Helper()
 
 	numClusterNodes := 3
@@ -91,7 +91,7 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	var clusterAddresses []string
 
 	for i := 0; i < numClusterNodes; i++ {
-		clusterAddresses = append(clusterAddresses, net.JoinHostPort("127.0.0.1", strconv.Itoa(7000+i)))
+		clusterAddresses = append(clusterAddresses, net.JoinHostPort("127.0.0.1", strconv.Itoa(port+i)))
 	}
 
 	redisConf := RedisShardConfig{
@@ -179,11 +179,14 @@ type historyRedisTest struct {
 
 var historyRedisTests = []historyRedisTest{
 	{"rd_single_list", false, false, 6379},
+	{"vk_single_list", false, false, 8379},
 	{"rd_single_strm", true, false, 6379},
+	{"vk_single_strm", true, false, 8379},
 	{"df_single_list", false, false, 7379},
 	{"df_single_strm", true, false, 7379},
-	{"rd_cluster_list", false, true, 0},
-	{"rd_cluster_strm", true, true, 0},
+	{"rd_cluster_list", false, true, 7000},
+	{"rd_cluster_strm", true, true, 7000},
+	{"vk_cluster_strm", true, true, 8000},
 }
 
 type noHistoryRedisTest struct {
@@ -195,6 +198,7 @@ type noHistoryRedisTest struct {
 var noHistoryRedisTests = []noHistoryRedisTest{
 	{"rd_single", false, 6379},
 	{"df_single", false, 7379},
+	{"vk_single", false, 8379},
 	{"rd_cluster", false, 0},
 }
 
