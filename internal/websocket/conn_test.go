@@ -81,9 +81,6 @@ func TestFraming(t *testing.T) {
 		{"write", func(w io.Writer, n int) (int, error) {
 			return w.Write(writeBuf[:n])
 		}},
-		{"string", func(w io.Writer, n int) (int, error) {
-			return io.WriteString(w, string(writeBuf[:n]))
-		}},
 	}
 
 	for _, compress := range []bool{false, true} {

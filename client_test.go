@@ -263,7 +263,7 @@ func TestClientConnectNoCredentialsNoToken(t *testing.T) {
 	transport := newTestTransport(func() {})
 	client, _ := newClient(context.Background(), node, transport)
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, DisconnectBadRequest, err)
 }
 
@@ -281,7 +281,7 @@ func TestClientConnectContextCredentials(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	result := extractConnectReply(rwWrapper.replies)
 	require.Equal(t, false, result.Expires)
@@ -312,7 +312,7 @@ func TestClientRefreshHandlerClosingExpiredClient(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	client.triggerConnect()
 	client.expire()
@@ -342,7 +342,7 @@ func TestClientRefreshHandlerProlongsClientSession(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	client.expire()
 	require.False(t, client.status == statusClosed)
@@ -368,7 +368,7 @@ func TestClientConnectWithExpiredContextCredentials(t *testing.T) {
 	})
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 }
 
@@ -929,7 +929,7 @@ func TestUserConnectionLimit(t *testing.T) {
 
 	rwWrapper := testReplyWriterWrapper()
 	anotherClient, _ := newClient(newCtx, node, transport)
-	_, err := anotherClient.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := anotherClient.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, DisconnectConnectionLimit, err)
 }
 
@@ -2449,7 +2449,7 @@ func TestClientConnectExpiredError(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.Equal(t, ErrorExpired, err)
 	require.False(t, client.authenticated)
 }
@@ -3569,7 +3569,7 @@ func TestClientOnStateSnapshot(t *testing.T) {
 
 func connectClientV2(t testing.TB, client *Client) {
 	rwWrapper := testReplyWriterWrapper()
-	_, err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	err := client.connectCmd(&protocol.ConnectRequest{}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Nil(t, rwWrapper.replies[0].Error)
 	require.True(t, client.authenticated)
@@ -4224,4 +4224,59 @@ func TestWrappedDisconnect(t *testing.T) {
 		require.Equal(t, uint32(1001), d.Code, "disconnect code should match")
 		require.Equal(t, "Test disconnect", d.Reason, "disconnect reason should match")
 	})
+}
+
+func benchNodeNoHandlers() *Node {
+	n, err := New(Config{
+		LogLevel:   LogLevelError,
+		LogHandler: func(entry LogEntry) {},
+	})
+	if err != nil {
+		panic(err)
+	}
+	err = n.Run()
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func BenchmarkClientRPC(b *testing.B) {
+	node := benchNodeNoHandlers()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	node.OnConnect(func(client *Client) {
+		client.OnRPC(func(event RPCEvent, callback RPCCallback) {
+			callback(RPCReply{
+				Data: []byte(`{}`),
+			}, nil)
+		})
+	})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setPing(-1, 0)
+	sink := make(chan []byte, 100)
+	transport.setSink(sink)
+	transport.setProtocolType(ProtocolTypeProtobuf)
+	client := newTestClientCustomTransport(b, ctx, node, transport, "42")
+	connectClientV2(b, client)
+	<-sink
+	rpcCmd := &protocol.Command{
+		Id: 2,
+		Rpc: &protocol.RPCRequest{
+			Data: []byte(`{"key":"valuevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevaluevalue"}`),
+		},
+	}
+	frame, err := protocol.NewProtobufCommandEncoder().Encode(rpcCmd)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		decoder := protocol.GetStreamCommandDecoder(protocol.TypeProtobuf, bytes.NewReader(frame))
+		cmd, cmdProtocolSize, err := decoder.Decode()
+		require.NoError(b, err)
+		client.HandleCommand(cmd, cmdProtocolSize)
+		<-sink
+		protocol.PutStreamCommandDecoder(protocol.TypeProtobuf, decoder)
+	}
 }

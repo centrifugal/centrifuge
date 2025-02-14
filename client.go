@@ -192,6 +192,8 @@ type ConnectRequest struct {
 	Version string
 	// Subs is a map with channel subscription state (for recovery on connect).
 	Subs map[string]SubscribeRequest
+	// Headers represent headers which may be used for headers emulation feature.
+	Headers map[string]string
 }
 
 // SubscribeRequest contains state of subscription to a channel.
@@ -213,6 +215,7 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 		Data:    r.Data,
 		Name:    r.Name,
 		Version: r.Version,
+		Headers: r.Headers,
 	}
 	if len(r.Subs) > 0 {
 		subs := make(map[string]*protocol.SubscribeRequest, len(r.Subs))
@@ -343,8 +346,7 @@ func (c *Client) extractUnidirectionalDisconnect(err error) Disconnect {
 // with a server. If there is an error during connect method processing Centrifuge
 // extracts Disconnect from it and closes the connection with that Disconnect message.
 func (c *Client) Connect(req ConnectRequest) {
-	// unidirectionalConnect never returns errors when errorToDisconnect is true.
-	_ = c.unidirectionalConnect(req.toProto(), 0, true)
+	c.ProtocolConnect(req.toProto())
 }
 
 // ConnectNoErrorToDisconnect is the same as Client.Connect but does not try to extract
@@ -352,7 +354,20 @@ func (c *Client) Connect(req ConnectRequest) {
 // the error to the caller. This error must be handled by the caller on the Transport level,
 // and the connection must be closed on Transport level upon receiving an error.
 func (c *Client) ConnectNoErrorToDisconnect(req ConnectRequest) error {
-	return c.unidirectionalConnect(req.toProto(), 0, false)
+	return c.ProtocolConnectNoErrorToDisconnect(req.toProto())
+}
+
+// ProtocolConnect accepts protocol.ConnectRequest directly. It adds dependency to protocol package,
+// so prefer using Connect or ConnectNoErrorToDisconnect methods until necessary.
+func (c *Client) ProtocolConnect(req *protocol.ConnectRequest) {
+	// unidirectionalConnect never returns errors when errorToDisconnect is true.
+	_ = c.unidirectionalConnect(req, req.SizeVT(), true)
+}
+
+// ProtocolConnectNoErrorToDisconnect accepts protocol.ConnectRequest directly. It adds dependency to
+// protocol package, so prefer ConnectNoErrorToDisconnect methods until necessary.
+func (c *Client) ProtocolConnectNoErrorToDisconnect(req *protocol.ConnectRequest) error {
+	return c.unidirectionalConnect(req, req.SizeVT(), false)
 }
 
 func (c *Client) getDisconnectPushReply(d Disconnect) ([]byte, error) {
@@ -416,7 +431,7 @@ func (c *Client) unidirectionalConnect(connectRequest *protocol.ConnectRequest, 
 			return err
 		}
 	}
-	_, err := c.connectCmd(connectRequest, nil, time.Time{}, nil)
+	err := c.connectCmd(connectRequest, nil, time.Time{}, nil)
 	if err != nil {
 		if c.node.clientEvents.commandProcessedHandler != nil {
 			c.handleCommandFinished(cmd, protocol.FrameTypeConnect, err, nil, started, "")
@@ -1021,7 +1036,8 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 
 	// close writer and send messages remaining in writer queue if any.
-	_ = c.messageWriter.close(disconnect != DisconnectConnectionClosed && disconnect != DisconnectSlow)
+	flushRemaining := disconnect.Code != DisconnectConnectionClosed.Code && disconnect.Code != DisconnectSlow.Code
+	_ = c.messageWriter.close(flushRemaining)
 
 	_ = c.transport.Close(disconnect)
 
@@ -1351,7 +1367,11 @@ func (c *Client) writeEncodedCommandReply(ch string, frameType protocol.FrameTyp
 		return
 	}
 
-	item := queue.Item{Data: replyData, FrameType: frameType}
+	// Note: avoid adding *Reply to item since it's pooled.
+	item := queue.Item{
+		Data:      replyData,
+		FrameType: frameType,
+	}
 	if ch != "" && c.node.config.Metrics.GetChannelNamespaceLabel != nil {
 		item.Channel = ch
 	}
@@ -1447,7 +1467,7 @@ func (c *Client) expire() {
 }
 
 func (c *Client) handleConnect(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
-	_, err := c.connectCmd(req, cmd, started, rw)
+	err := c.connectCmd(req, cmd, started, rw)
 	if err != nil {
 		return err
 	}
@@ -1881,7 +1901,8 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 			}
 		}
 
-		protoReply, err := c.getPublishCommandReply(&protocol.PublishResult{})
+		res := &protocol.PublishResult{}
+		protoReply, err := c.getPublishCommandReply(res)
 		if err != nil {
 			c.logWriteInternalErrorFlush(channel, protocol.FrameTypePublish, cmd, err, "error encoding publish", started, rw)
 			return
@@ -2219,7 +2240,7 @@ const (
 
 // connectCmd handles connect command from client - client must send connect
 // command immediately after establishing connection with server.
-func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) (*protocol.ConnectResult, error) {
+func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command, started time.Time, rw *replyWriter) error {
 	var metricClientName string
 	if req.Name != "" {
 		metricClientName = "unregistered"
@@ -2240,11 +2261,11 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.RUnlock()
 
 	if closed {
-		return nil, DisconnectConnectionClosed
+		return DisconnectConnectionClosed
 	}
 
 	if authenticated {
-		return nil, c.logDisconnectBadRequest("client already authenticated")
+		return c.logDisconnectBadRequest("client already authenticated")
 	}
 
 	config := c.node.config
@@ -2279,7 +2300,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		reply, err := c.node.clientEvents.connectingHandler(c.ctx, e)
 		if err != nil {
 			c.startWriter(0, 0, 0)
-			return nil, err
+			return err
 		}
 		if reply.PingPongConfig != nil {
 			c.pingInterval, c.pongTimeout = getPingPongPeriodValues(*reply.PingPongConfig)
@@ -2317,7 +2338,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	}
 
 	if channelLimit > 0 && len(subscriptions) > channelLimit {
-		return nil, DisconnectChannelLimit
+		return DisconnectChannelLimit
 	}
 
 	if credentials == nil {
@@ -2337,7 +2358,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.Unlock()
 
 	if credentials == nil {
-		return nil, c.logDisconnectBadRequest("client credentials not found")
+		return c.logDisconnectBadRequest("client credentials not found")
 	}
 
 	c.mu.Lock()
@@ -2351,7 +2372,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.Unlock()
 
 	if closed {
-		return nil, DisconnectConnectionClosed
+		return DisconnectConnectionClosed
 	}
 
 	if c.node.logEnabled(LogLevelDebug) {
@@ -2360,7 +2381,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 
 	if userConnectionLimit > 0 && user != "" && len(c.node.hub.UserConnections(user)) >= userConnectionLimit {
 		c.node.logger.log(newLogEntry(LogLevelInfo, "limit of connections for user reached", map[string]any{"user": user, "client": c.uid, "limit": userConnectionLimit}))
-		return nil, DisconnectConnectionLimit
+		return DisconnectConnectionLimit
 	}
 
 	c.mu.RLock()
@@ -2370,17 +2391,16 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if exp < now {
 			c.mu.RUnlock()
 			c.node.logger.log(newLogEntry(LogLevelInfo, "connection expiration must be greater than now", map[string]any{"client": c.uid, "user": c.UserID()}))
-			return nil, ErrorExpired
+			return ErrorExpired
 		}
 		ttl = uint32(exp - now)
 	}
 	c.mu.RUnlock()
 
-	res := &protocol.ConnectResult{
-		Version: version,
-		Expires: expires,
-		Ttl:     ttl,
-	}
+	res := &protocol.ConnectResult{}
+	res.Version = version
+	res.Expires = expires
+	res.Ttl = ttl
 
 	if c.pingInterval > 0 {
 		res.Ping = uint32(c.pingInterval.Seconds())
@@ -2403,7 +2423,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.Lock()
 	if c.status == statusClosed {
 		c.mu.Unlock()
-		return nil, DisconnectConnectionClosed
+		return DisconnectConnectionClosed
 	}
 	c.authenticated = true
 	c.metricName = metricClientName
@@ -2442,6 +2462,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 					subCmd.Recover = subReq.Recover
 					subCmd.Offset = subReq.Offset
 					subCmd.Epoch = subReq.Epoch
+					subCmd.Delta = subReq.Delta
 				}
 				if isInTest && ch == testChannelRedisClientSubscribeRecoveryDeadlock2 { // Only for tests.
 					select {
@@ -2470,9 +2491,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				c.onSubscribeError(channel)
 			}
 			if subDisconnect != nil {
-				return nil, subDisconnect
+				return subDisconnect
 			}
-			return nil, subError
+			return subError
 		}
 		res.Subs = subs
 	}
@@ -2483,7 +2504,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			if err != nil {
 				c.unlockServerSideSubscriptions(subCtxMap)
 				c.node.logger.log(newErrorLogEntry(err, "error encoding connect", map[string]any{"error": err.Error()}))
-				return nil, DisconnectServerError
+				return DisconnectServerError
 			}
 			c.writeEncodedPush(protoReply, rw, "", protocol.FrameTypePushConnect)
 			if c.node.logEnabled(LogLevelTrace) {
@@ -2495,7 +2516,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		if err != nil {
 			c.unlockServerSideSubscriptions(subCtxMap)
 			c.node.logger.log(newErrorLogEntry(err, "error encoding connect", map[string]any{"error": err.Error()}))
-			return nil, DisconnectServerError
+			return DisconnectServerError
 		}
 		c.writeEncodedCommandReply("", protocol.FrameTypeConnect, cmd, protoReply, rw)
 		defer c.releaseConnectCommandReply(protoReply)
@@ -2520,7 +2541,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 	}
 
-	return res, nil
+	return nil
 }
 
 func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Reply, error) {
@@ -2792,8 +2813,8 @@ func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffse
 // actually subscribe client on channel. Optionally we can send missed messages to
 // client if it provided last message id seen in channel.
 func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeReply, cmd *protocol.Command, serverSide bool, started time.Time, rw *replyWriter) subscribeContext {
-
 	ctx := subscribeContext{}
+
 	res := &protocol.SubscribeResult{}
 
 	if reply.Options.ExpireAt > 0 {

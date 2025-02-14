@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/readerpool"
 
 	"github.com/centrifugal/protocol"
+	"github.com/segmentio/encoding/json"
 )
 
 // EmulationConfig is a config for EmulationHandler.
@@ -66,7 +66,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Type") == "application/octet-stream" {
 		err = req.UnmarshalVT(data)
 	} else {
-		err = json.Unmarshal(data, &req)
+		_, err = json.Parse(data, &req, json.ZeroCopy)
 	}
 	if err != nil {
 		if s.node.logEnabled(LogLevelInfo) {

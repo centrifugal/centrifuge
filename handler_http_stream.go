@@ -44,6 +44,12 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "expected http.ResponseWriter to be http.Flusher", http.StatusInternalServerError)
+		return
+	}
+
 	protocolType := ProtocolTypeJSON
 	if r.Header.Get("Content-Type") == "application/octet-stream" {
 		protocolType = ProtocolTypeProtobuf
@@ -103,11 +109,6 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Expire", "0")
 	w.WriteHeader(http.StatusOK)
 
-	_, ok := w.(http.Flusher)
-	if !ok {
-		return
-	}
-
 	rc := http.NewResponseController(w)
 
 	reader := readerpool.GetBytesReader(requestData)
@@ -120,28 +121,31 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-transport.disconnectCh:
 			return
-		case data, ok := <-transport.messages:
-			if !ok {
+		case messages, messagesOK := <-transport.messages:
+			if !messagesOK {
 				return
 			}
 			_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
 			if protocolType == ProtocolTypeProtobuf {
-				protoType := protocolType.toProto()
-				encoder := protocol.GetDataEncoder(protoType)
-				_ = encoder.Encode(data)
+				encoder := protocol.GetDataEncoder(protocolType.toProto())
+				for _, message := range messages {
+					_ = encoder.Encode(message)
+				}
 				_, err := w.Write(encoder.Finish())
 				if err != nil {
 					return
 				}
-				protocol.PutDataEncoder(protoType, encoder)
+				protocol.PutDataEncoder(protocolType.toProto(), encoder)
 			} else {
-				_, err = w.Write(data)
-				if err != nil {
-					return
-				}
-				_, err = w.Write([]byte("\n"))
-				if err != nil {
-					return
+				for _, message := range messages {
+					_, err = w.Write(message)
+					if err != nil {
+						return
+					}
+					_, err = w.Write([]byte("\n"))
+					if err != nil {
+						return
+					}
 				}
 			}
 			_ = rc.Flush()
@@ -157,7 +161,7 @@ const (
 type httpStreamTransport struct {
 	mu           sync.Mutex
 	req          *http.Request
-	messages     chan []byte
+	messages     chan [][]byte
 	disconnectCh chan struct{}
 	closedCh     chan struct{}
 	closed       bool
@@ -171,7 +175,7 @@ type httpStreamTransportConfig struct {
 
 func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig) *httpStreamTransport {
 	return &httpStreamTransport{
-		messages:     make(chan []byte),
+		messages:     make(chan [][]byte),
 		disconnectCh: make(chan struct{}),
 		closedCh:     make(chan struct{}),
 		req:          req,
@@ -222,12 +226,9 @@ func (t *httpStreamTransport) WriteMany(messages ...[]byte) error {
 	if t.closed {
 		return nil
 	}
-	for i := 0; i < len(messages); i++ {
-		select {
-		case t.messages <- messages[i]:
-		case <-t.closedCh:
-			return nil
-		}
+	select {
+	case t.messages <- messages:
+	case <-t.closedCh:
 	}
 	return nil
 }

@@ -1799,13 +1799,14 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 
 			prefix := getUniquePrefix()
 
-			b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+			b1, err := NewRedisBroker(node1, RedisBrokerConfig{
 				Prefix:               prefix,
 				Shards:               []*RedisShard{s},
 				numSubscribeShards:   tt.NumSubscribeShards,
 				numResubscribeShards: tt.NumResubscribeShards,
 				numPubSubProcessors:  tt.NumPubSubProcessors,
 			})
+			require.NoError(b, err)
 			defer stopRedisBroker(b1)
 
 			node1.SetBroker(b1)
@@ -2151,7 +2152,7 @@ func TestRedisClientSubscribeRecoveryServerSubs(t *testing.T) {
 			defer wg.Done()
 			client := newTestClient(t, node, "42")
 			rwWrapper := testReplyWriterWrapper()
-			_, err := client.connectCmd(&protocol.ConnectRequest{
+			err := client.connectCmd(&protocol.ConnectRequest{
 				Subs: map[string]*protocol.SubscribeRequest{},
 			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 			require.NoError(t, err)
@@ -2201,6 +2202,7 @@ func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
 					}
 					return
 				}
+				time.Sleep(10 * time.Millisecond)
 				i++
 			}
 		}(channel)
@@ -2243,7 +2245,7 @@ func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
 			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 			require.NoError(t, err)
 			require.Equal(t, 2, len(rwWrapper.replies))
-			require.Nil(t, rwWrapper.replies[0].Error)
+			require.Nil(t, rwWrapper.replies[1].Error)
 
 			err = client.handleSubscribe(&protocol.SubscribeRequest{
 				Channel: channel1,
@@ -2252,7 +2254,7 @@ func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
 			}, &protocol.Command{}, time.Now(), rwWrapper.rw)
 			require.NoError(t, err)
 			require.Equal(t, 3, len(rwWrapper.replies))
-			require.Nil(t, rwWrapper.replies[0].Error)
+			require.Nil(t, rwWrapper.replies[2].Error)
 			res = extractSubscribeResult(rwWrapper.replies)
 			require.Empty(t, res.Offset)
 			require.NotZero(t, res.Epoch)
