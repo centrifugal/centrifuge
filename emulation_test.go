@@ -31,7 +31,7 @@ func TestEmulationHandler_Options(t *testing.T) {
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
 func TestEmulationHandler_RequestTooLarge(t *testing.T) {
