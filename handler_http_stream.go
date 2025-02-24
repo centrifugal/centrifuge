@@ -34,13 +34,17 @@ func NewHTTPStreamHandler(node *Node, config HTTPStreamConfig) *HTTPStreamHandle
 	}
 }
 
-const defaultMaxHTTPStreamingBodySize = 64 * 1024
-
-const streamingResponseWriteTimeout = time.Second
+const (
+	defaultMaxHTTPStreamingBodySize  = 64 * 1024
+	streamingResponseWriteTimeout    = time.Second
+	statusCodeClientConnectionClosed = 499
+)
 
 func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions { // For pre-flight browser requests.
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Access-Control-Max-Age", "300")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -70,7 +74,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(statusCodeClientConnectionClosed)
 			return
 		}
 	} else {
@@ -125,7 +129,10 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !messagesOK {
 				return
 			}
-			_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
+			err = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
+			if err != nil && h.node.logEnabled(LogLevelTrace) {
+				h.node.logger.log(newLogEntry(LogLevelTrace, "can't set custom write deadline", map[string]any{"error": err.Error()}))
+			}
 			if protocolType == ProtocolTypeProtobuf {
 				encoder := protocol.GetDataEncoder(protocolType.toProto())
 				for _, message := range messages {
