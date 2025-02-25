@@ -332,6 +332,14 @@ http.Handle("/connection/http_stream", CORS(centrifuge.NewHTTPStreamHandler(node
 
 You can also configure CORS on load-balancer/reverse-proxy level.
 
+### Server timeouts and HTTP-based real-time transports
+
+Centrifuge uses [http.ResponseController](https://pkg.go.dev/net/http#ResponseController) when working with timeouts in HTTP-streaming and Server-Sent Events (SSE) handlers. This allows having custom timeouts for HTTP server. But if you are using HTTP middlewares which provide a custom implementation of `http.ResponseWriter` – then make sure they implement `Unwrap` method to access original `http.ResponseWriter` for `ResponseController` to work correctly. As per `http` package documentation:
+
+> The ResponseWriter should be the original value passed to the [Handler.ServeHTTP] method, or have an Unwrap method returning the original ResponseWriter.
+
+If handlers can't access original `http.ResponseWriter` – then you will observe connection closing corresponding to your HTTP server's `ReadTimeout` setting.
+
 ### For contributors
 
 #### Running integration tests locally

@@ -150,7 +150,6 @@ func (w *writer) close(flushRemaining bool) error {
 	if flushRemaining {
 		remaining := w.messages.CloseRemaining()
 		if len(remaining) > 0 {
-			// TODO: make it respect MaxMessagesInFrame option.
 			_ = w.config.WriteManyFn(remaining...)
 		}
 	} else {

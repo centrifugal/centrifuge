@@ -71,7 +71,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				return
 			}
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(statusCodeClientConnectionClosed)
 			return
 		}
 	} else {
@@ -109,7 +109,10 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
+	err = rc.SetWriteDeadline(time.Now().Add(streamingResponseWriteTimeout))
+	if err != nil && h.node.logEnabled(LogLevelTrace) {
+		h.node.logger.log(newLogEntry(LogLevelTrace, "can't set custom write deadline", map[string]any{"error": err.Error()}))
+	}
 	_, err = w.Write([]byte("\r\n"))
 	if err != nil {
 		return

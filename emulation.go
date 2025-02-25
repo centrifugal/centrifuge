@@ -41,7 +41,13 @@ func NewEmulationHandler(node *Node, config EmulationConfig) *EmulationHandler {
 func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		// For pre-flight browser requests.
-		rw.WriteHeader(http.StatusOK)
+		rw.Header().Set("Access-Control-Max-Age", "300")
+		rw.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		rw.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		rw.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -58,7 +64,7 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			rw.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
-		rw.WriteHeader(http.StatusInternalServerError)
+		rw.WriteHeader(statusCodeClientConnectionClosed)
 		return
 	}
 

@@ -1111,12 +1111,12 @@ var (
 )
 
 func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, chID channelID, data []byte) error {
-	pushData, pushType, sp, delta, prevPayload, ok := extractPushData(data)
+	pushData, typeOfPush, sp, delta, prevPayload, ok := extractPushData(data)
 	if !ok {
 		return fmt.Errorf("malformed PUB/SUB data: %s", data)
 	}
 	channel := b.extractChannel(chID)
-	if pushType == pubPushType {
+	if typeOfPush == pubPushType {
 		var pub protocol.Publication
 		err := pub.UnmarshalVT(pushData)
 		if err != nil {
@@ -1144,14 +1144,14 @@ func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, 
 		} else {
 			_ = eventHandler.HandlePublication(channel, pubFromProto(&pub), sp, delta, nil)
 		}
-	} else if pushType == joinPushType {
+	} else if typeOfPush == joinPushType {
 		var info protocol.ClientInfo
 		err := info.UnmarshalVT(pushData)
 		if err != nil {
 			return err
 		}
 		_ = eventHandler.HandleJoin(channel, infoFromProto(&info))
-	} else if pushType == leavePushType {
+	} else if typeOfPush == leavePushType {
 		var info protocol.ClientInfo
 		err := info.UnmarshalVT(pushData)
 		if err != nil {

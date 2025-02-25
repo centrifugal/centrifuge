@@ -31,7 +31,28 @@ func TestEmulationHandler_Options(t *testing.T) {
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+}
+
+func TestEmulationHandler_UnknownMethod(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/emulation", NewEmulationHandler(n, EmulationConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := server.URL + "/emulation"
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(nil))
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
 
 func TestEmulationHandler_RequestTooLarge(t *testing.T) {
