@@ -167,6 +167,27 @@ func TestHTTPStreamHandler_Options(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
+func TestHTTPStreamHandler_UnknownMethod(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/connection/http_stream", NewHTTPStreamHandler(n, HTTPStreamConfig{}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	url := server.URL + "/connection/http_stream"
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewBuffer(nil))
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}
+
 func newJSONStreamDecoder(body io.Reader) *jsonStreamDecoder {
 	return &jsonStreamDecoder{
 		r: bufio.NewReader(body),

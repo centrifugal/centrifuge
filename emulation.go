@@ -46,6 +46,10 @@ func (s *EmulationHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusNoContent)
 		return
 	}
+	if r.Method != http.MethodPost {
+		rw.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 
 	maxBytesSize := s.config.MaxRequestBodySize
 	if maxBytesSize == 0 {

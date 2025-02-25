@@ -164,6 +164,34 @@ func TestSSEHandler_RequestTooLarge(t *testing.T) {
 	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
+func TestSSEHandler_UnknownMethod(t *testing.T) {
+	t.Parallel()
+	n, _ := New(Config{})
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	mux := http.NewServeMux()
+	mux.Handle("/connection/sse", NewSSEHandler(n, SSEConfig{
+		MaxRequestBodySize: 2,
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	command := &protocol.Command{
+		Id:      1,
+		Connect: &protocol.ConnectRequest{},
+	}
+	jsonData, err := json.Marshal(command)
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPatch, server.URL+"/connection/sse", bytes.NewBuffer(jsonData))
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+}
+
 func newSSEStreamDecoder(body io.Reader) *sseStreamDecoder {
 	return &sseStreamDecoder{
 		r: bufio.NewReader(body),
