@@ -37,8 +37,12 @@ type RedisShard struct {
 
 var knownRedisURLPrefixes = []string{
 	"redis://",
+	"rediss://",
 	"redis+sentinel://",
+	"rediss+sentinel://",
+	"rediss+sentinels://",
 	"redis+cluster://",
+	"rediss+cluster://",
 	"unix://",
 	"tcp://",
 }
@@ -77,7 +81,7 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 	var addresses []string
 
 	switch u.Scheme {
-	case "tcp", "redis", "redis+sentinel", "redis+cluster":
+	case "tcp", "redis", "redis+sentinel", "redis+cluster", "rediss", "rediss+sentinel", "rediss+sentinels", "rediss+cluster":
 		addresses = []string{u.Host}
 		if u.Path != "" {
 			db, err := strconv.Atoi(strings.TrimPrefix(u.Path, "/"))
@@ -85,6 +89,12 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 				return result, fmt.Errorf("can't parse Redis DB number from connection address: %s is not a number", u.Path)
 			}
 			result.ClientOption.SelectDB = db
+		}
+		if strings.HasPrefix(u.Scheme, "rediss") && result.ClientOption.TLSConfig == nil {
+			result.ClientOption.TLSConfig = &tls.Config{}
+		}
+		if strings.HasSuffix(u.Scheme, "sentinels") && result.ClientOption.Sentinel.TLSConfig == nil {
+			result.ClientOption.Sentinel.TLSConfig = &tls.Config{}
 		}
 	case "unix":
 		addresses = []string{u.Path}
@@ -174,8 +184,8 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 	}
 
 	result.ClientOption.InitAddress = addresses
-	result.IsCluster = u.Scheme == "redis+cluster"
-	result.IsSentinel = u.Scheme == "redis+sentinel"
+	result.IsCluster = u.Scheme == "redis+cluster" || u.Scheme == "rediss+cluster"
+	result.IsSentinel = u.Scheme == "redis+sentinel" || u.Scheme == "rediss+sentinel" || u.Scheme == "rediss+sentinels"
 	return result, nil
 }
 
