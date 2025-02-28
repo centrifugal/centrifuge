@@ -83,7 +83,7 @@ type redisPresenceTest struct {
 
 var redisPresenceTests = []redisPresenceTest{
 	{"rd_single", false, 6379},
-	{"df_single", false, 7379},
+	{"df_single", false, 9379},
 	{"vk_single", false, 8379},
 	{"rd_cluster", true, 7000},
 	{"vk_cluster", true, 8000},

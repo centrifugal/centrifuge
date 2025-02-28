@@ -15,7 +15,7 @@ func TestNewRedisShard(t *testing.T) {
 		expectedCluster bool
 	}{
 		{
-			name: "standalone redis",
+			name: "redis standalone",
 			config: RedisShardConfig{
 				Address: "redis://127.0.0.1:6379",
 			},
@@ -28,7 +28,7 @@ func TestNewRedisShard(t *testing.T) {
 			expectedCluster: true,
 		},
 		{
-			name: "standalone valkey",
+			name: "valkey standalone",
 			config: RedisShardConfig{
 				Address: "redis://127.0.0.1:8379",
 			},
@@ -41,10 +41,17 @@ func TestNewRedisShard(t *testing.T) {
 			expectedCluster: true,
 		},
 		{
-			name: "standalone dragonfly",
+			name: "dragonfly standalone",
 			config: RedisShardConfig{
-				Address: "redis://127.0.0.1:8000",
+				Address: "redis://127.0.0.1:9379",
 			},
+		},
+		{
+			name: "dragonfly cluster",
+			config: RedisShardConfig{
+				Address: "redis://127.0.0.1:9000",
+			},
+			expectedCluster: true,
 		},
 	}
 	for _, tc := range testCases {

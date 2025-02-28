@@ -182,8 +182,8 @@ var historyRedisTests = []historyRedisTest{
 	{"vk_single_list", false, false, 8379},
 	{"rd_single_strm", true, false, 6379},
 	{"vk_single_strm", true, false, 8379},
-	{"df_single_list", false, false, 7379},
-	{"df_single_strm", true, false, 7379},
+	{"df_single_list", false, false, 9379},
+	{"df_single_strm", true, false, 9379},
 	{"rd_cluster_list", false, true, 7000},
 	{"rd_cluster_strm", true, true, 7000},
 	{"vk_cluster_strm", true, true, 8000},
@@ -197,7 +197,7 @@ type noHistoryRedisTest struct {
 
 var noHistoryRedisTests = []noHistoryRedisTest{
 	{"rd_single", false, 6379},
-	{"df_single", false, 7379},
+	{"df_single", false, 9379},
 	{"vk_single", false, 8379},
 	{"rd_cluster", false, 0},
 }
@@ -1785,9 +1785,9 @@ var throughputTests = []throughputTest{
 	{1, 0, 0, 6379},
 	{2, 0, 0, 6379},
 	{4, 0, 0, 6379},
-	{1, 0, 0, 7379},
-	{2, 0, 0, 7379},
-	{4, 0, 0, 7379},
+	{1, 0, 0, 9379},
+	{2, 0, 0, 9379},
+	{4, 0, 0, 9379},
 }
 
 func BenchmarkPubSubThroughput(b *testing.B) {
