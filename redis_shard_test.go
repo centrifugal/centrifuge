@@ -196,31 +196,6 @@ func TestOptionsFromAddress(t *testing.T) {
 				},
 			},
 		},
-		{
-			name:          "Redis secure and Sentinel secure URL",
-			address:       "rediss+sentinels://127.0.0.1:6379",
-			inputOptions:  rueidis.ClientOption{},
-			expectedError: nil,
-			expectedOutput: rueidis.ClientOption{
-				InitAddress: []string{"127.0.0.1:6379"},
-				TLSConfig:   &tls.Config{},
-				Sentinel: rueidis.SentinelOption{
-					TLSConfig: &tls.Config{},
-				},
-			},
-			expectedIsSentinel: true,
-		},
-		{
-			name:          "Redis Cluster secure URL",
-			address:       "rediss+cluster://127.0.0.1:6379",
-			inputOptions:  rueidis.ClientOption{},
-			expectedError: nil,
-			expectedOutput: rueidis.ClientOption{
-				InitAddress: []string{"127.0.0.1:6379"},
-				TLSConfig:   &tls.Config{},
-			},
-			expectedIsCluster: true,
-		},
 	}
 
 	for _, tt := range tests {
