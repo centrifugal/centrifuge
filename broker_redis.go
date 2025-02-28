@@ -396,7 +396,14 @@ func (b *RedisBroker) Close(_ context.Context) error {
 }
 
 func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, eventHandler BrokerEventHandler, startOnce func(error)) {
-	b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis control PUB/SUB", logFields))
+	startFields := logFields
+	if s.isCluster {
+		for k, v := range logFields {
+			startFields[k] = v
+		}
+		startFields["cluster"] = true
+	}
+	b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis control PUB/SUB", startFields))
 	defer func() {
 		b.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", logFields))
 	}()
