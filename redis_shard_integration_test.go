@@ -47,7 +47,7 @@ func TestNewRedisShard(t *testing.T) {
 			},
 		},
 		{
-			name: "dragonfly cluster",
+			name: "dragonfly cluster emulated",
 			config: RedisShardConfig{
 				Address: "redis://127.0.0.1:9000",
 			},

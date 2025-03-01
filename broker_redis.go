@@ -395,15 +395,19 @@ func (b *RedisBroker) Close(_ context.Context) error {
 	return nil
 }
 
-func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, eventHandler BrokerEventHandler, startOnce func(error)) {
-	startFields := make(map[string]any, len(logFields))
+func getPubSubStartLogFields(s *RedisShard, logFields map[string]any) map[string]any {
+	startLogFields := make(map[string]any, len(logFields))
 	for k, v := range logFields {
-		startFields[k] = v
+		startLogFields[k] = v
 	}
 	if s.isCluster {
-		startFields["cluster"] = true
+		startLogFields["cluster"] = true
 	}
-	b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis control PUB/SUB", startFields))
+	return startLogFields
+}
+
+func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, eventHandler BrokerEventHandler, startOnce func(error)) {
+	b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis control PUB/SUB", getPubSubStartLogFields(s, logFields)))
 	defer func() {
 		b.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", logFields))
 	}()
@@ -518,7 +522,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 		if useShardedPubSub {
 			debugLogValues["cluster_shard_index"] = clusterShardIndex
 		}
-		b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis PUB/SUB", logFields, debugLogValues))
+		b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis PUB/SUB", getPubSubStartLogFields(s.shard, logFields), debugLogValues))
 		defer func() {
 			b.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis PUB/SUB", logFields, debugLogValues))
 		}()

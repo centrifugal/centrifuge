@@ -254,8 +254,9 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 		return nil, fmt.Errorf("error creating Redis client: %v", err)
 	}
 	if strings.Contains(strings.ToLower(fmt.Sprintf("%T", client)), "cluster") {
-		// Cluster mode not explicitly set but client is cluster client – set isCluster to true.
-		// Ask rueidis to provide a non-hacky way to detect the cluster client.
+		// Cluster mode is not explicitly set but client is a cluster client – thus set isCluster to true.
+		// This scenario covered with tests for our main integrations: see TestNewRedisShard.
+		// Centrifuge need to know that it's working with Redis Cluster to construct proper keys.
 		isCluster = true
 	}
 
@@ -291,12 +292,9 @@ type RedisShardConfig struct {
 	// - redis://[[[user]:password]@]host:port[/db][?option1=value1&optionN=valueN]
 	// - rediss://[[[user]:password]@]host:port[/db][?option1=value1&optionN=valueN]
 	// - unix://[[[user]:password]@]path[?option1=value1&optionN=valueN]
-	// It's also possible to use Address with redis+sentinel:// and redis+cluster://
-	// schemes when connecting to Redis Sentinel and Redis Cluster respectively and
-	// which have several addresses.
-	// Examples:
+	// It's also possible to use Address with redis+sentinel:// scheme to connect to Redis Sentinel:
 	// - redis+sentinel://[[[user]:password]@]host:port?sentinel_master_name=mymaster?addr=host2:port2&addr=host3:port3
-	// - redis+cluster://[[[user]:password]@]host:port[?addr=host2:port2&addr=host3:port3]
+	// In case of using redis+sentinel://, sentinel_master_name is required and host:port points to Sentinel instance.
 	// It's also possible to connect to Redis Cluster by providing ClusterAddresses instead of Address.
 	// It's also possible to connect to Redis Sentinel by providing SentinelAddresses instead of Address.
 	Address string

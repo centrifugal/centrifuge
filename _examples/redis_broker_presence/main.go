@@ -97,15 +97,9 @@ func main() {
 	})
 
 	redisShardConfigs := []centrifuge.RedisShardConfig{
-		{Address: "localhost:6379"},
-		//{Address: "localhost:6380"},
-		//{
-		//	ClusterAddresses:  []string{"localhost:7000", "localhost:7001", "localhost:7002"},
-		//},
-		//{
-		//	SentinelAddresses:  []string{"localhost:26379"},
-		//	SentinelMasterName: "mymaster",
-		//},
+		{Address: "redis://localhost:6379"}, // Will connect to both standalone Redis and Redis cluster.
+		//{Address: "redis://localhost:6380"}, // Uncomment for client-side sharding.
+		//{Address: "redis+sentinel://localhost:26379?sentinel_master_name=mymaster"}, // Example for Redis Sentinel.
 	}
 	var redisShards []*centrifuge.RedisShard
 	for _, redisConf := range redisShardConfigs {
@@ -159,6 +153,7 @@ func main() {
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
+		log.Print("Starting server, visit http://localhost:" + strconv.Itoa(*port))
 		if err := http.ListenAndServe(":"+strconv.Itoa(*port), nil); err != nil {
 			log.Fatal(err)
 		}
