@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter v1.2.4
 	github.com/planetscale/vtprotobuf v0.6.0
-	github.com/prometheus/client_golang v1.20.5
+	github.com/prometheus/client_golang v1.21.0
 	github.com/redis/rueidis v1.0.53
 	github.com/segmentio/encoding v0.4.1
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
@@ -28,7 +28,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
-	github.com/prometheus/common v0.55.0 // indirect
+	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
