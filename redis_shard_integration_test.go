@@ -30,26 +30,26 @@ func TestNewRedisShard(t *testing.T) {
 		{
 			name: "valkey standalone",
 			config: RedisShardConfig{
-				Address: "redis://127.0.0.1:8379",
+				Address: "redis://127.0.0.1:16379",
 			},
 		},
 		{
 			name: "valkey cluster",
 			config: RedisShardConfig{
-				Address: "redis://127.0.0.1:8000",
+				Address: "redis://127.0.0.1:17000",
 			},
 			expectedCluster: true,
 		},
 		{
 			name: "dragonfly standalone",
 			config: RedisShardConfig{
-				Address: "redis://127.0.0.1:9379",
+				Address: "redis://127.0.0.1:36379",
 			},
 		},
 		{
 			name: "dragonfly cluster emulated",
 			config: RedisShardConfig{
-				Address: "redis://127.0.0.1:9000",
+				Address: "redis://127.0.0.1:37000",
 			},
 			expectedCluster: true,
 		},

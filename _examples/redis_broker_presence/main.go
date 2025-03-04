@@ -97,7 +97,7 @@ func main() {
 	})
 
 	redisShardConfigs := []centrifuge.RedisShardConfig{
-		{Address: "redis://localhost:6379"}, // Will connect to both standalone Redis and Redis cluster.
+		{Address: "redis://localhost:6379"},
 		//{Address: "redis://localhost:6380"}, // Uncomment for client-side sharding.
 		//{Address: "redis+sentinel://localhost:26379?sentinel_master_name=mymaster"}, // Example for Redis Sentinel.
 	}

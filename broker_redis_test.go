@@ -179,14 +179,14 @@ type historyRedisTest struct {
 
 var historyRedisTests = []historyRedisTest{
 	{"rd_single_list", false, false, 6379},
-	{"vk_single_list", false, false, 8379},
+	{"vk_single_list", false, false, 16379},
 	{"rd_single_strm", true, false, 6379},
-	{"vk_single_strm", true, false, 8379},
-	{"df_single_list", false, false, 9379},
-	{"df_single_strm", true, false, 9379},
+	{"vk_single_strm", true, false, 16379},
+	{"df_single_list", false, false, 36379},
+	{"df_single_strm", true, false, 36379},
 	{"rd_cluster_list", false, true, 7000},
 	{"rd_cluster_strm", true, true, 7000},
-	{"vk_cluster_strm", true, true, 8000},
+	{"vk_cluster_strm", true, true, 17000},
 }
 
 type noHistoryRedisTest struct {
@@ -197,8 +197,8 @@ type noHistoryRedisTest struct {
 
 var noHistoryRedisTests = []noHistoryRedisTest{
 	{"rd_single", false, 6379},
-	{"df_single", false, 9379},
-	{"vk_single", false, 8379},
+	{"df_single", false, 36379},
+	{"vk_single", false, 16379},
 	{"rd_cluster", false, 0},
 }
 
@@ -221,17 +221,6 @@ var noHistoryBenchRedisTests = func() (tests []noHistoryRedisTest) {
 	}
 	return
 }()
-
-//func excludeHistoryClusterTests(tests []historyRedisTest) []historyRedisTest {
-//	var res []historyRedisTest
-//	for _, t := range tests {
-//		if t.UseCluster {
-//			continue
-//		}
-//		res = append(res, t)
-//	}
-//	return res
-//}
 
 func excludeNoHistoryClusterTests(tests []noHistoryRedisTest) []noHistoryRedisTest {
 	var res []noHistoryRedisTest
@@ -1785,9 +1774,9 @@ var throughputTests = []throughputTest{
 	{1, 0, 0, 6379},
 	{2, 0, 0, 6379},
 	{4, 0, 0, 6379},
-	{1, 0, 0, 9379},
-	{2, 0, 0, 9379},
-	{4, 0, 0, 9379},
+	{1, 0, 0, 36379},
+	{2, 0, 0, 36379},
+	{4, 0, 0, 36379},
 }
 
 func BenchmarkPubSubThroughput(b *testing.B) {
