@@ -170,6 +170,32 @@ func TestOptionsFromAddress(t *testing.T) {
 			},
 			expectedIsSentinel: true,
 		},
+		{
+			name:          "Redis secure URL",
+			address:       "rediss://127.0.0.1:6379",
+			inputOptions:  rueidis.ClientOption{},
+			expectedError: nil,
+			expectedOutput: rueidis.ClientOption{
+				InitAddress: []string{"127.0.0.1:6379"},
+				TLSConfig:   &tls.Config{},
+			},
+		},
+		{
+			name:    "Redis secure URL does not override explicitly set TLS config",
+			address: "rediss://127.0.0.1:6379",
+			inputOptions: rueidis.ClientOption{
+				TLSConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+			expectedError: nil,
+			expectedOutput: rueidis.ClientOption{
+				InitAddress: []string{"127.0.0.1:6379"},
+				TLSConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
