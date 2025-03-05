@@ -37,7 +37,9 @@ type RedisShard struct {
 
 var knownRedisURLPrefixes = []string{
 	"redis://",
+	"rediss://",
 	"redis+sentinel://",
+	"rediss+sentinel://",
 	"redis+cluster://",
 	"unix://",
 	"tcp://",
@@ -76,8 +78,20 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 
 	var addresses []string
 
+	query := u.Query()
+
+	if query.Has("sentinel_master_name") {
+		result.ClientOption.Sentinel.MasterSet = query.Get("sentinel_master_name")
+	}
+
+	isCluster := u.Scheme == "redis+cluster"
+	isSentinel := u.Scheme == "redis+sentinel" || u.Scheme == "rediss+sentinel" || result.ClientOption.Sentinel.MasterSet != ""
+	if isSentinel && result.ClientOption.Sentinel.MasterSet == "" {
+		return result, errors.New("sentinel master name must be configured for Redis Sentinel setup")
+	}
+
 	switch u.Scheme {
-	case "tcp", "redis", "redis+sentinel", "redis+cluster":
+	case "tcp", "redis", "redis+sentinel", "redis+cluster", "rediss", "rediss+sentinel":
 		addresses = []string{u.Host}
 		if u.Path != "" {
 			db, err := strconv.Atoi(strings.TrimPrefix(u.Path, "/"))
@@ -85,6 +99,14 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 				return result, fmt.Errorf("can't parse Redis DB number from connection address: %s is not a number", u.Path)
 			}
 			result.ClientOption.SelectDB = db
+		}
+		if strings.HasPrefix(u.Scheme, "rediss") {
+			if result.ClientOption.TLSConfig == nil {
+				result.ClientOption.TLSConfig = &tls.Config{}
+			}
+			if isSentinel && result.ClientOption.Sentinel.TLSConfig == nil {
+				result.ClientOption.Sentinel.TLSConfig = &tls.Config{}
+			}
 		}
 	case "unix":
 		addresses = []string{u.Path}
@@ -102,7 +124,6 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 		}
 	}
 
-	query := u.Query()
 	addresses = append(addresses, query["addr"]...)
 
 	if query.Has("connect_timeout") {
@@ -139,10 +160,6 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 		result.ClientOption.AlwaysRESP2 = val
 	}
 
-	if query.Has("sentinel_master_name") {
-		result.ClientOption.Sentinel.MasterSet = query.Get("sentinel_master_name")
-	}
-
 	if query.Has("sentinel_user") {
 		result.ClientOption.Sentinel.Username = query.Get("sentinel_user")
 	}
@@ -169,13 +186,10 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 		result.ReplicaClientEnabled = val
 	}
 
-	if u.Scheme == "redis+sentinel" && result.ClientOption.Sentinel.MasterSet == "" {
-		return result, errors.New("sentinel master name must be configured for Redis Sentinel setup")
-	}
-
 	result.ClientOption.InitAddress = addresses
-	result.IsCluster = u.Scheme == "redis+cluster"
-	result.IsSentinel = u.Scheme == "redis+sentinel"
+	result.IsCluster = isCluster
+	result.IsSentinel = isSentinel
+
 	return result, nil
 }
 
@@ -231,13 +245,6 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 			addressOpts.ClientOption, addressOpts.IsCluster, addressOpts.IsSentinel, addressOpts.ReplicaClientEnabled
 	}
 
-	shard := &RedisShard{
-		config:       conf,
-		isCluster:    isCluster,
-		closeCh:      make(chan struct{}),
-		finalAddress: options.InitAddress,
-	}
-
 	if isSentinel && options.Sentinel.MasterSet == "" {
 		return nil, errors.New("sentinel master name must be configured for Redis Sentinel setup")
 	}
@@ -246,6 +253,20 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating Redis client: %v", err)
 	}
+	if strings.Contains(strings.ToLower(fmt.Sprintf("%T", client)), "cluster") {
+		// Cluster mode is not explicitly set but client is a cluster client – thus set isCluster to true.
+		// This scenario covered with tests for our main integrations: see TestNewRedisShard.
+		// Centrifuge need to know that it's working with Redis Cluster to construct proper keys.
+		isCluster = true
+	}
+
+	shard := &RedisShard{
+		config:       conf,
+		isCluster:    isCluster,
+		closeCh:      make(chan struct{}),
+		finalAddress: options.InitAddress,
+	}
+
 	shard.client = client
 
 	if replicaClientEnabled {
@@ -269,18 +290,13 @@ type RedisShardConfig struct {
 	// - host:port
 	// - tcp://[[[user]:password]@]host:port[/db][?option1=value1&optionN=valueN]
 	// - redis://[[[user]:password]@]host:port[/db][?option1=value1&optionN=valueN]
+	// - rediss://[[[user]:password]@]host:port[/db][?option1=value1&optionN=valueN]
 	// - unix://[[[user]:password]@]path[?option1=value1&optionN=valueN]
-	// It's also possible to use Address with redis+sentinel:// and redis+cluster://
-	// schemes when connecting to Redis Sentinel and Redis Cluster respectively.
-	// Examples:
-	// - redis+sentinel://[[[user]:password]@]host:port?sentinel_master_name=mymaster
-	// - redis+cluster://[[[user]:password]@]host:port[?addr=host2:port2&addr=host3:port3]
-	// If you need to connect to Redis Cluster then you need to provide ClusterAddresses
-	// or must use redis+cluster:// scheme in Address.
-	// If you need to connect to Redis Sentinel then you need to provide SentinelAddresses
-	// or must use redis+sentinel:// scheme in Address.
-	// I.e. Centrifuge requires you to explicitly specify the type of Redis setup you want
-	// to connect to.
+	// It's also possible to use Address with redis+sentinel:// scheme to connect to Redis Sentinel:
+	// - redis+sentinel://[[[user]:password]@]host:port?sentinel_master_name=mymaster?addr=host2:port2&addr=host3:port3
+	// In case of using redis+sentinel://, sentinel_master_name is required and host:port points to Sentinel instance.
+	// It's also possible to connect to Redis Cluster by providing ClusterAddresses instead of Address.
+	// It's also possible to connect to Redis Sentinel by providing SentinelAddresses instead of Address.
 	Address string
 	// ClusterAddresses is a slice of seed cluster addresses to connect to.
 	// Each address should be in form of host:port. If ClusterAddresses set then
