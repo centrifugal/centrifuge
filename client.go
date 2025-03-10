@@ -2637,8 +2637,9 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 
 		c.messageWriter = newWriter(messageWriterConf, queueInitialCap)
 		go c.messageWriter.run(batchDelay, maxMessagesInFrame)
-
-		c.perChannelWriter = newPerChannelWriter(c.writeQueueItems)
+		if c.node.config.GetChannelBatchConfig != nil {
+			c.perChannelWriter = newPerChannelWriter(c.writeQueueItems)
+		}
 	})
 }
 
