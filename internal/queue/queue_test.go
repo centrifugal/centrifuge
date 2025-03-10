@@ -71,7 +71,23 @@ func TestByteQueueWait(t *testing.T) {
 	require.Equal(t, "3", string(s.Data))
 }
 
-func TestByteQueueClose(t *testing.T) {
+func TestByteQueueAddMany(t *testing.T) {
+	q := New(initialCapacity)
+	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
+	ok := q.Wait()
+	require.Equal(t, true, ok)
+	s, ok := q.Remove()
+	require.Equal(t, true, ok)
+	require.Equal(t, "1", string(s.Data))
+
+	ok = q.Wait()
+	require.Equal(t, true, ok)
+	s, ok = q.Remove()
+	require.Equal(t, true, ok)
+	require.Equal(t, "2", string(s.Data))
+}
+
+func TestQueueClose(t *testing.T) {
 	q := New(initialCapacity)
 
 	// test removing from empty queue

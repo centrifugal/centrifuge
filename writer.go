@@ -139,6 +139,17 @@ func (w *writer) enqueue(item queue.Item) *Disconnect {
 	return nil
 }
 
+func (w *writer) enqueueMany(item ...queue.Item) *Disconnect {
+	ok := w.messages.AddMany(item...)
+	if !ok {
+		return &DisconnectConnectionClosed
+	}
+	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
+		return &DisconnectSlow
+	}
+	return nil
+}
+
 func (w *writer) close(flushRemaining bool) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
