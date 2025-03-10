@@ -75,6 +75,27 @@ func (q *Queue) Add(i Item) bool {
 	return true
 }
 
+// AddMany items.
+func (q *Queue) AddMany(items ...Item) bool {
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return false
+	}
+	for _, i := range items {
+		if q.cnt == len(q.nodes) {
+			q.resize(q.cnt * 2)
+		}
+		q.nodes[q.tail] = i
+		q.tail = (q.tail + 1) % len(q.nodes)
+		q.size += len(i.Data)
+		q.cnt++
+	}
+	q.cond.Signal()
+	q.mu.Unlock()
+	return true
+}
+
 // Close the queue and discard all entries in the queue
 // all goroutines in wait() will return
 func (q *Queue) Close() {
