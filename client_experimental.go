@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -26,6 +27,11 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 	pub := pubToProto(publication)
 	protoType := c.transport.Protocol().toProto()
 
+	maxBatchSize, maxBatchDelay, err := c.node.getBatchConfig(channel)
+	if err != nil {
+		return fmt.Errorf("error getting channel batch config: %v", err)
+	}
+
 	if protoType == protocol.TypeJSON {
 		if c.transport.Unidirectional() {
 			push := &protocol.Push{Channel: channel, Pub: pub}
@@ -35,7 +41,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, jsonPush, sp)
+			return c.writePublicationNoDelta(channel, pub, jsonPush, sp, maxBatchSize, maxBatchDelay)
 		} else {
 			push := &protocol.Push{Channel: channel, Pub: pub}
 			var err error
@@ -44,7 +50,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, jsonReply, sp)
+			return c.writePublicationNoDelta(channel, pub, jsonReply, sp, maxBatchSize, maxBatchDelay)
 		}
 	} else if protoType == protocol.TypeProtobuf {
 		if c.transport.Unidirectional() {
@@ -54,7 +60,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 			if err != nil {
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, protobufPush, sp)
+			return c.writePublicationNoDelta(channel, pub, protobufPush, sp, maxBatchSize, maxBatchDelay)
 		} else {
 			push := &protocol.Push{Channel: channel, Pub: pub}
 			var err error
@@ -62,7 +68,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 			if err != nil {
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, protobufReply, sp)
+			return c.writePublicationNoDelta(channel, pub, protobufReply, sp, maxBatchSize, maxBatchDelay)
 		}
 	}
 
@@ -116,17 +122,24 @@ func (c *Client) writeQueueItems(items []queue.Item) error {
 	return nil
 }
 
-func (c *Client) getChannelWriteConfig(channel string) (ChannelBatchConfig, bool) {
+func (c *Client) getChannelWriteConfig(channel string) (ChannelBatchConfig, error) {
 	if c.node.config.GetChannelBatchConfig == nil {
-		return ChannelBatchConfig{}, false
+		return ChannelBatchConfig{}, nil
 	}
 	return c.node.config.GetChannelBatchConfig(channel)
 }
 
-// ChannelBatchConfig allows configuring how to write push messages to a channel.
+// ChannelBatchConfig allows configuring how to write push messages to a channel
+// during broadcasts (applied for publication, join and leave pushes).
+// This API is EXPERIMENTAL and may be changed/removed.
+// If MaxSize is set to 0 then no batching by size will be performed.
+// If MaxDelay is set to 0 then no batching by time will be performed.
+// If both MaxSize and MaxDelay are set to 0 then no batching will be performed.
 type ChannelBatchConfig struct {
-	MaxBatchSize int
-	WriteDelay   time.Duration
+	// MaxSize is the maximum number of messages to batch before flushing.
+	MaxSize int64
+	// MaxDelay is the maximum time to wait before flushing.
+	MaxDelay time.Duration
 }
 
 // channelWriter buffers queue.Item objects and flushes them after a fixed delay
@@ -134,14 +147,14 @@ type ChannelBatchConfig struct {
 type channelWriter struct {
 	mu           sync.Mutex
 	delay        time.Duration
-	maxBatchSize int
+	maxBatchSize int64
 	buffer       []queue.Item
 	timer        *time.Timer
 	flushFn      func([]queue.Item) error
 }
 
 // newChannelWriter creates a new channelWriter with the given delay and maxBatchSize.
-func newChannelWriter(delay time.Duration, maxBatchSize int, flushFn func([]queue.Item) error) *channelWriter {
+func newChannelWriter(delay time.Duration, maxBatchSize int64, flushFn func([]queue.Item) error) *channelWriter {
 	return &channelWriter{
 		delay:        delay,
 		maxBatchSize: maxBatchSize,
@@ -160,7 +173,7 @@ func (b *channelWriter) Add(item queue.Item) {
 		go b.waitTimer(b.timer)
 	}
 	// Flush immediately if batch size is reached.
-	if b.maxBatchSize > 0 && len(b.buffer) >= b.maxBatchSize {
+	if b.maxBatchSize > 0 && int64(len(b.buffer)) >= b.maxBatchSize {
 		if b.timer != nil {
 			tm := b.timer
 			b.timer = nil // Set timer to nil so waitTimer knows it was cancelled.
@@ -229,7 +242,7 @@ func (c *perChannelWriter) Close(flushRemaining bool) {
 
 // getWriter returns the channelWriter for the given channel's configuration,
 // creating one if necessary.
-func (c *perChannelWriter) getWriter(channel string, delay time.Duration, maxBatchSize int) *channelWriter {
+func (c *perChannelWriter) getWriter(channel string, delay time.Duration, maxBatchSize int64) *channelWriter {
 	c.mu.RLock()
 	w, exists := c.writers[channel]
 	c.mu.RUnlock()
@@ -247,7 +260,7 @@ func (c *perChannelWriter) getWriter(channel string, delay time.Duration, maxBat
 }
 
 // Add routes an item to its configuration-specific aggregator.
-func (c *perChannelWriter) Add(item queue.Item, delay time.Duration, maxBatchSize int) {
+func (c *perChannelWriter) Add(item queue.Item, delay time.Duration, maxBatchSize int64) {
 	w := c.getWriter(item.Channel, delay, maxBatchSize)
 	w.Add(item)
 }

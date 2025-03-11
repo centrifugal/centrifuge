@@ -2,8 +2,6 @@ package centrifuge
 
 import (
 	"context"
-	"github.com/centrifugal/protocol"
-	"github.com/stretchr/testify/require"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,6 +9,9 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/queue"
+
+	"github.com/centrifugal/protocol"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkPerChannelWriter(b *testing.B) {
@@ -40,11 +41,11 @@ func BenchmarkPerChannelWriter(b *testing.B) {
 func TestClientSubscribeReceivePublication_ChannelBatching_Delay(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
-	node.config.GetChannelBatchConfig = func(channel string) (ChannelBatchConfig, bool) {
+	node.config.GetChannelBatchConfig = func(channel string) (ChannelBatchConfig, error) {
 		return ChannelBatchConfig{
-			MaxBatchSize: 0,
-			WriteDelay:   10 * time.Millisecond,
-		}, true
+			MaxSize:  0,
+			MaxDelay: 10 * time.Millisecond,
+		}, nil
 	}
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
@@ -86,11 +87,11 @@ func TestClientSubscribeReceivePublication_ChannelBatching_Delay(t *testing.T) {
 func TestClientSubscribeReceivePublication_ChannelBatching_BatchSize(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
-	node.config.GetChannelBatchConfig = func(channel string) (ChannelBatchConfig, bool) {
+	node.config.GetChannelBatchConfig = func(channel string) (ChannelBatchConfig, error) {
 		return ChannelBatchConfig{
-			MaxBatchSize: 1,
-			WriteDelay:   0,
-		}, true
+			MaxSize:  1,
+			MaxDelay: 0,
+		}, nil
 	}
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})

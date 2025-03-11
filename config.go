@@ -125,12 +125,14 @@ type Config struct {
 	// mapping defined internally.
 	UnidirectionalCodeToDisconnect map[uint32]Disconnect
 	// GetChannelBatchConfig allows configuring per-channel write batching. Batching config if
-	// returned is applied for publications and join/leave channel pushes. The cost of batching
-	// are extra goroutines for each channel used in batching, so you expect some memory overhead.
-	// But batching is generally useful for reducing CPU usage coming from write system calls in
-	// channels with high publication rate. If GetChannelBatchConfig not set then no batching is
-	// used. This is an EXPERIMENTAL feature.
-	GetChannelBatchConfig func(channel string) (ChannelBatchConfig, bool)
+	// returned is applied for publications and join/leave channel pushes for all channel subscribers.
+	// The cost of batching are extra goroutines, buffers and extra timers for each channel used in
+	// batching, so you can expect memory overhead. But batching may be useful for reducing CPU usage
+	// coming from write system calls in channels with high publication rate. If GetChannelBatchConfig
+	// not set then no batching is used on per-channel level. This function may be called in the hot
+	// broadcast path, so must be fast. If an error is returned from this function – message will be
+	// skipped by Centrifuge. This is an EXPERIMENTAL feature.
+	GetChannelBatchConfig func(channel string) (ChannelBatchConfig, error)
 }
 
 const (

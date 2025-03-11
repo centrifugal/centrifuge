@@ -281,7 +281,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_sent_size",
-		Help:      "MaxBatchSize in bytes of messages sent to client connections over specific transport (uncompressed and does not include framing overhead).",
+		Help:      "MaxSize in bytes of messages sent to client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.transportMessagesReceived = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -295,7 +295,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Namespace: metricsNamespace,
 		Subsystem: "transport",
 		Name:      "messages_received_size",
-		Help:      "MaxBatchSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
+		Help:      "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
 	m.pubSubLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{

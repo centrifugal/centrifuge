@@ -139,20 +139,22 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, bool) {
 // in a channel with incremental offset. By calling BroadcastPublication messages will only be sent
 // to the current node subscribers without any defined offset semantics, without delta support.
 func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition) error {
-	return h.broadcastPublication(ch, sp, pub, nil, nil)
+	return h.broadcastPublication(ch, sp, pub, nil, nil, 0, 0)
 }
 
-func (h *Hub) broadcastPublication(ch string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, sp, pub, prevPub, localPrevPub)
+func (h *Hub) broadcastPublication(
+	ch string, sp StreamPosition, pub, prevPub, localPrevPub *Publication, maxBatchSize int64, maxBatchDelay time.Duration,
+) error {
+	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, sp, pub, prevPub, localPrevPub, maxBatchSize, maxBatchDelay)
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
-func (h *Hub) broadcastJoin(ch string, info *ClientInfo) error {
-	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: infoToProto(info)})
+func (h *Hub) broadcastJoin(ch string, info *ClientInfo, maxBatchSize int64, maxBatchDelay time.Duration) error {
+	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: infoToProto(info)}, maxBatchSize, maxBatchDelay)
 }
 
-func (h *Hub) broadcastLeave(ch string, info *ClientInfo) error {
-	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: infoToProto(info)})
+func (h *Hub) broadcastLeave(ch string, info *ClientInfo, maxBatchSize int64, maxBatchDelay time.Duration) error {
+	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: infoToProto(info)}, maxBatchSize, maxBatchDelay)
 }
 
 // NumSubscribers returns number of current subscribers for a given channel.
@@ -652,7 +654,7 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 }
 
 // broadcastPublication sends message to all clients subscribed on a channel.
-func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication) error {
+func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication, maxBatchSize int64, maxBatchDelay time.Duration) error {
 	pubTime := pub.Time
 	// Check lag in PUB/SUB processing. We use it to notify subscribers with positioning enabled
 	// about insufficient state in the stream.
@@ -782,7 +784,7 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 			continue
 		}
 
-		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded)
+		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, maxBatchSize, maxBatchDelay)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
@@ -799,7 +801,7 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
-func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
+func (h *subShard) broadcastJoin(channel string, join *protocol.Join, maxBatchSize int64, maxBatchDelay time.Duration) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -836,7 +838,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						continue
 					}
 				}
-				_ = sub.client.writeJoin(channel, join, jsonPush)
+				_ = sub.client.writeJoin(channel, join, jsonPush, maxBatchSize, maxBatchDelay)
 			} else {
 				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
@@ -848,7 +850,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						continue
 					}
 				}
-				_ = sub.client.writeJoin(channel, join, jsonReply)
+				_ = sub.client.writeJoin(channel, join, jsonReply, maxBatchSize, maxBatchDelay)
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if sub.client.transport.Unidirectional() {
@@ -860,7 +862,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						return err
 					}
 				}
-				_ = sub.client.writeJoin(channel, join, protobufPush)
+				_ = sub.client.writeJoin(channel, join, protobufPush, maxBatchSize, maxBatchDelay)
 			} else {
 				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
@@ -870,7 +872,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 						return err
 					}
 				}
-				_ = sub.client.writeJoin(channel, join, protobufReply)
+				_ = sub.client.writeJoin(channel, join, protobufReply, maxBatchSize, maxBatchDelay)
 			}
 		}
 	}
@@ -887,7 +889,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join) error {
 }
 
 // broadcastLeave sends message to all clients subscribed on channel.
-func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
+func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave, maxBatchSize int64, maxBatchDelay time.Duration) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -924,7 +926,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						continue
 					}
 				}
-				_ = sub.client.writeLeave(channel, leave, jsonPush)
+				_ = sub.client.writeLeave(channel, leave, jsonPush, maxBatchSize, maxBatchDelay)
 			} else {
 				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
@@ -936,7 +938,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						continue
 					}
 				}
-				_ = sub.client.writeLeave(channel, leave, jsonReply)
+				_ = sub.client.writeLeave(channel, leave, jsonReply, maxBatchSize, maxBatchDelay)
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if sub.client.transport.Unidirectional() {
@@ -948,7 +950,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						return err
 					}
 				}
-				_ = sub.client.writeLeave(channel, leave, protobufPush)
+				_ = sub.client.writeLeave(channel, leave, protobufPush, maxBatchSize, maxBatchDelay)
 			} else {
 				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
@@ -958,7 +960,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave) error {
 						return err
 					}
 				}
-				_ = sub.client.writeLeave(channel, leave, protobufReply)
+				_ = sub.client.writeLeave(channel, leave, protobufReply, maxBatchSize, maxBatchDelay)
 			}
 		}
 	}
