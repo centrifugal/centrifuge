@@ -60,55 +60,18 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	msg, ok := w.messages.Remove()
+	items, ok := w.messages.RemoveMany(maxMessagesInFrame)
 	if !ok {
 		return !w.messages.Closed()
 	}
-
 	var writeErr error
-
-	messageCount := w.messages.Len()
-	if (maxMessagesInFrame == -1 || maxMessagesInFrame > 1) && messageCount > 0 {
-		// There are several more messages left in queue, try to send them in single frame,
-		// but no more than maxMessagesInFrame.
-
-		// Limit message count to get from queue with (maxMessagesInFrame - 1)
-		// (as we already have one message received from queue above).
-		messagesCap := messageCount + 1
-		if messagesCap > maxMessagesInFrame && maxMessagesInFrame > -1 {
-			messagesCap = maxMessagesInFrame
-		}
-
-		messages := make([]queue.Item, 0, messagesCap)
-		messages = append(messages, msg)
-
-		for messageCount > 0 {
-			messageCount--
-			if maxMessagesInFrame > -1 && len(messages) >= maxMessagesInFrame {
-				break
-			}
-			m, ok := w.messages.Remove()
-			if ok {
-				messages = append(messages, m)
-			} else {
-				if w.messages.Closed() {
-					return false
-				}
-				break
-			}
-		}
-		if len(messages) == 1 {
-			writeErr = w.config.WriteFn(messages[0])
-		} else {
-			writeErr = w.config.WriteManyFn(messages...)
-		}
+	if len(items) == 1 {
+		writeErr = w.config.WriteFn(items[0])
 	} else {
-		// WriteMany single message without allocating new slice.
-		writeErr = w.config.WriteFn(msg)
+		writeErr = w.config.WriteManyFn(items...)
 	}
 	if writeErr != nil {
-		// WriteMany failed, transport must close itself, here we just return from routine.
+		// Write failed, transport must close itself, here we just return from routine.
 		return false
 	}
 	return true

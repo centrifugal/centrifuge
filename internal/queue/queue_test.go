@@ -87,6 +87,26 @@ func TestByteQueueAddMany(t *testing.T) {
 	require.Equal(t, "2", string(s.Data))
 }
 
+func TestByteQueueRemoveMany(t *testing.T) {
+	q := New(initialCapacity)
+	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
+	ok := q.Wait()
+	require.Equal(t, true, ok)
+	items, ok := q.RemoveMany(-1)
+	require.Equal(t, true, ok)
+	require.Equal(t, 2, len(items))
+}
+
+func TestByteQueueRemoveManyFixed(t *testing.T) {
+	q := New(initialCapacity)
+	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
+	ok := q.Wait()
+	require.Equal(t, true, ok)
+	items, ok := q.RemoveMany(2)
+	require.Equal(t, true, ok)
+	require.Equal(t, 2, len(items))
+}
+
 func TestQueueClose(t *testing.T) {
 	q := New(initialCapacity)
 
