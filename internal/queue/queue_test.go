@@ -143,6 +143,68 @@ func TestByteQueueCloseRemaining(t *testing.T) {
 	require.Equal(t, 0, len(messages))
 }
 
+func TestQueueAddConsume(t *testing.T) {
+	// Add many items to queue and then consume.
+	// Make sure item data is expected.
+	q := New(initialCapacity)
+
+	for range 5 {
+		for i := 0; i < 1000; i++ {
+			q.Add(testItem([]byte("test" + strconv.Itoa(i))))
+		}
+		for i := 0; i < 1000; i++ {
+			items, _ := q.RemoveMany(1)
+			require.Equal(t, "test"+strconv.Itoa(i), string(items[0].Data))
+		}
+	}
+
+	require.Equal(t, 0, q.Size())
+	require.Equal(t, initialCapacity, q.Cap())
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueAddConsumeInBatch(t *testing.T) {
+	// Add many items to queue and then consume.
+	// Make sure item data is expected.
+	q := New(initialCapacity)
+
+	for range 5 {
+		for i := 0; i < 1000; i++ {
+			q.Add(testItem([]byte("test" + strconv.Itoa(i))))
+		}
+		for i := 0; i < 100; i++ {
+			items, _ := q.RemoveMany(10)
+			for j := 0; j < 10; j++ {
+				require.Equal(t, "test"+strconv.Itoa(i*10+j), string(items[j].Data))
+			}
+		}
+	}
+
+	require.Equal(t, 0, q.Size())
+	require.Equal(t, initialCapacity, q.Cap())
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueAddConsumeAll(t *testing.T) {
+	// Add many items to queue and then consume.
+	// Make sure item data is expected.
+	q := New(initialCapacity)
+
+	for range 5 {
+		for i := 0; i < 1000; i++ {
+			q.Add(testItem([]byte("test" + strconv.Itoa(i))))
+		}
+		items, _ := q.RemoveMany(-1)
+		for i := 0; i < 1000; i++ {
+			require.Equal(t, "test"+strconv.Itoa(i), string(items[i].Data))
+		}
+	}
+
+	require.Equal(t, 0, q.Size())
+	require.Equal(t, initialCapacity, q.Cap())
+	require.Equal(t, 0, q.Len())
+}
+
 func BenchmarkQueueAdd(b *testing.B) {
 	q := New(initialCapacity)
 	b.ResetTimer()

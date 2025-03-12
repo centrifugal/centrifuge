@@ -274,15 +274,20 @@ func (q *Queue) RemoveMany(maxItems int) ([]Item, bool) {
 		messages = append(messages, msg)
 		q.cnt--
 		q.size -= len(msg.Data)
-		//// Resize the underlying slice if needed. It's important to keep resize
-		//// inside loop to avoid slice out of bounds issues.
-		//if n := len(q.nodes) / 2; n >= q.initCap && q.cnt <= n {
-		//	q.resize(n)
-		//}
 	}
 
-	// Resize only once after all removals if needed.
-	if n := len(q.nodes) / 2; n >= q.initCap && q.cnt <= n {
+	// Find n to resize to.
+	n := -1
+	k := len(q.nodes) / 2
+	for {
+		if k >= q.initCap && q.cnt <= k {
+			n = k
+		} else {
+			break
+		}
+		k /= 2
+	}
+	if n != -1 {
 		q.resize(n)
 	}
 
