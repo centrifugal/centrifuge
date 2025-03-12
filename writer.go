@@ -41,8 +41,7 @@ const (
 
 func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duration) bool {
 	// Wait for message from the queue.
-	ok := w.messages.Wait()
-	if !ok {
+	if !w.messages.Wait() {
 		return false
 	}
 

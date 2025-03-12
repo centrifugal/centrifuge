@@ -130,9 +130,8 @@ type Config struct {
 	// batching, so you can expect memory overhead. But batching may be useful for reducing CPU usage
 	// coming from write system calls in channels with high publication rate. If GetChannelBatchConfig
 	// not set then no batching is used on per-channel level. This function may be called in the hot
-	// broadcast path, so must be fast. If an error is returned from this function – message will be
-	// skipped by Centrifuge. This is an EXPERIMENTAL feature.
-	GetChannelBatchConfig func(channel string) (ChannelBatchConfig, error)
+	// broadcast path, so must be fast. This is an EXPERIMENTAL feature.
+	GetChannelBatchConfig func(channel string) ChannelBatchConfig
 }
 
 const (

@@ -32,7 +32,7 @@ func BenchmarkPerChannelWriter(b *testing.B) {
 		wg.Add(1) // Each added message increments the WaitGroup counter.
 		channelName := "channel-" + strconv.Itoa(i%numChannels)
 		item := queue.Item{Channel: channelName}
-		w.Add(item, 10*time.Millisecond, 128)
+		w.Add(item, channelName, 10*time.Millisecond, 128)
 	}
 	w.Close(true)
 	wg.Wait() // Wait for all messages to be flushed.
@@ -41,11 +41,11 @@ func BenchmarkPerChannelWriter(b *testing.B) {
 func TestClientSubscribeReceivePublication_ChannelBatching_Delay(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
-	node.config.GetChannelBatchConfig = func(channel string) (ChannelBatchConfig, error) {
+	node.config.GetChannelBatchConfig = func(channel string) ChannelBatchConfig {
 		return ChannelBatchConfig{
 			MaxSize:  0,
 			MaxDelay: 10 * time.Millisecond,
-		}, nil
+		}
 	}
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})
@@ -87,11 +87,11 @@ func TestClientSubscribeReceivePublication_ChannelBatching_Delay(t *testing.T) {
 func TestClientSubscribeReceivePublication_ChannelBatching_BatchSize(t *testing.T) {
 	t.Parallel()
 	node := defaultTestNode()
-	node.config.GetChannelBatchConfig = func(channel string) (ChannelBatchConfig, error) {
+	node.config.GetChannelBatchConfig = func(channel string) ChannelBatchConfig {
 		return ChannelBatchConfig{
 			MaxSize:  1,
 			MaxDelay: 0,
-		}, nil
+		}
 	}
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	transport := newTestTransport(func() {})

@@ -628,17 +628,14 @@ func (c *Client) writeEncodedPushData(data []byte, ch string, frameType protocol
 	if c.node.config.Metrics.GetChannelNamespaceLabel != nil {
 		item.Channel = ch
 	}
-	if ch != "" && (maxBatchSize > 0 || maxBatchDelay > 0) {
-		needChannelWriter := item.FrameType == protocol.FrameTypePushPublication ||
+	if ch != "" && (maxBatchSize > 0 || maxBatchDelay > 0) && (
+		item.FrameType == protocol.FrameTypePushPublication ||
 			item.FrameType == protocol.FrameTypePushJoin ||
-			item.FrameType == protocol.FrameTypePushLeave
-		if needChannelWriter {
-			// For channel writes we need to check whether per-channel writer must be used.
-			// Per channel writer helps to batch messages on the channel level working as
-			// an intermediary buffer before client's connection writer.
-			c.perChannelWriter.Add(item, maxBatchDelay, maxBatchSize)
-			return nil
-		}
+			item.FrameType == protocol.FrameTypePushLeave) {
+		// Per channel writer helps to batch messages on the channel level working as
+		// an intermediary buffer before client's connection writer.
+		c.perChannelWriter.Add(item, ch, maxBatchDelay, maxBatchSize)
+		return nil
 	}
 	disconnect := c.messageWriter.enqueue(item)
 	if disconnect != nil {
@@ -3478,6 +3475,9 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		close(currentChCtx.subscribingCh)
 	}
 	delete(c.channels, channel)
+	if disconnect == nil && c.perChannelWriter != nil {
+		c.perChannelWriter.delWriter(channel, false)
+	}
 	c.mu.Unlock()
 
 	if channelHasFlag(chCtx.flags, flagEmitPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {

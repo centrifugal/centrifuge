@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -27,10 +26,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 	pub := pubToProto(publication)
 	protoType := c.transport.Protocol().toProto()
 
-	maxBatchSize, maxBatchDelay, err := c.node.getBatchConfig(channel)
-	if err != nil {
-		return fmt.Errorf("error getting channel batch config: %v", err)
-	}
+	maxBatchSize, maxBatchDelay := c.node.getBatchConfig(channel)
 
 	if protoType == protocol.TypeJSON {
 		if c.transport.Unidirectional() {
@@ -122,9 +118,9 @@ func (c *Client) writeQueueItems(items []queue.Item) error {
 	return nil
 }
 
-func (c *Client) getChannelWriteConfig(channel string) (ChannelBatchConfig, error) {
+func (c *Client) getChannelWriteConfig(channel string) ChannelBatchConfig {
 	if c.node.config.GetChannelBatchConfig == nil {
-		return ChannelBatchConfig{}, nil
+		return ChannelBatchConfig{}
 	}
 	return c.node.config.GetChannelBatchConfig(channel)
 }
@@ -145,66 +141,74 @@ type ChannelBatchConfig struct {
 // channelWriter buffers queue.Item objects and flushes them after a fixed delay
 // or when a specific batch size is reached.
 type channelWriter struct {
-	mu           sync.Mutex
-	delay        time.Duration
-	maxBatchSize int64
-	buffer       []queue.Item
-	timer        *time.Timer
-	flushFn      func([]queue.Item) error
+	mu      sync.Mutex
+	buffer  []queue.Item
+	timer   *time.Timer
+	flushFn func([]queue.Item) error
 }
 
 // newChannelWriter creates a new channelWriter with the given delay and maxBatchSize.
-func newChannelWriter(delay time.Duration, maxBatchSize int64, flushFn func([]queue.Item) error) *channelWriter {
+func newChannelWriter(flushFn func([]queue.Item) error) *channelWriter {
 	return &channelWriter{
-		delay:        delay,
-		maxBatchSize: maxBatchSize,
-		flushFn:      flushFn,
+		flushFn: flushFn,
 	}
+}
+
+func (w *channelWriter) close(flushRemaining bool) {
+	w.mu.Lock()
+	if w.timer != nil {
+		w.timer.Stop()
+		w.timer = nil
+	}
+	if flushRemaining && len(w.buffer) > 0 { // If there are any buffered items, flush them.
+		w.flushLocked()
+	}
+	w.buffer = nil
+	w.mu.Unlock()
 }
 
 // Add appends an item to the buffer. It starts a delay timer if this is the first item,
 // and flushes immediately if the batch size is reached.
-func (b *channelWriter) Add(item queue.Item) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.buffer = append(b.buffer, item)
-	if b.delay > 0 && len(b.buffer) == 1 && b.timer == nil { // Start the flush timer for the first item and if no active timer.
-		b.timer = timers.AcquireTimer(b.delay)
-		go b.waitTimer(b.timer)
+func (w *channelWriter) Add(item queue.Item, ch string, maxBatchDelay time.Duration, maxBatchSize int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buffer = append(w.buffer, item)
+	if maxBatchDelay > 0 && len(w.buffer) == 1 && w.timer == nil { // Start the flush timer for the first item and if no active timer.
+		w.timer = timers.AcquireTimer(maxBatchDelay)
+		go w.waitTimer(w.timer, ch)
 	}
 	// Flush immediately if batch size is reached.
-	if b.maxBatchSize > 0 && int64(len(b.buffer)) >= b.maxBatchSize {
-		if b.timer != nil {
-			tm := b.timer
-			b.timer = nil // Set timer to nil so waitTimer knows it was cancelled.
-			timers.ReleaseTimer(tm)
+	if maxBatchSize > 0 && int64(len(w.buffer)) >= maxBatchSize {
+		if w.timer != nil {
+			w.timer.Stop()
+			w.timer = nil // Set timer to nil so waitTimer knows it was cancelled.
 		}
-		b.flushLocked()
+		w.flushLocked()
 	}
 }
 
 // waitTimer waits for the timer to fire, then flushes the batch.
-func (b *channelWriter) waitTimer(tm *time.Timer) {
+func (w *channelWriter) waitTimer(tm *time.Timer, ch string) {
 	<-tm.C // Wait for the timer to fire.
-	b.mu.Lock()
+	timers.ReleaseTimer(tm)
+	w.mu.Lock()
 	// Check if the timer is still active. If it’s not, it was already stopped and handled.
-	if b.timer != tm {
-		b.mu.Unlock()
+	if w.timer == nil {
+		w.mu.Unlock()
 		return
 	}
-	if len(b.buffer) > 0 { // If there are any items, flush the buffer.
-		b.flushLocked()
+	if len(w.buffer) > 0 { // If there are any items, flush the buffer.
+		w.flushLocked()
 	}
-	b.timer = nil // Mark the timer as no longer active.
-	b.mu.Unlock()
-	timers.ReleaseTimer(tm)
+	w.timer = nil // Mark the timer as no longer active.
+	w.mu.Unlock()
 }
 
 // flushLocked flushes the current buffer. It assumes the caller holds the lock.
-func (b *channelWriter) flushLocked() {
-	batch := b.buffer
-	b.buffer = b.buffer[:0]
-	_ = b.flushFn(batch)
+func (w *channelWriter) flushLocked() {
+	batch := w.buffer
+	w.buffer = w.buffer[:0]
+	_ = w.flushFn(batch)
 }
 
 // perChannelWriter groups items by configuration (batch size and delay).
@@ -223,44 +227,45 @@ func newPerChannelWriter(flushFn func([]queue.Item) error) *perChannelWriter {
 }
 
 // Close cancels all active timers in each channelWriter and discards any pending items.
-func (c *perChannelWriter) Close(flushRemaining bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, w := range c.writers {
-		w.mu.Lock()
-		if w.timer != nil {
-			timers.ReleaseTimer(w.timer)
-			w.timer = nil
-		}
-		if flushRemaining && len(w.buffer) > 0 { // If there are any buffered items, flush them.
-			w.flushLocked()
-		}
-		w.buffer = nil
-		w.mu.Unlock()
+func (pcw *perChannelWriter) Close(flushRemaining bool) {
+	pcw.mu.Lock()
+	defer pcw.mu.Unlock()
+	for _, w := range pcw.writers {
+		w.close(flushRemaining)
 	}
 }
 
 // getWriter returns the channelWriter for the given channel's configuration,
 // creating one if necessary.
-func (c *perChannelWriter) getWriter(channel string, delay time.Duration, maxBatchSize int64) *channelWriter {
-	c.mu.RLock()
-	w, exists := c.writers[channel]
-	c.mu.RUnlock()
+func (pcw *perChannelWriter) getWriter(channel string) *channelWriter {
+	pcw.mu.RLock()
+	w, exists := pcw.writers[channel]
+	pcw.mu.RUnlock()
 	if !exists {
-		c.mu.Lock()
+		pcw.mu.Lock()
 		// Double-check existence after acquiring write lock.
-		w, exists = c.writers[channel]
+		w, exists = pcw.writers[channel]
 		if !exists {
-			w = newChannelWriter(delay, maxBatchSize, c.flushFn)
-			c.writers[channel] = w
+			w = newChannelWriter(pcw.flushFn)
+			pcw.writers[channel] = w
 		}
-		c.mu.Unlock()
+		pcw.mu.Unlock()
 	}
 	return w
 }
 
+func (pcw *perChannelWriter) delWriter(channel string, flushRemaining bool) {
+	pcw.mu.Lock()
+	w, exists := pcw.writers[channel]
+	if exists {
+		w.close(flushRemaining)
+		delete(pcw.writers, channel)
+	}
+	pcw.mu.Unlock()
+}
+
 // Add routes an item to its configuration-specific aggregator.
-func (c *perChannelWriter) Add(item queue.Item, delay time.Duration, maxBatchSize int64) {
-	w := c.getWriter(item.Channel, delay, maxBatchSize)
-	w.Add(item)
+func (pcw *perChannelWriter) Add(item queue.Item, ch string, maxBatchDelay time.Duration, maxBatchSize int64) {
+	w := pcw.getWriter(ch)
+	w.Add(item, ch, maxBatchDelay, maxBatchSize)
 }
