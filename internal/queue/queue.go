@@ -14,7 +14,7 @@ type Item struct {
 
 // Queue is an unbounded queue of Item.
 // The queue is goroutine safe.
-// Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT)
+// Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT).
 type Queue struct {
 	mu      sync.RWMutex
 	cond    *sync.Cond
@@ -59,21 +59,6 @@ func (q *Queue) resize(n int) {
 	q.head = 0
 	q.nodes = nodes
 }
-
-//// Write mutex must be held when calling.
-//func (q *Queue) resize(n int) {
-//	nodes := make([]Item, n)
-//	if q.head < q.tail {
-//		copy(nodes, q.nodes[q.head:q.tail])
-//	} else {
-//		copy(nodes, q.nodes[q.head:])
-//		copy(nodes[len(q.nodes)-q.head:], q.nodes[:q.tail])
-//	}
-//
-//	q.tail = q.cnt % n
-//	q.head = 0
-//	q.nodes = nodes
-//}
 
 // Add an Item to the back of the queue
 // will return false if the queue is closed.
@@ -204,46 +189,6 @@ func (q *Queue) Remove() (Item, bool) {
 	q.mu.Unlock()
 	return i, true
 }
-
-//// RemoveMany removes up to maxItems items from the queue.
-//// If maxItems is -1, it removes all available items.
-//// It returns the slice of removed items and a boolean indicating whether
-//// at least one item was removed (false means no messages were available).
-//func (q *Queue) RemoveMany(maxItems int) ([]Item, bool) {
-//	q.mu.Lock()
-//
-//	// Return false if there are no messages.
-//	if q.cnt == 0 {
-//		q.mu.Unlock()
-//		return nil, false
-//	}
-//
-//	// Determine how many messages to remove.
-//	var count int
-//	if maxItems == -1 || q.cnt < maxItems {
-//		count = q.cnt
-//	} else {
-//		count = maxItems
-//	}
-//
-//	messages := make([]Item, 0, count)
-//
-//	for i := 0; i < count; i++ {
-//		msg := q.nodes[q.head]
-//		q.head = (q.head + 1) % len(q.nodes)
-//		messages = append(messages, msg)
-//		q.cnt--
-//		q.size -= len(msg.Data)
-//		// Resize the underlying slice if needed. It's important to keep resize
-//		// inside loop to avoid slice out of bounds issues.
-//		if n := len(q.nodes) / 2; n >= q.initCap && q.cnt <= n {
-//			q.resize(n)
-//		}
-//	}
-//
-//	q.mu.Unlock()
-//	return messages, true
-//}
 
 // RemoveMany removes up to maxItems items from the queue.
 // If maxItems is -1, it removes all available items.

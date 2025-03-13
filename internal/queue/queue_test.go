@@ -2,6 +2,7 @@ package queue
 
 import (
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -203,6 +204,164 @@ func TestQueueAddConsumeAll(t *testing.T) {
 	require.Equal(t, 0, q.Size())
 	require.Equal(t, initialCapacity, q.Cap())
 	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueResizing(t *testing.T) {
+	q := New(2)
+	for i := 0; i < 10; i++ {
+		item := Item{Data: []byte("msg"), Channel: "ch"}
+		require.True(t, q.Add(item))
+	}
+	require.GreaterOrEqual(t, q.Cap(), 10)
+}
+
+func TestQueueCloseRemaining(t *testing.T) {
+	q := New(3)
+	q.Add(Item{Data: []byte("msg1"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("msg2"), Channel: "ch2"})
+
+	remaining := q.CloseRemaining()
+	require.Len(t, remaining, 2)
+	require.True(t, q.Closed())
+}
+
+func TestQueueWait(t *testing.T) {
+	q := New(1)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		require.True(t, q.Wait())
+	}()
+
+	q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	wg.Wait()
+}
+
+func TestQueueConcurrency(t *testing.T) {
+	q := New(5)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+		}()
+	}
+	wg.Wait()
+	require.GreaterOrEqual(t, q.Len(), 5)
+}
+
+func TestQueueRemoveMany(t *testing.T) {
+	q := New(5)
+	for i := 0; i < 5; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	removed, ok := q.RemoveMany(3)
+	require.True(t, ok)
+	require.Len(t, removed, 3)
+	require.Equal(t, 2, q.Len())
+}
+
+func TestQueueRemoveManyAll(t *testing.T) {
+	q := New(3)
+	for i := 0; i < 3; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	removed, ok := q.RemoveMany(-1)
+	require.True(t, ok)
+	require.Len(t, removed, 3)
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueAddAfterClose(t *testing.T) {
+	q := New(2)
+	q.Close()
+	added := q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	require.False(t, added)
+}
+
+func TestQueueRemoveFromEmptyQueue(t *testing.T) {
+	q := New(2)
+	_, ok := q.Remove()
+	require.False(t, ok)
+}
+
+func TestQueueAddManyAfterClose(t *testing.T) {
+	q := New(2)
+	q.Close()
+	added := q.AddMany(Item{Data: []byte("msg1"), Channel: "ch"}, Item{Data: []byte("msg2"), Channel: "ch"})
+	require.False(t, added)
+}
+
+func TestQueueRemoveManyFromEmptyQueue(t *testing.T) {
+	q := New(2)
+	removed, ok := q.RemoveMany(5)
+	require.False(t, ok)
+	require.Nil(t, removed)
+}
+
+func TestQueueWaitOnClosedQueue(t *testing.T) {
+	q := New(1)
+	q.Close()
+	require.False(t, q.Wait())
+}
+
+func TestQueueCorrectness(t *testing.T) {
+	q := New(5)
+	items := []Item{
+		{Data: []byte("A"), Channel: "ch1"},
+		{Data: []byte("B"), Channel: "ch2"},
+		{Data: []byte("C"), Channel: "ch3"},
+		{Data: []byte("D"), Channel: "ch4"},
+		{Data: []byte("E"), Channel: "ch5"},
+	}
+
+	q.Add(items[0])
+	q.Add(items[1])
+	retrieved, _ := q.Remove()
+	require.Equal(t, items[0], retrieved)
+
+	q.Add(items[2])
+	q.Add(items[3])
+	q.Add(items[4])
+
+	// Remove in different order.
+	retrieved, _ = q.Remove()
+	require.Equal(t, items[1], retrieved)
+
+	retrieved, _ = q.Remove()
+	require.Equal(t, items[2], retrieved)
+
+	retrieved, _ = q.Remove()
+	require.Equal(t, items[3], retrieved)
+
+	retrieved, _ = q.Remove()
+	require.Equal(t, items[4], retrieved)
+}
+
+func TestQueueAddManyWithResize(t *testing.T) {
+	q := New(2)
+	items := []Item{
+		{Data: []byte("A"), Channel: "ch1"},
+		{Data: []byte("B"), Channel: "ch2"},
+		{Data: []byte("C"), Channel: "ch3"},
+		{Data: []byte("D"), Channel: "ch4"},
+		{Data: []byte("E"), Channel: "ch5"},
+	}
+
+	// Add more items than initial capacity to trigger resize.
+	added := q.AddMany(items...)
+	require.True(t, added)
+	require.GreaterOrEqual(t, q.Cap(), 5)
+
+	// Verify correct items are retrieved.
+	for _, expected := range items {
+		retrieved, ok := q.Remove()
+		require.True(t, ok)
+		require.Equal(t, expected, retrieved)
+	}
 }
 
 func BenchmarkQueueAdd(b *testing.B) {
