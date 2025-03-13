@@ -364,6 +364,71 @@ func TestQueueAddManyWithResize(t *testing.T) {
 	}
 }
 
+func TestQueueResizeEmptyQueue(t *testing.T) {
+	q := New(2)
+	q.resize(4)
+	require.Equal(t, 0, q.Len())
+	require.Equal(t, 4, q.Cap())
+}
+
+func TestQueueResizeWithSequentialData(t *testing.T) {
+	q := New(2)
+	q.Add(Item{Data: []byte("A"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("B"), Channel: "ch2"})
+
+	q.resize(4)
+	require.Equal(t, 2, q.Len())
+	retrieved, _ := q.Remove()
+	require.Equal(t, "A", string(retrieved.Data))
+}
+
+func TestQueueResizeWithWrappedData(t *testing.T) {
+	q := New(3)
+	q.Add(Item{Data: []byte("X"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("Y"), Channel: "ch2"})
+	q.Remove()
+	q.Add(Item{Data: []byte("Z"), Channel: "ch3"})
+
+	q.resize(6)
+	require.Equal(t, 2, q.Len())
+	retrieved, _ := q.Remove()
+	require.Equal(t, "Y", string(retrieved.Data))
+	retrieved, _ = q.Remove()
+	require.Equal(t, "Z", string(retrieved.Data))
+}
+
+func TestQueueResizeToSmallerSize(t *testing.T) {
+	q := New(6)
+	q.Add(Item{Data: []byte("1"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("2"), Channel: "ch2"})
+	q.Add(Item{Data: []byte("3"), Channel: "ch3"})
+	q.resize(2)
+
+	require.Equal(t, 2, q.Cap())
+	_, ok := q.Remove()
+	require.True(t, ok)
+	_, ok = q.Remove()
+	require.True(t, ok)
+}
+
+func TestQueueResizeWraparound(t *testing.T) {
+	q := New(4)
+	q.Add(Item{Data: []byte("A"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("B"), Channel: "ch2"})
+	q.Add(Item{Data: []byte("C"), Channel: "ch3"})
+	q.Remove()
+	q.Add(Item{Data: []byte("D"), Channel: "ch4"})
+	q.resize(8)
+
+	require.Equal(t, 3, q.Len())
+	retrieved, _ := q.Remove()
+	require.Equal(t, "B", string(retrieved.Data))
+	retrieved, _ = q.Remove()
+	require.Equal(t, "C", string(retrieved.Data))
+	retrieved, _ = q.Remove()
+	require.Equal(t, "D", string(retrieved.Data))
+}
+
 func BenchmarkQueueAdd(b *testing.B) {
 	q := New(initialCapacity)
 	b.ResetTimer()

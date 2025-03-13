@@ -118,13 +118,6 @@ func (c *Client) writeQueueItems(items []queue.Item) error {
 	return nil
 }
 
-func (c *Client) getChannelWriteConfig(channel string) ChannelBatchConfig {
-	if c.node.config.GetChannelBatchConfig == nil {
-		return ChannelBatchConfig{}
-	}
-	return c.node.config.GetChannelBatchConfig(channel)
-}
-
 // ChannelBatchConfig allows configuring how to write push messages to a channel
 // during broadcasts (applied for publication, join and leave pushes).
 // This API is EXPERIMENTAL and may be changed/removed.
