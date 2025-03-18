@@ -17,8 +17,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type TestController struct {
+	errorOnRegister       bool
+	errorOnPublishControl bool
+	publishControlCount   int32
+}
+
+func NewTestController() *TestController {
+	return &TestController{}
+}
+
+func (e *TestController) RegisterControlEventHandler(_ ControlEventHandler) error {
+	if e.errorOnRegister {
+		return errors.New("boom")
+	}
+	return nil
+}
+
+func (e *TestController) PublishControl(_ []byte, _, _ string) error {
+	atomic.AddInt32(&e.publishControlCount, 1)
+	if e.errorOnPublishControl {
+		return errors.New("boom")
+	}
+	return nil
+}
+
 type TestBroker struct {
-	errorOnRun            bool
+	errorOnRegister       bool
 	errorOnSubscribe      bool
 	errorOnUnsubscribe    bool
 	errorOnPublish        bool
@@ -40,8 +65,8 @@ func NewTestBroker() *TestBroker {
 	return &TestBroker{}
 }
 
-func (e *TestBroker) Run(_ BrokerEventHandler) error {
-	if e.errorOnRun {
+func (e *TestBroker) RegisterBrokerEventHandler(_ BrokerEventHandler) error {
+	if e.errorOnRegister {
 		return errors.New("boom")
 	}
 	return nil
@@ -165,6 +190,21 @@ func nodeWithBroker(broker Broker) *Node {
 
 func nodeWithTestBroker() *Node {
 	return nodeWithBroker(NewTestBroker())
+}
+
+func nodeWithTestController() *Node {
+	c := Config{}
+	n, err := New(c)
+	if err != nil {
+		panic(err)
+	}
+	controller := NewTestController()
+	n.SetController(controller)
+	err = n.Run()
+	if err != nil {
+		panic(err)
+	}
+	return n
 }
 
 func nodeWithPresenceManager(presenceManager PresenceManager) *Node {
@@ -335,7 +375,7 @@ func TestNode_LogEnabled(t *testing.T) {
 
 func TestNode_RunError(t *testing.T) {
 	broker := NewTestBroker()
-	broker.errorOnRun = true
+	broker.errorOnRegister = true
 	node, err := New(Config{})
 	require.NoError(t, err)
 	node.SetBroker(broker)
@@ -344,11 +384,11 @@ func TestNode_RunError(t *testing.T) {
 }
 
 func TestNode_RunPubControlError(t *testing.T) {
-	broker := NewTestBroker()
-	broker.errorOnPublishControl = true
+	controller := NewTestController()
+	controller.errorOnPublishControl = true
 	node, err := New(Config{})
 	require.NoError(t, err)
-	node.SetBroker(broker)
+	node.SetController(controller)
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	require.Error(t, node.Run())
 }
@@ -473,27 +513,27 @@ func TestNode_Disconnect(t *testing.T) {
 }
 
 func TestNode_pubUnsubscribe(t *testing.T) {
-	node := nodeWithTestBroker()
+	node := nodeWithTestController()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	testBroker, _ := node.broker.(*TestBroker)
-	require.EqualValues(t, 1, testBroker.publishControlCount)
+	testController, _ := node.controller.(*TestController)
+	require.EqualValues(t, 1, testController.publishControlCount)
 
 	err := node.pubUnsubscribe("42", "holypeka", unsubscribeServer, "", "")
 	require.NoError(t, err)
-	require.EqualValues(t, 2, testBroker.publishControlCount)
+	require.EqualValues(t, 2, testController.publishControlCount)
 }
 
 func TestNode_pubDisconnect(t *testing.T) {
-	node := nodeWithTestBroker()
+	node := nodeWithTestController()
 	defer func() { _ = node.Shutdown(context.Background()) }()
 
-	testBroker, _ := node.broker.(*TestBroker)
-	require.EqualValues(t, 1, testBroker.publishControlCount)
+	testController, _ := node.controller.(*TestController)
+	require.EqualValues(t, 1, testController.publishControlCount)
 
 	err := node.pubDisconnect("42", DisconnectForceNoReconnect, "", "", nil)
 	require.NoError(t, err)
-	require.EqualValues(t, 2, testBroker.publishControlCount)
+	require.EqualValues(t, 2, testController.publishControlCount)
 }
 
 func TestNode_publishJoin(t *testing.T) {

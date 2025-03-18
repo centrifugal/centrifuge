@@ -40,6 +40,8 @@ type Node struct {
 	config Config
 	// hub to manage client connections.
 	hub *Hub
+	// controller is responsible for inter-node communication.
+	controller Controller
 	// broker is responsible for PUB/SUB and history streaming mechanics.
 	broker Broker
 	// presenceManager is responsible for presence information management.
@@ -226,9 +228,21 @@ func (n *Node) mediumLock(ch string) *sync.Mutex {
 	return n.mediumLocks[index(ch, numMediumLocks)]
 }
 
+// SetController allows setting Controller implementation to use.
+func (n *Node) SetController(c Controller) {
+	n.controller = c
+}
+
 // SetBroker allows setting Broker implementation to use.
+// For historical reasons and to keep existing API, we also check if Broker implements Controller
+// and if so we set it as Node's Controller (but only if Controller not explicitly set).
 func (n *Node) SetBroker(b Broker) {
 	n.broker = b
+	if n.controller == nil {
+		if c, ok := b.(Controller); ok {
+			n.controller = c
+		}
+	}
 }
 
 // SetPresenceManager allows setting PresenceManager to use.
@@ -242,9 +256,14 @@ func (n *Node) Hub() *Hub {
 }
 
 // Run performs node startup actions. At moment must be called once on start
-// after Broker set to Node.
+// after Controller and Broker set to Node.
 func (n *Node) Run() error {
-	if err := n.broker.Run(n); err != nil {
+	if n.controller != nil {
+		if err := n.controller.RegisterControlEventHandler(n); err != nil {
+			return err
+		}
+	}
+	if err := n.broker.RegisterBrokerEventHandler(n); err != nil {
 		return err
 	}
 	err := n.initMetrics()
@@ -841,7 +860,10 @@ func (n *Node) publishControl(cmd *controlpb.Command, nodeID string) error {
 	if err != nil {
 		return err
 	}
-	return n.broker.PublishControl(data, nodeID, "")
+	if n.controller == nil {
+		return n.HandleControl(data)
+	}
+	return n.controller.PublishControl(data, nodeID, "")
 }
 
 func (n *Node) getMetrics(metrics eagle.Metrics) *controlpb.Metrics {

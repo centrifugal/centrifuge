@@ -1027,7 +1027,8 @@ func TestRedisPubSubTwoNodes(t *testing.T) {
 					return nil
 				},
 			}
-			_ = b1.Run(brokerEventHandler)
+			_ = b1.RegisterControlEventHandler(brokerEventHandler)
+			_ = b1.RegisterBrokerEventHandler(brokerEventHandler)
 
 			for i := 0; i < msgNum; i++ {
 				require.NoError(t, b1.Subscribe("test"+strconv.Itoa(i)))
@@ -1130,7 +1131,8 @@ func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
 					return nil
 				},
 			}
-			_ = b1.Run(brokerEventHandler)
+			_ = b1.RegisterControlEventHandler(brokerEventHandler)
+			_ = b1.RegisterBrokerEventHandler(brokerEventHandler)
 
 			require.NoError(t, b1.Subscribe(ch))
 
@@ -1231,7 +1233,8 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 			return nil
 		},
 	}
-	_ = b1.Run(brokerEventHandler)
+	_ = b1.RegisterControlEventHandler(brokerEventHandler)
+	_ = b1.RegisterBrokerEventHandler(brokerEventHandler)
 
 	for i := 0; i < msgNum; i++ {
 		require.NoError(t, b1.Subscribe("test"+strconv.Itoa(i)))
@@ -1815,7 +1818,8 @@ func BenchmarkPubSubThroughput(b *testing.B) {
 					return nil
 				},
 			}
-			_ = b1.Run(brokerEventHandler)
+			_ = b1.RegisterControlEventHandler(brokerEventHandler)
+			_ = b1.RegisterBrokerEventHandler(brokerEventHandler)
 
 			for i := 0; i < numChannels; i++ {
 				require.NoError(b, b1.Subscribe("test"+strconv.Itoa(i)))
