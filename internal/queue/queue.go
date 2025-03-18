@@ -14,7 +14,7 @@ type Item struct {
 
 // Queue is an unbounded queue of Item.
 // The queue is goroutine safe.
-// Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT)
+// Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT).
 type Queue struct {
 	mu      sync.RWMutex
 	cond    *sync.Cond
@@ -37,16 +37,24 @@ func New(initialCapacity int) *Queue {
 	return sq
 }
 
-// WriteMany mutex must be held when calling
 func (q *Queue) resize(n int) {
 	nodes := make([]Item, n)
+	// Handle empty queue case.
+	if q.cnt == 0 {
+		q.head = 0
+		q.tail = 0
+		q.nodes = nodes
+		return
+	}
+	// Normal case: copy the items from the old slice.
 	if q.head < q.tail {
 		copy(nodes, q.nodes[q.head:q.tail])
 	} else {
-		copy(nodes, q.nodes[q.head:])
-		copy(nodes[len(q.nodes)-q.head:], q.nodes[:q.tail])
+		// Copy the segment from head to end.
+		copied := copy(nodes, q.nodes[q.head:])
+		// Copy the segment from beginning to tail.
+		copy(nodes[copied:], q.nodes[:q.tail])
 	}
-
 	q.tail = q.cnt % n
 	q.head = 0
 	q.nodes = nodes
@@ -70,6 +78,27 @@ func (q *Queue) Add(i Item) bool {
 	q.tail = (q.tail + 1) % len(q.nodes)
 	q.size += len(i.Data)
 	q.cnt++
+	q.cond.Signal()
+	q.mu.Unlock()
+	return true
+}
+
+// AddMany items.
+func (q *Queue) AddMany(items ...Item) bool {
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return false
+	}
+	for _, i := range items {
+		if q.cnt == len(q.nodes) {
+			q.resize(q.cnt * 2)
+		}
+		q.nodes[q.tail] = i
+		q.tail = (q.tail + 1) % len(q.nodes)
+		q.size += len(i.Data)
+		q.cnt++
+	}
 	q.cond.Signal()
 	q.mu.Unlock()
 	return true
@@ -159,6 +188,56 @@ func (q *Queue) Remove() (Item, bool) {
 
 	q.mu.Unlock()
 	return i, true
+}
+
+// RemoveMany removes up to maxItems items from the queue.
+// If maxItems is -1, it removes all available items.
+// It returns the slice of removed items and a boolean indicating whether
+// at least one item was removed (false means no messages were available).
+func (q *Queue) RemoveMany(maxItems int) ([]Item, bool) {
+	q.mu.Lock()
+
+	// Return false if there are no messages.
+	if q.cnt == 0 {
+		q.mu.Unlock()
+		return nil, false
+	}
+
+	// Determine how many messages to remove.
+	var count int
+	if maxItems == -1 || q.cnt < maxItems {
+		count = q.cnt
+	} else {
+		count = maxItems
+	}
+
+	messages := make([]Item, 0, count)
+
+	for i := 0; i < count; i++ {
+		msg := q.nodes[q.head]
+		q.head = (q.head + 1) % len(q.nodes)
+		messages = append(messages, msg)
+		q.cnt--
+		q.size -= len(msg.Data)
+	}
+
+	// Find n to resize to.
+	n := -1
+	k := len(q.nodes) / 2
+	for {
+		if k >= q.initCap && q.cnt <= k {
+			n = k
+		} else {
+			break
+		}
+		k /= 2
+	}
+	if n != -1 {
+		q.resize(n)
+	}
+
+	q.mu.Unlock()
+	return messages, true
 }
 
 // Cap returns the capacity (without allocations)

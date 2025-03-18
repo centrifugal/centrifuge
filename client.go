@@ -242,6 +242,7 @@ type Client struct {
 	exp               int64
 	channels          map[string]ChannelContext
 	messageWriter     *writer
+	perChannelWriter  *perChannelWriter
 	pubSubSync        *recovery.PubSubSync
 	uid               string
 	session           string
@@ -541,7 +542,7 @@ func (c *Client) sendPing() {
 	c.lastPing = time.Now().UnixNano()
 	c.mu.Unlock()
 	unidirectional := c.transport.Unidirectional()
-	_ = c.transportEnqueue(getPingData(unidirectional, c.transport.Protocol()), "", protocol.FrameTypeServerPing)
+	_ = c.writeEncodedPushData(getPingData(unidirectional, c.transport.Protocol()), "", protocol.FrameTypeServerPing, 0, 0)
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutReply(emptyReply)
 	}
@@ -619,13 +620,22 @@ func (c *Client) closeStale() {
 	}
 }
 
-func (c *Client) transportEnqueue(data []byte, ch string, frameType protocol.FrameType) error {
+func (c *Client) writeEncodedPushData(data []byte, ch string, frameType protocol.FrameType, maxBatchSize int64, maxBatchDelay time.Duration) error {
 	item := queue.Item{
 		Data:      data,
 		FrameType: frameType,
 	}
 	if c.node.config.Metrics.GetChannelNamespaceLabel != nil {
 		item.Channel = ch
+	}
+	if ch != "" && (maxBatchSize > 0 || maxBatchDelay > 0) && (
+		item.FrameType == protocol.FrameTypePushPublication ||
+			item.FrameType == protocol.FrameTypePushJoin ||
+			item.FrameType == protocol.FrameTypePushLeave) {
+		// Per channel writer helps to batch messages on the channel level working as
+		// an intermediary buffer before client's connection writer.
+		c.perChannelWriter.Add(item, ch, maxBatchDelay, maxBatchSize)
+		return nil
 	}
 	disconnect := c.messageWriter.enqueue(item)
 	if disconnect != nil {
@@ -893,7 +903,7 @@ func (c *Client) Send(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return c.transportEnqueue(replyData, "", protocol.FrameTypePushMessage)
+	return c.writeEncodedPushData(replyData, "", protocol.FrameTypePushMessage, 0, 0)
 }
 
 func (c *Client) encodeReply(reply *protocol.Reply) ([]byte, error) {
@@ -952,7 +962,7 @@ func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {
 	if err != nil {
 		return err
 	}
-	_ = c.transportEnqueue(replyData, ch, protocol.FrameTypePushUnsubscribe)
+	_ = c.writeEncodedPushData(replyData, ch, protocol.FrameTypePushUnsubscribe, 0, 0)
 	c.node.metrics.incServerUnsubscribe(unsub.Code, ch)
 	return nil
 }
@@ -1031,12 +1041,15 @@ func (c *Client) close(disconnect Disconnect) error {
 
 	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
 		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
-			_ = c.transportEnqueue(replyData, "", protocol.FrameTypePushDisconnect)
+			_ = c.writeEncodedPushData(replyData, "", protocol.FrameTypePushDisconnect, 0, 0)
 		}
 	}
 
 	// close writer and send messages remaining in writer queue if any.
 	flushRemaining := disconnect.Code != DisconnectConnectionClosed.Code && disconnect.Code != DisconnectSlow.Code
+	if c.perChannelWriter != nil {
+		c.perChannelWriter.Close(flushRemaining)
+	}
 	_ = c.messageWriter.close(flushRemaining)
 
 	_ = c.transport.Close(disconnect)
@@ -1333,21 +1346,6 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 	return nil, true
 }
 
-func (c *Client) writeEncodedPush(rep *protocol.Reply, rw *replyWriter, ch string, frameType protocol.FrameType) {
-	encoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
-	var err error
-	data, err := encoder.Encode(rep.Push)
-	if err != nil {
-		c.node.logger.log(newErrorLogEntry(err, "error encoding connect push", map[string]any{"push": fmt.Sprintf("%v", rep.Push), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
-		go func() { _ = c.close(DisconnectInappropriateProtocol) }()
-		return
-	}
-	_ = c.transportEnqueue(data, ch, frameType)
-	if rw != nil {
-		rw.write(rep)
-	}
-}
-
 func (c *Client) writeEncodedCommandReply(ch string, frameType protocol.FrameType, cmd *protocol.Command, rep *protocol.Reply, rw *replyWriter) {
 	rep.Id = cmd.Id
 	if rep.Error != nil {
@@ -1559,7 +1557,7 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 	if err != nil {
 		return err
 	}
-	return c.transportEnqueue(replyData, "", protocol.FrameTypePushRefresh)
+	return c.writeEncodedPushData(replyData, "", protocol.FrameTypePushRefresh, 0, 0)
 }
 
 func (c *Client) getRefreshPushReply(res *protocol.Refresh) ([]byte, error) {
@@ -2506,9 +2504,20 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				c.node.logger.log(newErrorLogEntry(err, "error encoding connect", map[string]any{"error": err.Error()}))
 				return DisconnectServerError
 			}
-			c.writeEncodedPush(protoReply, rw, "", protocol.FrameTypePushConnect)
-			if c.node.logEnabled(LogLevelTrace) {
-				c.traceOutPush(&protocol.Push{Connect: protoReply.Push.Connect})
+			encoder := protocol.GetPushEncoder(c.transport.Protocol().toProto())
+			data, err := encoder.Encode(protoReply.Push)
+			if err != nil {
+				c.node.logger.log(newErrorLogEntry(err, "error encoding connect push", map[string]any{"push": fmt.Sprintf("%v", protoReply.Push), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
+				go func() { _ = c.close(DisconnectInappropriateProtocol) }()
+			} else {
+				if err = c.writeEncodedPushData(data, "", protocol.FrameTypePushConnect, 0, 0); err == nil {
+					if rw != nil {
+						rw.write(protoReply)
+					}
+					if c.node.logEnabled(LogLevelTrace) {
+						c.traceOutPush(&protocol.Push{Connect: protoReply.Push.Connect})
+					}
+				}
 			}
 		}
 	} else {
@@ -2621,6 +2630,9 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 
 		c.messageWriter = newWriter(messageWriterConf, queueInitialCap)
 		go c.messageWriter.run(batchDelay, maxMessagesInFrame)
+		if c.node.config.GetChannelBatchConfig != nil {
+			c.perChannelWriter = newPerChannelWriter(c.writeQueueItems)
+		}
 	})
 }
 
@@ -2676,7 +2688,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if err != nil {
 		return err
 	}
-	err = c.transportEnqueue(replyData, channel, protocol.FrameTypePushSubscribe)
+	err = c.writeEncodedPushData(replyData, channel, protocol.FrameTypePushSubscribe, 0, 0)
 	if err != nil {
 		return err
 	}
@@ -3219,7 +3231,10 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 	}
 }
 
-func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool) error {
+func (c *Client) writePublicationUpdatePosition(
+	ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool,
+	maxBatchSize int64, maxBatchDelay time.Duration,
+) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
 	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
@@ -3240,7 +3255,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		}
 		if prep.deltaSub {
 			if deltaAllowed {
-				return c.transportEnqueue(prep.localDeltaData, ch, protocol.FrameTypePushPublication)
+				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
 			}
 			c.mu.Lock()
 			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
@@ -3249,7 +3264,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 			}
 			c.mu.Unlock()
 		}
-		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
+		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
@@ -3312,7 +3327,7 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 	}
 	if prep.deltaSub {
 		if deltaAllowed {
-			return c.transportEnqueue(prep.brokerDeltaData, ch, protocol.FrameTypePushPublication)
+			return c.writeEncodedPushData(prep.brokerDeltaData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
 		}
 		c.mu.Lock()
 		if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
@@ -3321,14 +3336,14 @@ func (c *Client) writePublicationUpdatePosition(ch string, pub *protocol.Publica
 		}
 		c.mu.Unlock()
 	}
-	return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
+	return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
 }
 
-func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition) error {
-	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp, false)
+func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, maxBatchSize int64, maxBatchDelay time.Duration) error {
+	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp, false, maxBatchSize, maxBatchDelay)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool) error {
+func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, maxBatchSize int64, maxBatchDelay time.Duration) error {
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
@@ -3350,7 +3365,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			c.mu.RUnlock()
 
 			if deltaAllowed {
-				return c.transportEnqueue(prep.localDeltaData, ch, protocol.FrameTypePushPublication)
+				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
 			}
 			c.mu.Lock()
 			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
@@ -3359,15 +3374,15 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			}
 			c.mu.Unlock()
 		}
-		return c.transportEnqueue(prep.fullData, ch, protocol.FrameTypePushPublication)
+		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded)
+		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, maxBatchSize, maxBatchDelay)
 	})
 	return nil
 }
 
-func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte) error {
+func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte, maxBatchSize int64, maxBatchDelay time.Duration) error {
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Join: join})
 	}
@@ -3385,10 +3400,10 @@ func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte) error {
 		return nil
 	}
 	c.mu.RUnlock()
-	return c.transportEnqueue(data, ch, protocol.FrameTypePushJoin)
+	return c.writeEncodedPushData(data, ch, protocol.FrameTypePushJoin, maxBatchSize, maxBatchDelay)
 }
 
-func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte) error {
+func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, maxBatchSize int64, maxBatchDelay time.Duration) error {
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Leave: leave})
 	}
@@ -3406,7 +3421,7 @@ func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte) error
 		return nil
 	}
 	c.mu.RUnlock()
-	return c.transportEnqueue(data, ch, protocol.FrameTypePushLeave)
+	return c.writeEncodedPushData(data, ch, protocol.FrameTypePushLeave, maxBatchSize, maxBatchDelay)
 }
 
 // Lock must be held outside.
@@ -3460,6 +3475,9 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		close(currentChCtx.subscribingCh)
 	}
 	delete(c.channels, channel)
+	if disconnect == nil && c.perChannelWriter != nil {
+		c.perChannelWriter.delWriter(channel, false)
+	}
 	c.mu.Unlock()
 
 	if channelHasFlag(chCtx.flags, flagEmitPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {

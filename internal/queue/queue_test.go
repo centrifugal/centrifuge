@@ -2,6 +2,7 @@ package queue
 
 import (
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -71,7 +72,43 @@ func TestByteQueueWait(t *testing.T) {
 	require.Equal(t, "3", string(s.Data))
 }
 
-func TestByteQueueClose(t *testing.T) {
+func TestByteQueueAddMany(t *testing.T) {
+	q := New(initialCapacity)
+	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
+	ok := q.Wait()
+	require.Equal(t, true, ok)
+	s, ok := q.Remove()
+	require.Equal(t, true, ok)
+	require.Equal(t, "1", string(s.Data))
+
+	ok = q.Wait()
+	require.Equal(t, true, ok)
+	s, ok = q.Remove()
+	require.Equal(t, true, ok)
+	require.Equal(t, "2", string(s.Data))
+}
+
+func TestByteQueueRemoveMany(t *testing.T) {
+	q := New(initialCapacity)
+	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
+	ok := q.Wait()
+	require.Equal(t, true, ok)
+	items, ok := q.RemoveMany(-1)
+	require.Equal(t, true, ok)
+	require.Equal(t, 2, len(items))
+}
+
+func TestByteQueueRemoveManyFixed(t *testing.T) {
+	q := New(initialCapacity)
+	q.AddMany(testItem([]byte("1")), testItem([]byte("2")))
+	ok := q.Wait()
+	require.Equal(t, true, ok)
+	items, ok := q.RemoveMany(2)
+	require.Equal(t, true, ok)
+	require.Equal(t, 2, len(items))
+}
+
+func TestQueueClose(t *testing.T) {
 	q := New(initialCapacity)
 
 	// test removing from empty queue
@@ -105,6 +142,291 @@ func TestByteQueueCloseRemaining(t *testing.T) {
 	require.Equal(t, true, q.Closed())
 	messages = q.CloseRemaining()
 	require.Equal(t, 0, len(messages))
+}
+
+func TestQueueAddConsume(t *testing.T) {
+	// Add many items to queue and then consume.
+	// Make sure item data is expected.
+	q := New(initialCapacity)
+
+	for range 5 {
+		for i := 0; i < 1000; i++ {
+			q.Add(testItem([]byte("test" + strconv.Itoa(i))))
+		}
+		for i := 0; i < 1000; i++ {
+			items, _ := q.RemoveMany(1)
+			require.Equal(t, "test"+strconv.Itoa(i), string(items[0].Data))
+		}
+	}
+
+	require.Equal(t, 0, q.Size())
+	require.Equal(t, initialCapacity, q.Cap())
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueAddConsumeInBatch(t *testing.T) {
+	// Add many items to queue and then consume.
+	// Make sure item data is expected.
+	q := New(initialCapacity)
+
+	for range 5 {
+		for i := 0; i < 1000; i++ {
+			q.Add(testItem([]byte("test" + strconv.Itoa(i))))
+		}
+		for i := 0; i < 100; i++ {
+			items, _ := q.RemoveMany(10)
+			for j := 0; j < 10; j++ {
+				require.Equal(t, "test"+strconv.Itoa(i*10+j), string(items[j].Data))
+			}
+		}
+	}
+
+	require.Equal(t, 0, q.Size())
+	require.Equal(t, initialCapacity, q.Cap())
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueAddConsumeAll(t *testing.T) {
+	// Add many items to queue and then consume.
+	// Make sure item data is expected.
+	q := New(initialCapacity)
+
+	for range 5 {
+		for i := 0; i < 1000; i++ {
+			q.Add(testItem([]byte("test" + strconv.Itoa(i))))
+		}
+		items, _ := q.RemoveMany(-1)
+		for i := 0; i < 1000; i++ {
+			require.Equal(t, "test"+strconv.Itoa(i), string(items[i].Data))
+		}
+	}
+
+	require.Equal(t, 0, q.Size())
+	require.Equal(t, initialCapacity, q.Cap())
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueResizing(t *testing.T) {
+	q := New(2)
+	for i := 0; i < 10; i++ {
+		item := Item{Data: []byte("msg"), Channel: "ch"}
+		require.True(t, q.Add(item))
+	}
+	require.GreaterOrEqual(t, q.Cap(), 10)
+}
+
+func TestQueueCloseRemaining(t *testing.T) {
+	q := New(3)
+	q.Add(Item{Data: []byte("msg1"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("msg2"), Channel: "ch2"})
+
+	remaining := q.CloseRemaining()
+	require.Len(t, remaining, 2)
+	require.True(t, q.Closed())
+}
+
+func TestQueueWait(t *testing.T) {
+	q := New(1)
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		require.True(t, q.Wait())
+	}()
+
+	q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	wg.Wait()
+}
+
+func TestQueueConcurrency(t *testing.T) {
+	q := New(5)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+		}()
+	}
+	wg.Wait()
+	require.GreaterOrEqual(t, q.Len(), 5)
+}
+
+func TestQueueRemoveMany(t *testing.T) {
+	q := New(5)
+	for i := 0; i < 5; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	removed, ok := q.RemoveMany(3)
+	require.True(t, ok)
+	require.Len(t, removed, 3)
+	require.Equal(t, 2, q.Len())
+}
+
+func TestQueueRemoveManyAll(t *testing.T) {
+	q := New(3)
+	for i := 0; i < 3; i++ {
+		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	}
+	removed, ok := q.RemoveMany(-1)
+	require.True(t, ok)
+	require.Len(t, removed, 3)
+	require.Equal(t, 0, q.Len())
+}
+
+func TestQueueAddAfterClose(t *testing.T) {
+	q := New(2)
+	q.Close()
+	added := q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+	require.False(t, added)
+}
+
+func TestQueueRemoveFromEmptyQueue(t *testing.T) {
+	q := New(2)
+	_, ok := q.Remove()
+	require.False(t, ok)
+}
+
+func TestQueueAddManyAfterClose(t *testing.T) {
+	q := New(2)
+	q.Close()
+	added := q.AddMany(Item{Data: []byte("msg1"), Channel: "ch"}, Item{Data: []byte("msg2"), Channel: "ch"})
+	require.False(t, added)
+}
+
+func TestQueueRemoveManyFromEmptyQueue(t *testing.T) {
+	q := New(2)
+	removed, ok := q.RemoveMany(5)
+	require.False(t, ok)
+	require.Nil(t, removed)
+}
+
+func TestQueueWaitOnClosedQueue(t *testing.T) {
+	q := New(1)
+	q.Close()
+	require.False(t, q.Wait())
+}
+
+func TestQueueCorrectness(t *testing.T) {
+	q := New(5)
+	items := []Item{
+		{Data: []byte("A"), Channel: "ch1"},
+		{Data: []byte("B"), Channel: "ch2"},
+		{Data: []byte("C"), Channel: "ch3"},
+		{Data: []byte("D"), Channel: "ch4"},
+		{Data: []byte("E"), Channel: "ch5"},
+	}
+
+	q.Add(items[0])
+	q.Add(items[1])
+	retrieved, _ := q.Remove()
+	require.Equal(t, items[0], retrieved)
+
+	q.Add(items[2])
+	q.Add(items[3])
+	q.Add(items[4])
+
+	// Remove in different order.
+	retrieved, _ = q.Remove()
+	require.Equal(t, items[1], retrieved)
+
+	retrieved, _ = q.Remove()
+	require.Equal(t, items[2], retrieved)
+
+	retrieved, _ = q.Remove()
+	require.Equal(t, items[3], retrieved)
+
+	retrieved, _ = q.Remove()
+	require.Equal(t, items[4], retrieved)
+}
+
+func TestQueueAddManyWithResize(t *testing.T) {
+	q := New(2)
+	items := []Item{
+		{Data: []byte("A"), Channel: "ch1"},
+		{Data: []byte("B"), Channel: "ch2"},
+		{Data: []byte("C"), Channel: "ch3"},
+		{Data: []byte("D"), Channel: "ch4"},
+		{Data: []byte("E"), Channel: "ch5"},
+	}
+
+	// Add more items than initial capacity to trigger resize.
+	added := q.AddMany(items...)
+	require.True(t, added)
+	require.GreaterOrEqual(t, q.Cap(), 5)
+
+	// Verify correct items are retrieved.
+	for _, expected := range items {
+		retrieved, ok := q.Remove()
+		require.True(t, ok)
+		require.Equal(t, expected, retrieved)
+	}
+}
+
+func TestQueueResizeEmptyQueue(t *testing.T) {
+	q := New(2)
+	q.resize(4)
+	require.Equal(t, 0, q.Len())
+	require.Equal(t, 4, q.Cap())
+}
+
+func TestQueueResizeWithSequentialData(t *testing.T) {
+	q := New(2)
+	q.Add(Item{Data: []byte("A"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("B"), Channel: "ch2"})
+
+	q.resize(4)
+	require.Equal(t, 2, q.Len())
+	retrieved, _ := q.Remove()
+	require.Equal(t, "A", string(retrieved.Data))
+}
+
+func TestQueueResizeWithWrappedData(t *testing.T) {
+	q := New(3)
+	q.Add(Item{Data: []byte("X"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("Y"), Channel: "ch2"})
+	q.Remove()
+	q.Add(Item{Data: []byte("Z"), Channel: "ch3"})
+
+	q.resize(6)
+	require.Equal(t, 2, q.Len())
+	retrieved, _ := q.Remove()
+	require.Equal(t, "Y", string(retrieved.Data))
+	retrieved, _ = q.Remove()
+	require.Equal(t, "Z", string(retrieved.Data))
+}
+
+func TestQueueResizeToSmallerSize(t *testing.T) {
+	q := New(6)
+	q.Add(Item{Data: []byte("1"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("2"), Channel: "ch2"})
+	q.Add(Item{Data: []byte("3"), Channel: "ch3"})
+	q.resize(2)
+
+	require.Equal(t, 2, q.Cap())
+	_, ok := q.Remove()
+	require.True(t, ok)
+	_, ok = q.Remove()
+	require.True(t, ok)
+}
+
+func TestQueueResizeWraparound(t *testing.T) {
+	q := New(4)
+	q.Add(Item{Data: []byte("A"), Channel: "ch1"})
+	q.Add(Item{Data: []byte("B"), Channel: "ch2"})
+	q.Add(Item{Data: []byte("C"), Channel: "ch3"})
+	q.Remove()
+	q.Add(Item{Data: []byte("D"), Channel: "ch4"})
+	q.resize(8)
+
+	require.Equal(t, 3, q.Len())
+	retrieved, _ := q.Remove()
+	require.Equal(t, "B", string(retrieved.Data))
+	retrieved, _ = q.Remove()
+	require.Equal(t, "C", string(retrieved.Data))
+	retrieved, _ = q.Remove()
+	require.Equal(t, "D", string(retrieved.Data))
 }
 
 func BenchmarkQueueAdd(b *testing.B) {

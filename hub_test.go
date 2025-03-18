@@ -599,6 +599,7 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
 				nil,
 				nil,
+				0, 0,
 			)
 			require.NoError(t, err)
 
@@ -620,7 +621,7 @@ func TestHubBroadcastPublicationDelta(t *testing.T) {
 				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 2},
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
-				nil,
+				nil, 0, 0,
 			)
 			require.NoError(t, err)
 
@@ -678,7 +679,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
 				StreamPosition{Offset: 1, Epoch: res.StreamPosition.Epoch},
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
 				nil,
-				nil,
+				nil, 0, 0,
 			)
 			require.NoError(t, err)
 
@@ -700,7 +701,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnce(t *testing.T) {
 				StreamPosition{Offset: 2, Epoch: res.StreamPosition.Epoch},
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 2},
 				nil,
-				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1},
+				&Publication{Data: []byte(`{"data": "broadcast_data"}`), Offset: 1}, 0, 0,
 			)
 			require.NoError(t, err)
 
@@ -755,7 +756,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
 				StreamPosition{},
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
 				nil,
-				nil,
+				nil, 0, 0,
 			)
 			require.NoError(t, err)
 
@@ -778,6 +779,7 @@ func TestHubBroadcastPublicationDeltaAtMostOnceNoOffset(t *testing.T) {
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
 				nil,
 				&Publication{Data: []byte(`{"data": "broadcast_data"}`)},
+				0, 0,
 			)
 			require.NoError(t, err)
 
@@ -827,11 +829,11 @@ func TestHubBroadcastJoin(t *testing.T) {
 			c.channels["test_channel"] = chCtx
 
 			// Broadcast to not existed channel.
-			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
+			err := n.hub.broadcastJoin("not_test_channel", &ClientInfo{ClientID: "broadcast_client"}, 0, 0)
 			require.NoError(t, err)
 
 			// Broadcast to existed channel.
-			err = n.hub.broadcastJoin("test_channel", &ClientInfo{ClientID: "broadcast_client"})
+			err = n.hub.broadcastJoin("test_channel", &ClientInfo{ClientID: "broadcast_client"}, 0, 0)
 			require.NoError(t, err)
 		LOOP:
 			for {
@@ -878,11 +880,11 @@ func TestHubBroadcastLeave(t *testing.T) {
 			c.channels["test_channel"] = chCtx
 
 			// Broadcast to not existed channel.
-			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"})
+			err := n.hub.broadcastLeave("not_test_channel", &ClientInfo{ClientID: "broadcast_client"}, 0, 0)
 			require.NoError(t, err)
 
 			// Broadcast to existed channel.
-			err = n.hub.broadcastLeave("test_channel", &ClientInfo{ClientID: "broadcast_client"})
+			err = n.hub.broadcastLeave("test_channel", &ClientInfo{ClientID: "broadcast_client"}, 0, 0)
 			require.NoError(t, err)
 		LOOP:
 			for {
@@ -1114,7 +1116,7 @@ func BenchmarkHub_MassiveBroadcast(b *testing.B) {
 						}
 					}
 				}()
-				_ = n.hub.broadcastPublication(channel, streamPosition, pub, nil, nil)
+				_ = n.hub.broadcastPublication(channel, streamPosition, pub, nil, nil, 0, 0)
 				wg.Wait()
 			}
 		})
@@ -1168,7 +1170,7 @@ func TestHubBroadcastInappropriateProtocol_Join(t *testing.T) {
 		}
 		err := n.hub.broadcastJoin("test_channel", &ClientInfo{
 			ChanInfo: []byte(`{111`),
-		})
+		}, 0, 0)
 		require.NoError(t, err)
 		waitWithTimeout(t, done)
 	}
@@ -1197,7 +1199,7 @@ func TestHubBroadcastInappropriateProtocol_Leave(t *testing.T) {
 		}
 		err := n.hub.broadcastLeave("test_channel", &ClientInfo{
 			ChanInfo: []byte(`{111`),
-		})
+		}, 0, 0)
 		require.NoError(t, err)
 		waitWithTimeout(t, done)
 	}
