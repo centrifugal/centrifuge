@@ -253,7 +253,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating Redis client: %v", err)
 	}
-	if strings.Contains(strings.ToLower(fmt.Sprintf("%T", client)), "cluster") {
+	if client.Mode() == rueidis.ClientModeCluster {
 		// Cluster mode is not explicitly set but client is a cluster client – thus set isCluster to true.
 		// This scenario covered with tests for our main integrations: see TestNewRedisShard.
 		// Centrifuge need to know that it's working with Redis Cluster to construct proper keys.
