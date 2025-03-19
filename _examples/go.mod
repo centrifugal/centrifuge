@@ -18,7 +18,7 @@ require (
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/mailru/easygo v0.0.0-20190618140210-3c14a0dc985f
 	github.com/nats-io/nats.go v1.38.0
-	github.com/prometheus/client_golang v1.20.5
+	github.com/prometheus/client_golang v1.21.1
 	github.com/quic-go/quic-go v0.49.0
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/ratelimit v0.3.1
@@ -56,7 +56,7 @@ require (
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
@@ -72,7 +72,7 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
-	github.com/prometheus/common v0.55.0 // indirect
+	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/redis/rueidis v1.0.56 // indirect
