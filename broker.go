@@ -48,8 +48,6 @@ type BrokerEventHandler interface {
 	HandleJoin(ch string, info *ClientInfo) error
 	// HandleLeave to handle received Leave messages.
 	HandleLeave(ch string, info *ClientInfo) error
-	// HandleControl to handle received control data.
-	HandleControl(data []byte) error
 }
 
 // HistoryFilter allows filtering history according to fields set.
@@ -126,9 +124,9 @@ type PublishOptions struct {
 
 // Broker is responsible for PUB/SUB mechanics.
 type Broker interface {
-	// Run called once on start when broker already set to node. At
+	// RegisterBrokerEventHandler called once on start when Broker already set to Node. At
 	// this moment node is ready to process broker events.
-	Run(BrokerEventHandler) error
+	RegisterBrokerEventHandler(BrokerEventHandler) error
 
 	// Subscribe node on channel to listen all messages coming from channel.
 	Subscribe(ch string) error
@@ -160,10 +158,6 @@ type Broker interface {
 	PublishJoin(ch string, info *ClientInfo) error
 	// PublishLeave publishes Leave Push message into channel.
 	PublishLeave(ch string, info *ClientInfo) error
-	// PublishControl allows sending control command data. If nodeID is empty string
-	// then message should be delivered to all running nodes, if nodeID is set then
-	// message should be delivered only to node with specified ID.
-	PublishControl(data []byte, nodeID, shardKey string) error
 
 	// History used to extract Publications from history stream.
 	// Publications returned according to HistoryFilter which allows to set several
