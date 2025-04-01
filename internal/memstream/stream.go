@@ -29,14 +29,22 @@ type Item struct {
 	Value  any
 }
 
+type AppStreamPosition struct {
+	// Offset is an incremental position number inside a history stream.
+	Offset uint64
+	// Epoch is a string that identifies the stream.
+	Epoch string
+}
+
 // Stream is a non-thread safe in-memory data structure that
 // maintains a stream of values limited by size and provides
 // methods to access a range of values from provided position.
 type Stream struct {
-	top   uint64
-	list  *list.List
-	index map[uint64]*list.Element
-	epoch string
+	top    uint64
+	list   *list.List
+	index  map[uint64]*list.Element
+	epoch  string
+	appPos AppStreamPosition
 }
 
 // New creates new Stream.
@@ -49,7 +57,7 @@ func New() *Stream {
 }
 
 // Add item to stream.
-func (s *Stream) Add(v any, size int) (uint64, error) {
+func (s *Stream) Add(v any, size int, appStreamPosition AppStreamPosition) (uint64, error) {
 	s.top++
 	item := Item{
 		Offset: s.top,
@@ -63,6 +71,7 @@ func (s *Stream) Add(v any, size int) (uint64, error) {
 		s.list.Remove(el)
 		delete(s.index, item.Offset)
 	}
+	s.appPos = appStreamPosition
 	return s.top, nil
 }
 
@@ -74,6 +83,14 @@ func (s *Stream) Top() uint64 {
 // Epoch returns epoch of stream.
 func (s *Stream) Epoch() string {
 	return s.epoch
+}
+
+func (s *Stream) AppTopOffset() uint64 {
+	return s.appPos.Offset
+}
+
+func (s *Stream) AppEpoch() string {
+	return s.appPos.Epoch
 }
 
 // Reset stream.

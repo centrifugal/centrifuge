@@ -110,9 +110,13 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {
 		var err error
 		var streamTop StreamPosition
-		streamTop, prevPub, err = b.historyHub.add(ch, pub, opts)
+		var skip bool
+		streamTop, prevPub, skip, err = b.historyHub.add(ch, pub, opts)
 		if err != nil {
 			return StreamPosition{}, false, err
+		}
+		if skip {
+			return streamTop, false, nil
 		}
 		pub.Offset = streamTop.Offset
 		if opts.IdempotencyKey != "" {
@@ -333,7 +337,7 @@ func (h *historyHub) expireStreams() {
 	}
 }
 
-func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (StreamPosition, *Publication, error) {
+func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (StreamPosition, *Publication, bool, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -344,7 +348,7 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 			Reverse: true,
 		}, MetaTTL: opts.HistoryMetaTTL})
 		if err != nil {
-			return StreamPosition{}, nil, fmt.Errorf("error getting previous publication from stream: %w", err)
+			return StreamPosition{}, nil, false, fmt.Errorf("error getting previous publication from stream: %w", err)
 		}
 		if len(pubs) > 0 {
 			prevPub = pubs[0]
@@ -379,18 +383,32 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 		}
 	}
 
+	var appStreamPosition memstream.AppStreamPosition
+	if opts.AppStreamPosition != nil {
+		if stream, ok := h.streams[ch]; ok {
+			appTopOffset := stream.AppTopOffset()
+			appTopEpoch := stream.AppEpoch()
+			if (opts.AppStreamPosition.Epoch == "" || opts.AppStreamPosition.Epoch == appTopEpoch) &&
+				opts.AppStreamPosition.Offset <= appTopOffset {
+				// We can skip the unordered publication.
+				return StreamPosition{Offset: stream.Top(), Epoch: stream.Epoch()}, nil, true, nil
+			}
+		}
+		appStreamPosition = memstream.AppStreamPosition(*opts.AppStreamPosition)
+	}
+
 	if stream, ok := h.streams[ch]; ok {
-		offset, _ = stream.Add(pub, opts.HistorySize)
+		offset, _ = stream.Add(pub, opts.HistorySize, appStreamPosition)
 		epoch = stream.Epoch()
 	} else {
 		stream := memstream.New()
-		offset, _ = stream.Add(pub, opts.HistorySize)
+		offset, _ = stream.Add(pub, opts.HistorySize, appStreamPosition)
 		epoch = stream.Epoch()
 		h.streams[ch] = stream
 	}
 	pub.Offset = offset
 
-	return StreamPosition{Offset: offset, Epoch: epoch}, prevPub, nil
+	return StreamPosition{Offset: offset, Epoch: epoch}, prevPub, false, nil
 }
 
 // Lock must be held outside.
