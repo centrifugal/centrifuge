@@ -542,7 +542,7 @@ func (c *Client) sendPing() {
 	c.lastPing = time.Now().UnixNano()
 	c.mu.Unlock()
 	unidirectional := c.transport.Unidirectional()
-	_ = c.writeEncodedPushData(getPingData(unidirectional, c.transport.Protocol()), "", protocol.FrameTypeServerPing, 0, 0)
+	_ = c.writeEncodedPushData(getPingData(unidirectional, c.transport.Protocol()), "", protocol.FrameTypeServerPing, ChannelBatchConfig{})
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutReply(emptyReply)
 	}
@@ -620,7 +620,7 @@ func (c *Client) closeStale() {
 	}
 }
 
-func (c *Client) writeEncodedPushData(data []byte, ch string, frameType protocol.FrameType, maxBatchSize int64, maxBatchDelay time.Duration) error {
+func (c *Client) writeEncodedPushData(data []byte, ch string, frameType protocol.FrameType, batchConfig ChannelBatchConfig) error {
 	item := queue.Item{
 		Data:      data,
 		FrameType: frameType,
@@ -628,13 +628,13 @@ func (c *Client) writeEncodedPushData(data []byte, ch string, frameType protocol
 	if c.node.config.Metrics.GetChannelNamespaceLabel != nil {
 		item.Channel = ch
 	}
-	if ch != "" && (maxBatchSize > 0 || maxBatchDelay > 0) && (
+	if ch != "" && (batchConfig.MaxSize > 0 || batchConfig.MaxDelay > 0) && (
 		item.FrameType == protocol.FrameTypePushPublication ||
 			item.FrameType == protocol.FrameTypePushJoin ||
 			item.FrameType == protocol.FrameTypePushLeave) {
 		// Per channel writer helps to batch messages on the channel level working as
 		// an intermediary buffer before client's connection writer.
-		c.perChannelWriter.Add(item, ch, maxBatchDelay, maxBatchSize)
+		c.perChannelWriter.Add(item, ch, batchConfig)
 		return nil
 	}
 	disconnect := c.messageWriter.enqueue(item)
@@ -903,7 +903,7 @@ func (c *Client) Send(data []byte) error {
 	if err != nil {
 		return err
 	}
-	return c.writeEncodedPushData(replyData, "", protocol.FrameTypePushMessage, 0, 0)
+	return c.writeEncodedPushData(replyData, "", protocol.FrameTypePushMessage, ChannelBatchConfig{})
 }
 
 func (c *Client) encodeReply(reply *protocol.Reply) ([]byte, error) {
@@ -962,7 +962,7 @@ func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {
 	if err != nil {
 		return err
 	}
-	_ = c.writeEncodedPushData(replyData, ch, protocol.FrameTypePushUnsubscribe, 0, 0)
+	_ = c.writeEncodedPushData(replyData, ch, protocol.FrameTypePushUnsubscribe, ChannelBatchConfig{})
 	c.node.metrics.incServerUnsubscribe(unsub.Code, ch)
 	return nil
 }
@@ -1041,7 +1041,7 @@ func (c *Client) close(disconnect Disconnect) error {
 
 	if disconnect.Code != DisconnectConnectionClosed.Code && !hasFlag(c.transport.DisabledPushFlags(), PushFlagDisconnect) {
 		if replyData, err := c.getDisconnectPushReply(disconnect); err == nil {
-			_ = c.writeEncodedPushData(replyData, "", protocol.FrameTypePushDisconnect, 0, 0)
+			_ = c.writeEncodedPushData(replyData, "", protocol.FrameTypePushDisconnect, ChannelBatchConfig{})
 		}
 	}
 
@@ -1557,7 +1557,7 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 	if err != nil {
 		return err
 	}
-	return c.writeEncodedPushData(replyData, "", protocol.FrameTypePushRefresh, 0, 0)
+	return c.writeEncodedPushData(replyData, "", protocol.FrameTypePushRefresh, ChannelBatchConfig{})
 }
 
 func (c *Client) getRefreshPushReply(res *protocol.Refresh) ([]byte, error) {
@@ -2510,7 +2510,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 				c.node.logger.log(newErrorLogEntry(err, "error encoding connect push", map[string]any{"push": fmt.Sprintf("%v", protoReply.Push), "client": c.ID(), "user": c.UserID(), "error": err.Error()}))
 				go func() { _ = c.close(DisconnectInappropriateProtocol) }()
 			} else {
-				if err = c.writeEncodedPushData(data, "", protocol.FrameTypePushConnect, 0, 0); err == nil {
+				if err = c.writeEncodedPushData(data, "", protocol.FrameTypePushConnect, ChannelBatchConfig{}); err == nil {
 					if rw != nil {
 						rw.write(protoReply)
 					}
@@ -2688,7 +2688,7 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	if err != nil {
 		return err
 	}
-	err = c.writeEncodedPushData(replyData, channel, protocol.FrameTypePushSubscribe, 0, 0)
+	err = c.writeEncodedPushData(replyData, channel, protocol.FrameTypePushSubscribe, ChannelBatchConfig{})
 	if err != nil {
 		return err
 	}
@@ -3233,7 +3233,7 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 
 func (c *Client) writePublicationUpdatePosition(
 	ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool,
-	maxBatchSize int64, maxBatchDelay time.Duration,
+	batchConfig ChannelBatchConfig,
 ) error {
 	c.mu.Lock()
 	channelContext, ok := c.channels[ch]
@@ -3255,7 +3255,7 @@ func (c *Client) writePublicationUpdatePosition(
 		}
 		if prep.deltaSub {
 			if deltaAllowed {
-				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
+				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
 			}
 			c.mu.Lock()
 			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
@@ -3264,7 +3264,7 @@ func (c *Client) writePublicationUpdatePosition(
 			}
 			c.mu.Unlock()
 		}
-		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
+		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 	}
 	serverSide := channelHasFlag(channelContext.flags, flagServerSide)
 	currentPositionOffset := channelContext.streamPosition.Offset
@@ -3327,7 +3327,7 @@ func (c *Client) writePublicationUpdatePosition(
 	}
 	if prep.deltaSub {
 		if deltaAllowed {
-			return c.writeEncodedPushData(prep.brokerDeltaData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
+			return c.writeEncodedPushData(prep.brokerDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
 		}
 		c.mu.Lock()
 		if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
@@ -3336,14 +3336,14 @@ func (c *Client) writePublicationUpdatePosition(
 		}
 		c.mu.Unlock()
 	}
-	return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
+	return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 }
 
-func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, maxBatchSize int64, maxBatchDelay time.Duration) error {
-	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp, false, maxBatchSize, maxBatchDelay)
+func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, batchConfig ChannelBatchConfig) error {
+	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp, false, batchConfig)
 }
 
-func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, maxBatchSize int64, maxBatchDelay time.Duration) error {
+func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig) error {
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 	}
@@ -3365,7 +3365,7 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			c.mu.RUnlock()
 
 			if deltaAllowed {
-				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
+				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
 			}
 			c.mu.Lock()
 			if chCtx, chCtxOK := c.channels[ch]; chCtxOK {
@@ -3374,15 +3374,15 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			}
 			c.mu.Unlock()
 		}
-		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, maxBatchSize, maxBatchDelay)
+		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 	}
 	c.pubSubSync.SyncPublication(ch, pub, func() {
-		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, maxBatchSize, maxBatchDelay)
+		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig)
 	})
 	return nil
 }
 
-func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte, maxBatchSize int64, maxBatchDelay time.Duration) error {
+func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte, batchConfig ChannelBatchConfig) error {
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Join: join})
 	}
@@ -3400,10 +3400,10 @@ func (c *Client) writeJoin(ch string, join *protocol.Join, data []byte, maxBatch
 		return nil
 	}
 	c.mu.RUnlock()
-	return c.writeEncodedPushData(data, ch, protocol.FrameTypePushJoin, maxBatchSize, maxBatchDelay)
+	return c.writeEncodedPushData(data, ch, protocol.FrameTypePushJoin, batchConfig)
 }
 
-func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, maxBatchSize int64, maxBatchDelay time.Duration) error {
+func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, batchConfig ChannelBatchConfig) error {
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutPush(&protocol.Push{Channel: ch, Leave: leave})
 	}
@@ -3421,7 +3421,7 @@ func (c *Client) writeLeave(ch string, leave *protocol.Leave, data []byte, maxBa
 		return nil
 	}
 	c.mu.RUnlock()
-	return c.writeEncodedPushData(data, ch, protocol.FrameTypePushLeave, maxBatchSize, maxBatchDelay)
+	return c.writeEncodedPushData(data, ch, protocol.FrameTypePushLeave, batchConfig)
 }
 
 // Lock must be held outside.

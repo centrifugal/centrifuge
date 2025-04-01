@@ -139,22 +139,22 @@ func (h *Hub) removeSub(ch string, c *Client) (bool, bool) {
 // in a channel with incremental offset. By calling BroadcastPublication messages will only be sent
 // to the current node subscribers without any defined offset semantics, without delta support.
 func (h *Hub) BroadcastPublication(ch string, pub *Publication, sp StreamPosition) error {
-	return h.broadcastPublication(ch, sp, pub, nil, nil, 0, 0)
+	return h.broadcastPublication(ch, sp, pub, nil, nil, ChannelBatchConfig{})
 }
 
 func (h *Hub) broadcastPublication(
-	ch string, sp StreamPosition, pub, prevPub, localPrevPub *Publication, maxBatchSize int64, maxBatchDelay time.Duration,
+	ch string, sp StreamPosition, pub, prevPub, localPrevPub *Publication, batchConfig ChannelBatchConfig,
 ) error {
-	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, sp, pub, prevPub, localPrevPub, maxBatchSize, maxBatchDelay)
+	return h.subShards[index(ch, numHubShards)].broadcastPublication(ch, sp, pub, prevPub, localPrevPub, batchConfig)
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
-func (h *Hub) broadcastJoin(ch string, info *ClientInfo, maxBatchSize int64, maxBatchDelay time.Duration) error {
-	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: infoToProto(info)}, maxBatchSize, maxBatchDelay)
+func (h *Hub) broadcastJoin(ch string, info *ClientInfo, batchConfig ChannelBatchConfig) error {
+	return h.subShards[index(ch, numHubShards)].broadcastJoin(ch, &protocol.Join{Info: infoToProto(info)}, batchConfig)
 }
 
-func (h *Hub) broadcastLeave(ch string, info *ClientInfo, maxBatchSize int64, maxBatchDelay time.Duration) error {
-	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: infoToProto(info)}, maxBatchSize, maxBatchDelay)
+func (h *Hub) broadcastLeave(ch string, info *ClientInfo, batchConfig ChannelBatchConfig) error {
+	return h.subShards[index(ch, numHubShards)].broadcastLeave(ch, &protocol.Leave{Info: infoToProto(info)}, batchConfig)
 }
 
 // NumSubscribers returns number of current subscribers for a given channel.
@@ -654,7 +654,7 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 }
 
 // broadcastPublication sends message to all clients subscribed on a channel.
-func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication, maxBatchSize int64, maxBatchDelay time.Duration) error {
+func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication, batchConfig ChannelBatchConfig) error {
 	pubTime := pub.Time
 	// Check lag in PUB/SUB processing. We use it to notify subscribers with positioning enabled
 	// about insufficient state in the stream.
@@ -784,7 +784,7 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 			continue
 		}
 
-		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, maxBatchSize, maxBatchDelay)
+		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, batchConfig)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
@@ -801,7 +801,7 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 }
 
 // broadcastJoin sends message to all clients subscribed on channel.
-func (h *subShard) broadcastJoin(channel string, join *protocol.Join, maxBatchSize int64, maxBatchDelay time.Duration) error {
+func (h *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfig ChannelBatchConfig) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -838,7 +838,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join, maxBatchSi
 						continue
 					}
 				}
-				_ = sub.client.writeJoin(channel, join, jsonPush, maxBatchSize, maxBatchDelay)
+				_ = sub.client.writeJoin(channel, join, jsonPush, batchConfig)
 			} else {
 				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
@@ -850,7 +850,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join, maxBatchSi
 						continue
 					}
 				}
-				_ = sub.client.writeJoin(channel, join, jsonReply, maxBatchSize, maxBatchDelay)
+				_ = sub.client.writeJoin(channel, join, jsonReply, batchConfig)
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if sub.client.transport.Unidirectional() {
@@ -862,7 +862,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join, maxBatchSi
 						return err
 					}
 				}
-				_ = sub.client.writeJoin(channel, join, protobufPush, maxBatchSize, maxBatchDelay)
+				_ = sub.client.writeJoin(channel, join, protobufPush, batchConfig)
 			} else {
 				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Join: join}
@@ -872,7 +872,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join, maxBatchSi
 						return err
 					}
 				}
-				_ = sub.client.writeJoin(channel, join, protobufReply, maxBatchSize, maxBatchDelay)
+				_ = sub.client.writeJoin(channel, join, protobufReply, batchConfig)
 			}
 		}
 	}
@@ -889,7 +889,7 @@ func (h *subShard) broadcastJoin(channel string, join *protocol.Join, maxBatchSi
 }
 
 // broadcastLeave sends message to all clients subscribed on channel.
-func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave, maxBatchSize int64, maxBatchDelay time.Duration) error {
+func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchConfig ChannelBatchConfig) error {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -926,7 +926,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave, maxBatc
 						continue
 					}
 				}
-				_ = sub.client.writeLeave(channel, leave, jsonPush, maxBatchSize, maxBatchDelay)
+				_ = sub.client.writeLeave(channel, leave, jsonPush, batchConfig)
 			} else {
 				if jsonReply == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
@@ -938,7 +938,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave, maxBatc
 						continue
 					}
 				}
-				_ = sub.client.writeLeave(channel, leave, jsonReply, maxBatchSize, maxBatchDelay)
+				_ = sub.client.writeLeave(channel, leave, jsonReply, batchConfig)
 			}
 		} else if protoType == protocol.TypeProtobuf {
 			if sub.client.transport.Unidirectional() {
@@ -950,7 +950,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave, maxBatc
 						return err
 					}
 				}
-				_ = sub.client.writeLeave(channel, leave, protobufPush, maxBatchSize, maxBatchDelay)
+				_ = sub.client.writeLeave(channel, leave, protobufPush, batchConfig)
 			} else {
 				if protobufReply == nil {
 					push := &protocol.Push{Channel: channel, Leave: leave}
@@ -960,7 +960,7 @@ func (h *subShard) broadcastLeave(channel string, leave *protocol.Leave, maxBatc
 						return err
 					}
 				}
-				_ = sub.client.writeLeave(channel, leave, protobufReply, maxBatchSize, maxBatchDelay)
+				_ = sub.client.writeLeave(channel, leave, protobufReply, batchConfig)
 			}
 		}
 	}

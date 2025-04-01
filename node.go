@@ -710,20 +710,14 @@ func (n *Node) handlePublication(ch string, sp StreamPosition, pub, prevPub, loc
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	maxBatchSize, maxBatchDelay := n.getBatchConfig(ch)
-	return n.hub.broadcastPublication(ch, sp, pub, prevPub, localPrevPub, maxBatchSize, maxBatchDelay)
+	return n.hub.broadcastPublication(ch, sp, pub, prevPub, localPrevPub, n.getBatchConfig(ch))
 }
 
-func (n *Node) getBatchConfig(channel string) (int64, time.Duration) {
-	var (
-		maxBatchSize  int64
-		maxBatchDelay time.Duration
-	)
+func (n *Node) getBatchConfig(channel string) ChannelBatchConfig {
 	if n.config.GetChannelBatchConfig != nil {
-		batchConfig := n.config.GetChannelBatchConfig(channel)
-		maxBatchSize, maxBatchDelay = batchConfig.MaxSize, batchConfig.MaxDelay
+		return n.config.GetChannelBatchConfig(channel)
 	}
-	return maxBatchSize, maxBatchDelay
+	return ChannelBatchConfig{}
 }
 
 // handleJoin handles join messages - i.e. broadcasts it to
@@ -735,8 +729,7 @@ func (n *Node) handleJoin(ch string, info *ClientInfo) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	maxBatchSize, maxBatchDelay := n.getBatchConfig(ch)
-	return n.hub.broadcastJoin(ch, info, maxBatchSize, maxBatchDelay)
+	return n.hub.broadcastJoin(ch, info, n.getBatchConfig(ch))
 }
 
 // handleLeave handles leave messages - i.e. broadcasts it to
@@ -748,8 +741,7 @@ func (n *Node) handleLeave(ch string, info *ClientInfo) error {
 	if !hasCurrentSubscribers {
 		return nil
 	}
-	maxBatchSize, maxBatchDelay := n.getBatchConfig(ch)
-	return n.hub.broadcastLeave(ch, info, maxBatchSize, maxBatchDelay)
+	return n.hub.broadcastLeave(ch, info, n.getBatchConfig(ch))
 }
 
 func (n *Node) publish(ch string, data []byte, opts ...PublishOption) (PublishResult, error) {
