@@ -128,7 +128,8 @@ type ChannelBatchConfig struct {
 	// MaxDelay is the maximum time to wait before flushing.
 	MaxDelay time.Duration
 	// FlushLatest if true, then Centrifuge flushes only the latest item in the batch
-	// upon reaching the MaxSize or MaxDelay.
+	// upon reaching the MaxSize or MaxDelay. Skipping on this level does not work
+	// with delta compression.
 	FlushLatest bool
 }
 
