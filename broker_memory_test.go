@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"os"
 	"strconv"
 	"testing"
@@ -225,23 +226,52 @@ func TestMemoryBrokerPublishSkipOldVersion(t *testing.T) {
 		},
 	}
 
+	channel1 := uuid.NewString()
+
 	// Test publish with history and with version.
-	_, _, err := e.Publish("channel", testPublicationData(), PublishOptions{
+	_, _, err := e.Publish(channel1, testPublicationData(), PublishOptions{
 		HistorySize: 1,
 		HistoryTTL:  time.Second,
 		Version:     1,
 	})
 	require.NoError(t, err)
-
 	// Publish with same version.
-	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{
+	_, _, err = e.Publish(channel1, testPublicationData(), PublishOptions{
 		HistorySize: 1,
 		HistoryTTL:  time.Second,
 		Version:     1,
 	})
 	require.NoError(t, err)
-
 	require.Equal(t, 1, numPubs)
+
+	numPubs = 0
+	channel2 := uuid.NewString()
+	// Test publish with history and with version and version epoch.
+	_, _, err = e.Publish(channel2, testPublicationData(), PublishOptions{
+		HistorySize:  1,
+		HistoryTTL:   time.Second,
+		Version:      1,
+		VersionEpoch: "xyz",
+	})
+	require.NoError(t, err)
+	// Publish with same version and epoch.
+	_, _, err = e.Publish(channel2, testPublicationData(), PublishOptions{
+		HistorySize:  1,
+		HistoryTTL:   time.Second,
+		Version:      1,
+		VersionEpoch: "xyz",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, numPubs)
+	// Publish with same version and different epoch.
+	_, _, err = e.Publish(channel2, testPublicationData(), PublishOptions{
+		HistorySize:  1,
+		HistoryTTL:   time.Second,
+		Version:      1,
+		VersionEpoch: "aaa",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, numPubs)
 }
 
 func TestMemoryEngineSubscribeUnsubscribe(t *testing.T) {
