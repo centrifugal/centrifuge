@@ -345,17 +345,26 @@ func (b *RedisBroker) runForever(fn func()) {
 	}
 }
 
+func getBaseLogFields(s *shardWrapper) map[string]any {
+	baseLogFields := make(map[string]any, len(s.logFields))
+	for k, v := range s.logFields {
+		baseLogFields[k] = v
+	}
+	return baseLogFields
+}
+
 func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
 	if b.config.SkipPubSub {
 		return nil
 	}
+	baseLogFields := getBaseLogFields(s)
 	go b.runForever(func() {
 		select {
 		case <-b.closeCh:
 			return
 		default:
 		}
-		b.runControlPubSub(s.shard, s.logFields, h, func(err error) {
+		b.runControlPubSub(s.shard, baseLogFields, h, func(err error) {
 			s.controlPubSubStart.once.Do(func() {
 				s.controlPubSubStart.errCh <- err
 			})
@@ -372,10 +381,7 @@ func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
 					return
 				default:
 				}
-				logFields := make(map[string]any, len(s.logFields)+2)
-				for k, v := range s.logFields {
-					logFields[k] = v
-				}
+				logFields := getBaseLogFields(s)
 				logFields["pub_sub_shard"] = pubSubShardIndex
 				b.runPubSub(s, logFields, h, clusterShardIndex, pubSubShardIndex, b.useShardedPubSub(s.shard), func(err error) {
 					s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].once.Do(func() {
