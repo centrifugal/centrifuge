@@ -374,6 +374,42 @@ func TestRedisBrokerPublishIdempotent(t *testing.T) {
 	}
 }
 
+func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
+	for _, tt := range historyRedisTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			node := testNode(t)
+
+			b := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisBroker(b)
+
+			channel := uuid.New().String()
+
+			_, _, err := b.Publish(channel, testPublicationData(), PublishOptions{
+				HistorySize: 2,
+				HistoryTTL:  5 * time.Second,
+				Version:     1,
+			})
+			require.NoError(t, err)
+
+			_, _, err = b.Publish(channel, testPublicationData(), PublishOptions{
+				HistorySize: 2,
+				HistoryTTL:  5 * time.Second,
+				Version:     1,
+			})
+			require.NoError(t, err)
+
+			pubs, _, err := b.History(channel, HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, len(pubs))
+		})
+	}
+}
+
 func TestRedisCurrentPosition(t *testing.T) {
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {

@@ -124,7 +124,7 @@ type PublishOptions struct {
 	UseDelta bool
 	// Version of Publication. This is a tip to Centrifuge to skip non-actual
 	// publications. Mostly useful for cases when Publication contains the entire
-	// state.
+	// state. Version only used when history is configured.
 	Version uint64
 	// VersionEpoch is a string that is used to identify the epoch of version of the
 	// publication. Use it if version may be reused in the future. For example, if

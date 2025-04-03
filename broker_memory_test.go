@@ -147,7 +147,7 @@ func TestMemoryBrokerPublishIdempotent(t *testing.T) {
 		},
 	}
 
-	// Test publish with history and with idempotency key.
+	// Test publish with idempotency key.
 	_, _, err := e.Publish("channel", testPublicationData(), PublishOptions{
 		IdempotencyKey: "test",
 	})
@@ -209,6 +209,38 @@ func TestMemoryBrokerPublishIdempotentWithHistory(t *testing.T) {
 
 	// Make sure stream positions match.
 	require.Equal(t, sp1, sp2)
+	require.Equal(t, 1, numPubs)
+}
+
+func TestMemoryBrokerPublishSkipOldVersion(t *testing.T) {
+	e := testMemoryBroker()
+	defer func() { _ = e.node.Shutdown(context.Background()) }()
+
+	numPubs := 0
+
+	e.eventHandler = &testBrokerEventHandler{
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			numPubs++
+			return nil
+		},
+	}
+
+	// Test publish with history and with version.
+	_, _, err := e.Publish("channel", testPublicationData(), PublishOptions{
+		HistorySize: 1,
+		HistoryTTL:  time.Second,
+		Version:     1,
+	})
+	require.NoError(t, err)
+
+	// Publish with same version.
+	_, _, err = e.Publish("channel", testPublicationData(), PublishOptions{
+		HistorySize: 1,
+		HistoryTTL:  time.Second,
+		Version:     1,
+	})
+	require.NoError(t, err)
+
 	require.Equal(t, 1, numPubs)
 }
 
