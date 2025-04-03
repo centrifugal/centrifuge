@@ -413,7 +413,7 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 			channel2 := uuid.NewString()
 			// Test publish with history and with version and version epoch.
 			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
-				HistorySize:  1,
+				HistorySize:  2,
 				HistoryTTL:   5 * time.Second,
 				Version:      1,
 				VersionEpoch: "xyz",
@@ -421,7 +421,7 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 			require.NoError(t, err)
 			// Publish with same version and epoch.
 			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
-				HistorySize:  1,
+				HistorySize:  2,
 				HistoryTTL:   5 * time.Second,
 				Version:      1,
 				VersionEpoch: "xyz",
@@ -436,7 +436,7 @@ func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
 			require.Equal(t, 1, len(pubs))
 			// Publish with same version and different epoch.
 			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
-				HistorySize:  1,
+				HistorySize:  2,
 				HistoryTTL:   time.Second,
 				Version:      1,
 				VersionEpoch: "aaa",
