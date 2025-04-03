@@ -29,10 +29,10 @@ type Item struct {
 	Value  any
 }
 
-type AppStreamPosition struct {
-	// Offset is an incremental position number inside a history stream.
-	Offset uint64
-	// Epoch is a string that identifies the stream.
+type AppVersion struct {
+	// Version is an incremental version of state.
+	Version uint64
+	// Epoch is a string that identifies the epoch of version number.
 	Epoch string
 }
 
@@ -40,11 +40,11 @@ type AppStreamPosition struct {
 // maintains a stream of values limited by size and provides
 // methods to access a range of values from provided position.
 type Stream struct {
-	top    uint64
-	list   *list.List
-	index  map[uint64]*list.Element
-	epoch  string
-	appPos AppStreamPosition
+	top     uint64
+	list    *list.List
+	index   map[uint64]*list.Element
+	epoch   string
+	version AppVersion
 }
 
 // New creates new Stream.
@@ -57,7 +57,7 @@ func New() *Stream {
 }
 
 // Add item to stream.
-func (s *Stream) Add(v any, size int, appStreamPosition AppStreamPosition) (uint64, error) {
+func (s *Stream) Add(v any, size int, version uint64, versionEpoch string) (uint64, error) {
 	s.top++
 	item := Item{
 		Offset: s.top,
@@ -71,7 +71,10 @@ func (s *Stream) Add(v any, size int, appStreamPosition AppStreamPosition) (uint
 		s.list.Remove(el)
 		delete(s.index, item.Offset)
 	}
-	s.appPos = appStreamPosition
+	s.version = AppVersion{
+		Version: version,
+		Epoch:   versionEpoch,
+	}
 	return s.top, nil
 }
 
@@ -85,12 +88,12 @@ func (s *Stream) Epoch() string {
 	return s.epoch
 }
 
-func (s *Stream) AppTopOffset() uint64 {
-	return s.appPos.Offset
+func (s *Stream) TopVersion() uint64 {
+	return s.version.Version
 }
 
-func (s *Stream) AppEpoch() string {
-	return s.appPos.Epoch
+func (s *Stream) TopVersionEpoch() string {
+	return s.version.Epoch
 }
 
 // Reset stream.

@@ -53,22 +53,28 @@ func WithTags(meta map[string]string) PublishOption {
 	}
 }
 
-// WithAppStreamPosition allows application to provide a tip for Centrifuge about
-// internal application stream position of Publication. This is helpful to drop
-// non-actual publications on Centrifuge Broker level. Publications may be non-actual
-// in case of unordered processing and message publication by the application.
-// This is mostly useful for scenarios when channel messages contain the entire state,
-// so skipping intermediary messages is safe and beneficial. This also means that
-// Centrifuge history will contain the most recent Publication, so the recovery will return
-// the proper state (and state will be eventually consistent in case of at least one delivery).
-// This option must be used only with channels that have history enabled. Note, this
-// StreamPosition is not used as Centrifuge channel stream position, it serves a different
-// purpose. Centrifuge still generates its own independent StreamPosition for each Publication
-// in channel streams with history, but for dropping non-actual publications it additionally
-// keeps Offset and Epoch from this application stream position.
-func WithAppStreamPosition(sp StreamPosition) PublishOption {
+// WithVersion allows application to provide a tip for Centrifuge about
+// internal application version of Publication. This is helpful to drop
+// non-actual publications on Centrifuge Broker level. Publications may be
+// non-actual in case of unordered publish calls from application side.
+// In some cases application may want Centrifuge to avoid delivery of these
+// publications.
+// This is mostly useful for scenarios when channel publications contain the
+// entire state, so skipping intermediary messages is safe and beneficial.
+// This also means that Centrifuge history will contain the most recent Publication,
+// so the recovery will return the proper state (and state should be eventually
+// consistent in case of at least one delivery).
+// This option must be used only with channels that have history enabled. Note,
+// these version and versionEpoch are not used as Centrifuge channel stream position.
+// Centrifuge still generates its own independent StreamPosition for each Publication
+// in channel streams with history, but it additionally starts keeping version and
+// versionEpoch provided here.
+// If versionEpoch is an empty string, then Centrifuge does not look at it when comparing
+// versions.
+func WithVersion(version uint64, versionEpoch string) PublishOption {
 	return func(opts *PublishOptions) {
-		opts.AppStreamPosition = &sp
+		opts.Version = version
+		opts.VersionEpoch = versionEpoch
 	}
 }
 

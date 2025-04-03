@@ -835,6 +835,12 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		useDelta = "1"
 	}
 
+	version := "0"
+	if opts.Version > 0 {
+		version = strconv.Itoa(int(opts.Version))
+	}
+	versionEpoch := opts.VersionEpoch
+
 	replies, err := script.Exec(
 		context.Background(),
 		s.shard.client,
@@ -849,12 +855,14 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 			publishCommand,
 			resultExpire,
 			useDelta,
+			version,
+			versionEpoch,
 		},
 	).ToArray()
 	if err != nil {
 		return StreamPosition{}, false, err
 	}
-	if len(replies) != 2 && len(replies) != 3 {
+	if len(replies) != 2 && len(replies) != 3 && len(replies) != 4 {
 		return StreamPosition{}, false, errors.New("wrong Redis reply")
 	}
 	offset, err := replies[0].AsInt64()
@@ -873,6 +881,14 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 		}
 		fromCache = fromCacheStr == "1"
 	}
+	//skipped := false
+	//if len(replies) == 4 {
+	//	skippedStr, err := replies[3].ToString()
+	//	if err != nil {
+	//		return StreamPosition{}, false, errors.New("wrong Redis reply skipped flag")
+	//	}
+	//	skipped = skippedStr == "1"
+	//}
 
 	return StreamPosition{Offset: uint64(offset), Epoch: epoch}, fromCache, nil
 }

@@ -122,12 +122,14 @@ type PublishOptions struct {
 	IdempotentResultTTL time.Duration
 	// UseDelta enables using delta encoding for the publication.
 	UseDelta bool
-	// AppStreamPosition is an optional stream position that can be used by Centrifuge
-	// to understand the position of the publication in the app's stream. This stream
-	// position is not used by the broker and is only used for the purpose of skipping
-	// non-actual messages (due to unordered processing). Mostly useful for channels
-	// where the entire state is sent in the publication.
-	AppStreamPosition *StreamPosition
+	// Version of Publication. This is a tip to Centrifuge to skip non-actual
+	// publications. Mostly useful for cases when Publication contains the entire
+	// state.
+	Version uint64
+	// VersionEpoch is a string that is used to identify the epoch of version of the
+	// publication. Use it if version may be reused in the future. For example, if
+	// version comes from in-memory system which can lose data, or due to eviction, etc.
+	VersionEpoch string
 }
 
 // Broker is responsible for PUB/SUB mechanics.

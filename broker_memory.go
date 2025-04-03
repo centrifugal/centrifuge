@@ -383,26 +383,24 @@ func (h *historyHub) add(ch string, pub *Publication, opts PublishOptions) (Stre
 		}
 	}
 
-	var appStreamPosition memstream.AppStreamPosition
-	if opts.AppStreamPosition != nil {
+	if opts.Version > 0 {
 		if stream, ok := h.streams[ch]; ok {
-			appTopOffset := stream.AppTopOffset()
-			appTopEpoch := stream.AppEpoch()
-			if (opts.AppStreamPosition.Epoch == "" || opts.AppStreamPosition.Epoch == appTopEpoch) &&
-				opts.AppStreamPosition.Offset <= appTopOffset {
+			topVersion := stream.TopVersion()
+			topVersionEpoch := stream.TopVersionEpoch()
+			if (opts.VersionEpoch == "" || opts.VersionEpoch == topVersionEpoch) &&
+				opts.Version <= topVersion {
 				// We can skip the unordered publication.
 				return StreamPosition{Offset: stream.Top(), Epoch: stream.Epoch()}, nil, true, nil
 			}
 		}
-		appStreamPosition = memstream.AppStreamPosition(*opts.AppStreamPosition)
 	}
 
 	if stream, ok := h.streams[ch]; ok {
-		offset, _ = stream.Add(pub, opts.HistorySize, appStreamPosition)
+		offset, _ = stream.Add(pub, opts.HistorySize, opts.Version, opts.VersionEpoch)
 		epoch = stream.Epoch()
 	} else {
 		stream := memstream.New()
-		offset, _ = stream.Add(pub, opts.HistorySize, appStreamPosition)
+		offset, _ = stream.Add(pub, opts.HistorySize, opts.Version, opts.VersionEpoch)
 		epoch = stream.Epoch()
 		h.streams[ch] = stream
 	}

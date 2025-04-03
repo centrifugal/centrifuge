@@ -229,10 +229,10 @@ func TestMemoryHistoryHub(t *testing.T) {
 	ch1 := "channel1"
 	ch2 := "channel2"
 	pub := newTestPublication()
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
 
 	hist, _, err := h.get(ch1, HistoryOptions{
 		Filter: HistoryFilter{
@@ -271,10 +271,10 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 0, len(hist))
 
 	// test history messages limit
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 10, HistoryTTL: time.Second})
 	hist, _, err = h.get(ch1, HistoryOptions{
 		Filter: HistoryFilter{
 			Limit: -1,
@@ -291,8 +291,8 @@ func TestMemoryHistoryHub(t *testing.T) {
 	require.Equal(t, 1, len(hist))
 
 	// test history limit greater than history size
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
 	hist, _, err = h.get(ch1, HistoryOptions{
 		Filter: HistoryFilter{
 			Limit: 2,
@@ -312,10 +312,10 @@ func TestMemoryHistoryHubMetaTTL(t *testing.T) {
 	h.RLock()
 	require.Equal(t, int64(0), h.nextRemoveCheck)
 	h.RUnlock()
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
-	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
+	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second})
 	h.RLock()
 	require.True(t, h.nextRemoveCheck > 0)
 	require.Equal(t, 2, len(h.streams))
@@ -350,10 +350,10 @@ func TestMemoryHistoryHubMetaTTLPerChannel(t *testing.T) {
 	h.RLock()
 	require.Equal(t, int64(0), h.nextRemoveCheck)
 	h.RUnlock()
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
-	_, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
-	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
-	_, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
+	_, _, _, _ = h.add(ch2, pub, PublishOptions{HistorySize: 2, HistoryTTL: time.Second, HistoryMetaTTL: time.Second})
 	h.RLock()
 	require.True(t, h.nextRemoveCheck > 0)
 	require.Equal(t, 2, len(h.streams))
@@ -784,8 +784,8 @@ func TestMemoryHistoryHubPrevPub(t *testing.T) {
 	defer h.close()
 	ch1 := "channel1"
 	pub := newTestPublication()
-	_, prevPub, _ := h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, UseDelta: true})
+	_, prevPub, _, _ := h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, UseDelta: true})
 	require.Nil(t, prevPub)
-	_, prevPub, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, UseDelta: true})
+	_, prevPub, _, _ = h.add(ch1, pub, PublishOptions{HistorySize: 1, HistoryTTL: time.Second, UseDelta: true})
 	require.NotNil(t, prevPub)
 }
