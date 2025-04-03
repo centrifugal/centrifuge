@@ -375,14 +375,14 @@ func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
 		clusterShardIndex := i
 		for j := 0; j < len(s.subClients[i]); j++ { // PUB/SUB shards.
 			pubSubShardIndex := j
+			logFields := getBaseLogFields(s)
+			logFields["pub_sub_shard"] = pubSubShardIndex
 			go b.runForever(func() {
 				select {
 				case <-b.closeCh:
 					return
 				default:
 				}
-				logFields := getBaseLogFields(s)
-				logFields["pub_sub_shard"] = pubSubShardIndex
 				b.runPubSub(s, logFields, h, clusterShardIndex, pubSubShardIndex, b.useShardedPubSub(s.shard), func(err error) {
 					s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].once.Do(func() {
 						s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].errCh <- err
