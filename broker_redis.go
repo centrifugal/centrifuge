@@ -528,9 +528,17 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 		if useShardedPubSub {
 			debugLogValues["cluster_shard_index"] = clusterShardIndex
 		}
-		b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis PUB/SUB", getPubSubStartLogFields(s.shard, logFields), debugLogValues))
+		pubSubStartLogFields := getPubSubStartLogFields(s.shard, logFields)
+		combinedLogFields := make(map[string]any, len(pubSubStartLogFields)+len(debugLogValues))
+		for k, v := range pubSubStartLogFields {
+			combinedLogFields[k] = v
+		}
+		for k, v := range debugLogValues {
+			combinedLogFields[k] = v
+		}
+		b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis PUB/SUB", combinedLogFields))
 		defer func() {
-			b.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis PUB/SUB", logFields, debugLogValues))
+			b.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis PUB/SUB", combinedLogFields))
 		}()
 	}
 
@@ -687,7 +695,13 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 	go func() {
 		wg.Wait()
 		if len(channels) > 0 && b.node.logEnabled(LogLevelDebug) {
-			b.node.logger.log(newLogEntry(LogLevelDebug, "resubscribed to channels", logFields, map[string]any{"elapsed": time.Since(started).String(), "num_channels": len(channels)}))
+			combinedLogFields := make(map[string]any, len(logFields)+2)
+			for k, v := range logFields {
+				combinedLogFields[k] = v
+			}
+			combinedLogFields["elapsed"] = time.Since(started).String()
+			combinedLogFields["num_channels"] = len(channels)
+			b.node.logger.log(newLogEntry(LogLevelDebug, "resubscribed to channels", combinedLogFields))
 		}
 		select {
 		case <-done:
