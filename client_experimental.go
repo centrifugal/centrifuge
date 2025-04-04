@@ -26,8 +26,6 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 	pub := pubToProto(publication)
 	protoType := c.transport.Protocol().toProto()
 
-	maxBatchSize, maxBatchDelay := c.node.getBatchConfig(channel)
-
 	if protoType == protocol.TypeJSON {
 		if c.transport.Unidirectional() {
 			push := &protocol.Push{Channel: channel, Pub: pub}
@@ -37,7 +35,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, jsonPush, sp, maxBatchSize, maxBatchDelay)
+			return c.writePublicationNoDelta(channel, pub, jsonPush, sp, c.node.getBatchConfig(channel))
 		} else {
 			push := &protocol.Push{Channel: channel, Pub: pub}
 			var err error
@@ -46,7 +44,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(c)
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, jsonReply, sp, maxBatchSize, maxBatchDelay)
+			return c.writePublicationNoDelta(channel, pub, jsonReply, sp, c.node.getBatchConfig(channel))
 		}
 	} else if protoType == protocol.TypeProtobuf {
 		if c.transport.Unidirectional() {
@@ -56,7 +54,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 			if err != nil {
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, protobufPush, sp, maxBatchSize, maxBatchDelay)
+			return c.writePublicationNoDelta(channel, pub, protobufPush, sp, c.node.getBatchConfig(channel))
 		} else {
 			push := &protocol.Push{Channel: channel, Pub: pub}
 			var err error
@@ -64,7 +62,7 @@ func (c *Client) WritePublication(channel string, publication *Publication, sp S
 			if err != nil {
 				return err
 			}
-			return c.writePublicationNoDelta(channel, pub, protobufReply, sp, maxBatchSize, maxBatchDelay)
+			return c.writePublicationNoDelta(channel, pub, protobufReply, sp, c.node.getBatchConfig(channel))
 		}
 	}
 
@@ -129,15 +127,20 @@ type ChannelBatchConfig struct {
 	MaxSize int64
 	// MaxDelay is the maximum time to wait before flushing.
 	MaxDelay time.Duration
+	// FlushLatest if true, then Centrifuge flushes only the latest item in the batch
+	// upon reaching the MaxSize or MaxDelay. Skipping on this level does not work
+	// with delta compression.
+	FlushLatest bool
 }
 
 // channelWriter buffers queue.Item objects and flushes them after a fixed delay
 // or when a specific batch size is reached.
 type channelWriter struct {
-	mu      sync.Mutex
-	buffer  []queue.Item
-	timer   *time.Timer
-	flushFn func([]queue.Item) error
+	mu         sync.Mutex
+	buffer     []queue.Item
+	timer      *time.Timer
+	flushFn    func([]queue.Item) error
+	latestOnly bool
 }
 
 // newChannelWriter creates a new channelWriter with the given delay and maxBatchSize.
@@ -154,7 +157,7 @@ func (w *channelWriter) close(flushRemaining bool) {
 		w.timer = nil
 	}
 	if flushRemaining && len(w.buffer) > 0 { // If there are any buffered items, flush them.
-		w.flushLocked()
+		w.flushLocked(w.latestOnly)
 	}
 	w.buffer = nil
 	w.mu.Unlock()
@@ -162,26 +165,27 @@ func (w *channelWriter) close(flushRemaining bool) {
 
 // Add appends an item to the buffer. It starts a delay timer if this is the first item,
 // and flushes immediately if the batch size is reached.
-func (w *channelWriter) Add(item queue.Item, ch string, maxBatchDelay time.Duration, maxBatchSize int64) {
+func (w *channelWriter) Add(item queue.Item, config ChannelBatchConfig) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.latestOnly = config.FlushLatest
 	w.buffer = append(w.buffer, item)
-	if maxBatchDelay > 0 && len(w.buffer) == 1 && w.timer == nil { // Start the flush timer for the first item and if no active timer.
-		w.timer = timers.AcquireTimer(maxBatchDelay)
-		go w.waitTimer(w.timer, ch)
+	if config.MaxDelay > 0 && len(w.buffer) == 1 && w.timer == nil { // Start the flush timer for the first item and if no active timer.
+		w.timer = timers.AcquireTimer(config.MaxDelay)
+		go w.waitTimer(w.timer)
 	}
 	// Flush immediately if batch size is reached.
-	if maxBatchSize > 0 && int64(len(w.buffer)) >= maxBatchSize {
+	if config.MaxSize > 0 && int64(len(w.buffer)) >= config.MaxSize {
 		if w.timer != nil {
 			w.timer.Stop()
 			w.timer = nil // Set timer to nil so waitTimer knows it was cancelled.
 		}
-		w.flushLocked()
+		w.flushLocked(w.latestOnly)
 	}
 }
 
 // waitTimer waits for the timer to fire, then flushes the batch.
-func (w *channelWriter) waitTimer(tm *time.Timer, ch string) {
+func (w *channelWriter) waitTimer(tm *time.Timer) {
 	<-tm.C // Wait for the timer to fire.
 	timers.ReleaseTimer(tm)
 	w.mu.Lock()
@@ -191,16 +195,23 @@ func (w *channelWriter) waitTimer(tm *time.Timer, ch string) {
 		return
 	}
 	if len(w.buffer) > 0 { // If there are any items, flush the buffer.
-		w.flushLocked()
+		w.flushLocked(w.latestOnly)
 	}
 	w.timer = nil // Mark the timer as no longer active.
 	w.mu.Unlock()
 }
 
 // flushLocked flushes the current buffer. It assumes the caller holds the lock.
-func (w *channelWriter) flushLocked() {
+func (w *channelWriter) flushLocked(latestOnly bool) {
+	if len(w.buffer) == 0 {
+		return
+	}
 	batch := w.buffer
 	w.buffer = w.buffer[:0]
+	if latestOnly {
+		// flush only latest item in the batch.
+		batch = batch[len(batch)-1:]
+	}
 	_ = w.flushFn(batch)
 }
 
@@ -258,7 +269,7 @@ func (pcw *perChannelWriter) delWriter(channel string, flushRemaining bool) {
 }
 
 // Add routes an item to its configuration-specific aggregator.
-func (pcw *perChannelWriter) Add(item queue.Item, ch string, maxBatchDelay time.Duration, maxBatchSize int64) {
+func (pcw *perChannelWriter) Add(item queue.Item, ch string, config ChannelBatchConfig) {
 	w := pcw.getWriter(ch)
-	w.Add(item, ch, maxBatchDelay, maxBatchSize)
+	w.Add(item, config)
 }
