@@ -67,8 +67,8 @@ func NewMemoryBroker(n *Node, _ MemoryBrokerConfig) (*MemoryBroker, error) {
 	return b, nil
 }
 
-// Run runs memory broker.
-func (b *MemoryBroker) Run(h BrokerEventHandler) error {
+// RegisterBrokerEventHandler runs memory broker.
+func (b *MemoryBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 	b.eventHandler = h
 	go b.expireResultCache()
 	b.historyHub.runCleanups()
@@ -196,11 +196,6 @@ func (b *MemoryBroker) PublishJoin(ch string, info *ClientInfo) error {
 // PublishLeave - see Broker interface description.
 func (b *MemoryBroker) PublishLeave(ch string, info *ClientInfo) error {
 	return b.eventHandler.HandleLeave(ch, info)
-}
-
-// PublishControl - see Broker interface description.
-func (b *MemoryBroker) PublishControl(data []byte, _, _ string) error {
-	return b.eventHandler.HandleControl(data)
 }
 
 // Subscribe is noop here.

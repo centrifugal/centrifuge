@@ -39,6 +39,7 @@ const (
 )
 
 var _ Broker = (*RedisBroker)(nil)
+var _ Controller = (*RedisBroker)(nil)
 
 type pubSubStart struct {
 	once  sync.Once
@@ -250,7 +251,6 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 
 		shardWrapper.subClients = subChannels
 		shardWrapper.pubSubStartChannels = pubSubStartChannels
-		shardWrapper.controlPubSubStart = &controlPubSubStart{errCh: make(chan error, 1)}
 	}
 
 	return b, nil
@@ -280,11 +280,42 @@ func (b *RedisBroker) getShard(channel string) *shardWrapper {
 	return b.shards[consistentIndex(channel, len(b.shards))]
 }
 
-// Run – see Broker.Run.
-func (b *RedisBroker) Run(h BrokerEventHandler) error {
+func (b *RedisBroker) RegisterControlEventHandler(h ControlEventHandler) error {
+	for _, wrapper := range b.shards {
+		wrapper.controlPubSubStart = &controlPubSubStart{errCh: make(chan error, 1)}
+		err := b.runControlShard(wrapper, h)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PublishControl - see Broker.PublishControl.
+func (b *RedisBroker) PublishControl(data []byte, nodeID string, _ string) error {
+	currentRound := atomic.AddUint64(&b.controlRound, 1)
+	index := currentRound % uint64(len(b.shards))
+	s := b.shards[index]
+	return b.publishControl(s, data, nodeID)
+}
+
+func (b *RedisBroker) publishControl(s *shardWrapper, data []byte, nodeID string) error {
+	var chID channelID
+	if nodeID == "" {
+		chID = channelID(b.controlChannel)
+	} else {
+		chID = b.nodeChannelID(nodeID)
+	}
+	cmd := s.shard.client.B().Publish().Channel(string(chID)).Message(convert.BytesToString(data)).Build()
+	resp := s.shard.client.Do(context.Background(), cmd)
+	return resp.Error()
+}
+
+// RegisterBrokerEventHandler – see Broker.RegisterBrokerEventHandler.
+func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 	// Run all shards.
 	for _, wrapper := range b.shards {
-		err := b.runShard(wrapper, h)
+		err := b.runPubSubShard(wrapper, h)
 		if err != nil {
 			return err
 		}
@@ -293,7 +324,9 @@ func (b *RedisBroker) Run(h BrokerEventHandler) error {
 		}
 	}
 	for i := 0; i < len(b.shards); i++ {
-		<-b.shards[i].controlPubSubStart.errCh
+		if b.shards[i].controlPubSubStart != nil {
+			<-b.shards[i].controlPubSubStart.errCh
+		}
 		for j := 0; j < len(b.shards[i].pubSubStartChannels); j++ {
 			for k := 0; k < len(b.shards[i].pubSubStartChannels[j]); k++ {
 				<-b.shards[i].pubSubStartChannels[j][k].errCh
@@ -345,10 +378,7 @@ func (b *RedisBroker) runForever(fn func()) {
 	}
 }
 
-func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
-	if b.config.SkipPubSub {
-		return nil
-	}
+func (b *RedisBroker) runControlShard(s *shardWrapper, h ControlEventHandler) error {
 	go b.runForever(func() {
 		select {
 		case <-b.closeCh:
@@ -361,6 +391,13 @@ func (b *RedisBroker) runShard(s *shardWrapper, h BrokerEventHandler) error {
 			})
 		})
 	})
+	return nil
+}
+
+func (b *RedisBroker) runPubSubShard(s *shardWrapper, h BrokerEventHandler) error {
+	if b.config.SkipPubSub {
+		return nil
+	}
 
 	for i := 0; i < len(s.subClients); i++ { // Cluster shards.
 		clusterShardIndex := i
@@ -406,7 +443,7 @@ func getPubSubStartLogFields(s *RedisShard, logFields map[string]any) map[string
 	return startLogFields
 }
 
-func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, eventHandler BrokerEventHandler, startOnce func(error)) {
+func (b *RedisBroker) runControlPubSub(s *RedisShard, logFields map[string]any, eventHandler ControlEventHandler, startOnce func(error)) {
 	b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis control PUB/SUB", getPubSubStartLogFields(s, logFields)))
 	defer func() {
 		b.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis control PUB/SUB", logFields))
@@ -938,26 +975,6 @@ func (b *RedisBroker) publishLeave(s *shardWrapper, ch string, info *ClientInfo)
 		cmd := s.shard.client.B().Publish().Channel(string(chID)).Message(convert.BytesToString(append(leaveTypePrefix, byteMessage...))).Build()
 		resp = s.shard.client.Do(context.Background(), cmd)
 	}
-	return resp.Error()
-}
-
-// PublishControl - see Broker.PublishControl.
-func (b *RedisBroker) PublishControl(data []byte, nodeID string, _ string) error {
-	currentRound := atomic.AddUint64(&b.controlRound, 1)
-	index := currentRound % uint64(len(b.shards))
-	s := b.shards[index]
-	return b.publishControl(s, data, nodeID)
-}
-
-func (b *RedisBroker) publishControl(s *shardWrapper, data []byte, nodeID string) error {
-	var chID channelID
-	if nodeID == "" {
-		chID = channelID(b.controlChannel)
-	} else {
-		chID = b.nodeChannelID(nodeID)
-	}
-	cmd := s.shard.client.B().Publish().Channel(string(chID)).Message(convert.BytesToString(data)).Build()
-	resp := s.shard.client.Do(context.Background(), cmd)
 	return resp.Error()
 }
 
