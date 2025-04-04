@@ -314,8 +314,35 @@ func TestRedisBroker(t *testing.T) {
 
 			require.NoError(t, b.PublishJoin("channel", &ClientInfo{}))
 			require.NoError(t, b.PublishLeave("channel", &ClientInfo{}))
+
+			// TODO: test resubscribe upon broker temporary unavailability.
+			b.logResubscribed(3, time.Second, map[string]any{"test": "case"})
 		})
 	}
+}
+
+func TestRedisBrokerPublishNoPubSub(t *testing.T) {
+	node := testNode(t)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	redisConf := testSingleRedisConf(6379)
+	s, err := NewRedisShard(node, redisConf)
+	require.NoError(t, err)
+	b, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix:     uuid.NewString(),
+		Shards:     []*RedisShard{s},
+		SkipPubSub: true,
+	})
+	require.NoError(t, err)
+	node.SetBroker(b)
+	err = node.Run()
+	require.NoError(t, err)
+	sp, _, err := b.Publish("channel", []byte(`{}`), PublishOptions{
+		HistorySize: 4,
+		HistoryTTL:  time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, sp.Offset > 0)
 }
 
 func TestRedisBrokerPublishIdempotent(t *testing.T) {

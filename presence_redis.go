@@ -98,7 +98,7 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 	}
 
 	if len(config.Shards) > 1 {
-		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("presence: Redis sharding enabled: %d shards", len(config.Shards))))
+		n.logger.log(newLogEntry(LogLevelInfo, fmt.Sprintf("presence: Redis sharding enabled: %d shards", len(config.Shards)), nil))
 	}
 
 	if config.Prefix == "" {

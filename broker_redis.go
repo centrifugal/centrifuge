@@ -329,7 +329,9 @@ func (b *RedisBroker) RegisterBrokerEventHandler(h BrokerEventHandler) error {
 		}
 		for j := 0; j < len(b.shards[i].pubSubStartChannels); j++ {
 			for k := 0; k < len(b.shards[i].pubSubStartChannels[j]); k++ {
-				<-b.shards[i].pubSubStartChannels[j][k].errCh
+				if !b.config.SkipPubSub {
+					<-b.shards[i].pubSubStartChannels[j][k].errCh
+				}
 			}
 		}
 	}
@@ -378,14 +380,23 @@ func (b *RedisBroker) runForever(fn func()) {
 	}
 }
 
+func getBaseLogFields(s *shardWrapper) map[string]any {
+	baseLogFields := make(map[string]any, len(s.logFields))
+	for k, v := range s.logFields {
+		baseLogFields[k] = v
+	}
+	return baseLogFields
+}
+
 func (b *RedisBroker) runControlShard(s *shardWrapper, h ControlEventHandler) error {
+	baseLogFields := getBaseLogFields(s)
 	go b.runForever(func() {
 		select {
 		case <-b.closeCh:
 			return
 		default:
 		}
-		b.runControlPubSub(s.shard, s.logFields, h, func(err error) {
+		b.runControlPubSub(s.shard, baseLogFields, h, func(err error) {
 			s.controlPubSubStart.once.Do(func() {
 				s.controlPubSubStart.errCh <- err
 			})
@@ -403,17 +414,14 @@ func (b *RedisBroker) runPubSubShard(s *shardWrapper, h BrokerEventHandler) erro
 		clusterShardIndex := i
 		for j := 0; j < len(s.subClients[i]); j++ { // PUB/SUB shards.
 			pubSubShardIndex := j
+			logFields := getBaseLogFields(s)
+			logFields["pub_sub_shard"] = pubSubShardIndex
 			go b.runForever(func() {
 				select {
 				case <-b.closeCh:
 					return
 				default:
 				}
-				logFields := make(map[string]any, len(s.logFields)+2)
-				for k, v := range s.logFields {
-					logFields[k] = v
-				}
-				logFields["pub_sub_shard"] = pubSubShardIndex
 				b.runPubSub(s, logFields, h, clusterShardIndex, pubSubShardIndex, b.useShardedPubSub(s.shard), func(err error) {
 					s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].once.Do(func() {
 						s.pubSubStartChannels[clusterShardIndex][pubSubShardIndex].errCh <- err
@@ -559,9 +567,17 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 		if useShardedPubSub {
 			debugLogValues["cluster_shard_index"] = clusterShardIndex
 		}
-		b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis PUB/SUB", getPubSubStartLogFields(s.shard, logFields), debugLogValues))
+		pubSubStartLogFields := getPubSubStartLogFields(s.shard, logFields)
+		combinedLogFields := make(map[string]any, len(pubSubStartLogFields)+len(debugLogValues))
+		for k, v := range pubSubStartLogFields {
+			combinedLogFields[k] = v
+		}
+		for k, v := range debugLogValues {
+			combinedLogFields[k] = v
+		}
+		b.node.logger.log(newLogEntry(LogLevelDebug, "running Redis PUB/SUB", combinedLogFields))
 		defer func() {
-			b.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis PUB/SUB", logFields, debugLogValues))
+			b.node.logger.log(newLogEntry(LogLevelDebug, "stopping Redis PUB/SUB", combinedLogFields))
 		}()
 	}
 
@@ -718,7 +734,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 	go func() {
 		wg.Wait()
 		if len(channels) > 0 && b.node.logEnabled(LogLevelDebug) {
-			b.node.logger.log(newLogEntry(LogLevelDebug, "resubscribed to channels", logFields, map[string]any{"elapsed": time.Since(started).String(), "num_channels": len(channels)}))
+			b.logResubscribed(len(channels), time.Since(started), logFields)
 		}
 		select {
 		case <-done:
@@ -747,6 +763,16 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 	case <-done:
 	case <-s.shard.closeCh:
 	}
+}
+
+func (b *RedisBroker) logResubscribed(numChannels int, elapsed time.Duration, logFields map[string]any) {
+	combinedLogFields := make(map[string]any, len(logFields)+2)
+	for k, v := range logFields {
+		combinedLogFields[k] = v
+	}
+	combinedLogFields["elapsed"] = elapsed.String()
+	combinedLogFields["num_channels"] = numChannels
+	b.node.logger.log(newLogEntry(LogLevelDebug, "resubscribed to channels", combinedLogFields))
 }
 
 func (b *RedisBroker) useShardedPubSub(s *RedisShard) bool {
