@@ -401,6 +401,85 @@ func TestRedisBrokerPublishIdempotent(t *testing.T) {
 	}
 }
 
+func TestRedisBrokerPublishSkipOldVersion(t *testing.T) {
+	for _, tt := range historyRedisTests {
+		t.Run(tt.Name, func(t *testing.T) {
+			if !tt.UseStreams {
+				// Does not work with lists.
+				t.Skip("Skip test for Redis lists - not implemented")
+			}
+
+			node := testNode(t)
+
+			b := newTestRedisBroker(t, node, tt.UseStreams, tt.UseCluster, tt.Port)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisBroker(b)
+
+			channel := uuid.New().String()
+
+			_, _, err := b.Publish(channel, testPublicationData(), PublishOptions{
+				HistorySize: 2,
+				HistoryTTL:  5 * time.Second,
+				Version:     1,
+			})
+			require.NoError(t, err)
+			_, _, err = b.Publish(channel, testPublicationData(), PublishOptions{
+				HistorySize: 2,
+				HistoryTTL:  5 * time.Second,
+				Version:     1,
+			})
+			require.NoError(t, err)
+			pubs, _, err := b.History(channel, HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, len(pubs))
+
+			channel2 := uuid.NewString()
+			// Test publish with history and with version and version epoch.
+			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
+				HistorySize:  2,
+				HistoryTTL:   5 * time.Second,
+				Version:      1,
+				VersionEpoch: "xyz",
+			})
+			require.NoError(t, err)
+			// Publish with same version and epoch.
+			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
+				HistorySize:  2,
+				HistoryTTL:   5 * time.Second,
+				Version:      1,
+				VersionEpoch: "xyz",
+			})
+			require.NoError(t, err)
+			pubs, _, err = b.History(channel2, HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, len(pubs))
+			// Publish with same version and different epoch.
+			_, _, err = b.Publish(channel2, testPublicationData(), PublishOptions{
+				HistorySize:  2,
+				HistoryTTL:   time.Second,
+				Version:      1,
+				VersionEpoch: "aaa",
+			})
+			require.NoError(t, err)
+			pubs, _, err = b.History(channel2, HistoryOptions{
+				Filter: HistoryFilter{
+					Limit: -1,
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, 2, len(pubs))
+		})
+	}
+}
+
 func TestRedisCurrentPosition(t *testing.T) {
 	for _, tt := range historyRedisTests {
 		t.Run(tt.Name, func(t *testing.T) {
