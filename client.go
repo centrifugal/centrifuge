@@ -266,6 +266,7 @@ type Client struct {
 	pongTimeout       time.Duration
 	eventHub          *clientEventHub
 	timer             *time.Timer
+	timerCanceler     TimerCanceler // TimerCanceler if TimerScheduler is used.
 	startWriterOnce   sync.Once
 	replyWithoutQueue bool
 	unusable          bool
@@ -307,7 +308,11 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	if staleCloseDelay > 0 {
 		client.mu.Lock()
 		client.timerOp = timerOpStale
-		client.timer = time.AfterFunc(staleCloseDelay, client.onTimerOp)
+		if client.node.timerScheduler != nil {
+			client.timerCanceler = client.node.timerScheduler.ScheduleTimer(staleCloseDelay, client.onTimerOp)
+		} else {
+			client.timer = time.AfterFunc(staleCloseDelay, client.onTimerOp)
+		}
 		client.mu.Unlock()
 	}
 	return client, func() error { return client.close(DisconnectConnectionClosed) }, nil
@@ -479,7 +484,7 @@ func (c *Client) scheduleNextTimer() {
 	if c.status == statusClosed {
 		return
 	}
-	c.stopTimer()
+	c.stopTimer() // Cancel any existing timer.
 	var minEventTime int64
 	var nextTimerOp timerOp
 	var needTimer bool
@@ -506,17 +511,26 @@ func (c *Client) scheduleNextTimer() {
 	if needTimer {
 		c.timerOp = nextTimerOp
 		afterDuration := time.Duration(minEventTime-time.Now().UnixNano()) * time.Nanosecond
-		if c.timer != nil {
-			c.timer.Reset(afterDuration)
+		if c.node.timerScheduler != nil {
+			c.timerCanceler = c.node.timerScheduler.ScheduleTimer(afterDuration, c.onTimerOp)
 		} else {
-			c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+			if c.timer != nil {
+				c.timer.Reset(afterDuration)
+			} else {
+				c.timer = time.AfterFunc(afterDuration, c.onTimerOp)
+			}
 		}
 	}
 }
 
 // Lock must be held outside.
 func (c *Client) stopTimer() {
-	if c.timer != nil {
+	if c.node.timerScheduler != nil {
+		if c.timerCanceler != nil {
+			c.timerCanceler.Cancel()
+			c.timerCanceler = nil
+		}
+	} else if c.timer != nil {
 		c.timer.Stop()
 	}
 }
@@ -590,8 +604,14 @@ func (c *Client) addPingUpdate(isFirst bool, scheduleNext bool) {
 }
 
 // Lock must be held outside.
-func (c *Client) addPresenceUpdate(scheduleNext bool) {
-	c.nextPresence = time.Now().Add(c.node.config.ClientPresenceUpdateInterval).UnixNano()
+func (c *Client) addPresenceUpdate(isFirst bool, scheduleNext bool) {
+	delay := c.node.config.ClientPresenceUpdateInterval
+	if isFirst {
+		// Spread in time first presence update.
+		intervalNanoseconds := c.node.config.ClientPresenceUpdateInterval.Nanoseconds()
+		delay = time.Duration(intervalNanoseconds/2) + time.Duration(randSource.Int63n(intervalNanoseconds/2))*time.Nanosecond
+	}
+	c.nextPresence = time.Now().Add(delay).UnixNano()
 	if scheduleNext {
 		c.scheduleNextTimer()
 	}
@@ -776,7 +796,7 @@ func (c *Client) updatePresence() {
 		}
 	}
 	c.mu.Lock()
-	c.addPresenceUpdate(true)
+	c.addPresenceUpdate(false, true)
 	c.mu.Unlock()
 }
 
@@ -1491,7 +1511,7 @@ func (c *Client) triggerConnect() {
 func (c *Client) scheduleOnConnectTimers() {
 	// Make presence and refresh handlers always run after client connect event.
 	c.mu.Lock()
-	c.addPresenceUpdate(false)
+	c.addPresenceUpdate(true, false)
 	if c.exp > 0 {
 		expireAfter := time.Duration(c.exp-time.Now().Unix()) * time.Second
 		if c.clientSideRefresh {
