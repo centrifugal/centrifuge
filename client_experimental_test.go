@@ -181,3 +181,68 @@ func TestClientSubscribeReceivePublication_ChannelBatching_FlushLatestOnly(t *te
 	case <-done:
 	}
 }
+
+// timerCanceler implements the TimerCanceler interface.
+type timerCanceler struct {
+	timer   *time.Timer
+	mu      sync.Mutex
+	stopped bool
+}
+
+func (c *timerCanceler) Cancel() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.stopped {
+		c.timer.Stop()
+		c.stopped = true
+	}
+}
+
+// testTimerScheduler is a test implementation of the TimerScheduler interface.
+type testTimerScheduler struct{}
+
+func (s *testTimerScheduler) ScheduleTimer(duration time.Duration, callback func()) TimerCanceler {
+	canceler := &timerCanceler{}
+	canceler.timer = time.AfterFunc(duration, func() {
+		canceler.mu.Lock()
+		defer canceler.mu.Unlock()
+		if !canceler.stopped {
+			go callback()
+		}
+	})
+	return canceler
+}
+
+func TestClientLevelPingCustomTimerScheduler(t *testing.T) {
+	t.Parallel()
+	node := defaultTestNode()
+	node.timerScheduler = &testTimerScheduler{}
+	defer func() { _ = node.Shutdown(context.Background()) }()
+	done := make(chan struct{})
+	node.OnConnecting(func(context.Context, ConnectEvent) (ConnectReply, error) {
+		return ConnectReply{
+			PingPongConfig: &PingPongConfig{
+				PingInterval: 5 * time.Second,
+				PongTimeout:  3 * time.Second,
+			},
+		}, nil
+	})
+	node.OnConnect(func(client *Client) {
+		client.OnDisconnect(func(event DisconnectEvent) {
+			require.Equal(t, DisconnectNoPong.Code, event.Disconnect.Code)
+			close(done)
+		})
+	})
+	ctx, cancelFn := context.WithCancel(context.Background())
+	transport := newTestTransport(cancelFn)
+	transport.setProtocolVersion(ProtocolVersion2)
+	transport.setPing(0, 0)
+	client := newTestClientCustomTransport(t, ctx, node, transport, "42")
+	connectClientV2(t, client)
+	select {
+	case <-done:
+	case <-time.After(9 * time.Second):
+		t.Fatal("no disconnect in timeout")
+	}
+}

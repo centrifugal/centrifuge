@@ -273,3 +273,17 @@ func (pcw *perChannelWriter) Add(item queue.Item, ch string, config ChannelBatch
 	w := pcw.getWriter(ch)
 	w.Add(item, config)
 }
+
+// TimerCanceler is the interface returned from ScheduleTimer which allows the task to be cancelled.
+// EXPERIMENTAL API.
+type TimerCanceler interface {
+	// Cancel the timer.
+	Cancel()
+}
+
+// TimerScheduler is the interface for scheduling timers.
+// EXPERIMENTAL API.
+type TimerScheduler interface {
+	// ScheduleTimer adds a callback for later execution. The TimerCanceler is returned.
+	ScheduleTimer(duration time.Duration, callback func()) TimerCanceler
+}

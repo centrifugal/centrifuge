@@ -132,6 +132,9 @@ type Config struct {
 	// not set then no batching is used on per-channel level. This function may be called in the hot
 	// broadcast path, so must be fast. This is an EXPERIMENTAL feature.
 	GetChannelBatchConfig func(channel string) ChannelBatchConfig
+	// ClientTimerScheduler if set will be used for scheduling client timers.
+	// This is an EXPERIMENTAL API.
+	ClientTimerScheduler TimerScheduler
 }
 
 const (

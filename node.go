@@ -88,6 +88,8 @@ type Node struct {
 
 	mediums     map[string]*channelMedium
 	mediumLocks map[int]*sync.Mutex // Sharded locks for mediums map.
+
+	timerScheduler TimerScheduler
 }
 
 const (
@@ -174,6 +176,7 @@ func New(c Config) (*Node, error) {
 		surveyRegistry: make(map[uint64]chan survey),
 		mediums:        map[string]*channelMedium{},
 		mediumLocks:    mediumLocks,
+		timerScheduler: c.ClientTimerScheduler,
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
