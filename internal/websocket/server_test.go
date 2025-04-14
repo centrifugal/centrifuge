@@ -86,6 +86,15 @@ func TestSubProtocolSelection(t *testing.T) {
 	if s != "" {
 		t.Errorf("Upgrader.selectSubprotocol returned %v, want %v", s, "empty string")
 	}
+
+	upgrader = Upgrader{
+		Subprotocols: nil,
+	}
+	r = http.Request{Header: http.Header{"Sec-Websocket-Protocol": {"foo"}}}
+	s = upgrader.selectSubprotocol(&r, nil)
+	if s != "" {
+		t.Errorf("Upgrader.selectSubprotocol returned %v, want %v", s, "empty string")
+	}
 }
 
 var checkSameOriginTests = []struct {
@@ -192,6 +201,55 @@ func BenchmarkUpgrade(b *testing.B) {
 		_, _, err := upgrader.Upgrade(w, req, responseHeader)
 		if err != nil {
 			b.Error("Upgrade failed:", err)
+		}
+	}
+}
+
+func BenchmarkUpgradeSubprotocol(b *testing.B) {
+	// Create a sample request with necessary WebSocket headers
+	req, err := http.NewRequest("GET", "http://example.com/socket", nil)
+	if err != nil {
+		b.Fatal("Error creating request:", err)
+	}
+	req.Header.Add("Connection", "Upgrade")
+	req.Header.Add("Upgrade", "websocket")
+	req.Header.Add("Sec-Websocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	req.Header.Add("Sec-Websocket-Version", "13")
+	req.Header.Add("Sec-WebSocket-Protocol", "centrifuge-protobuf")
+
+	// Mock connection and buffer to fulfill the Hijack requirement
+	conn := newMockConn()
+	buf := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	// Create a response recorder with Hijack capability
+	w := &HijackableResponseRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		HijackFunc: func() (net.Conn, *bufio.ReadWriter, error) {
+			return conn, buf, nil
+		},
+	}
+
+	//// Create a response recorder
+	//w := httptest.NewRecorder()
+
+	// Initialize the Upgrader
+	upgrader := &Upgrader{
+		// Configure your Upgrader here
+		Subprotocols: []string{"centrifuge-json", "centrifuge-protobuf"},
+	}
+
+	// Pre-create the responseHeader map
+	responseHeader := http.Header{}
+
+	b.ResetTimer() // Start the benchmark timer
+	for i := 0; i < b.N; i++ {
+		// Run the Upgrade function
+		_, sub, err := upgrader.Upgrade(w, req, responseHeader)
+		if err != nil {
+			b.Error("Upgrade failed:", err)
+		}
+		if sub != "centrifuge-protobuf" {
+			b.Errorf("Expected subprotocol 'centrifuge-protobuf', got '%s'", sub)
 		}
 	}
 }

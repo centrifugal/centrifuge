@@ -101,11 +101,29 @@ func checkSameOrigin(r *http.Request) bool {
 
 func (u *Upgrader) selectSubprotocol(r *http.Request, responseHeader http.Header) string {
 	if u.Subprotocols != nil {
-		clientProtocols := Subprotocols(r)
-		for _, clientProtocol := range clientProtocols {
+		header := r.Header.Get("Sec-Websocket-Protocol")
+		if header == "" {
+			return ""
+		}
+
+		start := 0
+		for i, c := range header {
+			if c == ',' {
+				proto := strings.TrimSpace(header[start:i])
+				for _, serverProtocol := range u.Subprotocols {
+					if proto == serverProtocol {
+						return proto
+					}
+				}
+				start = i + 1
+			}
+		}
+		// Last protocol (after last comma).
+		if start < len(header) {
+			proto := strings.TrimSpace(header[start:])
 			for _, serverProtocol := range u.Subprotocols {
-				if clientProtocol == serverProtocol {
-					return clientProtocol
+				if proto == serverProtocol {
+					return proto
 				}
 			}
 		}
@@ -113,6 +131,20 @@ func (u *Upgrader) selectSubprotocol(r *http.Request, responseHeader http.Header
 		return responseHeader.Get("Sec-Websocket-Protocol")
 	}
 	return ""
+}
+
+// Subprotocols returns the subprotocols requested by the client in the
+// Sec-Websocket-Protocol header.
+func Subprotocols(r *http.Request) []string {
+	h := strings.TrimSpace(r.Header.Get("Sec-Websocket-Protocol"))
+	if h == "" {
+		return nil
+	}
+	protocols := strings.Split(h, ",")
+	for i := range protocols {
+		protocols[i] = strings.TrimSpace(protocols[i])
+	}
+	return protocols
 }
 
 // Upgrade upgrades the HTTP server connection to the WebSocket protocol.
@@ -264,20 +296,6 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	}
 
 	return c, subprotocol, nil
-}
-
-// Subprotocols returns the subprotocols requested by the client in the
-// Sec-Websocket-Protocol header.
-func Subprotocols(r *http.Request) []string {
-	h := strings.TrimSpace(r.Header.Get("Sec-Websocket-Protocol"))
-	if h == "" {
-		return nil
-	}
-	protocols := strings.Split(h, ",")
-	for i := range protocols {
-		protocols[i] = strings.TrimSpace(protocols[i])
-	}
-	return protocols
 }
 
 // IsWebSocketUpgrade returns true if the client requested upgrade to the
