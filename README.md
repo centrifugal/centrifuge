@@ -15,7 +15,7 @@ Centrifuge library is used by:
 
 ## Why using Centrifuge
 
-As said, Centrifuge provides a lot of top of raw WebSocket transport. Important library highlights:
+Centrifuge library provides a lot of top of raw WebSocket transport. Important library highlights:
 
 * Fast and optimized for low-latency communication with millions of client connections. See [test stand with 1 million connections in Kubernetes](https://centrifugal.dev/blog/2020/02/10/million-connections-with-centrifugo)
 * WebSocket bidirectional transport using JSON or binary Protobuf formats, both based on a [strict Protobuf schema](https://github.com/centrifugal/protocol/blob/master/definitions/client.proto). Code generation is used to push both JSON and Protobuf serialization performance to the limits
@@ -35,6 +35,7 @@ As said, Centrifuge provides a lot of top of raw WebSocket transport. Important 
 * Message recovery mechanism for channels to survive PUB/SUB delivery problems, short network disconnects or node restart
 * Cache channels – a way to quickly deliver latest publication from channel history to the client upon subscription
 * Delta compression using [Fossil](https://fossil-scm.org/home/doc/tip/www/delta_format.wiki) algorithm for publications inside a channel to reduce bandwidth usage
+* Per-client and per-channel batching controls for reduced system calls and better CPU utilization
 * Out-of-the-box observability using Prometheus instrumentation
 * Client SDKs for main application environments all following [single behaviour spec](https://centrifugal.dev/docs/transports/client_api) (see list of SDKs below).
 
