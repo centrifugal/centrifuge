@@ -2,13 +2,13 @@ package centrifuge
 
 import (
 	"context"
-	"github.com/google/uuid"
 	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/centrifugal/protocol"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 

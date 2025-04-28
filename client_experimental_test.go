@@ -135,9 +135,9 @@ func TestClientSubscribeReceivePublication_ChannelBatching_FlushLatestOnly(t *te
 	node := defaultTestNode()
 	node.config.GetChannelBatchConfig = func(channel string) ChannelBatchConfig {
 		return ChannelBatchConfig{
-			MaxSize:     2,
-			MaxDelay:    0,
-			FlushLatest: true,
+			MaxSize:                0,
+			MaxDelay:               100 * time.Millisecond,
+			FlushLatestPublication: true,
 		}
 	}
 	defer func() { _ = node.Shutdown(context.Background()) }()

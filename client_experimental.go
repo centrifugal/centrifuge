@@ -127,60 +127,78 @@ type ChannelBatchConfig struct {
 	MaxSize int64
 	// MaxDelay is the maximum time to wait before flushing.
 	MaxDelay time.Duration
-	// FlushLatest if true, then Centrifuge flushes only the latest item in the batch
-	// upon reaching the MaxSize or MaxDelay. Skipping on this level does not work
-	// with delta compression.
-	FlushLatest bool
+	// FlushLatestPublication if true, then Centrifuge flushes only the latest publication
+	// in the batch upon reaching the MaxSize or MaxDelay. Skipping on this level does
+	// not work with delta compression.
+	FlushLatestPublication bool
 }
 
 // channelWriter buffers queue.Item objects and flushes them after a fixed delay
 // or when a specific batch size is reached.
 type channelWriter struct {
-	mu         sync.Mutex
-	buffer     []queue.Item
-	timer      *time.Timer
-	flushFn    func([]queue.Item) error
-	latestOnly bool
+	mu           sync.Mutex
+	buffer       []queue.Item
+	timer        *time.Timer
+	flushFn      func([]queue.Item) error
+	latestOnly   bool
+	latestPub    queue.Item
+	hasLatestPub bool
 }
 
-// newChannelWriter creates a new channelWriter with the given delay and maxBatchSize.
+// newChannelWriter creates a new channelWriter with the given flush callback.
 func newChannelWriter(flushFn func([]queue.Item) error) *channelWriter {
-	return &channelWriter{
-		flushFn: flushFn,
-	}
+	return &channelWriter{flushFn: flushFn}
 }
 
+// close stops the timer and optionally flushes remaining items.
 func (w *channelWriter) close(flushRemaining bool) {
 	w.mu.Lock()
 	if w.timer != nil {
 		w.timer.Stop()
 		w.timer = nil
 	}
-	if flushRemaining && len(w.buffer) > 0 { // If there are any buffered items, flush them.
-		w.flushLocked(w.latestOnly)
+	if flushRemaining && (len(w.buffer) > 0 || w.hasLatestPub) {
+		w.flushLocked()
 	}
 	w.buffer = nil
+	w.hasLatestPub = false
 	w.mu.Unlock()
 }
 
-// Add appends an item to the buffer. It starts a delay timer if this is the first item,
-// and flushes immediately if the batch size is reached.
+// Add appends an item to the buffer or records it as the latest publication.
+// It starts a delay timer if this is the first item, and flushes immediately if the batch size is reached.
 func (w *channelWriter) Add(item queue.Item, config ChannelBatchConfig) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.latestOnly = config.FlushLatest
-	w.buffer = append(w.buffer, item)
-	if config.MaxDelay > 0 && len(w.buffer) == 1 && w.timer == nil { // Start the flush timer for the first item and if no active timer.
+	w.latestOnly = config.FlushLatestPublication
+
+	// If FlushLatestPublication is enabled and this is a publication, keep it separately
+	if config.FlushLatestPublication && item.FrameType == protocol.FrameTypePushPublication {
+		w.latestPub = item
+		w.hasLatestPub = true
+	} else {
+		w.buffer = append(w.buffer, item)
+	}
+
+	// Total items count includes latestPub if present
+	totalCount := len(w.buffer)
+	if w.hasLatestPub {
+		totalCount++
+	}
+
+	// Start timer on first item
+	if config.MaxDelay > 0 && totalCount == 1 && w.timer == nil {
 		w.timer = timers.AcquireTimer(config.MaxDelay)
 		go w.waitTimer(w.timer)
 	}
-	// Flush immediately if batch size is reached.
-	if config.MaxSize > 0 && int64(len(w.buffer)) >= config.MaxSize {
+
+	// Flush immediately if batch size is reached
+	if config.MaxSize > 0 && int64(totalCount) >= config.MaxSize {
 		if w.timer != nil {
 			w.timer.Stop()
 			w.timer = nil // Set timer to nil so waitTimer knows it was cancelled.
 		}
-		w.flushLocked(w.latestOnly)
+		w.flushLocked()
 	}
 }
 
@@ -189,29 +207,41 @@ func (w *channelWriter) waitTimer(tm *time.Timer) {
 	<-tm.C // Wait for the timer to fire.
 	timers.ReleaseTimer(tm)
 	w.mu.Lock()
-	// Check if the timer is still active. If it’s not, it was already stopped and handled.
+
+	// If timer was stopped, do nothing
 	if w.timer == nil {
 		w.mu.Unlock()
 		return
 	}
-	if len(w.buffer) > 0 { // If there are any items, flush the buffer.
-		w.flushLocked(w.latestOnly)
+
+	// Flush if any items exist
+	if len(w.buffer) > 0 || w.hasLatestPub {
+		w.flushLocked()
 	}
 	w.timer = nil // Mark the timer as no longer active.
 	w.mu.Unlock()
 }
 
-// flushLocked flushes the current buffer. It assumes the caller holds the lock.
-func (w *channelWriter) flushLocked(latestOnly bool) {
-	if len(w.buffer) == 0 {
+// flushLocked flushes the current batch. Caller must hold the lock.
+func (w *channelWriter) flushLocked() {
+	// Nothing to do if no items.
+	if len(w.buffer) == 0 && !w.hasLatestPub {
 		return
 	}
-	batch := w.buffer
-	w.buffer = w.buffer[:0]
-	if latestOnly {
-		// flush only latest item in the batch.
-		batch = batch[len(batch)-1:]
+
+	var batch []queue.Item
+	// Combine logic: if FlushLatestPublication and a latest publication exists, include all buffered items.
+	// followed by that publication.
+	if w.latestOnly && w.hasLatestPub {
+		batch = append(batch, w.buffer...)
+		batch = append(batch, w.latestPub)
+	} else {
+		// Otherwise, flush everything currently buffered.
+		batch = w.buffer
 	}
+
+	w.buffer = w.buffer[:0]
+	w.hasLatestPub = false
 	_ = w.flushFn(batch)
 }
 
