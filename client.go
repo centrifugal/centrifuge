@@ -648,8 +648,8 @@ func (c *Client) writeEncodedPushData(data []byte, ch string, frameType protocol
 	if c.node.config.Metrics.GetChannelNamespaceLabel != nil {
 		item.Channel = ch
 	}
-	if ch != "" && (batchConfig.MaxSize > 0 || batchConfig.MaxDelay > 0) && (
-		item.FrameType == protocol.FrameTypePushPublication ||
+	if ch != "" && (batchConfig.MaxSize > 0 || batchConfig.MaxDelay > 0) &&
+		(item.FrameType == protocol.FrameTypePushPublication ||
 			item.FrameType == protocol.FrameTypePushJoin ||
 			item.FrameType == protocol.FrameTypePushLeave) {
 		// Per channel writer helps to batch messages on the channel level working as
