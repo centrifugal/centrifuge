@@ -41,5 +41,5 @@ jobs:
 
       - name: Test
         env:
-          GODEBUG: fips140=only
+          GODEBUG: fips140=on
         run: go test -v -race -tags integration -coverprofile=coverage.out $(go list ./... | grep -v /_examples/)
