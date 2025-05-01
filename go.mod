@@ -2,6 +2,8 @@ module github.com/centrifugal/centrifuge
 
 go 1.23.0
 
+replace github.com/redis/rueidis => github.com/FZambia/rueidis v0.0.0-20250501161008-e8328e58a80a
+
 require (
 	github.com/FZambia/eagle v0.2.0
 	github.com/centrifugal/protocol v0.16.0

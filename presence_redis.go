@@ -115,10 +115,10 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		config:   config,
 		sharding: len(config.Shards) > 1,
 
-		addPresenceScript:   rueidis.NewLuaScript(addPresenceScriptSource),
-		remPresenceScript:   rueidis.NewLuaScript(remPresenceScriptSource),
-		presenceScript:      rueidis.NewLuaScript(presenceScriptSource),
-		presenceStatsScript: rueidis.NewLuaScript(presenceStatsScriptSource),
+		addPresenceScript:   rueidis.NewLuaScriptNoSha(addPresenceScriptSource),
+		remPresenceScript:   rueidis.NewLuaScriptNoSha(remPresenceScriptSource),
+		presenceScript:      rueidis.NewLuaScriptNoSha(presenceScriptSource),
+		presenceStatsScript: rueidis.NewLuaScriptNoSha(presenceStatsScriptSource),
 	}
 	return m, nil
 }

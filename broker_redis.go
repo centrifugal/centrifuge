@@ -212,11 +212,11 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		config:                  config,
 		shards:                  shardWrappers,
 		sharding:                len(config.Shards) > 1,
-		publishIdempotentScript: rueidis.NewLuaScript(publishIdempotentSource),
-		historyStreamScript:     rueidis.NewLuaScript(historyStreamSource),
-		historyListScript:       rueidis.NewLuaScript(historyListSource),
-		addHistoryStreamScript:  rueidis.NewLuaScript(addHistoryStreamSource),
-		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource),
+		publishIdempotentScript: rueidis.NewLuaScriptNoSha(publishIdempotentSource),
+		historyStreamScript:     rueidis.NewLuaScriptNoSha(historyStreamSource),
+		historyListScript:       rueidis.NewLuaScriptNoSha(historyListSource),
+		addHistoryStreamScript:  rueidis.NewLuaScriptNoSha(addHistoryStreamSource),
+		addHistoryListScript:    rueidis.NewLuaScriptNoSha(addHistoryListSource),
 		closeCh:                 make(chan struct{}),
 	}
 	b.shardChannel = config.Prefix + redisPubSubShardChannelSuffix
