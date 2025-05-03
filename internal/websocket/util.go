@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -44,11 +43,7 @@ func encodeAcceptKey(challengeKey string, p []byte) []byte {
 	*bufPtr = (*bufPtr)[:0]
 	sum := h.Sum(*bufPtr)
 
-	// replace with base64.AppendEncode when we can depend on Go 1.22.
-	n := base64.StdEncoding.EncodedLen(len(sum))
-	p = slices.Grow(p, n)
-	base64.StdEncoding.Encode(p[len(p):][:n], sum)
-	return p[:len(p)+n]
+	return base64.StdEncoding.AppendEncode(p, sum)
 }
 
 func generateChallengeKey() (string, error) {
