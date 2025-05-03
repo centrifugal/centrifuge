@@ -139,6 +139,12 @@ type RedisBrokerConfig struct {
 	// Redis Cluster mode due to reasons outlined above.
 	NumShardedPubSubPartitions int
 
+	// DisableSHA disables Lua script caching in Redis. This is useful for FIPS
+	// compliance since avoids using SHA-1 to make script digest. But this will cause
+	// Lua scripts to be sent to a server on every call, thus cause a performance drop,
+	// so use it only if you really need it.
+	DisableSHA bool
+
 	// numSubscribeShards defines how many subscribe shards will be used by Centrifuge.
 	// Each subscribe shard uses a dedicated connection to Redis for making subscriptions.
 	// Zero value means 1.
@@ -212,11 +218,11 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		config:                  config,
 		shards:                  shardWrappers,
 		sharding:                len(config.Shards) > 1,
-		publishIdempotentScript: rueidis.NewLuaScript(publishIdempotentSource),
-		historyStreamScript:     rueidis.NewLuaScript(historyStreamSource),
-		historyListScript:       rueidis.NewLuaScript(historyListSource),
-		addHistoryStreamScript:  rueidis.NewLuaScript(addHistoryStreamSource),
-		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource),
+		publishIdempotentScript: newLuaScript(publishIdempotentSource, config.DisableSHA),
+		historyStreamScript:     newLuaScript(historyStreamSource, config.DisableSHA),
+		historyListScript:       newLuaScript(historyListSource, config.DisableSHA),
+		addHistoryStreamScript:  newLuaScript(addHistoryStreamSource, config.DisableSHA),
+		addHistoryListScript:    newLuaScript(addHistoryListSource, config.DisableSHA),
 		closeCh:                 make(chan struct{}),
 	}
 	b.shardChannel = config.Prefix + redisPubSubShardChannelSuffix

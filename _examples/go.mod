@@ -24,7 +24,7 @@ require (
 	go.uber.org/ratelimit v0.3.1
 	golang.org/x/oauth2 v0.29.0
 	google.golang.org/grpc v1.71.1
-	google.golang.org/protobuf v1.36.5
+	google.golang.org/protobuf v1.36.6
 	nhooyr.io/websocket v1.8.10
 )
 
@@ -75,7 +75,7 @@ require (
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
-	github.com/redis/rueidis v1.0.57 // indirect
+	github.com/redis/rueidis v1.0.60-0.20250502070618-84ae736a8812 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.4.1 // indirect
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3 // indirect

@@ -386,3 +386,10 @@ func consistentIndex(s string, numBuckets int) int {
 
 	return int(b)
 }
+
+func newLuaScript(script string, disableSha bool) *rueidis.Lua {
+	if disableSha {
+		return rueidis.NewLuaScriptNoSha(script)
+	}
+	return rueidis.NewLuaScript(script)
+}

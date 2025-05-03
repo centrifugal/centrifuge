@@ -63,6 +63,12 @@ type RedisPresenceManagerConfig struct {
 	// This only works in Redis Cluster and Sentinel setups and requires replica client
 	// to be initialized in each RedisShard using RedisShardConfig.ReplicaClientEnabled.
 	ReadFromReplica bool
+
+	// DisableSHA disables Lua script caching in Redis. This is useful for FIPS
+	// compliance since avoids using SHA-1 to make script digest. But this will cause
+	// Lua scripts to be sent to a server on every call, thus cause a performance drop,
+	// so use it only if you really need it.
+	DisableSHA bool
 }
 
 var (
@@ -115,10 +121,10 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		config:   config,
 		sharding: len(config.Shards) > 1,
 
-		addPresenceScript:   rueidis.NewLuaScript(addPresenceScriptSource),
-		remPresenceScript:   rueidis.NewLuaScript(remPresenceScriptSource),
-		presenceScript:      rueidis.NewLuaScript(presenceScriptSource),
-		presenceStatsScript: rueidis.NewLuaScript(presenceStatsScriptSource),
+		addPresenceScript:   newLuaScript(addPresenceScriptSource, config.DisableSHA),
+		remPresenceScript:   newLuaScript(remPresenceScriptSource, config.DisableSHA),
+		presenceScript:      newLuaScript(presenceScriptSource, config.DisableSHA),
+		presenceStatsScript: newLuaScript(presenceStatsScriptSource, config.DisableSHA),
 	}
 	return m, nil
 }

@@ -14,11 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestRedisPresenceManager(tb testing.TB, n *Node, useCluster bool, userMapping, hashFieldTTL bool, port int) *RedisPresenceManager {
+func newTestRedisPresenceManager(tb testing.TB, n *Node, useCluster bool, userMapping, hashFieldTTL bool, noSha bool, port int) *RedisPresenceManager {
 	if useCluster {
-		return NewTestRedisPresenceManagerClusterWithPrefix(tb, n, getUniquePrefix(), userMapping, port)
+		return NewTestRedisPresenceManagerClusterWithPrefix(tb, n, getUniquePrefix(), userMapping, noSha, port)
 	}
-	return NewTestRedisPresenceManagerWithPrefix(tb, n, getUniquePrefix(), userMapping, hashFieldTTL, port)
+	return NewTestRedisPresenceManagerWithPrefix(tb, n, getUniquePrefix(), userMapping, hashFieldTTL, noSha, port)
 }
 
 func stopRedisPresenceManager(pm *RedisPresenceManager) {
@@ -27,7 +27,7 @@ func stopRedisPresenceManager(pm *RedisPresenceManager) {
 	}
 }
 
-func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string, userMapping, hashFieldTTL bool, port int) *RedisPresenceManager {
+func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string, userMapping, hashFieldTTL bool, noSha bool, port int) *RedisPresenceManager {
 	redisConf := testSingleRedisConf(port)
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -38,6 +38,7 @@ func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string
 			return userMapping
 		},
 		UseHashFieldTTL: hashFieldTTL,
+		DisableSHA:      noSha,
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -50,7 +51,7 @@ func NewTestRedisPresenceManagerWithPrefix(tb testing.TB, n *Node, prefix string
 	return pm
 }
 
-func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix string, userMapping bool, port int) *RedisPresenceManager {
+func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix string, userMapping bool, noSha bool, port int) *RedisPresenceManager {
 	redisConf := RedisShardConfig{
 		ClusterAddresses: []string{"localhost:" + strconv.Itoa(port), "localhost:" + strconv.Itoa(port+1), "localhost:" + strconv.Itoa(port+2)},
 		IOTimeout:        10 * time.Second,
@@ -63,6 +64,7 @@ func NewTestRedisPresenceManagerClusterWithPrefix(tb testing.TB, n *Node, prefix
 		EnableUserMapping: func(_ string) bool {
 			return userMapping
 		},
+		DisableSHA: noSha,
 	})
 	if err != nil {
 		tb.Fatal(err)
@@ -101,32 +103,40 @@ func excludeClusterPresenceTests(tests []redisPresenceTest) []redisPresenceTest 
 }
 
 func TestRedisPresenceManager(t *testing.T) {
-	for _, tt := range redisPresenceTests {
-		t.Run(tt.Name, func(t *testing.T) {
-			node := testNode(t)
-			pm := newTestRedisPresenceManager(t, node, tt.UseCluster, false, false, tt.Port)
-			defer func() { _ = node.Shutdown(context.Background()) }()
-			defer stopRedisPresenceManager(pm)
+	options := []struct {
+		noSha bool
+	}{
+		{false},
+		{true},
+	}
+	for _, opt := range options {
+		for _, tt := range redisPresenceTests {
+			t.Run(tt.Name+"_no_sha_"+strconv.FormatBool(opt.noSha), func(t *testing.T) {
+				node := testNode(t)
+				pm := newTestRedisPresenceManager(t, node, tt.UseCluster, false, false, opt.noSha, tt.Port)
+				defer func() { _ = node.Shutdown(context.Background()) }()
+				defer stopRedisPresenceManager(pm)
 
-			// test adding presence
-			require.NoError(t, pm.AddPresence("channel", "uid", &ClientInfo{}))
+				// test adding presence
+				require.NoError(t, pm.AddPresence("channel", "uid", &ClientInfo{}))
 
-			p, err := pm.Presence("channel")
-			require.NoError(t, err)
-			require.Equal(t, 1, len(p))
+				p, err := pm.Presence("channel")
+				require.NoError(t, err)
+				require.Equal(t, 1, len(p))
 
-			s, err := pm.PresenceStats("channel")
-			require.NoError(t, err)
-			require.Equal(t, 1, s.NumUsers)
-			require.Equal(t, 1, s.NumClients)
+				s, err := pm.PresenceStats("channel")
+				require.NoError(t, err)
+				require.Equal(t, 1, s.NumUsers)
+				require.Equal(t, 1, s.NumClients)
 
-			err = pm.RemovePresence("channel", "uid", "")
-			require.NoError(t, err)
+				err = pm.RemovePresence("channel", "uid", "")
+				require.NoError(t, err)
 
-			p, err = pm.Presence("channel")
-			require.NoError(t, err)
-			require.Equal(t, 0, len(p))
-		})
+				p, err = pm.Presence("channel")
+				require.NoError(t, err)
+				require.Equal(t, 0, len(p))
+			})
+		}
 	}
 }
 
@@ -134,7 +144,7 @@ func TestRedisPresenceManagerWithUserMapping(t *testing.T) {
 	for _, tt := range redisPresenceTests {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := testNode(t)
-			pm := newTestRedisPresenceManager(t, node, tt.UseCluster, true, false, tt.Port)
+			pm := newTestRedisPresenceManager(t, node, tt.UseCluster, true, false, false, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 
@@ -210,7 +220,7 @@ func TestRedisPresenceManagerWithHashFieldTTL(t *testing.T) {
 		for _, userMapping := range []bool{true, false} {
 			t.Run(tt.Name+"_user_mapping_"+strconv.FormatBool(userMapping), func(t *testing.T) {
 				node := testNode(t)
-				pm := newTestRedisPresenceManager(t, node, tt.UseCluster, userMapping, true, tt.Port)
+				pm := newTestRedisPresenceManager(t, node, tt.UseCluster, userMapping, true, false, tt.Port)
 				defer func() { _ = node.Shutdown(context.Background()) }()
 				defer stopRedisPresenceManager(pm)
 
@@ -287,7 +297,7 @@ func TestRedisPresenceManagerWithUserMappingExpire(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			t.Parallel()
 			node := testNode(t)
-			pm := newTestRedisPresenceManager(t, node, tt.UseCluster, true, false, tt.Port)
+			pm := newTestRedisPresenceManager(t, node, tt.UseCluster, true, false, false, tt.Port)
 			pm.config.PresenceTTL = 2 * time.Second
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
@@ -357,7 +367,7 @@ func BenchmarkRedisAddPresence_1Ch(b *testing.B) {
 	for _, tt := range redisPresenceTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, tt.Port)
+			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, false, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 			b.SetParallelism(getBenchParallelism())
@@ -378,7 +388,7 @@ func BenchmarkRedisAddPresence_ManyCh(b *testing.B) {
 	for _, tt := range redisPresenceTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, tt.Port)
+			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, false, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 			b.SetParallelism(getBenchParallelism())
@@ -402,7 +412,29 @@ func BenchmarkRedisPresence_1Ch(b *testing.B) {
 	for _, tt := range redisPresenceTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, tt.Port)
+			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, false, tt.Port)
+			defer func() { _ = node.Shutdown(context.Background()) }()
+			defer stopRedisPresenceManager(pm)
+			b.SetParallelism(getBenchParallelism())
+			_ = pm.AddPresence("channel", "uid", &ClientInfo{})
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					_, err := pm.Presence("channel")
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
+}
+
+func BenchmarkRedisPresence_1Ch_NoSha(b *testing.B) {
+	for _, tt := range redisPresenceTests {
+		b.Run(tt.Name, func(b *testing.B) {
+			node := benchNode(b)
+			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, true, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 			b.SetParallelism(getBenchParallelism())
@@ -424,7 +456,7 @@ func BenchmarkRedisPresence_ManyCh(b *testing.B) {
 	for _, tt := range redisPresenceTests {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, tt.Port)
+			pm := newTestRedisPresenceManager(b, node, tt.UseCluster, false, false, false, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 			b.SetParallelism(getBenchParallelism())
@@ -452,7 +484,7 @@ func BenchmarkRedisPresenceStatsWithMapping(b *testing.B) {
 	for _, tt := range excludeClusterPresenceTests(redisPresenceTests) {
 		b.Run(tt.Name, func(b *testing.B) {
 			node := benchNode(b)
-			pm := newTestRedisPresenceManager(b, node, false, true, false, tt.Port)
+			pm := newTestRedisPresenceManager(b, node, false, true, false, false, tt.Port)
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 			b.SetParallelism(getBenchParallelism())
