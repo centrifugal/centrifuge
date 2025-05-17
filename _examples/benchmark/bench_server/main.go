@@ -106,7 +106,7 @@ func main() {
 	}
 
 	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: time.Second,
 	}))
 
 	go func() {
