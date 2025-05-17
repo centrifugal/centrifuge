@@ -53,7 +53,7 @@ func main() {
 		runtime.NumCPU(), writeDelay, maxMessagesInFrame, queueInitialCap)
 
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:           centrifuge.LogLevelDebug,
+		LogLevel:           centrifuge.LogLevelError,
 		LogHandler:         handleLog,
 		ClientQueueMaxSize: 10 * 1024 * 1024,
 	})
