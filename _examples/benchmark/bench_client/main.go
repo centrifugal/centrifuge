@@ -34,7 +34,7 @@ var messageReceivedCounter int32 = 0
 var messagePublishedCounter int32 = 0
 
 func usage() {
-	log.Fatalf("Usage: benchmark [-s uri] [-np NUM_PUBLISHERS] [-ns NUM_SUBSCRIBERS] [-n NUM_MSGS] [-ms MESSAGE_SIZE] [-p] [-d DEADLINE_SECONDS] <channel>\n")
+	log.Fatalf("Usage: bench_client [-s uri] [-np NUM_PUBLISHERS] [-ns NUM_SUBSCRIBERS] [-n NUM_MSGS] [-ms MESSAGE_SIZE] [-p] [-pl PUBLISH_RATE] [-d DEADLINE_SECONDS] <channel>\n")
 }
 
 var url = flag.String("s", "ws://localhost:8000/connection/websocket", "Connection URI")
@@ -49,7 +49,6 @@ var pubRateLimit = flag.Int("pl", 0, "Rate limit for each publisher in messages 
 var benchmark *Benchmark
 
 func main() {
-
 	log.SetFlags(0)
 	flag.Usage = usage
 	flag.Parse()
@@ -87,7 +86,11 @@ func main() {
 	}
 
 	startWg.Wait()
-	log.Printf("Starting benchmark [msgs=%d, msgsize=%d, pubs=%d, subs=%d]\n", *numMsg, *msgSize, *numPubs, *numSubs)
+	pubRateTotal := "unbound"
+	if *pubRateLimit > 0 {
+		pubRateTotal = strconv.FormatInt(int64(*numPubs**pubRateLimit), 10) + " msgs/sec"
+	}
+	log.Printf("Starting benchmark [msgs=%d, msgsize=%d, pubs=%d, pub_rate_total=%s, subs=%d]\n", *numMsg, *msgSize, *numPubs, pubRateTotal, *numSubs)
 
 	testCompleted := waitForTestCompletion(&doneWg, deadline)
 	if testCompleted {
@@ -101,7 +104,7 @@ func main() {
 	fmt.Print(benchmark.Report())
 }
 
-func newConnection() *centrifuge.Client {
+func newConnection(connType string) *centrifuge.Client {
 	var c *centrifuge.Client
 	config := centrifuge.Config{}
 	if *useProtobuf {
@@ -114,19 +117,19 @@ func newConnection() *centrifuge.Client {
 	})
 	c.OnConnecting(func(e centrifuge.ConnectingEvent) {
 		if e.Code != 0 {
-			log.Printf("connecting: %d, %s", e.Code, e.Reason)
+			log.Printf("connecting (%s): %d, %s", connType, e.Code, e.Reason)
 		}
 	})
 	c.OnDisconnected(func(e centrifuge.DisconnectedEvent) {
 		if e.Code != 0 {
-			log.Printf("disconnect: %d, %s", e.Code, e.Reason)
+			log.Printf("disconnect (%s): %d, %s", connType, e.Code, e.Reason)
 		}
 	})
 	return c
 }
 
 func runPublisher(startWg, doneWg *sync.WaitGroup, numMsg int, msgSize int) {
-	c := newConnection()
+	c := newConnection("publisher")
 	defer c.Close()
 
 	args := flag.Args()
@@ -200,7 +203,7 @@ func (h *subEventHandler) OnError(e centrifuge.SubscriptionErrorEvent) {
 }
 
 func runSubscriber(startWg, doneWg *sync.WaitGroup, numMsg int, msgSize int) {
-	c := newConnection()
+	c := newConnection("subscriber")
 
 	args := flag.Args()
 	subj := args[0]

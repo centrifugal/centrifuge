@@ -53,7 +53,7 @@ func main() {
 		runtime.NumCPU(), writeDelay, maxMessagesInFrame, queueInitialCap)
 
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:           centrifuge.LogLevelError,
+		LogLevel:           centrifuge.LogLevelDebug,
 		LogHandler:         handleLog,
 		ClientQueueMaxSize: 10 * 1024 * 1024,
 	})
@@ -106,7 +106,7 @@ func main() {
 	}
 
 	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		WriteTimeout: time.Second,
+		WriteTimeout: 10 * time.Second,
 	}))
 
 	go func() {
