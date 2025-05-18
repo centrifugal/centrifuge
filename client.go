@@ -2611,6 +2611,9 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				writeMu.Lock()
 				defer writeMu.Unlock()
 				if err := c.transport.Write(item.Data); err != nil {
+					if c.node.logger.enabled(LogLevelTrace) {
+						c.node.logger.log(newLogEntry(LogLevelTrace, "client write failed", map[string]any{"client": c.uid, "user": c.user, "error": err.Error()}))
+					}
 					disconnect, ok := disconnectFromError(err)
 					if ok {
 						go func() { _ = c.close(*disconnect) }()
@@ -2636,6 +2639,9 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				writeMu.Lock()
 				defer writeMu.Unlock()
 				if err := c.transport.WriteMany(messages...); err != nil {
+					if c.node.logger.enabled(LogLevelTrace) {
+						c.node.logger.log(newLogEntry(LogLevelTrace, "client write failed", map[string]any{"client": c.uid, "user": c.user, "error": err.Error()}))
+					}
 					disconnect, ok := disconnectFromError(err)
 					if ok {
 						go func() { _ = c.close(*disconnect) }()

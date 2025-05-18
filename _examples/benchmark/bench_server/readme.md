@@ -1,4 +1,4 @@
-Can be used with benchmark client script from `centrifuge-go` repo.
+Can be used with benchmark client script from `bench_client` dir.
 
 This server example works as simple proxy for all events - without extra business logic, so suitable to measure Centrifuge performance.
 
