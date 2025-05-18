@@ -6,7 +6,7 @@ replace github.com/centrifugal/centrifuge => ../
 
 require (
 	github.com/centrifugal/centrifuge v0.8.2
-	github.com/centrifugal/centrifuge-go v0.10.4
+	github.com/centrifugal/centrifuge-go v0.10.6
 	github.com/cristalhq/jwt/v5 v5.4.0
 	github.com/dchest/uniuri v1.2.0
 	github.com/gin-contrib/sessions v0.0.3
@@ -15,13 +15,13 @@ require (
 	github.com/gorilla/sessions v1.4.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/kelseyhightower/envconfig v1.4.0
-	github.com/nats-io/nats.go v1.41.2
+	github.com/nats-io/nats.go v1.42.0
 	github.com/prometheus/client_golang v1.22.0
 	github.com/quic-go/quic-go v0.49.0
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/ratelimit v0.3.1
-	golang.org/x/oauth2 v0.29.0
-	google.golang.org/grpc v1.71.1
+	golang.org/x/oauth2 v0.30.0
+	google.golang.org/grpc v1.72.1
 	google.golang.org/protobuf v1.36.5
 )
 
@@ -72,7 +72,7 @@ require (
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
-	github.com/redis/rueidis v1.0.57 // indirect
+	github.com/redis/rueidis v1.0.60 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.4.1 // indirect
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3 // indirect
@@ -85,10 +85,10 @@ require (
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/mod v0.24.0 // indirect
 	golang.org/x/net v0.39.0 // indirect
-	golang.org/x/sync v0.13.0 // indirect
+	golang.org/x/sync v0.14.0 // indirect
 	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
 	golang.org/x/tools v0.31.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250115164207-1a7da9e5054f // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
