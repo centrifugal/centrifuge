@@ -1,4 +1,4 @@
-This script intended to be used with [this server](https://github.com/centrifugal/centrifuge/tree/master/_examples/benchmarks/bench_server).
+This script intended to be used with [this server](https://github.com/centrifugal/centrifuge/tree/master/_examples/benchmark/bench_server).
 
 Run it (`n` is total number of messages to publish, `ns` is number of subscribers, `np` is number of publishers):
 
