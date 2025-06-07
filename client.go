@@ -1254,6 +1254,9 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 	c.mu.Unlock()
 	isConnect := cmd.Connect != nil
 	if !c.authenticated && !isConnect {
+		if c.node.logEnabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "unexpected frame before connect", map[string]any{"client": c.ID()}))
+		}
 		return &DisconnectBadRequest, false
 	}
 
