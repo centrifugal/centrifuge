@@ -4,17 +4,17 @@ go 1.23.0
 
 require (
 	github.com/FZambia/eagle v0.2.0
-	github.com/centrifugal/protocol v0.16.0
+	github.com/centrifugal/protocol v0.16.1
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter v1.2.4
 	github.com/planetscale/vtprotobuf v0.6.0
 	github.com/prometheus/client_golang v1.22.0
 	github.com/redis/rueidis v1.0.61
-	github.com/segmentio/encoding v0.4.1
+	github.com/segmentio/encoding v0.5.1
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/sync v0.15.0
-	google.golang.org/protobuf v1.36.5
+	google.golang.org/protobuf v1.36.6
 )
 
 require (
