@@ -2702,6 +2702,10 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	subCtx := c.subscribeCmd(subCmd, SubscribeReply{
 		Options: *subscribeOpts,
 	}, nil, true, time.Time{}, nil)
+	if subCtx.disconnect != nil {
+		c.onSubscribeError(subCmd.Channel)
+		return subCtx.disconnect
+	}
 	if subCtx.err != nil {
 		c.onSubscribeError(subCmd.Channel)
 		return subCtx.err
