@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
-
-	"github.com/centrifugal/centrifuge/internal/convert"
 )
 
 var keyGUID = []byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
@@ -35,7 +33,7 @@ var acceptKeyBufferPool = sync.Pool{
 
 func encodeAcceptKey(challengeKey string, p []byte) []byte {
 	h := sha1.New()
-	h.Write(convert.StringToBytes(challengeKey))
+	h.Write(stringToBytes(challengeKey))
 	h.Write(keyGUID)
 
 	bufPtr := acceptKeyBufferPool.Get().(*[]byte)
