@@ -6,10 +6,10 @@ package websocket
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"io"
-	"math/rand"
 	"net"
 	"strconv"
 	"strings"
@@ -180,8 +180,11 @@ var (
 )
 
 func newMaskKey() [4]byte {
-	n := rand.Uint32()
-	return [4]byte{byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24)}
+	var key [4]byte
+	if _, err := io.ReadFull(rand.Reader, key[:]); err != nil {
+		panic("failed to generate mask key: " + err.Error())
+	}
+	return key
 }
 
 func hideTempErr(err error) error {

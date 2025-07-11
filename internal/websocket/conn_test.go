@@ -652,3 +652,10 @@ func TestUnexpectedCloseErrors(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkNewMaskKey measures the cost of generating a 4-byte mask key.
+func BenchmarkNewMaskKey(b *testing.B) {
+	for b.Loop() {
+		_ = newMaskKey()
+	}
+}
