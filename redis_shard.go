@@ -32,6 +32,7 @@ type RedisShard struct {
 	closeCh       chan struct{}
 	closeOnce     sync.Once
 	isCluster     bool
+	isSentinel    bool
 	finalAddress  []string
 }
 
@@ -263,6 +264,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	shard := &RedisShard{
 		config:       conf,
 		isCluster:    isCluster,
+		isSentinel:   isSentinel,
 		closeCh:      make(chan struct{}),
 		finalAddress: options.InitAddress,
 	}
@@ -352,6 +354,24 @@ type RedisShardConfig struct {
 	// be initialized with the same options as the main client but with ReplicaOnly option
 	// set to true.
 	ReplicaClientEnabled bool
+}
+
+type RedisShardMode string
+
+const (
+	RedisShardModeStandalone RedisShardMode = "standalone"
+	RedisShardModeCluster    RedisShardMode = "cluster"
+	RedisShardModeSentinel   RedisShardMode = "sentinel"
+)
+
+func (s *RedisShard) Mode() RedisShardMode {
+	if s.isSentinel {
+		return RedisShardModeSentinel
+	}
+	if s.isCluster {
+		return RedisShardModeCluster
+	}
+	return RedisShardModeStandalone
 }
 
 func (s *RedisShard) Close() {

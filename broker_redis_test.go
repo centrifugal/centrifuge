@@ -65,6 +65,7 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool, 
 	redisConf := testSingleRedisConf(port)
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
+	require.Equal(tb, s.Mode(), RedisShardModeStandalone)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
 		Prefix:   prefix,
 		UseLists: !useStreams,
@@ -100,6 +101,7 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
+	require.Equal(tb, s.Mode(), RedisShardModeCluster)
 	brokerConfig := RedisBrokerConfig{
 		Prefix:   prefix,
 		UseLists: !useStreams,
@@ -134,6 +136,7 @@ func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
+	require.Equal(tb, s.Mode(), RedisShardModeSentinel)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
 		Shards: []*RedisShard{s},
 	})
