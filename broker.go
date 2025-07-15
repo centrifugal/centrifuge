@@ -63,7 +63,7 @@ type HistoryFilter struct {
 	Reverse bool
 }
 
-// HistoryOptions define some fields to alter History method behaviour.
+// HistoryOptions define some fields to alter History method behavior.
 type HistoryOptions struct {
 	// Filter for history publications.
 	Filter HistoryFilter
@@ -95,7 +95,7 @@ type Closer interface {
 	Close(ctx context.Context) error
 }
 
-// PublishOptions define some fields to alter behaviour of Publish operation.
+// PublishOptions define some fields to alter behavior of Publish operation.
 type PublishOptions struct {
 	// HistoryTTL sets history ttl to expire inactive history streams.
 	// Current Broker implementations only work with seconds resolution for TTL.
@@ -152,7 +152,7 @@ type Broker interface {
 	// Saving message to a history stream and publish to PUB/SUB should be an atomic
 	// operation per channel. If this is not true – then publication to one channel
 	// must be serialized on the caller side, i.e. publish requests must be issued one
-	// after another. Otherwise, the order of publications and stable behaviour of
+	// after another. Otherwise, the order of publications and stable behavior of
 	// subscribers with positioning/recovery enabled can't be guaranteed.
 	//
 	// StreamPosition returned here describes stream epoch and offset assigned to
