@@ -4280,3 +4280,76 @@ func BenchmarkClientRPC(b *testing.B) {
 		protocol.PutStreamCommandDecoder(protocol.TypeProtobuf, decoder)
 	}
 }
+
+func TestMaxTTLSeconds(t *testing.T) {
+	// Test that maxTTLSeconds is correctly set to 1 year
+	expectedMaxTTL := 365 * 24 * 3600
+	require.Equal(t, expectedMaxTTL, maxTTLSeconds)
+}
+
+func TestClientExpireTTLCapping(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	client := newTestClient(t, node, "42")
+
+	// Mock refresh handler that returns a very large ExpireAt
+	refreshHandlerCalled := false
+	client.eventHub.refreshHandler = func(event RefreshEvent, cb RefreshCallback) {
+		refreshHandlerCalled = true
+		// Return an expireAt far in the future (beyond maxTTLSeconds)
+		futureTime := time.Now().Unix() + maxTTLSeconds + 1000000
+		cb(RefreshReply{ExpireAt: futureTime}, nil)
+	}
+
+	// Set client expiration to trigger refresh
+	client.mu.Lock()
+	client.exp = time.Now().Unix() - 1 // expired
+	client.mu.Unlock()
+
+	client.expire()
+
+	require.True(t, refreshHandlerCalled)
+
+	// Verify that expiration was capped to maxTTLSeconds
+	client.mu.RLock()
+	actualExp := client.exp
+	nowUnix := time.Now().Unix()
+	client.mu.RUnlock()
+
+	require.True(t, actualExp <= nowUnix+maxTTLSeconds)
+	require.True(t, actualExp > nowUnix) // Should still be in the future
+}
+
+func TestConnectTTLCapping(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Create credentials with very large ExpireAt
+	futureTime := time.Now().Unix() + maxTTLSeconds + 1000000
+	credentials := &Credentials{
+		UserID:   "42",
+		ExpireAt: futureTime,
+	}
+
+	// Set credentials in context.
+	ctx := SetCredentials(context.Background(), credentials)
+	transport := newTestTransport(func() {})
+	client, _ := newClient(ctx, node, transport)
+
+	rwWrapper := testReplyWriterWrapper()
+	connectReq := &protocol.ConnectRequest{}
+	cmd := &protocol.Command{Id: 1, Connect: connectReq}
+
+	err := client.connectCmd(connectReq, cmd, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	// Verify that client expiration was capped
+	client.mu.RLock()
+	actualExp := client.exp
+	nowUnix := time.Now().Unix()
+	client.mu.RUnlock()
+
+	require.True(t, actualExp <= nowUnix+maxTTLSeconds)
+	require.True(t, actualExp > nowUnix) // Should still be in the future
+}
