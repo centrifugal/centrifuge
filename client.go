@@ -693,10 +693,10 @@ func (c *Client) Context() context.Context {
 }
 
 func (c *Client) checkSubscriptionExpiration(channel string, channelContext ChannelContext, delay time.Duration, resultCB func(bool)) {
-	now := c.node.nowTimeGetter().Unix()
+	nowUnix := c.node.nowTimeGetter().Unix()
 	expireAt := channelContext.expireAt
 	clientSideRefresh := channelHasFlag(channelContext.flags, flagClientSideRefresh)
-	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
+	if expireAt > 0 && nowUnix > expireAt+int64(delay.Seconds()) {
 		// Subscription expired.
 		if clientSideRefresh || c.eventHub.subRefreshHandler == nil {
 			// The only way subscription could be refreshed in this case is via
@@ -710,7 +710,8 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 				resultCB(false)
 				return
 			}
-			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
+			newExpireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
+			if reply.Expired || (newExpireAt > 0 && newExpireAt < nowUnix) {
 				resultCB(false)
 				return
 			}
@@ -719,7 +720,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 				if len(reply.Info) > 0 {
 					ctx.info = reply.Info
 				}
-				ctx.expireAt = reply.ExpireAt
+				ctx.expireAt = newExpireAt
 				c.channels[channel] = ctx
 			}
 			c.mu.Unlock()
@@ -1446,6 +1447,11 @@ func (c *Client) checkExpired() {
 	_ = c.close(DisconnectExpired)
 }
 
+// A protection against too long connection and subscription TTL which is likely
+// a bug and may result into overflow of time.Duration type usage (~292 years max in Go).
+// It's possible to go without expiration at all rather than having longer TTL.
+const maxTTLSeconds = 365 * 24 * 3600
+
 func (c *Client) expire() {
 	c.mu.RLock()
 	closed := c.status == statusClosed
@@ -1471,9 +1477,11 @@ func (c *Client) expire() {
 				_ = c.close(DisconnectExpired)
 				return
 			}
-			if reply.ExpireAt > 0 {
+			nowUnix := time.Now().Unix()
+			expireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
+			if expireAt > 0 {
 				c.mu.Lock()
-				c.exp = reply.ExpireAt
+				c.exp = expireAt
 				if reply.Info != nil {
 					c.info = reply.Info
 				}
@@ -1541,14 +1549,15 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 		return nil
 	}
 
-	expireAt := refreshOptions.ExpireAt
+	nowUnix := time.Now().Unix()
+	expireAt := min(refreshOptions.ExpireAt, nowUnix+maxTTLSeconds)
 	info := refreshOptions.Info
 
 	res := &protocol.Refresh{
 		Expires: expireAt > 0,
 	}
 
-	ttl := expireAt - time.Now().Unix()
+	ttl := expireAt - nowUnix
 
 	if ttl > 0 {
 		res.Ttl = uint32(ttl)
@@ -1633,14 +1642,15 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 			return
 		}
 
-		expireAt := reply.ExpireAt
+		nowUnix := time.Now().Unix()
+		expireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
 		info := reply.Info
 
 		res := &protocol.RefreshResult{
 			Expires: expireAt > 0,
 		}
 
-		ttl := expireAt - time.Now().Unix()
+		ttl := expireAt - nowUnix
 
 		if ttl > 0 {
 			res.Ttl = uint32(ttl)
@@ -1811,21 +1821,23 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 
 		res := &protocol.SubRefreshResult{}
 
-		if reply.ExpireAt > 0 {
+		nowUnix := time.Now().Unix()
+		expireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
+		if expireAt > 0 {
 			res.Expires = true
-			now := time.Now().Unix()
-			if reply.ExpireAt < now {
+
+			if expireAt < nowUnix {
 				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, ErrorExpired, started, rw)
 				return
 			}
-			res.Ttl = uint32(reply.ExpireAt - now)
+			res.Ttl = uint32(expireAt - nowUnix)
 		}
 
 		c.mu.Lock()
 		channelContext, okChan := c.channels[channel]
 		if okChan && channelHasFlag(channelContext.flags, flagSubscribed) {
 			channelContext.info = reply.Info
-			channelContext.expireAt = reply.ExpireAt
+			channelContext.expireAt = expireAt
 			c.channels[channel] = channelContext
 		}
 		c.mu.Unlock()
@@ -2385,7 +2397,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.Lock()
 	c.user = credentials.UserID
 	c.info = credentials.Info
-	c.exp = credentials.ExpireAt
+	c.exp = min(credentials.ExpireAt, time.Now().Unix()+maxTTLSeconds)
 
 	user := c.user
 	exp := c.exp
