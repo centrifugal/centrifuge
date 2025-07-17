@@ -113,7 +113,7 @@ func BenchmarkIncRecover(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incRecover(true, "channel"+strconv.Itoa(i%1024))
+			m.incRecover(true, "channel"+strconv.Itoa(i%1024), false)
 			i++
 		}
 	})
@@ -162,7 +162,8 @@ func TestMetrics(t *testing.T) {
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
-		ChannelNamespaceCacheTTL: -1,
+		ChannelNamespaceCacheTTL:             -1,
+		EnableRecoveredPublicationsHistogram: true,
 	})
 	require.Error(t, err)
 
@@ -244,8 +245,9 @@ func TestMetrics(t *testing.T) {
 				}
 
 				m.observeSurveyDuration("test", time.Second)
-				m.incRecover(true, "channel"+strconv.Itoa(i%2))
-				m.incRecover(false, "channel"+strconv.Itoa(i%2))
+				m.incRecover(true, "channel"+strconv.Itoa(i%2), false)
+				m.incRecover(false, "channel"+strconv.Itoa(i%2), false)
+				m.observeRecoveredPublications(10, "channel"+strconv.Itoa(i%2))
 				m.observePubSubDeliveryLag(100)
 				m.observePubSubDeliveryLag(-10)
 				m.observePingPongDuration(time.Second, transportWebsocket)

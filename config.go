@@ -190,6 +190,9 @@ type MetricsConfig struct {
 	// false Centrifuge will use "unregistered" value for a client version. Note, the name argument here
 	// is an original name of client passed to Centrifuge.
 	CheckRegisteredClientVersion func(clientName string, clientVersion string) bool
+	// EnableRecoveredPublicationsHistogram enables histogram tracking of number of publications
+	// recovered during subscription successful recovery operations.
+	EnableRecoveredPublicationsHistogram bool
 }
 
 // PingPongConfig allows configuring application level ping-pong behavior.
