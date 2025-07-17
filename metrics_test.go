@@ -209,10 +209,11 @@ func TestMetrics(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			m, err := newMetricsRegistry(MetricsConfig{
-				MetricsNamespace:          tc.metricsNamespace,
-				GetChannelNamespaceLabel:  tc.getChannelNamespaceLabel,
-				ChannelNamespaceCacheSize: tc.channelNamespaceCacheSize,
-				RegistererGatherer:        tc.registererGatherer,
+				MetricsNamespace:                     tc.metricsNamespace,
+				GetChannelNamespaceLabel:             tc.getChannelNamespaceLabel,
+				ChannelNamespaceCacheSize:            tc.channelNamespaceCacheSize,
+				RegistererGatherer:                   tc.registererGatherer,
+				EnableRecoveredPublicationsHistogram: true,
 			})
 			require.NoError(t, err)
 

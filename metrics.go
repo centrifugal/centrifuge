@@ -17,28 +17,28 @@ var defaultMetricsNamespace = "centrifuge"
 var registryMu sync.RWMutex
 
 type metrics struct {
-	messagesSentCount                *prometheus.CounterVec
-	messagesReceivedCount            *prometheus.CounterVec
-	actionCount                      *prometheus.CounterVec
-	buildInfoGauge                   *prometheus.GaugeVec
-	numClientsGauge                  prometheus.Gauge
-	numUsersGauge                    prometheus.Gauge
-	numSubsGauge                     prometheus.Gauge
-	numChannelsGauge                 prometheus.Gauge
-	numNodesGauge                    prometheus.Gauge
-	replyErrorCount                  *prometheus.CounterVec
-	connectionsInflight              *prometheus.GaugeVec
-	subscriptionsInflight            *prometheus.GaugeVec
-	serverUnsubscribeCount           *prometheus.CounterVec
-	serverDisconnectCount            *prometheus.CounterVec
-	commandDurationSummary           *prometheus.SummaryVec
-	surveyDurationSummary            *prometheus.SummaryVec
-	recoverCount                     *prometheus.CounterVec
-	recoveredPublicationsPerRecovery *prometheus.HistogramVec
-	transportMessagesSent            *prometheus.CounterVec
-	transportMessagesSentSize        *prometheus.CounterVec
-	transportMessagesReceived        *prometheus.CounterVec
-	transportMessagesReceivedSize    *prometheus.CounterVec
+	messagesSentCount             *prometheus.CounterVec
+	messagesReceivedCount         *prometheus.CounterVec
+	actionCount                   *prometheus.CounterVec
+	buildInfoGauge                *prometheus.GaugeVec
+	numClientsGauge               prometheus.Gauge
+	numUsersGauge                 prometheus.Gauge
+	numSubsGauge                  prometheus.Gauge
+	numChannelsGauge              prometheus.Gauge
+	numNodesGauge                 prometheus.Gauge
+	replyErrorCount               *prometheus.CounterVec
+	connectionsInflight           *prometheus.GaugeVec
+	subscriptionsInflight         *prometheus.GaugeVec
+	serverUnsubscribeCount        *prometheus.CounterVec
+	serverDisconnectCount         *prometheus.CounterVec
+	commandDurationSummary        *prometheus.SummaryVec
+	surveyDurationSummary         *prometheus.SummaryVec
+	recoverCount                  *prometheus.CounterVec
+	recoveredPublications         *prometheus.HistogramVec
+	transportMessagesSent         *prometheus.CounterVec
+	transportMessagesSentSize     *prometheus.CounterVec
+	transportMessagesReceived     *prometheus.CounterVec
+	transportMessagesReceivedSize *prometheus.CounterVec
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -247,7 +247,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	}, []string{"recovered", "channel_namespace", "had_recovered_publications"})
 
 	if config.EnableRecoveredPublicationsHistogram {
-		m.recoveredPublicationsPerRecovery = prometheus.NewHistogramVec(
+		m.recoveredPublications = prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: metricsNamespace,
 				Subsystem: "client",
@@ -419,7 +419,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	}
 
 	if config.EnableRecoveredPublicationsHistogram {
-		if err := registerer.Register(m.recoveredPublicationsPerRecovery); err != nil && !errors.As(err, &alreadyRegistered) {
+		if err := registerer.Register(m.recoveredPublications); err != nil && !errors.As(err, &alreadyRegistered) {
 			return nil, err
 		}
 	}
@@ -601,9 +601,9 @@ func (m *metrics) incRecover(success bool, ch string, hasPublications bool) {
 }
 
 func (m *metrics) observeRecoveredPublications(count int, ch string) {
-	if m.recoveredPublicationsPerRecovery != nil {
+	if m.recoveredPublications != nil {
 		channelNamespace := m.getChannelNamespaceLabel(ch)
-		m.recoveredPublicationsPerRecovery.WithLabelValues(channelNamespace).Observe(float64(count))
+		m.recoveredPublications.WithLabelValues(channelNamespace).Observe(float64(count))
 	}
 }
 
