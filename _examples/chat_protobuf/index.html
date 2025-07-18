@@ -110,6 +110,20 @@
                     }, function(err) {
                         drawText("RPC error: " + JSON.stringify(err));
                     });
+
+                    centrifuge.presenceStats(channel).then(function(stats) {
+                        drawText("Presence stats for channel " + channel + ": " + JSON.stringify(stats));
+                    }, function(err) {
+                        drawText("Presence stats error: " + JSON.stringify(err));
+                    });
+
+                    if (ctx.wasRecovering) {
+                        if (ctx.recovered) {
+                            drawText('Subscription to ' + ctx.channel + ' recovered after connection lost');
+                        } else {
+                            drawText('Subscription to ' + ctx.channel + ' was unable to recover');
+                        }
+                    }
                 }
 
                 function handleSubscriptionError(ctx) {

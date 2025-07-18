@@ -650,6 +650,7 @@ func TestClientSubscribeRecover(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			node := defaultNodeNoHandlers()
 			node.config.RecoveryMaxPublicationLimit = tt.Limit
+			node.config.Metrics.EnableRecoveredPublicationsHistogram = true
 
 			node.OnCacheEmpty(func(event CacheEmptyEvent) (CacheEmptyReply, error) {
 				return CacheEmptyReply{}, nil

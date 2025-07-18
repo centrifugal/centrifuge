@@ -3020,12 +3020,21 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 						latestEpoch = currentSP.Epoch
 						recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
 						res.Recovered = recovered
-						c.node.metrics.incRecover(res.Recovered, channel)
+						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+						if res.Recovered {
+							c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+						}
 					} else {
-						c.node.metrics.incRecover(res.Recovered, channel)
+						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+						if res.Recovered {
+							c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+						}
 					}
 				} else {
-					c.node.metrics.incRecover(res.Recovered, channel)
+					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+					if res.Recovered {
+						c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+					}
 				}
 			} else {
 				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
@@ -3036,7 +3045,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 						latestOffset = historyResult.Offset
 						latestEpoch = historyResult.Epoch
 						res.Recovered = false
-						c.node.metrics.incRecover(res.Recovered, channel)
+						c.node.metrics.incRecover(res.Recovered, channel, false)
 					} else {
 						c.node.logger.log(newErrorLogEntry(err, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 						return handleErr(err)
@@ -3047,7 +3056,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					var recovered bool
 					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch)
 					res.Recovered = recovered
-					c.node.metrics.incRecover(res.Recovered, channel)
+					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+					if res.Recovered {
+						c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+					}
 				}
 			}
 		} else {
