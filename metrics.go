@@ -244,7 +244,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Subsystem: "client",
 		Name:      "recover",
 		Help:      "Count of recover operations with success/fail resolution.",
-	}, []string{"recovered", "channel_namespace", "had_recovered_publications"})
+	}, []string{"recovered", "channel_namespace", "has_recovered_publications"})
 
 	if config.EnableRecoveredPublicationsHistogram {
 		m.recoveredPublications = prometheus.NewHistogramVec(
