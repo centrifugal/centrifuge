@@ -79,7 +79,14 @@ func main() {
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
-			cb(centrifuge.SubscribeReply{}, nil)
+			cb(centrifuge.SubscribeReply{
+				Options: centrifuge.SubscribeOptions{
+					EnableRecovery: true,
+					EmitPresence:   true,
+					EmitJoinLeave:  true,
+					PushJoinLeave:  true,
+				},
+			}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -88,7 +95,14 @@ func main() {
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
-			cb(centrifuge.PublishReply{}, nil)
+			result, err := node.Publish(
+				e.Channel, e.Data,
+				centrifuge.WithHistory(300, time.Minute),
+				centrifuge.WithClientInfo(e.ClientInfo),
+			)
+			cb(centrifuge.PublishReply{
+				Result: &result,
+			}, err)
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
@@ -99,6 +113,10 @@ func main() {
 			default:
 				cb(centrifuge.RPCReply{}, centrifuge.ErrorMethodNotFound)
 			}
+		})
+
+		client.OnPresenceStats(func(e centrifuge.PresenceStatsEvent, cb centrifuge.PresenceStatsCallback) {
+			cb(centrifuge.PresenceStatsReply{}, nil)
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
