@@ -92,4 +92,3 @@ require (
 	gorm.io/gorm v1.26.0 // indirect
 )
 
-replace github.com/channelwill/cw2-live-chat-common => ../cw2-live-chat-common
