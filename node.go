@@ -15,6 +15,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
 	"github.com/centrifugal/centrifuge/internal/nowtime"
+	"github.com/segmentio/encoding/json"
 
 	"github.com/FZambia/eagle"
 	"github.com/centrifugal/protocol"
@@ -186,7 +187,7 @@ func New(c Config) (*Node, error) {
 	}
 	n.metrics = m
 
-	n.hub = newHub(lg, n.metrics, c.ClientChannelPositionMaxTimeLag.Milliseconds())
+	n.hub = newHub(lg, n.metrics, c.ClientChannelPositionMaxTimeLag.Milliseconds(), nil)
 
 	b, err := NewMemoryBroker(n, MemoryBrokerConfig{})
 	if err != nil {
@@ -256,6 +257,13 @@ func (n *Node) SetPresenceManager(m PresenceManager) {
 // Hub returns node's Hub.
 func (n *Node) Hub() *Hub {
 	return n.hub
+}
+
+// SetMessageFilter sets the message filter for the node
+func (n *Node) SetMessageFilter(filter MessageFilter) {
+	for i := 0; i < numHubShards; i++ {
+		n.hub.subShards[i].messageFilter = filter
+	}
 }
 
 // Run performs node startup actions. At moment must be called once on start
@@ -729,9 +737,24 @@ func (n *Node) handlePublication(ch string, sp StreamPosition, pub, prevPub, loc
 	n.metrics.incMessagesReceived("publication", ch)
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
+
+	n.logger.log(newLogEntry(LogLevelInfo, "handlePublication called", map[string]any{
+		"channel":        ch,
+		"numSubscribers": numSubscribers,
+		"hasSubscribers": hasCurrentSubscribers,
+		"data":           string(pub.Data),
+	}))
+
 	if !hasCurrentSubscribers {
+		n.logger.log(newLogEntry(LogLevelInfo, "no subscribers, skipping broadcast", map[string]any{
+			"channel": ch,
+		}))
 		return nil
 	}
+
+	n.logger.log(newLogEntry(LogLevelInfo, "calling broadcastPublication", map[string]any{
+		"channel": ch,
+	}))
 	return n.hub.broadcastPublication(ch, sp, pub, prevPub, localPrevPub, n.getBatchConfig(ch))
 }
 
@@ -1319,9 +1342,22 @@ func pubToProto(pub *Publication) *protocol.Publication {
 	if pub == nil {
 		return nil
 	}
+
+	// Convert meta to JSON bytes if present
+	var metaBytes []byte
+	if pub.Meta != nil {
+		var err error
+		metaBytes, err = json.Marshal(pub.Meta)
+		if err != nil {
+			// If meta marshaling fails, we'll use empty meta
+			metaBytes = nil
+		}
+	}
+
 	return &protocol.Publication{
 		Offset: pub.Offset,
 		Data:   pub.Data,
+		Meta:   metaBytes,
 		Info:   infoToProto(pub.Info),
 		Tags:   pub.Tags,
 	}
@@ -1331,9 +1367,20 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 	if pub == nil {
 		return nil
 	}
+
+	// Convert meta from bytes to map[string]interface{} if present
+	var meta map[string]interface{}
+	if len(pub.Meta) > 0 {
+		if err := json.Unmarshal(pub.Meta, &meta); err != nil {
+			// If meta parsing fails, we'll use nil meta
+			meta = nil
+		}
+	}
+
 	return &Publication{
 		Offset: pub.GetOffset(),
 		Data:   pub.Data,
+		Meta:   meta,
 		Info:   infoFromProto(pub.GetInfo()),
 		Tags:   pub.GetTags(),
 		Time:   pub.Time,

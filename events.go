@@ -215,6 +215,8 @@ type PublishEvent struct {
 	Channel string
 	// Data client wants to publish.
 	Data []byte
+	// Meta contains metadata for filtering messages.
+	Meta []byte
 	// ClientInfo about client connection.
 	ClientInfo *ClientInfo
 }

@@ -1913,6 +1913,7 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 	event := PublishEvent{
 		Channel:    channel,
 		Data:       data,
+		Meta:       req.Meta,
 		ClientInfo: info,
 	}
 
@@ -2783,9 +2784,29 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	numChannels := len(c.channels)
 	_, ok := c.channels[channel]
 	if ok {
-		c.mu.Unlock()
-		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-		return ErrorAlreadySubscribed, nil
+		// Check if this is a filter update request (has data with filter field)
+		var isFilterUpdate bool
+		if len(cmd.Data) > 0 {
+			var dataMap map[string]interface{}
+			if err := json.Unmarshal(cmd.Data, &dataMap); err == nil {
+				if _, hasFilter := dataMap["filter"]; hasFilter {
+					isFilterUpdate = true
+				}
+			}
+		}
+
+		if isFilterUpdate {
+			// Allow filter updates for existing subscriptions
+			c.mu.Unlock()
+			c.node.logger.log(newLogEntry(LogLevelInfo, "updating filter for existing subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			// Return existing channel context to allow update
+			return nil, nil
+		} else {
+			// Regular duplicate subscription attempt
+			c.mu.Unlock()
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return ErrorAlreadySubscribed, nil
+		}
 	}
 	if channelLimit > 0 && numChannels >= channelLimit {
 		c.mu.Unlock()
@@ -2916,7 +2937,26 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 	}
 
-	if !serverSide {
+	// Check if this is a filter update for existing subscription
+	var isFilterUpdate bool
+	if !serverSide && len(req.Data) > 0 {
+		var dataMap map[string]interface{}
+		if err := json.Unmarshal(req.Data, &dataMap); err == nil {
+			if _, hasFilter := dataMap["filter"]; hasFilter {
+				c.mu.Lock()
+				_, ok := c.channels[channel]
+				if ok {
+					isFilterUpdate = true
+					c.mu.Unlock()
+					c.node.logger.log(newLogEntry(LogLevelInfo, "filter update for existing subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+				} else {
+					c.mu.Unlock()
+				}
+			}
+		}
+	}
+
+	if !serverSide && !isFilterUpdate {
 		c.mu.Lock()
 		_, ok := c.channels[channel]
 		if !ok || c.status == statusClosed {
@@ -2928,7 +2968,21 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		c.mu.Unlock()
 	}
-	err := c.node.addSubscription(channel, sub)
+
+	var err error
+	c.node.logger.log(newLogEntry(LogLevelInfo, "subscribeCmd: checking filter update", map[string]any{
+		"channel":        channel,
+		"isFilterUpdate": isFilterUpdate,
+		"serverSide":     serverSide,
+	}))
+
+	// Always call addSubscription to ensure subscription is registered in hub
+	// Even for filter updates, we need the subscription to be active for message filtering
+	c.node.logger.log(newLogEntry(LogLevelInfo, "subscribeCmd: calling addSubscription", map[string]any{
+		"channel":        channel,
+		"isFilterUpdate": isFilterUpdate,
+	}))
+	err = c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.pubSubSync.StopBuffering(channel)

@@ -53,6 +53,13 @@ func WithTags(meta map[string]string) PublishOption {
 	}
 }
 
+// WithMeta allows setting Publication.Meta for message filtering.
+func WithMeta(meta map[string]interface{}) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.Meta = meta
+	}
+}
+
 // WithVersion allows application to provide a tip for Centrifuge about
 // internal application version of Publication. This is helpful to drop
 // non-actual publications on Centrifuge Broker level. Publications may be

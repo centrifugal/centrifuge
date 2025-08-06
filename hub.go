@@ -13,6 +13,11 @@ import (
 	fdelta "github.com/shadowspore/fossil-delta"
 )
 
+// MessageFilter defines interface for message filtering
+type MessageFilter interface {
+	ShouldDeliverMessage(ctx context.Context, clientID, channel string, pub *Publication) (bool, error)
+}
+
 const numHubShards = 64
 
 // Hub tracks Client connections on the current Node.
@@ -24,13 +29,13 @@ type Hub struct {
 }
 
 // newHub initializes Hub.
-func newHub(logger *logger, metrics *metrics, maxTimeLagMilli int64) *Hub {
+func newHub(logger *logger, metrics *metrics, maxTimeLagMilli int64, messageFilter MessageFilter) *Hub {
 	h := &Hub{
 		sessions: map[string]*Client{},
 	}
 	for i := 0; i < numHubShards; i++ {
 		h.connShards[i] = newConnShard()
-		h.subShards[i] = newSubShard(logger, metrics, maxTimeLagMilli)
+		h.subShards[i] = newSubShard(logger, metrics, maxTimeLagMilli, messageFilter)
 	}
 	return h
 }
@@ -506,14 +511,16 @@ type subShard struct {
 	maxTimeLagMilli int64
 	logger          *logger
 	metrics         *metrics
+	messageFilter   MessageFilter
 }
 
-func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64) *subShard {
+func newSubShard(logger *logger, metrics *metrics, maxTimeLagMilli int64, messageFilter MessageFilter) *subShard {
 	return &subShard{
 		subs:            make(map[string]map[string]subInfo),
 		logger:          logger,
 		metrics:         metrics,
 		maxTimeLagMilli: maxTimeLagMilli,
+		messageFilter:   messageFilter,
 	}
 }
 
@@ -782,6 +789,44 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 		if sub.client.transport.Protocol() == ProtocolTypeJSON && jsonEncodeErr != nil {
 			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
 			continue
+		}
+
+		// Apply message filtering if filter is configured
+		if h.messageFilter != nil {
+			h.logger.log(newLogEntry(LogLevelDebug, "calling message filter", map[string]any{
+				"channel": channel,
+				"client":  sub.client.ID(),
+				"data":    string(pub.Data),
+			}))
+			shouldDeliver, err := h.messageFilter.ShouldDeliverMessage(context.Background(), sub.client.ID(), channel, pub)
+			if err != nil {
+				// Log error but continue processing other subscribers
+				if h.logger.enabled(LogLevelWarn) {
+					h.logger.log(newLogEntry(LogLevelWarn, "message filter error", map[string]any{
+						"channel": channel,
+						"client":  sub.client.ID(),
+						"error":   err,
+					}))
+				}
+				continue
+			}
+			if !shouldDeliver {
+				// Skip this subscriber, message filtered out
+				h.logger.log(newLogEntry(LogLevelInfo, "message filtered out", map[string]any{
+					"channel": channel,
+					"client":  sub.client.ID(),
+				}))
+				continue
+			}
+			h.logger.log(newLogEntry(LogLevelDebug, "message passed filter", map[string]any{
+				"channel": channel,
+				"client":  sub.client.ID(),
+			}))
+		} else {
+			h.logger.log(newLogEntry(LogLevelDebug, "no message filter configured", map[string]any{
+				"channel": channel,
+				"client":  sub.client.ID(),
+			}))
 		}
 
 		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, batchConfig)
