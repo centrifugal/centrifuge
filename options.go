@@ -134,6 +134,9 @@ type SubscribeOptions struct {
 	// Delta encoding is an EXPERIMENTAL feature and may be changed.
 	AllowedDeltaTypes []DeltaType
 
+	// MessageFilter for filtering messages during subscription recovery
+	MessageFilter MessageFilter
+
 	// clientID to subscribe.
 	clientID string
 	// sessionID to subscribe.
@@ -250,6 +253,13 @@ func WithSubscribeSource(source uint8) SubscribeOption {
 func WithSubscribeHistoryMetaTTL(metaTTL time.Duration) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.HistoryMetaTTL = metaTTL
+	}
+}
+
+// WithMessageFilter sets a message filter for subscription recovery
+func WithMessageFilter(filter MessageFilter) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.MessageFilter = filter
 	}
 }
 

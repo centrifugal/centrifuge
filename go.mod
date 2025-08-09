@@ -37,4 +37,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/centrifugal/protocol => github.com/chainstream-io/protocol v0.0.0-20250806162029-5aa056067f23
+replace github.com/centrifugal/protocol => github.com/chainstream-io/protocol v0.0.0-20250809142339-f22827f207fe

@@ -158,7 +158,7 @@ func TestHub(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	c.user = "test"
@@ -906,10 +906,10 @@ func TestHubShutdown(t *testing.T) {
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 	err = h.shutdown(context.Background())
 	require.NoError(t, err)
-	h = newHub(nil, m, 0)
+	h = newHub(nil, m, 0, nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	h.add(c)
@@ -928,7 +928,7 @@ func TestHubSubscriptions(t *testing.T) {
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 
@@ -973,7 +973,7 @@ func TestUserConnections(t *testing.T) {
 		MetricsNamespace: "test",
 	})
 	require.NoError(t, err)
-	h := newHub(nil, m, 0)
+	h := newHub(nil, m, 0, nil)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
 	require.NoError(t, err)
 	h.add(c)

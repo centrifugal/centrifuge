@@ -738,23 +738,29 @@ func (n *Node) handlePublication(ch string, sp StreamPosition, pub, prevPub, loc
 	numSubscribers := n.hub.NumSubscribers(ch)
 	hasCurrentSubscribers := numSubscribers > 0
 
-	n.logger.log(newLogEntry(LogLevelInfo, "handlePublication called", map[string]any{
-		"channel":        ch,
-		"numSubscribers": numSubscribers,
-		"hasSubscribers": hasCurrentSubscribers,
-		"data":           string(pub.Data),
-	}))
+	if n.logger.enabled(LogLevelDebug) {
+		n.logger.log(newLogEntry(LogLevelDebug, "handlePublication called", map[string]any{
+			"channel":        ch,
+			"numSubscribers": numSubscribers,
+			"hasSubscribers": hasCurrentSubscribers,
+			"data":           string(pub.Data),
+		}))
+	}
 
 	if !hasCurrentSubscribers {
-		n.logger.log(newLogEntry(LogLevelInfo, "no subscribers, skipping broadcast", map[string]any{
-			"channel": ch,
-		}))
+		if n.logger.enabled(LogLevelDebug) {
+			n.logger.log(newLogEntry(LogLevelDebug, "no subscribers, skipping broadcast", map[string]any{
+				"channel": ch,
+			}))
+		}
 		return nil
 	}
 
-	n.logger.log(newLogEntry(LogLevelInfo, "calling broadcastPublication", map[string]any{
-		"channel": ch,
-	}))
+	if n.logger.enabled(LogLevelDebug) {
+		n.logger.log(newLogEntry(LogLevelDebug, "calling broadcastPublication", map[string]any{
+			"channel": ch,
+		}))
+	}
 	return n.hub.broadcastPublication(ch, sp, pub, prevPub, localPrevPub, n.getBatchConfig(ch))
 }
 

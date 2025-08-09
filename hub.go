@@ -791,45 +791,11 @@ func (h *subShard) broadcastPublication(channel string, sp StreamPosition, pub, 
 			continue
 		}
 
-		// Apply message filtering if filter is configured
-		if h.messageFilter != nil {
-			h.logger.log(newLogEntry(LogLevelDebug, "calling message filter", map[string]any{
-				"channel": channel,
-				"client":  sub.client.ID(),
-				"data":    string(pub.Data),
-			}))
-			shouldDeliver, err := h.messageFilter.ShouldDeliverMessage(context.Background(), sub.client.ID(), channel, pub)
-			if err != nil {
-				// Log error but continue processing other subscribers
-				if h.logger.enabled(LogLevelWarn) {
-					h.logger.log(newLogEntry(LogLevelWarn, "message filter error", map[string]any{
-						"channel": channel,
-						"client":  sub.client.ID(),
-						"error":   err,
-					}))
-				}
-				continue
-			}
-			if !shouldDeliver {
-				// Skip this subscriber, message filtered out
-				h.logger.log(newLogEntry(LogLevelInfo, "message filtered out", map[string]any{
-					"channel": channel,
-					"client":  sub.client.ID(),
-				}))
-				continue
-			}
-			h.logger.log(newLogEntry(LogLevelDebug, "message passed filter", map[string]any{
-				"channel": channel,
-				"client":  sub.client.ID(),
-			}))
-		} else {
-			h.logger.log(newLogEntry(LogLevelDebug, "no message filter configured", map[string]any{
-				"channel": channel,
-				"client":  sub.client.ID(),
-			}))
+		// Process message for this subscriber
+		shouldDeliver := h.shouldDeliverMessageToSubscriber(channel, sub, pub, fullPub)
+		if shouldDeliver {
+			_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, batchConfig)
 		}
-
-		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, batchConfig)
 	}
 	if jsonEncodeErr != nil && h.logger.enabled(LogLevelWarn) {
 		// Log that we had clients with inappropriate protocol, and point to the first such client.
@@ -1061,4 +1027,67 @@ func (h *subShard) NumSubscribers(ch string) int {
 		return 0
 	}
 	return len(clients)
+}
+
+func (h *subShard) shouldDeliverMessageToSubscriber(
+	channel string,
+	sub subInfo,
+	pub *Publication,
+	fullPub *protocol.Publication,
+) bool {
+	// Only correct offset if message filtering is enabled
+	// This prevents unnecessary offset correction when no filtering is applied
+	if h.messageFilter != nil {
+		err := sub.client.correctOffsetForFilteredMessages(channel, fullPub)
+		if err != nil {
+			if h.logger.enabled(LogLevelDebug) {
+				h.logger.log(newLogEntry(LogLevelWarn, "insufficient state", map[string]any{
+					"channel": channel,
+					"client":  sub.client.ID(),
+					"error":   err,
+				}))
+			}
+			// Client has insufficient state, skip this subscriber
+			return false
+		}
+	}
+
+	// Apply message filtering if filter is configured
+	if h.messageFilter != nil {
+		h.logger.log(newLogEntry(LogLevelDebug, "calling message filter", map[string]any{
+			"channel": channel,
+			"client":  sub.client.ID(),
+			"data":    string(pub.Data),
+		}))
+		shouldDeliver, filterErr := h.messageFilter.ShouldDeliverMessage(context.Background(), sub.client.ID(), channel, pub)
+		if filterErr != nil {
+			// Log error but continue processing other subscribers
+			if h.logger.enabled(LogLevelWarn) {
+				h.logger.log(newLogEntry(LogLevelWarn, "message filter error", map[string]any{
+					"channel": channel,
+					"client":  sub.client.ID(),
+					"error":   filterErr,
+				}))
+			}
+			return false
+		}
+		if !shouldDeliver {
+			// Skip this subscriber, message filtered out
+			if h.logger.enabled(LogLevelDebug) {
+				h.logger.log(newLogEntry(LogLevelDebug, "message filtered out", map[string]any{
+					"channel": channel,
+					"client":  sub.client.ID(),
+				}))
+			}
+			return false
+		}
+		if h.logger.enabled(LogLevelDebug) {
+			h.logger.log(newLogEntry(LogLevelDebug, "message passed filter", map[string]any{
+				"channel": channel,
+				"client":  sub.client.ID(),
+			}))
+		}
+	}
+
+	return true
 }
