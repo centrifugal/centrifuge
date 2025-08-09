@@ -102,10 +102,12 @@ func (b *MemoryBroker) Publish(ch string, data []byte, opts PublishOptions) (Str
 
 	pub := &Publication{
 		Data: data,
+		Meta: opts.Meta,
 		Info: opts.ClientInfo,
 		Tags: opts.Tags,
 		Time: time.Now().UnixMilli(),
 	}
+
 	var prevPub *Publication
 	if opts.HistorySize > 0 && opts.HistoryTTL > 0 {
 		var err error

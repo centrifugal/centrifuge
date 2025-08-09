@@ -36,3 +36,5 @@ require (
 	golang.org/x/text v0.26.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/centrifugal/protocol => github.com/chainstream-io/protocol v0.0.0-20250809142339-f22827f207fe

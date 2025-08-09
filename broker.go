@@ -12,6 +12,10 @@ type Publication struct {
 	Offset uint64
 	// Data published to a channel.
 	Data []byte
+	// Meta contains metadata for CEL expression filtering.
+	// This field is used by message filters to determine whether to deliver
+	// the message to clients. The actual business data should be in Data field.
+	Meta map[string]interface{}
 	// Info is optional information about client connection published this data.
 	Info *ClientInfo
 	// Tags contains a map with custom key-values attached to a Publication. Tags map
@@ -109,6 +113,8 @@ type PublishOptions struct {
 	ClientInfo *ClientInfo
 	// Tags to set Publication.Tags.
 	Tags map[string]string
+	// Meta to set Publication.Meta for message filtering.
+	Meta map[string]interface{}
 	// IdempotencyKey is an optional key for idempotent publish. Broker implementation
 	// may cache these keys for some time to prevent duplicate publications. In this case
 	// the returned result is the same as from the previous publication with the same key.

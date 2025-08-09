@@ -53,6 +53,13 @@ func WithTags(meta map[string]string) PublishOption {
 	}
 }
 
+// WithMeta allows setting Publication.Meta for message filtering.
+func WithMeta(meta map[string]interface{}) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.Meta = meta
+	}
+}
+
 // WithVersion allows application to provide a tip for Centrifuge about
 // internal application version of Publication. This is helpful to drop
 // non-actual publications on Centrifuge Broker level. Publications may be
@@ -126,6 +133,9 @@ type SubscribeOptions struct {
 	// within a channel and will receive full data in publications.
 	// Delta encoding is an EXPERIMENTAL feature and may be changed.
 	AllowedDeltaTypes []DeltaType
+
+	// MessageFilter for filtering messages during subscription recovery
+	MessageFilter MessageFilter
 
 	// clientID to subscribe.
 	clientID string
@@ -243,6 +253,13 @@ func WithSubscribeSource(source uint8) SubscribeOption {
 func WithSubscribeHistoryMetaTTL(metaTTL time.Duration) SubscribeOption {
 	return func(opts *SubscribeOptions) {
 		opts.HistoryMetaTTL = metaTTL
+	}
+}
+
+// WithMessageFilter sets a message filter for subscription recovery
+func WithMessageFilter(filter MessageFilter) SubscribeOption {
+	return func(opts *SubscribeOptions) {
+		opts.MessageFilter = filter
 	}
 }
 

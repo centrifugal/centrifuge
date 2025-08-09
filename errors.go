@@ -109,4 +109,11 @@ var (
 		Code:    112,
 		Message: "unrecoverable position",
 	}
+	// ErrorInsufficientState means that client state is insufficient to process
+	// the current message. This can happen due to missed messages, epoch mismatch,
+	// or excessive lag.
+	ErrorInsufficientState = &Error{
+		Code:    113,
+		Message: "insufficient state",
+	}
 )

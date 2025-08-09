@@ -15,6 +15,7 @@ import (
 	_ "embed"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
+	"github.com/segmentio/encoding/json"
 
 	"github.com/centrifugal/protocol"
 	"github.com/redis/rueidis"
@@ -785,8 +786,19 @@ func (b *RedisBroker) Publish(ch string, data []byte, opts PublishOptions) (Stre
 }
 
 func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts PublishOptions) (StreamPosition, bool, error) {
+	// Convert meta to JSON bytes if present
+	var metaBytes []byte
+	if opts.Meta != nil {
+		var err error
+		metaBytes, err = json.Marshal(opts.Meta)
+		if err != nil {
+			return StreamPosition{}, false, err
+		}
+	}
+
 	protoPub := &protocol.Publication{
 		Data: data,
+		Meta: metaBytes,
 		Info: infoToProto(opts.ClientInfo),
 		Tags: opts.Tags,
 		Time: time.Now().UnixMilli(),

@@ -1735,6 +1735,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		Positioned:  req.Positioned,
 		Recoverable: req.Recoverable,
 		JoinLeave:   req.JoinLeave,
+		Filter:      req.Filter,
 	}
 
 	cb := func(reply SubscribeReply, err error) {
@@ -1913,6 +1914,7 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 	event := PublishEvent{
 		Channel:    channel,
 		Data:       data,
+		Meta:       req.Meta,
 		ClientInfo: info,
 	}
 
@@ -2783,9 +2785,24 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 	numChannels := len(c.channels)
 	_, ok := c.channels[channel]
 	if ok {
-		c.mu.Unlock()
-		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
-		return ErrorAlreadySubscribed, nil
+		// Check if this is a filter update request
+		var isFilterUpdate bool
+		if cmd.Filter != "" {
+			isFilterUpdate = true
+		}
+
+		if isFilterUpdate {
+			// Allow filter updates for existing subscriptions
+			c.mu.Unlock()
+			c.node.logger.log(newLogEntry(LogLevelInfo, "updating filter for existing subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			// Return existing channel context to allow update
+			return nil, nil
+		} else {
+			// Regular duplicate subscription attempt
+			c.mu.Unlock()
+			c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed on channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return ErrorAlreadySubscribed, nil
+		}
 	}
 	if channelLimit > 0 && numChannels >= channelLimit {
 		c.mu.Unlock()
@@ -2822,12 +2839,31 @@ type subscribeContext struct {
 	channelContext ChannelContext
 }
 
-func isStreamRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isStreamRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string, filter MessageFilter, clientID, channel string, logger *logger) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
 
 	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
 	for _, pub := range historyResult.Publications {
+		// Apply filter if provided
+		if filter != nil {
+			if logger.enabled(LogLevelDebug) {
+				logger.log(newLogEntry(LogLevelDebug, "applying filter during stream recovery", map[string]any{
+					"channel": channel, "clientID": clientID, "offset": pub.Offset,
+					"meta": pub.Meta, "data": string(pub.Data),
+				}))
+			}
+			shouldDeliver, err := filter.ShouldDeliverMessage(context.Background(), clientID, channel, pub)
+			if logger.enabled(LogLevelDebug) {
+				logger.log(newLogEntry(LogLevelDebug, "filter result during stream recovery", map[string]any{
+					"channel": channel, "clientID": clientID, "offset": pub.Offset,
+					"shouldDeliver": shouldDeliver, "error": err,
+				}))
+			}
+			if err != nil || !shouldDeliver {
+				continue
+			}
+		}
 		protoPub := pubToProto(pub)
 		recoveredPubs = append(recoveredPubs, protoPub)
 	}
@@ -2845,7 +2881,7 @@ func isStreamRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch s
 	return recoveredPubs, recovered
 }
 
-func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string, filter MessageFilter, clientID, channel string) ([]*protocol.Publication, bool) {
 	latestOffset := currentSP.Offset
 	latestEpoch := currentSP.Epoch
 	var recovered bool
@@ -2855,8 +2891,19 @@ func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffse
 		recovered = publication.Offset == latestOffset
 		skipPublication := cmdOffset > 0 && cmdOffset == latestOffset && cmdEpoch == latestEpoch
 		if recovered && !skipPublication {
-			protoPub := pubToProto(publication)
-			recoveredPubs = append(recoveredPubs, protoPub)
+			// Apply filter if provided
+			if filter != nil {
+				shouldDeliver, err := filter.ShouldDeliverMessage(context.Background(), clientID, channel, publication)
+				if err != nil || !shouldDeliver {
+					// Skip this publication
+				} else {
+					protoPub := pubToProto(publication)
+					recoveredPubs = append(recoveredPubs, protoPub)
+				}
+			} else {
+				protoPub := pubToProto(publication)
+				recoveredPubs = append(recoveredPubs, protoPub)
+			}
 		}
 	} else if cmdOffset > 0 && latestOffset == cmdOffset && cmdEpoch == latestEpoch {
 		// Client already had state, which has not been modified since.
@@ -2916,7 +2963,21 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 	}
 
-	if !serverSide {
+	// Check if this is a filter update for existing subscription
+	var isFilterUpdate bool
+	if !serverSide && req.Filter != "" {
+		c.mu.Lock()
+		_, ok := c.channels[channel]
+		if ok {
+			isFilterUpdate = true
+			c.mu.Unlock()
+			c.node.logger.log(newLogEntry(LogLevelInfo, "filter update for existing subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+		} else {
+			c.mu.Unlock()
+		}
+	}
+
+	if !serverSide && !isFilterUpdate {
 		c.mu.Lock()
 		_, ok := c.channels[channel]
 		if !ok || c.status == statusClosed {
@@ -2928,7 +2989,25 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		c.mu.Unlock()
 	}
-	err := c.node.addSubscription(channel, sub)
+
+	var err error
+	if c.node.logger.enabled(LogLevelDebug) {
+		c.node.logger.log(newLogEntry(LogLevelDebug, "subscribeCmd: checking filter update", map[string]any{
+			"channel":        channel,
+			"isFilterUpdate": isFilterUpdate,
+			"serverSide":     serverSide,
+		}))
+	}
+
+	// Always call addSubscription to ensure subscription is registered in hub
+	// Even for filter updates, we need the subscription to be active for message filtering
+	if c.node.logger.enabled(LogLevelDebug) {
+		c.node.logger.log(newLogEntry(LogLevelDebug, "subscribeCmd: calling addSubscription", map[string]any{
+			"channel":        channel,
+			"isFilterUpdate": isFilterUpdate,
+		}))
+	}
+	err = c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.pubSubSync.StopBuffering(channel)
@@ -3001,7 +3080,20 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				latestOffset = currentSP.Offset
 				latestEpoch = currentSP.Epoch
 				var recovered bool
-				recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
+				// Get filter from subscription reply
+				var filter MessageFilter = nil
+				if reply.MessageFilter != nil {
+					filter = reply.MessageFilter
+				}
+				recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch, filter, c.uid, channel)
+				if c.node.logger.enabled(LogLevelDebug) {
+					c.node.logger.log(newLogEntry(LogLevelDebug, "cache recovery result", map[string]any{
+						"channel": channel, "user": c.user, "client": c.uid,
+						"recovered": recovered, "recoveredPubsCount": len(recoveredPubs),
+						"cmdOffset": cmdOffset, "cmdEpoch": cmdEpoch,
+						"hasFilter": filter != nil,
+					}))
+				}
 				res.Recovered = recovered
 				if latestPub == nil && c.node.clientEvents.cacheEmptyHandler != nil {
 					cacheReply, err := c.node.clientEvents.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
@@ -3018,7 +3110,20 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 						}
 						latestOffset = currentSP.Offset
 						latestEpoch = currentSP.Epoch
-						recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
+						// Get filter from subscription reply
+						var filter MessageFilter = nil
+						if reply.MessageFilter != nil {
+							filter = reply.MessageFilter
+						}
+						recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch, filter, c.uid, channel)
+						if c.node.logger.enabled(LogLevelDebug) {
+							c.node.logger.log(newLogEntry(LogLevelDebug, "cache recovery result (populated)", map[string]any{
+								"channel": channel, "user": c.user, "client": c.uid,
+								"recovered": recovered, "recoveredPubsCount": len(recoveredPubs),
+								"cmdOffset": cmdOffset, "cmdEpoch": cmdEpoch,
+								"hasFilter": filter != nil,
+							}))
+						}
 						res.Recovered = recovered
 						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
 						if res.Recovered {
@@ -3054,7 +3159,20 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestOffset = historyResult.Offset
 					latestEpoch = historyResult.Epoch
 					var recovered bool
-					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch)
+					// Get filter from subscription reply
+					var filter MessageFilter = nil
+					if reply.MessageFilter != nil {
+						filter = reply.MessageFilter
+					}
+					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, filter, c.uid, channel, c.node.logger)
+					if c.node.logger.enabled(LogLevelDebug) {
+						c.node.logger.log(newLogEntry(LogLevelDebug, "stream recovery result", map[string]any{
+							"channel": channel, "user": c.user, "client": c.uid,
+							"recovered": recovered, "recoveredPubsCount": len(recoveredPubs),
+							"cmdOffset": cmdOffset, "cmdEpoch": cmdEpoch,
+							"hasFilter": filter != nil, "historyResultOffset": historyResult.Offset,
+						}))
+					}
 					res.Recovered = recovered
 					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
 					if res.Recovered {
@@ -3158,12 +3276,53 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		channelFlags |= flagPushJoinLeave
 	}
 
+	// Calculate adjusted offset based on filter
+	adjustedOffset := latestOffset
+	if reply.MessageFilter != nil {
+		if len(recoveredPubs) > 0 {
+			// If we have recovered publications, adjust the offset
+			// to account for filtered messages
+			lastRecoveredOffset := recoveredPubs[len(recoveredPubs)-1].Offset
+			if lastRecoveredOffset < latestOffset {
+				// This means some messages were filtered out during recovery
+				// We should set the offset to the last recovered message offset
+				adjustedOffset = lastRecoveredOffset
+			}
+			if c.node.logger.enabled(LogLevelDebug) {
+				c.node.logger.log(newLogEntry(LogLevelDebug, "offset adjustment with recovered pubs", map[string]any{
+					"channel": channel, "user": c.user, "client": c.uid,
+					"latestOffset": latestOffset, "lastRecoveredOffset": lastRecoveredOffset,
+					"adjustedOffset": adjustedOffset, "recoveredPubsCount": len(recoveredPubs),
+				}))
+			}
+		} else {
+			// If no publications were recovered (all filtered out),
+			// we should set the offset to the client's requested offset
+			// to maintain consistency
+			adjustedOffset = req.Offset
+			if c.node.logger.enabled(LogLevelDebug) {
+				c.node.logger.log(newLogEntry(LogLevelDebug, "offset adjustment with no recovered pubs", map[string]any{
+					"channel": channel, "user": c.user, "client": c.uid,
+					"latestOffset": latestOffset, "reqOffset": req.Offset,
+					"adjustedOffset": adjustedOffset, "recoveredPubsCount": len(recoveredPubs),
+				}))
+			}
+		}
+	} else {
+		if c.node.logger.enabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "no filter, using latest offset", map[string]any{
+				"channel": channel, "user": c.user, "client": c.uid,
+				"latestOffset": latestOffset, "adjustedOffset": adjustedOffset,
+			}))
+		}
+	}
+
 	channelContext := ChannelContext{
 		info:     reply.Options.ChannelInfo,
 		flags:    channelFlags,
 		expireAt: reply.Options.ExpireAt,
 		streamPosition: StreamPosition{
-			Offset: latestOffset,
+			Offset: adjustedOffset,
 			Epoch:  latestEpoch,
 		},
 		metaTTLSeconds: int64(reply.Options.HistoryMetaTTL.Seconds()),
@@ -3286,6 +3445,50 @@ func (c *Client) handleAsyncUnsubscribe(ch string, unsub Unsubscribe) {
 		_ = c.close(DisconnectWriteError)
 		return
 	}
+}
+
+func (c *Client) correctOffsetForFilteredMessages(
+	ch string, pub *protocol.Publication,
+) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	channelContext, ok := c.channels[ch]
+	if !ok || !channelHasFlag(channelContext.flags, flagSubscribed) {
+		return nil
+	}
+	if !channelHasFlag(channelContext.flags, flagPositioning) {
+		// Client does not use positioning, no need to check position
+		return nil
+	}
+
+	currentPositionOffset := channelContext.streamPosition.Offset
+	nextExpectedOffset := currentPositionOffset + 1
+	pubOffset := pub.Offset
+
+	// Only handle offset correction for filtered messages
+	if pubOffset > nextExpectedOffset {
+		// Offset mismatch - likely due to filtered messages
+		// Correct the client's offset to match the current message offset
+		if c.node.logger.enabled(LogLevelDebug) {
+			c.node.logger.log(newLogEntry(LogLevelDebug, "correcting client offset due to filtered messages", map[string]any{
+				"channel": ch, "user": c.user, "client": c.uid,
+				"oldOffset": currentPositionOffset, "newOffset": pubOffset - 1,
+				"messageOffset": pubOffset, "expectedOffset": nextExpectedOffset,
+			}))
+		}
+		// Update client's position to be one less than the current message offset
+		// This way, when the message is processed, the client will be at the correct position
+		channelContext.streamPosition.Offset = pubOffset - 1
+		c.channels[ch] = channelContext
+		return nil
+	} else if pubOffset < nextExpectedOffset {
+		// Due to the lag in PUB/SUB processing we received non-actual update
+		// Safe to just skip for the subscriber.
+		return nil
+	}
+
+	return nil
 }
 
 func (c *Client) writePublicationUpdatePosition(

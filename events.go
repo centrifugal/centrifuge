@@ -174,6 +174,8 @@ type SubscribeEvent struct {
 	Token string
 	// Data received from client as part of Subscribe Command.
 	Data []byte
+	// Filter contains CEL expression for message filtering (preferred over data.filter).
+	Filter string
 	// Positioned is true when Client wants to create subscription with positioned property.
 	Positioned bool
 	// Recoverable is true when Client wants to create subscription with recoverable property.
@@ -196,6 +198,9 @@ type SubscribeReply struct {
 	// SubRefresh handler will be used.
 	ClientSideRefresh bool
 
+	// MessageFilter for filtering messages during subscription recovery
+	MessageFilter MessageFilter
+
 	// SubscriptionReady channel if provided will be closed as soon as Centrifuge
 	// written subscribe reply to the connection, so it's possible to start writing
 	// publications into a channel using experimental Client.WritePublication method.
@@ -215,6 +220,8 @@ type PublishEvent struct {
 	Channel string
 	// Data client wants to publish.
 	Data []byte
+	// Meta contains metadata for filtering messages.
+	Meta []byte
 	// ClientInfo about client connection.
 	ClientInfo *ClientInfo
 }
