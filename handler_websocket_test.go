@@ -316,7 +316,7 @@ func TestWebsocketHandlerPing(t *testing.T) {
 
 func TestWebsocketHandler_FramePingPong(t *testing.T) {
 	t.Parallel()
-	framePingInterval = time.Second
+	defaultFramePingInterval = time.Second
 	n, _ := New(Config{})
 	require.NoError(t, n.Run())
 	defer func() { _ = n.Shutdown(context.Background()) }()

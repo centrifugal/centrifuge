@@ -173,7 +173,15 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	if useFramePingPong {
-		pongWait := framePingInterval * 10 / 9
+		pongTimeout := s.config.PingPongConfig.PongTimeout
+		if pongTimeout <= 0 {
+			pongTimeout = defaultFramePongTimeout
+		}
+		pingInterval := s.config.PingPongConfig.PingInterval
+		if pingInterval <= 0 {
+			pingInterval = defaultFramePingInterval
+		}
+		pongWait := pingInterval + pongTimeout
 		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 		conn.SetPongHandler(func([]byte) error {
 			_ = conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -477,15 +485,17 @@ func (t *websocketTransport) Close(disconnect Disconnect) error {
 	return t.conn.Close()
 }
 
-var framePingInterval = 25 * time.Second
+var (
+	defaultFramePingInterval = 25 * time.Second
+	defaultFramePongTimeout  = 10 * time.Second
+)
 
 func (t *websocketTransport) ping() {
 	select {
 	case <-t.closeCh:
 		return
 	default:
-		deadline := time.Now().Add(framePingInterval / 2)
-		err := t.conn.WriteControl(websocket.PingMessage, nil, deadline)
+		err := t.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(t.opts.writeTimeout))
 		if err != nil {
 			_ = t.Close(DisconnectWriteError)
 			return
@@ -500,7 +510,21 @@ func (t *websocketTransport) addPing() {
 		t.mu.Unlock()
 		return
 	}
-	t.nativePingTimer = time.AfterFunc(framePingInterval, t.ping)
+	pongTimeout := t.opts.pingPong.PongTimeout
+	if pongTimeout <= 0 {
+		pongTimeout = defaultFramePongTimeout
+	}
+	if pongTimeout >= 0 {
+		// It's safe to call SetReadDeadline concurrently with reader in separate goroutine.
+		// According to Go docs:
+		// SetReadDeadline sets the deadline for future Read calls and any currently-blocked Read call.
+		_ = t.conn.SetReadDeadline(time.Now().Add(pongTimeout))
+	}
+	pingInterval := t.opts.pingPong.PingInterval
+	if pingInterval <= 0 {
+		pingInterval = defaultFramePingInterval
+	}
+	t.nativePingTimer = time.AfterFunc(pingInterval, t.ping)
 	t.mu.Unlock()
 }
 
