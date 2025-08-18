@@ -97,7 +97,9 @@ func NewKafkaBroker(n *Node, config KafkaBrokerConfig) (*KafkaBroker, error) {
 	}
 
 	if config.ConsumerGroupID == "" {
-		config.ConsumerGroupID = "centrifuge-node-" + n.ID()
+		// Use a stable consumer group ID to avoid creating new groups on every restart
+		// This prevents Kafka from accumulating consumer groups and crashing
+		config.ConsumerGroupID = "centrifuge-kafka-consumer-group"
 	}
 
 	if config.NumPartitions == 0 {
@@ -396,40 +398,33 @@ func (b *KafkaBroker) startGlobalConsumer() error {
 		return nil
 	}
 
-	go func() {
-		for {
-			select {
-			case <-b.stopCh:
-				return
-			default:
-				err := b.kafkaBroker.Subscribe(
-					context.Background(),
-					b.messagesTopic,
-					b.config.ConsumerGroupID,
-					b.handleMessage,
-					commonBroker.WithSubPullGoroutines(2),
-					commonBroker.WithEnableSubUseMsgBuffer(),
-					commonBroker.WithSubMsgBufferSize(1024),
-					commonBroker.WithSubMsgBufferGoroutines(4),
-				)
-				if err != nil {
-					b.node.logger.log(newErrorLogEntry(err, "kafka broker global consumer failed", map[string]any{
-						"topic":       b.messagesTopic,
-						"broker_name": b.config.Name,
-					}))
-					// Retry after delay
-					select {
-					case <-b.stopCh:
-						return
-					case <-time.After(5 * time.Second):
-						continue
-					}
-				}
-			}
-		}
-	}()
+	// 启动单个消费者，使用修复后的非阻塞Subscribe
+	err := b.kafkaBroker.Subscribe(
+		context.Background(),
+		b.messagesTopic,
+		b.config.ConsumerGroupID,
+		b.handleMessage,
+		commonBroker.WithSubPullGoroutines(2),
+		commonBroker.WithEnableSubUseMsgBuffer(),
+		commonBroker.WithSubMsgBufferSize(1024),
+		commonBroker.WithSubMsgBufferGoroutines(4),
+	)
+	
+	if err != nil {
+		b.node.logger.log(newErrorLogEntry(err, "kafka broker start consumer failed", map[string]any{
+			"topic":       b.messagesTopic,
+			"broker_name": b.config.Name,
+		}))
+		return err
+	}
 
 	b.isSubscribed = true
+	b.node.logger.log(newLogEntry(LogLevelInfo, "kafka broker global consumer started", map[string]any{
+		"topic":         b.messagesTopic,
+		"consumer_group": b.config.ConsumerGroupID,
+		"broker_name":   b.config.Name,
+	}))
+	
 	return nil
 }
 
