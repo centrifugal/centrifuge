@@ -148,7 +148,7 @@ func (v *CentrifugePermissionValidator) ValidateChannelAccess(ctx context.Contex
     })
     
     if err != nil {
-        zaplog.ErrorLogWithCtxFormat(ctx, "频道权限检查失败: %v", err)
+        zaplog.GetGlobalLogger().ErrorWithCtx(ctx, "频道权限检查失败: %v", err)
         return false
     }
     
@@ -190,7 +190,7 @@ func (v *CentrifugePermissionValidator) BatchValidateChannelAccess(ctx context.C
     })
     
     if err != nil {
-        zaplog.ErrorLogWithCtxFormat(ctx, "批量频道权限检查失败: %v", err)
+        zaplog.GetGlobalLogger().ErrorWithCtx(ctx, "批量频道权限检查失败: %v", err)
         return make(map[string]bool) // 失败时拒绝所有访问
     }
     
@@ -252,7 +252,7 @@ func (cm *ConnectionManager) HandleConnection(client *centrifuge.Client) {
     // 2. 连接断开时的清理
     client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
         cm.connections.Delete(client.ID())
-        zaplog.InfoLogWithCtxFormat(context.Background(), "用户连接断开: client_id=%s", client.ID())
+        zaplog.GetGlobalLogger().InfoWithCtxFormat(context.Background(), "用户连接断开: client_id=%s", client.ID())
     })
 }
 ```
@@ -287,7 +287,7 @@ func (cm *ConnectionManager) syncToRedis(ctx context.Context) {
     // 同步在线状态到Redis
     err := cm.presenceService.UpdateOnlineUsers(ctx, onlineUsers)
     if err != nil {
-        zaplog.ErrorLogWithCtxFormat(ctx, "同步在线状态失败: %v", err)
+        zaplog.GetGlobalLogger().ErrorWithCtx(ctx, "同步在线状态失败: %v", err)
     }
 }
 ```
@@ -316,7 +316,7 @@ func (sm *SubscriptionManager) HandleSubscribe(client *centrifuge.Client) {
         }
         
         // 3. 记录订阅
-        zaplog.InfoLogWithCtxFormat(e.Context, "用户订阅频道: user_id=%s, channel=%s", userID, e.Channel)
+        zaplog.GetGlobalLogger().InfoWithCtxFormat(e.Context, "用户订阅频道: user_id=%s, channel=%s", userID, e.Channel)
         
         return centrifuge.SubscribeReply{
             Options: centrifuge.SubscribeOptions{
