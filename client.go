@@ -150,13 +150,13 @@ const (
 type ChannelContext struct {
 	subscribingCh     chan struct{}
 	info              []byte
+	streamPosition    StreamPosition
 	expireAt          int64
 	positionCheckTime int64
 	metaTTLSeconds    int64
 	// SubscribedAtMS is a timestamp in milliseconds when subscription happened.
 	SubscribedAtMS int64
-	streamPosition StreamPosition
-	flags          uint8
+	flags         uint8
 	// Source is a source of subscription application can set in SubscribeHandler.
 	Source uint8
 }
