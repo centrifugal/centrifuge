@@ -255,6 +255,9 @@ func TestClientV2PingPong(t *testing.T) {
 		t.Fatal("unexpected disconnect, client must receive pong")
 	case <-time.After(4 * time.Second):
 	}
+	lat, ok := client.LatestPingPongLatency()
+	require.True(t, ok)
+	require.Greater(t, lat, time.Duration(0))
 }
 
 func TestClientConnectNoCredentialsNoToken(t *testing.T) {
@@ -430,6 +433,7 @@ func TestClientSubscribe(t *testing.T) {
 	require.Empty(t, res.Publications)
 	require.Equal(t, 1, len(client.Channels()))
 	require.Equal(t, 1, len(client.ChannelsWithContext()))
+	require.Greater(t, client.ChannelsWithContext()["test1"].SubscribedAtMS, int64(0))
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
@@ -2437,6 +2441,9 @@ func TestClientInfo(t *testing.T) {
 	client, _ := newClient(newCtx, node, transport)
 	connectClientV2(t, client)
 	require.Equal(t, []byte("info"), client.Info())
+	require.NotZero(t, client.ConnectedAtMS())
+	_, ok := client.LatestPingPongLatency()
+	require.False(t, ok)
 }
 
 func TestClientConnectExpiredError(t *testing.T) {
