@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
@@ -149,12 +150,13 @@ const (
 type ChannelContext struct {
 	subscribingCh     chan struct{}
 	info              []byte
+	streamPosition    StreamPosition
 	expireAt          int64
 	positionCheckTime int64
 	metaTTLSeconds    int64
-	streamPosition    StreamPosition
 	flags             uint8
-	Source            uint8
+	// Source is a source of subscription application can set in SubscribeHandler.
+	Source uint8
 }
 
 func channelHasFlag(flags, flag uint8) bool {
@@ -268,6 +270,8 @@ type Client struct {
 	timer             *time.Timer
 	timerCanceler     TimerCanceler // TimerCanceler if TimerScheduler is used.
 	startWriterOnce   sync.Once
+	pingPongLatency   atomic.Int64
+	connectedAtMS     int64
 	replyWithoutQueue bool
 	unusable          bool
 }
@@ -293,16 +297,18 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	}
 
 	client := &Client{
-		ctx:        ctx,
-		uid:        uid,
-		session:    session,
-		node:       n,
-		transport:  t,
-		channels:   make(map[string]ChannelContext),
-		pubSubSync: recovery.NewPubSubSync(),
-		status:     statusConnecting,
-		eventHub:   &clientEventHub{},
+		ctx:           ctx,
+		uid:           uid,
+		session:       session,
+		node:          n,
+		transport:     t,
+		channels:      make(map[string]ChannelContext),
+		pubSubSync:    recovery.NewPubSubSync(),
+		status:        statusConnecting,
+		eventHub:      &clientEventHub{},
+		connectedAtMS: time.Now().UnixMilli(),
 	}
+	client.pingPongLatency.Store(-1)
 
 	staleCloseDelay := n.config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 {
@@ -580,7 +586,9 @@ func (c *Client) checkPong() {
 		go func() { c.Disconnect(DisconnectNoPong) }()
 		return
 	}
-	c.node.metrics.observePingPongDuration(time.Duration(lastSeen-lastPing)*time.Nanosecond, c.transport.Name())
+	diff := lastSeen - lastPing
+	c.node.metrics.observePingPongDuration(time.Duration(diff)*time.Nanosecond, c.transport.Name())
+	c.pingPongLatency.Store(diff)
 	c.mu.Lock()
 	c.nextPong = 0
 	c.scheduleNextTimer()
@@ -869,6 +877,25 @@ func (c *Client) Info() []byte {
 	copy(info, c.info)
 	c.mu.Unlock()
 	return info
+}
+
+// ConnectedAtMS returns timestamp in milliseconds when client connected.
+func (c *Client) ConnectedAtMS() int64 {
+	return c.connectedAtMS
+}
+
+// LatestPingPongLatency returns latest ping-pong latency duration. It may be not
+// available if no ping-pong messages were exchanged yet, or in case of unidirectional
+// transport. In that case second return value will be false.
+func (c *Client) LatestPingPongLatency() (time.Duration, bool) {
+	val := c.pingPongLatency.Load()
+	if val < 0 {
+		// If ping-pong latency is negative then it means that we have not sent
+		// any ping yet, and thus we do not have any latency info. Or in case of
+		// unidirectional connection we do not have this info also.
+		return 0, false
+	}
+	return time.Duration(c.pingPongLatency.Load()) * time.Nanosecond, true
 }
 
 // Transport returns client connection transport information.
