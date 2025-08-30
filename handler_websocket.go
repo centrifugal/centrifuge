@@ -289,11 +289,11 @@ const (
 type websocketTransport struct {
 	mu              sync.RWMutex
 	conn            *websocket.Conn
-	closed          bool
 	closeCh         chan struct{}
 	graceCh         chan struct{}
 	opts            websocketTransportOptions
 	nativePingTimer *time.Timer
+	closed          bool
 }
 
 type websocketTransportOptions struct {

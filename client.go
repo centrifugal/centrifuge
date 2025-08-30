@@ -154,9 +154,7 @@ type ChannelContext struct {
 	expireAt          int64
 	positionCheckTime int64
 	metaTTLSeconds    int64
-	// SubscribedAtMS is a timestamp in milliseconds when subscription happened.
-	SubscribedAtMS int64
-	flags         uint8
+	flags             uint8
 	// Source is a source of subscription application can set in SubscribeHandler.
 	Source uint8
 }
@@ -3196,7 +3194,6 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			Epoch:  latestEpoch,
 		},
 		metaTTLSeconds: int64(reply.Options.HistoryMetaTTL.Seconds()),
-		SubscribedAtMS: time.Now().UnixMilli(),
 		Source:         reply.Options.Source,
 	}
 	if reply.Options.EnableRecovery || reply.Options.EnablePositioning {

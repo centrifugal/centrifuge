@@ -433,7 +433,6 @@ func TestClientSubscribe(t *testing.T) {
 	require.Empty(t, res.Publications)
 	require.Equal(t, 1, len(client.Channels()))
 	require.Equal(t, 1, len(client.ChannelsWithContext()))
-	require.Greater(t, client.ChannelsWithContext()["test1"].SubscribedAtMS, int64(0))
 
 	rwWrapper = testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
