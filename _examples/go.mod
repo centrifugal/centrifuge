@@ -18,7 +18,7 @@ require (
 	github.com/nats-io/nats.go v1.43.0
 	github.com/prometheus/client_golang v1.23.0
 	github.com/quic-go/quic-go v0.52.0
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	go.uber.org/ratelimit v0.3.1
 	golang.org/x/oauth2 v0.30.0
 	google.golang.org/grpc v1.73.0
@@ -32,7 +32,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect
 	github.com/bytedance/sonic/loader v0.1.1 // indirect
-	github.com/centrifugal/protocol v0.16.1 // indirect
+	github.com/centrifugal/protocol v0.16.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.4 // indirect
 	github.com/cloudwego/iasm v0.2.0 // indirect
