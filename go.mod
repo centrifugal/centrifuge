@@ -14,7 +14,7 @@ require (
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.16.0
-	google.golang.org/protobuf v1.36.6
+	google.golang.org/protobuf v1.36.8
 )
 
 require (
