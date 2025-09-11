@@ -15,7 +15,9 @@ func AcquireTimer(d time.Duration) *time.Timer {
 	}
 	tm := v.(*time.Timer)
 	if tm.Reset(d) {
-		panic("Received an active timer from the pool!")
+		// Timer was still active, create a new one instead
+		// This should not happen in normal operation, but handle it gracefully
+		return time.NewTimer(d)
 	}
 	return tm
 }

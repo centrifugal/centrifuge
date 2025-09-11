@@ -8,6 +8,7 @@ import (
 
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/readerpool"
+	"github.com/channelwill/cw2-live-chat-common/pkg/zaplog"
 )
 
 // SSEConfig represents config for SSEHandler.
@@ -53,7 +54,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if requestDataString != "" {
 			requestData = []byte(requestDataString)
 		} else {
-			h.node.logger.log(newLogEntry(LogLevelDebug, "no connect command", map[string]any{}))
+			zaplog.GetGlobalLogger().ErrorWithCtx(r.Context(), nil, "no connect command")
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}

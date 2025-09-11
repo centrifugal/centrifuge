@@ -9,6 +9,7 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/channelwill/cw2-live-chat-common/pkg/storage/gredis"
+	"github.com/channelwill/cw2-live-chat-common/pkg/zaplog"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -32,6 +33,14 @@ type RedisHistoryStorageConfig struct {
 
 	// Storage name for observability (default: "redis-history")
 	Name string
+}
+
+// RedisHistoryStats represents statistics from Redis history storage
+type RedisHistoryStats struct {
+	StorageType string `json:"storage_type"`
+	StorageName string `json:"storage_name"`
+	Prefix      string `json:"prefix"`
+	RedisInfo   string `json:"redis_info"`
 }
 
 // NewRedisHistoryStorage creates a new Redis-based history storage using common package
@@ -89,23 +98,25 @@ func (r *RedisHistoryStorage) AddToHistory(ctx context.Context, channel string, 
 	pipe := r.client.Pipeline()
 
 	// Add to stream with auto-generated ID
+	streamValues := map[string]string{
+		"data": string(pubData),
+	}
 	pipe.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		MaxLen: int64(opts.HistorySize),
 		Approx: true, // Use approximate trimming for better performance
-		Values: map[string]interface{}{
-			"data": pubData,
-		},
+		Values: streamValues,
 	})
 
 	// Update metadata (current position and epoch)
 	currentTime := time.Now().Unix()
 	epoch := r.generateEpoch(channel, currentTime)
 
-	pipe.HMSet(ctx, metaKey, map[string]interface{}{
+	metaFields := map[string]string{
 		"epoch":      epoch,
-		"updated_at": currentTime,
-	})
+		"updated_at": strconv.FormatInt(currentTime, 10),
+	}
+	pipe.HMSet(ctx, metaKey, metaFields)
 
 	// Set TTL on both keys
 	pipe.Expire(ctx, streamKey, opts.HistoryTTL)
@@ -172,7 +183,12 @@ func (r *RedisHistoryStorage) GetHistory(ctx context.Context, channel string, op
 	for _, msg := range streamResults {
 		pub, err := r.parseStreamMessage(msg)
 		if err != nil {
-			continue // Skip malformed messages
+			zaplog.GetGlobalLogger().WarnWithCtx(context.Background(), "Skipping malformed stream message", 
+				"stream_id", msg.ID,
+				"storage", r.name,
+				"error", err.Error(),
+			)
+			continue // Skip malformed messages with proper logging
 		}
 		publications = append(publications, pub)
 	}
@@ -323,7 +339,10 @@ func (r *RedisHistoryStorage) parseStreamMessage(msg redis.XMessage) (*Publicati
 	// Convert stream ID to offset
 	offset, err := r.parseStreamIDToOffset(msg.ID)
 	if err != nil {
-		offset = 0 // Fallback to 0 if parsing fails
+		zaplog.GetGlobalLogger().ErrorFormat(context.Background(),
+			err, "Failed to parse stream ID to offset: stream_id=%s, storage=%s",
+			msg.ID, r.name)
+		offset = 0 // Safe fallback to 0, but with proper logging
 	}
 
 	// Convert to centrifuge Publication
@@ -359,12 +378,21 @@ func (r *RedisHistoryStorage) Stats(ctx context.Context) (map[string]interface{}
 		return nil, fmt.Errorf("failed to get redis info: %w", err)
 	}
 
-	stats := map[string]interface{}{
-		"storage_type": "redis",
-		"storage_name": r.name,
-		"prefix":       r.prefix,
-		"redis_info":   info,
+	// Use concrete struct internally then convert to map for backward compatibility
+	stats := RedisHistoryStats{
+		StorageType: "redis",
+		StorageName: r.name,
+		Prefix:      r.prefix,
+		RedisInfo:   info,
 	}
 
-	return stats, nil
+	// Convert to map[string]interface{} for compatibility
+	result := map[string]interface{}{
+		"storage_type": stats.StorageType,
+		"storage_name": stats.StorageName,
+		"prefix":       stats.Prefix,
+		"redis_info":   stats.RedisInfo,
+	}
+
+	return result, nil
 }

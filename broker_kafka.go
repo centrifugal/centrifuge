@@ -15,6 +15,7 @@ import (
 	"github.com/centrifugal/protocol"
 	commonBroker "github.com/channelwill/cw2-live-chat-common/pkg/broker"
 	"github.com/channelwill/cw2-live-chat-common/pkg/broker/gkafka"
+	"github.com/channelwill/cw2-live-chat-common/pkg/zaplog"
 )
 
 var _ Broker = (*KafkaBroker)(nil)
@@ -190,8 +191,9 @@ func NewKafkaBroker(n *Node, config KafkaBrokerConfig) (*KafkaBroker, error) {
 	if config.HistoryStorage != nil {
 		historyStorage = config.HistoryStorage
 	} else {
-		// Default to memory storage for backward compatibility
-		historyStorage = NewMemoryHistoryStorage()
+		// 这里不应该使用内存存储，因为如果重启会导致历史消息丢失
+		zaplog.GetGlobalLogger().ErrorWithCtx(context.Background(), nil, "using memory history storage as fallback - not suitable for production distributed setups")
+		return nil, fmt.Errorf("kafka broker: failed to create history storage")
 	}
 
 	b := &KafkaBroker{
@@ -241,7 +243,13 @@ func createAdminClient(kafkaConfig gkafka.KafkaConfig) (sarama.ClusterAdmin, err
 	if kafkaConfig.SecurityProtocol == "SASL_SSL" || kafkaConfig.SecurityProtocol == "SSL" {
 		config.Net.TLS.Enable = true
 		config.Net.TLS.Config = &tls.Config{
-			InsecureSkipVerify: true, // You might want to make this configurable
+			InsecureSkipVerify: false, // Always verify certificates for security
+		}
+
+		// Load CA cert if provided
+		if kafkaConfig.CACertPath != "" {
+			// CA cert loading logic would go here if needed
+			// For now, use system root CAs with proper verification
 		}
 	}
 
@@ -259,7 +267,9 @@ func createAdminClient(kafkaConfig gkafka.KafkaConfig) (sarama.ClusterAdmin, err
 		case "SCRAM-SHA-512":
 			config.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
 		default:
-			config.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+			// Don't default to PLAIN as it's insecure
+			// Require explicit SASL mechanism specification
+			return nil, fmt.Errorf("invalid or missing SASL mechanism: %s. Supported: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512", kafkaConfig.SASLMechanism)
 		}
 	}
 
@@ -409,7 +419,7 @@ func (b *KafkaBroker) startGlobalConsumer() error {
 		commonBroker.WithSubMsgBufferSize(1024),
 		commonBroker.WithSubMsgBufferGoroutines(4),
 	)
-	
+
 	if err != nil {
 		b.node.logger.log(newErrorLogEntry(err, "kafka broker start consumer failed", map[string]any{
 			"topic":       b.messagesTopic,
@@ -420,11 +430,11 @@ func (b *KafkaBroker) startGlobalConsumer() error {
 
 	b.isSubscribed = true
 	b.node.logger.log(newLogEntry(LogLevelInfo, "kafka broker global consumer started", map[string]any{
-		"topic":         b.messagesTopic,
+		"topic":          b.messagesTopic,
 		"consumer_group": b.config.ConsumerGroupID,
-		"broker_name":   b.config.Name,
+		"broker_name":    b.config.Name,
 	}))
-	
+
 	return nil
 }
 

@@ -109,4 +109,48 @@ var (
 		Code:    112,
 		Message: "unrecoverable position",
 	}
+
+	// ========== 限流相关错误定义 ==========
+
+	// ErrorConnectionLimitExceeded 连接数超过限制
+	ErrorConnectionLimitExceeded = &Error{
+		Code:      113,
+		Message:   "连接数已达上限",
+		Temporary: true,
+	}
+
+	// ErrorMessageRateLimitExceeded 消息发送频率超限
+	ErrorMessageRateLimitExceeded = &Error{
+		Code:      114,
+		Message:   "消息发送过于频繁，请稍后重试",
+		Temporary: true,
+	}
+
+	// ErrorSubscriptionRateLimitExceeded 订阅频率超限
+	ErrorSubscriptionRateLimitExceeded = &Error{
+		Code:      115,
+		Message:   "订阅请求过于频繁，请稍后重试",
+		Temporary: true,
+	}
+
+	// ErrorBroadcastRateLimitExceeded 广播频率超限
+	ErrorBroadcastRateLimitExceeded = &Error{
+		Code:      116,
+		Message:   "广播消息过于频繁，请稍后重试",
+		Temporary: true,
+	}
+
+	// ErrorIPConnectionLimitExceeded IP连接数超限
+	ErrorIPConnectionLimitExceeded = &Error{
+		Code:      117,
+		Message:   "来自该IP的连接数已达上限",
+		Temporary: true,
+	}
+
+	// ErrorUserConnectionLimitExceeded 用户连接数超限
+	ErrorUserConnectionLimitExceeded = &Error{
+		Code:      118,
+		Message:   "用户连接数已达上限",
+		Temporary: true,
+	}
 )

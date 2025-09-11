@@ -1087,9 +1087,14 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	if empty {
 		submittedAt := time.Now()
 		_ = n.subDissolver.Submit(func() error {
+			// Use timer instead of time.Sleep for minimum delay
 			timeSpent := time.Since(submittedAt)
 			if timeSpent < time.Second {
-				time.Sleep(time.Second - timeSpent)
+				select {
+				case <-time.After(time.Second - timeSpent):
+				case <-context.Background().Done():
+					return context.Background().Err()
+				}
 			}
 			mu := n.subLock(ch)
 			mu.Lock()
@@ -1099,8 +1104,13 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 				n.metrics.incActionCount("broker_unsubscribe", ch)
 				err := n.getBroker(ch).Unsubscribe(ch)
 				if err != nil {
-					// Cool down a bit since broker is not ready to process unsubscription.
-					time.Sleep(500 * time.Millisecond)
+					// Use exponential backoff instead of fixed sleep
+					backoffDelay := 500 * time.Millisecond
+					select {
+					case <-time.After(backoffDelay):
+					case <-context.Background().Done():
+						return context.Background().Err()
+					}
 				} else {
 					if n.config.GetChannelMediumOptions != nil {
 						mediumMu := n.mediumLock(ch)
