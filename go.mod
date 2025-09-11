@@ -1,6 +1,6 @@
 module github.com/centrifugal/centrifuge
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/FZambia/eagle v0.2.0
@@ -8,12 +8,12 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter v1.2.4
 	github.com/planetscale/vtprotobuf v0.6.0
-	github.com/prometheus/client_golang v1.23.1
+	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/rueidis v1.0.64
 	github.com/segmentio/encoding v0.5.3
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/sync v0.16.0
+	golang.org/x/sync v0.17.0
 	google.golang.org/protobuf v1.36.8
 )
 
@@ -29,7 +29,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.66.0 // indirect
+	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
