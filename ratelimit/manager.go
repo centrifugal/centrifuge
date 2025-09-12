@@ -97,7 +97,7 @@ func (m *Manager) CheckMessageLimit(ctx context.Context, clientID string, userTy
 	// 获取或创建消息限流器
 	limiter, err := m.getOrCreateLimiter(
 		m.keyManager.CentrifugeMessageLimit(clientID),
-		userConfig.MessagesPerSecond,
+		userConfig.MessagesPerMinute,
 		m.config.MessageWindow,
 	)
 	if err != nil {
@@ -112,7 +112,7 @@ func (m *Manager) CheckMessageLimit(ctx context.Context, clientID string, userTy
 		m.logger.DebugWithCtx(ctx, "消息限流触发",
 			"client_id", clientID,
 			"user_type", userType,
-			"limit", userConfig.MessagesPerSecond,
+			"limit", userConfig.MessagesPerMinute,
 			"window", m.config.MessageWindow)
 	}
 
@@ -166,7 +166,7 @@ func (m *Manager) CheckBroadcastLimit(ctx context.Context, channel string) bool 
 	// 获取或创建广播限流器（使用B端用户的广播限制，因为C端用户很少需要广播）
 	limiter, err := m.getOrCreateLimiter(
 		m.keyManager.CentrifugeBroadcastLimit(channel),
-		m.config.BUser.BroadcastsPerSecond,
+		m.config.BUser.BroadcastsPerMinute,
 		m.config.BroadcastWindow,
 	)
 	if err != nil {
@@ -180,7 +180,7 @@ func (m *Manager) CheckBroadcastLimit(ctx context.Context, channel string) bool 
 	if !allowed {
 		m.logger.DebugWithCtx(ctx, "广播限流触发",
 			"channel", channel,
-			"limit", m.config.BUser.BroadcastsPerSecond,
+			"limit", m.config.BUser.BroadcastsPerMinute,
 			"window", m.config.BroadcastWindow)
 	}
 
@@ -337,11 +337,11 @@ func (m *Manager) getUserRateLimitConfig(userType UserType) UserRateLimitConfig 
 		m.logger.ErrorWithCtx(context.Background(), nil, "拒绝未知用户类型的访问", "user_type", string(userType))
 		return UserRateLimitConfig{
 			ConnectionsPerUser:     0, // 0 means no connections allowed
-			MessagesPerSecond:      0, // 0 means no messages allowed
+			MessagesPerMinute:      0, // 0 means no messages allowed
 			MessageBurst:           0, // 0 burst capacity
 			SubscriptionsPerMinute: 0, // 0 means no subscriptions allowed
 			MaxSubscriptions:       0, // 0 max subscriptions
-			BroadcastsPerSecond:    0, // 0 broadcasts allowed
+			BroadcastsPerMinute:    0, // 0 broadcasts allowed
 			BroadcastBurst:         0, // 0 broadcast burst
 		}
 	default:
@@ -349,11 +349,11 @@ func (m *Manager) getUserRateLimitConfig(userType UserType) UserRateLimitConfig 
 		m.logger.ErrorWithCtx(context.Background(), nil, "完全未知的用户类型，拒绝访问", "user_type", string(userType))
 		return UserRateLimitConfig{
 			ConnectionsPerUser:     0, // 0 means no connections allowed
-			MessagesPerSecond:      0, // 0 means no messages allowed
+			MessagesPerMinute:      0, // 0 means no messages allowed
 			MessageBurst:           0, // 0 burst capacity
 			SubscriptionsPerMinute: 0, // 0 means no subscriptions allowed
 			MaxSubscriptions:       0, // 0 max subscriptions
-			BroadcastsPerSecond:    0, // 0 broadcasts allowed
+			BroadcastsPerMinute:    0, // 0 broadcasts allowed
 			BroadcastBurst:         0, // 0 broadcast burst
 		}
 	}

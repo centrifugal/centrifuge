@@ -87,30 +87,30 @@ func ExampleUsage() {
 		// B端用户（客服）配置
 		BUser: UserRateLimitConfig{
 			ConnectionsPerUser:     0,   // 不限制连接数
-			MessagesPerSecond:      500, // 高消息限制
-			MessageBurst:           1000,
-			SubscriptionsPerMinute: 100, // 高订阅限制
-			MaxSubscriptions:       500,
-			BroadcastsPerSecond:    100, // 高广播限制
-			BroadcastBurst:         200,
+			MessagesPerMinute:      100, // 每分钟100条消息
+			MessageBurst:           20,
+			SubscriptionsPerMinute: 30, // 每分钟30个订阅
+			MaxSubscriptions:       100,
+			BroadcastsPerMinute:    60, // 每分钟60个广播
+			BroadcastBurst:         10,
 		},
 
 		// C端用户（客户）配置
 		CUser: UserRateLimitConfig{
 			ConnectionsPerUser:     3,  // 严格连接限制
-			MessagesPerSecond:      50, // 低消息限制
-			MessageBurst:           100,
-			SubscriptionsPerMinute: 20, // 低订阅限制
+			MessagesPerMinute:      50, // 每分钟50条消息
+			MessageBurst:           10,
+			SubscriptionsPerMinute: 20, // 每分钟20个订阅
 			MaxSubscriptions:       50,
-			BroadcastsPerSecond:    10, // 低广播限制
-			BroadcastBurst:         20,
+			BroadcastsPerMinute:    10, // 每分钟10个广播
+			BroadcastBurst:         5,
 		},
 
-		// 时间窗口配置
-		ConnectionWindow:   60 * time.Second,
-		MessageWindow:      time.Second,
+		// 时间窗口配置 - 统一使用分钟级别
+		ConnectionWindow:   time.Minute,
+		MessageWindow:      time.Minute,
 		SubscriptionWindow: time.Minute,
-		BroadcastWindow:    time.Second,
+		BroadcastWindow:    time.Minute,
 
 		// 其他配置
 		WhitelistUsers: []string{},

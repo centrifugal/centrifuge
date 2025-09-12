@@ -33,9 +33,7 @@ centrifuge:
     enabled: true                      # 是否启用限流
     connections_per_ip: 10             # 每个IP最大连接数
     connections_per_user: 5            # 每个用户最大连接数
-    messages_per_second: 100           # 每秒最大消息数
     messages_per_minute: 1000          # 每分钟最大消息数
-    subscriptions_per_second: 10       # 每秒最大订阅数
     subscriptions_per_minute: 100      # 每分钟最大订阅数
     connection_burst_size: 20          # 连接突发容量
     message_burst_size: 200            # 消息突发容量
@@ -68,7 +66,7 @@ func initCentrifugeWithRateLimit() {
         Enabled:            true,
         ConnectionsPerIP:   10,
         ConnectionsPerUser: 5,
-        MessagesPerSecond:  100,
+        MessagesPerMinute:  100,
         // ... 其他配置
     }
 
@@ -147,7 +145,7 @@ func addRateLimitToExistingNode(node *centrifuge.Node, redisClient redis.Cmdable
 消息限流控制每个客户端的消息发送速率：
 
 - 使用固定窗口算法
-- 支持秒级和分钟级限流
+- 支持分钟级限流
 - 被限流的消息会被丢弃，但不会断开连接
 
 ### 订阅限流

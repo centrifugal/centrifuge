@@ -9,8 +9,8 @@ type UserRateLimitConfig struct {
 	// ConnectionsPerUser 单个用户最大连接数（0表示不限制）
 	ConnectionsPerUser uint `yaml:"connections_per_user" json:"connections_per_user"`
 
-	// MessagesPerSecond 每秒最大消息数（单个连接）
-	MessagesPerSecond uint `yaml:"messages_per_second" json:"messages_per_second"`
+	// MessagesPerMinute 每分钟最大消息数（单个连接）
+	MessagesPerMinute uint `yaml:"messages_per_minute" json:"messages_per_minute"`
 
 	// MessageBurst 消息突发容量
 	MessageBurst uint `yaml:"message_burst" json:"message_burst"`
@@ -21,8 +21,8 @@ type UserRateLimitConfig struct {
 	// MaxSubscriptions 单个连接最大订阅总数
 	MaxSubscriptions uint `yaml:"max_subscriptions" json:"max_subscriptions"`
 
-	// BroadcastsPerSecond 每秒最大广播数（单个频道）
-	BroadcastsPerSecond uint `yaml:"broadcasts_per_second" json:"broadcasts_per_second"`
+	// BroadcastsPerMinute 每分钟最大广播数（单个频道）
+	BroadcastsPerMinute uint `yaml:"broadcasts_per_minute" json:"broadcasts_per_minute"`
 
 	// BroadcastBurst 广播突发容量
 	BroadcastBurst uint `yaml:"broadcast_burst" json:"broadcast_burst"`
@@ -69,33 +69,33 @@ func DefaultConfig() *Config {
 	return &Config{
 		Enabled: false, // 默认关闭，需要显式启用
 
-		// B端用户（客服）配置 - 宽松限制
+		// B端用户（客服）配置 - 合理限制
 		BUser: UserRateLimitConfig{
 			ConnectionsPerUser:     0,   // 不限制连接数（客服需要多设备同时在线）
-			MessagesPerSecond:      500, // 客服需要快速回复大量消息
-			MessageBurst:           1000,
-			SubscriptionsPerMinute: 100, // 客服需要订阅多个会话频道
-			MaxSubscriptions:       500,
-			BroadcastsPerSecond:    100, // 客服可能需要群发消息
-			BroadcastBurst:         200,
+			MessagesPerMinute:      100, // 客服每分钟100条消息
+			MessageBurst:           20,
+			SubscriptionsPerMinute: 30, // 客服每分钟30个订阅
+			MaxSubscriptions:       100,
+			BroadcastsPerMinute:    60, // 客服每分钟60个广播
+			BroadcastBurst:         10,
 		},
 
 		// C端用户（客户）配置 - 严格限制
 		CUser: UserRateLimitConfig{
 			ConnectionsPerUser:     3,  // 客户限制3个连接（手机+电脑+平板）
-			MessagesPerSecond:      50, // 普通客户发送消息频率较低
-			MessageBurst:           100,
+			MessagesPerMinute:      50, // 普通客户每分钟50条消息
+			MessageBurst:           10,
 			SubscriptionsPerMinute: 20, // 客户订阅频道较少
 			MaxSubscriptions:       50,
-			BroadcastsPerSecond:    10, // 客户很少需要广播
-			BroadcastBurst:         20,
+			BroadcastsPerMinute:    10, // 客户很少需要广播
+			BroadcastBurst:         5,
 		},
 
-		// 时间窗口配置
-		ConnectionWindow:   60 * time.Second,
-		MessageWindow:      time.Second,
+		// 时间窗口配置 - 统一使用分钟级别
+		ConnectionWindow:   time.Minute,
+		MessageWindow:      time.Minute,
 		SubscriptionWindow: time.Minute,
-		BroadcastWindow:    time.Second,
+		BroadcastWindow:    time.Minute,
 
 		// 白名单
 		WhitelistUsers: []string{},
@@ -113,18 +113,18 @@ func (c *Config) Validate() error {
 	// 验证C端用户配置
 	c.validateUserConfig(&c.CUser, "C端用户")
 
-	// 时间窗口配置验证
+	// 时间窗口配置验证 - 统一使用分钟级别
 	if c.ConnectionWindow == 0 {
-		c.ConnectionWindow = 60 * time.Second
+		c.ConnectionWindow = time.Minute
 	}
 	if c.MessageWindow == 0 {
-		c.MessageWindow = time.Second
+		c.MessageWindow = time.Minute
 	}
 	if c.SubscriptionWindow == 0 {
 		c.SubscriptionWindow = time.Minute
 	}
 	if c.BroadcastWindow == 0 {
-		c.BroadcastWindow = time.Second
+		c.BroadcastWindow = time.Minute
 	}
 
 	// Redis TTL验证
@@ -138,15 +138,19 @@ func (c *Config) Validate() error {
 // validateUserConfig 验证用户类型配置的合法性
 func (c *Config) validateUserConfig(userConfig *UserRateLimitConfig, userType string) {
 	// 消息限流验证（0表示不限制，但需要设置合理的默认值）
-	if userConfig.MessagesPerSecond == 0 {
+	if userConfig.MessagesPerMinute == 0 {
 		if userType == "B端用户" {
-			userConfig.MessagesPerSecond = 500 // B端用户默认较高限制
+			userConfig.MessagesPerMinute = 100 // B端用户默认限制
 		} else {
-			userConfig.MessagesPerSecond = 50 // C端用户默认较低限制
+			userConfig.MessagesPerMinute = 50 // C端用户默认限制
 		}
 	}
 	if userConfig.MessageBurst == 0 {
-		userConfig.MessageBurst = userConfig.MessagesPerSecond * 2
+		if userType == "B端用户" {
+			userConfig.MessageBurst = 20
+		} else {
+			userConfig.MessageBurst = 10
+		}
 	}
 
 	// 订阅限流验证
@@ -166,15 +170,19 @@ func (c *Config) validateUserConfig(userConfig *UserRateLimitConfig, userType st
 	}
 
 	// 广播限流验证
-	if userConfig.BroadcastsPerSecond == 0 {
+	if userConfig.BroadcastsPerMinute == 0 {
 		if userType == "B端用户" {
-			userConfig.BroadcastsPerSecond = 100
+			userConfig.BroadcastsPerMinute = 60
 		} else {
-			userConfig.BroadcastsPerSecond = 10
+			userConfig.BroadcastsPerMinute = 10
 		}
 	}
 	if userConfig.BroadcastBurst == 0 {
-		userConfig.BroadcastBurst = userConfig.BroadcastsPerSecond * 2
+		if userType == "B端用户" {
+			userConfig.BroadcastBurst = 10
+		} else {
+			userConfig.BroadcastBurst = 5
+		}
 	}
 }
 
