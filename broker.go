@@ -10,7 +10,7 @@ type Publication struct {
 	// Offset is an incremental position number inside a history stream.
 	// Zero value means that channel does not maintain Publication stream.
 	Offset uint64
-	// Data published to a channel.
+	// Data to be published to a channel (to be delivered to subscribers).
 	Data []byte
 	// Info is optional information about client connection published this data.
 	Info *ClientInfo
@@ -25,6 +25,11 @@ type Publication struct {
 	// This is a case for wildcard subscriptions. Client SDK then should use this channel
 	// in PublicationContext.
 	Channel string
+	// Meta contains metadata for server-side processing.
+	// For example, this field may be used by publication filters to determine whether to
+	// deliver the publication to the client. Centrifuge does not deliver this field to
+	// subscribers of the client protocol – it stays server-side only.
+	Meta map[string]any
 }
 
 // ClientInfo contains information about client connection.
@@ -128,6 +133,8 @@ type PublishOptions struct {
 	// publication. Use it if version may be reused in the future. For example, if
 	// version comes from in-memory system which can lose data, or due to eviction, etc.
 	VersionEpoch string
+	// Meta contains metadata for server-side processing.
+	Meta map[string]any
 }
 
 // Broker is responsible for PUB/SUB mechanics.

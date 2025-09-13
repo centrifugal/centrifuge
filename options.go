@@ -47,9 +47,16 @@ func WithClientInfo(info *ClientInfo) PublishOption {
 }
 
 // WithTags allows setting Publication.Tags.
-func WithTags(meta map[string]string) PublishOption {
+func WithTags(tags map[string]string) PublishOption {
 	return func(opts *PublishOptions) {
-		opts.Tags = meta
+		opts.Tags = tags
+	}
+}
+
+// WithMeta allows setting Publication.Meta.
+func WithMeta(meta map[string]any) PublishOption {
+	return func(opts *PublishOptions) {
+		opts.Meta = meta
 	}
 }
 
@@ -134,6 +141,12 @@ type SubscribeOptions struct {
 	// Source is a way to mark the source of Subscription - i.e. where it comes from. May be useful
 	// for inspection of a connection during its lifetime.
 	Source uint8
+
+	PublicationFilterer PublicationFilterer
+}
+
+type PublicationFilterer interface {
+	FilterPublication(client *Client, pub *Publication) bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

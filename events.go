@@ -180,6 +180,8 @@ type SubscribeEvent struct {
 	Recoverable bool
 	// JoinLeave is true when Client wants to receive join/leave messages.
 	JoinLeave bool
+	// Filter expression.
+	Filter string
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do
