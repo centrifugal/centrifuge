@@ -142,6 +142,8 @@ type SubscribeOptions struct {
 	// for inspection of a connection during its lifetime.
 	Source uint8
 
+	AllowChannelCompression bool
+
 	PublicationFilterer PublicationFilterer
 }
 

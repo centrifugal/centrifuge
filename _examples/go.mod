@@ -4,6 +4,10 @@ go 1.24.0
 
 replace github.com/centrifugal/centrifuge => ../
 
+replace (
+	github.com/centrifugal/protocol => ../../protocol
+)
+
 require (
 	github.com/centrifugal/centrifuge v0.8.2
 	github.com/centrifugal/centrifuge-go v0.10.6

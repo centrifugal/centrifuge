@@ -1027,15 +1027,15 @@ func (n *Node) removeClient(c *Client) {
 
 // addSubscription registers subscription of connection on channel in both
 // Hub and Broker.
-func (n *Node) addSubscription(ch string, sub subInfo) error {
+func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
 	n.metrics.subscriptionsInflight.WithLabelValues(sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)).Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	first, err := n.hub.addSub(ch, sub)
+	chanID, first, err := n.hub.addSub(ch, sub)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if first {
 		if n.config.GetChannelMediumOptions != nil {
@@ -1044,7 +1044,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
 					_, _ = n.hub.removeSub(ch, sub.client)
-					return err
+					return 0, err
 				}
 				mediumMu := n.mediumLock(ch)
 				mediumMu.Lock()
@@ -1067,10 +1067,10 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 				}
 				mediumMu.Unlock()
 			}
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return chanID, nil
 }
 
 // removeSubscription removes subscription of connection on channel
@@ -1091,29 +1091,29 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			if timeSpent < time.Second {
 				time.Sleep(time.Second - timeSpent)
 			}
-			mu := n.subLock(ch)
-			mu.Lock()
-			defer mu.Unlock()
-			empty := n.hub.NumSubscribers(ch) == 0
-			if empty {
+			subMu := n.subLock(ch)
+			subMu.Lock()
+			defer subMu.Unlock()
+			noSubscribers := n.hub.NumSubscribers(ch) == 0
+			if noSubscribers {
 				n.metrics.incActionCount("broker_unsubscribe", ch)
 				err := n.getBroker(ch).Unsubscribe(ch)
 				if err != nil {
 					// Cool down a bit since broker is not ready to process unsubscription.
 					time.Sleep(500 * time.Millisecond)
-				} else {
-					if n.config.GetChannelMediumOptions != nil {
-						mediumMu := n.mediumLock(ch)
-						mediumMu.Lock()
-						medium, ok := n.mediums[ch]
-						if ok {
-							medium.close()
-							delete(n.mediums, ch)
-						}
-						mediumMu.Unlock()
-					}
+					return err
 				}
-				return err
+				n.hub.removeSubID(ch)
+				if n.config.GetChannelMediumOptions != nil {
+					mediumMu := n.mediumLock(ch)
+					mediumMu.Lock()
+					medium, ok := n.mediums[ch]
+					if ok {
+						medium.close()
+						delete(n.mediums, ch)
+					}
+					mediumMu.Unlock()
+				}
 			}
 			return nil
 		})
