@@ -1,6 +1,8 @@
 package centrifuge
 
-import "time"
+import (
+	"time"
+)
 
 // PublishOption is a type to represent various Publish options.
 type PublishOption func(*PublishOptions)
@@ -54,7 +56,7 @@ func WithTags(tags map[string]string) PublishOption {
 }
 
 // WithMeta allows setting Publication.Meta.
-func WithMeta(meta map[string]any) PublishOption {
+func WithMeta(meta []byte) PublishOption {
 	return func(opts *PublishOptions) {
 		opts.Meta = meta
 	}
@@ -148,7 +150,7 @@ type SubscribeOptions struct {
 }
 
 type PublicationFilterer interface {
-	FilterPublication(client *Client, pub *Publication) bool
+	FilterPublication(any) bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

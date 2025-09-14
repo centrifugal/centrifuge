@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title></title>
+        <style type="text/css">
+            .muted {color: #CCCCCC; font-size: 10px;}
+            .controls { margin: 10px 0; }
+            .controls label { margin-right: 10px; }
+            #tickerSelect { margin: 0 10px; }
+            #status { margin: 10px 0; font-weight: bold; }
+        </style>
+        <script type="text/javascript" src="http://localhost:2000/centrifuge.js"></script>
+        <script type="text/javascript">
+            // helper functions to work with escaping html.
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            function replaceTag(tag) {return tagsToReplace[tag] || tag;}
+            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
+
+            const channel = "tickers";
+            let currentSubscription = null;
+
+            window.addEventListener('load', function() {
+                const container = document.getElementById('messages');
+                const tickerSelect = document.getElementById('tickerSelect');
+                const statusDiv = document.getElementById('status');
+
+                const centrifuge = new Centrifuge('ws://localhost:8000/connection/websocket', {});
+
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
+                });
+
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
+                });
+
+                // bind listeners on centrifuge object instance events.
+                centrifuge.on('connected', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
+                    statusDiv.textContent = 'Connected - ready to subscribe';
+
+                    // Initial subscription with default ticker.
+                    subscribeToTicker(tickerSelect.value);
+                });
+
+                // Function to create new subscription with ticker filter
+                function subscribeToTicker(ticker) {
+                    statusDiv.textContent = 'Subscribing to ticker: ' + ticker;
+
+                    const filter = 'tags["ticker"] == "' + ticker + '" && meta["ask"] > 140 && meta["bid"] > 140';
+
+                    if (!currentSubscription) {
+                        currentSubscription = centrifuge.newSubscription(channel, {
+                            filter: filter
+                        });
+                        currentSubscription.on("publication", handlePublication)
+                            .on("unsubscribed", handleUnsubscribed)
+                            .on("subscribed", handleSubscribed)
+                            .on("subscribing", handleSubscribing)
+                            .on("error", handleSubscriptionError);
+                    } else {
+                        currentSubscription.unsubscribe();
+                        currentSubscription.setFilter(filter)
+                    }
+                    currentSubscription.subscribe();
+                }
+
+                // Handle ticker selection change
+                tickerSelect.addEventListener('change', function() {
+                    if (centrifuge.state === 'connected') {
+                        subscribeToTicker(tickerSelect.value);
+                    }
+                });
+
+                // Trigger actual connection establishing with a server.
+                centrifuge.connect();
+
+                function handleUnsubscribed(ctx) {
+                    drawText('Unsubscribed from channel ' + ctx.channel);
+                }
+
+                function handleSubscribing(ctx) {
+                    drawText('Subscribing to channel ' + ctx.channel);
+                }
+
+                function handleSubscribed(ctx) {
+                    drawText('Subscribed on channel ' + ctx.channel);
+                    statusDiv.textContent = 'Subscribed to ticker: ' + tickerSelect.value + ' (filtering active)';
+                    if (ctx.wasRecovering) {
+                        if (ctx.recovered) {
+                            drawText('Subscription to ' + ctx.channel + ' recovered');
+                        } else {
+                            drawText('Subscription to ' + ctx.channel + ' was unable to recover');
+                        }
+                    }
+                }
+
+                function handleSubscriptionError(ctx) {
+                    drawText('Subscription error in channel ' + err.channel + ': ' + JSON.stringify(ctx));
+                }
+
+                function handlePublication(ctx) {
+                    const ticker = ctx.data["ticker"];
+                    const bid = ctx.data["bid"];
+                    const ask = ctx.data["ask"];
+                    const text  = "Ticker " + ticker + " bid: " + bid + " ask: " + ask;
+                    drawText(text);
+                }
+
+                function drawText(text) {
+                    let e = document.createElement('li');
+                    e.innerHTML = [(new Date()).toString(), ' ' + text].join(':');
+                    container.insertBefore(e, container.firstChild);
+                }
+            });
+        </script>
+    </head>
+    <body>
+        <div class="controls">
+            <label for="tickerSelect">Select Ticker:</label>
+            <select id="tickerSelect">
+                <option value="AAPL" selected>AAPL</option>
+                <option value="GOOG">GOOG</option>
+                <option value="MSFT">MSFT</option>
+                <option value="AMZN">AMZN</option>
+                <option value="TSLA">TSLA</option>
+                <option value="META">META</option>
+                <option value="NVDA">NVDA</option>
+                <option value="NFLX">NFLX</option>
+                <option value="ORCL">ORCL</option>
+                <option value="CRM">CRM</option>
+            </select>
+        </div>
+        <div id="status">Not connected</div>
+        <ul id="messages"></ul>
+    </body>
+</html>

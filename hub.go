@@ -505,6 +505,7 @@ type subInfo struct {
 	client    *Client
 	deltaType DeltaType
 	useID     bool
+	filterer  PublicationFilterer
 }
 
 type subShard struct {
@@ -610,6 +611,7 @@ type preparedKey struct {
 	Unidirectional bool
 	DeltaType      DeltaType
 	UseID          bool
+	WasFiltered    bool
 }
 
 type preparedData struct {
@@ -617,6 +619,8 @@ type preparedData struct {
 	brokerDeltaData []byte
 	localDeltaData  []byte
 	deltaSub        bool
+	wasFiltered     bool
+	filteredPub     *protocol.Publication
 }
 
 func getDeltaPub(prevPub *Publication, fullPub *protocol.Publication, key preparedKey) *protocol.Publication {
@@ -709,6 +713,24 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 	return deltaData, nil
 }
 
+func getVariables(pub *Publication) map[string]any {
+	varsMap := map[string]any{
+		"tags": pub.Tags,
+	}
+	var metaData map[string]any
+	if pub.Meta != nil {
+		err := json.Unmarshal(pub.Meta, &metaData)
+		if err == nil {
+			varsMap["meta"] = metaData
+		} else {
+			varsMap["meta"] = map[string]any{}
+		}
+	} else {
+		varsMap["meta"] = map[string]any{}
+	}
+	return varsMap
+}
+
 // broadcastPublication sends message to all clients subscribed on a channel.
 func (s *subShard) broadcastPublication(
 	channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication,
@@ -729,6 +751,9 @@ func (s *subShard) broadcastPublication(
 
 	fullPub := pubToProto(pub)
 	preparedDataByKey := make(map[preparedKey]preparedData)
+
+	var filteredPub *protocol.Publication
+	var variables any
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -751,11 +776,21 @@ func (s *subShard) broadcastPublication(
 
 	for _, sub := range channelSubscribers {
 		useChannelID := sub.useID && hasSubID
+
+		wasFiltered := false
+		if sub.filterer != nil {
+			if variables == nil {
+				variables = getVariables(pub)
+			}
+			wasFiltered = !sub.filterer.FilterPublication(variables)
+		}
+
 		key := preparedKey{
 			ProtocolType:   sub.client.Transport().Protocol().toProto(),
 			Unidirectional: sub.client.transport.Unidirectional(),
 			DeltaType:      sub.deltaType,
 			UseID:          useChannelID,
+			WasFiltered:    wasFiltered,
 		}
 		prepValue, prepDataFound := preparedDataByKey[key]
 		if !prepDataFound {
@@ -860,6 +895,14 @@ func (s *subShard) broadcastPublication(
 				brokerDeltaData: brokerDeltaData,
 				localDeltaData:  localDeltaData,
 				deltaSub:        key.DeltaType != deltaTypeNone,
+				wasFiltered:     wasFiltered,
+			}
+			if wasFiltered && filteredPub == nil {
+				filteredPub = &protocol.Publication{
+					Offset: fullPub.Offset,
+					Data:   nil,
+				}
+				prepValue.filteredPub = filteredPub
 			}
 			preparedDataByKey[key] = prepValue
 		}
@@ -868,6 +911,8 @@ func (s *subShard) broadcastPublication(
 			continue
 		}
 
+		// Even filtered publications need to reach writePublication for offset tracking,
+		// but they will be marked as filtered so the client can skip them without adding to the queue.
 		_ = sub.client.writePublication(channel, fullPub, prepValue, sp, maxLagExceeded, batchConfig)
 	}
 	if jsonEncodeErr != nil && s.logger.enabled(LogLevelWarn) {

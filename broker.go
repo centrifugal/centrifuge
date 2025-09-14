@@ -29,7 +29,7 @@ type Publication struct {
 	// For example, this field may be used by publication filters to determine whether to
 	// deliver the publication to the client. Centrifuge does not deliver this field to
 	// subscribers of the client protocol – it stays server-side only.
-	Meta map[string]any
+	Meta []byte
 }
 
 // ClientInfo contains information about client connection.
@@ -133,8 +133,9 @@ type PublishOptions struct {
 	// publication. Use it if version may be reused in the future. For example, if
 	// version comes from in-memory system which can lose data, or due to eviction, etc.
 	VersionEpoch string
-	// Meta contains metadata for server-side processing.
-	Meta map[string]any
+	// Meta contains metadata for server-side processing. It must be valid JSON which can
+	// be decoded to map[string]any. Other format leads to dropped publications.
+	Meta []byte
 }
 
 // Broker is responsible for PUB/SUB mechanics.

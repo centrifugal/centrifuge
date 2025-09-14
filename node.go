@@ -1337,6 +1337,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		Info:   infoFromProto(pub.GetInfo()),
 		Tags:   pub.GetTags(),
 		Time:   pub.Time,
+		Meta:   pub.Meta,
 	}
 }
 

@@ -1762,6 +1762,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		Positioned:  req.Positioned,
 		Recoverable: req.Recoverable,
 		JoinLeave:   req.JoinLeave,
+		Filter:      req.Filter,
 	}
 
 	cb := func(reply SubscribeReply, err error) {
@@ -2849,24 +2850,41 @@ type subscribeContext struct {
 	channelContext ChannelContext
 }
 
-func isStreamRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isStreamRecovered(
+	historyResult HistoryResult, cmdOffset uint64, cmdEpoch string, filterer PublicationFilterer,
+) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
 
-	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
-	for _, pub := range historyResult.Publications {
-		protoPub := pubToProto(pub)
-		recoveredPubs = append(recoveredPubs, protoPub)
+	if cmdEpoch != "" && latestEpoch != cmdEpoch {
+		// Epochs do not match, cannot recover.
+		return nil, false
 	}
 
-	nextOffset := cmdOffset + 1
 	var recovered bool
-	if len(recoveredPubs) == 0 {
-		recovered = latestOffset == cmdOffset && (cmdEpoch == "" || latestEpoch == cmdEpoch)
+	if len(historyResult.Publications) == 0 {
+		recovered = latestOffset == cmdOffset
 	} else {
-		recovered = recoveredPubs[0].Offset == nextOffset &&
-			recoveredPubs[len(recoveredPubs)-1].Offset == latestOffset &&
-			(cmdEpoch == "" || latestEpoch == cmdEpoch)
+		nextOffset := cmdOffset + 1
+		recovered = historyResult.Publications[0].Offset == nextOffset &&
+			historyResult.Publications[len(historyResult.Publications)-1].Offset == latestOffset
+	}
+	if !recovered {
+		return nil, false
+	}
+
+	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
+	for _, pub := range historyResult.Publications {
+		if filterer != nil {
+			variables := map[string]any{
+				"tags": pub.Tags,
+			}
+			if !filterer.FilterPublication(variables) {
+				continue
+			}
+		}
+		protoPub := pubToProto(pub)
+		recoveredPubs = append(recoveredPubs, protoPub)
 	}
 
 	return recoveredPubs, recovered
@@ -2939,7 +2957,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 	}
 
 	useID := reply.Options.AllowChannelCompression && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID}
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, filterer: reply.Options.PublicationFilterer}
 	if req.Delta != "" {
 		dt := DeltaType(req.Delta)
 		if slices.Contains(reply.Options.AllowedDeltaTypes, dt) {
@@ -3001,6 +3019,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		latestOffset  uint64
 		latestEpoch   string
 		recoveredPubs []*protocol.Publication
+		maxSeenOffset uint64
 	)
 
 	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
@@ -3089,7 +3108,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestOffset = historyResult.Offset
 					latestEpoch = historyResult.Epoch
 					var recovered bool
-					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch)
+					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, reply.Options.PublicationFilterer)
 					res.Recovered = recovered
 					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
 					if res.Recovered {
@@ -3112,7 +3131,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
 		var okMerge bool
-		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
 			ctx.disconnect = &DisconnectInsufficientState
@@ -3134,6 +3153,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			latestOffset = lastPubOffset
 			res.Offset = latestOffset
 		}
+	}
+
+	if maxSeenOffset > latestOffset {
+		// Some entries could be filtered, but it's normal so we put max seen offset as the latest.
+		latestOffset = maxSeenOffset
+		res.Offset = latestOffset
 	}
 
 	var channelFlags uint8
@@ -3345,6 +3370,12 @@ func (c *Client) writePublicationUpdatePosition(
 			// This is a special pub to trigger insufficient state. Noop in non-positioning case.
 			return nil
 		}
+
+		// For non-positioning case, if publication should be filtered, skip it
+		if prep.wasFiltered && !prep.deltaSub {
+			return nil
+		}
+
 		if prep.deltaSub {
 			if deltaAllowed {
 				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
@@ -3355,6 +3386,10 @@ func (c *Client) writePublicationUpdatePosition(
 				c.channels[ch] = chCtx
 			}
 			c.mu.Unlock()
+		}
+
+		if c.node.logEnabled(LogLevelTrace) {
+			c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 		}
 		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 	}
@@ -3417,8 +3452,16 @@ func (c *Client) writePublicationUpdatePosition(
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
+
+	// If publication should be filtered, skip sending it but keep the offset updated
+	if prep.wasFiltered && !prep.deltaSub {
+		return nil
+	}
 	if prep.deltaSub {
 		if deltaAllowed {
+			if c.node.logEnabled(LogLevelTrace) {
+				c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+			}
 			return c.writeEncodedPushData(prep.brokerDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
 		}
 		c.mu.Lock()
@@ -3428,19 +3471,30 @@ func (c *Client) writePublicationUpdatePosition(
 		}
 		c.mu.Unlock()
 	}
+
+	if c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+	}
 	return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, batchConfig ChannelBatchConfig) error {
-	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp, false, batchConfig)
+	return c.writePublication(
+		ch, pub, preparedData{
+			fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false, wasFiltered: false,
+		},
+		sp, false, batchConfig)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig) error {
-	if c.node.logEnabled(LogLevelTrace) {
-		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-	}
 	if pub.Offset == 0 {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
+			return nil
+		}
+
+		// For publications without offset, if filtering is needed, we can skip them
+		// early since there's no position tracking to maintain.
+		if prep.wasFiltered && !prep.deltaSub {
 			return nil
 		}
 
@@ -3457,6 +3511,9 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			c.mu.RUnlock()
 
 			if deltaAllowed {
+				if c.node.logEnabled(LogLevelTrace) {
+					c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+				}
 				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
 			}
 			c.mu.Lock()
@@ -3466,9 +3523,17 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			}
 			c.mu.Unlock()
 		}
+
+		if c.node.logEnabled(LogLevelTrace) {
+			c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+		}
 		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 	}
-	c.pubSubSync.SyncPublication(ch, pub, func() {
+	syncPub := pub
+	if prep.wasFiltered {
+		syncPub = prep.filteredPub
+	}
+	c.pubSubSync.SyncPublication(ch, syncPub, func() {
 		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig)
 	})
 	return nil
