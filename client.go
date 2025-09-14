@@ -2892,6 +2892,10 @@ func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffse
 	return recoveredPubs, recovered
 }
 
+const (
+	subscriptionFlagChannelCompression = 1 << iota
+)
+
 // subscribeCmd handles subscribe command - clients send this when subscribe
 // on channel, if channel is private then we must validate provided sign here before
 // actually subscribe client on channel. Optionally we can send missed messages to
@@ -2934,7 +2938,8 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		c.pubSubSync.StartBuffering(channel)
 	}
 
-	sub := subInfo{client: c, deltaType: deltaTypeNone}
+	useID := reply.Options.AllowChannelCompression && req.Flag&subscriptionFlagChannelCompression != 0
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID}
 	if req.Delta != "" {
 		dt := DeltaType(req.Delta)
 		if slices.Contains(reply.Options.AllowedDeltaTypes, dt) {
@@ -2955,7 +2960,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		c.mu.Unlock()
 	}
-	err := c.node.addSubscription(channel, sub)
+	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.pubSubSync.StopBuffering(channel)
@@ -2965,6 +2970,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		ctx.disconnect = &DisconnectServerError
 		return ctx
+	}
+	if chanID > 0 {
+		res.Id = chanID
 	}
 	if !serverSide {
 		c.mu.Lock()

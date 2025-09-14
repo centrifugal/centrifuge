@@ -134,6 +134,9 @@ type SubscribeOptions struct {
 	// Source is a way to mark the source of Subscription - i.e. where it comes from. May be useful
 	// for inspection of a connection during its lifetime.
 	Source uint8
+
+	// AllowChannelCompression allows client to negotiate channel compression.
+	AllowChannelCompression bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.
