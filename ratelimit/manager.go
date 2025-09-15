@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/channelwill/cw2-live-chat-common/configx"
 	"github.com/channelwill/cw2-live-chat-common/pkg/storage/gredis"
 	"github.com/channelwill/cw2-live-chat-common/pkg/storage/gredis/keys"
 	"github.com/channelwill/cw2-live-chat-common/pkg/zaplog"
@@ -16,12 +17,12 @@ import (
 type UserType string
 
 const (
-	// BUser B端用户（客服）
-	BUser UserType = "b_user"
-	// CUser C端用户（客户）
-	CUser UserType = "c_user"
+	// BUser B端用户（客服）- 使用 configx 定义的值
+	BUser UserType = UserType(configx.BUSER_TYPE)
+	// CUser C端用户（客户）- 使用 configx 定义的值
+	CUser UserType = UserType(configx.CUSER_TYPE)
 	// Unknown 未知用户类型（应该拒绝连接）
-	Unknown UserType = "unknown"
+	Unknown UserType = UserType(configx.UNKNOWN_TYPE)
 )
 
 // Manager 限流管理器
@@ -361,10 +362,12 @@ func (m *Manager) getUserRateLimitConfig(userType UserType) UserRateLimitConfig 
 
 // ParseUserType 从字符串解析用户类型
 func ParseUserType(userTypeStr string) UserType {
-	switch userTypeStr {
-	case "b_user", "B_USER", "buser":
+	// 直接转换并比较
+	userType := UserType(userTypeStr)
+	switch userType {
+	case BUser:
 		return BUser
-	case "c_user", "C_USER", "cuser":
+	case CUser:
 		return CUser
 	default:
 		// 无法识别的用户类型，返回Unknown让调用者处理拒绝逻辑

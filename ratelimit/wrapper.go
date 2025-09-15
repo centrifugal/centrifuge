@@ -144,13 +144,8 @@ func (w *NodeWrapper) extractUserType(client *centrifuge.Client) UserType {
 			UserType string `json:"user_type"`
 		}
 		if err := json.Unmarshal(info, &userContext); err == nil {
-			// Gateway 传递的 userType 格式是 "1"(B端) 或 "2"(C端)
-			switch userContext.UserType {
-			case "1":
-				return BUser
-			case "2":
-				return CUser
-			}
+			// 直接使用 ParseUserType 解析用户类型
+			return ParseUserType(userContext.UserType)
 		}
 	}
 
