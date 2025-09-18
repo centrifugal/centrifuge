@@ -361,14 +361,17 @@ func (m *Manager) getUserRateLimitConfig(userType UserType) UserRateLimitConfig 
 }
 
 // ParseUserType 从字符串解析用户类型
+// 只处理系统实际使用的configx常量格式："B", "C", "U"
 func ParseUserType(userTypeStr string) UserType {
-	// 直接转换并比较
+	// 直接处理configx常量格式
 	userType := UserType(userTypeStr)
 	switch userType {
-	case BUser:
+	case BUser: // "B"
 		return BUser
-	case CUser:
+	case CUser: // "C"
 		return CUser
+	case Unknown: // "U"
+		return Unknown
 	default:
 		// 无法识别的用户类型，返回Unknown让调用者处理拒绝逻辑
 		return Unknown

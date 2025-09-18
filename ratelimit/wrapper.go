@@ -140,13 +140,29 @@ func (w *NodeWrapper) extractUserType(client *centrifuge.Client) UserType {
 
 	// 方法 2: 从 client.Info() 中解析用户类型（从 Gateway 传递的 userContext）
 	if info := client.Info(); len(info) > 0 {
+		// 解析完整的 authpb.UserContext 结构（从 Gateway 传递）
 		var userContext struct {
+			UserId   string `json:"user_id"`
 			UserType string `json:"user_type"`
+			OrgId    string `json:"org_id"`
+			BrandId  string `json:"brand_id"`
+			ShopId   string `json:"shop_id"`
+			// 其他字段...
 		}
-		if err := json.Unmarshal(info, &userContext); err == nil {
-			// 直接使用 ParseUserType 解析用户类型
+		if err := json.Unmarshal(info, &userContext); err == nil && userContext.UserType != "" {
+			// 成功解析用户上下文，提取用户类型
+			w.logger.DebugFormat(context.Background(), "从用户上下文解析用户类型成功: user_id=%s, user_type=%s",
+				userContext.UserId, userContext.UserType)
 			return ParseUserType(userContext.UserType)
 		}
+
+		// 调试信息：记录无法解析的原始数据
+		previewLen := len(info)
+		if previewLen > 100 {
+			previewLen = 100
+		}
+		w.logger.WarnFormat(context.Background(), "无法解析用户上下文中的用户类型: raw_info_size=%d, raw_info_preview=%s",
+			len(info), string(info[:previewLen]))
 	}
 
 	// 无法从可信来源确定用户类型，记录错误并拒绝连接
