@@ -2,11 +2,9 @@ module github.com/centrifugal/centrifuge
 
 go 1.24.0
 
-replace github.com/centrifugal/protocol => ../protocol
-
 require (
 	github.com/FZambia/eagle v0.2.0
-	github.com/centrifugal/protocol v0.16.2
+	github.com/centrifugal/protocol v0.16.3-0.20250922193434-b8264b215dd1
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter v1.2.4
 	github.com/planetscale/vtprotobuf v0.6.0
