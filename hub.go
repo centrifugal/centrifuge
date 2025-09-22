@@ -501,11 +501,16 @@ var stringToDeltaType = map[string]DeltaType{
 	"fossil": DeltaTypeFossil,
 }
 
+type tagsFilter struct {
+	filter *protocol.FilterNode
+	hash   [32]byte
+}
+
 type subInfo struct {
-	client    *Client
-	deltaType DeltaType
-	useID     bool
-	filterer  PublicationFilterer
+	client     *Client
+	deltaType  DeltaType
+	useID      bool
+	tagsFilter *tagsFilter
 }
 
 type subShard struct {
@@ -713,24 +718,6 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 	return deltaData, nil
 }
 
-func getVariables(pub *Publication) map[string]any {
-	varsMap := map[string]any{
-		"tags": pub.Tags,
-	}
-	var metaData map[string]any
-	if pub.Meta != nil {
-		err := json.Unmarshal(pub.Meta, &metaData)
-		if err == nil {
-			varsMap["meta"] = metaData
-		} else {
-			varsMap["meta"] = map[string]any{}
-		}
-	} else {
-		varsMap["meta"] = map[string]any{}
-	}
-	return varsMap
-}
-
 // broadcastPublication sends message to all clients subscribed on a channel.
 func (s *subShard) broadcastPublication(
 	channel string, sp StreamPosition, pub, prevPub, localPrevPub *Publication,
@@ -753,7 +740,6 @@ func (s *subShard) broadcastPublication(
 	preparedDataByKey := make(map[preparedKey]preparedData)
 
 	var filteredPub *protocol.Publication
-	var variables any
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -778,11 +764,9 @@ func (s *subShard) broadcastPublication(
 		useChannelID := sub.useID && hasSubID
 
 		wasFiltered := false
-		if sub.filterer != nil {
-			if variables == nil {
-				variables = getVariables(pub)
-			}
-			wasFiltered = !sub.filterer.FilterPublication(variables)
+		if sub.tagsFilter != nil {
+			match, _ := protocol.FilterMatch(sub.tagsFilter.filter, pub.Tags)
+			wasFiltered = !match
 		}
 
 		key := preparedKey{

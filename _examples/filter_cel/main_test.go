@@ -8,7 +8,7 @@ import (
 	"github.com/maypok86/otter"
 )
 
-func BenchmarkCELPublicationFilterer(b *testing.B) {
+func BenchmarkCELPublicationFiltererMatch(b *testing.B) {
 	// Create CEL environment
 	env, err := cel.NewEnv(
 		cel.Variable("tags", cel.MapType(cel.StringType, cel.StringType)),
@@ -82,15 +82,18 @@ func BenchmarkCELPublicationFilterer(b *testing.B) {
 				b.Fatal(err)
 			}
 
+			variables := map[string]any{
+				"tags": tc.tags,
+			}
+
 			// Reset timer and run benchmark
 			b.ResetTimer()
 			for b.Loop() {
-				variables := map[string]any{
-					"tags": tc.tags,
-				}
-				result := filter.FilterPublication(variables)
-				if result != tc.expected {
-					b.Fatalf("Expected %v, got %v", tc.expected, result)
+				for range 10000 {
+					result := filter.FilterPublication(variables)
+					if result != tc.expected {
+						b.Fatalf("Expected %v, got %v", tc.expected, result)
+					}
 				}
 			}
 		})

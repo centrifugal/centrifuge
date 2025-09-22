@@ -55,13 +55,6 @@ func WithTags(tags map[string]string) PublishOption {
 	}
 }
 
-// WithMeta allows setting Publication.Meta.
-func WithMeta(meta []byte) PublishOption {
-	return func(opts *PublishOptions) {
-		opts.Meta = meta
-	}
-}
-
 // WithVersion allows application to provide a tip for Centrifuge about
 // internal application version of Publication. This is helpful to drop
 // non-actual publications on Centrifuge Broker level. Publications may be
@@ -89,6 +82,11 @@ func WithVersion(version uint64, versionEpoch string) PublishOption {
 
 // SubscribeOptions define per-subscription options.
 type SubscribeOptions struct {
+	// clientID to subscribe.
+	clientID string
+	// sessionID to subscribe.
+	sessionID string
+
 	// ExpireAt defines time in future when subscription should expire,
 	// zero value means no expiration.
 	ExpireAt int64
@@ -135,22 +133,18 @@ type SubscribeOptions struct {
 	// within a channel and will receive full data in publications.
 	// Delta encoding is an EXPERIMENTAL feature and may be changed.
 	AllowedDeltaTypes []DeltaType
-
-	// clientID to subscribe.
-	clientID string
-	// sessionID to subscribe.
-	sessionID string
 	// Source is a way to mark the source of Subscription - i.e. where it comes from. May be useful
 	// for inspection of a connection during its lifetime.
 	Source uint8
-
+	// AllowChannelCompression if true allows client to negotiate channel compression – Centrifuge
+	// will replace channel with shorter id in pushes related to a subscription. If compression is
+	// not allowed client SDK will receive full channel name in pushes.
 	AllowChannelCompression bool
-
-	PublicationFilterer PublicationFilterer
-}
-
-type PublicationFilterer interface {
-	FilterPublication(any) bool
+	// AllowTagsFilter if set to true allows client to use publication filter by tags. If not allowed
+	// and client provided a filter – the BadRequest error will be returned.
+	// Important note here, since channel permissions are managed on channel level, tags filtering
+	// must be used as a bandwidth optimization, not an access control mechanism.
+	AllowTagsFilter bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

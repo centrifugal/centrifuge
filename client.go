@@ -1762,7 +1762,6 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		Positioned:  req.Positioned,
 		Recoverable: req.Recoverable,
 		JoinLeave:   req.JoinLeave,
-		Filter:      req.Filter,
 	}
 
 	cb := func(reply SubscribeReply, err error) {
@@ -2851,7 +2850,7 @@ type subscribeContext struct {
 }
 
 func isStreamRecovered(
-	historyResult HistoryResult, cmdOffset uint64, cmdEpoch string, filterer PublicationFilterer,
+	historyResult HistoryResult, cmdOffset uint64, cmdEpoch string, tf *tagsFilter,
 ) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
@@ -2875,11 +2874,9 @@ func isStreamRecovered(
 
 	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
 	for _, pub := range historyResult.Publications {
-		if filterer != nil {
-			variables := map[string]any{
-				"tags": pub.Tags,
-			}
-			if !filterer.FilterPublication(variables) {
+		if tf != nil {
+			match, _ := protocol.FilterMatch(tf.filter, pub.Tags)
+			if !match {
 				continue
 			}
 		}
@@ -2890,24 +2887,25 @@ func isStreamRecovered(
 	return recoveredPubs, recovered
 }
 
-func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isCacheRecovered(
+	latestPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string,
+) ([]*protocol.Publication, bool) {
 	latestOffset := currentSP.Offset
 	latestEpoch := currentSP.Epoch
-	var recovered bool
-	recoveredPubs := make([]*protocol.Publication, 0, 1)
-	if latestPub != nil {
-		publication := latestPub
-		recovered = publication.Offset == latestOffset
-		skipPublication := cmdOffset > 0 && cmdOffset == latestOffset && cmdEpoch == latestEpoch
-		if recovered && !skipPublication {
-			protoPub := pubToProto(publication)
-			recoveredPubs = append(recoveredPubs, protoPub)
-		}
-	} else if cmdOffset > 0 && latestOffset == cmdOffset && cmdEpoch == latestEpoch {
-		// Client already had state, which has not been modified since.
-		recovered = true
+
+	// Check if client state matches current state.
+	clientHasSameState := cmdOffset > 0 && cmdOffset == latestOffset && cmdEpoch == latestEpoch
+
+	if latestPub == nil {
+		return nil, clientHasSameState
 	}
-	return recoveredPubs, recovered
+
+	recovered := latestPub.Offset == latestOffset
+	if recovered && !clientHasSameState {
+		return []*protocol.Publication{pubToProto(latestPub)}, true
+	}
+
+	return nil, recovered
 }
 
 const (
@@ -2948,6 +2946,23 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		ChanInfo: reply.Options.ChannelInfo,
 	}
 
+	useID := reply.Options.AllowChannelCompression && req.Flag&subscriptionFlagChannelCompression != 0
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID}
+	if req.Tf != nil {
+		if !reply.Options.AllowTagsFilter {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return errorDisconnectContext(ErrorBadRequest, nil)
+		}
+		if err := protocol.FilterValidate(req.Tf); err != nil {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return errorDisconnectContext(ErrorBadRequest, nil)
+		}
+		sub.tagsFilter = &tagsFilter{
+			filter: req.Tf,
+			hash:   protocol.FilterHash(req.Tf),
+		}
+	}
+
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
 		// Start syncing recovery and PUB/SUB.
@@ -2956,8 +2971,6 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		c.pubSubSync.StartBuffering(channel)
 	}
 
-	useID := reply.Options.AllowChannelCompression && req.Flag&subscriptionFlagChannelCompression != 0
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID, filterer: reply.Options.PublicationFilterer}
 	if req.Delta != "" {
 		dt := DeltaType(req.Delta)
 		if slices.Contains(reply.Options.AllowedDeltaTypes, dt) {
@@ -3047,7 +3060,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			// publications automatically from history (we assume here that the history configured wisely).
 
 			if recoveryMode == RecoveryModeCache {
-				latestPub, currentSP, err := c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+				var latestPub *Publication
+				var currentSP StreamPosition
+				latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
 				if err != nil {
 					c.node.logger.log(newErrorLogEntry(err, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					return handleErr(err)
@@ -3065,7 +3080,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					}
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
-						latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+						latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
 						if err != nil {
 							c.node.logger.log(newErrorLogEntry(err, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 							return handleErr(err)
@@ -3108,7 +3123,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestOffset = historyResult.Offset
 					latestEpoch = historyResult.Epoch
 					var recovered bool
-					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, reply.Options.PublicationFilterer)
+					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, sub.tagsFilter)
 					res.Recovered = recovered
 					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
 					if res.Recovered {
