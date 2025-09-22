@@ -884,7 +884,7 @@ func (s *subShard) broadcastPublication(
 			if wasFiltered && filteredPub == nil {
 				filteredPub = &protocol.Publication{
 					Offset: fullPub.Offset,
-					Data:   nil,
+					Time:   -1, // Use -1 for indicating filtered publication.
 				}
 				prepValue.filteredPub = filteredPub
 			}

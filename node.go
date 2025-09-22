@@ -1460,7 +1460,7 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 }
 
 // recoverCache recovers last publication in channel.
-func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, filter *tagsFilter) (*Publication, StreamPosition, error) {
+func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, filter *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
 	n.metrics.incActionCount("history_recover_cache", ch)
 	if filter == nil {
 		hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
@@ -1468,13 +1468,13 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, filter *tag
 			Reverse: true,
 		}), WithHistoryMetaTTL(historyMetaTTL))
 		if err != nil {
-			return nil, StreamPosition{}, err
+			return nil, nil, StreamPosition{}, err
 		}
 		var latestPublication *Publication
 		if len(hr.Publications) > 0 {
 			latestPublication = hr.Publications[0]
 		}
-		return latestPublication, hr.StreamPosition, nil
+		return latestPublication, latestPublication, hr.StreamPosition, nil
 	}
 
 	limit := NoLimit
@@ -1488,15 +1488,19 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, filter *tag
 		Reverse: true,
 	}), WithHistoryMetaTTL(historyMetaTTL))
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return nil, nil, StreamPosition{}, err
+	}
+	var latestPublication *Publication
+	if len(hr.Publications) > 0 {
+		latestPublication = hr.Publications[0]
 	}
 	for _, pub := range hr.Publications {
 		match, _ := protocol.FilterMatch(filter.filter, pub.Tags)
 		if match {
-			return pub, hr.StreamPosition, nil
+			return latestPublication, pub, hr.StreamPosition, nil
 		}
 	}
-	return nil, hr.StreamPosition, nil
+	return nil, nil, hr.StreamPosition, nil
 }
 
 // streamTop returns current stream top StreamPosition for a channel.

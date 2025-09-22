@@ -1776,7 +1776,6 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		}
 
 		ctx := c.subscribeCmd(req, reply, cmd, false, started, rw)
-
 		if ctx.disconnect != nil {
 			c.onSubscribeError(req.Channel)
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ctx.disconnect, started, rw)
@@ -2888,7 +2887,7 @@ func isStreamRecovered(
 }
 
 func isCacheRecovered(
-	latestPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string,
+	latestPub *Publication, recoveredPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string,
 ) ([]*protocol.Publication, bool) {
 	latestOffset := currentSP.Offset
 	latestEpoch := currentSP.Epoch
@@ -2902,7 +2901,7 @@ func isCacheRecovered(
 
 	recovered := latestPub.Offset == latestOffset
 	if recovered && !clientHasSameState {
-		return []*protocol.Publication{pubToProto(latestPub)}, true
+		return []*protocol.Publication{pubToProto(recoveredPub)}, true
 	}
 
 	return nil, recovered
@@ -3061,8 +3060,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 			if recoveryMode == RecoveryModeCache {
 				var latestPub *Publication
+				var recoveredPub *Publication
 				var currentSP StreamPosition
-				latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
+				latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
 				if err != nil {
 					c.node.logger.log(newErrorLogEntry(err, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					return handleErr(err)
@@ -3070,7 +3070,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				latestOffset = currentSP.Offset
 				latestEpoch = currentSP.Epoch
 				var recovered bool
-				recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
+				recoveredPubs, recovered = isCacheRecovered(latestPub, recoveredPub, currentSP, cmdOffset, cmdEpoch)
 				res.Recovered = recovered
 				if latestPub == nil && c.node.clientEvents.cacheEmptyHandler != nil {
 					cacheReply, err := c.node.clientEvents.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
@@ -3080,14 +3080,14 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					}
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
-						latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
+						latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
 						if err != nil {
 							c.node.logger.log(newErrorLogEntry(err, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 							return handleErr(err)
 						}
 						latestOffset = currentSP.Offset
 						latestEpoch = currentSP.Epoch
-						recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
+						recoveredPubs, recovered = isCacheRecovered(latestPub, recoveredPub, currentSP, cmdOffset, cmdEpoch)
 						res.Recovered = recovered
 						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
 						if res.Recovered {

@@ -17,7 +17,7 @@ func uniqueNonFilteredPublications(s []*protocol.Publication) ([]*protocol.Publi
 		if entry.Offset > maxSeenOffset {
 			maxSeenOffset = entry.Offset
 		}
-		if entry.Data == nil {
+		if entry.Time == -1 { // Special value -1 indicates filtered publication, see in hub.go.
 			skippedOffsets = append(skippedOffsets, entry.Offset)
 			continue
 		}

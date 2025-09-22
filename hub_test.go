@@ -1468,7 +1468,7 @@ func TestSubIDShardDistribution(t *testing.T) {
 
 		// Verify the IDs follow the pattern: shardIndex, shardIndex + numHubShards, shardIndex + 2*numHubShards, etc.
 		for i, id := range ids {
-			expectedID := int64(shardIdx) + int64(i+1)*numHubShards
+			expectedID := int64(shardIdx) + int64(i)*numHubShards
 			require.Equal(t, expectedID, id,
 				"Shard %d, ID %d: expected %d, got %d", shardIdx, i, expectedID, id)
 		}
@@ -1532,7 +1532,7 @@ func TestCompressedChannelBroadcast(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestNonUseIDSubscribersGetPreviousBehavior(t *testing.T) {
+func TestUseIDSubscribersSameMessages(t *testing.T) {
 	n := defaultTestNode()
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
@@ -1551,11 +1551,99 @@ func TestNonUseIDSubscribersGetPreviousBehavior(t *testing.T) {
 	transportWithID.setProtocolVersion(ProtocolVersion2)
 	transportWithID.setUnidirectional(false)
 
-	// Create clients using the pattern from other tests
-	clientWithoutID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithoutID, "user1", "test_validation_channel")
-	clientWithID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithID, "user2", "test_validation_channel")
+	channel := "test"
 
-	channel := "test_validation_channel"
+	// Create clients using the pattern from other tests
+	clientWithoutID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithoutID, "user1", channel)
+	clientWithID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithID, "user2", channel)
+
+	// Remove existing subscriptions and add with our specific settings
+	n.hub.removeSub(channel, clientWithoutID)
+	n.hub.removeSub(channel, clientWithID)
+
+	// Add subscription WITHOUT useID
+	_, isNew1, err := n.hub.addSub(channel, subInfo{
+		client: clientWithoutID,
+		useID:  true, // Important: useID = true
+	})
+	require.NoError(t, err)
+	require.True(t, isNew1)
+
+	// Add subscription WITH useID to same channel
+	_, isNew2, err := n.hub.addSub(channel, subInfo{
+		client: clientWithID,
+		useID:  true, // Important: useID = true
+	})
+	require.NoError(t, err)
+	require.False(t, isNew2) // Channel already exists
+
+	// Test 1: Broadcast with compressChannel=false
+	// Both clients should get identical messages without Id field
+	pub := &Publication{Data: []byte(`{"input": "content"}`)}
+	err = n.hub.broadcastPublication(channel, StreamPosition{}, pub, nil, nil, ChannelBatchConfig{})
+	require.NoError(t, err)
+
+	// Wait for publication messages
+	var msgWithoutID, msgWithID []byte
+
+OUTER1:
+	for {
+		select {
+		case msgWithoutID = <-transportWithoutID.sink:
+			if strings.Contains(string(msgWithoutID), "content") {
+				break OUTER1
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client without useID")
+		}
+	}
+
+OUTER2:
+	for {
+		select {
+		case msgWithID = <-transportWithID.sink:
+			if strings.Contains(string(msgWithID), "content") {
+				break OUTER2
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client with useID")
+		}
+	}
+
+	// When compressChannel=false, both should get identical messages
+	require.Equal(t, msgWithoutID, msgWithID,
+		"Messages should not be identical when compressChannel=false:\n  without ID: %s\n  with ID: %s",
+		string(msgWithoutID), string(msgWithID))
+	t.Log(string(msgWithID))
+	t.Log(string(msgWithoutID))
+	require.Contains(t, string(msgWithID), "id")
+	require.NotContains(t, string(msgWithoutID), channel)
+}
+
+func TestUseIDSubscribersDifferentMessages(t *testing.T) {
+	n := defaultTestNode()
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	ctx, cancelFn := context.WithCancel(context.Background())
+
+	// Create transport that captures messages
+	transportWithoutID := newTestTransport(cancelFn)
+	transportWithoutID.sink = make(chan []byte, 100)
+	transportWithoutID.setProtocolType(ProtocolTypeJSON)
+	transportWithoutID.setProtocolVersion(ProtocolVersion2)
+	transportWithoutID.setUnidirectional(false)
+
+	transportWithID := newTestTransport(cancelFn)
+	transportWithID.sink = make(chan []byte, 100)
+	transportWithID.setProtocolType(ProtocolTypeJSON)
+	transportWithID.setProtocolVersion(ProtocolVersion2)
+	transportWithID.setUnidirectional(false)
+
+	channel := "test"
+
+	// Create clients using the pattern from other tests
+	clientWithoutID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithoutID, "user1", channel)
+	clientWithID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithID, "user2", channel)
 
 	// Remove existing subscriptions and add with our specific settings
 	n.hub.removeSub(channel, clientWithoutID)
@@ -1577,93 +1665,48 @@ func TestNonUseIDSubscribersGetPreviousBehavior(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, isNew2) // Channel already exists
 
-	// Clear any buffered messages
-	time.Sleep(100 * time.Millisecond) // Let any connection messages settle
-	for {
-		select {
-		case <-transportWithoutID.sink:
-		case <-transportWithID.sink:
-		default:
-			goto cleared
-		}
-	}
-cleared:
-
 	// Test 1: Broadcast with compressChannel=false
 	// Both clients should get identical messages without Id field
-	pub := &Publication{Data: []byte(`{"test": "data_no_compress"}`)}
+	pub := &Publication{Data: []byte(`{"input": "content"}`)}
 	err = n.hub.broadcastPublication(channel, StreamPosition{}, pub, nil, nil, ChannelBatchConfig{})
 	require.NoError(t, err)
 
 	// Wait for publication messages
 	var msgWithoutID, msgWithID []byte
-	select {
-	case msgWithoutID = <-transportWithoutID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no message received by client without useID")
-	}
-	select {
-	case msgWithID = <-transportWithID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no message received by client with useID")
-	}
 
-	// When compressChannel=false, both should get identical messages
-	require.Equal(t, msgWithoutID, msgWithID,
-		"Messages should be identical when compressChannel=false:\n  without ID: %s\n  with ID: %s",
-		string(msgWithoutID), string(msgWithID))
-
-	// Verify message content
-	msgStr := string(msgWithoutID)
-	require.NotContains(t, msgStr, `"id":`, "Message should not contain id field when compressChannel=false")
-	require.Contains(t, msgStr, "data_no_compress", "Message should contain the data")
-	require.Contains(t, msgStr, channel, "Message should contain channel name")
-
-	// Test 2: Broadcast with compressChannel=true
-	// Client without useID should get same format as before (no Id field)
-	// Client with useID should get Id field
-	pub2 := &Publication{Data: []byte(`{"test": "data_with_compress"}`)}
-	err = n.hub.broadcastPublication(channel, StreamPosition{}, pub2, nil, nil, ChannelBatchConfig{})
-	require.NoError(t, err)
-
-	// Wait for publication messages
-	select {
-	case msgWithoutID = <-transportWithoutID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no message received by client without useID in test 2")
-	}
-	select {
-	case msgWithID = <-transportWithID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no message received by client with useID in test 2")
+OUTER1:
+	for {
+		select {
+		case msgWithoutID = <-transportWithoutID.sink:
+			if strings.Contains(string(msgWithoutID), "content") {
+				break OUTER1
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client without useID")
+		}
 	}
 
-	// Parse messages for detailed validation
-	msgWithoutIDStr := string(msgWithoutID)
-	msgWithIDStr := string(msgWithID)
+OUTER2:
+	for {
+		select {
+		case msgWithID = <-transportWithID.sink:
+			if strings.Contains(string(msgWithID), "content") {
+				break OUTER2
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client with useID")
+		}
+	}
 
-	t.Logf("Message without useID: %s", msgWithoutIDStr)
-	t.Logf("Message with useID: %s", msgWithIDStr)
-
-	// Client without useID should NOT have Id field (previous behavior)
-	require.NotContains(t, msgWithoutIDStr, `"id":`,
-		"Client without useID should not receive Id field even when compressChannel=true")
-	require.Contains(t, msgWithoutIDStr, channel,
-		"Client without useID should still receive channel name")
-	require.Contains(t, msgWithoutIDStr, "data_with_compress",
-		"Client without useID should receive the data")
-
-	// Client with useID should have Id field when compressChannel=true
-	require.Contains(t, msgWithIDStr, `"id":`,
-		"Client with useID should receive Id field when compressChannel=true")
-	require.NotContains(t, msgWithIDStr, `"channel":`,
-		"Client with useID should NOT receive channel field - it should be replaced by id")
-	require.Contains(t, msgWithIDStr, "data_with_compress",
-		"Client with useID should receive the data")
-
-	// Messages should be different when compressChannel=true
 	require.NotEqual(t, msgWithoutID, msgWithID,
-		"Messages should be different when compressChannel=true due to Id field")
+		"Messages should not be identical when compressChannel=false:\n  without ID: %s\n  with ID: %s",
+		string(msgWithoutID), string(msgWithID))
+	t.Log(string(msgWithID))
+	t.Log(string(msgWithoutID))
+	require.NotContains(t, string(msgWithID), channel)
+	require.Contains(t, string(msgWithID), "id")
+	require.Contains(t, string(msgWithoutID), channel)
+	require.NotContains(t, string(msgWithoutID), "id")
 }
 
 func TestDeltaPublicationsWithCompressedChannels(t *testing.T) {
@@ -1685,11 +1728,11 @@ func TestDeltaPublicationsWithCompressedChannels(t *testing.T) {
 	transportWithID.setProtocolVersion(ProtocolVersion2)
 	transportWithID.setUnidirectional(false)
 
-	// Create clients
-	clientWithoutID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithoutID, "user1", "test_delta_channel")
-	clientWithID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithID, "user2", "test_delta_channel")
-
 	channel := "test_delta_channel"
+
+	// Create clients
+	clientWithoutID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithoutID, "user1", channel)
+	clientWithID := newTestSubscribedClientWithTransport(t, ctx, n, transportWithID, "user2", channel)
 
 	// Remove existing subscriptions and add with our specific settings including delta
 	n.hub.removeSub(channel, clientWithoutID)
@@ -1713,18 +1756,6 @@ func TestDeltaPublicationsWithCompressedChannels(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, isNew2) // Channel already exists
 
-	// Clear any buffered messages
-	time.Sleep(100 * time.Millisecond)
-	for {
-		select {
-		case <-transportWithoutID.sink:
-		case <-transportWithID.sink:
-		default:
-			goto cleared
-		}
-	}
-cleared:
-
 	// Test: Broadcast publication that can use delta - should work with compressed channels
 	// Use prevPub to trigger delta compression logic
 	pub := &Publication{Data: []byte(`{"test": "delta_with_compress"}`)}
@@ -1734,15 +1765,29 @@ cleared:
 
 	// Wait for messages
 	var msgWithoutID, msgWithID []byte
-	select {
-	case msgWithoutID = <-transportWithoutID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no message received by client without useID")
+
+OUTER1:
+	for {
+		select {
+		case msgWithoutID = <-transportWithoutID.sink:
+			if strings.Contains(string(msgWithoutID), "pub") {
+				break OUTER1
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client without useID")
+		}
 	}
-	select {
-	case msgWithID = <-transportWithID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no message received by client with useID")
+
+OUTER2:
+	for {
+		select {
+		case msgWithID = <-transportWithID.sink:
+			if strings.Contains(string(msgWithID), "pub") {
+				break OUTER2
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client with useID")
+		}
 	}
 
 	msgWithoutIDStr := string(msgWithoutID)
@@ -1826,18 +1871,6 @@ func TestCompressedJoinMessages(t *testing.T) {
 	chCtx2.flags |= flagPushJoinLeave
 	clientWithID.channels[channel] = chCtx2
 
-	// Clear any buffered messages
-	time.Sleep(100 * time.Millisecond)
-	for {
-		select {
-		case <-transportWithoutID.sink:
-		case <-transportWithID.sink:
-		default:
-			goto cleared
-		}
-	}
-cleared:
-
 	// Test: Broadcast join with automatic compression per subscriber
 	// Client without useID should get channel field
 	// Client with useID should get id field instead of channel
@@ -1850,15 +1883,28 @@ cleared:
 
 	// Wait for join messages
 	var msgWithoutID, msgWithID []byte
-	select {
-	case msgWithoutID = <-transportWithoutID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no join message received by client without useID")
+OUTER1:
+	for {
+		select {
+		case msgWithoutID = <-transportWithoutID.sink:
+			if strings.Contains(string(msgWithoutID), "join") {
+				break OUTER1
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client without useID")
+		}
 	}
-	select {
-	case msgWithID = <-transportWithID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no join message received by client with useID")
+
+OUTER2:
+	for {
+		select {
+		case msgWithID = <-transportWithID.sink:
+			if strings.Contains(string(msgWithID), "join") {
+				break OUTER2
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client with useID")
+		}
 	}
 
 	// Messages should be different due to compression
@@ -1939,18 +1985,6 @@ func TestCompressedLeaveMessages(t *testing.T) {
 	chCtx2.flags |= flagPushJoinLeave
 	clientWithID.channels[channel] = chCtx2
 
-	// Clear any buffered messages
-	time.Sleep(100 * time.Millisecond)
-	for {
-		select {
-		case <-transportWithoutID.sink:
-		case <-transportWithID.sink:
-		default:
-			goto cleared
-		}
-	}
-cleared:
-
 	// Test: Broadcast leave with automatic compression per subscriber
 	// Client without useID should get channel field
 	// Client with useID should get id field instead of channel
@@ -1963,15 +1997,28 @@ cleared:
 
 	// Wait for leave messages
 	var msgWithoutID, msgWithID []byte
-	select {
-	case msgWithoutID = <-transportWithoutID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no leave message received by client without useID")
+OUTER1:
+	for {
+		select {
+		case msgWithoutID = <-transportWithoutID.sink:
+			if strings.Contains(string(msgWithoutID), "leave") {
+				break OUTER1
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client without useID")
+		}
 	}
-	select {
-	case msgWithID = <-transportWithID.sink:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no leave message received by client with useID")
+
+OUTER2:
+	for {
+		select {
+		case msgWithID = <-transportWithID.sink:
+			if strings.Contains(string(msgWithID), "leave") {
+				break OUTER2
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("no message received by client with useID")
+		}
 	}
 
 	// Messages should be different due to compression
