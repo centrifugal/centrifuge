@@ -4497,8 +4497,6 @@ func TestTagsFilter_EndToEndFiltering(t *testing.T) {
 
 	connectClientV2(t, client)
 
-	rwWrapper := testReplyWriterWrapper()
-
 	// Subscribe with a filter that should match only prod environment
 	filter := &protocol.FilterNode{
 		Cmp: protocol.FilterCompareEQ,
@@ -4506,7 +4504,7 @@ func TestTagsFilter_EndToEndFiltering(t *testing.T) {
 		Val: "prod",
 	}
 
-	rwWrapper = testReplyWriterWrapper()
+	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "test",
 		Tf:      filter,
