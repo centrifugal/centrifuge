@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
+	"github.com/centrifugal/centrifuge/internal/filter"
 
 	"github.com/centrifugal/protocol"
 	"github.com/segmentio/encoding/json"
@@ -754,7 +755,8 @@ func (s *subShard) broadcastPublication(
 	}
 
 	var (
-		jsonEncodeErr *encodeError
+		jsonEncodeErr     *encodeError
+		tagsFilterDropped int
 	)
 
 	// Get subID for this channel if it exists
@@ -765,8 +767,11 @@ func (s *subShard) broadcastPublication(
 
 		wasFiltered := false
 		if sub.tagsFilter != nil {
-			match, _ := protocol.FilterMatch(sub.tagsFilter.filter, pub.Tags)
+			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
 			wasFiltered = !match
+			if wasFiltered {
+				tagsFilterDropped++
+			}
 		}
 
 		key := preparedKey{
@@ -909,6 +914,9 @@ func (s *subShard) broadcastPublication(
 		}))
 	}
 
+	if tagsFilterDropped > 0 {
+		s.metrics.incTagsFilterDropped(channel, tagsFilterDropped)
+	}
 	s.metrics.observeBroadcastDuration(now, channel)
 	return nil
 }

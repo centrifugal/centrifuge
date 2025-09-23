@@ -1,0 +1,17 @@
+mode: set
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:21.31,23.2 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:26.52,29.2 2 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:38.36,40.2 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:43.38,45.24 2 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:45.24,47.3 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:48.2,48.17 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:52.44,53.17 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:53.17,57.3 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:58.2,58.30 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:58.30,62.3 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:63.2,64.37 2 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:64.37,66.3 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:67.2,69.3 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:73.36,75.49 2 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:75.49,77.3 1 1
+github.com/centrifugal/centrifuge/internal/bpool/bpool.go:78.2,80.20 3 1

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
+	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/saferand"
@@ -2111,25 +2112,25 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 		return c.logDisconnectBadRequest("channel required for history")
 	}
 
-	var filter HistoryFilter
+	var historyFilter HistoryFilter
 	if req.Since != nil {
-		filter.Since = &StreamPosition{
+		historyFilter.Since = &StreamPosition{
 			Offset: req.Since.Offset,
 			Epoch:  req.Since.Epoch,
 		}
 	}
-	filter.Limit = int(req.Limit)
+	historyFilter.Limit = int(req.Limit)
 
 	maxPublicationLimit := c.node.config.HistoryMaxPublicationLimit
-	if maxPublicationLimit > 0 && (filter.Limit < 0 || filter.Limit > maxPublicationLimit) {
-		filter.Limit = maxPublicationLimit
+	if maxPublicationLimit > 0 && (historyFilter.Limit < 0 || historyFilter.Limit > maxPublicationLimit) {
+		historyFilter.Limit = maxPublicationLimit
 	}
 
-	filter.Reverse = req.Reverse
+	historyFilter.Reverse = req.Reverse
 
 	event := HistoryEvent{
 		Channel: channel,
-		Filter:  filter,
+		Filter:  historyFilter,
 	}
 
 	cb := func(reply HistoryReply, err error) {
@@ -2874,7 +2875,7 @@ func isStreamRecovered(
 	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
 	for _, pub := range historyResult.Publications {
 		if tf != nil {
-			match, _ := protocol.FilterMatch(tf.filter, pub.Tags)
+			match, _ := filter.Match(tf.filter, pub.Tags)
 			if !match {
 				continue
 			}
@@ -2952,13 +2953,13 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			return errorDisconnectContext(ErrorBadRequest, nil)
 		}
-		if err := protocol.FilterValidate(req.Tf); err != nil {
+		if err := filter.Validate(req.Tf); err != nil {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
 			return errorDisconnectContext(ErrorBadRequest, nil)
 		}
 		sub.tagsFilter = &tagsFilter{
 			filter: req.Tf,
-			hash:   protocol.FilterHash(req.Tf),
+			hash:   filter.Hash(req.Tf),
 		}
 	}
 

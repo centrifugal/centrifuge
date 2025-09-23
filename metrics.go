@@ -39,6 +39,7 @@ type metrics struct {
 	transportMessagesSentSize     *prometheus.CounterVec
 	transportMessagesReceived     *prometheus.CounterVec
 	transportMessagesReceivedSize *prometheus.CounterVec
+	tagsFilterDroppedCount        *prometheus.CounterVec
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -83,6 +84,7 @@ type metrics struct {
 	disconnectCache                sync.Map
 	messagesSentCache              sync.Map
 	messagesReceivedCache          sync.Map
+	tagsFilterDroppedCache         sync.Map
 	nsCache                        *otter.Cache[string, string]
 	codeStrings                    map[uint32]string
 }
@@ -312,6 +314,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
+	m.tagsFilterDroppedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "tags_filter_dropped_count",
+		Help:      "Number of publications dropped due to tags filtering.",
+	}, []string{"channel_namespace"})
+
 	m.pubSubLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
@@ -405,6 +414,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.transportMessagesSentSize,
 		m.transportMessagesReceived,
 		m.transportMessagesReceivedSize,
+		m.tagsFilterDroppedCount,
 		m.buildInfoGauge,
 		m.surveyDurationSummary,
 		m.pubSubLagHistogram,
@@ -794,4 +804,21 @@ func (m *metrics) incActionCount(action string, ch string) {
 
 func (m *metrics) observeSurveyDuration(op string, d time.Duration) {
 	m.surveyDurationSummary.WithLabelValues(op).Observe(d.Seconds())
+}
+
+type tagsFilterDroppedLabels struct {
+	ChannelNamespace string
+}
+
+func (m *metrics) incTagsFilterDropped(ch string, count int) {
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := tagsFilterDroppedLabels{
+		ChannelNamespace: channelNamespace,
+	}
+	counter, ok := m.tagsFilterDroppedCache.Load(labels)
+	if !ok {
+		counter = m.tagsFilterDroppedCount.WithLabelValues(channelNamespace)
+		m.tagsFilterDroppedCache.Store(labels, counter)
+	}
+	counter.(prometheus.Counter).Add(float64(count))
 }

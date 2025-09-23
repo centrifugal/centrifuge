@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log"
 	"math"
 	"math/rand"
@@ -13,91 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
-	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/common/types"
-	"github.com/maypok86/otter"
 )
 
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("%s: %v", e.Message, e.Fields)
-}
-
-// Global CEL filter cache
-var celFilterCache *otter.Cache[string, *CELPublicationFilterer]
-
-func initCELFilterCache() {
-	cache, err := otter.MustBuilder[string, *CELPublicationFilterer](10000).
-		Cost(func(key string, value *CELPublicationFilterer) uint32 {
-			return uint32(len(key))
-		}).
-		WithTTL(10 * time.Minute).
-		Build()
-	if err != nil {
-		log.Fatal("Failed to create CEL filter cache:", err)
-	}
-	celFilterCache = &cache
-}
-
-func getOrCreateCELFilter(env *cel.Env, expression string) (*CELPublicationFilterer, error) {
-	if celFilterCache != nil {
-		if filter, ok := celFilterCache.Get(expression); ok {
-			log.Printf("filter expression found in cache: %s", expression)
-			return filter, nil
-		}
-	}
-
-	filter, err := NewCELPublicationFilterer(env, expression)
-	if err != nil {
-		return nil, err
-	}
-
-	if celFilterCache != nil {
-		celFilterCache.Set(expression, filter)
-	}
-
-	return filter, nil
-}
-
-type CELPublicationFilterer struct {
-	program cel.Program
-}
-
-func NewCELPublicationFilterer(env *cel.Env, expression string) (*CELPublicationFilterer, error) {
-	ast, iss := env.Parse(expression)
-	if iss.Err() != nil {
-		return nil, iss.Err()
-	}
-
-	checked, iss := env.Check(ast)
-	if iss.Err() != nil {
-		return nil, iss.Err()
-	}
-
-	if checked.OutputType() != cel.BoolType {
-		return nil, errors.New("expected bool output type")
-	}
-
-	globalVars := map[string]any{}
-
-	program, err := env.Program(checked, cel.Globals(globalVars))
-	if err != nil {
-		return nil, err
-	}
-
-	return &CELPublicationFilterer{
-		program: program,
-	}, nil
-}
-
-func (f *CELPublicationFilterer) FilterPublication(variables any) bool {
-	out, _, err := f.program.Eval(variables)
-	if err != nil {
-		return false
-	}
-	return out == types.True
 }
 
 func authMiddleware(h http.Handler) http.Handler {
@@ -125,9 +48,6 @@ func waitExitSignal(n *centrifuge.Node) {
 }
 
 func main() {
-	// Initialize CEL filter cache
-	initCELFilterCache()
-
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
@@ -139,14 +59,6 @@ func main() {
 		}, nil
 	})
 
-	celEnv, err := cel.NewEnv(
-		cel.Variable("tags", cel.MapType(cel.StringType, cel.StringType)),
-		cel.Variable("meta", cel.MapType(cel.StringType, cel.DynType)),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
@@ -154,25 +66,14 @@ func main() {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
 
-			var filter centrifuge.PublicationFilterer
-			if e.Filter != "" {
-				var err error
-				filter, err = getOrCreateCELFilter(celEnv, e.Filter)
-				if err != nil {
-					log.Printf("failed to create CEL filter: %v", err)
-					cb(centrifuge.SubscribeReply{}, centrifuge.DisconnectBadRequest)
-					return
-				}
-				log.Printf("created CEL filter for channel %s with expression: %s", e.Channel, e.Filter)
-			}
-
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
-					EnableRecovery:      true,
-					EmitPresence:        true,
-					EmitJoinLeave:       true,
-					PushJoinLeave:       true,
-					PublicationFilterer: filter,
+					EnableRecovery:  true,
+					EmitPresence:    true,
+					EmitJoinLeave:   true,
+					PushJoinLeave:   true,
+					AllowTagsFilter: true, // Enable tags filtering
+					RecoveryMode:    centrifuge.RecoveryModeCache,
 				},
 			}, nil)
 		})
@@ -203,6 +104,7 @@ func main() {
 	}
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	// Start publishing ticker data
@@ -238,7 +140,7 @@ func publishTickerData(node *centrifuge.Node) {
 				ask := roundToTwoDecimals(bid + rand.Float64()*2.0)
 
 				data := map[string]interface{}{
-					"ticker": ticker,
+					"ticker": ticker, // Maybe be excluded BTW since sent in tags.
 					"bid":    bid,
 					"ask":    ask,
 					"time":   time.Now().UnixMilli(),
@@ -250,11 +152,6 @@ func publishTickerData(node *centrifuge.Node) {
 					continue
 				}
 
-				metaData, _ := json.Marshal(map[string]any{
-					"bid": bid,
-					"ask": ask,
-				})
-
 				_, err = node.Publish(
 					"tickers",
 					jsonData,
@@ -262,7 +159,6 @@ func publishTickerData(node *centrifuge.Node) {
 					centrifuge.WithTags(map[string]string{
 						"ticker": ticker,
 					}),
-					centrifuge.WithMeta(metaData),
 				)
 				if err != nil {
 					log.Printf("Failed to publish ticker data: %v", err)

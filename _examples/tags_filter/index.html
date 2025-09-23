@@ -44,15 +44,20 @@
                     subscribeToTicker(tickerSelect.value);
                 });
 
-                // Function to create new subscription with ticker filter
+                // Function to create new subscription with tags filter
                 function subscribeToTicker(ticker) {
                     statusDiv.textContent = 'Subscribing to ticker: ' + ticker;
 
-                    const filter = 'tags["ticker"] == "' + ticker + '" && meta["ask"] > 140 && meta["bid"] > 140';
+                    const tagsFilter = {
+                        op: "", // leaf node for comparison
+                        key: "ticker",
+                        cmp: "eq",
+                        val: ticker
+                    };
 
                     if (!currentSubscription) {
                         currentSubscription = centrifuge.newSubscription(channel, {
-                            filter: filter
+                            tagsFilter: tagsFilter
                         });
                         currentSubscription.on("publication", handlePublication)
                             .on("unsubscribed", handleUnsubscribed)
@@ -61,7 +66,7 @@
                             .on("error", handleSubscriptionError);
                     } else {
                         currentSubscription.unsubscribe();
-                        currentSubscription.setFilter(filter)
+                        currentSubscription.setTagsFilter(tagsFilter)
                     }
                     currentSubscription.subscribe();
                 }
@@ -86,7 +91,7 @@
 
                 function handleSubscribed(ctx) {
                     drawText('Subscribed on channel ' + ctx.channel);
-                    statusDiv.textContent = 'Subscribed to ticker: ' + tickerSelect.value + ' (filtering active)';
+                    statusDiv.textContent = 'Subscribed to ticker: ' + tickerSelect.value + ' (tags filtering active)';
                     if (ctx.wasRecovering) {
                         if (ctx.recovered) {
                             drawText('Subscription to ' + ctx.channel + ' recovered');

@@ -14,6 +14,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
+	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/centrifuge/internal/nowtime"
 
 	"github.com/FZambia/eagle"
@@ -1460,9 +1461,9 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 }
 
 // recoverCache recovers last publication in channel.
-func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, filter *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
+func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
 	n.metrics.incActionCount("history_recover_cache", ch)
-	if filter == nil {
+	if tf == nil {
 		hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
 			Limit:   1,
 			Reverse: true,
@@ -1495,7 +1496,7 @@ func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, filter *tag
 		latestPublication = hr.Publications[0]
 	}
 	for _, pub := range hr.Publications {
-		match, _ := protocol.FilterMatch(filter.filter, pub.Tags)
+		match, _ := filter.Match(tf.filter, pub.Tags)
 		if match {
 			return latestPublication, pub, hr.StreamPosition, nil
 		}
