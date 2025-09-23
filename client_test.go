@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/protocol"
 	fdelta "github.com/shadowspore/fossil-delta"
 	"github.com/stretchr/testify/require"
@@ -4401,7 +4402,7 @@ func TestTagsFilter_SubscribeValidation(t *testing.T) {
 			name:    "valid filter allowed channel",
 			channel: "allowed",
 			filter: &protocol.FilterNode{
-				Cmp: protocol.FilterCompareEQ,
+				Cmp: filter.CompareEQ,
 				Key: "env",
 				Val: "prod",
 			},
@@ -4410,7 +4411,7 @@ func TestTagsFilter_SubscribeValidation(t *testing.T) {
 			name:    "filter not allowed channel",
 			channel: "not_allowed",
 			filter: &protocol.FilterNode{
-				Cmp: protocol.FilterCompareEQ,
+				Cmp: filter.CompareEQ,
 				Key: "env",
 				Val: "prod",
 			},
@@ -4420,15 +4421,15 @@ func TestTagsFilter_SubscribeValidation(t *testing.T) {
 			name:    "complex valid filter",
 			channel: "allowed",
 			filter: &protocol.FilterNode{
-				Op: protocol.FilterOpAnd,
+				Op: filter.OpAnd,
 				Nodes: []*protocol.FilterNode{
 					{
-						Cmp: protocol.FilterCompareEQ,
+						Cmp: filter.CompareEQ,
 						Key: "env",
 						Val: "prod",
 					},
 					{
-						Cmp:  protocol.FilterCompareIn,
+						Cmp:  filter.CompareIn,
 						Key:  "region",
 						Vals: []string{"us", "eu"},
 					},
@@ -4498,8 +4499,8 @@ func TestTagsFilter_EndToEndFiltering(t *testing.T) {
 	connectClientV2(t, client)
 
 	// Subscribe with a filter that should match only prod environment
-	filter := &protocol.FilterNode{
-		Cmp: protocol.FilterCompareEQ,
+	tf := &protocol.FilterNode{
+		Cmp: filter.CompareEQ,
 		Key: "env",
 		Val: "prod",
 	}
@@ -4507,7 +4508,7 @@ func TestTagsFilter_EndToEndFiltering(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: "test",
-		Tf:      filter,
+		Tf:      tf,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
 	require.Contains(t, client.channels, "test")
@@ -4583,8 +4584,8 @@ func TestTagsFilter_RecoverCache(t *testing.T) {
 	connectClientV2(t, client)
 
 	// Subscribe with cache recovery and filter for env=prod only.
-	filter := &protocol.FilterNode{
-		Cmp: protocol.FilterCompareEQ,
+	tf := &protocol.FilterNode{
+		Cmp: filter.CompareEQ,
 		Key: "env",
 		Val: "prod",
 	}
@@ -4592,7 +4593,7 @@ func TestTagsFilter_RecoverCache(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Tf:      filter,
+		Tf:      tf,
 		Recover: true,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
@@ -4654,8 +4655,8 @@ func TestTagsFilter_RecoverStream(t *testing.T) {
 	connectClientV2(t, client)
 
 	// Subscribe with stream recovery and filter for env=prod only
-	filter := &protocol.FilterNode{
-		Cmp: protocol.FilterCompareEQ,
+	tf := &protocol.FilterNode{
+		Cmp: filter.CompareEQ,
 		Key: "env",
 		Val: "prod",
 	}
@@ -4663,7 +4664,7 @@ func TestTagsFilter_RecoverStream(t *testing.T) {
 	rwWrapper := testReplyWriterWrapper()
 	err = client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel: channel,
-		Tf:      filter,
+		Tf:      tf,
 		Recover: true, // Request recovery from the beginning
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
 	require.NoError(t, err)
