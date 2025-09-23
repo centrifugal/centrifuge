@@ -3,8 +3,7 @@
     <head>
         <meta charset="utf-8">
         <title></title>
-        <style type="text/css">
-            .muted {color: #CCCCCC; font-size: 10px;}
+        <style>
             .controls { margin: 10px 0; }
             .controls label { margin-right: 10px; }
             #tickerSelect { margin: 0 10px; }
@@ -15,7 +14,6 @@
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
-            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
 
             const channel = "tickers";
             let currentSubscription = null;

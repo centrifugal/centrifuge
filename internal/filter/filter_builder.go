@@ -39,11 +39,11 @@ func Contains(key, val string) *protocol.FilterNode {
 }
 
 func Starts(key, val string) *protocol.FilterNode {
-	return &protocol.FilterNode{Op: "", Key: key, Cmp: ComparePrefix, Val: val}
+	return &protocol.FilterNode{Op: "", Key: key, Cmp: CompareStartsWith, Val: val}
 }
 
 func Ends(key, val string) *protocol.FilterNode {
-	return &protocol.FilterNode{Op: "", Key: key, Cmp: CompareSuffix, Val: val}
+	return &protocol.FilterNode{Op: "", Key: key, Cmp: CompareEndsWith, Val: val}
 }
 
 func Exists(key string) *protocol.FilterNode {

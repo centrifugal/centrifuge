@@ -1,4 +1,5 @@
-Example uses Websocket with Protobuf binary protocol between client and server.
+Example demonstrates a simple tags filter usage - filtering messages by tags on the server side according to
+filter supplied by client in subscription request.
 
 To start example run the following command from example directory:
 

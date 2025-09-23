@@ -12,11 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	_ "net/http/pprof"
 
 	"github.com/centrifugal/centrifuge"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func handleLog(e centrifuge.LogEntry) {
@@ -72,7 +71,7 @@ func main() {
 					EmitPresence:    true,
 					EmitJoinLeave:   true,
 					PushJoinLeave:   true,
-					AllowTagsFilter: true, // Enable tags filtering
+					AllowTagsFilter: true, // Enable tags filtering.
 					RecoveryMode:    centrifuge.RecoveryModeCache,
 				},
 			}, nil)

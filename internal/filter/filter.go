@@ -13,19 +13,6 @@ import (
 	"github.com/quagmt/udecimal"
 )
 
-// Centrifuge’s philosophy is to keep message routing simple and fast — filters might add overhead especially
-// with many subscribers in channel (since in a hot broadcast path). We must be careful with filter design to
-// avoid security confusion also – because permissions will be still on channel level, and filter is just an
-// additional layer of filtering for bandwidth/processing optimizations.
-//
-// Thus Filter design decisions:
-// - Must be zero allocation to evaluate, because it is in the hot path with broadcast to many subscribers.
-// - Must be easy to serialize/deserialize to/from Protobuf and fully (easy)JSON compatible.
-// - Must be programmatically constructible, making it easy to build filters in code based on app conditions.
-// - Must be simple. It's a custom implementation, and we want to avoid too much complexity which can limit the usage.
-// - Must be secure. Not be Turing complete. Only filter based on what client can see in the Publication anyway.
-// - Server-side filter may be done separately and must not be controlled by clients.
-
 // Node operations.
 const (
 	OpLeaf = "" // leaf node
@@ -36,19 +23,19 @@ const (
 
 // Leaf comparison operators.
 const (
-	CompareEQ        = "eq"
-	CompareNotEQ     = "neq"
-	CompareIn        = "in"
-	CompareNotIn     = "nin"
-	CompareExists    = "ex"
-	CompareNotExists = "nex"
-	ComparePrefix    = "starts"
-	CompareSuffix    = "ends"
-	CompareContains  = "contains"
-	CompareGT        = "gt"
-	CompareGTE       = "gte"
-	CompareLT        = "lt"
-	CompareLTE       = "lte"
+	CompareEQ         = "eq"
+	CompareNotEQ      = "neq"
+	CompareIn         = "in"
+	CompareNotIn      = "nin"
+	CompareExists     = "ex"
+	CompareNotExists  = "nex"
+	CompareStartsWith = "sw"
+	CompareEndsWith   = "ew"
+	CompareContains   = "ct"
+	CompareGT         = "gt"
+	CompareGTE        = "gte"
+	CompareLT         = "lt"
+	CompareLTE        = "lte"
 )
 
 // Match checks if the provided tags match the filter.
@@ -69,9 +56,9 @@ func Match(f *protocol.FilterNode, tags map[string]string) (bool, error) {
 			return ok, nil
 		case CompareNotExists:
 			return !ok, nil
-		case ComparePrefix:
+		case CompareStartsWith:
 			return ok && strings.HasPrefix(val, f.Val), nil
-		case CompareSuffix:
+		case CompareEndsWith:
 			return ok && strings.HasSuffix(val, f.Val), nil
 		case CompareContains:
 			return ok && strings.Contains(val, f.Val), nil
@@ -153,7 +140,7 @@ func Validate(f *protocol.FilterNode) error {
 
 		switch f.Cmp {
 		case CompareEQ, CompareNotEQ,
-			ComparePrefix, CompareSuffix, CompareContains,
+			CompareStartsWith, CompareEndsWith, CompareContains,
 			CompareGT, CompareGTE, CompareLT, CompareLTE:
 			if f.Val == "" {
 				return fmt.Errorf("%s comparison requires Val", f.Cmp)

@@ -134,12 +134,11 @@ func main() {
 
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
-					EnableRecovery:          true,
-					EmitPresence:            true,
-					EmitJoinLeave:           true,
-					PushJoinLeave:           true,
-					Data:                    []byte(`{"msg": "welcome"}`),
-					AllowChannelCompression: true,
+					EnableRecovery: true,
+					EmitPresence:   true,
+					EmitJoinLeave:  true,
+					PushJoinLeave:  true,
+					Data:           []byte(`{"msg": "welcome"}`),
 				},
 			}, nil)
 		})
@@ -237,7 +236,7 @@ func main() {
 				log.Printf("error publishing to channel: %s", err)
 			}
 			i++
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10000 * time.Millisecond)
 		}
 	}()
 
