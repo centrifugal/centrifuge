@@ -2946,7 +2946,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		ChanInfo: reply.Options.ChannelInfo,
 	}
 
-	useID := reply.Options.AllowChannelCompression && req.Flag&subscriptionFlagChannelCompression != 0
+	useID := reply.Options.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
 	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID}
 	if req.Tf != nil {
 		if !reply.Options.AllowTagsFilter {

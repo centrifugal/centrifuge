@@ -136,10 +136,11 @@ type SubscribeOptions struct {
 	// Source is a way to mark the source of Subscription - i.e. where it comes from. May be useful
 	// for inspection of a connection during its lifetime.
 	Source uint8
-	// AllowChannelCompression if true allows client to negotiate channel compression – Centrifuge
-	// will replace channel with shorter id in pushes related to a subscription. If compression is
-	// not allowed client SDK will receive full channel name in pushes.
-	AllowChannelCompression bool
+	// AllowChannelCompaction if true allows client to negotiate channel ID compaction –
+	// Centrifuge will replace channel names with shorter IDs in subscription pushes.
+	// If disabled, clients receive the full channel name in all pushes. Requires support
+	// in client SDK.
+	AllowChannelCompaction bool
 	// AllowTagsFilter if set to true allows client to use publication filter by tags. If not allowed
 	// and client provided a filter – the BadRequest error will be returned.
 	// Important note here, since channel permissions are managed on channel level, tags filtering
