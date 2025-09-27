@@ -100,7 +100,7 @@ func NewKafkaBroker(n *Node, config KafkaBrokerConfig) (*KafkaBroker, error) {
 	if config.ConsumerGroupID == "" {
 		// Use a stable consumer group ID to avoid creating new groups on every restart
 		// This prevents Kafka from accumulating consumer groups and crashing
-		config.ConsumerGroupID = "centrifuge-kafka-consumer-group"
+		config.ConsumerGroupID = "centrifuge-kafka-consumer-group-default"
 	}
 
 	if config.NumPartitions == 0 {
