@@ -5,7 +5,14 @@ import (
 
 	"github.com/centrifugal/protocol"
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
 )
+
+var testTags = map[string]string{
+	"count":  "100",
+	"price":  "120.0",
+	"ticker": "GOOG",
+}
 
 func buildTestCompareFilter() *protocol.FilterNode {
 	return &protocol.FilterNode{
@@ -33,15 +40,15 @@ func buildTestCompareFilter() *protocol.FilterNode {
 	}
 }
 
-func buildTestCompareCELProgram() cel.Program {
+const testCelExpr = `int(tags["count"]) > 42 && double(tags["price"]) >= 99.5 && tags["ticker"].contains("GOO")`
+
+func buildTestCompareCELProgram(expr string) cel.Program {
 	env, err := cel.NewEnv(
 		cel.Variable("tags", cel.MapType(cel.StringType, cel.StringType)),
 	)
 	if err != nil {
 		panic(err)
 	}
-
-	expr := `int(tags["count"]) > 42 && double(tags["price"]) >= 99.5 && tags["ticker"].contains("GOO")`
 
 	ast, issues := env.Parse(expr)
 	if issues != nil && issues.Err() != nil {
@@ -60,15 +67,21 @@ func buildTestCompareCELProgram() cel.Program {
 	return prg
 }
 
-func BenchmarkFilterCompareFilterNode10k(b *testing.B) {
+func BenchmarkCompareFilterNode(b *testing.B) {
+	filter := buildTestCompareFilter()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		res, _ := Match(filter, testTags)
+		if !res {
+			b.Fatal("unexpected result")
+		}
+	}
+}
+
+func BenchmarkCompareFilterNode10k(b *testing.B) {
 	filter := buildTestCompareFilter()
 	const subscribers = 10000
-
-	tags := map[string]string{
-		"count":  "100",
-		"price":  "120.0",
-		"ticker": "GOOG",
-	}
 
 	subs := make([]*protocol.FilterNode, subscribers)
 	for i := 0; i < subscribers; i++ {
@@ -80,13 +93,36 @@ func BenchmarkFilterCompareFilterNode10k(b *testing.B) {
 
 	for b.Loop() {
 		for _, sub := range subs {
-			_, _ = Match(sub, tags)
+			res, _ := Match(sub, testTags)
+			if !res {
+				b.Fatal("unexpected result")
+			}
 		}
 	}
 }
 
-func BenchmarkFilterCompareCEL10k(b *testing.B) {
-	prg := buildTestCompareCELProgram()
+func BenchmarkCompareCELProgram(b *testing.B) {
+	prg := buildTestCompareCELProgram(testCelExpr)
+
+	// Create a shared activation map outside the loop to reduce allocations.
+	activation := map[string]any{"tags": testTags}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		out, _, err := prg.Eval(activation)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if out != types.True {
+			b.Fatal("unexpected result")
+		}
+	}
+}
+
+func BenchmarkCompareCEL10k(b *testing.B) {
+	prg := buildTestCompareCELProgram(testCelExpr)
 
 	const subscribers = 10000
 
@@ -95,14 +131,8 @@ func BenchmarkFilterCompareCEL10k(b *testing.B) {
 		subs[i] = prg
 	}
 
-	tags := map[string]string{
-		"count":  "100",
-		"price":  "120.0",
-		"ticker": "GOOG",
-	}
-
 	// Create a shared activation map outside the loop to reduce allocations.
-	activation := map[string]any{"tags": tags}
+	activation := map[string]any{"tags": testTags}
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -113,29 +143,28 @@ func BenchmarkFilterCompareCEL10k(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			// cast to bool
-			if out.Value().(bool) != true {
+			if out != types.True {
 				b.Fatal("unexpected result")
 			}
 		}
 	}
 }
 
-func BenchmarkFilterCompareMemoryFilterNode(b *testing.B) {
+func BenchmarkCompareMemoryFilterNode(b *testing.B) {
 	for b.Loop() {
 		buildTestCompareFilter()
 	}
 }
 
-func BenchmarkFilterCompareMemoryFilterNodeHash(b *testing.B) {
+func BenchmarkCompareMemoryFilterNodeHash(b *testing.B) {
 	for b.Loop() {
 		f := buildTestCompareFilter()
 		Hash(f)
 	}
 }
 
-func BenchmarkFilterCompareCELMemory(b *testing.B) {
+func BenchmarkCompareCELMemory(b *testing.B) {
 	for b.Loop() {
-		buildTestCompareCELProgram()
+		buildTestCompareCELProgram(testCelExpr)
 	}
 }
