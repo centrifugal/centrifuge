@@ -1148,13 +1148,13 @@ func (n *Node) Subscribe(userID string, channel string, opts ...SubscribeOption)
 	for _, opt := range opts {
 		opt(subscribeOpts)
 	}
-	// Subscribe on this node.
-	err := n.hub.subscribe(userID, channel, subscribeOpts.clientID, subscribeOpts.sessionID, opts...)
+	// Send subscribe control message to other nodes.
+	err := n.pubSubscribe(userID, channel, *subscribeOpts)
 	if err != nil {
 		return err
 	}
-	// Send subscribe control message to other nodes.
-	return n.pubSubscribe(userID, channel, *subscribeOpts)
+	// Subscribe on this node.
+	return n.hub.subscribe(userID, channel, subscribeOpts.clientID, subscribeOpts.sessionID, opts...)
 }
 
 // Unsubscribe unsubscribes user from a channel.
@@ -1168,14 +1168,13 @@ func (n *Node) Unsubscribe(userID string, channel string, opts ...UnsubscribeOpt
 	if unsubscribeOpts.unsubscribe != nil {
 		customUnsubscribe = *unsubscribeOpts.unsubscribe
 	}
-
-	// Unsubscribe on this node.
-	err := n.hub.unsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
+	// Send unsubscribe control message to other nodes.
+	err := n.pubUnsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
 	if err != nil {
 		return err
 	}
-	// Send unsubscribe control message to other nodes.
-	return n.pubUnsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
+	// Unsubscribe on this node.
+	return n.hub.unsubscribe(userID, channel, customUnsubscribe, unsubscribeOpts.clientID, unsubscribeOpts.sessionID)
 }
 
 // Disconnect allows closing all user connections on all nodes.
@@ -1189,12 +1188,13 @@ func (n *Node) Disconnect(userID string, opts ...DisconnectOption) error {
 	if disconnectOpts.Disconnect != nil {
 		customDisconnect = *disconnectOpts.Disconnect
 	}
-	err := n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
+	// Send disconnect control message to other nodes.
+	err := n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
 	if err != nil {
 		return err
 	}
-	// Send disconnect control message to other nodes
-	return n.pubDisconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
+	// Disconnect on this node.
+	return n.hub.disconnect(userID, customDisconnect, disconnectOpts.clientID, disconnectOpts.sessionID, disconnectOpts.ClientWhitelist)
 }
 
 // Refresh user connection.
@@ -1206,13 +1206,12 @@ func (n *Node) Refresh(userID string, opts ...RefreshOption) error {
 	for _, opt := range opts {
 		opt(refreshOpts)
 	}
-	// Refresh on this node.
-	err := n.hub.refresh(userID, refreshOpts.clientID, refreshOpts.sessionID, opts...)
+	err := n.pubRefresh(userID, *refreshOpts)
 	if err != nil {
 		return err
 	}
-	// Send refresh control message to other nodes.
-	return n.pubRefresh(userID, *refreshOpts)
+	// Refresh on this node.
+	return n.hub.refresh(userID, refreshOpts.clientID, refreshOpts.sessionID, opts...)
 }
 
 func (n *Node) getPresenceManager(ch string) PresenceManager {
