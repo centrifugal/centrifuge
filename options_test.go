@@ -47,7 +47,7 @@ func TestWithVersion(t *testing.T) {
 	opt := WithVersion(2, "xxx")
 	opts := &PublishOptions{}
 	opt(opts)
-	require.Equal(t, 2, opts.Version)
+	require.Equal(t, uint64(2), opts.Version)
 	require.Equal(t, "xxx", opts.VersionEpoch)
 }
 
