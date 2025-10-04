@@ -366,11 +366,6 @@ func (h *connShard) unsubscribe(user string, ch string, unsubscribe Unsubscribe,
 
 func (h *connShard) disconnect(user string, disconnect Disconnect, clientID string, sessionID string, whitelist []string) error {
 	userConnections := h.userConnections(user)
-
-	var firstErr error
-	var errMu sync.Mutex
-
-	var wg sync.WaitGroup
 	for _, c := range userConnections {
 		if stringInSlice(c.ID(), whitelist) {
 			continue
@@ -381,19 +376,9 @@ func (h *connShard) disconnect(user string, disconnect Disconnect, clientID stri
 		if sessionID != "" && c.sessionID() != sessionID {
 			continue
 		}
-		wg.Add(1)
-		go func(cc *Client) {
-			defer wg.Done()
-			err := cc.close(disconnect)
-			errMu.Lock()
-			defer errMu.Unlock()
-			if err != nil && err != io.EOF && firstErr == nil {
-				firstErr = err
-			}
-		}(c)
+		c.Disconnect(disconnect)
 	}
-	wg.Wait()
-	return firstErr
+	return nil
 }
 
 // userConnections returns all connections of user with specified User.

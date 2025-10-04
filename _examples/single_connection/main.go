@@ -49,32 +49,32 @@ func main() {
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
+		userID := cred.UserID
+
+		presenceStats, err := node.PresenceStats("#" + userID)
+		if err != nil {
+			return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+		}
+		if presenceStats.NumClients >= 1 {
+			err = node.Disconnect(
+				userID,
+				centrifuge.WithCustomDisconnect(centrifuge.DisconnectConnectionLimit),
+				centrifuge.WithDisconnectClientWhitelist([]string{e.ClientID}),
+			)
+			if err != nil {
+				return centrifuge.ConnectReply{}, centrifuge.DisconnectServerError
+			}
+		}
+
 		return centrifuge.ConnectReply{
 			// Subscribe to personal several server-side channel.
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
-				"#" + cred.UserID: {EmitPresence: true},
+				"#" + userID: {EmitPresence: true},
 			},
 		}, nil
 	})
 
 	node.OnConnect(func(client *centrifuge.Client) {
-		presenceStats, err := node.PresenceStats("#" + client.UserID())
-		if err != nil {
-			client.Disconnect(centrifuge.DisconnectServerError)
-			return
-		}
-		if presenceStats.NumClients >= 2 {
-			err = node.Disconnect(
-				client.UserID(),
-				centrifuge.WithCustomDisconnect(centrifuge.DisconnectConnectionLimit),
-				centrifuge.WithDisconnectClientWhitelist([]string{client.ID()}),
-			)
-			if err != nil {
-				client.Disconnect(centrifuge.DisconnectServerError)
-				return
-			}
-		}
-
 		transport := client.Transport()
 		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
 
@@ -96,6 +96,7 @@ func main() {
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	go func() {
+		log.Println("starting http server, visit http://localhost:8000")
 		if err := http.ListenAndServe(":8000", nil); err != nil {
 			log.Fatal(err)
 		}
