@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"html/template"
 	"log"
 	"math"
 	"math/rand"
@@ -32,6 +33,26 @@ func authMiddleware(h http.Handler) http.Handler {
 		r = r.WithContext(newCtx)
 		h.ServeHTTP(w, r)
 	})
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	useProtobuf := r.URL.Query().Get("protobuf") == "true"
+
+	tmpl, err := template.ParseFiles("index.html")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := struct {
+		UseProtobuf bool
+	}{
+		UseProtobuf: useProtobuf,
+	}
+
+	if err := tmpl.Execute(w, data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func waitExitSignal(n *centrifuge.Node) {
@@ -104,7 +125,7 @@ func main() {
 
 	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	http.Handle("/metrics", promhttp.Handler())
-	http.Handle("/", http.FileServer(http.Dir("./")))
+	http.HandleFunc("/", handleIndex)
 
 	// Start publishing ticker data
 	go publishTickerData(node)

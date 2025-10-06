@@ -22,9 +22,9 @@
                 flex-direction: column;
             }
             .card {
-                border: none;
-                border-radius: 15px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                border: 2px solid rgba(255,255,255,0.2);
+                border-radius: 0;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
                 height: 100%;
                 display: flex;
                 flex-direction: column;
@@ -38,21 +38,33 @@
             .card-header {
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 color: white;
-                border-radius: 15px 15px 0 0 !important;
+                border-radius: 0;
                 padding: 20px;
+                border-bottom: 2px solid rgba(255,255,255,0.3);
             }
             .card-header h1 {
                 margin: 0;
                 font-size: 24px;
                 font-weight: 600;
             }
+            .card-header a {
+                color: white;
+                text-decoration: none;
+                opacity: 0.9;
+                transition: opacity 0.2s;
+            }
+            .card-header a:hover {
+                opacity: 1;
+                text-decoration: underline;
+            }
             .protocol-badge {
                 display: inline-block;
                 padding: 4px 12px;
-                border-radius: 12px;
+                border-radius: 0;
                 font-size: 12px;
                 font-weight: 600;
                 margin-left: 10px;
+                border: 1px solid rgba(255,255,255,0.5);
             }
             .protocol-protobuf {
                 background: #10b981;
@@ -64,30 +76,32 @@
             }
             #status {
                 padding: 12px;
-                border-radius: 8px;
+                border-radius: 0;
                 font-weight: 500;
                 margin-bottom: 20px;
+                border: 1px solid;
             }
             .status-connected {
                 background: #d1fae5;
                 color: #065f46;
-                border-left: 4px solid #10b981;
+                border-color: #10b981;
             }
             .status-disconnected {
                 background: #fee2e2;
                 color: #991b1b;
-                border-left: 4px solid #ef4444;
+                border-color: #ef4444;
             }
             .status-connecting {
                 background: #fef3c7;
                 color: #92400e;
-                border-left: 4px solid #f59e0b;
+                border-color: #f59e0b;
             }
             .controls {
                 background: #f8fafc;
                 padding: 20px;
-                border-radius: 10px;
+                border-radius: 0;
                 margin-bottom: 20px;
+                border: 1px solid #e2e8f0;
             }
             .controls label {
                 font-weight: 600;
@@ -97,7 +111,7 @@
             #tickerSelect {
                 padding: 8px 16px;
                 border: 2px solid #e2e8f0;
-                border-radius: 8px;
+                border-radius: 0;
                 font-size: 14px;
                 font-weight: 500;
                 color: #1e293b;
@@ -106,7 +120,7 @@
             #tickerSelect:focus {
                 outline: none;
                 border-color: #667eea;
-                box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+                box-shadow: none;
             }
             .messages-container {
                 flex: 1;
@@ -125,12 +139,14 @@
                 padding: 12px 16px;
                 margin-bottom: 8px;
                 background: white;
-                border-radius: 8px;
-                border-left: 4px solid #667eea;
+                border-radius: 0;
+                border-left: 3px solid #667eea;
+                border-top: 1px solid #e2e8f0;
+                border-right: 1px solid #e2e8f0;
+                border-bottom: 1px solid #e2e8f0;
                 font-size: 14px;
                 line-height: 1.6;
                 animation: slideIn 0.3s ease;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
             }
             @keyframes slideIn {
                 from {
@@ -157,7 +173,7 @@
             .info-text {
                 background: #eff6ff;
                 border: 1px solid #bfdbfe;
-                border-radius: 8px;
+                border-radius: 0;
                 padding: 12px;
                 margin-top: 5px;
                 margin-bottom: 10px;
@@ -167,7 +183,7 @@
             .info-text code {
                 background: #dbeafe;
                 padding: 2px 6px;
-                border-radius: 4px;
+                border-radius: 0;
                 font-family: 'Courier New', monospace;
                 color: #1e3a8a;
             }
@@ -176,31 +192,25 @@
             }
             ::-webkit-scrollbar-track {
                 background: #f1f5f9;
-                border-radius: 4px;
+                border-radius: 0;
             }
             ::-webkit-scrollbar-thumb {
                 background: #cbd5e1;
-                border-radius: 4px;
+                border-radius: 0;
             }
             ::-webkit-scrollbar-thumb:hover {
                 background: #94a3b8;
             }
         </style>
+        {{if .UseProtobuf}}
+        <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding-indexes.js"></script>
+        <script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding.js"></script>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@^5.5/dist/centrifuge.protobuf.js"></script>
+        {{else}}
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@^5.5/dist/centrifuge.js"></script>
+        {{end}}
         <script type="text/javascript">
-            // Check if protobuf mode is enabled via URL parameter.
-            const urlParams = new URLSearchParams(window.location.search);
-            const useProtobuf = urlParams.get('protobuf') === 'true';
-
-            if (useProtobuf) {
-                // Load text-encoding polyfills for protobuf mode
-                document.write('<script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding-indexes.js"><\/script>');
-                document.write('<script src="https://unpkg.com/text-encoding@0.6.4/lib/encoding.js"><\/script>');
-                document.write('<script type="text/javascript" src="https://unpkg.com/centrifuge@^5.5/dist/centrifuge.protobuf.js"><\/script>');
-            } else {
-                document.write('<script type="text/javascript" src="https://unpkg.com/centrifuge@^5.5/dist/centrifuge.js"><\/script>');
-            }
-        </script>
-        <script type="text/javascript">
+            const useProtobuf = {{.UseProtobuf}};
             // helper functions to work with escaping html.
             const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
             function replaceTag(tag) {return tagsToReplace[tag] || tag;}
@@ -330,10 +340,19 @@
                 <div class="card-header">
                     <h1>
                         Stock Ticker Feed - Tags Filter
-                        <script>
-                            document.write('<span class="protocol-badge protocol-' + (useProtobuf ? 'protobuf">Protobuf' : 'json">JSON') + '</span>');
-                        </script>
+                        {{if .UseProtobuf}}
+                        <span class="protocol-badge protocol-protobuf">Protobuf</span>
+                        {{else}}
+                        <span class="protocol-badge protocol-json">JSON</span>
+                        {{end}}
                     </h1>
+                    <div style="margin-top: 10px; font-size: 14px;">
+                        {{if .UseProtobuf}}
+                        <a href="/">← Switch to JSON</a>
+                        {{else}}
+                        <a href="?protobuf=true">Switch to Protobuf →</a>
+                        {{end}}
+                    </div>
                 </div>
                 <div class="card-body">
                     <div id="status" class="status-disconnected">Not connected</div>
@@ -360,13 +379,11 @@
                     </div>
 
                     <div class="info-text">
-                        <script>
-                            if (!useProtobuf) {
-                                document.write('<strong>ℹ️ Tip:</strong> Add <code><a href="?protobuf=true">?protobuf=true</a></code> to the URL to use Protobuf protocol instead of JSON.');
-                            } else {
-                                document.write('<strong>✓ Protobuf Mode:</strong> Using binary protocol with TextEncoder/TextDecoder.');
-                            }
-                        </script>
+                        {{if .UseProtobuf}}
+                        <strong>✓ Protobuf Mode:</strong> Using binary protocol with TextEncoder/TextDecoder for efficient data transfer.
+                        {{else}}
+                        <strong>ℹ️ JSON Mode:</strong> Using JSON protocol for human-readable data transfer.
+                        {{end}}
                     </div>
 
                     <div class="messages-container">
