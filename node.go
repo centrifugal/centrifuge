@@ -14,6 +14,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/controlpb"
 	"github.com/centrifugal/centrifuge/internal/controlproto"
 	"github.com/centrifugal/centrifuge/internal/dissolve"
+	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/centrifuge/internal/nowtime"
 
 	"github.com/FZambia/eagle"
@@ -1027,15 +1028,15 @@ func (n *Node) removeClient(c *Client) {
 
 // addSubscription registers subscription of connection on channel in both
 // Hub and Broker.
-func (n *Node) addSubscription(ch string, sub subInfo) error {
+func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
 	n.metrics.subscriptionsInflight.WithLabelValues(sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)).Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
-	first, err := n.hub.addSub(ch, sub)
+	chanID, first, err := n.hub.addSub(ch, sub)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if first {
 		if n.config.GetChannelMediumOptions != nil {
@@ -1044,7 +1045,7 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 				medium, err := newChannelMedium(ch, n, mediumOptions)
 				if err != nil {
 					_, _ = n.hub.removeSub(ch, sub.client)
-					return err
+					return 0, err
 				}
 				mediumMu := n.mediumLock(ch)
 				mediumMu.Lock()
@@ -1067,10 +1068,10 @@ func (n *Node) addSubscription(ch string, sub subInfo) error {
 				}
 				mediumMu.Unlock()
 			}
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return chanID, nil
 }
 
 // removeSubscription removes subscription of connection on channel
@@ -1091,29 +1092,29 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 			if timeSpent < time.Second {
 				time.Sleep(time.Second - timeSpent)
 			}
-			mu := n.subLock(ch)
-			mu.Lock()
-			defer mu.Unlock()
-			empty := n.hub.NumSubscribers(ch) == 0
-			if empty {
+			subMu := n.subLock(ch)
+			subMu.Lock()
+			defer subMu.Unlock()
+			noSubscribers := n.hub.NumSubscribers(ch) == 0
+			if noSubscribers {
 				n.metrics.incActionCount("broker_unsubscribe", ch)
 				err := n.getBroker(ch).Unsubscribe(ch)
 				if err != nil {
 					// Cool down a bit since broker is not ready to process unsubscription.
 					time.Sleep(500 * time.Millisecond)
-				} else {
-					if n.config.GetChannelMediumOptions != nil {
-						mediumMu := n.mediumLock(ch)
-						mediumMu.Lock()
-						medium, ok := n.mediums[ch]
-						if ok {
-							medium.close()
-							delete(n.mediums, ch)
-						}
-						mediumMu.Unlock()
-					}
+					return err
 				}
-				return err
+				n.hub.removeSubID(ch)
+				if n.config.GetChannelMediumOptions != nil {
+					mediumMu := n.mediumLock(ch)
+					mediumMu.Lock()
+					medium, ok := n.mediums[ch]
+					if ok {
+						medium.close()
+						delete(n.mediums, ch)
+					}
+					mediumMu.Unlock()
+				}
 			}
 			return nil
 		})
@@ -1459,20 +1460,47 @@ func (n *Node) recoverHistory(ch string, since StreamPosition, historyMetaTTL ti
 }
 
 // recoverCache recovers last publication in channel.
-func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration) (*Publication, StreamPosition, error) {
+func (n *Node) recoverCache(ch string, historyMetaTTL time.Duration, tf *tagsFilter) (*Publication, *Publication, StreamPosition, error) {
 	n.metrics.incActionCount("history_recover_cache", ch)
+	if tf == nil {
+		hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
+			Limit:   1,
+			Reverse: true,
+		}), WithHistoryMetaTTL(historyMetaTTL))
+		if err != nil {
+			return nil, nil, StreamPosition{}, err
+		}
+		var latestPublication *Publication
+		if len(hr.Publications) > 0 {
+			latestPublication = hr.Publications[0]
+		}
+		return latestPublication, latestPublication, hr.StreamPosition, nil
+	}
+
+	limit := NoLimit
+	maxPublicationLimit := n.config.RecoveryMaxPublicationLimit
+	if maxPublicationLimit > 0 {
+		limit = maxPublicationLimit
+	}
+
 	hr, err := n.History(ch, WithHistoryFilter(HistoryFilter{
-		Limit:   1,
+		Limit:   limit,
 		Reverse: true,
 	}), WithHistoryMetaTTL(historyMetaTTL))
 	if err != nil {
-		return nil, StreamPosition{}, err
+		return nil, nil, StreamPosition{}, err
 	}
 	var latestPublication *Publication
 	if len(hr.Publications) > 0 {
 		latestPublication = hr.Publications[0]
 	}
-	return latestPublication, hr.StreamPosition, nil
+	for _, pub := range hr.Publications {
+		match, _ := filter.Match(tf.filter, pub.Tags)
+		if match {
+			return latestPublication, pub, hr.StreamPosition, nil
+		}
+	}
+	return nil, nil, hr.StreamPosition, nil
 }
 
 // streamTop returns current stream top StreamPosition for a channel.

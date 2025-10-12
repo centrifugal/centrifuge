@@ -1,6 +1,8 @@
 package centrifuge
 
-import "time"
+import (
+	"time"
+)
 
 // PublishOption is a type to represent various Publish options.
 type PublishOption func(*PublishOptions)
@@ -47,9 +49,9 @@ func WithClientInfo(info *ClientInfo) PublishOption {
 }
 
 // WithTags allows setting Publication.Tags.
-func WithTags(meta map[string]string) PublishOption {
+func WithTags(tags map[string]string) PublishOption {
 	return func(opts *PublishOptions) {
-		opts.Tags = meta
+		opts.Tags = tags
 	}
 }
 
@@ -80,6 +82,11 @@ func WithVersion(version uint64, versionEpoch string) PublishOption {
 
 // SubscribeOptions define per-subscription options.
 type SubscribeOptions struct {
+	// clientID to subscribe.
+	clientID string
+	// sessionID to subscribe.
+	sessionID string
+
 	// ExpireAt defines time in future when subscription should expire,
 	// zero value means no expiration.
 	ExpireAt int64
@@ -126,14 +133,19 @@ type SubscribeOptions struct {
 	// within a channel and will receive full data in publications.
 	// Delta encoding is an EXPERIMENTAL feature and may be changed.
 	AllowedDeltaTypes []DeltaType
-
-	// clientID to subscribe.
-	clientID string
-	// sessionID to subscribe.
-	sessionID string
 	// Source is a way to mark the source of Subscription - i.e. where it comes from. May be useful
 	// for inspection of a connection during its lifetime.
 	Source uint8
+	// AllowChannelCompaction if true allows client to negotiate channel ID compaction –
+	// Centrifuge will replace channel names with shorter IDs in subscription pushes.
+	// If disabled, clients receive the full channel name in all pushes. Requires support
+	// in client SDK.
+	AllowChannelCompaction bool
+	// AllowTagsFilter if set to true allows client to use publication filter by tags. If not allowed
+	// and client provided a filter – the BadRequest error will be returned.
+	// Important note here, since channel permissions are managed on channel level, tags filtering
+	// must be used as a bandwidth optimization, not an access control mechanism.
+	AllowTagsFilter bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.
