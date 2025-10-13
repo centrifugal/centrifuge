@@ -317,7 +317,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	m.tagsFilterDroppedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
-		Name:      "tags_filter_dropped_count",
+		Name:      "tags_filter_dropped_publications",
 		Help:      "Number of publications dropped due to tags filtering.",
 	}, []string{"channel_namespace"})
 
