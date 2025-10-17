@@ -1,0 +1,50 @@
+services:
+  haproxy:
+    image: haproxy:2.9-alpine
+    ports:
+      - "443:443"
+      - "8404:8404"  # HAProxy stats
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./certs:/certs:ro
+    depends_on:
+      - centrifuge1
+      - centrifuge2
+      - centrifuge3
+    networks:
+      - centrifuge-net
+    restart: unless-stopped
+
+  centrifuge1:
+    build: .
+    environment:
+      - PORT=8443
+      - INSTANCE_NAME=centrifuge1
+      - GODEBUG=http2xconnect=1
+    networks:
+      - centrifuge-net
+    restart: unless-stopped
+
+  centrifuge2:
+    build: .
+    environment:
+      - PORT=8443
+      - INSTANCE_NAME=centrifuge2
+      - GODEBUG=http2xconnect=1
+    networks:
+      - centrifuge-net
+    restart: unless-stopped
+
+  centrifuge3:
+    build: .
+    environment:
+      - PORT=8443
+      - INSTANCE_NAME=centrifuge3
+      - GODEBUG=http2xconnect=1
+    networks:
+      - centrifuge-net
+    restart: unless-stopped
+
+networks:
+  centrifuge-net:
+    driver: bridge

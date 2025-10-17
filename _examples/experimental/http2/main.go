@@ -14,11 +14,12 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/quic-go/quic-go/http3"
 )
 
 var (
-	port = flag.Int("port", 4433, "Port to bind app to")
+	port = flag.Int("port", 8080, "Port to bind app to")
+	cert = flag.String("cert", "certs/localhost.pem", "TLS certificate file")
+	key  = flag.String("key", "certs/localhost-key.pem", "TLS key file")
 )
 
 type clientMessage struct {
@@ -156,7 +157,7 @@ func main() {
 			log.Printf("[user %s] sent RPC, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
 			switch e.Method {
 			case "getCurrentYear":
-				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2025"}`)}, nil)
 			default:
 				cb(centrifuge.RPCReply{}, centrifuge.ErrorMethodNotFound)
 			}
@@ -197,7 +198,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.DefaultServeMux
+	mux := http.NewServeMux()
+
 	mux.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	mux.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
 	mux.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
@@ -206,13 +208,18 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/", http.FileServer(http.Dir("./")))
 
+	addr := "0.0.0.0:" + strconv.Itoa(*port)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+	log.Printf("running with TLS, open https://localhost:%d", *port)
 	go func() {
-		if err := http3.ListenAndServeTLS("0.0.0.0:"+strconv.Itoa(*port), "certs/localhost.pem", "certs/localhost-key.pem", mux); err != nil {
+		if err := srv.ListenAndServeTLS(*cert, *key); err != nil {
 			log.Fatal(err)
 		}
 	}()
 
-	log.Println("running, open https://localhost:" + strconv.Itoa(*port))
 	waitExitSignal(node)
 	log.Println("bye!")
 }

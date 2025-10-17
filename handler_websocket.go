@@ -91,6 +91,7 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 		ReadBufferSize:    config.ReadBufferSize,
 		EnableCompression: config.Compression,
 		Subprotocols:      []string{"centrifuge-json", "centrifuge-protobuf"},
+		Protocol:          websocket.ProtocolAcceptAny,
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool
@@ -189,8 +190,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Separate goroutine for better GC of caller's data.
-	go func() {
+	handleConn := func() {
 		opts := websocketTransportOptions{
 			pingPong:           s.config.PingPongConfig,
 			writeTimeout:       writeTimeout,
@@ -209,10 +209,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		default:
 		}
 
-		ctxCh := make(chan struct{})
-		defer close(ctxCh)
+		clientCtx := r.Context()
+		if r.ProtoMajor == 1 {
+			ctxCh := make(chan struct{})
+			defer close(ctxCh)
+			clientCtx = cancelctx.New(r.Context(), ctxCh)
+		}
 
-		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
+		c, closeFn, err := NewClient(clientCtx, s.node, transport)
 		if err != nil {
 			s.node.logger.log(newErrorLogEntry(err, "error creating client", map[string]any{"transport": transportWebsocket}))
 			return
@@ -248,7 +252,15 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-	}()
+	}
+
+	if r.ProtoMajor == 1 {
+		// Separate goroutine for better GC of caller's data for HTTP/1.x.
+		go handleConn()
+	} else {
+		// HTTP/2 and above - execute directly, there is a panic in Go HTTP/2 implementation otherwise.
+		handleConn()
+	}
 }
 
 // HandleReadFrame is a helper to read Centrifuge commands from frame-based io.Reader and

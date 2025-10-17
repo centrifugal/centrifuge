@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Centrifuge HTTP/2 WebSocket Example</title>
+        <style type="text/css">
+            input[type="text"] { width: 300px; }
+            .muted {color: #CCCCCC; font-size: 10px;}
+        </style>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@^5/dist/centrifuge.js"></script>
+        <script type="text/javascript">
+            // helper functions to work with escaping html.
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            function replaceTag(tag) {return tagsToReplace[tag] || tag;}
+            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
+
+            const channel = "chat:index";
+
+            window.addEventListener('load', function() {
+                const input = document.getElementById("input");
+                const container = document.getElementById('messages');
+
+                const transports = [
+                    {
+                        transport: 'websocket',
+                        endpoint: `wss://${window.location.host}/connection/websocket`
+                    }
+                ];
+                const centrifuge = new Centrifuge(transports, {});
+
+                centrifuge.on('connected', function(ctx){
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport + ' with data: ' + JSON.stringify(ctx.data));
+                    input.removeAttribute('disabled');
+                });
+
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('error', function(ctx){
+                    drawText('Client error: ' + JSON.stringify(ctx));
+                    centrifuge.connect();
+                });
+
+                centrifuge.on('message', function(data) {
+                    drawText('Message: ' + JSON.stringify(data));
+                });
+
+                centrifuge.on('publication', function(ctx) {
+                    drawText('Server-side publication from channel ' + ctx.channel + ": " + JSON.stringify(ctx.data));
+                });
+
+                centrifuge.on('join', function(ctx) {
+                    drawText('Server-side join from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('leave', function(ctx) {
+                    drawText('Server-side leave from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('subscribed', function(ctx) {
+                    drawText('Subscribed to server-side channel ' + ctx.channel +  ' (ctx: ' + JSON.stringify(ctx) + ')');
+                });
+
+                centrifuge.on('subscribing', function(ctx) {
+                    drawText('Subscribing to server-side channel ' + ctx.channel);
+                });
+
+                centrifuge.on('unsubscribed', function(ctx) {
+                    drawText('Unsubscribe from server-side channel ' + ctx.channel);
+                });
+
+                // show how many users currently in channel.
+                function showPresence(sub) {
+                    sub.presence().then(function(result) {
+                        let count = 0;
+                        for (let key in result.clients){
+                            count++;
+                        }
+                        drawText('Presence: now in this room – ' + count + ' clients');
+                    }, function(err) {
+                        drawText("Presence error: " + JSON.stringify(err));
+                    });
+                }
+
+                // subscribe on channel and bind various event listeners. Actual
+                // subscription request will be sent after client connects to
+                // a server.
+                const sub = centrifuge.newSubscription(channel, {});
+
+                sub.on("publication", function(ctx) {
+                    drawText('Client-side subscription publication: ' + ctx.channel + ", " + JSON.stringify(ctx.data));
+                });
+                sub.on("join", function(ctx) {
+                    drawText('Client-side subscription join: ' + ctx.channel + ", " + JSON.stringify(ctx.info));
+                });
+                sub.on("leave", function(ctx) {
+                    drawText('Client-side subscription leave: ' + ctx.channel + ", " + JSON.stringify(ctx.info));
+                });
+                sub.on("subscribing", function(ctx) {
+                    drawText('Client-side subscription subscribing: ' + ctx.channel);
+                });
+                sub.on("subscribed", function(ctx) {
+                    drawText('Client-side subscription subscribed to channel ' + ctx.channel);
+                    showPresence(sub);
+                });
+                sub.on("unsubscribed", function(ctx) {
+                    drawText('Client-side subscription unsubscribed from channel ' + ctx.channel);
+                });
+                sub.on("error", function(ctx) {
+                    drawText('Client-side subscription error: ' + ctx.channel);
+                });
+
+                sub.subscribe();
+
+                // Trigger actual connection request to server.
+                centrifuge.connect();
+
+                // Publish to channel when user presses key in input field.
+                input.addEventListener('keyup', function(e) {
+                    if (e.keyCode === 13) {
+                        sub.publish({"input": input.value}).then(function() {
+                            console.log("message accepted by server");
+                        }, function(err) {
+                            drawText("Error publishing message: " + JSON.stringify(err));
+                        });
+                        input.value = '';
+                    }
+                });
+
+                // Draw raw data in textarea.
+                function drawText(text) {
+                    const time = '<span class="muted">' + new Date().toLocaleTimeString() + '</span>';
+                    container.innerHTML = time + ' ' + safeTagsReplace(text) + '<br>' + container.innerHTML;
+                }
+            }, false);
+        </script>
+    </head>
+    <body>
+        <h3>Centrifuge WebSocket over HTTP/2 Demo</h3>
+        <p>This example demonstrates WebSocket over HTTP/2 using RFC 8441 extended CONNECT.</p>
+        <div id="counter"></div>
+        <input type="text" id="input" autocomplete="off" disabled />
+        <div id="messages"></div>
+    </body>
+</html>

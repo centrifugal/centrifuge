@@ -73,6 +73,13 @@ type Upgrader struct {
 	// guarantee that compression will be supported. Currently only "no context
 	// takeover" modes are supported.
 	EnableCompression bool
+
+	// Protocol selects which HTTP version to accept. Zero value defaults to
+	// ProtocolHTTP1. ProtocolAcceptAny allows accepting either HTTP/1.1 or
+	// HTTP/2.
+	//
+	// Experimental: This feature is experimental and may change in the future.
+	Protocol Protocol
 }
 
 func (u *Upgrader) returnError(w http.ResponseWriter, r *http.Request, status int, reason string) (*Conn, string, error) {
@@ -156,22 +163,39 @@ func Subprotocols(r *http.Request) []string {
 // If the upgrade fails, then Upgrade replies to the client with an HTTP error
 // response.
 func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*Conn, string, error) {
-	const badHandshake = "websocket: the client is not using the websocket protocol: "
-
-	if !tokenListContainsValue(r.Header, "Connection", "upgrade") {
-		return u.returnError(w, r, http.StatusBadRequest, badHandshake+"'upgrade' token not found in 'Connection' header")
+	// Determine if this is an HTTP/2 extended CONNECT request.
+	proto := ProtocolHTTP1
+	if r.ProtoMajor == 2 {
+		proto = ProtocolHTTP2
 	}
 
-	if !tokenListContainsValue(r.Header, "Upgrade", "websocket") {
-		return u.returnError(w, r, http.StatusBadRequest, badHandshake+"'websocket' token not found in 'Upgrade' header")
+	// Check protocol compatibility.
+	switch u.Protocol {
+	case ProtocolHTTP1:
+		if proto == ProtocolHTTP2 {
+			return u.returnError(w, r, http.StatusBadRequest, "websocket: HTTP/2 extended CONNECT refused: server only accepts HTTP/1.1 Upgrade")
+		}
+	case ProtocolHTTP2:
+		if proto == ProtocolHTTP1 {
+			return u.returnError(w, r, http.StatusBadRequest, "websocket: HTTP/1.1 Upgrade refused: server requires HTTP/2 extended CONNECT")
+		}
+	case ProtocolAcceptAny:
+		// Accept both HTTP/1.1 and HTTP/2.
+	default:
+		return u.returnError(w, r, http.StatusInternalServerError, "websocket: invalid protocol configuration")
 	}
 
-	if r.Method != http.MethodGet {
-		return u.returnError(w, r, http.StatusMethodNotAllowed, badHandshake+"request method is not GET")
+	// Validate the handshake based on the protocol version.
+	var challengeKey string
+	var err error
+	if proto == ProtocolHTTP2 {
+		challengeKey, err = u.verifyClientRequestH2(w, r)
+	} else {
+		challengeKey, err = u.verifyClientRequestH1(w, r)
 	}
-
-	if !tokenListContainsValue(r.Header, "Sec-Websocket-Version", "13") {
-		return u.returnError(w, r, http.StatusBadRequest, "websocket: unsupported version: 13 not found in 'Sec-Websocket-Version' header")
+	if err != nil {
+		// Error response already sent by verification function.
+		return nil, "", err
 	}
 
 	if _, ok := responseHeader["Sec-Websocket-Extensions"]; ok {
@@ -184,11 +208,6 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	}
 	if !checkOrigin(r) {
 		return u.returnError(w, r, http.StatusForbidden, "websocket: request origin not allowed by Upgrader.CheckOrigin")
-	}
-
-	challengeKey := r.Header.Get("Sec-Websocket-Key")
-	if !isValidChallengeKey(challengeKey) {
-		return u.returnError(w, r, http.StatusBadRequest, "websocket: not a websocket handshake: 'Sec-WebSocket-Key' header must be Base64 encoded value of 16-byte in length")
 	}
 
 	subprotocol := u.selectSubprotocol(r, responseHeader)
@@ -205,6 +224,16 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 		}
 	}
 
+	// Handle HTTP/2 extended CONNECT handshake.
+	if proto == ProtocolHTTP2 {
+		return u.upgradeH2(w, r, responseHeader, challengeKey, subprotocol, compress)
+	}
+	// Handle HTTP/1.1 Upgrade handshake.
+	return u.upgradeH1(w, r, responseHeader, challengeKey, subprotocol, compress)
+}
+
+// upgradeH1 handles the HTTP/1.1 Upgrade handshake.
+func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHeader http.Header, challengeKey, subprotocol string, compress bool) (*Conn, string, error) {
 	h, ok := w.(http.Hijacker)
 	if !ok {
 		return u.returnError(w, r, http.StatusInternalServerError, "websocket: response does not implement http.Hijacker")
@@ -298,6 +327,55 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	return c, subprotocol, nil
 }
 
+// upgradeH2 handles the HTTP/2 extended CONNECT handshake.
+func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHeader http.Header, challengeKey, subprotocol string, compress bool) (*Conn, string, error) {
+	// Prepare response headers for H2 (no Connection/Upgrade).
+	w.Header().Set("Sec-WebSocket-Accept", computeAcceptKey(challengeKey))
+
+	if subprotocol != "" {
+		w.Header().Set("Sec-WebSocket-Protocol", subprotocol)
+	}
+
+	if compress {
+		w.Header().Set("Sec-WebSocket-Extensions", "permessage-deflate; server_no_context_takeover; client_no_context_takeover")
+	}
+
+	// Copy additional response headers.
+	for k, vs := range responseHeader {
+		if k == "Sec-Websocket-Protocol" {
+			continue
+		}
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
+
+	// RFC 8441 requires a 2xx response for extended CONNECT.
+	w.WriteHeader(http.StatusOK)
+
+	// Flush the response immediately to complete the extended CONNECT
+	// handshake before we start streaming on the tunnel.
+	rc := http.NewResponseController(w)
+	if err := rc.Flush(); err != nil {
+		return nil, "", err
+	}
+
+	stream := &h2ServerStream{
+		ReadCloser: r.Body,
+		Writer:     w,
+		flush:      rc.Flush,
+	}
+
+	c := newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, nil, nil)
+
+	if compress {
+		c.newCompressionWriter = compressNoContextTakeover
+		c.newDecompressionReader = decompressNoContextTakeover
+	}
+
+	return c, subprotocol, nil
+}
+
 // IsWebSocketUpgrade returns true if the client requested upgrade to the
 // WebSocket protocol.
 func IsWebSocketUpgrade(r *http.Request) bool {
@@ -328,4 +406,68 @@ func bufioWriterBuffer(originalWriter io.Writer, bw *bufio.Writer) []byte {
 	bw.Reset(originalWriter)
 
 	return wh.p[:cap(wh.p)]
+}
+
+// verifyClientRequestH1 validates an HTTP/1.1 WebSocket GET/Upgrade request.
+func (u *Upgrader) verifyClientRequestH1(w http.ResponseWriter, r *http.Request) (string, error) {
+	const badHandshake = "websocket: the client is not using the websocket protocol: "
+
+	if !tokenListContainsValue(r.Header, "Connection", "upgrade") {
+		return "", u.returnErrorString(w, r, http.StatusBadRequest, badHandshake+"'upgrade' token not found in 'Connection' header")
+	}
+
+	if !tokenListContainsValue(r.Header, "Upgrade", "websocket") {
+		return "", u.returnErrorString(w, r, http.StatusBadRequest, badHandshake+"'websocket' token not found in 'Upgrade' header")
+	}
+
+	if r.Method != http.MethodGet {
+		return "", u.returnErrorString(w, r, http.StatusMethodNotAllowed, badHandshake+"request method is not GET")
+	}
+
+	if !tokenListContainsValue(r.Header, "Sec-Websocket-Version", "13") {
+		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: unsupported version: 13 not found in 'Sec-Websocket-Version' header")
+	}
+
+	challengeKey := r.Header.Get("Sec-Websocket-Key")
+	if !isValidChallengeKey(challengeKey) {
+		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: not a websocket handshake: 'Sec-WebSocket-Key' header must be Base64 encoded value of 16-byte in length")
+	}
+
+	return challengeKey, nil
+}
+
+// verifyClientRequestH2 validates an HTTP/2 extended CONNECT request.
+func (u *Upgrader) verifyClientRequestH2(w http.ResponseWriter, r *http.Request) (string, error) {
+	if r.ProtoMajor != 2 {
+		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: handshake request must be HTTP/2")
+	}
+
+	if r.Header.Get(":protocol") != "websocket" {
+		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: :protocol header not set or does not match websocket")
+	}
+
+	if r.Method != http.MethodConnect {
+		return "", u.returnErrorString(w, r, http.StatusMethodNotAllowed, "websocket: handshake request method is not CONNECT")
+	}
+
+	if !tokenListContainsValue(r.Header, "Sec-Websocket-Version", "13") {
+		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: unsupported version: 13 not found in 'Sec-Websocket-Version' header")
+	}
+
+	// Sec-WebSocket-Key is not checked in HTTP/2 extended CONNECT.
+	challengeKey := "AAAAAAAAAAAAAAAAAAAAAA==" // Valid base64 of 16 bytes
+
+	return challengeKey, nil
+}
+
+// returnErrorString is a helper that returns an error and sends an HTTP error response.
+func (u *Upgrader) returnErrorString(w http.ResponseWriter, r *http.Request, status int, reason string) error {
+	err := HandshakeError{reason}
+	if u.Error != nil {
+		u.Error(w, r, status, err)
+	} else {
+		w.Header().Set("Sec-Websocket-Version", "13")
+		http.Error(w, http.StatusText(status), status)
+	}
+	return err
 }
