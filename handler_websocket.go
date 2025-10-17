@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -71,6 +70,11 @@ type WebsocketConfig struct {
 	// works well for your use case, and you want to enable it in production.
 	CompressionPreparedMessageCacheSize int64
 
+	// EnableHTTP2ExtendedConnect enables support for HTTP/2 Extended CONNECT (RFC 8441)
+	// for WebSocket connections. When false (default), only HTTP/1.1 Upgrade handshakes
+	// are accepted. When true, both HTTP/1.1 Upgrade and HTTP/2 Extended CONNECT are accepted.
+	EnableHTTP2ExtendedConnect bool
+
 	PingPongConfig
 }
 
@@ -89,10 +93,10 @@ var writeBufferPool = &sync.Pool{}
 // NewWebsocketHandler creates new WebsocketHandler.
 func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
-		ReadBufferSize:    config.ReadBufferSize,
-		EnableCompression: config.Compression,
-		Subprotocols:      []string{"centrifuge-json", "centrifuge-protobuf"},
-		Protocol:          websocket.ProtocolAcceptAny,
+		ReadBufferSize:             config.ReadBufferSize,
+		EnableCompression:          config.Compression,
+		Subprotocols:               []string{"centrifuge-json", "centrifuge-protobuf"},
+		EnableHTTP2ExtendedConnect: config.EnableHTTP2ExtendedConnect,
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool
@@ -147,7 +151,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	conn, subProtocol, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
-		log.Println("Upgrade error:", err)
 		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
@@ -235,12 +238,13 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		for {
 			_, r, err := conn.NextReader()
 			if err != nil {
-				log.Println(err)
+				if s.node.logEnabled(LogLevelTrace) {
+					s.node.logger.log(newLogEntry(LogLevelTrace, "websocket next reader error", map[string]any{"client": c.ID(), "error": err.Error()}))
+				}
 				break
 			}
 			proceed := HandleReadFrame(c, r)
 			if !proceed {
-				log.Println("2")
 				break
 			}
 		}

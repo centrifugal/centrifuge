@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -75,12 +74,14 @@ type Upgrader struct {
 	// takeover" modes are supported.
 	EnableCompression bool
 
-	// Protocol selects which HTTP version to accept. Zero value defaults to
-	// ProtocolHTTP1. ProtocolAcceptAny allows accepting either HTTP/1.1 or
-	// HTTP/2.
-	//
+	// EnableHTTP2ExtendedConnect enables support for HTTP/2 Extended CONNECT
+	// for WebSocket connections. See https://datatracker.ietf.org/doc/html/rfc8441.
+	// When false (default), only HTTP/1.1 Upgrade handshakes are accepted.
+	// When true, both HTTP/1.1 Upgrade and HTTP/2 Extended CONNECT are accepted.
+	// Make sure your infrastructure (proxies, load balancers, etc.) supports HTTP/2
+	// and Extended CONNECT.
 	// Experimental: This feature is experimental and may change in the future.
-	Protocol Protocol
+	EnableHTTP2ExtendedConnect bool
 }
 
 func (u *Upgrader) returnError(w http.ResponseWriter, r *http.Request, status int, reason string) (*Conn, string, error) {
@@ -164,34 +165,13 @@ func Subprotocols(r *http.Request) []string {
 // If the upgrade fails, then Upgrade replies to the client with an HTTP error
 // response.
 func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*Conn, string, error) {
-	log.Println("upgrade, HTTP/2:", r.ProtoMajor == 2)
-	// Determine if this is an HTTP/2 extended CONNECT request.
-	proto := ProtocolHTTP1
-	if r.ProtoMajor == 2 {
-		proto = ProtocolHTTP2
-	}
-
-	// Check protocol compatibility.
-	switch u.Protocol {
-	case ProtocolHTTP1:
-		if proto == ProtocolHTTP2 {
-			return u.returnError(w, r, http.StatusBadRequest, "websocket: HTTP/2 extended CONNECT refused: server only accepts HTTP/1.1 Upgrade")
-		}
-	case ProtocolHTTP2:
-		if proto == ProtocolHTTP1 {
-			return u.returnError(w, r, http.StatusBadRequest, "websocket: HTTP/1.1 Upgrade refused: server requires HTTP/2 extended CONNECT")
-		}
-	case ProtocolAcceptAny:
-		// Accept both HTTP/1.1 and HTTP/2.
-	default:
-		return u.returnError(w, r, http.StatusInternalServerError, "websocket: invalid protocol configuration")
-	}
+	useExtendedConnect := r.ProtoMajor == 2 && u.EnableHTTP2ExtendedConnect && r.Header.Get(":protocol") == "websocket"
 
 	// Validate the handshake based on the protocol version.
 	var challengeKey string
 	var err error
-	if proto == ProtocolHTTP2 {
-		challengeKey, err = u.verifyClientRequestH2(w, r)
+	if useExtendedConnect {
+		err = u.verifyClientRequestH2(w, r)
 	} else {
 		challengeKey, err = u.verifyClientRequestH1(w, r)
 	}
@@ -227,8 +207,8 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	}
 
 	// Handle HTTP/2 extended CONNECT handshake.
-	if proto == ProtocolHTTP2 {
-		return u.upgradeH2(w, r, responseHeader, challengeKey, subprotocol, compress)
+	if useExtendedConnect {
+		return u.upgradeH2(w, r, responseHeader, subprotocol, compress)
 	}
 	// Handle HTTP/1.1 Upgrade handshake.
 	return u.upgradeH1(w, r, responseHeader, challengeKey, subprotocol, compress)
@@ -330,9 +310,8 @@ func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHea
 }
 
 // upgradeH2 handles the HTTP/2 extended CONNECT handshake.
-func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHeader http.Header, challengeKey, subprotocol string, compress bool) (*Conn, string, error) {
-	// Prepare response headers for H2 (no Connection/Upgrade).
-	w.Header().Set("Sec-WebSocket-Accept", computeAcceptKey(challengeKey))
+func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHeader http.Header, subprotocol string, compress bool) (*Conn, string, error) {
+	// "Sec-WebSocket-Accept" not used in HTTP/2 extended CONNECT per RFC 8441.
 
 	if subprotocol != "" {
 		w.Header().Set("Sec-WebSocket-Protocol", subprotocol)
@@ -362,18 +341,13 @@ func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHea
 		return nil, "", err
 	}
 
-	log.Printf("[DEBUG] HTTP/2 Extended CONNECT handshake completed for %s, creating stream from r.Body", r.RemoteAddr)
-
 	stream := &h2ServerStream{
 		ReadCloser: r.Body,
 		Writer:     w,
 		flush:      rc.Flush,
 	}
 
-	log.Printf("[DEBUG] h2ServerStream created, stream will be used by WebSocket connection: %#v", r.Header)
-
 	c := newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, nil, nil)
-
 	if compress {
 		c.newCompressionWriter = compressNoContextTakeover
 		c.newDecompressionReader = decompressNoContextTakeover
@@ -443,32 +417,24 @@ func (u *Upgrader) verifyClientRequestH1(w http.ResponseWriter, r *http.Request)
 }
 
 // verifyClientRequestH2 validates an HTTP/2 extended CONNECT request.
-func (u *Upgrader) verifyClientRequestH2(w http.ResponseWriter, r *http.Request) (string, error) {
+func (u *Upgrader) verifyClientRequestH2(w http.ResponseWriter, r *http.Request) error {
 	if r.ProtoMajor != 2 {
-		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: handshake request must be HTTP/2")
+		return u.returnErrorString(w, r, http.StatusBadRequest, "websocket: handshake request must be HTTP/2")
 	}
 
 	if r.Header.Get(":protocol") != "websocket" {
-		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: :protocol header not set or does not match websocket")
+		return u.returnErrorString(w, r, http.StatusBadRequest, "websocket: :protocol header not set or does not match websocket")
 	}
 
 	if r.Method != http.MethodConnect {
-		return "", u.returnErrorString(w, r, http.StatusMethodNotAllowed, "websocket: handshake request method is not CONNECT")
+		return u.returnErrorString(w, r, http.StatusMethodNotAllowed, "websocket: handshake request method is not CONNECT")
 	}
 
 	if !tokenListContainsValue(r.Header, "Sec-Websocket-Version", "13") {
-		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: unsupported version: 13 not found in 'Sec-Websocket-Version' header")
+		return u.returnErrorString(w, r, http.StatusBadRequest, "websocket: unsupported version: 13 not found in 'Sec-Websocket-Version' header")
 	}
 
-	// Sec-WebSocket-Key is not required in HTTP/2 extended CONNECT per RFC 8441,
-	// but some browsers (like Chrome) send it anyway and expect a proper response.
-	// If present, use it; otherwise use a dummy value.
-	challengeKey := r.Header.Get("Sec-Websocket-Key")
-	if challengeKey == "" {
-		challengeKey = "AAAAAAAAAAAAAAAAAAAAAA==" // Valid base64 of 16 bytes (for browsers that don't send the key)
-	}
-
-	return challengeKey, nil
+	return nil
 }
 
 // returnErrorString is a helper that returns an error and sends an HTTP error response.

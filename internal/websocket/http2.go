@@ -1,14 +1,8 @@
-// Copyright 2013 The Gorilla WebSocket Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 package websocket
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
 )
@@ -17,21 +11,15 @@ var (
 	_ net.Conn = (*h2ServerStream)(nil)
 )
 
-// h2ServerStream is a minimal io.ReadWriteCloser for an HTTP/2 extended CONNECT
-// tunnel. Read reads from the request body and Write writes to the response
-// writer. To ensure data transmission, the stream is flushed on write.
+// h2ServerStream is a wrapper for HTTP/2 extended CONNECT tunnel.
 type h2ServerStream struct {
-	io.ReadCloser              // http.Request.Body
-	io.Writer                  // http.ResponseWriter
-	flush         func() error // http.ResponseWriter flush function
+	io.ReadCloser
+	io.Writer
+	flush func() error
 }
 
 func (s *h2ServerStream) Read(p []byte) (int, error) {
-	n, err := s.ReadCloser.Read(p)
-	if err != nil {
-		log.Printf("[DEBUG] h2ServerStream.Read error: %v (bytes read: %d)", err, n)
-	}
-	return n, err
+	return s.ReadCloser.Read(p)
 }
 
 func (s *h2ServerStream) Write(p []byte) (int, error) {
@@ -51,9 +39,7 @@ func (s *h2ServerStream) Flush() error {
 }
 
 func (s *h2ServerStream) Close() error {
-	// Flush before closing the reader to ensure all data is sent.
-	err := s.Flush()
-	return errors.Join(err, s.ReadCloser.Close())
+	return s.ReadCloser.Close()
 }
 
 // LocalAddr returns a dummy local address. HTTP/2 streams don't have
