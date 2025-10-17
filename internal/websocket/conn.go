@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -283,6 +284,7 @@ func newConn(conn net.Conn, isServer bool, readBufferSize, writeBufferSize int, 
 			// must be large enough for control frame
 			readBufferSize = maxControlFramePayloadSize
 		}
+		fmt.Println(readBufferSize)
 		br = bufio.NewReaderSize(conn, readBufferSize)
 	}
 

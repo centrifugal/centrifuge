@@ -106,7 +106,7 @@ func main() {
 	instance := getInstanceName()
 
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelInfo,
+		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
 	})
 

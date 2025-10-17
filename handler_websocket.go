@@ -3,6 +3,7 @@ package centrifuge
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -146,6 +147,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	conn, subProtocol, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
+		log.Println("Upgrade error:", err)
 		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
@@ -233,10 +235,12 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		for {
 			_, r, err := conn.NextReader()
 			if err != nil {
+				log.Println(err)
 				break
 			}
 			proceed := HandleReadFrame(c, r)
 			if !proceed {
+				log.Println("2")
 				break
 			}
 		}

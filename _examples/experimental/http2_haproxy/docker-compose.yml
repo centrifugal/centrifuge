@@ -1,6 +1,6 @@
 services:
   haproxy:
-    image: haproxy:2.9-alpine
+    image: haproxy:3.2-alpine
     ports:
       - "443:443"
       - "8404:8404"  # HAProxy stats

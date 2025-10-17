@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -163,6 +164,7 @@ func Subprotocols(r *http.Request) []string {
 // If the upgrade fails, then Upgrade replies to the client with an HTTP error
 // response.
 func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*Conn, string, error) {
+	log.Println("upgrade, HTTP/2:", r.ProtoMajor == 2)
 	// Determine if this is an HTTP/2 extended CONNECT request.
 	proto := ProtocolHTTP1
 	if r.ProtoMajor == 2 {
