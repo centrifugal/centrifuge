@@ -72,8 +72,14 @@ type WebsocketConfig struct {
 
 	// EnableHTTP2ExtendedConnect enables support for HTTP/2 Extended CONNECT (RFC 8441)
 	// for WebSocket connections. When false (default), only HTTP/1.1 Upgrade handshakes
-	// are accepted. When true, both HTTP/1.1 Upgrade and HTTP/2 Extended CONNECT are accepted.
+	// are accepted. When true, both HTTP/1.1 Upgrade and HTTP/2 Extended CONNECT are accepted
+	// (unless DisableHTTP1Upgrade is also set to true).
 	EnableHTTP2ExtendedConnect bool
+
+	// DisableHTTP1Upgrade disables support for HTTP/1.1 Upgrade WebSocket handshakes.
+	// When true, only HTTP/2 Extended CONNECT is accepted (EnableHTTP2ExtendedConnect
+	// must be true, otherwise no connections will be accepted).
+	DisableHTTP1Upgrade bool
 
 	PingPongConfig
 }
@@ -97,6 +103,7 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 		EnableCompression:          config.Compression,
 		Subprotocols:               []string{"centrifuge-json", "centrifuge-protobuf"},
 		EnableHTTP2ExtendedConnect: config.EnableHTTP2ExtendedConnect,
+		DisableHTTP1Upgrade:        config.DisableHTTP1Upgrade,
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool

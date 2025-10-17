@@ -81,7 +81,7 @@ func main() {
 	flag.Parse()
 
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelInfo,
+		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
 	})
 
@@ -213,6 +213,7 @@ func main() {
 	mux.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
 	})
 
 	mux.Handle("/metrics", promhttp.Handler())
