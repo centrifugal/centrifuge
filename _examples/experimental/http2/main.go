@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -73,6 +74,10 @@ func channelSubscribeAllowed(channel string) bool {
 }
 
 func main() {
+	if !strings.Contains(os.Getenv("GODEBUG"), "http2xconnect=1") {
+		panic("required to use GODEBUG=http2xconnect=1")
+	}
+
 	flag.Parse()
 
 	node, _ := centrifuge.New(centrifuge.Config{
@@ -204,6 +209,9 @@ func main() {
 	mux.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
 	mux.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
 	mux.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/", http.FileServer(http.Dir("./")))

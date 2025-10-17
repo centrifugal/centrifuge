@@ -362,11 +362,15 @@ func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHea
 		return nil, "", err
 	}
 
+	log.Printf("[DEBUG] HTTP/2 Extended CONNECT handshake completed for %s, creating stream from r.Body", r.RemoteAddr)
+
 	stream := &h2ServerStream{
 		ReadCloser: r.Body,
 		Writer:     w,
 		flush:      rc.Flush,
 	}
+
+	log.Printf("[DEBUG] h2ServerStream created, stream will be used by WebSocket connection: %#v", r.Header)
 
 	c := newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, nil, nil)
 
@@ -456,8 +460,13 @@ func (u *Upgrader) verifyClientRequestH2(w http.ResponseWriter, r *http.Request)
 		return "", u.returnErrorString(w, r, http.StatusBadRequest, "websocket: unsupported version: 13 not found in 'Sec-Websocket-Version' header")
 	}
 
-	// Sec-WebSocket-Key is not checked in HTTP/2 extended CONNECT.
-	challengeKey := "AAAAAAAAAAAAAAAAAAAAAA==" // Valid base64 of 16 bytes
+	// Sec-WebSocket-Key is not required in HTTP/2 extended CONNECT per RFC 8441,
+	// but some browsers (like Chrome) send it anyway and expect a proper response.
+	// If present, use it; otherwise use a dummy value.
+	challengeKey := r.Header.Get("Sec-Websocket-Key")
+	if challengeKey == "" {
+		challengeKey = "AAAAAAAAAAAAAAAAAAAAAA==" // Valid base64 of 16 bytes (for browsers that don't send the key)
+	}
 
 	return challengeKey, nil
 }

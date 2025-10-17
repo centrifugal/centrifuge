@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"time"
 )
@@ -26,7 +27,11 @@ type h2ServerStream struct {
 }
 
 func (s *h2ServerStream) Read(p []byte) (int, error) {
-	return s.ReadCloser.Read(p)
+	n, err := s.ReadCloser.Read(p)
+	if err != nil {
+		log.Printf("[DEBUG] h2ServerStream.Read error: %v (bytes read: %d)", err, n)
+	}
+	return n, err
 }
 
 func (s *h2ServerStream) Write(p []byte) (int, error) {
