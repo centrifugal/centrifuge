@@ -34,15 +34,12 @@
                 const centrifuge = new Centrifuge(transports, {
                     // This is required to reliably use HTTP/2 Extended CONNECT in Chrome upon reconnections
                     // (when no HTTP/2 connection in pool exists Chrome selects HTTP/1.1 for WebSocket).
-                    // getData: function () {
-                    //     // Fetch /ping endpoint.
-                    //     return fetch('/ping', {
-                    //         method: 'GET',
-                    //         credentials: 'include'
-                    //     }).then(function(response) {
-                    //         return null;
-                    //     });
-                    // }
+                    getData: function () {
+                        // Fetch /ping endpoint.
+                        return fetch('/ping', {method: 'GET'}).then(function() {
+                            return null;
+                        });
+                    }
                 });
 
                 centrifuge.on('connected', function(ctx){
