@@ -222,3 +222,18 @@ func getPingPongPeriodValues(config PingPongConfig) (time.Duration, time.Duratio
 	}
 	return pingInterval, pongTimeout
 }
+
+func warnAboutIncorrectPingPongConfig(node *Node, config PingPongConfig, transportName string) {
+	pingInterval, pongTimeout := getPingPongPeriodValues(config)
+	if pingInterval > 0 && pongTimeout > 0 && pongTimeout >= pingInterval {
+		node.logger.log(newLogEntry(
+			LogLevelWarn,
+			"ping interval must be greater than pong timeout to work properly",
+			map[string]any{
+				"transport":     transportName,
+				"ping_interval": pingInterval.String(),
+				"pong_timeout":  pongTimeout.String(),
+			},
+		))
+	}
+}

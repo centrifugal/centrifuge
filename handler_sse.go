@@ -28,6 +28,7 @@ type SSEHandler struct {
 
 // NewSSEHandler creates new SSEHandler.
 func NewSSEHandler(node *Node, config SSEConfig) *SSEHandler {
+	warnAboutIncorrectPingPongConfig(node, config.PingPongConfig, transportSSE)
 	return &SSEHandler{
 		node:   node,
 		config: config,

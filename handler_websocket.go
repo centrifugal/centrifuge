@@ -126,6 +126,9 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 			Build()
 		cache = &c
 	}
+
+	warnAboutIncorrectPingPongConfig(node, config.PingPongConfig, transportWebsocket)
+
 	return &WebsocketHandler{
 		node:          node,
 		config:        config,

@@ -29,6 +29,7 @@ type HTTPStreamHandler struct {
 
 // NewHTTPStreamHandler creates new HTTPStreamHandler.
 func NewHTTPStreamHandler(node *Node, config HTTPStreamConfig) *HTTPStreamHandler {
+	warnAboutIncorrectPingPongConfig(node, config.PingPongConfig, transportHTTPStream)
 	return &HTTPStreamHandler{
 		node:   node,
 		config: config,
