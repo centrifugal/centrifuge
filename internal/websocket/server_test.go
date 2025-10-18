@@ -139,15 +139,18 @@ func TestBufioReuse(t *testing.T) {
 		resp := &reuseTestResponseWriter{
 			brw: bufio.NewReadWriter(br, bw),
 		}
+
+		request, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Upgrade", "websocket")
+		request.Header.Set("Connection", "upgrade")
+		request.Header.Set("Sec-Websocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+		request.Header.Set("Sec-Websocket-Version", "13")
+
 		upgrader := Upgrader{}
-		c, _, err := upgrader.Upgrade(resp, &http.Request{
-			Method: http.MethodGet,
-			Header: http.Header{
-				"Upgrade":               []string{"websocket"},
-				"Connection":            []string{"upgrade"},
-				"Sec-Websocket-Key":     []string{"dGhlIHNhbXBsZSBub25jZQ=="},
-				"Sec-Websocket-Version": []string{"13"},
-			}}, nil)
+		c, _, err := upgrader.Upgrade(resp, request, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
