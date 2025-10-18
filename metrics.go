@@ -40,6 +40,7 @@ type metrics struct {
 	transportMessagesReceived     *prometheus.CounterVec
 	transportMessagesReceivedSize *prometheus.CounterVec
 	tagsFilterDroppedCount        *prometheus.CounterVec
+	transportAcceptedCount        *prometheus.CounterVec
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -85,6 +86,7 @@ type metrics struct {
 	messagesSentCache              sync.Map
 	messagesReceivedCache          sync.Map
 	tagsFilterDroppedCache         sync.Map
+	transportAcceptedCache         sync.Map
 	nsCache                        *otter.Cache[string, string]
 	codeStrings                    map[uint32]string
 }
@@ -314,6 +316,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, []string{"transport", "frame_type", "channel_namespace"})
 
+	m.transportAcceptedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "transport",
+		Name:      "accepted_count",
+		Help:      "Count of accepted transports.",
+	}, []string{"transport", "accept_protocol"})
+
 	m.tagsFilterDroppedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "node",
@@ -415,6 +424,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.transportMessagesReceived,
 		m.transportMessagesReceivedSize,
 		m.tagsFilterDroppedCount,
+		m.transportAcceptedCount,
 		m.buildInfoGauge,
 		m.surveyDurationSummary,
 		m.pubSubLagHistogram,
@@ -821,4 +831,36 @@ func (m *metrics) incTagsFilterDropped(ch string, count int) {
 		m.tagsFilterDroppedCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Add(float64(count))
+}
+
+type transportAcceptedLabels struct {
+	Transport         string
+	TransportProtocol string
+}
+
+func (m *metrics) incTransportAccepted(incr int, transport, transportProtocol string) {
+	labels := transportAcceptedLabels{
+		Transport:         transport,
+		TransportProtocol: transportProtocol,
+	}
+	counter, ok := m.transportAcceptedCache.Load(labels)
+	if !ok {
+		counter = m.transportAcceptedCount.WithLabelValues(transport, transportProtocol)
+		m.transportAcceptedCache.Store(labels, counter)
+	}
+	counter.(prometheus.Counter).Add(float64(incr))
+}
+
+// getHTTPTransportProto returns the transport accept protocol label based on HTTP version.
+func getHTTPTransportProto(protoMajor int) string {
+	switch protoMajor {
+	case 3:
+		return "h3"
+	case 2:
+		return "h2"
+	case 1:
+		return "h1"
+	default:
+		return "unknown"
+	}
 }

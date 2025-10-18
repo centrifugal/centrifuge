@@ -220,7 +220,7 @@ func BenchmarkUpgradeSubprotocol(b *testing.B) {
 	req.Header.Add("Sec-Websocket-Version", "13")
 	req.Header.Add("Sec-WebSocket-Protocol", "centrifuge-protobuf")
 
-	// Mock connection and buffer to fulfill the Hijack requirement
+	// Mock connection and buffer to fulfill the Hijack requirement.
 	conn := newMockConn()
 	buf := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 
@@ -231,9 +231,6 @@ func BenchmarkUpgradeSubprotocol(b *testing.B) {
 			return conn, buf, nil
 		},
 	}
-
-	//// Create a response recorder
-	//w := httptest.NewRecorder()
 
 	// Initialize the Upgrader
 	upgrader := &Upgrader{

@@ -155,16 +155,22 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	compression := s.config.Compression
 	compressionLevel := s.config.CompressionLevel
 	compressionMinSize := s.config.CompressionMinSize
-
 	conn, subProtocol, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
+	if subProtocol == "centrifuge-protobuf" {
+		protoType = ProtocolTypeProtobuf
+	}
+
+	s.node.IncTransportAccepted(TransportAcceptedLabels{
+		Transport:      transportWebsocket,
+		AcceptProtocol: getHTTPTransportProto(r.ProtoMajor),
+	}, 1)
 
 	if compression {
-		err := conn.SetCompressionLevel(compressionLevel)
-		if err != nil {
+		if err := conn.SetCompressionLevel(compressionLevel); err != nil {
 			s.node.logger.log(newErrorLogEntry(err, "websocket error setting compression level", map[string]any{"error": err.Error()}))
 		}
 	}
@@ -179,10 +185,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 	if messageSizeLimit > 0 {
 		conn.SetReadLimit(int64(messageSizeLimit))
-	}
-
-	if subProtocol == "centrifuge-protobuf" {
-		protoType = ProtocolTypeProtobuf
 	}
 
 	if useFramePingPong {
@@ -273,7 +275,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		// Separate goroutine for better GC of caller's data for HTTP/1.x.
 		go handleConn()
 	} else {
-		// HTTP/2 and above - execute directly, there is a panic in Go HTTP/2 implementation otherwise.
+		// HTTP/2 and above - execute directly, otherwise underlying stream is being closed.
 		handleConn()
 	}
 }

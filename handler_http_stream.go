@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -50,6 +51,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := w.(http.Flusher)
 	if !ok {
+		h.node.logger.log(newErrorLogEntry(errors.New("not http.Flusher"), "HTTP stream: ResponseWriter is not a Flusher", map[string]any{}))
 		http.Error(w, "expected http.ResponseWriter to be http.Flusher", http.StatusInternalServerError)
 		return
 	}
@@ -86,6 +88,10 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		protocolType: protocolType,
 		pingPong:     h.config.PingPongConfig,
 	})
+	h.node.IncTransportAccepted(TransportAcceptedLabels{
+		Transport:      transportHTTPStream,
+		AcceptProtocol: getHTTPTransportProto(r.ProtoMajor),
+	}, 1)
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {

@@ -99,6 +99,16 @@ const (
 	numSubDissolverWorkers = 64
 )
 
+// TransportAcceptedLabels contains labels for transport connection metrics.
+// This struct is designed to be extensible - additional label fields can be
+// added in the future without breaking compatibility.
+type TransportAcceptedLabels struct {
+	// Transport is the transport type (e.g., "websocket", "http_stream", "sse").
+	Transport string
+	// AcceptProtocol is the transport protocol used to accept connection (can be "h1", "h2", "h3").
+	AcceptProtocol string
+}
+
 // New creates Node with provided Config.
 func New(c Config) (*Node, error) {
 	if c.NodeInfoMetricsAggregateInterval == 0 {
@@ -1024,6 +1034,22 @@ func (n *Node) removeClient(c *Client) {
 	if removed {
 		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), c.metricName, c.metricVersion).Dec()
 	}
+}
+
+// IncTransportAccepted increments the accepted transport counter metric.
+// This should be called by transport handlers (including custom implementations)
+// when a new connection is accepted and transport for it was created. The labels
+// parameter allows tracking various connection attributes and can be extended with
+// additional fields in the future. The main goal of this metric is to distinguish
+// between different transports and network protocols used by clients to connect
+// to the server. It's possible to init new metric after Node creation by calling
+// this method with desired labels and incr = 0, i.e. node.IncTransportAccepted(labels, 0).
+func (n *Node) IncTransportAccepted(labels TransportAcceptedLabels, incr int) {
+	n.metrics.incTransportAccepted(
+		incr,
+		labels.Transport,
+		labels.AcceptProtocol,
+	)
 }
 
 // addSubscription registers subscription of connection on channel in both

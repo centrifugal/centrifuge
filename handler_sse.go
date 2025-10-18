@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -43,6 +44,7 @@ const defaultMaxSSEBodySize = 64 * 1024
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, ok := w.(http.Flusher)
 	if !ok {
+		h.node.logger.log(newErrorLogEntry(errors.New("not http.Flusher"), "SSE: ResponseWriter is not a Flusher", map[string]any{}))
 		http.Error(w, "expected http.ResponseWriter to be http.Flusher", http.StatusInternalServerError)
 		return
 	}
@@ -80,6 +82,10 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	transport := newSSETransport(r, sseTransportConfig{pingPong: h.config.PingPongConfig})
+	h.node.IncTransportAccepted(TransportAcceptedLabels{
+		Transport:      transportSSE,
+		AcceptProtocol: getHTTPTransportProto(r.ProtoMajor),
+	}, 1)
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {

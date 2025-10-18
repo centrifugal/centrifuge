@@ -157,6 +157,32 @@ func BenchmarkIncUnsubscribe(b *testing.B) {
 	})
 }
 
+func BenchmarkIncTransportConnect(b *testing.B) {
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace: "test",
+	})
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			transport := "websocket"
+			if i%3 == 0 {
+				transport = "http_stream"
+			} else if i%3 == 1 {
+				transport = "sse"
+			}
+			transportProto := "h1"
+			if i%2 == 0 {
+				transportProto = "h2"
+			}
+			m.incTransportAccepted(1, transport, transportProto)
+			i++
+		}
+	})
+}
+
 func TestMetrics(t *testing.T) {
 	_, err := newMetricsRegistry(MetricsConfig{
 		GetChannelNamespaceLabel: func(channel string) string {
@@ -262,6 +288,52 @@ func TestMetrics(t *testing.T) {
 				m.setNumUsers(300)
 				m.setNumNodes(4)
 				m.setNumSubscriptions(500)
+
+				// Test incTransportAccepted with various combinations.
+				for _, transport := range []string{"websocket", "http_stream", "sse", "custom"} {
+					for _, transportProto := range []string{"h1", "h2", "h3"} {
+						m.incTransportAccepted(1, transport, transportProto)
+					}
+				}
+			}
+		})
+	}
+}
+
+func Test_getHTTPTransportProto(t *testing.T) {
+	type args struct {
+		protoMajor int
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "HTTP/1.x",
+			args: args{protoMajor: 1},
+			want: "h1",
+		},
+		{
+			name: "HTTP/2",
+			args: args{protoMajor: 2},
+			want: "h2",
+		},
+		{
+			name: "HTTP/3",
+			args: args{protoMajor: 3},
+			want: "h3",
+		},
+		{
+			name: "unknown HTTP version",
+			args: args{protoMajor: 0},
+			want: "unknown",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getHTTPTransportProto(tt.args.protoMajor); got != tt.want {
+				t.Errorf("getHTTPTransportProto() = %v, want %v", got, tt.want)
 			}
 		})
 	}

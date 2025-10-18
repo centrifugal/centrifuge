@@ -1471,3 +1471,28 @@ func TestGetPresenceManager(t *testing.T) {
 	_, err = node.Presence("test2")
 	require.NoError(t, err)
 }
+
+func TestNodeIncTransportAccepted(t *testing.T) {
+	n, err := New(Config{})
+	require.NoError(t, err)
+	require.NoError(t, n.Run())
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	// Call with 0 to init.
+	n.IncTransportAccepted(TransportAcceptedLabels{
+		Transport:      "sse",
+		AcceptProtocol: "h1",
+	}, 0)
+
+	// Test custom transport.
+	n.IncTransportAccepted(TransportAcceptedLabels{
+		Transport:      "my_custom_transport",
+		AcceptProtocol: "h1",
+	}, 1)
+
+	// Call again to test caching.
+	n.IncTransportAccepted(TransportAcceptedLabels{
+		Transport:      "websocket",
+		AcceptProtocol: "h1",
+	}, 1)
+}
