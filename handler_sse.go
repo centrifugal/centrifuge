@@ -85,7 +85,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	transport := newSSETransport(r, sseTransportConfig{pingPong: h.config.PingPongConfig})
 	h.node.IncTransportAccepted(TransportAcceptedLabels{
 		Transport:      transportSSE,
-		AcceptProtocol: getHTTPTransportProto(r.ProtoMajor),
+		AcceptProtocol: getAcceptProtocolLabel(r.ProtoMajor),
 	}, 1)
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)

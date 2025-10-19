@@ -91,7 +91,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	h.node.IncTransportAccepted(TransportAcceptedLabels{
 		Transport:      transportHTTPStream,
-		AcceptProtocol: getHTTPTransportProto(r.ProtoMajor),
+		AcceptProtocol: getAcceptProtocolLabel(r.ProtoMajor),
 	}, 1)
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)

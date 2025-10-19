@@ -1023,7 +1023,11 @@ func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string
 // this allows to make operations with user connection on demand.
 func (n *Node) addClient(c *Client) {
 	n.metrics.incActionCount("add_client", "")
-	n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), c.metricName, c.metricVersion).Inc()
+	var acceptProtocol string
+	if n.config.Metrics.ExposeClientAcceptProtocol {
+		acceptProtocol = c.transport.AcceptProtocol()
+	}
+	n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
 	n.hub.add(c)
 }
 
@@ -1032,24 +1036,12 @@ func (n *Node) removeClient(c *Client) {
 	n.metrics.incActionCount("remove_client", "")
 	removed := n.hub.remove(c)
 	if removed {
-		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), c.metricName, c.metricVersion).Dec()
+		var acceptProtocol string
+		if n.config.Metrics.ExposeClientAcceptProtocol {
+			acceptProtocol = c.transport.AcceptProtocol()
+		}
+		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Dec()
 	}
-}
-
-// IncTransportAccepted increments the accepted transport counter metric.
-// This should be called by transport handlers (including custom implementations)
-// when a new connection is accepted and transport for it was created. The labels
-// parameter allows tracking various connection attributes and can be extended with
-// additional fields in the future. The main goal of this metric is to distinguish
-// between different transports and network protocols used by clients to connect
-// to the server. It's possible to init new metric after Node creation by calling
-// this method with desired labels and incr = 0, i.e. node.IncTransportAccepted(labels, 0).
-func (n *Node) IncTransportAccepted(labels TransportAcceptedLabels, incr int) {
-	n.metrics.incTransportAccepted(
-		incr,
-		labels.Transport,
-		labels.AcceptProtocol,
-	)
 }
 
 // addSubscription registers subscription of connection on channel in both

@@ -169,7 +169,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	s.node.IncTransportAccepted(TransportAcceptedLabels{
 		Transport:      transportWebsocket,
-		AcceptProtocol: getHTTPTransportProto(r.ProtoMajor),
+		AcceptProtocol: getAcceptProtocolLabel(r.ProtoMajor),
 	}, 1)
 
 	if compression {

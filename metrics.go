@@ -27,7 +27,9 @@ type metrics struct {
 	numChannelsGauge              prometheus.Gauge
 	numNodesGauge                 prometheus.Gauge
 	replyErrorCount               *prometheus.CounterVec
+	connectionsAcceptedCount      *prometheus.CounterVec
 	connectionsInflight           *prometheus.GaugeVec
+	subscriptionsAcceptedCount    *prometheus.CounterVec
 	subscriptionsInflight         *prometheus.GaugeVec
 	serverUnsubscribeCount        *prometheus.CounterVec
 	serverDisconnectCount         *prometheus.CounterVec
@@ -40,7 +42,6 @@ type metrics struct {
 	transportMessagesReceived     *prometheus.CounterVec
 	transportMessagesReceivedSize *prometheus.CounterVec
 	tagsFilterDroppedCount        *prometheus.CounterVec
-	transportAcceptedCount        *prometheus.CounterVec
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -274,12 +275,26 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, []string{"transport"})
 
+	m.connectionsAcceptedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "connections_accepted",
+		Help:      "Count of accepted transports.",
+	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
+
 	m.connectionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "connections_inflight",
 		Help:      "Number of inflight client connections.",
-	}, []string{"transport", "client_name", "client_version"})
+	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
+
+	m.subscriptionsAcceptedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "subscriptions_accepted",
+		Help:      "Count of accepted client subscriptions.",
+	}, []string{"client_name", "channel_namespace"})
 
 	m.subscriptionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
@@ -315,13 +330,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Name:      "messages_received_size",
 		Help:      "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, []string{"transport", "frame_type", "channel_namespace"})
-
-	m.transportAcceptedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: metricsNamespace,
-		Subsystem: "transport",
-		Name:      "accepted_count",
-		Help:      "Count of accepted transports.",
-	}, []string{"transport", "accept_protocol"})
 
 	m.tagsFilterDroppedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
@@ -413,7 +421,9 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.numNodesGauge,
 		m.commandDurationSummary,
 		m.replyErrorCount,
+		m.connectionsAcceptedCount,
 		m.connectionsInflight,
+		m.subscriptionsAcceptedCount,
 		m.subscriptionsInflight,
 		m.serverUnsubscribeCount,
 		m.serverDisconnectCount,
@@ -424,7 +434,6 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.transportMessagesReceived,
 		m.transportMessagesReceivedSize,
 		m.tagsFilterDroppedCount,
-		m.transportAcceptedCount,
 		m.buildInfoGauge,
 		m.surveyDurationSummary,
 		m.pubSubLagHistogram,
@@ -833,26 +842,8 @@ func (m *metrics) incTagsFilterDropped(ch string, count int) {
 	counter.(prometheus.Counter).Add(float64(count))
 }
 
-type transportAcceptedLabels struct {
-	Transport         string
-	TransportProtocol string
-}
-
-func (m *metrics) incTransportAccepted(incr int, transport, transportProtocol string) {
-	labels := transportAcceptedLabels{
-		Transport:         transport,
-		TransportProtocol: transportProtocol,
-	}
-	counter, ok := m.transportAcceptedCache.Load(labels)
-	if !ok {
-		counter = m.transportAcceptedCount.WithLabelValues(transport, transportProtocol)
-		m.transportAcceptedCache.Store(labels, counter)
-	}
-	counter.(prometheus.Counter).Add(float64(incr))
-}
-
-// getHTTPTransportProto returns the transport accept protocol label based on HTTP version.
-func getHTTPTransportProto(protoMajor int) string {
+// getAcceptProtocolLabel returns the transport accept protocol label based on HTTP version.
+func getAcceptProtocolLabel(protoMajor int) string {
 	switch protoMajor {
 	case 3:
 		return "h3"
