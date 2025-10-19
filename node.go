@@ -1024,9 +1024,10 @@ func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string
 func (n *Node) addClient(c *Client) {
 	n.metrics.incActionCount("add_client", "")
 	var acceptProtocol string
-	if n.config.Metrics.ExposeClientAcceptProtocol {
+	if n.config.Metrics.ExposeTransportAcceptProtocol {
 		acceptProtocol = c.transport.AcceptProtocol()
 	}
+	n.metrics.connectionsAccepted.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
 	n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
 	n.hub.add(c)
 }
@@ -1037,7 +1038,7 @@ func (n *Node) removeClient(c *Client) {
 	removed := n.hub.remove(c)
 	if removed {
 		var acceptProtocol string
-		if n.config.Metrics.ExposeClientAcceptProtocol {
+		if n.config.Metrics.ExposeTransportAcceptProtocol {
 			acceptProtocol = c.transport.AcceptProtocol()
 		}
 		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Dec()

@@ -83,6 +83,9 @@ func main() {
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
+		Metrics: centrifuge.MetricsConfig{
+			ExposeTransportAcceptProtocol: true,
+		},
 	})
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {

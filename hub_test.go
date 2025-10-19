@@ -109,6 +109,10 @@ func (t *testTransport) Name() string {
 	return transportWebsocket
 }
 
+func (t *testTransport) AcceptProtocol() string {
+	return "h1"
+}
+
 func (t *testTransport) Protocol() ProtocolType {
 	return t.protoType
 }

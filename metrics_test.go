@@ -269,7 +269,7 @@ func TestMetrics(t *testing.T) {
 
 func Test_getHTTPTransportProto(t *testing.T) {
 	type args struct {
-		protoMajor int
+		protoMajor int8
 	}
 	tests := []struct {
 		name string

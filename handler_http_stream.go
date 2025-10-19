@@ -88,12 +88,8 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
 		protocolType: protocolType,
 		pingPong:     h.config.PingPongConfig,
+		protoMajor:   uint8(r.ProtoMajor),
 	})
-	h.node.IncTransportAccepted(TransportAcceptedLabels{
-		Transport:      transportHTTPStream,
-		AcceptProtocol: getAcceptProtocolLabel(r.ProtoMajor),
-	}, 1)
-
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
 		h.node.logger.log(newErrorLogEntry(err, "error create client", map[string]any{"error": err.Error(), "transport": transportHTTPStream}))
@@ -185,6 +181,7 @@ type httpStreamTransport struct {
 type httpStreamTransportConfig struct {
 	protocolType ProtocolType
 	pingPong     PingPongConfig
+	protoMajor   uint8
 }
 
 func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig) *httpStreamTransport {
@@ -199,6 +196,10 @@ func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig)
 
 func (t *httpStreamTransport) Name() string {
 	return transportHTTPStream
+}
+
+func (t *httpStreamTransport) AcceptProtocol() string {
+	return getAcceptProtocolLabel(int8(t.config.protoMajor))
 }
 
 func (t *httpStreamTransport) Protocol() ProtocolType {

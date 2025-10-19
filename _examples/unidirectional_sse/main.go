@@ -276,6 +276,10 @@ func (t *eventsourceTransport) Name() string {
 	return "eventsource"
 }
 
+func (t *eventsourceTransport) AcceptProtocol() string {
+	return ""
+}
+
 func (t *eventsourceTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeJSON
 }

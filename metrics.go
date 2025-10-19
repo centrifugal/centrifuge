@@ -27,9 +27,9 @@ type metrics struct {
 	numChannelsGauge              prometheus.Gauge
 	numNodesGauge                 prometheus.Gauge
 	replyErrorCount               *prometheus.CounterVec
-	connectionsAcceptedCount      *prometheus.CounterVec
+	connectionsAccepted           *prometheus.CounterVec
 	connectionsInflight           *prometheus.GaugeVec
-	subscriptionsAcceptedCount    *prometheus.CounterVec
+	subscriptionsAccepted         *prometheus.CounterVec
 	subscriptionsInflight         *prometheus.GaugeVec
 	serverUnsubscribeCount        *prometheus.CounterVec
 	serverDisconnectCount         *prometheus.CounterVec
@@ -275,7 +275,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, []string{"transport"})
 
-	m.connectionsAcceptedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.connectionsAccepted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "connections_accepted",
@@ -289,7 +289,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Help:      "Number of inflight client connections.",
 	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
 
-	m.subscriptionsAcceptedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.subscriptionsAccepted = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "subscriptions_accepted",
@@ -421,9 +421,9 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.numNodesGauge,
 		m.commandDurationSummary,
 		m.replyErrorCount,
-		m.connectionsAcceptedCount,
+		m.connectionsAccepted,
 		m.connectionsInflight,
-		m.subscriptionsAcceptedCount,
+		m.subscriptionsAccepted,
 		m.subscriptionsInflight,
 		m.serverUnsubscribeCount,
 		m.serverDisconnectCount,
@@ -843,7 +843,7 @@ func (m *metrics) incTagsFilterDropped(ch string, count int) {
 }
 
 // getAcceptProtocolLabel returns the transport accept protocol label based on HTTP version.
-func getAcceptProtocolLabel(protoMajor int) string {
+func getAcceptProtocolLabel(protoMajor int8) string {
 	switch protoMajor {
 	case 3:
 		return "h3"

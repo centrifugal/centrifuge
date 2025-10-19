@@ -193,9 +193,9 @@ type MetricsConfig struct {
 	// EnableRecoveredPublicationsHistogram enables histogram tracking of number of publications
 	// recovered during subscription successful recovery operations.
 	EnableRecoveredPublicationsHistogram bool
-	// ExposeClientAcceptProtocol enables exposing in labels the accept protocol used by client's transport.
+	// ExposeTransportAcceptProtocol enables exposing in labels the accept protocol used by client's transport.
 	// If not enabled - empty string will be used as a label value.
-	ExposeClientAcceptProtocol bool
+	ExposeTransportAcceptProtocol bool
 }
 
 // PingPongConfig allows configuring application level ping-pong behavior.

@@ -245,6 +245,10 @@ func (t *websocketTransport) Name() string {
 	return "websocket"
 }
 
+func (t *websocketTransport) AcceptProtocol() string {
+	return "h1"
+}
+
 // Protocol returns transport protocol.
 func (t *websocketTransport) Protocol() centrifuge.ProtocolType {
 	return t.opts.protoType

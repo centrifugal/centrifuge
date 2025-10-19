@@ -82,11 +82,10 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	transport := newSSETransport(r, sseTransportConfig{pingPong: h.config.PingPongConfig})
-	h.node.IncTransportAccepted(TransportAcceptedLabels{
-		Transport:      transportSSE,
-		AcceptProtocol: getAcceptProtocolLabel(r.ProtoMajor),
-	}, 1)
+	transport := newSSETransport(r, sseTransportConfig{
+		pingPong:   h.config.PingPongConfig,
+		protoMajor: uint8(r.ProtoMajor),
+	})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
@@ -169,7 +168,8 @@ type sseTransport struct {
 }
 
 type sseTransportConfig struct {
-	pingPong PingPongConfig
+	pingPong   PingPongConfig
+	protoMajor uint8
 }
 
 func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport {
@@ -184,6 +184,10 @@ func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport
 
 func (t *sseTransport) Name() string {
 	return transportSSE
+}
+
+func (t *sseTransport) AcceptProtocol() string {
+	return getAcceptProtocolLabel(int8(t.config.protoMajor))
 }
 
 func (t *sseTransport) Protocol() ProtocolType {

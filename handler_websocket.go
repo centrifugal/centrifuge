@@ -167,11 +167,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		protoType = ProtocolTypeProtobuf
 	}
 
-	s.node.IncTransportAccepted(TransportAcceptedLabels{
-		Transport:      transportWebsocket,
-		AcceptProtocol: getAcceptProtocolLabel(r.ProtoMajor),
-	}, 1)
-
 	if compression {
 		if err := conn.SetCompressionLevel(compressionLevel); err != nil {
 			s.node.logger.log(newErrorLogEntry(err, "websocket error setting compression level", map[string]any{"error": err.Error()}))
@@ -214,6 +209,7 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			compressionMinSize: compressionMinSize,
 			protoType:          protoType,
 			preparedCache:      s.preparedCache,
+			protoMajor:         uint8(r.ProtoMajor),
 		}
 
 		graceCh := make(chan struct{})
@@ -342,6 +338,7 @@ type websocketTransportOptions struct {
 	writeTimeout       time.Duration
 	compressionMinSize int
 	preparedCache      *otter.Cache[string, *websocket.PreparedMessage]
+	protoMajor         uint8
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}, useNativePingPong bool) *websocketTransport {
@@ -360,6 +357,10 @@ func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions,
 // Name returns name of transport.
 func (t *websocketTransport) Name() string {
 	return transportWebsocket
+}
+
+func (t *websocketTransport) AcceptProtocol() string {
+	return getAcceptProtocolLabel(int8(t.opts.protoMajor))
 }
 
 // Protocol returns transport protocol.
