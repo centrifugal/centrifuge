@@ -2,20 +2,17 @@
 
 This example demonstrates WebSocket over HTTP/2 using RFC 8441 extended CONNECT protocol.
 
-The server supports both:
-- **HTTP/2 cleartext (h2c)** - for local development
-- **HTTP/2 over TLS** - for production use
-
 ## Running the Example
 
-### Option 1: H2C (HTTP/2 Cleartext) - Default
+First gen certs following certs/README.md instructions.
+
+Then run the server with:
 
 ```bash
-cd _examples/experimental/http2
 GODEBUG=http2xconnect=1 go run main.go
 ```
 
-Open https://localhost:8443 in your browser (you may need to accept the self-signed certificate warning).
+Open https://localhost:8080 in your browser.
 
 ## Important Notes
 
@@ -25,8 +22,7 @@ Open https://localhost:8443 in your browser (you may need to accept the self-sig
 
 3. **Network Inspection**: To verify HTTP/2 is being used:
    - Open browser DevTools → Network tab
-   - Look for the "Protocol" column (you may need to enable it)
-   - WebSocket connections over HTTP/2 will show "h2" as the protocol
+   - WebSocket connections over HTTP/2 will have "200" status code instead of 101.
 
 ## Server Options
 
@@ -44,8 +40,8 @@ Open https://localhost:8443 in your browser (you may need to accept the self-sig
 The server configures the WebSocket upgrader with:
 
 ```go
-upgrader := websocket.Upgrader{
-    Protocol: websocket.ProtocolAcceptAny, // Accept both HTTP/1.1 and HTTP/2
+centrifuge.WebsocketConfig{
+    EnableHTTP2ExtendedConnect: true,
 }
 ```
 
@@ -54,3 +50,24 @@ This allows the same endpoint to accept:
 - HTTP/2 extended CONNECT (RFC 8441 with `:protocol: websocket` pseudo-header)
 
 The client (browser) automatically chooses the appropriate protocol based on the connection type.
+
+## Emulate Latency
+
+# Create pipes with 50ms delay each way (100ms RTT), apply to port 8080:
+
+```
+sudo dnctl pipe 1 config delay 50
+sudo dnctl pipe 2 config delay 50
+sudo pfctl -e
+echo "
+dummynet in proto tcp from any port 8080 to any pipe 1
+dummynet out proto tcp from any to any port 8080 pipe 2
+" | sudo pfctl -f -
+```
+
+Clean up:
+
+```
+sudo dnctl -q flush
+sudo pfctl -d
+```

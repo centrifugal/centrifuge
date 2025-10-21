@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	_ "net/http/pprof"
+
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -206,26 +208,23 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.NewServeMux()
-
-	mux.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
 		EnableHTTP2ExtendedConnect: true,
 	})))
-	mux.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
-	mux.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
-	mux.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
-	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+	http.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
+	http.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
+	http.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
+	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
 	})
 
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/", http.FileServer(http.Dir("./")))
+	http.Handle("/metrics", promhttp.Handler())
+	http.Handle("/", http.FileServer(http.Dir("./")))
 
 	addr := "0.0.0.0:" + strconv.Itoa(*port)
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr: addr,
 	}
 	log.Printf("running with TLS, open https://localhost:%d", *port)
 	go func() {
