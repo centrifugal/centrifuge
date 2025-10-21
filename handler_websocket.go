@@ -435,6 +435,14 @@ func (t *websocketTransport) writeData(data []byte) error {
 
 	if t.opts.writeTimeout > 0 {
 		_ = t.conn.SetWriteDeadline(time.Time{})
+		if t.opts.protoMajor > 1 {
+			// For HTTP/2 connections, we need to actually clear the deadline on the underlying
+			// connection. The websocket Conn.SetWriteDeadline only sets a field, but doesn't
+			// clear the deadline that was already set on the underlying net.Conn during write.
+			// This is critical for HTTP/2 ResponseController where expired deadlines cannot be
+			// extended and will cause the stream to fail permanently.
+			_ = t.conn.NetConn().SetWriteDeadline(time.Time{})
+		}
 	}
 	return nil
 }
