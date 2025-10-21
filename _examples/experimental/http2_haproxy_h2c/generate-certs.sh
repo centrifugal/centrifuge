@@ -21,18 +21,8 @@ fi
 echo "Generating locally-trusted SSL certificates for HAProxy HTTP/2 example..."
 echo ""
 
-# Generate backend server certificate (localhost + Docker service names)
-echo "1. Generating backend server certificate..."
-mkcert -cert-file "$CERTS_DIR/localhost.pem" \
-       -key-file "$CERTS_DIR/localhost-key.pem" \
-       localhost centrifuge1 centrifuge2 centrifuge3 127.0.0.1 ::1
-
-echo "   ✓ Created $CERTS_DIR/localhost.pem"
-echo "   ✓ Created $CERTS_DIR/localhost-key.pem"
-echo ""
-
 # Generate HAProxy certificate
-echo "2. Generating HAProxy certificate..."
+echo "1. Generating HAProxy certificate..."
 mkcert -cert-file "$CERTS_DIR/haproxy-cert.pem" \
        -key-file "$CERTS_DIR/haproxy-key.pem" \
        localhost 127.0.0.1 ::1
@@ -44,7 +34,7 @@ echo "   ✓ Created $CERTS_DIR/haproxy.pem (combined cert + key)"
 echo ""
 
 # Copy mkcert root CA for Docker containers
-echo "3. Copying mkcert root CA..."
+echo "2. Copying mkcert root CA..."
 MKCERT_CAROOT=$(mkcert -CAROOT)
 if [ -f "$MKCERT_CAROOT/rootCA.pem" ]; then
     cp "$MKCERT_CAROOT/rootCA.pem" "$CERTS_DIR/rootCA.pem"

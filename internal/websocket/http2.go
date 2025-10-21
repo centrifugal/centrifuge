@@ -1,73 +1,70 @@
 package websocket
 
 import (
-	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"time"
 )
 
 var (
-	_ net.Conn = (*h2ServerStream)(nil)
+	_ net.Conn = (*http2Stream)(nil)
 )
 
-// h2ServerStream is a wrapper for HTTP/2 extended CONNECT tunnel.
-type h2ServerStream struct {
+// http2Stream is a wrapper for HTTP/2 extended CONNECT tunnel.
+type http2Stream struct {
 	io.ReadCloser
 	io.Writer
-	flush func() error
+	rc *http.ResponseController
 }
 
-func (s *h2ServerStream) Read(p []byte) (int, error) {
+func (s *http2Stream) Read(p []byte) (int, error) {
 	return s.ReadCloser.Read(p)
 }
 
-func (s *h2ServerStream) Write(p []byte) (int, error) {
+func (s *http2Stream) Write(p []byte) (int, error) {
 	n, err := s.Writer.Write(p)
 	if err != nil {
 		return n, err
 	}
-	err = s.Flush()
+	err = s.rc.Flush()
 	return n, err
 }
 
-func (s *h2ServerStream) Flush() error {
-	if err := s.flush(); err != nil {
-		return fmt.Errorf("h2ServerStream: failed to flush: %w", err)
-	}
-	return nil
+func (s *http2Stream) Flush() error {
+	return s.rc.Flush()
 }
 
-func (s *h2ServerStream) Close() error {
+func (s *http2Stream) Close() error {
 	return s.ReadCloser.Close()
 }
 
 // LocalAddr returns a dummy local address. HTTP/2 streams don't have
 // a meaningful local address separate from the underlying connection.
-func (s *h2ServerStream) LocalAddr() net.Addr {
+func (s *http2Stream) LocalAddr() net.Addr {
 	return &net.TCPAddr{}
 }
 
 // RemoteAddr returns a dummy remote address. HTTP/2 streams don't have
 // a meaningful remote address separate from the underlying connection.
-func (s *h2ServerStream) RemoteAddr() net.Addr {
+func (s *http2Stream) RemoteAddr() net.Addr {
 	return &net.TCPAddr{}
 }
 
-// SetDeadline is a no-op for HTTP/2 streams. Deadline management is handled
-// by the underlying HTTP/2 transport.
-func (s *h2ServerStream) SetDeadline(t time.Time) error {
-	return nil
+// SetDeadline ...
+func (s *http2Stream) SetDeadline(t time.Time) error {
+	if err := s.rc.SetWriteDeadline(t); err != nil {
+		return err
+	}
+	return s.rc.SetReadDeadline(t)
 }
 
-// SetReadDeadline is a no-op for HTTP/2 streams. Deadline management is handled
-// by the underlying HTTP/2 transport.
-func (s *h2ServerStream) SetReadDeadline(t time.Time) error {
-	return nil
+// SetReadDeadline ...
+func (s *http2Stream) SetReadDeadline(t time.Time) error {
+	return s.rc.SetReadDeadline(t)
 }
 
-// SetWriteDeadline is a no-op for HTTP/2 streams. Deadline management is handled
-// by the underlying HTTP/2 transport.
-func (s *h2ServerStream) SetWriteDeadline(t time.Time) error {
-	return nil
+// SetWriteDeadline ...
+func (s *http2Stream) SetWriteDeadline(t time.Time) error {
+	return s.rc.SetWriteDeadline(t)
 }

@@ -70,12 +70,6 @@ type WebsocketConfig struct {
 	// works well for your use case, and you want to enable it in production.
 	CompressionPreparedMessageCacheSize int64
 
-	// EnableHTTP2ExtendedConnect enables support for HTTP/2 Extended CONNECT (RFC 8441)
-	// for WebSocket connections. When false (default), only HTTP/1.1 Upgrade handshakes
-	// are accepted. When true, both HTTP/1.1 Upgrade and HTTP/2 Extended CONNECT are accepted
-	// (unless DisableHTTP1Upgrade is also set to true).
-	EnableHTTP2ExtendedConnect bool
-
 	// DisableHTTP1Upgrade disables support for HTTP/1.1 Upgrade WebSocket handshakes.
 	// When true, only HTTP/2 Extended CONNECT is accepted (EnableHTTP2ExtendedConnect
 	// must be true, otherwise no connections will be accepted).
@@ -99,11 +93,10 @@ var writeBufferPool = &sync.Pool{}
 // NewWebsocketHandler creates new WebsocketHandler.
 func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
-		ReadBufferSize:             config.ReadBufferSize,
-		EnableCompression:          config.Compression,
-		Subprotocols:               []string{"centrifuge-json", "centrifuge-protobuf"},
-		EnableHTTP2ExtendedConnect: config.EnableHTTP2ExtendedConnect,
-		DisableHTTP1Upgrade:        config.DisableHTTP1Upgrade,
+		ReadBufferSize:      config.ReadBufferSize,
+		EnableCompression:   config.Compression,
+		Subprotocols:        []string{"centrifuge-json", "centrifuge-protobuf"},
+		DisableHTTP1Upgrade: config.DisableHTTP1Upgrade,
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool

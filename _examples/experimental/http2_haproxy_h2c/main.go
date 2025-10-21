@@ -14,12 +14,12 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 var (
 	port         = flag.Int("port", 8443, "Port to bind app to")
-	cert         = flag.String("cert", "certs/localhost.pem", "TLS certificate file")
-	key          = flag.String("key", "certs/localhost-key.pem", "TLS key file")
 	instanceName = flag.String("instance", "", "Instance name for identification")
 )
 
@@ -248,9 +248,10 @@ func main() {
 		Handler: mux,
 	}
 
-	log.Printf("[%s] running with TLS+HTTP/2 on %s", instance, addr)
+	srv.Handler = h2c.NewHandler(srv.Handler, &http2.Server{})
+	log.Printf("[%s] running with HTTP/2 CLEARTEXT on %s", instance, addr)
 	go func() {
-		if err := srv.ListenAndServeTLS(*cert, *key); err != nil {
+		if err := srv.ListenAndServe(); err != nil {
 			log.Fatal(err)
 		}
 	}()

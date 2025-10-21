@@ -74,17 +74,10 @@ type Upgrader struct {
 	// takeover" modes are supported.
 	EnableCompression bool
 
-	// EnableHTTP2ExtendedConnect enables support for HTTP/2 Extended CONNECT
-	// for WebSocket connections. See https://datatracker.ietf.org/doc/html/rfc8441.
-	// By default, only HTTP/1.1 Upgrade handshakes are accepted. (unless DisableHTTP1Upgrade
-	// is set to true - in that case only HTTP/2 Extended CONNECT is allowed).
-	// Experimental: This feature is experimental and may change in the future.
-	EnableHTTP2ExtendedConnect bool
-
 	// DisableHTTP1Upgrade disables support for HTTP/1.1 Upgrade WebSocket handshakes.
-	// When true, EnableHTTP2ExtendedConnect must be also true, otherwise no connections
-	// will be accepted - server will return internal errors upon handshake attempts.
-	// Experimental: This feature is experimental and may change in the future.
+	// When true, server only accepts WebSocket connections over HTTP/2 Extended Connect
+	// (for now requires GODEBUG=http2xconnect=1).
+	// Experimental: This feature is experimental.
 	DisableHTTP1Upgrade bool
 }
 
@@ -169,17 +162,12 @@ func Subprotocols(r *http.Request) []string {
 // If the upgrade fails, then Upgrade replies to the client with an HTTP error
 // response.
 func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*Conn, string, error) {
-	// Validate configuration.
-	if !u.EnableHTTP2ExtendedConnect && u.DisableHTTP1Upgrade {
-		return u.returnError(w, r, http.StatusInternalServerError, "websocket: invalid configuration, both HTTP/1.1 and HTTP/2 are disabled")
-	}
-
 	var challengeKey string
 
 	switch r.ProtoMajor {
 	case 1:
 		if u.DisableHTTP1Upgrade {
-			return u.returnError(w, r, http.StatusBadRequest, "websocket: HTTP/1.1 Upgrade not accepted")
+			return u.returnError(w, r, http.StatusBadRequest, "websocket: HTTP/1.1 Upgrade not enabled")
 		}
 
 		const badHandshake = "websocket: the client is not using the websocket protocol: "
@@ -205,9 +193,6 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 			return u.returnError(w, r, http.StatusBadRequest, "websocket: not a websocket handshake: 'Sec-WebSocket-Key' header must be Base64 encoded value of 16-byte in length")
 		}
 	case 2:
-		if !u.EnableHTTP2ExtendedConnect {
-			return u.returnError(w, r, http.StatusBadRequest, "websocket: HTTP/2 Extended CONNECT not enabled")
-		}
 		if r.Header.Get(":protocol") != "websocket" {
 			return u.returnError(w, r, http.StatusBadRequest, "websocket: HTTP/2 Extended CONNECT requires :protocol header with 'websocket' value")
 		}
@@ -382,10 +367,10 @@ func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHea
 		return nil, "", err
 	}
 
-	stream := &h2ServerStream{
+	stream := &http2Stream{
 		ReadCloser: r.Body,
 		Writer:     w,
-		flush:      rc.Flush,
+		rc:         rc,
 	}
 
 	c := newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, nil, nil)

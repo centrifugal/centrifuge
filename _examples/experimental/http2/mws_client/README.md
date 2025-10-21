@@ -11,7 +11,7 @@ mix deps.compile
 Then:
 
 ```
-HTTP_MODE=h1 TARGET_HOST=localhost TARGET_PORT=8080 TARGET_PATH=/connection/websocket NUM=100 mix run -e "MwsClient.main()"
+HTTP_MODE=h1 TARGET_HOST=localhost TARGET_PORT=8080 TARGET_PATH=/connection/websocket NUM=1000 mix run -e "MwsClient.main()"
 ```
 
 See connections to server:

@@ -31,34 +31,10 @@ echo "   ✓ Created $CERTS_DIR/localhost.pem"
 echo "   ✓ Created $CERTS_DIR/localhost-key.pem"
 echo ""
 
-# Generate HAProxy certificate
-echo "2. Generating HAProxy certificate..."
-mkcert -cert-file "$CERTS_DIR/haproxy-cert.pem" \
-       -key-file "$CERTS_DIR/haproxy-key.pem" \
-       localhost 127.0.0.1 ::1
-
-# HAProxy requires cert and key in single file
-cat "$CERTS_DIR/haproxy-cert.pem" "$CERTS_DIR/haproxy-key.pem" > "$CERTS_DIR/haproxy.pem"
-
-echo "   ✓ Created $CERTS_DIR/haproxy.pem (combined cert + key)"
-echo ""
-
-# Copy mkcert root CA for Docker containers
-echo "3. Copying mkcert root CA..."
-MKCERT_CAROOT=$(mkcert -CAROOT)
-if [ -f "$MKCERT_CAROOT/rootCA.pem" ]; then
-    cp "$MKCERT_CAROOT/rootCA.pem" "$CERTS_DIR/rootCA.pem"
-    echo "   ✓ Created $CERTS_DIR/rootCA.pem"
-else
-    echo "   ⚠️  Warning: Could not find mkcert root CA at $MKCERT_CAROOT/rootCA.pem"
-    echo "   You may need to run 'mkcert -install' first"
-fi
-echo ""
-
 echo ""
 echo "✅ Certificate generation complete!"
 echo ""
 echo "Files created in $CERTS_DIR/:"
 ls -lh "$CERTS_DIR/"
 echo ""
-echo "You can now run: ./build.sh && docker-compose up --build"
+echo "You can now run: go run main.go"
