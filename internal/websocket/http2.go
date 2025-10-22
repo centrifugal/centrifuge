@@ -39,14 +39,14 @@ func (s *http2Stream) Close() error {
 	return s.ReadCloser.Close()
 }
 
-// LocalAddr returns a dummy local address. HTTP/2 streams don't have
-// a meaningful local address separate from the underlying connection.
+// LocalAddr is not implemented for HTTP/2 streams.
+// May be taken from request if needed.
 func (s *http2Stream) LocalAddr() net.Addr {
 	return &net.TCPAddr{}
 }
 
-// RemoteAddr returns a dummy remote address. HTTP/2 streams don't have
-// a meaningful remote address separate from the underlying connection.
+// RemoteAddr is not implemented for HTTP/2 streams.
+// May be taken from request if needed.
 func (s *http2Stream) RemoteAddr() net.Addr {
 	return &net.TCPAddr{}
 }

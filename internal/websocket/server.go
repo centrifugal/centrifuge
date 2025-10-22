@@ -337,7 +337,10 @@ func (u *Upgrader) upgradeH1(w http.ResponseWriter, r *http.Request, responseHea
 
 // upgradeH2 handles the HTTP/2 extended CONNECT handshake.
 func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHeader http.Header, subprotocol string, compress bool) (*Conn, string, error) {
-	// "Sec-WebSocket-Accept" not used in HTTP/2 extended CONNECT per RFC 8441.
+	// https://www.rfc-editor.org/rfc/rfc8441.html:
+	// Implementations using this extended CONNECT to bootstrap WebSockets do not do the processing of
+	// the Sec-WebSocket-Key and Sec-WebSocket-Accept header fields of [RFC6455] as that functionality
+	// has been superseded by the :protocol pseudo-header field.
 
 	if subprotocol != "" {
 		w.Header().Set("Sec-WebSocket-Protocol", subprotocol)
