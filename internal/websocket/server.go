@@ -34,6 +34,7 @@ type Upgrader struct {
 	// I/O buffer sizes do not limit the size of the messages that can be sent
 	// or received.
 	// The default value is 4096 bytes, 4kb.
+	// For HTTP/2 connections via Extended Connect ReadBufferSize is ignored.
 	ReadBufferSize, WriteBufferSize int
 
 	// WriteBufferPool is a pool of buffers for write operations. If the value
@@ -233,10 +234,10 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	}
 
 	if r.ProtoMajor == 2 {
-		// HTTP/2 extended CONNECT handshake.
+		// HTTP/2 extended CONNECT (RFC 8441).
 		return u.upgradeH2(w, r, responseHeader, subprotocol, compress)
 	}
-	// HTTP/1.1 Upgrade handshake.
+	// HTTP/1.1 Upgrade (RFC 6455).
 	return u.upgradeH1(w, r, responseHeader, challengeKey, subprotocol, compress)
 }
 
@@ -376,7 +377,15 @@ func (u *Upgrader) upgradeH2(w http.ResponseWriter, r *http.Request, responseHea
 		rc:         rc,
 	}
 
-	c := newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, nil, nil)
+	// HTTP/2 stream already has internal buffering. Make small br to avoid allocating a new
+	// large intermediary buffer inside newConn.
+	// Small reads will be sufficient with 16 bytes buffer, for large reads our intermediary
+	// buffer will be bypassed avoiding any overhead.
+	// This means that for HTTP/2 it's not possible to control the read buffer size
+	// via Upgrader.ReadBufferSize. For write buffers it's better to always use a pool
+	// by setting Upgrader.WriteBufferPool.
+	br := bufio.NewReaderSize(stream, 16)
+	c := newConn(stream, true, u.ReadBufferSize, u.WriteBufferSize, u.WriteBufferPool, br, nil)
 	if compress {
 		c.newCompressionWriter = compressNoContextTakeover
 		c.newDecompressionReader = decompressNoContextTakeover

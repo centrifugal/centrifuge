@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -76,9 +77,9 @@ func channelSubscribeAllowed(channel string) bool {
 }
 
 func main() {
-	if !strings.Contains(os.Getenv("GODEBUG"), "http2xconnect=1") {
-		panic("required to use GODEBUG=http2xconnect=1")
-	}
+	//if !strings.Contains(os.Getenv("GODEBUG"), "http2xconnect=1") {
+	//	panic("required to use GODEBUG=http2xconnect=1")
+	//}
 
 	flag.Parse()
 
@@ -215,6 +216,26 @@ func main() {
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
+	})
+
+	// Memory stats endpoint.
+	http.HandleFunc("/memstats", func(w http.ResponseWriter, r *http.Request) {
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = fmt.Fprintf(w, "Memory Statistics\n")
+		_, _ = fmt.Fprintf(w, "=================\n")
+		_, _ = fmt.Fprintf(w, "Alloc:      %d bytes (%.2f KB, %.2f MB)\n", m.Alloc, float64(m.Alloc)/1024, float64(m.Alloc)/1024/1024)
+		_, _ = fmt.Fprintf(w, "TotalAlloc: %d bytes (%.2f KB, %.2f MB)\n", m.TotalAlloc, float64(m.TotalAlloc)/1024, float64(m.TotalAlloc)/1024/1024)
+		_, _ = fmt.Fprintf(w, "Sys:        %d bytes (%.2f KB, %.2f MB)\n", m.Sys, float64(m.Sys)/1024, float64(m.Sys)/1024/1024)
+		_, _ = fmt.Fprintf(w, "HeapAlloc:  %d bytes (%.2f KB, %.2f MB)\n", m.HeapAlloc, float64(m.HeapAlloc)/1024, float64(m.HeapAlloc)/1024/1024)
+		_, _ = fmt.Fprintf(w, "HeapInuse:  %d bytes (%.2f KB, %.2f MB)\n", m.HeapInuse, float64(m.HeapInuse)/1024, float64(m.HeapInuse)/1024/1024)
+		_, _ = fmt.Fprintf(w, "NumGC:      %d\n", m.NumGC)
+		_, _ = fmt.Fprintf(w, "\nConnections: %d\n", len(node.Hub().Connections()))
+		if len(node.Hub().Connections()) >= 1000 {
+			_, _ = fmt.Fprintf(w, "\nPer connection (HeapAlloc / connections): %.2f bytes\n", float64(m.HeapAlloc)/float64(len(node.Hub().Connections())))
+		}
 	})
 
 	http.Handle("/metrics", promhttp.Handler())
