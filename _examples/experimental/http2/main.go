@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -77,9 +78,9 @@ func channelSubscribeAllowed(channel string) bool {
 }
 
 func main() {
-	//if !strings.Contains(os.Getenv("GODEBUG"), "http2xconnect=1") {
-	//	panic("required to use GODEBUG=http2xconnect=1")
-	//}
+	if !strings.Contains(os.Getenv("GODEBUG"), "http2xconnect=1") {
+		panic("required to use GODEBUG=http2xconnect=1")
+	}
 
 	flag.Parse()
 
