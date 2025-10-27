@@ -70,6 +70,11 @@ type WebsocketConfig struct {
 	// works well for your use case, and you want to enable it in production.
 	CompressionPreparedMessageCacheSize int64
 
+	// DisableHTTP1Upgrade disables support for HTTP/1.1 Upgrade WebSocket handshakes.
+	// When true, only HTTP/2 Extended CONNECT is accepted (EnableHTTP2ExtendedConnect
+	// must be true, otherwise no connections will be accepted).
+	DisableHTTP1Upgrade bool
+
 	PingPongConfig
 }
 
@@ -88,9 +93,10 @@ var writeBufferPool = &sync.Pool{}
 // NewWebsocketHandler creates new WebsocketHandler.
 func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
-		ReadBufferSize:    config.ReadBufferSize,
-		EnableCompression: config.Compression,
-		Subprotocols:      []string{"centrifuge-json", "centrifuge-protobuf"},
+		ReadBufferSize:      config.ReadBufferSize,
+		EnableCompression:   config.Compression,
+		Subprotocols:        []string{"centrifuge-json", "centrifuge-protobuf"},
+		DisableHTTP1Upgrade: config.DisableHTTP1Upgrade,
 	}
 	if config.UseWriteBufferPool {
 		upgrade.WriteBufferPool = writeBufferPool
@@ -113,6 +119,9 @@ func NewWebsocketHandler(node *Node, config WebsocketConfig) *WebsocketHandler {
 			Build()
 		cache = &c
 	}
+
+	warnAboutIncorrectPingPongConfig(node, config.PingPongConfig, transportWebsocket)
+
 	return &WebsocketHandler{
 		node:          node,
 		config:        config,
@@ -142,16 +151,17 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	compression := s.config.Compression
 	compressionLevel := s.config.CompressionLevel
 	compressionMinSize := s.config.CompressionMinSize
-
 	conn, subProtocol, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
 		s.node.logger.log(newLogEntry(LogLevelDebug, "websocket upgrade error", map[string]any{"error": err.Error()}))
 		return
 	}
+	if subProtocol == "centrifuge-protobuf" {
+		protoType = ProtocolTypeProtobuf
+	}
 
 	if compression {
-		err := conn.SetCompressionLevel(compressionLevel)
-		if err != nil {
+		if err := conn.SetCompressionLevel(compressionLevel); err != nil {
 			s.node.logger.log(newErrorLogEntry(err, "websocket error setting compression level", map[string]any{"error": err.Error()}))
 		}
 	}
@@ -166,10 +176,6 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 	if messageSizeLimit > 0 {
 		conn.SetReadLimit(int64(messageSizeLimit))
-	}
-
-	if subProtocol == "centrifuge-protobuf" {
-		protoType = ProtocolTypeProtobuf
 	}
 
 	if useFramePingPong {
@@ -189,14 +195,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Separate goroutine for better GC of caller's data.
-	go func() {
+	handleConn := func() {
 		opts := websocketTransportOptions{
 			pingPong:           s.config.PingPongConfig,
 			writeTimeout:       writeTimeout,
 			compressionMinSize: compressionMinSize,
 			protoType:          protoType,
 			preparedCache:      s.preparedCache,
+			protoMajor:         uint8(r.ProtoMajor),
 		}
 
 		graceCh := make(chan struct{})
@@ -209,10 +215,14 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		default:
 		}
 
-		ctxCh := make(chan struct{})
-		defer close(ctxCh)
+		clientCtx := r.Context()
+		if r.ProtoMajor == 1 {
+			ctxCh := make(chan struct{})
+			defer close(ctxCh)
+			clientCtx = cancelctx.New(r.Context(), ctxCh)
+		}
 
-		c, closeFn, err := NewClient(cancelctx.New(r.Context(), ctxCh), s.node, transport)
+		c, closeFn, err := NewClient(clientCtx, s.node, transport)
 		if err != nil {
 			s.node.logger.log(newErrorLogEntry(err, "error creating client", map[string]any{"transport": transportWebsocket}))
 			return
@@ -229,6 +239,9 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		for {
 			_, r, err := conn.NextReader()
 			if err != nil {
+				if s.node.logEnabled(LogLevelTrace) {
+					s.node.logger.log(newLogEntry(LogLevelTrace, "websocket next reader error", map[string]any{"client": c.ID(), "error": err.Error()}))
+				}
 				break
 			}
 			proceed := HandleReadFrame(c, r)
@@ -248,7 +261,15 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-	}()
+	}
+
+	if r.ProtoMajor == 1 {
+		// Separate goroutine for better GC of caller's data for HTTP/1.x.
+		go handleConn()
+	} else {
+		// HTTP/2 and above - execute directly, otherwise underlying stream is being closed.
+		handleConn()
+	}
 }
 
 // HandleReadFrame is a helper to read Centrifuge commands from frame-based io.Reader and
@@ -310,6 +331,7 @@ type websocketTransportOptions struct {
 	writeTimeout       time.Duration
 	compressionMinSize int
 	preparedCache      *otter.Cache[string, *websocket.PreparedMessage]
+	protoMajor         uint8
 }
 
 func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions, graceCh chan struct{}, useNativePingPong bool) *websocketTransport {
@@ -328,6 +350,10 @@ func newWebsocketTransport(conn *websocket.Conn, opts websocketTransportOptions,
 // Name returns name of transport.
 func (t *websocketTransport) Name() string {
 	return transportWebsocket
+}
+
+func (t *websocketTransport) AcceptProtocol() string {
+	return getAcceptProtocolLabel(int8(t.opts.protoMajor))
 }
 
 // Protocol returns transport protocol.
@@ -409,6 +435,14 @@ func (t *websocketTransport) writeData(data []byte) error {
 
 	if t.opts.writeTimeout > 0 {
 		_ = t.conn.SetWriteDeadline(time.Time{})
+		if t.opts.protoMajor > 1 {
+			// For HTTP/2 connections, we need to actually clear the deadline on the underlying
+			// connection. The websocket Conn.SetWriteDeadline only sets a field, but doesn't
+			// clear the deadline that was already set on the underlying net.Conn during write.
+			// This is critical for HTTP/2 ResponseController where expired deadlines cannot be
+			// extended and will cause the stream to fail permanently.
+			_ = t.conn.NetConn().SetWriteDeadline(time.Time{})
+		}
 	}
 	return nil
 }

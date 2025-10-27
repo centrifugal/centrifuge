@@ -4,21 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	_ "net/http/pprof"
+
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/quic-go/quic-go/http3"
 )
 
 var (
-	port = flag.Int("port", 4433, "Port to bind app to")
+	port = flag.Int("port", 8080, "Port to bind app to")
+	cert = flag.String("cert", "certs/localhost.pem", "TLS certificate file")
+	key  = flag.String("key", "certs/localhost-key.pem", "TLS key file")
 )
 
 type clientMessage struct {
@@ -72,10 +78,14 @@ func channelSubscribeAllowed(channel string) bool {
 }
 
 func main() {
+	if !strings.Contains(os.Getenv("GODEBUG"), "http2xconnect=1") {
+		panic("required to use GODEBUG=http2xconnect=1")
+	}
+
 	flag.Parse()
 
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelInfo,
+		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
 		Metrics: centrifuge.MetricsConfig{
 			ExposeTransportAcceptProtocol: true,
@@ -159,7 +169,7 @@ func main() {
 			log.Printf("[user %s] sent RPC, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
 			switch e.Method {
 			case "getCurrentYear":
-				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2025"}`)}, nil)
 			default:
 				cb(centrifuge.RPCReply{}, centrifuge.ErrorMethodNotFound)
 			}
@@ -200,22 +210,49 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.DefaultServeMux
-	mux.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
-	mux.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
-	mux.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
-	mux.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
+	http.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
+	http.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
+	http.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
+	http.Handle("/emulation", centrifuge.NewEmulationHandler(node, centrifuge.EmulationConfig{}))
+	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	})
 
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/", http.FileServer(http.Dir("./")))
+	// Memory stats endpoint.
+	http.HandleFunc("/memstats", func(w http.ResponseWriter, r *http.Request) {
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = fmt.Fprintf(w, "Memory Statistics\n")
+		_, _ = fmt.Fprintf(w, "=================\n")
+		_, _ = fmt.Fprintf(w, "Alloc:      %d bytes (%.2f KB, %.2f MB)\n", m.Alloc, float64(m.Alloc)/1024, float64(m.Alloc)/1024/1024)
+		_, _ = fmt.Fprintf(w, "TotalAlloc: %d bytes (%.2f KB, %.2f MB)\n", m.TotalAlloc, float64(m.TotalAlloc)/1024, float64(m.TotalAlloc)/1024/1024)
+		_, _ = fmt.Fprintf(w, "Sys:        %d bytes (%.2f KB, %.2f MB)\n", m.Sys, float64(m.Sys)/1024, float64(m.Sys)/1024/1024)
+		_, _ = fmt.Fprintf(w, "HeapAlloc:  %d bytes (%.2f KB, %.2f MB)\n", m.HeapAlloc, float64(m.HeapAlloc)/1024, float64(m.HeapAlloc)/1024/1024)
+		_, _ = fmt.Fprintf(w, "HeapInuse:  %d bytes (%.2f KB, %.2f MB)\n", m.HeapInuse, float64(m.HeapInuse)/1024, float64(m.HeapInuse)/1024/1024)
+		_, _ = fmt.Fprintf(w, "NumGC:      %d\n", m.NumGC)
+		_, _ = fmt.Fprintf(w, "\nConnections: %d\n", len(node.Hub().Connections()))
+		if len(node.Hub().Connections()) >= 1000 {
+			_, _ = fmt.Fprintf(w, "\nPer connection (HeapAlloc / connections): %.2f bytes\n", float64(m.HeapAlloc)/float64(len(node.Hub().Connections())))
+		}
+	})
 
+	http.Handle("/metrics", promhttp.Handler())
+	http.Handle("/", http.FileServer(http.Dir("./")))
+
+	addr := "0.0.0.0:" + strconv.Itoa(*port)
+	srv := &http.Server{
+		Addr: addr,
+	}
+	log.Printf("running with TLS, open https://localhost:%d", *port)
 	go func() {
-		if err := http3.ListenAndServeTLS("0.0.0.0:"+strconv.Itoa(*port), "certs/localhost.pem", "certs/localhost-key.pem", mux); err != nil {
+		if err := srv.ListenAndServeTLS(*cert, *key); err != nil {
 			log.Fatal(err)
 		}
 	}()
 
-	log.Println("running, open https://localhost:" + strconv.Itoa(*port))
 	waitExitSignal(node)
 	log.Println("bye!")
 }

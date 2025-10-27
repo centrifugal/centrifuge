@@ -14,20 +14,31 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 var (
-	port = flag.Int("port", 4433, "Port to bind app to")
+	port         = flag.Int("port", 8443, "Port to bind app to")
+	instanceName = flag.String("instance", "", "Instance name for identification")
 )
 
 type clientMessage struct {
-	Timestamp int64  `json:"timestamp"`
-	Input     string `json:"input"`
+	Timestamp    int64  `json:"timestamp"`
+	Input        string `json:"input"`
+	InstanceName string `json:"instance,omitempty"`
 }
 
 func handleLog(e centrifuge.LogEntry) {
-	log.Printf("%s: %v", e.Message, e.Fields)
+	instance := os.Getenv("INSTANCE_NAME")
+	if instance == "" {
+		instance = *instanceName
+	}
+	if instance != "" {
+		log.Printf("[%s] %s: %v", instance, e.Message, e.Fields)
+	} else {
+		log.Printf("%s: %v", e.Message, e.Fields)
+	}
 }
 
 func authMiddleware(h http.Handler) http.Handler {
@@ -71,11 +82,31 @@ func channelSubscribeAllowed(channel string) bool {
 	return false
 }
 
+func getInstanceName() string {
+	instance := os.Getenv("INSTANCE_NAME")
+	if instance == "" {
+		instance = *instanceName
+	}
+	if instance == "" {
+		instance = "unknown"
+	}
+	return instance
+}
+
 func main() {
 	flag.Parse()
 
+	// Override port from environment if set (for Docker)
+	if envPort := os.Getenv("PORT"); envPort != "" {
+		if p, err := strconv.Atoi(envPort); err == nil {
+			*port = p
+		}
+	}
+
+	instance := getInstanceName()
+
 	node, _ := centrifuge.New(centrifuge.Config{
-		LogLevel:   centrifuge.LogLevelInfo,
+		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
 		Metrics: centrifuge.MetricsConfig{
 			ExposeTransportAcceptProtocol: true,
@@ -85,7 +116,7 @@ func main() {
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		cred, _ := centrifuge.GetCredentials(ctx)
 		return centrifuge.ConnectReply{
-			Data: []byte(`{}`),
+			Data: []byte(`{"instance": "` + instance + `"}`),
 			// Subscribe to personal several server-side channel.
 			Subscriptions: map[string]centrifuge.SubscribeOptions{
 				"#" + cred.UserID: {EnableRecovery: true, EmitPresence: true, EmitJoinLeave: true, PushJoinLeave: true},
@@ -95,21 +126,21 @@ func main() {
 
 	node.OnConnect(func(client *centrifuge.Client) {
 		transport := client.Transport()
-		log.Printf("user %s connected via %s with protocol: %s", client.UserID(), transport.Name(), transport.Protocol())
+		log.Printf("[%s] user %s connected via %s with protocol: %s", instance, client.UserID(), transport.Name(), transport.Protocol())
 
 		client.OnAlive(func() {
-			log.Printf("user %s connection is still active", client.UserID())
+			log.Printf("[%s] user %s connection is still active", instance, client.UserID())
 		})
 
 		client.OnRefresh(func(e centrifuge.RefreshEvent, cb centrifuge.RefreshCallback) {
-			log.Printf("user %s connection is going to expire, refreshing", client.UserID())
+			log.Printf("[%s] user %s connection is going to expire, refreshing", instance, client.UserID())
 			cb(centrifuge.RefreshReply{
 				ExpireAt: time.Now().Unix() + 60,
 			}, nil)
 		})
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			log.Printf("user %s subscribes on %s", client.UserID(), e.Channel)
+			log.Printf("[%s] user %s subscribes on %s", instance, client.UserID(), e.Channel)
 			if !channelSubscribeAllowed(e.Channel) {
 				cb(centrifuge.SubscribeReply{}, centrifuge.ErrorPermissionDenied)
 				return
@@ -121,17 +152,17 @@ func main() {
 					EmitPresence:      true,
 					EmitJoinLeave:     true,
 					PushJoinLeave:     true,
-					Data:              []byte(`{"msg": "welcome"}`),
+					Data:              []byte(`{"msg": "welcome from ` + instance + `"}`),
 				},
 			}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
-			log.Printf("user %s unsubscribed from %s (%s)", client.UserID(), e.Channel, e.Reason)
+			log.Printf("[%s] user %s unsubscribed from %s (%s)", instance, client.UserID(), e.Channel, e.Reason)
 		})
 
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
-			log.Printf("user %s publishes into channel %s: %s", client.UserID(), e.Channel, string(e.Data))
+			log.Printf("[%s] user %s publishes into channel %s: %s", instance, client.UserID(), e.Channel, string(e.Data))
 			if !client.IsSubscribed(e.Channel) {
 				cb(centrifuge.PublishReply{}, centrifuge.ErrorPermissionDenied)
 				return
@@ -144,6 +175,7 @@ func main() {
 				return
 			}
 			msg.Timestamp = time.Now().Unix()
+			msg.InstanceName = instance
 			data, _ := json.Marshal(msg)
 
 			result, err := node.Publish(
@@ -156,17 +188,17 @@ func main() {
 		})
 
 		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
-			log.Printf("[user %s] sent RPC, data: %s, method: %s", client.UserID(), string(e.Data), e.Method)
+			log.Printf("[%s] [user %s] sent RPC, data: %s, method: %s", instance, client.UserID(), string(e.Data), e.Method)
 			switch e.Method {
 			case "getCurrentYear":
-				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2020"}`)}, nil)
+				cb(centrifuge.RPCReply{Data: []byte(`{"year": "2025", "instance": "` + instance + `"}`)}, nil)
 			default:
 				cb(centrifuge.RPCReply{}, centrifuge.ErrorMethodNotFound)
 			}
 		})
 
 		client.OnPresence(func(e centrifuge.PresenceEvent, cb centrifuge.PresenceCallback) {
-			log.Printf("user %s calls presence on %s", client.UserID(), e.Channel)
+			log.Printf("[%s] user %s calls presence on %s", instance, client.UserID(), e.Channel)
 			if !client.IsSubscribed(e.Channel) {
 				cb(centrifuge.PresenceReply{}, centrifuge.ErrorPermissionDenied)
 				return
@@ -175,7 +207,7 @@ func main() {
 		})
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
-			log.Printf("user %s disconnected (%s)", client.UserID(), e.Reason)
+			log.Printf("[%s] user %s disconnected (%s)", instance, client.UserID(), e.Reason)
 		})
 	})
 
@@ -185,14 +217,14 @@ func main() {
 		for {
 			_, err := node.Publish(
 				"chat:index",
-				[]byte(`{"input": "Publish from server `+strconv.Itoa(i)+`"}`),
+				[]byte(`{"input": "Publish from server `+instance+` #`+strconv.Itoa(i)+`", "instance": "`+instance+`"}`),
 				centrifuge.WithHistory(300, time.Minute),
 			)
 			if err != nil {
-				log.Printf("error publishing to channel: %s", err)
+				log.Printf("[%s] error publishing to channel: %s", instance, err)
 			}
 			i++
-			time.Sleep(5000 * time.Millisecond)
+			time.Sleep(10000 * time.Millisecond)
 		}
 	}()
 
@@ -200,7 +232,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.DefaultServeMux
+	mux := http.NewServeMux()
+
 	mux.Handle("/connection/websocket", authMiddleware(centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})))
 	mux.Handle("/connection/http_stream", authMiddleware(centrifuge.NewHTTPStreamHandler(node, centrifuge.HTTPStreamConfig{})))
 	mux.Handle("/connection/sse", authMiddleware(centrifuge.NewSSEHandler(node, centrifuge.SSEConfig{})))
@@ -209,13 +242,20 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/", http.FileServer(http.Dir("./")))
 
+	addr := "0.0.0.0:" + strconv.Itoa(*port)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	srv.Handler = h2c.NewHandler(srv.Handler, &http2.Server{})
+	log.Printf("[%s] running with HTTP/2 CLEARTEXT on %s", instance, addr)
 	go func() {
-		if err := http3.ListenAndServeTLS("0.0.0.0:"+strconv.Itoa(*port), "certs/localhost.pem", "certs/localhost-key.pem", mux); err != nil {
+		if err := srv.ListenAndServe(); err != nil {
 			log.Fatal(err)
 		}
 	}()
 
-	log.Println("running, open https://localhost:" + strconv.Itoa(*port))
 	waitExitSignal(node)
-	log.Println("bye!")
+	log.Printf("[%s] bye!", instance)
 }

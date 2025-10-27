@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Centrifuge HAProxy HTTP/2 WebSocket Example</title>
+        <style type="text/css">
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            input[type="text"] { width: 300px; padding: 8px; }
+            .muted { color: #CCCCCC; font-size: 10px; }
+            .info-box {
+                background: #f0f0f0;
+                padding: 15px;
+                border-radius: 5px;
+                margin-bottom: 20px;
+                border-left: 4px solid #4CAF50;
+            }
+            .info-box h4 { margin-top: 0; }
+            .instance {
+                display: inline-block;
+                padding: 2px 8px;
+                background: #4CAF50;
+                color: white;
+                border-radius: 3px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            #messages {
+                margin-top: 20px;
+                max-height: 500px;
+                overflow-y: auto;
+            }
+        </style>
+        <script type="text/javascript" src="https://unpkg.com/centrifuge@^5/dist/centrifuge.js"></script>
+        <script type="text/javascript">
+            // helper functions to work with escaping html.
+            const tagsToReplace = {'&': '&amp;', '<': '&lt;', '>': '&gt;'};
+            function replaceTag(tag) {return tagsToReplace[tag] || tag;}
+            function safeTagsReplace(str) {return str.replace(/[&<>]/g, replaceTag);}
+
+            const channel = "chat:index";
+
+            window.addEventListener('load', function() {
+                const input = document.getElementById("input");
+                const container = document.getElementById('messages');
+                const instanceInfo = document.getElementById('instance-info');
+
+                const transports = [
+                    {
+                        transport: 'websocket',
+                        endpoint: `wss://localhost/connection/websocket`
+                    }
+                ];
+                const centrifuge = new Centrifuge(transports, {});
+
+                centrifuge.on('connected', function(ctx){
+                    const instanceName = ctx.data.instance;
+                    instanceInfo.innerHTML = `<strong>Connected to backend:</strong> <span class="instance">${instanceName}</span>`;
+                    drawText('Connected with client ID ' + ctx.client + ' over ' + ctx.transport);
+                    input.removeAttribute('disabled');
+                });
+
+                centrifuge.on('connecting', function(ctx){
+                    drawText('Connecting: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                });
+
+                centrifuge.on('disconnected', function(ctx){
+                    drawText('Disconnected: ' + ctx.reason);
+                    input.setAttribute('disabled', 'true');
+                    instanceInfo.innerHTML = '<strong>Status:</strong> Disconnected';
+                });
+
+                centrifuge.on('error', function(ctx){
+                    drawText('Client error: ' + JSON.stringify(ctx));
+                    centrifuge.connect();
+                });
+
+                centrifuge.on('message', function(data) {
+                    drawText('Message: ' + JSON.stringify(data));
+                });
+
+                centrifuge.on('publication', function(ctx) {
+                    let instanceBadge = '';
+                    try {
+                        const data = JSON.parse(ctx.data);
+                        if (data.instance) {
+                            instanceBadge = ' <span class="instance">' + data.instance + '</span>';
+                        }
+                    } catch (e) {}
+                    drawText('Server-side publication from channel ' + ctx.channel + instanceBadge + ": " + JSON.stringify(ctx.data));
+                });
+
+                centrifuge.on('join', function(ctx) {
+                    drawText('Server-side join from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('leave', function(ctx) {
+                    drawText('Server-side leave from channel ' + ctx.channel + ": " + JSON.stringify(ctx.info));
+                });
+
+                centrifuge.on('subscribed', function(ctx) {
+                    drawText('Subscribed to server-side channel ' + ctx.channel +  ' (ctx: ' + JSON.stringify(ctx) + ')');
+                });
+
+                centrifuge.on('subscribing', function(ctx) {
+                    drawText('Subscribing to server-side channel ' + ctx.channel);
+                });
+
+                centrifuge.on('unsubscribed', function(ctx) {
+                    drawText('Unsubscribe from server-side channel ' + ctx.channel);
+                });
+
+                // show how many users currently in channel.
+                function showPresence(sub) {
+                    sub.presence().then(function(result) {
+                        let count = 0;
+                        for (let key in result.clients){
+                            count++;
+                        }
+                        drawText('Presence: now in this room – ' + count + ' clients');
+                    }, function(err) {
+                        drawText("Presence error: " + JSON.stringify(err));
+                    });
+                }
+
+                // subscribe on channel and bind various event listeners. Actual
+                // subscription request will be sent after client connects to
+                // a server.
+                const sub = centrifuge.newSubscription(channel, {});
+
+                sub.on("publication", function(ctx) {
+                    let instanceBadge = '';
+                    try {
+                        const data = JSON.parse(ctx.data);
+                        if (data.instance) {
+                            instanceBadge = ' <span class="instance">' + data.instance + '</span>';
+                        }
+                    } catch (e) {}
+                    drawText('Client-side subscription publication: ' + ctx.channel + instanceBadge + ", " + JSON.stringify(ctx.data));
+                });
+                sub.on("join", function(ctx) {
+                    drawText('Client-side subscription join: ' + ctx.channel + ", " + JSON.stringify(ctx.info));
+                });
+                sub.on("leave", function(ctx) {
+                    drawText('Client-side subscription leave: ' + ctx.channel + ", " + JSON.stringify(ctx.info));
+                });
+                sub.on("subscribing", function(ctx) {
+                    drawText('Client-side subscription subscribing: ' + ctx.channel);
+                });
+                sub.on("subscribed", function(ctx) {
+                    drawText('Client-side subscription subscribed to channel ' + ctx.channel);
+                    showPresence(sub);
+                });
+                sub.on("unsubscribed", function(ctx) {
+                    drawText('Client-side subscription unsubscribed from channel ' + ctx.channel);
+                });
+                sub.on("error", function(ctx) {
+                    drawText('Client-side subscription error: ' + ctx.channel);
+                });
+
+                sub.subscribe();
+
+                // Trigger actual connection request to server.
+                centrifuge.connect();
+
+                // Publish to channel when user presses key in input field.
+                input.addEventListener('keyup', function(e) {
+                    if (e.keyCode === 13) {
+                        sub.publish({"input": input.value}).then(function() {
+                            console.log("message accepted by server");
+                        }, function(err) {
+                            drawText("Error publishing message: " + JSON.stringify(err));
+                        });
+                        input.value = '';
+                    }
+                });
+
+                // Draw raw data in textarea.
+                function drawText(text) {
+                    const time = '<span class="muted">' + new Date().toLocaleTimeString() + '</span>';
+                    container.innerHTML = time + ' ' + text + '<br>' + container.innerHTML;
+                }
+            }, false);
+        </script>
+    </head>
+    <body>
+        <h2>Centrifuge HAProxy HTTP/2 WebSocket Example</h2>
+
+        <div class="info-box">
+            <h4>Architecture Overview</h4>
+            <p><strong>Client → HAProxy → Backend</strong></p>
+            <ul>
+                <li><strong>Frontend (Client → HAProxy):</strong> HTTP/1.1 WebSocket connection</li>
+                <li><strong>Backend (HAProxy → Centrifuge):</strong> HTTP/2 with Extended CONNECT (RFC 8441)</li>
+                <li><strong>Load Balancing:</strong> 3 backend Centrifuge instances</li>
+                <li><strong>Connection Pooling:</strong> Multiple client WebSockets multiplexed into single HTTP/2 connection per backend</li>
+            </ul>
+        </div>
+
+        <div class="info-box" id="instance-info">
+            <strong>Status:</strong> Not connected
+        </div>
+
+        <div>
+            <input type="text" id="input" autocomplete="off" placeholder="Type message and press Enter..." disabled />
+        </div>
+
+        <div id="messages"></div>
+
+        <div style="margin-top: 30px; padding: 15px; background: #f9f9f9; border-radius: 5px;">
+            <h4>HAProxy Stats</h4>
+            <p>View HAProxy statistics and connection details: <a href="http://localhost:8404" target="_blank">http://localhost:8404</a></p>
+        </div>
+    </body>
+</html>

@@ -266,3 +266,42 @@ func TestMetrics(t *testing.T) {
 		})
 	}
 }
+
+func Test_getHTTPTransportProto(t *testing.T) {
+	type args struct {
+		protoMajor int8
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "HTTP/1.x",
+			args: args{protoMajor: 1},
+			want: "h1",
+		},
+		{
+			name: "HTTP/2",
+			args: args{protoMajor: 2},
+			want: "h2",
+		},
+		{
+			name: "HTTP/3",
+			args: args{protoMajor: 3},
+			want: "h3",
+		},
+		{
+			name: "unknown HTTP version",
+			args: args{protoMajor: 0},
+			want: "unknown",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getAcceptProtocolLabel(tt.args.protoMajor); got != tt.want {
+				t.Errorf("getAcceptProtocolLabel() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

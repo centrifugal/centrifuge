@@ -99,6 +99,16 @@ const (
 	numSubDissolverWorkers = 64
 )
 
+// TransportAcceptedLabels contains labels for transport connection metrics.
+// This struct is designed to be extensible - additional label fields can be
+// added in the future without breaking compatibility.
+type TransportAcceptedLabels struct {
+	// Transport is the transport type (e.g., "websocket", "http_stream", "sse").
+	Transport string
+	// AcceptProtocol is the transport protocol used to accept connection (can be "h1", "h2", "h3").
+	AcceptProtocol string
+}
+
 // New creates Node with provided Config.
 func New(c Config) (*Node, error) {
 	if c.NodeInfoMetricsAggregateInterval == 0 {
@@ -1013,7 +1023,12 @@ func (n *Node) pubDisconnect(user string, disconnect Disconnect, clientID string
 // this allows to make operations with user connection on demand.
 func (n *Node) addClient(c *Client) {
 	n.metrics.incActionCount("add_client", "")
-	n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), c.metricName, c.metricVersion).Inc()
+	var acceptProtocol string
+	if n.config.Metrics.ExposeTransportAcceptProtocol {
+		acceptProtocol = c.transport.AcceptProtocol()
+	}
+	n.metrics.connectionsAccepted.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
+	n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
 	n.hub.add(c)
 }
 
@@ -1022,7 +1037,11 @@ func (n *Node) removeClient(c *Client) {
 	n.metrics.incActionCount("remove_client", "")
 	removed := n.hub.remove(c)
 	if removed {
-		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), c.metricName, c.metricVersion).Dec()
+		var acceptProtocol string
+		if n.config.Metrics.ExposeTransportAcceptProtocol {
+			acceptProtocol = c.transport.AcceptProtocol()
+		}
+		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Dec()
 	}
 }
 
