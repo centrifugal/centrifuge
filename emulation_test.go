@@ -32,6 +32,7 @@ func TestEmulationHandler_Options(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestEmulationHandler_UnknownMethod(t *testing.T) {
@@ -53,6 +54,7 @@ func TestEmulationHandler_UnknownMethod(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestEmulationHandler_RequestTooLarge(t *testing.T) {
@@ -91,6 +93,7 @@ func TestEmulationHandler_RequestTooLarge(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestEmulationHandler_NodeNotFound(t *testing.T) {
@@ -127,6 +130,7 @@ func TestEmulationHandler_NodeNotFound(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestEmulationHandler_OK(t *testing.T) {
@@ -163,6 +167,7 @@ func TestEmulationHandler_OK(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestEmulation_SameNode(t *testing.T) {
