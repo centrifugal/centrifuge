@@ -256,12 +256,12 @@ func TestDialTimeout(t *testing.T) {
 	d.HandshakeTimeout = -1
 	ws, resp, _, err := d.Dial(s.URL, nil)
 	if err == nil {
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 		_ = ws.Close()
 		t.Fatalf("Dial: nil")
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
 }
 
 // requireDeadlineNetConn fails the current test when Read or Write are called
@@ -1034,9 +1034,9 @@ func TestNextProtos(t *testing.T) {
 
 	_, resp, _, err := d.Dial(makeWsProto(ts.URL), nil)
 	if err == nil {
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 		t.Fatalf("Dial succeeded, expect fail ")
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
 }
