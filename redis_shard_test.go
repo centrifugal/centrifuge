@@ -116,7 +116,9 @@ func TestOptionsFromAddress(t *testing.T) {
 				InitAddress:      []string{"127.0.0.1:6379"},
 				Dialer:           net.Dialer{Timeout: 1 * time.Second},
 				ConnWriteTimeout: 2 * time.Second,
-				TLSConfig:        &tls.Config{},
+				TLSConfig: &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				},
 			},
 		},
 		{
@@ -165,7 +167,9 @@ func TestOptionsFromAddress(t *testing.T) {
 					MasterSet: "mymaster",
 					Username:  "user",
 					Password:  "pass",
-					TLSConfig: &tls.Config{},
+					TLSConfig: &tls.Config{
+						MinVersion: tls.VersionTLS12,
+					},
 				},
 			},
 			expectedIsSentinel: true,
@@ -177,7 +181,9 @@ func TestOptionsFromAddress(t *testing.T) {
 			expectedError: nil,
 			expectedOutput: rueidis.ClientOption{
 				InitAddress: []string{"127.0.0.1:6379"},
-				TLSConfig:   &tls.Config{},
+				TLSConfig: &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				},
 			},
 		},
 		{
@@ -186,6 +192,7 @@ func TestOptionsFromAddress(t *testing.T) {
 			inputOptions: rueidis.ClientOption{
 				TLSConfig: &tls.Config{
 					InsecureSkipVerify: true,
+					MinVersion:         tls.VersionTLS12,
 				},
 			},
 			expectedError: nil,
@@ -193,6 +200,7 @@ func TestOptionsFromAddress(t *testing.T) {
 				InitAddress: []string{"127.0.0.1:6379"},
 				TLSConfig: &tls.Config{
 					InsecureSkipVerify: true,
+					MinVersion:         tls.VersionTLS12,
 				},
 			},
 		},
@@ -221,6 +229,8 @@ func TestOptionsFromAddressUnix(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, opts.ClientOption.InitAddress, []string{"/tmp/redis.sock"})
 	require.NotNil(t, opts.ClientOption.DialFn)
-	_, err = opts.ClientOption.DialFn("", &net.Dialer{}, &tls.Config{})
+	_, err = opts.ClientOption.DialFn("", &net.Dialer{}, &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	})
 	require.Error(t, err)
 }
