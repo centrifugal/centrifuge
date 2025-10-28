@@ -16,7 +16,7 @@ type Rand struct {
 }
 
 func New(seed int64) *Rand {
-	return &Rand{r: rand.New(rand.NewSource(seed))}
+	return &Rand{r: rand.New(rand.NewSource(seed))} //nolint:gosec // Not used for security-sensitive purposes.
 }
 
 func (sr *Rand) Int63n(n int64) int64 {
