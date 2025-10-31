@@ -109,4 +109,10 @@ var (
 		Code:    112,
 		Message: "unrecoverable position",
 	}
+	// ErrorIncorrectHistoryTTLConfiguration means that history meta TTL is less than history TTL.
+	// History meta TTL must be greater than or equal to history TTL to avoid stream inconsistencies.
+	ErrorIncorrectHistoryTTLConfiguration = &Error{
+		Code:    113,
+		Message: "history meta TTL must be greater than or equal to history TTL",
+	}
 )
