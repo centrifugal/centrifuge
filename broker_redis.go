@@ -154,6 +154,10 @@ type RedisBrokerConfig struct {
 	// number calculated as:
 	// runtime.NumCPU / numSubscribeShards / NumShardedPubSubPartitions (if used) (minimum 1).
 	numPubSubProcessors int
+
+	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
+	// it on the client side. This is useful for FIPS compliance.
+	LoadSHA1 bool
 }
 
 // NewRedisBroker initializes Redis Broker.
@@ -212,11 +216,11 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		config:                  config,
 		shards:                  shardWrappers,
 		sharding:                len(config.Shards) > 1,
-		publishIdempotentScript: rueidis.NewLuaScript(publishIdempotentSource),
-		historyStreamScript:     rueidis.NewLuaScript(historyStreamSource),
-		historyListScript:       rueidis.NewLuaScript(historyListSource),
-		addHistoryStreamScript:  rueidis.NewLuaScript(addHistoryStreamSource),
-		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource),
+		publishIdempotentScript: rueidis.NewLuaScript(publishIdempotentSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		historyStreamScript:     rueidis.NewLuaScript(historyStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		historyListScript:       rueidis.NewLuaScript(historyListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		addHistoryStreamScript:  rueidis.NewLuaScript(addHistoryStreamSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		addHistoryListScript:    rueidis.NewLuaScript(addHistoryListSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
 		closeCh:                 make(chan struct{}),
 	}
 	b.shardChannel = config.Prefix + redisPubSubShardChannelSuffix
