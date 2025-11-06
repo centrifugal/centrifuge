@@ -1471,3 +1471,32 @@ func TestGetPresenceManager(t *testing.T) {
 	_, err = node.Presence("test2")
 	require.NoError(t, err)
 }
+
+func TestNode_PublishHistoryTTLValidation(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	_, err := node.Publish("test", []byte("{}"), WithHistory(10, time.Hour, 2*time.Hour))
+	require.NoError(t, err)
+
+	_, err = node.Publish("test", []byte("{}"), WithHistory(10, time.Hour, time.Hour))
+	require.NoError(t, err)
+
+	_, err = node.Publish("test", []byte("{}"), WithHistory(10, 2*time.Hour, time.Hour))
+	require.Error(t, err)
+	require.Equal(t, ErrorIncorrectHistoryTTLConfiguration, err)
+
+	_, err = node.Publish("test", []byte("{}"), WithHistory(10, time.Hour))
+	require.NoError(t, err)
+
+	longTTL := 31 * 24 * time.Hour // 31 days
+	_, err = node.Publish("test", []byte("{}"), WithHistory(10, longTTL))
+	require.Error(t, err)
+	require.Equal(t, ErrorIncorrectHistoryTTLConfiguration, err)
+
+	_, err = node.Publish("test", []byte("{}"), WithHistory(0, 2*time.Hour, time.Hour))
+	require.NoError(t, err)
+
+	_, err = node.Publish("test", []byte("{}"), WithHistory(10, 0, time.Hour))
+	require.NoError(t, err)
+}
