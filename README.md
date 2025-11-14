@@ -50,6 +50,7 @@ For **bidirectional** communication between a client and a Centrifuge-based serv
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 * [centrifuge-python](https://github.com/centrifugal/centrifuge-python) - real-time SDK for Python on top of asyncio
+* [WIP] [centrifuge-csharp](https://github.com/centrifugal/centrifuge-csharp) - for modern .NET environments (including MAUI, Blazor, Unity)
 
 These SDKs abstract asynchronous communication complexity from the developer: handle framing, reconnect with backoff, timeouts, multiplex channel subscriptions over single connection, etc.
 
