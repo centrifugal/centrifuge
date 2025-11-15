@@ -36,7 +36,7 @@ Centrifuge library provides a lot of top of raw WebSocket transport. Important l
 * Message recovery mechanism for channels to survive PUB/SUB delivery problems, short network disconnects or node restart
 * Cache channels – a way to quickly deliver latest publication from channel history to the client upon subscription
 * Delta compression using [Fossil](https://fossil-scm.org/home/doc/tip/www/delta_format.wiki) algorithm for publications inside a channel to reduce bandwidth usage
-* Support for client-supplied publication filters to drop unnecessary channel publications on the server side 
+* Support for client-supplied publication filters to drop unnecessary channel publications on the server side (see [the example](https://github.com/centrifugal/centrifuge/tree/master/_examples/tags_filter)) 
 * Per-client and per-channel batching controls for reduced system calls and better CPU utilization
 * Out-of-the-box observability using Prometheus instrumentation
 * Client SDKs for main application environments all following [single behaviour spec](https://centrifugal.dev/docs/transports/client_api) (see list of SDKs below).
