@@ -1,6 +1,6 @@
 module github.com/centrifugal/centrifuge/_examples
 
-go 1.23.0
+go 1.23.12
 
 replace github.com/centrifugal/centrifuge => ../
 
