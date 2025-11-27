@@ -44,6 +44,13 @@ const (
 type TransportInfo interface {
 	// Name returns a name of transport.
 	Name() string
+	// AcceptProtocol protocol should return information about network protocol used to
+	// create transport. This is useful to distinguish between different HTTP protocols
+	// used to create transport. For example, WebSocket transport can be created over
+	// HTTP/1.1 and HTTP/2 protocols. For HTTP, it's recommended to use "h1", "h2", "h3"
+	// values. This must be low-cardinality set of values. It is used only for observability
+	// purposes, custom transport implementations can choose to return an empty string here.
+	AcceptProtocol() string
 	// Protocol returns an underlying transport protocol type used by transport.
 	// JSON or Protobuf protocol types are supported by Centrifuge. Message encoding
 	// happens of Client level.

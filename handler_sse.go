@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -28,6 +29,7 @@ type SSEHandler struct {
 
 // NewSSEHandler creates new SSEHandler.
 func NewSSEHandler(node *Node, config SSEConfig) *SSEHandler {
+	warnAboutIncorrectPingPongConfig(node, config.PingPongConfig, transportSSE)
 	return &SSEHandler{
 		node:   node,
 		config: config,
@@ -44,6 +46,7 @@ const defaultMaxSSEBodySize = 64 * 1024
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, ok := w.(http.Flusher)
 	if !ok {
+		h.node.logger.log(newErrorLogEntry(errors.New("not http.Flusher"), "SSE: ResponseWriter is not a Flusher", map[string]any{}))
 		http.Error(w, "expected http.ResponseWriter to be http.Flusher", http.StatusInternalServerError)
 		return
 	}
@@ -80,7 +83,10 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	transport := newSSETransport(r, sseTransportConfig{pingPong: h.config.PingPongConfig})
+	transport := newSSETransport(r, sseTransportConfig{
+		pingPong:   h.config.PingPongConfig,
+		protoMajor: uint8(r.ProtoMajor),
+	})
 
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
@@ -163,7 +169,8 @@ type sseTransport struct {
 }
 
 type sseTransportConfig struct {
-	pingPong PingPongConfig
+	pingPong   PingPongConfig
+	protoMajor uint8
 }
 
 func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport {
@@ -178,6 +185,10 @@ func newSSETransport(req *http.Request, config sseTransportConfig) *sseTransport
 
 func (t *sseTransport) Name() string {
 	return transportSSE
+}
+
+func (t *sseTransport) AcceptProtocol() string {
+	return getAcceptProtocolLabel(int8(t.config.protoMajor))
 }
 
 func (t *sseTransport) Protocol() ProtocolType {

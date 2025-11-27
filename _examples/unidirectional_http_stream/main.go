@@ -280,6 +280,10 @@ func (t *streamTransport) Name() string {
 	return "http_stream"
 }
 
+func (t *streamTransport) AcceptProtocol() string {
+	return ""
+}
+
 func (t *streamTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeJSON
 }

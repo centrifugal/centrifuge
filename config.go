@@ -190,6 +190,12 @@ type MetricsConfig struct {
 	// false Centrifuge will use "unregistered" value for a client version. Note, the name argument here
 	// is an original name of client passed to Centrifuge.
 	CheckRegisteredClientVersion func(clientName string, clientVersion string) bool
+	// EnableRecoveredPublicationsHistogram enables histogram tracking of number of publications
+	// recovered during subscription successful recovery operations.
+	EnableRecoveredPublicationsHistogram bool
+	// ExposeTransportAcceptProtocol enables exposing in labels the accept protocol used by client's transport.
+	// If not enabled - empty string will be used as a label value.
+	ExposeTransportAcceptProtocol bool
 }
 
 // PingPongConfig allows configuring application level ping-pong behavior.
@@ -218,4 +224,19 @@ func getPingPongPeriodValues(config PingPongConfig) (time.Duration, time.Duratio
 		pongTimeout = 10 * time.Second
 	}
 	return pingInterval, pongTimeout
+}
+
+func warnAboutIncorrectPingPongConfig(node *Node, config PingPongConfig, transportName string) {
+	pingInterval, pongTimeout := getPingPongPeriodValues(config)
+	if pingInterval > 0 && pongTimeout > 0 && pongTimeout >= pingInterval {
+		node.logger.log(newLogEntry(
+			LogLevelWarn,
+			"ping interval must be greater than pong timeout to work properly",
+			map[string]any{
+				"transport":     transportName,
+				"ping_interval": pingInterval.String(),
+				"pong_timeout":  pongTimeout.String(),
+			},
+		))
+	}
 }

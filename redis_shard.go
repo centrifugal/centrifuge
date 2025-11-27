@@ -32,6 +32,7 @@ type RedisShard struct {
 	closeCh       chan struct{}
 	closeOnce     sync.Once
 	isCluster     bool
+	isSentinel    bool
 	finalAddress  []string
 }
 
@@ -102,10 +103,14 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 		}
 		if strings.HasPrefix(u.Scheme, "rediss") {
 			if result.ClientOption.TLSConfig == nil {
-				result.ClientOption.TLSConfig = &tls.Config{}
+				result.ClientOption.TLSConfig = &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				}
 			}
 			if isSentinel && result.ClientOption.Sentinel.TLSConfig == nil {
-				result.ClientOption.Sentinel.TLSConfig = &tls.Config{}
+				result.ClientOption.Sentinel.TLSConfig = &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				}
 			}
 		}
 	case "unix":
@@ -148,7 +153,9 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 			return result, fmt.Errorf("invalid tls_enabled value: %q", query.Get("tls_enabled"))
 		}
 		if val {
-			result.ClientOption.TLSConfig = &tls.Config{}
+			result.ClientOption.TLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
 		}
 	}
 
@@ -174,7 +181,9 @@ func optionsFromAddress(address string, options rueidis.ClientOption) (fromAddre
 			return result, fmt.Errorf("invalid sentinel_tls_enabled value: %q", query.Get("sentinel_tls_enabled"))
 		}
 		if val {
-			result.ClientOption.Sentinel.TLSConfig = &tls.Config{}
+			result.ClientOption.Sentinel.TLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
 		}
 	}
 
@@ -263,6 +272,7 @@ func NewRedisShard(_ *Node, conf RedisShardConfig) (*RedisShard, error) {
 	shard := &RedisShard{
 		config:       conf,
 		isCluster:    isCluster,
+		isSentinel:   isSentinel,
 		closeCh:      make(chan struct{}),
 		finalAddress: options.InitAddress,
 	}
@@ -352,6 +362,24 @@ type RedisShardConfig struct {
 	// be initialized with the same options as the main client but with ReplicaOnly option
 	// set to true.
 	ReplicaClientEnabled bool
+}
+
+type RedisShardMode string
+
+const (
+	RedisShardModeStandalone RedisShardMode = "standalone"
+	RedisShardModeCluster    RedisShardMode = "cluster"
+	RedisShardModeSentinel   RedisShardMode = "sentinel"
+)
+
+func (s *RedisShard) Mode() RedisShardMode {
+	if s.isSentinel {
+		return RedisShardModeSentinel
+	}
+	if s.isCluster {
+		return RedisShardModeCluster
+	}
+	return RedisShardModeStandalone
 }
 
 func (s *RedisShard) Close() {

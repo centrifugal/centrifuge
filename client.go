@@ -8,9 +8,11 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/centrifugal/centrifuge/internal/convert"
+	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/centrifuge/internal/queue"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/centrifuge/internal/saferand"
@@ -149,12 +151,13 @@ const (
 type ChannelContext struct {
 	subscribingCh     chan struct{}
 	info              []byte
+	streamPosition    StreamPosition
 	expireAt          int64
 	positionCheckTime int64
 	metaTTLSeconds    int64
-	streamPosition    StreamPosition
 	flags             uint8
-	Source            uint8
+	// Source is a source of subscription application can set in SubscribeHandler.
+	Source uint8
 }
 
 func channelHasFlag(flags, flag uint8) bool {
@@ -268,6 +271,8 @@ type Client struct {
 	timer             *time.Timer
 	timerCanceler     TimerCanceler // TimerCanceler if TimerScheduler is used.
 	startWriterOnce   sync.Once
+	pingPongLatency   atomic.Int64
+	connectedAtMS     int64
 	replyWithoutQueue bool
 	unusable          bool
 }
@@ -293,16 +298,18 @@ func NewClient(ctx context.Context, n *Node, t Transport) (*Client, ClientCloseF
 	}
 
 	client := &Client{
-		ctx:        ctx,
-		uid:        uid,
-		session:    session,
-		node:       n,
-		transport:  t,
-		channels:   make(map[string]ChannelContext),
-		pubSubSync: recovery.NewPubSubSync(),
-		status:     statusConnecting,
-		eventHub:   &clientEventHub{},
+		ctx:           ctx,
+		uid:           uid,
+		session:       session,
+		node:          n,
+		transport:     t,
+		channels:      make(map[string]ChannelContext),
+		pubSubSync:    recovery.NewPubSubSync(),
+		status:        statusConnecting,
+		eventHub:      &clientEventHub{},
+		connectedAtMS: time.Now().UnixMilli(),
 	}
+	client.pingPongLatency.Store(-1)
 
 	staleCloseDelay := n.config.ClientStaleCloseDelay
 	if staleCloseDelay > 0 {
@@ -580,7 +587,9 @@ func (c *Client) checkPong() {
 		go func() { c.Disconnect(DisconnectNoPong) }()
 		return
 	}
-	c.node.metrics.observePingPongDuration(time.Duration(lastSeen-lastPing)*time.Nanosecond, c.transport.Name())
+	diff := lastSeen - lastPing
+	c.node.metrics.observePingPongDuration(time.Duration(diff)*time.Nanosecond, c.transport.Name())
+	c.pingPongLatency.Store(diff)
 	c.mu.Lock()
 	c.nextPong = 0
 	c.scheduleNextTimer()
@@ -693,10 +702,10 @@ func (c *Client) Context() context.Context {
 }
 
 func (c *Client) checkSubscriptionExpiration(channel string, channelContext ChannelContext, delay time.Duration, resultCB func(bool)) {
-	now := c.node.nowTimeGetter().Unix()
+	nowUnix := c.node.nowTimeGetter().Unix()
 	expireAt := channelContext.expireAt
 	clientSideRefresh := channelHasFlag(channelContext.flags, flagClientSideRefresh)
-	if expireAt > 0 && now > expireAt+int64(delay.Seconds()) {
+	if expireAt > 0 && nowUnix > expireAt+int64(delay.Seconds()) {
 		// Subscription expired.
 		if clientSideRefresh || c.eventHub.subRefreshHandler == nil {
 			// The only way subscription could be refreshed in this case is via
@@ -710,7 +719,8 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 				resultCB(false)
 				return
 			}
-			if reply.Expired || (reply.ExpireAt > 0 && reply.ExpireAt < now) {
+			newExpireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
+			if reply.Expired || (newExpireAt > 0 && newExpireAt < nowUnix) {
 				resultCB(false)
 				return
 			}
@@ -719,7 +729,7 @@ func (c *Client) checkSubscriptionExpiration(channel string, channelContext Chan
 				if len(reply.Info) > 0 {
 					ctx.info = reply.Info
 				}
-				ctx.expireAt = reply.ExpireAt
+				ctx.expireAt = newExpireAt
 				c.channels[channel] = ctx
 			}
 			c.mu.Unlock()
@@ -868,6 +878,25 @@ func (c *Client) Info() []byte {
 	copy(info, c.info)
 	c.mu.Unlock()
 	return info
+}
+
+// ConnectedAtMS returns timestamp in milliseconds when client connected.
+func (c *Client) ConnectedAtMS() int64 {
+	return c.connectedAtMS
+}
+
+// LatestPingPongLatency returns latest ping-pong latency duration. It may be not
+// available if no ping-pong messages were exchanged yet, or in case of unidirectional
+// transport. In that case second return value will be false.
+func (c *Client) LatestPingPongLatency() (time.Duration, bool) {
+	val := c.pingPongLatency.Load()
+	if val < 0 {
+		// If ping-pong latency is negative then it means that we have not sent
+		// any ping yet, and thus we do not have any latency info. Or in case of
+		// unidirectional connection we do not have this info also.
+		return 0, false
+	}
+	return time.Duration(c.pingPongLatency.Load()) * time.Nanosecond, true
 }
 
 // Transport returns client connection transport information.
@@ -1446,6 +1475,11 @@ func (c *Client) checkExpired() {
 	_ = c.close(DisconnectExpired)
 }
 
+// A protection against too long connection and subscription TTL which is likely
+// a bug and may result into overflow of time.Duration type usage (~292 years max in Go).
+// It's possible to go without expiration at all rather than having longer TTL.
+const maxTTLSeconds = 365 * 24 * 3600
+
 func (c *Client) expire() {
 	c.mu.RLock()
 	closed := c.status == statusClosed
@@ -1471,9 +1505,11 @@ func (c *Client) expire() {
 				_ = c.close(DisconnectExpired)
 				return
 			}
-			if reply.ExpireAt > 0 {
+			nowUnix := time.Now().Unix()
+			expireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
+			if expireAt > 0 {
 				c.mu.Lock()
-				c.exp = reply.ExpireAt
+				c.exp = expireAt
 				if reply.Info != nil {
 					c.info = reply.Info
 				}
@@ -1541,14 +1577,15 @@ func (c *Client) Refresh(opts ...RefreshOption) error {
 		return nil
 	}
 
-	expireAt := refreshOptions.ExpireAt
+	nowUnix := time.Now().Unix()
+	expireAt := min(refreshOptions.ExpireAt, nowUnix+maxTTLSeconds)
 	info := refreshOptions.Info
 
 	res := &protocol.Refresh{
 		Expires: expireAt > 0,
 	}
 
-	ttl := expireAt - time.Now().Unix()
+	ttl := expireAt - nowUnix
 
 	if ttl > 0 {
 		res.Ttl = uint32(ttl)
@@ -1633,14 +1670,15 @@ func (c *Client) handleRefresh(req *protocol.RefreshRequest, cmd *protocol.Comma
 			return
 		}
 
-		expireAt := reply.ExpireAt
+		nowUnix := time.Now().Unix()
+		expireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
 		info := reply.Info
 
 		res := &protocol.RefreshResult{
 			Expires: expireAt > 0,
 		}
 
-		ttl := expireAt - time.Now().Unix()
+		ttl := expireAt - nowUnix
 
 		if ttl > 0 {
 			res.Ttl = uint32(ttl)
@@ -1739,7 +1777,6 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		}
 
 		ctx := c.subscribeCmd(req, reply, cmd, false, started, rw)
-
 		if ctx.disconnect != nil {
 			c.onSubscribeError(req.Channel)
 			c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, ctx.disconnect, started, rw)
@@ -1811,21 +1848,23 @@ func (c *Client) handleSubRefresh(req *protocol.SubRefreshRequest, cmd *protocol
 
 		res := &protocol.SubRefreshResult{}
 
-		if reply.ExpireAt > 0 {
+		nowUnix := time.Now().Unix()
+		expireAt := min(reply.ExpireAt, nowUnix+maxTTLSeconds)
+		if expireAt > 0 {
 			res.Expires = true
-			now := time.Now().Unix()
-			if reply.ExpireAt < now {
+
+			if expireAt < nowUnix {
 				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubRefresh, cmd, ErrorExpired, started, rw)
 				return
 			}
-			res.Ttl = uint32(reply.ExpireAt - now)
+			res.Ttl = uint32(expireAt - nowUnix)
 		}
 
 		c.mu.Lock()
 		channelContext, okChan := c.channels[channel]
 		if okChan && channelHasFlag(channelContext.flags, flagSubscribed) {
 			channelContext.info = reply.Info
-			channelContext.expireAt = reply.ExpireAt
+			channelContext.expireAt = expireAt
 			c.channels[channel] = channelContext
 		}
 		c.mu.Unlock()
@@ -2073,25 +2112,25 @@ func (c *Client) handleHistory(req *protocol.HistoryRequest, cmd *protocol.Comma
 		return c.logDisconnectBadRequest("channel required for history")
 	}
 
-	var filter HistoryFilter
+	var historyFilter HistoryFilter
 	if req.Since != nil {
-		filter.Since = &StreamPosition{
+		historyFilter.Since = &StreamPosition{
 			Offset: req.Since.Offset,
 			Epoch:  req.Since.Epoch,
 		}
 	}
-	filter.Limit = int(req.Limit)
+	historyFilter.Limit = int(req.Limit)
 
 	maxPublicationLimit := c.node.config.HistoryMaxPublicationLimit
-	if maxPublicationLimit > 0 && (filter.Limit < 0 || filter.Limit > maxPublicationLimit) {
-		filter.Limit = maxPublicationLimit
+	if maxPublicationLimit > 0 && (historyFilter.Limit < 0 || historyFilter.Limit > maxPublicationLimit) {
+		historyFilter.Limit = maxPublicationLimit
 	}
 
-	filter.Reverse = req.Reverse
+	historyFilter.Reverse = req.Reverse
 
 	event := HistoryEvent{
 		Channel: channel,
-		Filter:  filter,
+		Filter:  historyFilter,
 	}
 
 	cb := func(reply HistoryReply, err error) {
@@ -2385,7 +2424,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.mu.Lock()
 	c.user = credentials.UserID
 	c.info = credentials.Info
-	c.exp = credentials.ExpireAt
+	c.exp = min(credentials.ExpireAt, time.Now().Unix()+maxTTLSeconds)
 
 	user := c.user
 	exp := c.exp
@@ -2702,6 +2741,10 @@ func (c *Client) Subscribe(channel string, opts ...SubscribeOption) error {
 	subCtx := c.subscribeCmd(subCmd, SubscribeReply{
 		Options: *subscribeOpts,
 	}, nil, true, time.Time{}, nil)
+	if subCtx.disconnect != nil {
+		c.onSubscribeError(subCmd.Channel)
+		return subCtx.disconnect
+	}
 	if subCtx.err != nil {
 		c.onSubscribeError(subCmd.Channel)
 		return subCtx.err
@@ -2806,48 +2849,68 @@ type subscribeContext struct {
 	channelContext ChannelContext
 }
 
-func isStreamRecovered(historyResult HistoryResult, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isStreamRecovered(
+	historyResult HistoryResult, cmdOffset uint64, cmdEpoch string, tf *tagsFilter,
+) ([]*protocol.Publication, bool) {
 	latestOffset := historyResult.Offset
 	latestEpoch := historyResult.Epoch
 
+	if cmdEpoch != "" && latestEpoch != cmdEpoch {
+		// Epochs do not match, cannot recover.
+		return nil, false
+	}
+
+	var recovered bool
+	if len(historyResult.Publications) == 0 {
+		recovered = latestOffset == cmdOffset
+	} else {
+		nextOffset := cmdOffset + 1
+		recovered = historyResult.Publications[0].Offset == nextOffset &&
+			historyResult.Publications[len(historyResult.Publications)-1].Offset == latestOffset
+	}
+	if !recovered {
+		return nil, false
+	}
+
 	recoveredPubs := make([]*protocol.Publication, 0, len(historyResult.Publications))
 	for _, pub := range historyResult.Publications {
+		if tf != nil {
+			match, _ := filter.Match(tf.filter, pub.Tags)
+			if !match {
+				continue
+			}
+		}
 		protoPub := pubToProto(pub)
 		recoveredPubs = append(recoveredPubs, protoPub)
 	}
 
-	nextOffset := cmdOffset + 1
-	var recovered bool
-	if len(recoveredPubs) == 0 {
-		recovered = latestOffset == cmdOffset && (cmdEpoch == "" || latestEpoch == cmdEpoch)
-	} else {
-		recovered = recoveredPubs[0].Offset == nextOffset &&
-			recoveredPubs[len(recoveredPubs)-1].Offset == latestOffset &&
-			(cmdEpoch == "" || latestEpoch == cmdEpoch)
-	}
-
 	return recoveredPubs, recovered
 }
 
-func isCacheRecovered(latestPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string) ([]*protocol.Publication, bool) {
+func isCacheRecovered(
+	latestPub *Publication, recoveredPub *Publication, currentSP StreamPosition, cmdOffset uint64, cmdEpoch string,
+) ([]*protocol.Publication, bool) {
 	latestOffset := currentSP.Offset
 	latestEpoch := currentSP.Epoch
-	var recovered bool
-	recoveredPubs := make([]*protocol.Publication, 0, 1)
-	if latestPub != nil {
-		publication := latestPub
-		recovered = publication.Offset == latestOffset
-		skipPublication := cmdOffset > 0 && cmdOffset == latestOffset && cmdEpoch == latestEpoch
-		if recovered && !skipPublication {
-			protoPub := pubToProto(publication)
-			recoveredPubs = append(recoveredPubs, protoPub)
-		}
-	} else if cmdOffset > 0 && latestOffset == cmdOffset && cmdEpoch == latestEpoch {
-		// Client already had state, which has not been modified since.
-		recovered = true
+
+	// Check if client state matches current state.
+	clientHasSameState := cmdOffset > 0 && cmdOffset == latestOffset && cmdEpoch == latestEpoch
+
+	if latestPub == nil {
+		return nil, clientHasSameState
 	}
-	return recoveredPubs, recovered
+
+	recovered := latestPub.Offset == latestOffset
+	if recovered && !clientHasSameState {
+		return []*protocol.Publication{pubToProto(recoveredPub)}, true
+	}
+
+	return nil, recovered
 }
+
+const (
+	subscriptionFlagChannelCompression = 1 << iota
+)
 
 // subscribeCmd handles subscribe command - clients send this when subscribe
 // on channel, if channel is private then we must validate provided sign here before
@@ -2883,6 +2946,23 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		ChanInfo: reply.Options.ChannelInfo,
 	}
 
+	useID := reply.Options.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
+	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID}
+	if req.Tf != nil {
+		if !reply.Options.AllowTagsFilter {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return errorDisconnectContext(ErrorBadRequest, nil)
+		}
+		if err := filter.Validate(req.Tf); err != nil {
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return errorDisconnectContext(ErrorBadRequest, nil)
+		}
+		sub.tagsFilter = &tagsFilter{
+			filter: req.Tf,
+			hash:   filter.Hash(req.Tf),
+		}
+	}
+
 	needPubSubSync := reply.Options.EnablePositioning || reply.Options.EnableRecovery
 	if needPubSubSync {
 		// Start syncing recovery and PUB/SUB.
@@ -2891,7 +2971,6 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		c.pubSubSync.StartBuffering(channel)
 	}
 
-	sub := subInfo{client: c, deltaType: deltaTypeNone}
 	if req.Delta != "" {
 		dt := DeltaType(req.Delta)
 		if slices.Contains(reply.Options.AllowedDeltaTypes, dt) {
@@ -2912,7 +2991,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		c.mu.Unlock()
 	}
-	err := c.node.addSubscription(channel, sub)
+	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.node.logger.log(newErrorLogEntry(err, "error adding subscription", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 		c.pubSubSync.StopBuffering(channel)
@@ -2922,6 +3001,9 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		}
 		ctx.disconnect = &DisconnectServerError
 		return ctx
+	}
+	if chanID > 0 {
+		res.Id = chanID
 	}
 	if !serverSide {
 		c.mu.Lock()
@@ -2950,6 +3032,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 		latestOffset  uint64
 		latestEpoch   string
 		recoveredPubs []*protocol.Publication
+		maxSeenOffset uint64
 	)
 
 	if reply.Options.EnablePositioning || reply.Options.EnableRecovery {
@@ -2977,7 +3060,10 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			// publications automatically from history (we assume here that the history configured wisely).
 
 			if recoveryMode == RecoveryModeCache {
-				latestPub, currentSP, err := c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+				var latestPub *Publication
+				var recoveredPub *Publication
+				var currentSP StreamPosition
+				latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
 				if err != nil {
 					c.node.logger.log(newErrorLogEntry(err, "error on cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 					return handleErr(err)
@@ -2985,7 +3071,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 				latestOffset = currentSP.Offset
 				latestEpoch = currentSP.Epoch
 				var recovered bool
-				recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
+				recoveredPubs, recovered = isCacheRecovered(latestPub, recoveredPub, currentSP, cmdOffset, cmdEpoch)
 				res.Recovered = recovered
 				if latestPub == nil && c.node.clientEvents.cacheEmptyHandler != nil {
 					cacheReply, err := c.node.clientEvents.cacheEmptyHandler(CacheEmptyEvent{Channel: channel})
@@ -2995,21 +3081,30 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					}
 					if cacheReply.Populated && !recovered {
 						// One more chance to recover in case we know cache was populated.
-						latestPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL)
+						latestPub, recoveredPub, currentSP, err = c.node.recoverCache(channel, reply.Options.HistoryMetaTTL, sub.tagsFilter)
 						if err != nil {
 							c.node.logger.log(newErrorLogEntry(err, "error on populated cache recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 							return handleErr(err)
 						}
 						latestOffset = currentSP.Offset
 						latestEpoch = currentSP.Epoch
-						recoveredPubs, recovered = isCacheRecovered(latestPub, currentSP, cmdOffset, cmdEpoch)
+						recoveredPubs, recovered = isCacheRecovered(latestPub, recoveredPub, currentSP, cmdOffset, cmdEpoch)
 						res.Recovered = recovered
-						c.node.metrics.incRecover(res.Recovered, channel)
+						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+						if res.Recovered {
+							c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+						}
 					} else {
-						c.node.metrics.incRecover(res.Recovered, channel)
+						c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+						if res.Recovered {
+							c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+						}
 					}
 				} else {
-					c.node.metrics.incRecover(res.Recovered, channel)
+					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+					if res.Recovered {
+						c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+					}
 				}
 			} else {
 				historyResult, err := c.node.recoverHistory(channel, StreamPosition{Offset: cmdOffset, Epoch: cmdEpoch}, reply.Options.HistoryMetaTTL)
@@ -3020,7 +3115,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 						latestOffset = historyResult.Offset
 						latestEpoch = historyResult.Epoch
 						res.Recovered = false
-						c.node.metrics.incRecover(res.Recovered, channel)
+						c.node.metrics.incRecover(res.Recovered, channel, false)
 					} else {
 						c.node.logger.log(newErrorLogEntry(err, "error on recover", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
 						return handleErr(err)
@@ -3029,9 +3124,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 					latestOffset = historyResult.Offset
 					latestEpoch = historyResult.Epoch
 					var recovered bool
-					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch)
+					recoveredPubs, recovered = isStreamRecovered(historyResult, cmdOffset, cmdEpoch, sub.tagsFilter)
 					res.Recovered = recovered
-					c.node.metrics.incRecover(res.Recovered, channel)
+					c.node.metrics.incRecover(res.Recovered, channel, len(recoveredPubs) > 0)
+					if res.Recovered {
+						c.node.metrics.observeRecoveredPublications(len(recoveredPubs), channel)
+					}
 				}
 			}
 		} else {
@@ -3049,7 +3147,7 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 
 		bufferedPubs := c.pubSubSync.LockBufferAndReadBuffered(channel)
 		var okMerge bool
-		recoveredPubs, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
+		recoveredPubs, maxSeenOffset, okMerge = recovery.MergePublications(recoveredPubs, bufferedPubs)
 		if !okMerge {
 			c.pubSubSync.StopBuffering(channel)
 			ctx.disconnect = &DisconnectInsufficientState
@@ -3071,6 +3169,12 @@ func (c *Client) subscribeCmd(req *protocol.SubscribeRequest, reply SubscribeRep
 			latestOffset = lastPubOffset
 			res.Offset = latestOffset
 		}
+	}
+
+	if maxSeenOffset > latestOffset {
+		// Some entries could be filtered, but it's normal so we put max seen offset as the latest.
+		latestOffset = maxSeenOffset
+		res.Offset = latestOffset
 	}
 
 	var channelFlags uint8
@@ -3282,6 +3386,12 @@ func (c *Client) writePublicationUpdatePosition(
 			// This is a special pub to trigger insufficient state. Noop in non-positioning case.
 			return nil
 		}
+
+		// For non-positioning case, if publication should be filtered, skip it
+		if prep.wasFiltered && !prep.deltaSub {
+			return nil
+		}
+
 		if prep.deltaSub {
 			if deltaAllowed {
 				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
@@ -3292,6 +3402,10 @@ func (c *Client) writePublicationUpdatePosition(
 				c.channels[ch] = chCtx
 			}
 			c.mu.Unlock()
+		}
+
+		if c.node.logEnabled(LogLevelTrace) {
+			c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
 		}
 		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 	}
@@ -3354,8 +3468,16 @@ func (c *Client) writePublicationUpdatePosition(
 	if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
 		return nil
 	}
+
+	// If publication should be filtered, skip sending it but keep the offset updated
+	if prep.wasFiltered && !prep.deltaSub {
+		return nil
+	}
 	if prep.deltaSub {
 		if deltaAllowed {
+			if c.node.logEnabled(LogLevelTrace) {
+				c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+			}
 			return c.writeEncodedPushData(prep.brokerDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
 		}
 		c.mu.Lock()
@@ -3365,19 +3487,30 @@ func (c *Client) writePublicationUpdatePosition(
 		}
 		c.mu.Unlock()
 	}
+
+	if c.node.logEnabled(LogLevelTrace) {
+		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+	}
 	return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 }
 
 func (c *Client) writePublicationNoDelta(ch string, pub *protocol.Publication, data []byte, sp StreamPosition, batchConfig ChannelBatchConfig) error {
-	return c.writePublication(ch, pub, preparedData{fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false}, sp, false, batchConfig)
+	return c.writePublication(
+		ch, pub, preparedData{
+			fullData: data, brokerDeltaData: nil, localDeltaData: nil, deltaSub: false, wasFiltered: false,
+		},
+		sp, false, batchConfig)
 }
 
 func (c *Client) writePublication(ch string, pub *protocol.Publication, prep preparedData, sp StreamPosition, maxLagExceeded bool, batchConfig ChannelBatchConfig) error {
-	if c.node.logEnabled(LogLevelTrace) {
-		c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
-	}
 	if pub.Offset == 0 {
 		if hasFlag(c.transport.DisabledPushFlags(), PushFlagPublication) {
+			return nil
+		}
+
+		// For publications without offset, if filtering is needed, we can skip them
+		// early since there's no position tracking to maintain.
+		if prep.wasFiltered && !prep.deltaSub {
 			return nil
 		}
 
@@ -3394,6 +3527,9 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			c.mu.RUnlock()
 
 			if deltaAllowed {
+				if c.node.logEnabled(LogLevelTrace) {
+					c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+				}
 				return c.writeEncodedPushData(prep.localDeltaData, ch, protocol.FrameTypePushPublication, batchConfig)
 			}
 			c.mu.Lock()
@@ -3403,9 +3539,17 @@ func (c *Client) writePublication(ch string, pub *protocol.Publication, prep pre
 			}
 			c.mu.Unlock()
 		}
+
+		if c.node.logEnabled(LogLevelTrace) {
+			c.traceOutPush(&protocol.Push{Channel: ch, Pub: pub})
+		}
 		return c.writeEncodedPushData(prep.fullData, ch, protocol.FrameTypePushPublication, batchConfig)
 	}
-	c.pubSubSync.SyncPublication(ch, pub, func() {
+	syncPub := pub
+	if prep.wasFiltered {
+		syncPub = prep.filteredPub
+	}
+	c.pubSubSync.SyncPublication(ch, syncPub, func() {
 		_ = c.writePublicationUpdatePosition(ch, pub, prep, sp, maxLagExceeded, batchConfig)
 	})
 	return nil

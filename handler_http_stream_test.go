@@ -144,6 +144,7 @@ func TestHTTPStreamHandler_RequestTooLarge(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestHTTPStreamHandler_Options(t *testing.T) {
@@ -165,6 +166,7 @@ func TestHTTPStreamHandler_Options(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNoContent, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestHTTPStreamHandler_UnknownMethod(t *testing.T) {
@@ -186,6 +188,7 @@ func TestHTTPStreamHandler_UnknownMethod(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func newJSONStreamDecoder(body io.Reader) *jsonStreamDecoder {

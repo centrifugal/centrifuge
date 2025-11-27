@@ -7,14 +7,14 @@ jobs:
     # Prevent duplicate builds on internal PRs.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.23.x'
+          go-version: stable
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: v1.61.0
+          version: v2.5
           args: --timeout 3m0s --verbose
   build:
     name: Test with Go ${{ matrix.go-version }} Redis ${{ matrix.redis-version }}
@@ -23,16 +23,16 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       matrix:
-        go-version: ["1.21", "1.22"]
+        go-version: ["1.24", "1.25"]
         redis-version: [6, 7]
     steps:
       - name: Install Go stable version
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Start redis
         env:
@@ -43,7 +43,7 @@ jobs:
         run: go test -v -race -tags integration -coverprofile=coverage.out $(go list ./... | grep -v /_examples/)
 
       - name: Upload code coverage to codecov
-        if: matrix.go-version == '1.22' && matrix.redis-version == 7
+        if: matrix.go-version == '1.25' && matrix.redis-version == 7
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage.out

@@ -63,6 +63,10 @@ type RedisPresenceManagerConfig struct {
 	// This only works in Redis Cluster and Sentinel setups and requires replica client
 	// to be initialized in each RedisShard using RedisShardConfig.ReplicaClientEnabled.
 	ReadFromReplica bool
+
+	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
+	// it on the client side. This is useful for FIPS compliance.
+	LoadSHA1 bool
 }
 
 var (
@@ -115,10 +119,10 @@ func NewRedisPresenceManager(n *Node, config RedisPresenceManagerConfig) (*Redis
 		config:   config,
 		sharding: len(config.Shards) > 1,
 
-		addPresenceScript:   rueidis.NewLuaScript(addPresenceScriptSource),
-		remPresenceScript:   rueidis.NewLuaScript(remPresenceScriptSource),
-		presenceScript:      rueidis.NewLuaScript(presenceScriptSource),
-		presenceStatsScript: rueidis.NewLuaScript(presenceStatsScriptSource),
+		addPresenceScript:   rueidis.NewLuaScript(addPresenceScriptSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		remPresenceScript:   rueidis.NewLuaScript(remPresenceScriptSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		presenceScript:      rueidis.NewLuaScript(presenceScriptSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
+		presenceStatsScript: rueidis.NewLuaScript(presenceStatsScriptSource, rueidis.WithLoadSHA1(config.LoadSHA1)),
 	}
 	return m, nil
 }

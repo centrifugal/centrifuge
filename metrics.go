@@ -27,17 +27,21 @@ type metrics struct {
 	numChannelsGauge              prometheus.Gauge
 	numNodesGauge                 prometheus.Gauge
 	replyErrorCount               *prometheus.CounterVec
+	connectionsAccepted           *prometheus.CounterVec
 	connectionsInflight           *prometheus.GaugeVec
+	subscriptionsAccepted         *prometheus.CounterVec
 	subscriptionsInflight         *prometheus.GaugeVec
 	serverUnsubscribeCount        *prometheus.CounterVec
 	serverDisconnectCount         *prometheus.CounterVec
 	commandDurationSummary        *prometheus.SummaryVec
 	surveyDurationSummary         *prometheus.SummaryVec
 	recoverCount                  *prometheus.CounterVec
+	recoveredPublications         *prometheus.HistogramVec
 	transportMessagesSent         *prometheus.CounterVec
 	transportMessagesSentSize     *prometheus.CounterVec
 	transportMessagesReceived     *prometheus.CounterVec
 	transportMessagesReceivedSize *prometheus.CounterVec
+	tagsFilterDroppedCount        *prometheus.CounterVec
 
 	messagesReceivedCountPublication prometheus.Counter
 	messagesReceivedCountJoin        prometheus.Counter
@@ -82,6 +86,7 @@ type metrics struct {
 	disconnectCache                sync.Map
 	messagesSentCache              sync.Map
 	messagesReceivedCache          sync.Map
+	tagsFilterDroppedCache         sync.Map
 	nsCache                        *otter.Cache[string, string]
 	codeStrings                    map[uint32]string
 }
@@ -242,8 +247,21 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "recover",
-		Help:      "Count of recover operations.",
-	}, []string{"recovered", "channel_namespace"})
+		Help:      "Count of recover operations with success/fail resolution.",
+	}, []string{"recovered", "channel_namespace", "has_recovered_publications"})
+
+	if config.EnableRecoveredPublicationsHistogram {
+		m.recoveredPublications = prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Namespace: metricsNamespace,
+				Subsystem: "client",
+				Name:      "recovered_publications",
+				Help:      "Number of publications recovered during subscription recovery.",
+				Buckets:   []float64{0, 1, 2, 3, 5, 10, 20, 50, 100, 250, 500, 1000, 2000, 5000, 10000},
+			},
+			[]string{"channel_namespace"},
+		)
+	}
 
 	m.pingPongDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
@@ -256,12 +274,26 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			1.0, 2.5, 5.0, 10.0, // Second resolution.
 		}}, []string{"transport"})
 
+	m.connectionsAccepted = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "connections_accepted",
+		Help:      "Count of accepted transports.",
+	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
+
 	m.connectionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
 		Subsystem: "client",
 		Name:      "connections_inflight",
 		Help:      "Number of inflight client connections.",
-	}, []string{"transport", "client_name", "client_version"})
+	}, []string{"transport", "accept_protocol", "client_name", "client_version"})
+
+	m.subscriptionsAccepted = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "client",
+		Name:      "subscriptions_accepted",
+		Help:      "Count of accepted client subscriptions.",
+	}, []string{"client_name", "channel_namespace"})
 
 	m.subscriptionsInflight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: metricsNamespace,
@@ -297,6 +329,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		Name:      "messages_received_size",
 		Help:      "MaxSize in bytes of messages received from client connections over specific transport (uncompressed and does not include framing overhead).",
 	}, []string{"transport", "frame_type", "channel_namespace"})
+
+	m.tagsFilterDroppedCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace,
+		Subsystem: "node",
+		Name:      "tags_filter_dropped_publications",
+		Help:      "Number of publications dropped due to tags filtering.",
+	}, []string{"channel_namespace"})
 
 	m.pubSubLagHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: metricsNamespace,
@@ -381,7 +420,9 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.numNodesGauge,
 		m.commandDurationSummary,
 		m.replyErrorCount,
+		m.connectionsAccepted,
 		m.connectionsInflight,
+		m.subscriptionsAccepted,
 		m.subscriptionsInflight,
 		m.serverUnsubscribeCount,
 		m.serverDisconnectCount,
@@ -391,6 +432,7 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 		m.transportMessagesSentSize,
 		m.transportMessagesReceived,
 		m.transportMessagesReceivedSize,
+		m.tagsFilterDroppedCount,
 		m.buildInfoGauge,
 		m.surveyDurationSummary,
 		m.pubSubLagHistogram,
@@ -403,6 +445,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			return nil, err
 		}
 	}
+
+	if config.EnableRecoveredPublicationsHistogram {
+		if err := registerer.Register(m.recoveredPublications); err != nil && !errors.As(err, &alreadyRegistered) {
+			return nil, err
+		}
+	}
+
 	return m, nil
 }
 
@@ -549,26 +598,41 @@ func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch st
 type recoverLabels struct {
 	ChannelNamespace string
 	Success          string
+	HasPublications  string
 }
 
-func (m *metrics) incRecover(success bool, ch string) {
+func (m *metrics) incRecover(success bool, ch string, hasPublications bool) {
 	var successStr string
 	if success {
 		successStr = "yes"
 	} else {
 		successStr = "no"
 	}
+	var hasPubsStr string
+	if hasPublications {
+		hasPubsStr = "yes"
+	} else {
+		hasPubsStr = "no"
+	}
 	channelNamespace := m.getChannelNamespaceLabel(ch)
 	labels := recoverLabels{
 		ChannelNamespace: channelNamespace,
 		Success:          successStr,
+		HasPublications:  hasPubsStr,
 	}
 	counter, ok := m.recoverCache.Load(labels)
 	if !ok {
-		counter = m.recoverCount.WithLabelValues(successStr, channelNamespace)
+		counter = m.recoverCount.WithLabelValues(successStr, channelNamespace, hasPubsStr)
 		m.recoverCache.Store(labels, counter)
 	}
 	counter.(prometheus.Counter).Inc()
+}
+
+func (m *metrics) observeRecoveredPublications(count int, ch string) {
+	if m.recoveredPublications != nil {
+		channelNamespace := m.getChannelNamespaceLabel(ch)
+		m.recoveredPublications.WithLabelValues(channelNamespace).Observe(float64(count))
+	}
 }
 
 type transportMessageLabels struct {
@@ -758,4 +822,35 @@ func (m *metrics) incActionCount(action string, ch string) {
 
 func (m *metrics) observeSurveyDuration(op string, d time.Duration) {
 	m.surveyDurationSummary.WithLabelValues(op).Observe(d.Seconds())
+}
+
+type tagsFilterDroppedLabels struct {
+	ChannelNamespace string
+}
+
+func (m *metrics) incTagsFilterDropped(ch string, count int) {
+	channelNamespace := m.getChannelNamespaceLabel(ch)
+	labels := tagsFilterDroppedLabels{
+		ChannelNamespace: channelNamespace,
+	}
+	counter, ok := m.tagsFilterDroppedCache.Load(labels)
+	if !ok {
+		counter = m.tagsFilterDroppedCount.WithLabelValues(channelNamespace)
+		m.tagsFilterDroppedCache.Store(labels, counter)
+	}
+	counter.(prometheus.Counter).Add(float64(count))
+}
+
+// getAcceptProtocolLabel returns the transport accept protocol label based on HTTP version.
+func getAcceptProtocolLabel(protoMajor int8) string {
+	switch protoMajor {
+	case 3:
+		return "h3"
+	case 2:
+		return "h2"
+	case 1:
+		return "h1"
+	default:
+		return "unknown"
+	}
 }

@@ -472,3 +472,19 @@ func BenchmarkQueueAddConsume(b *testing.B) {
 	b.StopTimer()
 	q.Close()
 }
+
+func BenchmarkQueueAdd10k(b *testing.B) {
+	n := 10000
+	queues := make([]*Queue, n)
+	for i := range n {
+		queues[i] = New(initialCapacity)
+	}
+	item := testItem([]byte("test"))
+	b.ResetTimer()
+	for b.Loop() {
+		for _, q := range queues {
+			q.Add(item)
+			q.Remove()
+		}
+	}
+}

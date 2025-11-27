@@ -113,7 +113,7 @@ func BenchmarkIncRecover(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incRecover(true, "channel"+strconv.Itoa(i%1024))
+			m.incRecover(true, "channel"+strconv.Itoa(i%1024), false)
 			i++
 		}
 	})
@@ -162,7 +162,8 @@ func TestMetrics(t *testing.T) {
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
-		ChannelNamespaceCacheTTL: -1,
+		ChannelNamespaceCacheTTL:             -1,
+		EnableRecoveredPublicationsHistogram: true,
 	})
 	require.Error(t, err)
 
@@ -208,10 +209,11 @@ func TestMetrics(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			m, err := newMetricsRegistry(MetricsConfig{
-				MetricsNamespace:          tc.metricsNamespace,
-				GetChannelNamespaceLabel:  tc.getChannelNamespaceLabel,
-				ChannelNamespaceCacheSize: tc.channelNamespaceCacheSize,
-				RegistererGatherer:        tc.registererGatherer,
+				MetricsNamespace:                     tc.metricsNamespace,
+				GetChannelNamespaceLabel:             tc.getChannelNamespaceLabel,
+				ChannelNamespaceCacheSize:            tc.channelNamespaceCacheSize,
+				RegistererGatherer:                   tc.registererGatherer,
+				EnableRecoveredPublicationsHistogram: true,
 			})
 			require.NoError(t, err)
 
@@ -244,8 +246,9 @@ func TestMetrics(t *testing.T) {
 				}
 
 				m.observeSurveyDuration("test", time.Second)
-				m.incRecover(true, "channel"+strconv.Itoa(i%2))
-				m.incRecover(false, "channel"+strconv.Itoa(i%2))
+				m.incRecover(true, "channel"+strconv.Itoa(i%2), false)
+				m.incRecover(false, "channel"+strconv.Itoa(i%2), false)
+				m.observeRecoveredPublications(10, "channel"+strconv.Itoa(i%2))
 				m.observePubSubDeliveryLag(100)
 				m.observePubSubDeliveryLag(-10)
 				m.observePingPongDuration(time.Second, transportWebsocket)
@@ -259,6 +262,45 @@ func TestMetrics(t *testing.T) {
 				m.setNumUsers(300)
 				m.setNumNodes(4)
 				m.setNumSubscriptions(500)
+			}
+		})
+	}
+}
+
+func Test_getHTTPTransportProto(t *testing.T) {
+	type args struct {
+		protoMajor int8
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "HTTP/1.x",
+			args: args{protoMajor: 1},
+			want: "h1",
+		},
+		{
+			name: "HTTP/2",
+			args: args{protoMajor: 2},
+			want: "h2",
+		},
+		{
+			name: "HTTP/3",
+			args: args{protoMajor: 3},
+			want: "h3",
+		},
+		{
+			name: "unknown HTTP version",
+			args: args{protoMajor: 0},
+			want: "unknown",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getAcceptProtocolLabel(tt.args.protoMajor); got != tt.want {
+				t.Errorf("getAcceptProtocolLabel() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"github.com/quic-go/quic-go/http3"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/centrifugal/centrifuge"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/quic-go/quic-go/http3"
 )
 
 var (
@@ -77,6 +77,9 @@ func main() {
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelInfo,
 		LogHandler: handleLog,
+		Metrics: centrifuge.MetricsConfig{
+			ExposeTransportAcceptProtocol: true,
+		},
 	})
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {

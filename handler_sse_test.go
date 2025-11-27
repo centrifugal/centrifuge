@@ -162,6 +162,7 @@ func TestSSEHandler_RequestTooLarge(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestSSEHandler_UnknownMethod(t *testing.T) {
@@ -190,6 +191,7 @@ func TestSSEHandler_UnknownMethod(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func newSSEStreamDecoder(body io.Reader) *sseStreamDecoder {

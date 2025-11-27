@@ -1,6 +1,7 @@
 package centrifuge
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -28,6 +29,7 @@ type HTTPStreamHandler struct {
 
 // NewHTTPStreamHandler creates new HTTPStreamHandler.
 func NewHTTPStreamHandler(node *Node, config HTTPStreamConfig) *HTTPStreamHandler {
+	warnAboutIncorrectPingPongConfig(node, config.PingPongConfig, transportHTTPStream)
 	return &HTTPStreamHandler{
 		node:   node,
 		config: config,
@@ -50,6 +52,7 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	_, ok := w.(http.Flusher)
 	if !ok {
+		h.node.logger.log(newErrorLogEntry(errors.New("not http.Flusher"), "HTTP stream: ResponseWriter is not a Flusher", map[string]any{}))
 		http.Error(w, "expected http.ResponseWriter to be http.Flusher", http.StatusInternalServerError)
 		return
 	}
@@ -85,8 +88,8 @@ func (h *HTTPStreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	transport := newHTTPStreamTransport(r, httpStreamTransportConfig{
 		protocolType: protocolType,
 		pingPong:     h.config.PingPongConfig,
+		protoMajor:   uint8(r.ProtoMajor),
 	})
-
 	c, closeFn, err := NewClient(r.Context(), h.node, transport)
 	if err != nil {
 		h.node.logger.log(newErrorLogEntry(err, "error create client", map[string]any{"error": err.Error(), "transport": transportHTTPStream}))
@@ -178,6 +181,7 @@ type httpStreamTransport struct {
 type httpStreamTransportConfig struct {
 	protocolType ProtocolType
 	pingPong     PingPongConfig
+	protoMajor   uint8
 }
 
 func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig) *httpStreamTransport {
@@ -192,6 +196,10 @@ func newHTTPStreamTransport(req *http.Request, config httpStreamTransportConfig)
 
 func (t *httpStreamTransport) Name() string {
 	return transportHTTPStream
+}
+
+func (t *httpStreamTransport) AcceptProtocol() string {
+	return getAcceptProtocolLabel(int8(t.config.protoMajor))
 }
 
 func (t *httpStreamTransport) Protocol() ProtocolType {

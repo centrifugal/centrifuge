@@ -176,6 +176,10 @@ func (t *grpcTransport) Name() string {
 	return "grpc"
 }
 
+func (t *grpcTransport) AcceptProtocol() string {
+	return "h2"
+}
+
 func (t *grpcTransport) Protocol() centrifuge.ProtocolType {
 	return centrifuge.ProtocolTypeProtobuf
 }

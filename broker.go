@@ -10,7 +10,7 @@ type Publication struct {
 	// Offset is an incremental position number inside a history stream.
 	// Zero value means that channel does not maintain Publication stream.
 	Offset uint64
-	// Data published to a channel.
+	// Data to be published to a channel (to be delivered to subscribers).
 	Data []byte
 	// Info is optional information about client connection published this data.
 	Info *ClientInfo

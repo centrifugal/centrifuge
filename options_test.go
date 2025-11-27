@@ -43,6 +43,14 @@ func TestWithMeta(t *testing.T) {
 	require.Equal(t, "value", opts.Tags["test"])
 }
 
+func TestWithVersion(t *testing.T) {
+	opt := WithVersion(2, "xxx")
+	opts := &PublishOptions{}
+	opt(opts)
+	require.Equal(t, uint64(2), opts.Version)
+	require.Equal(t, "xxx", opts.VersionEpoch)
+}
+
 func TestSubscribeOptions(t *testing.T) {
 	subscribeOpts := []SubscribeOption{
 		WithExpireAt(1),

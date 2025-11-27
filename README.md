@@ -35,6 +35,7 @@ Centrifuge library provides a lot of top of raw WebSocket transport. Important l
 * Message recovery mechanism for channels to survive PUB/SUB delivery problems, short network disconnects or node restart
 * Cache channels – a way to quickly deliver latest publication from channel history to the client upon subscription
 * Delta compression using [Fossil](https://fossil-scm.org/home/doc/tip/www/delta_format.wiki) algorithm for publications inside a channel to reduce bandwidth usage
+* Support for client-supplied publication filters to drop unnecessary channel publications on the server side 
 * Per-client and per-channel batching controls for reduced system calls and better CPU utilization
 * Out-of-the-box observability using Prometheus instrumentation
 * Client SDKs for main application environments all following [single behaviour spec](https://centrifugal.dev/docs/transports/client_api) (see list of SDKs below).
@@ -49,6 +50,7 @@ For **bidirectional** communication between a client and a Centrifuge-based serv
 * [centrifuge-swift](https://github.com/centrifugal/centrifuge-swift) – for native iOS development
 * [centrifuge-java](https://github.com/centrifugal/centrifuge-java) – for native Android development and general Java
 * [centrifuge-python](https://github.com/centrifugal/centrifuge-python) - real-time SDK for Python on top of asyncio
+* [WIP] [centrifuge-csharp](https://github.com/centrifugal/centrifuge-csharp) - for modern .NET environments (including MAUI, Blazor, Unity)
 
 These SDKs abstract asynchronous communication complexity from the developer: handle framing, reconnect with backoff, timeouts, multiplex channel subscriptions over single connection, etc.
 

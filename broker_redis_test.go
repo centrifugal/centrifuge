@@ -65,6 +65,7 @@ func NewTestRedisBroker(tb testing.TB, n *Node, prefix string, useStreams bool, 
 	redisConf := testSingleRedisConf(port)
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
+	require.Equal(tb, s.Mode(), RedisShardModeStandalone)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
 		Prefix:   prefix,
 		UseLists: !useStreams,
@@ -100,6 +101,7 @@ func NewTestRedisBrokerCluster(tb testing.TB, n *Node, prefix string, useStreams
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
+	require.Equal(tb, s.Mode(), RedisShardModeCluster)
 	brokerConfig := RedisBrokerConfig{
 		Prefix:   prefix,
 		UseLists: !useStreams,
@@ -134,6 +136,7 @@ func NewTestRedisBrokerSentinel(tb testing.TB) *RedisBroker {
 	}
 	s, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
+	require.Equal(tb, s.Mode(), RedisShardModeSentinel)
 	e, err := NewRedisBroker(n, RedisBrokerConfig{
 		Shards: []*RedisShard{s},
 	})
@@ -1764,7 +1767,7 @@ func testRedisClientSubscribeRecover(t *testing.T, tt historyRedisTest, rt recov
 
 	historyResult, err := node.recoverHistory(channel, StreamPosition{rt.SinceOffset, streamTop.Epoch}, 0)
 	require.NoError(t, err)
-	recoveredPubs, recovered := isStreamRecovered(historyResult, rt.SinceOffset, streamTop.Epoch)
+	recoveredPubs, recovered := isStreamRecovered(historyResult, rt.SinceOffset, streamTop.Epoch, nil)
 	require.Equal(t, rt.NumRecovered, len(recoveredPubs))
 	require.Equal(t, rt.Recovered, recovered)
 }
@@ -1772,9 +1775,9 @@ func testRedisClientSubscribeRecover(t *testing.T, tt historyRedisTest, rt recov
 var brokerRecoverTests = []recoverTest{
 	{"empty_stream", 10, 60, 0, 0, 0, 0, 0, true, RecoveryModeStream},
 	{"from_position", 10, 60, 10, 8, 2, 0, 0, true, RecoveryModeStream},
-	{"from_position_limited", 10, 60, 10, 5, 2, 0, 2, false, RecoveryModeStream},
-	{"from_position_with_server_limit", 10, 60, 10, 5, 1, 0, 1, false, RecoveryModeStream},
-	{"from_position_that_already_gone", 10, 60, 20, 8, 10, 0, 0, false, RecoveryModeStream},
+	{"from_position_limited", 10, 60, 10, 5, 0, 0, 2, false, RecoveryModeStream},
+	{"from_position_with_server_limit", 10, 60, 10, 5, 0, 0, 1, false, RecoveryModeStream},
+	{"from_position_that_already_gone", 10, 60, 20, 8, 0, 0, 0, false, RecoveryModeStream},
 	{"from_position_that_not_exist_yet", 10, 60, 20, 108, 0, 0, 0, false, RecoveryModeStream},
 	{"same_position_no_pubs_expected", 10, 60, 7, 7, 0, 0, 0, true, RecoveryModeStream},
 	{"empty_position_recover_expected", 10, 60, 4, 0, 4, 0, 0, true, RecoveryModeStream},
