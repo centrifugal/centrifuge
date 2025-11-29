@@ -2668,6 +2668,18 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 			},
 			WriteManyFn: func(items ...queue.Item) error {
 				messages := make([][]byte, 0, len(items))
+
+				// Batch metric updates - accumulate counts locally first
+				type metricKey struct {
+					frameType string
+					namespace string
+				}
+				metricCounts := make(map[metricKey]struct {
+					count int
+					size  int
+				})
+				transportName := c.transport.Name()
+
 				for i := 0; i < len(items); i++ {
 					if c.node.clientEvents.transportWriteHandler != nil {
 						pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(items[i]))
@@ -2676,8 +2688,26 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 						}
 					}
 					messages = append(messages, items[i].Data)
-					c.node.metrics.incTransportMessagesSent(c.transport.Name(), items[i].FrameType, items[i].Channel, len(items[i].Data))
+
+					// Accumulate metrics locally
+					key := metricKey{
+						frameType: items[i].FrameType.String(),
+						namespace: c.node.metrics.getChannelNamespaceLabel(items[i].Channel),
+					}
+					stats := metricCounts[key]
+					stats.count++
+					stats.size += len(items[i].Data)
+					metricCounts[key] = stats
 				}
+
+				// Update metrics once per unique label combination
+				for key, stats := range metricCounts {
+					counters := c.node.metrics.getTransportMessagesSentCounters(transportName, key.frameType, key.namespace)
+					// Batch update - add count and size together
+					counters.counterSent.Add(float64(stats.count))
+					counters.counterSentSize.Add(float64(stats.size))
+				}
+
 				writeMu.Lock()
 				defer writeMu.Unlock()
 				if err := c.transport.WriteMany(messages...); err != nil {
