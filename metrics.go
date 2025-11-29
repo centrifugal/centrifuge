@@ -651,25 +651,30 @@ type transportMessagesReceived struct {
 	counterReceivedSize prometheus.Counter
 }
 
-func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channel string, size int) {
-	channelNamespace := m.getChannelNamespaceLabel(channel)
+func (m *metrics) getTransportMessagesSentCounters(transport string, frameType string, namespace string) transportMessagesSent {
 	labels := transportMessageLabels{
 		Transport:        transport,
-		ChannelNamespace: channelNamespace,
-		FrameType:        frameType.String(),
+		ChannelNamespace: namespace,
+		FrameType:        frameType,
 	}
 	counters, ok := m.transportMessagesSentCache.Load(labels)
 	if !ok {
-		counterSent := m.transportMessagesSent.WithLabelValues(transport, labels.FrameType, channelNamespace)
-		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, labels.FrameType, channelNamespace)
+		counterSent := m.transportMessagesSent.WithLabelValues(transport, frameType, namespace)
+		counterSentSize := m.transportMessagesSentSize.WithLabelValues(transport, frameType, namespace)
 		counters = transportMessagesSent{
 			counterSent:     counterSent,
 			counterSentSize: counterSentSize,
 		}
 		m.transportMessagesSentCache.Store(labels, counters)
 	}
-	counters.(transportMessagesSent).counterSent.Inc()
-	counters.(transportMessagesSent).counterSentSize.Add(float64(size))
+	return counters.(transportMessagesSent)
+}
+
+func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channel string, size int) {
+	channelNamespace := m.getChannelNamespaceLabel(channel)
+	counters := m.getTransportMessagesSentCounters(transport, frameType.String(), channelNamespace)
+	counters.counterSent.Inc()
+	counters.counterSentSize.Add(float64(size))
 }
 
 func (m *metrics) incTransportMessagesReceived(transport string, frameType protocol.FrameType, channel string, size int) {
