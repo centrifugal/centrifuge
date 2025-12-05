@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "embed"
@@ -355,29 +356,65 @@ func (m *RedisPresenceManager) PresenceStats(ch string) (PresenceStats, error) {
 }
 
 func (m *RedisPresenceManager) presenceHashKey(s *RedisShard, ch string) channelID {
-	if s.isCluster {
-		ch = "{" + ch + "}"
+	if !s.isCluster {
+		// Fast path: simple concatenation is optimal for non-cluster
+		return channelID(m.config.Prefix + ".presence.data." + ch)
 	}
-	return channelID(m.config.Prefix + ".presence.data." + ch)
+
+	// Cluster path: use builder to avoid multiple allocations
+	var builder strings.Builder
+	builder.Grow(len(m.config.Prefix) + 16 + 1 + len(ch) + 1)
+	builder.WriteString(m.config.Prefix)
+	builder.WriteString(".presence.data.{")
+	builder.WriteString(ch)
+	builder.WriteByte('}')
+	return channelID(builder.String())
 }
 
 func (m *RedisPresenceManager) presenceSetKey(s *RedisShard, ch string) channelID {
-	if s.isCluster {
-		ch = "{" + ch + "}"
+	if !s.isCluster {
+		// Fast path: simple concatenation is optimal for non-cluster
+		return channelID(m.config.Prefix + ".presence.expire." + ch)
 	}
-	return channelID(m.config.Prefix + ".presence.expire." + ch)
+
+	// Cluster path: use builder to avoid multiple allocations
+	var builder strings.Builder
+	builder.Grow(len(m.config.Prefix) + 18 + 1 + len(ch) + 1)
+	builder.WriteString(m.config.Prefix)
+	builder.WriteString(".presence.expire.{")
+	builder.WriteString(ch)
+	builder.WriteByte('}')
+	return channelID(builder.String())
 }
 
 func (m *RedisPresenceManager) userSetKey(s *RedisShard, ch string) channelID {
-	if s.isCluster {
-		ch = "{" + ch + "}"
+	if !s.isCluster {
+		// Fast path: simple concatenation is optimal for non-cluster
+		return channelID(m.config.Prefix + ".presence.user.expire." + ch)
 	}
-	return channelID(m.config.Prefix + ".presence.user.expire." + ch)
+
+	// Cluster path: use builder to avoid multiple allocations
+	var builder strings.Builder
+	builder.Grow(len(m.config.Prefix) + 23 + 1 + len(ch) + 1)
+	builder.WriteString(m.config.Prefix)
+	builder.WriteString(".presence.user.expire.{")
+	builder.WriteString(ch)
+	builder.WriteByte('}')
+	return channelID(builder.String())
 }
 
 func (m *RedisPresenceManager) userHashKey(s *RedisShard, ch string) channelID {
-	if s.isCluster {
-		ch = "{" + ch + "}"
+	if !s.isCluster {
+		// Fast path: simple concatenation is optimal for non-cluster
+		return channelID(m.config.Prefix + ".presence.user.clients." + ch)
 	}
-	return channelID(m.config.Prefix + ".presence.user.clients." + ch)
+
+	// Cluster path: use builder to avoid multiple allocations
+	var builder strings.Builder
+	builder.Grow(len(m.config.Prefix) + 24 + 1 + len(ch) + 1)
+	builder.WriteString(m.config.Prefix)
+	builder.WriteString(".presence.user.clients.{")
+	builder.WriteString(ch)
+	builder.WriteByte('}')
+	return channelID(builder.String())
 }
