@@ -1102,17 +1102,59 @@ func (b *RedisBroker) removeHistory(s *shardWrapper, ch string) error {
 }
 
 func (b *RedisBroker) messageChannelID(s *RedisShard, ch string) channelID {
-	if b.useShardedPubSub(s) {
-		ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumShardedPubSubPartitions)) + "}." + ch
+	if !b.useShardedPubSub(s) {
+		// Fast path: no sharding
+		var builder strings.Builder
+		builder.Grow(len(b.messagePrefix) + len(ch))
+		builder.WriteString(b.messagePrefix)
+		builder.WriteString(ch)
+		return channelID(builder.String())
 	}
-	return channelID(b.messagePrefix + ch)
+
+	// Sharded path
+	idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
+	idxStr := strconv.Itoa(idx)
+
+	// Pre-calculate capacity: messagePrefix + "{" + idxStr + "}." + ch
+	capacity := len(b.messagePrefix) + 1 + len(idxStr) + 2 + len(ch)
+
+	var builder strings.Builder
+	builder.Grow(capacity)
+	builder.WriteString(b.messagePrefix)
+	builder.WriteByte('{')
+	builder.WriteString(idxStr)
+	builder.WriteString("}.")
+	builder.WriteString(ch)
+
+	return channelID(builder.String())
 }
 
 func (b *RedisBroker) pubSubShardChannelID(clusterShardIndex int, psShardIndex int, useShardedPubSub bool) channelID {
-	if useShardedPubSub {
-		return channelID(b.shardChannel + "." + strconv.Itoa(psShardIndex) + ".{" + strconv.Itoa(clusterShardIndex) + "}")
+	psShardStr := strconv.Itoa(psShardIndex)
+
+	if !useShardedPubSub {
+		// Fast path: shardChannel + "." + psShardIndex
+		var builder strings.Builder
+		builder.Grow(len(b.shardChannel) + 1 + len(psShardStr))
+		builder.WriteString(b.shardChannel)
+		builder.WriteByte('.')
+		builder.WriteString(psShardStr)
+		return channelID(builder.String())
 	}
-	return channelID(b.shardChannel + "." + strconv.Itoa(psShardIndex))
+
+	// Sharded path: shardChannel + "." + psShardIndex + ".{" + clusterShardIndex + "}"
+	clusterShardStr := strconv.Itoa(clusterShardIndex)
+	capacity := len(b.shardChannel) + 1 + len(psShardStr) + 2 + len(clusterShardStr) + 1
+
+	var builder strings.Builder
+	builder.Grow(capacity)
+	builder.WriteString(b.shardChannel)
+	builder.WriteByte('.')
+	builder.WriteString(psShardStr)
+	builder.WriteString(".{")
+	builder.WriteString(clusterShardStr)
+	builder.WriteByte('}')
+	return channelID(builder.String())
 }
 
 func (b *RedisBroker) nodeChannelID(nodeID string) channelID {
@@ -1120,50 +1162,163 @@ func (b *RedisBroker) nodeChannelID(nodeID string) channelID {
 }
 
 func (b *RedisBroker) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) channelID {
-	if s.isCluster {
-		if b.config.NumShardedPubSubPartitions > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumShardedPubSubPartitions)) + "}." + ch
-		} else {
-			ch = "{" + ch + "}"
-		}
+	if !s.isCluster {
+		// Fast path: prefix + ".result." + ch + "." + idempotencyKey
+		var builder strings.Builder
+		builder.Grow(len(b.config.Prefix) + 9 + len(ch) + 1 + len(idempotencyKey))
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".result.")
+		builder.WriteString(ch)
+		builder.WriteByte('.')
+		builder.WriteString(idempotencyKey)
+		return channelID(builder.String())
 	}
-	return channelID(b.config.Prefix + ".result." + ch + "." + idempotencyKey)
+
+	var builder strings.Builder
+
+	if b.config.NumShardedPubSubPartitions > 0 {
+		// Sharded cluster: prefix + ".result." + "{" + idx + "}." + ch + "." + idempotencyKey
+		idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
+		idxStr := strconv.Itoa(idx)
+		capacity := len(b.config.Prefix) + 9 + 1 + len(idxStr) + 2 + len(ch) + 1 + len(idempotencyKey)
+		builder.Grow(capacity)
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".result.{")
+		builder.WriteString(idxStr)
+		builder.WriteString("}.")
+		builder.WriteString(ch)
+		builder.WriteByte('.')
+		builder.WriteString(idempotencyKey)
+	} else {
+		// Non-sharded cluster: prefix + ".result." + "{" + ch + "}" + "." + idempotencyKey
+		capacity := len(b.config.Prefix) + 9 + 1 + len(ch) + 2 + len(idempotencyKey)
+		builder.Grow(capacity)
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".result.{")
+		builder.WriteString(ch)
+		builder.WriteString("}.")
+		builder.WriteString(idempotencyKey)
+	}
+
+	return channelID(builder.String())
 }
 
 func (b *RedisBroker) historyListKey(s *RedisShard, ch string) channelID {
-	if s.isCluster {
-		if b.config.NumShardedPubSubPartitions > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumShardedPubSubPartitions)) + "}." + ch
-		} else {
-			ch = "{" + ch + "}"
-		}
+	if !s.isCluster {
+		// Fast path: prefix + ".list." + ch
+		var builder strings.Builder
+		builder.Grow(len(b.config.Prefix) + 6 + len(ch))
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".list.")
+		builder.WriteString(ch)
+		return channelID(builder.String())
 	}
-	return channelID(b.config.Prefix + ".list." + ch)
+
+	var builder strings.Builder
+
+	if b.config.NumShardedPubSubPartitions > 0 {
+		// Sharded cluster: prefix + ".list." + "{" + idx + "}." + ch
+		idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
+		idxStr := strconv.Itoa(idx)
+		capacity := len(b.config.Prefix) + 6 + 1 + len(idxStr) + 2 + len(ch)
+		builder.Grow(capacity)
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".list.{")
+		builder.WriteString(idxStr)
+		builder.WriteString("}.")
+		builder.WriteString(ch)
+	} else {
+		// Non-sharded cluster: prefix + ".list." + "{" + ch + "}"
+		capacity := len(b.config.Prefix) + 6 + 1 + len(ch) + 1
+		builder.Grow(capacity)
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".list.{")
+		builder.WriteString(ch)
+		builder.WriteByte('}')
+	}
+
+	return channelID(builder.String())
 }
 
 func (b *RedisBroker) historyStreamKey(s *RedisShard, ch string) channelID {
-	if s.isCluster {
-		if b.config.NumShardedPubSubPartitions > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumShardedPubSubPartitions)) + "}." + ch
-		} else {
-			ch = "{" + ch + "}"
-		}
+	if !s.isCluster {
+		// Fast path: prefix + ".stream." + ch
+		var builder strings.Builder
+		builder.Grow(len(b.config.Prefix) + 8 + len(ch))
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".stream.")
+		builder.WriteString(ch)
+		return channelID(builder.String())
 	}
-	return channelID(b.config.Prefix + ".stream." + ch)
+
+	var builder strings.Builder
+
+	if b.config.NumShardedPubSubPartitions > 0 {
+		// Sharded cluster: prefix + ".stream." + "{" + idx + "}." + ch
+		idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
+		idxStr := strconv.Itoa(idx)
+		capacity := len(b.config.Prefix) + 8 + 1 + len(idxStr) + 2 + len(ch)
+		builder.Grow(capacity)
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".stream.{")
+		builder.WriteString(idxStr)
+		builder.WriteString("}.")
+		builder.WriteString(ch)
+	} else {
+		// Non-sharded cluster: prefix + ".stream." + "{" + ch + "}"
+		capacity := len(b.config.Prefix) + 8 + 1 + len(ch) + 1
+		builder.Grow(capacity)
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(".stream.{")
+		builder.WriteString(ch)
+		builder.WriteByte('}')
+	}
+
+	return channelID(builder.String())
 }
 
 func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
-	if s.isCluster {
-		if b.config.NumShardedPubSubPartitions > 0 {
-			ch = "{" + strconv.Itoa(consistentIndex(ch, b.config.NumShardedPubSubPartitions)) + "}." + ch
-		} else {
-			ch = "{" + ch + "}"
-		}
-	}
+	infix := ".stream.meta."
 	if b.config.UseLists {
-		return channelID(b.config.Prefix + ".list.meta." + ch)
+		infix = ".list.meta."
 	}
-	return channelID(b.config.Prefix + ".stream.meta." + ch)
+
+	if !s.isCluster {
+		// Fast path: prefix + infix + ch
+		var builder strings.Builder
+		builder.Grow(len(b.config.Prefix) + len(infix) + len(ch))
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(infix)
+		builder.WriteString(ch)
+		return channelID(builder.String())
+	}
+
+	var builder strings.Builder
+
+	if b.config.NumShardedPubSubPartitions > 0 {
+		// Sharded cluster: prefix + infix + "{" + idx + "}." + ch
+		idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
+		idxStr := strconv.Itoa(idx)
+		capacity := len(b.config.Prefix) + len(infix) + 1 + len(idxStr) + 2 + len(ch)
+		builder.Grow(capacity)
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(infix)
+		builder.WriteByte('{')
+		builder.WriteString(idxStr)
+		builder.WriteString("}.")
+		builder.WriteString(ch)
+	} else {
+		// Non-sharded cluster: prefix + infix + "{" + ch + "}"
+		capacity := len(b.config.Prefix) + len(infix) + 1 + len(ch) + 1
+		builder.Grow(capacity)
+		builder.WriteString(b.config.Prefix)
+		builder.WriteString(infix)
+		builder.WriteByte('{')
+		builder.WriteString(ch)
+		builder.WriteByte('}')
+	}
+
+	return channelID(builder.String())
 }
 
 func (b *RedisBroker) extractChannel(chID channelID) string {
