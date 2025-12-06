@@ -32,6 +32,23 @@ var protobufPingPush []byte
 
 var randSource *saferand.Rand
 
+const (
+	// reuseWriteManyMessagesBuffer enables reusing a pooled buffer for messages
+	// slice in WriteManyFn to avoid allocations on each call. Set to false to
+	// use the original behavior which allocates a new slice each time.
+	reuseWriteManyMessagesBuffer = true
+	// defaultWriteManyMessagesBufferSize is the initial capacity of the pooled
+	// messages buffer. Should match the typical maxMessagesInFrame value.
+	defaultWriteManyMessagesBufferSize = 16
+)
+
+var writeManyMessagesBufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([][]byte, 0, defaultWriteManyMessagesBufferSize)
+		return &buf
+	},
+}
+
 func init() {
 	protobufPingReply, _ = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{})
 	protobufPingPush, _ = protocol.DefaultProtobufPushEncoder.Encode(&protocol.Push{})
@@ -2667,7 +2684,15 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				return nil
 			},
 			WriteManyFn: func(items ...queue.Item) error {
-				messages := make([][]byte, 0, len(items))
+				var messages [][]byte
+				var messagesBufPtr *[][]byte
+
+				if reuseWriteManyMessagesBuffer {
+					messagesBufPtr = writeManyMessagesBufPool.Get().(*[][]byte)
+					messages = (*messagesBufPtr)[:0]
+				} else {
+					messages = make([][]byte, 0, len(items))
+				}
 
 				// Batch metric updates - accumulate counts locally first
 				type metricKey struct {
@@ -2709,8 +2734,19 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				}
 
 				writeMu.Lock()
-				defer writeMu.Unlock()
-				if err := c.transport.WriteMany(messages...); err != nil {
+				err := c.transport.WriteMany(messages...)
+				writeMu.Unlock()
+
+				if reuseWriteManyMessagesBuffer {
+					// Clear references to allow GC.
+					for i := range messages {
+						messages[i] = nil
+					}
+					*messagesBufPtr = messages
+					writeManyMessagesBufPool.Put(messagesBufPtr)
+				}
+
+				if err != nil {
 					if c.node.logger.enabled(LogLevelTrace) {
 						c.node.logger.log(newLogEntry(LogLevelTrace, "client write failed", map[string]any{"client": c.uid, "user": c.user, "error": err.Error()}))
 					}

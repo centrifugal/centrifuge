@@ -415,8 +415,11 @@ func (t *websocketTransport) writeData(data []byte) error {
 		key := convert.BytesToString(data)
 		preparedMessage, ok := t.opts.preparedCache.Get(key)
 		if !ok {
+			dataCopy := make([]byte, len(data))
+			copy(dataCopy, data)
+			key = convert.BytesToString(dataCopy)
 			var err error
-			preparedMessage, err = websocket.NewPreparedMessage(messageType, data)
+			preparedMessage, err = websocket.NewPreparedMessage(messageType, dataCopy)
 			if err != nil {
 				return err
 			}
@@ -461,7 +464,7 @@ func (t *websocketTransport) Write(message []byte) error {
 		encoder := protocol.GetDataEncoder(protoType)
 		defer protocol.PutDataEncoder(protoType, encoder)
 		_ = encoder.Encode(message)
-		return t.writeData(encoder.Finish())
+		return t.writeData(encoder.FinishNoCopy())
 	}
 }
 
@@ -477,7 +480,7 @@ func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 		for i := range messages {
 			_ = encoder.Encode(messages[i])
 		}
-		return t.writeData(encoder.Finish())
+		return t.writeData(encoder.FinishNoCopy())
 	}
 }
 

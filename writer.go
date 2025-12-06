@@ -47,19 +47,18 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 
 	if writeDelay > 0 {
 		tm := timers.AcquireTimer(writeDelay)
-		if writeDelay > 0 {
-			select {
-			case <-tm.C:
-			case <-w.closeCh:
-				timers.ReleaseTimer(tm)
-				return false
-			}
+		select {
+		case <-tm.C:
+		case <-w.closeCh:
+			timers.ReleaseTimer(tm)
+			return false
 		}
 		timers.ReleaseTimer(tm)
 	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	items, ok := w.messages.RemoveMany(maxMessagesInFrame)
 	if !ok {
 		return !w.messages.Closed()

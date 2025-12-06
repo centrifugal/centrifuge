@@ -302,6 +302,51 @@ func TestQueueRemoveManyFromEmptyQueue(t *testing.T) {
 	require.Nil(t, removed)
 }
 
+//
+//func TestQueueRemoveManyTo(t *testing.T) {
+//	q := New(5)
+//	for i := 0; i < 5; i++ {
+//		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+//	}
+//	buf := make([]Item, 10)
+//	removed, ok := q.RemoveManyTo(buf, 3)
+//	require.True(t, ok)
+//	require.Len(t, removed, 3)
+//	require.Equal(t, 2, q.Len())
+//}
+//
+//func TestQueueRemoveManyToAll(t *testing.T) {
+//	q := New(3)
+//	for i := 0; i < 3; i++ {
+//		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+//	}
+//	buf := make([]Item, 10)
+//	removed, ok := q.RemoveManyTo(buf, -1)
+//	require.True(t, ok)
+//	require.Len(t, removed, 3)
+//	require.Equal(t, 0, q.Len())
+//}
+//
+//func TestQueueRemoveManyToSmallBuffer(t *testing.T) {
+//	q := New(5)
+//	for i := 0; i < 5; i++ {
+//		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
+//	}
+//	buf := make([]Item, 2)
+//	removed, ok := q.RemoveManyTo(buf, -1)
+//	require.True(t, ok)
+//	require.Len(t, removed, 2) // limited by buffer size
+//	require.Equal(t, 3, q.Len())
+//}
+//
+//func TestQueueRemoveManyToFromEmptyQueue(t *testing.T) {
+//	q := New(2)
+//	buf := make([]Item, 5)
+//	removed, ok := q.RemoveManyTo(buf, 5)
+//	require.False(t, ok)
+//	require.Len(t, removed, 0)
+//}
+
 func TestQueueWaitOnClosedQueue(t *testing.T) {
 	q := New(1)
 	q.Close()
