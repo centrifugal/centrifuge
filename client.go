@@ -1929,8 +1929,8 @@ func (c *Client) handlePublish(req *protocol.PublishRequest, cmd *protocol.Comma
 	channel := req.Channel
 	data := req.Data
 
-	if channel == "" || len(data) == 0 {
-		return c.logDisconnectBadRequest("channel and data required for publish")
+	if channel == "" {
+		return c.logDisconnectBadRequest("channel is required for publish")
 	}
 
 	c.mu.RLock()
