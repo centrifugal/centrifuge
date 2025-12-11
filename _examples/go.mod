@@ -17,7 +17,7 @@ require (
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/nats-io/nats.go v1.47.0
 	github.com/prometheus/client_golang v1.23.2
-	github.com/quic-go/quic-go v0.55.0
+	github.com/quic-go/quic-go v0.57.0
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/ratelimit v0.3.1
 	golang.org/x/net v0.47.0
@@ -70,7 +70,7 @@ require (
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/quagmt/udecimal v1.9.0 // indirect
-	github.com/quic-go/qpack v0.5.1 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/redis/rueidis v1.0.69 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.5.3 // indirect
@@ -81,11 +81,9 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/arch v0.20.0 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
-	golang.org/x/mod v0.29.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
-	golang.org/x/tools v0.38.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250804133106-a7a43d27e69b // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
