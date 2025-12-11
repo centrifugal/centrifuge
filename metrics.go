@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/protocol"
-	"github.com/maypok86/otter"
+	"github.com/maypok86/otter/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -125,10 +125,10 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 			return nil, errors.New("channel namespace cache TTL must be positive")
 		}
 		if cacheSize != -1 {
-			c, _ := otter.MustBuilder[string, string](cacheSize).
-				WithTTL(cacheTTL).
-				Build()
-			nsCache = &c
+			nsCache = otter.Must(&otter.Options[string, string]{
+				MaximumSize:      cacheSize,
+				ExpiryCalculator: otter.ExpiryWriting[string, string](cacheTTL),
+			})
 		}
 	}
 
@@ -471,7 +471,7 @@ func (m *metrics) getChannelNamespaceLabel(ch string) string {
 		return m.config.GetChannelNamespaceLabel(ch)
 	}
 	var cached bool
-	if nsLabel, cached = m.nsCache.Get(ch); cached {
+	if nsLabel, cached = m.nsCache.GetIfPresent(ch); cached {
 		return nsLabel
 	}
 	nsLabel = m.config.GetChannelNamespaceLabel(ch)
