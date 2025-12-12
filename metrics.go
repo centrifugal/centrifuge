@@ -121,6 +121,11 @@ func (m *metrics) buildMetricLabels(subsystemName string, baseLabels []string) [
 	return labels
 }
 
+// isClientLabelsWhitelisted checks if client labels are enabled for a specific metric.
+func (m *metrics) isClientLabelsWhitelisted(metricName string) bool {
+	return len(m.config.ClientLabels) > 0 && m.clientLabelsWhitelist[metricName]
+}
+
 // getOrCreateClientLabelCombinationFromLabels returns a cached combination for the given labels map.
 // This is used during client connect to precompute and cache the combination.
 func (m *metrics) getOrCreateClientLabelCombinationFromLabels(labels map[string]string) *clientLabelCombination {
@@ -155,42 +160,40 @@ func (m *metrics) getOrCreateClientLabelCombinationFromLabels(labels map[string]
 	return actual.(*clientLabelCombination)
 }
 
-// getOrCreateClientLabelCombination returns the cached combination for the given client.
-// This is a fast path that just loads the pre-cached pointer from the client.
-// The combination is cached during client connect, so this should always return immediately.
-func (m *metrics) getOrCreateClientLabelCombination(c *Client) *clientLabelCombination {
+// getCachedClientLabelCombination returns the cached combination for the given client.
+// The combination is pre-cached during client connect. This is used only in non-hot paths
+// and for tests. Hot paths should call c.labelCombinationCached.Load() directly.
+func (m *metrics) getCachedClientLabelCombination(c *Client) *clientLabelCombination {
 	if len(m.config.ClientLabels) == 0 || c == nil {
 		return nil
 	}
 
-	// Fast path: combination should already be cached from client connect
+	// Load pre-cached combination from client (set during connect)
 	if cached := c.labelCombinationCached.Load(); cached != nil {
 		return cached
 	}
 
 	// Fallback: shouldn't happen in normal flow, but handle gracefully
-	// This can happen if metrics are recorded before client is fully connected
+	// This can happen if metrics are recorded before client is fully connected or in tests
 	return nil
 }
 
 // extractClientLabelValues extracts client label values from a client, returning empty strings for missing labels.
-// This is a helper for non-hot-path uses. For hot paths, use getOrCreateClientLabelCombination instead.
+// This is a helper for non-hot-path uses. For hot paths, call c.labelCombinationCached.Load() directly.
 func (m *metrics) extractClientLabelValues(c *Client) []string {
 	if len(m.config.ClientLabels) == 0 || c == nil {
 		return nil
 	}
 
 	// Try to get the cached combination first
-	combo := m.getOrCreateClientLabelCombination(c)
+	combo := m.getCachedClientLabelCombination(c)
 	if combo != nil {
 		return combo.labelValues
 	}
 
 	// Fallback: client doesn't have combination cached (e.g., in tests)
-	// Build label values directly from client
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
+	// Build label values directly from client.labels map
+	// Note: c.labels is set once during connect and never modified, so safe to read without lock
 	values := make([]string, len(m.config.ClientLabels))
 	if c.labels != nil {
 		for i, label := range m.config.ClientLabels {
@@ -657,10 +660,18 @@ type commandDurationLabels struct {
 func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration, ch string, c *Client) {
 	channelNamespace := m.getChannelNamespaceLabel(ch)
 
-	// Check if we need to add client labels
-	clientLabelValues := m.extractClientLabelValues(c)
+	// Check if client labels are whitelisted for this metric
+	useClientLabels := m.isClientLabelsWhitelisted("client_command_duration_seconds")
+	var clientLabelValues []string
+	if useClientLabels {
+		clientLabelValues = m.extractClientLabelValues(c)
+		if clientLabelValues == nil {
+			// Create empty strings for missing client labels to match metric definition
+			clientLabelValues = make([]string, len(m.config.ClientLabels))
+		}
+	}
 
-	if (ch != "" && m.config.GetChannelNamespaceLabel != nil) || clientLabelValues != nil {
+	if (ch != "" && m.config.GetChannelNamespaceLabel != nil) || useClientLabels {
 		labels := commandDurationLabels{
 			ChannelNamespace: channelNamespace,
 			FrameType:        frameType,
@@ -668,7 +679,7 @@ func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Du
 		summary, ok := m.commandDurationCache.Load(labels)
 		if !ok {
 			labelValues := []string{frameType.String(), channelNamespace}
-			if clientLabelValues != nil {
+			if useClientLabels {
 				labelValues = append(labelValues, clientLabelValues...)
 			}
 			summary = m.commandDurationSummary.WithLabelValues(labelValues...)
@@ -768,8 +779,17 @@ func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch st
 	counter, ok := m.replyErrorCache.Load(labels)
 	if !ok {
 		labelValues := []string{frameType.String(), labels.Code, channelNamespace}
-		if clientLabelValues := m.extractClientLabelValues(c); clientLabelValues != nil {
-			labelValues = append(labelValues, clientLabelValues...)
+		// Only append client labels if whitelisted for this metric
+		if m.isClientLabelsWhitelisted("client_num_reply_errors") {
+			clientLabelValues := m.extractClientLabelValues(c)
+			if clientLabelValues != nil {
+				labelValues = append(labelValues, clientLabelValues...)
+			} else {
+				// Append empty strings to match metric definition
+				for range m.config.ClientLabels {
+					labelValues = append(labelValues, "")
+				}
+			}
 		}
 		counter = m.replyErrorCount.WithLabelValues(labelValues...)
 		m.replyErrorCache.Store(labels, counter)
@@ -836,12 +856,17 @@ type transportMessagesReceived struct {
 
 func (m *metrics) getTransportMessagesSentCounters(transport string, frameType string, namespace string, clientLabelValues []string, clientLabelCacheKey string) transportMessagesSent {
 	// If either sent or sent_size metric is whitelisted, apply client labels to BOTH since they're always used together
-	if (m.clientLabelsWhitelist["transport_messages_sent"] || m.clientLabelsWhitelist["transport_messages_sent_size"]) && len(m.config.ClientLabels) > 0 {
+	useClientLabels := (m.clientLabelsWhitelist["transport_messages_sent"] || m.clientLabelsWhitelist["transport_messages_sent_size"]) && len(m.config.ClientLabels) > 0
+	if useClientLabels {
 		if clientLabelValues == nil {
 			// Create empty strings for missing client labels
 			clientLabelValues = make([]string, len(m.config.ClientLabels))
 			clientLabelCacheKey = buildClientLabelsCacheKey(clientLabelValues)
 		}
+	} else {
+		// Metric not whitelisted - don't use client labels even if provided
+		clientLabelValues = nil
+		clientLabelCacheKey = ""
 	}
 
 	// Use pre-computed cache key - no allocation here
@@ -856,7 +881,9 @@ func (m *metrics) getTransportMessagesSentCounters(transport string, frameType s
 		// Pre-allocate labelValues with exact capacity to avoid append reallocation
 		labelValues := make([]string, 0, 3+len(clientLabelValues))
 		labelValues = append(labelValues, transport, frameType, namespace)
-		labelValues = append(labelValues, clientLabelValues...)
+		if useClientLabels {
+			labelValues = append(labelValues, clientLabelValues...)
+		}
 
 		counterSent := m.transportMessagesSent.WithLabelValues(labelValues...)
 		counterSentSize := m.transportMessagesSentSize.WithLabelValues(labelValues...)
@@ -872,12 +899,14 @@ func (m *metrics) getTransportMessagesSentCounters(transport string, frameType s
 func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.FrameType, channel string, size int, c *Client) {
 	channelNamespace := m.getChannelNamespaceLabel(channel)
 
+	// Use pre-cached combination from client (set during connect)
 	var clientLabelValues []string
 	var clientLabelCacheKey string
-	combo := m.getOrCreateClientLabelCombination(c)
-	if combo != nil {
-		clientLabelValues = combo.labelValues
-		clientLabelCacheKey = combo.cacheKey
+	if c != nil {
+		if combo := c.labelCombinationCached.Load(); combo != nil {
+			clientLabelValues = combo.labelValues
+			clientLabelCacheKey = combo.cacheKey
+		}
 	}
 
 	counters := m.getTransportMessagesSentCounters(transport, frameType.String(), channelNamespace, clientLabelValues, clientLabelCacheKey)
@@ -890,10 +919,14 @@ func (m *metrics) incTransportMessagesReceived(transport string, frameType proto
 	clientLabelValues := m.extractClientLabelValues(c)
 
 	// If either received or received_size metric is whitelisted, apply client labels to BOTH since they're always used together
-	if (m.clientLabelsWhitelist["transport_messages_received"] || m.clientLabelsWhitelist["transport_messages_received_size"]) && len(m.config.ClientLabels) > 0 {
+	useClientLabels := (m.clientLabelsWhitelist["transport_messages_received"] || m.clientLabelsWhitelist["transport_messages_received_size"]) && len(m.config.ClientLabels) > 0
+	if useClientLabels {
 		if clientLabelValues == nil {
 			clientLabelValues = make([]string, len(m.config.ClientLabels))
 		}
+	} else {
+		// Metric not whitelisted - don't use client labels even if provided
+		clientLabelValues = nil
 	}
 
 	// Build cache key including client labels
@@ -908,7 +941,7 @@ func (m *metrics) incTransportMessagesReceived(transport string, frameType proto
 	counters, ok := m.transportMessagesReceivedCache.Load(labels)
 	if !ok {
 		labelValues := []string{transport, labels.FrameType, channelNamespace}
-		if len(clientLabelValues) > 0 {
+		if useClientLabels && len(clientLabelValues) > 0 {
 			labelValues = append(labelValues, clientLabelValues...)
 		}
 		counterReceived := m.transportMessagesReceived.WithLabelValues(labelValues...)
@@ -942,8 +975,17 @@ func (m *metrics) incServerDisconnect(code uint32, c *Client) {
 	counter, ok := m.disconnectCache.Load(labels)
 	if !ok {
 		labelValues := []string{labels.Code}
-		if clientLabelValues := m.extractClientLabelValues(c); clientLabelValues != nil {
-			labelValues = append(labelValues, clientLabelValues...)
+		// Only append client labels if whitelisted for this metric
+		if m.isClientLabelsWhitelisted("client_num_server_disconnects") {
+			clientLabelValues := m.extractClientLabelValues(c)
+			if clientLabelValues != nil {
+				labelValues = append(labelValues, clientLabelValues...)
+			} else {
+				// Append empty strings to match metric definition
+				for range m.config.ClientLabels {
+					labelValues = append(labelValues, "")
+				}
+			}
 		}
 		counter = m.serverDisconnectCount.WithLabelValues(labelValues...)
 		m.disconnectCache.Store(labels, counter)
@@ -964,8 +1006,17 @@ func (m *metrics) incServerUnsubscribe(code uint32, ch string, c *Client) {
 	counter, ok := m.unsubscribeCache.Load(labels)
 	if !ok {
 		labelValues := []string{labels.Code, labels.ChannelNamespace}
-		if clientLabelValues := m.extractClientLabelValues(c); clientLabelValues != nil {
-			labelValues = append(labelValues, clientLabelValues...)
+		// Only append client labels if whitelisted for this metric
+		if m.isClientLabelsWhitelisted("client_num_server_unsubscribes") {
+			clientLabelValues := m.extractClientLabelValues(c)
+			if clientLabelValues != nil {
+				labelValues = append(labelValues, clientLabelValues...)
+			} else {
+				// Append empty strings to match metric definition
+				for range m.config.ClientLabels {
+					labelValues = append(labelValues, "")
+				}
+			}
 		}
 		counter = m.serverUnsubscribeCount.WithLabelValues(labelValues...)
 		m.unsubscribeCache.Store(labels, counter)

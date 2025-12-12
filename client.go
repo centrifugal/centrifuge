@@ -2509,12 +2509,14 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.metricName = metricClientName
 	c.metricVersion = metricClientVersion
 	c.labels = labels
+
 	// Precompute and cache the label combination pointer for zero-allocation metrics hot path
-	// We do this here while we have c.mu locked and just set c.labels
+	// Do this before addClient so metrics recorded by addClient can use the cached combination
 	if len(c.node.metrics.config.ClientLabels) > 0 {
 		combo := c.node.metrics.getOrCreateClientLabelCombinationFromLabels(labels)
 		c.labelCombinationCached.Store(combo)
 	}
+
 	c.node.addClient(c)
 	c.mu.Unlock()
 
@@ -2729,10 +2731,10 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 
 				// Update metrics once per unique label combination
 				// Use cached client label combination for zero-allocation hot path
+				// The combination is pre-cached during connect, so just load it directly
 				var clientLabelValues []string
 				var clientLabelCacheKey string
-				combo := c.node.metrics.getOrCreateClientLabelCombination(c)
-				if combo != nil {
+				if combo := c.labelCombinationCached.Load(); combo != nil {
 					clientLabelValues = combo.labelValues
 					clientLabelCacheKey = combo.cacheKey
 				}

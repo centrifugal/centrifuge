@@ -1028,8 +1028,17 @@ func (n *Node) addClient(c *Client) {
 		acceptProtocol = c.transport.AcceptProtocol()
 	}
 	labelValues := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
-	if clientLabelValues := n.metrics.extractClientLabelValues(c); clientLabelValues != nil {
-		labelValues = append(labelValues, clientLabelValues...)
+	// Only append client labels if they are whitelisted for this metric
+	if n.metrics.isClientLabelsWhitelisted("client_connections_inflight") {
+		clientLabelValues := n.metrics.extractClientLabelValues(c)
+		if clientLabelValues != nil {
+			labelValues = append(labelValues, clientLabelValues...)
+		} else {
+			// Append empty strings to match metric definition
+			for range n.metrics.config.ClientLabels {
+				labelValues = append(labelValues, "")
+			}
+		}
 	}
 	n.metrics.connectionsAccepted.WithLabelValues(labelValues...).Inc()
 	n.metrics.connectionsInflight.WithLabelValues(labelValues...).Inc()
@@ -1046,8 +1055,17 @@ func (n *Node) removeClient(c *Client) {
 			acceptProtocol = c.transport.AcceptProtocol()
 		}
 		labelValues := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
-		if clientLabelValues := n.metrics.extractClientLabelValues(c); clientLabelValues != nil {
-			labelValues = append(labelValues, clientLabelValues...)
+		// Only append client labels if they are whitelisted for this metric
+		if n.metrics.isClientLabelsWhitelisted("client_connections_inflight") {
+			clientLabelValues := n.metrics.extractClientLabelValues(c)
+			if clientLabelValues != nil {
+				labelValues = append(labelValues, clientLabelValues...)
+			} else {
+				// Append empty strings to match metric definition
+				for range n.metrics.config.ClientLabels {
+					labelValues = append(labelValues, "")
+				}
+			}
 		}
 		n.metrics.connectionsInflight.WithLabelValues(labelValues...).Dec()
 	}
@@ -1058,8 +1076,17 @@ func (n *Node) removeClient(c *Client) {
 func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
 	labelValues := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-	if clientLabelValues := n.metrics.extractClientLabelValues(sub.client); clientLabelValues != nil {
-		labelValues = append(labelValues, clientLabelValues...)
+	// Only append client labels if they are whitelisted for this metric
+	if n.metrics.isClientLabelsWhitelisted("client_subscriptions_inflight") {
+		clientLabelValues := n.metrics.extractClientLabelValues(sub.client)
+		if clientLabelValues != nil {
+			labelValues = append(labelValues, clientLabelValues...)
+		} else {
+			// Append empty strings to match metric definition
+			for range n.metrics.config.ClientLabels {
+				labelValues = append(labelValues, "")
+			}
+		}
 	}
 	n.metrics.subscriptionsInflight.WithLabelValues(labelValues...).Inc()
 	mu := n.subLock(ch)
@@ -1115,8 +1142,17 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	empty, wasRemoved := n.hub.removeSub(ch, c)
 	if wasRemoved {
 		labelValues := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-		if clientLabelValues := n.metrics.extractClientLabelValues(c); clientLabelValues != nil {
-			labelValues = append(labelValues, clientLabelValues...)
+		// Only append client labels if they are whitelisted for this metric
+		if n.metrics.isClientLabelsWhitelisted("client_subscriptions_inflight") {
+			clientLabelValues := n.metrics.extractClientLabelValues(c)
+			if clientLabelValues != nil {
+				labelValues = append(labelValues, clientLabelValues...)
+			} else {
+				// Append empty strings to match metric definition
+				for range n.metrics.config.ClientLabels {
+					labelValues = append(labelValues, "")
+				}
+			}
 		}
 		n.metrics.subscriptionsInflight.WithLabelValues(labelValues...).Dec()
 	}
