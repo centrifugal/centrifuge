@@ -215,6 +215,7 @@ func (q *Queue) RemoveMany(maxItems int) ([]Item, bool) {
 
 	for i := 0; i < count; i++ {
 		msg := q.nodes[q.head]
+		q.nodes[q.head] = Item{} // clear to avoid memory leak
 		q.head = (q.head + 1) % len(q.nodes)
 		messages = append(messages, msg)
 		q.cnt--
@@ -239,6 +240,56 @@ func (q *Queue) RemoveMany(maxItems int) ([]Item, bool) {
 	q.mu.Unlock()
 	return messages, true
 }
+
+//// RemoveManyTo removes up to len(buf) items from the queue, storing them in buf.
+//// If maxItems is -1, it removes up to len(buf) items.
+//// If maxItems > 0, it removes up to min(maxItems, len(buf)) items.
+//// Returns the sub-slice of buf containing removed items and a boolean indicating
+//// whether at least one item was removed.
+//// The caller is responsible for providing a buffer with sufficient capacity.
+//func (q *Queue) RemoveManyTo(buf []Item, maxItems int) ([]Item, bool) {
+//	q.mu.Lock()
+//
+//	if q.cnt == 0 {
+//		q.mu.Unlock()
+//		return buf[:0], false
+//	}
+//
+//	// Determine how many messages to remove.
+//	count := q.cnt
+//	if maxItems > 0 && maxItems < count {
+//		count = maxItems
+//	}
+//	if count > len(buf) {
+//		count = len(buf)
+//	}
+//
+//	for i := 0; i < count; i++ {
+//		buf[i] = q.nodes[q.head]
+//		q.nodes[q.head] = Item{} // clear to avoid memory leak
+//		q.head = (q.head + 1) % len(q.nodes)
+//		q.cnt--
+//		q.size -= len(buf[i].Data)
+//	}
+//
+//	// Shrink if needed.
+//	n := -1
+//	k := len(q.nodes) / 2
+//	for {
+//		if k >= q.initCap && q.cnt <= k {
+//			n = k
+//		} else {
+//			break
+//		}
+//		k /= 2
+//	}
+//	if n != -1 {
+//		q.resize(n)
+//	}
+//
+//	q.mu.Unlock()
+//	return buf[:count], true
+//}
 
 // Cap returns the capacity (without allocations)
 func (q *Queue) Cap() int {
