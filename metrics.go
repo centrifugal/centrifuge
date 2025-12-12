@@ -92,8 +92,15 @@ type metrics struct {
 	codeStrings                    map[uint32]string
 	clientLabelsWhitelist          map[string]bool
 
-	// Cache for client label value slices to reduce allocations
-	clientLabelValuesCache sync.Map // map[*Client][]string
+	// Cache for client label combinations: maps cache key -> {labelValues, cacheKey}
+	// This allows sharing pre-computed label data across all clients with the same label values
+	clientLabelCombinationsCache sync.Map // map[string]*clientLabelCombination
+}
+
+// clientLabelCombination holds pre-computed label values and cache key for a unique combination
+type clientLabelCombination struct {
+	labelValues []string
+	cacheKey    string
 }
 
 func getMetricsNamespace(config MetricsConfig) string {
@@ -114,47 +121,81 @@ func (m *metrics) buildMetricLabels(subsystemName string, baseLabels []string) [
 	return labels
 }
 
-// precomputeClientMetricLabels precomputes and stores client label values and cache key on the client.
-// This should be called once during client connect, with client.mu already held by caller.
-// This enables zero-allocation metric recording in hot paths.
-func (m *metrics) precomputeClientMetricLabels(c *Client) {
+// getOrCreateClientLabelCombinationFromLabels returns a cached combination for the given labels map.
+// This is used during client connect to precompute and cache the combination.
+func (m *metrics) getOrCreateClientLabelCombinationFromLabels(labels map[string]string) *clientLabelCombination {
 	if len(m.config.ClientLabels) == 0 {
-		return
+		return nil
 	}
+
+	// Build label values from the provided map
+	tempValues := make([]string, len(m.config.ClientLabels))
+	if labels != nil {
+		for i, label := range m.config.ClientLabels {
+			tempValues[i] = labels[label]
+		}
+	}
+
+	// Build cache key for this combination
+	cacheKey := buildClientLabelsCacheKey(tempValues)
+
+	// Try to load existing combination from global cache
+	if combo, ok := m.clientLabelCombinationsCache.Load(cacheKey); ok {
+		return combo.(*clientLabelCombination)
+	}
+
+	// Create new combination
+	combo := &clientLabelCombination{
+		labelValues: tempValues,
+		cacheKey:    cacheKey,
+	}
+
+	// Store in global cache (even if another goroutine stored it first, we'll use theirs)
+	actual, _ := m.clientLabelCombinationsCache.LoadOrStore(cacheKey, combo)
+	return actual.(*clientLabelCombination)
+}
+
+// getOrCreateClientLabelCombination returns the cached combination for the given client.
+// This is a fast path that just loads the pre-cached pointer from the client.
+// The combination is cached during client connect, so this should always return immediately.
+func (m *metrics) getOrCreateClientLabelCombination(c *Client) *clientLabelCombination {
+	if len(m.config.ClientLabels) == 0 || c == nil {
+		return nil
+	}
+
+	// Fast path: combination should already be cached from client connect
+	if cached := c.labelCombinationCached.Load(); cached != nil {
+		return cached
+	}
+
+	// Fallback: shouldn't happen in normal flow, but handle gracefully
+	// This can happen if metrics are recorded before client is fully connected
+	return nil
+}
+
+// extractClientLabelValues extracts client label values from a client, returning empty strings for missing labels.
+// This is a helper for non-hot-path uses. For hot paths, use getOrCreateClientLabelCombination instead.
+func (m *metrics) extractClientLabelValues(c *Client) []string {
+	if len(m.config.ClientLabels) == 0 || c == nil {
+		return nil
+	}
+
+	// Try to get the cached combination first
+	combo := m.getOrCreateClientLabelCombination(c)
+	if combo != nil {
+		return combo.labelValues
+	}
+
+	// Fallback: client doesn't have combination cached (e.g., in tests)
+	// Build label values directly from client
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
 	values := make([]string, len(m.config.ClientLabels))
 	if c.labels != nil {
 		for i, label := range m.config.ClientLabels {
 			values[i] = c.labels[label]
 		}
-	}
-	// Store both the values slice and pre-built cache key
-	c.metricLabelValues = values
-	c.metricLabelCacheKey = buildClientLabelsCacheKey(values)
-}
-
-// extractClientLabelValues extracts client label values from a client, returning empty strings for missing labels.
-// For hot paths, prefer using the pre-computed c.metricLabelValues field instead (requires client.mu.RLock).
-func (m *metrics) extractClientLabelValues(c *Client) []string {
-	if len(m.config.ClientLabels) == 0 || c == nil {
-		return nil
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	// Use pre-computed values if available
-	if c.metricLabelValues != nil {
-		return c.metricLabelValues
-	}
-
-	// Fallback for edge cases
-	values := make([]string, len(m.config.ClientLabels))
-	if c.labels == nil {
-		return values
-	}
-
-	for i, label := range m.config.ClientLabels {
-		values[i] = c.labels[label]
 	}
 	return values
 }
@@ -833,11 +874,10 @@ func (m *metrics) incTransportMessagesSent(transport string, frameType protocol.
 
 	var clientLabelValues []string
 	var clientLabelCacheKey string
-	if c != nil && len(m.config.ClientLabels) > 0 {
-		c.mu.RLock()
-		clientLabelValues = c.metricLabelValues
-		clientLabelCacheKey = c.metricLabelCacheKey
-		c.mu.RUnlock()
+	combo := m.getOrCreateClientLabelCombination(c)
+	if combo != nil {
+		clientLabelValues = combo.labelValues
+		clientLabelCacheKey = combo.cacheKey
 	}
 
 	counters := m.getTransportMessagesSentCounters(transport, frameType.String(), channelNamespace, clientLabelValues, clientLabelCacheKey)

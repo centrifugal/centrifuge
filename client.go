@@ -236,48 +236,47 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 
 // Client represents client connection to server.
 type Client struct {
-	mu                  sync.RWMutex
-	connectMu           sync.Mutex // allows syncing connect with disconnect.
-	presenceMu          sync.Mutex // allows syncing presence routine with client closing.
-	ctx                 context.Context
-	transport           Transport
-	node                *Node
-	exp                 int64
-	channels            map[string]ChannelContext
-	messageWriter       *writer
-	perChannelWriter    *perChannelWriter
-	pubSubSync          *recovery.PubSubSync
-	uid                 string
-	session             string
-	user                string
-	info                []byte
-	storage             map[string]any
-	storageMu           sync.Mutex
-	metricName          string // Make a unique.Handle.
-	metricVersion       string // Make a unique.Handle.
-	labels              map[string]string
-	metricLabelValues   []string // Pre-computed label values for metrics (zero-alloc hot path)
-	metricLabelCacheKey string   // Pre-computed cache key for metrics
-	authenticated       bool
-	clientSideRefresh   bool
-	status              status
-	timerOp             timerOp
-	nextPresence        int64
-	nextExpire          int64
-	nextPing            int64
-	nextPong            int64
-	lastSeen            int64
-	lastPing            int64
-	pingInterval        time.Duration
-	pongTimeout         time.Duration
-	eventHub            *clientEventHub
-	timer               *time.Timer
-	timerCanceler       TimerCanceler // TimerCanceler if TimerScheduler is used.
-	startWriterOnce     sync.Once
-	pingPongLatency     atomic.Int64
-	connectedAtMS       int64
-	replyWithoutQueue   bool
-	unusable            bool
+	mu                     sync.RWMutex
+	connectMu              sync.Mutex // allows syncing connect with disconnect.
+	presenceMu             sync.Mutex // allows syncing presence routine with client closing.
+	ctx                    context.Context
+	transport              Transport
+	node                   *Node
+	exp                    int64
+	channels               map[string]ChannelContext
+	messageWriter          *writer
+	perChannelWriter       *perChannelWriter
+	pubSubSync             *recovery.PubSubSync
+	uid                    string
+	session                string
+	user                   string
+	info                   []byte
+	storage                map[string]any
+	storageMu              sync.Mutex
+	metricName             string // Make a unique.Handle.
+	metricVersion          string // Make a unique.Handle.
+	labels                 map[string]string
+	labelCombinationCached atomic.Pointer[clientLabelCombination] // Cached pointer to shared label combination
+	authenticated          bool
+	clientSideRefresh      bool
+	status                 status
+	timerOp                timerOp
+	nextPresence           int64
+	nextExpire             int64
+	nextPing               int64
+	nextPong               int64
+	lastSeen               int64
+	lastPing               int64
+	pingInterval           time.Duration
+	pongTimeout            time.Duration
+	eventHub               *clientEventHub
+	timer                  *time.Timer
+	timerCanceler          TimerCanceler // TimerCanceler if TimerScheduler is used.
+	startWriterOnce        sync.Once
+	pingPongLatency        atomic.Int64
+	connectedAtMS          int64
+	replyWithoutQueue      bool
+	unusable               bool
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -2510,8 +2509,12 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.metricName = metricClientName
 	c.metricVersion = metricClientVersion
 	c.labels = labels
-	// Precompute metric label values for zero-allocation hot path
-	c.node.metrics.precomputeClientMetricLabels(c)
+	// Precompute and cache the label combination pointer for zero-allocation metrics hot path
+	// We do this here while we have c.mu locked and just set c.labels
+	if len(c.node.metrics.config.ClientLabels) > 0 {
+		combo := c.node.metrics.getOrCreateClientLabelCombinationFromLabels(labels)
+		c.labelCombinationCached.Store(combo)
+	}
 	c.node.addClient(c)
 	c.mu.Unlock()
 
@@ -2725,11 +2728,14 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				}
 
 				// Update metrics once per unique label combination
-				// Use pre-computed client label values and cache key for zero-allocation hot path
-				c.mu.RLock()
-				clientLabelValues := c.metricLabelValues
-				clientLabelCacheKey := c.metricLabelCacheKey
-				c.mu.RUnlock()
+				// Use cached client label combination for zero-allocation hot path
+				var clientLabelValues []string
+				var clientLabelCacheKey string
+				combo := c.node.metrics.getOrCreateClientLabelCombination(c)
+				if combo != nil {
+					clientLabelValues = combo.labelValues
+					clientLabelCacheKey = combo.cacheKey
+				}
 
 				for key, stats := range metricCounts {
 					counters := c.node.metrics.getTransportMessagesSentCounters(transportName, key.frameType, key.namespace, clientLabelValues, clientLabelCacheKey)

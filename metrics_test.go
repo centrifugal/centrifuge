@@ -222,14 +222,16 @@ func BenchmarkMetricsIncReplyError_ClientLabels(b *testing.B) {
 	tiers := []string{"free", "standard", "premium", "enterprise"}
 	clients := make([]*Client, 100)
 	for i := 0; i < 100; i++ {
-		clients[i] = &Client{
-			labels: map[string]string{
-				"region": regions[i%len(regions)],
-				"tier":   tiers[i%len(tiers)],
-			},
+		labels := map[string]string{
+			"region": regions[i%len(regions)],
+			"tier":   tiers[i%len(tiers)],
 		}
-		// Precompute metric labels to simulate real-world usage
-		m.precomputeClientMetricLabels(clients[i])
+		clients[i] = &Client{
+			labels: labels,
+		}
+		// Simulate connect flow: precompute and cache the combination
+		combo := m.getOrCreateClientLabelCombinationFromLabels(labels)
+		clients[i].labelCombinationCached.Store(combo)
 	}
 
 	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
@@ -269,14 +271,16 @@ func BenchmarkMetricsIncDisconnect_ClientLabels(b *testing.B) {
 	tiers := []string{"free", "standard", "premium", "enterprise"}
 	clients := make([]*Client, 100)
 	for i := 0; i < 100; i++ {
-		clients[i] = &Client{
-			labels: map[string]string{
-				"region": regions[i%len(regions)],
-				"tier":   tiers[i%len(tiers)],
-			},
+		labels := map[string]string{
+			"region": regions[i%len(regions)],
+			"tier":   tiers[i%len(tiers)],
 		}
-		// Precompute metric labels to simulate real-world usage
-		m.precomputeClientMetricLabels(clients[i])
+		clients[i] = &Client{
+			labels: labels,
+		}
+		// Simulate connect flow: precompute and cache the combination
+		combo := m.getOrCreateClientLabelCombinationFromLabels(labels)
+		clients[i].labelCombinationCached.Store(combo)
 	}
 
 	b.ReportAllocs()
@@ -310,14 +314,16 @@ func BenchmarkMetricsIncUnsubscribe_ClientLabels(b *testing.B) {
 	tiers := []string{"free", "standard", "premium", "enterprise"}
 	clients := make([]*Client, 100)
 	for i := 0; i < 100; i++ {
-		clients[i] = &Client{
-			labels: map[string]string{
-				"region": regions[i%len(regions)],
-				"tier":   tiers[i%len(tiers)],
-			},
+		labels := map[string]string{
+			"region": regions[i%len(regions)],
+			"tier":   tiers[i%len(tiers)],
 		}
-		// Precompute metric labels to simulate real-world usage
-		m.precomputeClientMetricLabels(clients[i])
+		clients[i] = &Client{
+			labels: labels,
+		}
+		// Simulate connect flow: precompute and cache the combination
+		combo := m.getOrCreateClientLabelCombinationFromLabels(labels)
+		clients[i].labelCombinationCached.Store(combo)
 	}
 
 	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
@@ -354,14 +360,16 @@ func BenchmarkMetricsTransportMessagesSent_ClientLabels(b *testing.B) {
 	tiers := []string{"free", "standard", "premium", "enterprise"}
 	clients := make([]*Client, 100)
 	for i := 0; i < 100; i++ {
-		clients[i] = &Client{
-			labels: map[string]string{
-				"region": regions[i%len(regions)],
-				"tier":   tiers[i%len(tiers)],
-			},
+		labels := map[string]string{
+			"region": regions[i%len(regions)],
+			"tier":   tiers[i%len(tiers)],
 		}
-		// Precompute metric labels to simulate real-world usage
-		m.precomputeClientMetricLabels(clients[i])
+		clients[i] = &Client{
+			labels: labels,
+		}
+		// Simulate connect flow: precompute and cache the combination
+		combo := m.getOrCreateClientLabelCombinationFromLabels(labels)
+		clients[i].labelCombinationCached.Store(combo)
 	}
 
 	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
@@ -394,17 +402,20 @@ func BenchmarkMetricsGetTransportMessagesSentCounters_ClientLabels(b *testing.B)
 	require.NoError(b, err)
 
 	// Pre-create a client with labels
-	client := &Client{
-		labels: map[string]string{
-			"region": "us-east-1",
-			"tier":   "premium",
-		},
+	labels := map[string]string{
+		"region": "us-east-1",
+		"tier":   "premium",
 	}
-	m.precomputeClientMetricLabels(client)
+	client := &Client{
+		labels: labels,
+	}
+	// Simulate connect flow: precompute and cache the combination
+	combo := m.getOrCreateClientLabelCombinationFromLabels(labels)
+	client.labelCombinationCached.Store(combo)
 
 	// Pre-extract values to simulate hot path
-	clientLabelValues := client.metricLabelValues
-	clientLabelCacheKey := client.metricLabelCacheKey
+	clientLabelValues := combo.labelValues
+	clientLabelCacheKey := combo.cacheKey
 
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
@@ -439,14 +450,16 @@ func BenchmarkMetricsCommandDuration_ClientLabels(b *testing.B) {
 	tiers := []string{"free", "standard", "premium", "enterprise"}
 	clients := make([]*Client, 100)
 	for i := 0; i < 100; i++ {
-		clients[i] = &Client{
-			labels: map[string]string{
-				"region": regions[i%len(regions)],
-				"tier":   tiers[i%len(tiers)],
-			},
+		labels := map[string]string{
+			"region": regions[i%len(regions)],
+			"tier":   tiers[i%len(tiers)],
 		}
-		// Precompute metric labels to simulate real-world usage
-		m.precomputeClientMetricLabels(clients[i])
+		clients[i] = &Client{
+			labels: labels,
+		}
+		// Simulate connect flow: precompute and cache the combination
+		combo := m.getOrCreateClientLabelCombinationFromLabels(labels)
+		clients[i].labelCombinationCached.Store(combo)
 	}
 
 	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
