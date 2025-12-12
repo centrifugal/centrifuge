@@ -236,48 +236,48 @@ func (r *ConnectRequest) toProto() *protocol.ConnectRequest {
 
 // Client represents client connection to server.
 type Client struct {
-	mu                sync.RWMutex
-	connectMu         sync.Mutex // allows syncing connect with disconnect.
-	presenceMu        sync.Mutex // allows syncing presence routine with client closing.
-	ctx               context.Context
-	transport         Transport
-	node              *Node
-	exp               int64
-	channels          map[string]ChannelContext
-	messageWriter     *writer
-	perChannelWriter  *perChannelWriter
-	pubSubSync        *recovery.PubSubSync
-	uid               string
-	session           string
-	user              string
-	info              []byte
-	storage           map[string]any
-	storageMu         sync.Mutex
-	metricName           string // Make a unique.Handle.
-	metricVersion        string // Make a unique.Handle.
-	labels               map[string]string
-	metricLabelValues    []string // Pre-computed label values for metrics (zero-alloc hot path)
-	metricLabelCacheKey  string   // Pre-computed cache key for metrics
-	authenticated        bool
-	clientSideRefresh bool
-	status            status
-	timerOp           timerOp
-	nextPresence      int64
-	nextExpire        int64
-	nextPing          int64
-	nextPong          int64
-	lastSeen          int64
-	lastPing          int64
-	pingInterval      time.Duration
-	pongTimeout       time.Duration
-	eventHub          *clientEventHub
-	timer             *time.Timer
-	timerCanceler     TimerCanceler // TimerCanceler if TimerScheduler is used.
-	startWriterOnce   sync.Once
-	pingPongLatency   atomic.Int64
-	connectedAtMS     int64
-	replyWithoutQueue bool
-	unusable          bool
+	mu                  sync.RWMutex
+	connectMu           sync.Mutex // allows syncing connect with disconnect.
+	presenceMu          sync.Mutex // allows syncing presence routine with client closing.
+	ctx                 context.Context
+	transport           Transport
+	node                *Node
+	exp                 int64
+	channels            map[string]ChannelContext
+	messageWriter       *writer
+	perChannelWriter    *perChannelWriter
+	pubSubSync          *recovery.PubSubSync
+	uid                 string
+	session             string
+	user                string
+	info                []byte
+	storage             map[string]any
+	storageMu           sync.Mutex
+	metricName          string // Make a unique.Handle.
+	metricVersion       string // Make a unique.Handle.
+	labels              map[string]string
+	metricLabelValues   []string // Pre-computed label values for metrics (zero-alloc hot path)
+	metricLabelCacheKey string   // Pre-computed cache key for metrics
+	authenticated       bool
+	clientSideRefresh   bool
+	status              status
+	timerOp             timerOp
+	nextPresence        int64
+	nextExpire          int64
+	nextPing            int64
+	nextPong            int64
+	lastSeen            int64
+	lastPing            int64
+	pingInterval        time.Duration
+	pongTimeout         time.Duration
+	eventHub            *clientEventHub
+	timer               *time.Timer
+	timerCanceler       TimerCanceler // TimerCanceler if TimerScheduler is used.
+	startWriterOnce     sync.Once
+	pingPongLatency     atomic.Int64
+	connectedAtMS       int64
+	replyWithoutQueue   bool
+	unusable            bool
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
