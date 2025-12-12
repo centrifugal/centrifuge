@@ -16,11 +16,17 @@ func BenchmarkMetricsTransportMessagesSent(b *testing.B) {
 	})
 	require.NoError(b, err)
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incTransportMessagesSent("test", protocol.FrameTypePushPublication, "channel"+strconv.Itoa(i%10), 200, nil)
+			m.incTransportMessagesSent("test", protocol.FrameTypePushPublication, channels[i%10], 200, nil)
 			i++
 		}
 	})
@@ -32,11 +38,17 @@ func BenchmarkMetricsTransportMessagesReceived(b *testing.B) {
 	})
 	require.NoError(b, err)
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incTransportMessagesReceived("test", protocol.FrameTypePushPublication, "channel"+strconv.Itoa(i%10), 200, nil)
+			m.incTransportMessagesReceived("test", protocol.FrameTypePushPublication, channels[i%10], 200, nil)
 			i++
 		}
 	})
@@ -51,12 +63,18 @@ func BenchmarkMetricsCommandDuration(b *testing.B) {
 	})
 	require.NoError(b, err)
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
 			started := time.Now()
-			m.observeCommandDuration(protocol.FrameTypePresence, time.Since(started), "channel"+strconv.Itoa(i%1024), nil)
+			m.observeCommandDuration(protocol.FrameTypePresence, time.Since(started), channels[i%1024], nil)
 			i++
 		}
 	})
@@ -71,11 +89,17 @@ func BenchmarkMetricsIncReplyError(b *testing.B) {
 	})
 	require.NoError(b, err)
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incReplyError(protocol.FrameTypePresence, 100, "channel"+strconv.Itoa(i%1024), nil)
+			m.incReplyError(protocol.FrameTypePresence, 100, channels[i%1024], nil)
 			i++
 		}
 	})
@@ -90,11 +114,17 @@ func BenchmarkMetricsIncActionCount(b *testing.B) {
 	})
 	require.NoError(b, err)
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incActionCount("history", "channel"+strconv.Itoa(i%1024))
+			m.incActionCount("history", channels[i%1024])
 			i++
 		}
 	})
@@ -109,11 +139,17 @@ func BenchmarkMetricsIncRecover(b *testing.B) {
 	})
 	require.NoError(b, err)
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incRecover(true, "channel"+strconv.Itoa(i%1024), false)
+			m.incRecover(true, channels[i%1024], false)
 			i++
 		}
 	})
@@ -147,11 +183,17 @@ func BenchmarkMetricsIncUnsubscribe(b *testing.B) {
 	})
 	require.NoError(b, err)
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%1024), nil)
+			m.incServerUnsubscribe(2500, channels[i%1024], nil)
 			i++
 		}
 	})
@@ -190,12 +232,18 @@ func BenchmarkMetricsIncReplyError_ClientLabels(b *testing.B) {
 		m.precomputeClientMetricLabels(clients[i])
 	}
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
 			client := clients[i%len(clients)]
-			m.incReplyError(protocol.FrameTypePresence, 100, "channel"+strconv.Itoa(i%1024), client)
+			m.incReplyError(protocol.FrameTypePresence, 100, channels[i%1024], client)
 			i++
 		}
 	})
@@ -272,12 +320,18 @@ func BenchmarkMetricsIncUnsubscribe_ClientLabels(b *testing.B) {
 		m.precomputeClientMetricLabels(clients[i])
 	}
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
 			client := clients[i%len(clients)]
-			m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%1024), client)
+			m.incServerUnsubscribe(2500, channels[i%1024], client)
 			i++
 		}
 	})
@@ -310,12 +364,18 @@ func BenchmarkMetricsTransportMessagesSent_ClientLabels(b *testing.B) {
 		m.precomputeClientMetricLabels(clients[i])
 	}
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
 			client := clients[i%len(clients)]
-			m.incTransportMessagesSent("test", protocol.FrameTypePushPublication, "channel"+strconv.Itoa(i%10), 200, client)
+			m.incTransportMessagesSent("test", protocol.FrameTypePushPublication, channels[i%10], 200, client)
 			i++
 		}
 	})
@@ -389,12 +449,18 @@ func BenchmarkMetricsCommandDuration_ClientLabels(b *testing.B) {
 		m.precomputeClientMetricLabels(clients[i])
 	}
 
+	// Pre-allocate channel strings to avoid strconv.Itoa allocations in hot path
+	channels := make([]string, 1024)
+	for i := 0; i < 1024; i++ {
+		channels[i] = "channel" + strconv.Itoa(i)
+	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
 			client := clients[i%len(clients)]
-			m.observeCommandDuration(protocol.FrameTypeSubscribe, time.Millisecond, "channel"+strconv.Itoa(i%1024), client)
+			m.observeCommandDuration(protocol.FrameTypeSubscribe, time.Millisecond, channels[i%1024], client)
 			i++
 		}
 	})
