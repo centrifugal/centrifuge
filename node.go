@@ -1027,8 +1027,12 @@ func (n *Node) addClient(c *Client) {
 	if n.config.Metrics.ExposeTransportAcceptProtocol {
 		acceptProtocol = c.transport.AcceptProtocol()
 	}
-	n.metrics.connectionsAccepted.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
-	n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Inc()
+	labelValues := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
+	if clientLabelValues := n.metrics.extractClientLabelValues(c); clientLabelValues != nil {
+		labelValues = append(labelValues, clientLabelValues...)
+	}
+	n.metrics.connectionsAccepted.WithLabelValues(labelValues...).Inc()
+	n.metrics.connectionsInflight.WithLabelValues(labelValues...).Inc()
 	n.hub.add(c)
 }
 
@@ -1041,7 +1045,11 @@ func (n *Node) removeClient(c *Client) {
 		if n.config.Metrics.ExposeTransportAcceptProtocol {
 			acceptProtocol = c.transport.AcceptProtocol()
 		}
-		n.metrics.connectionsInflight.WithLabelValues(c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion).Dec()
+		labelValues := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
+		if clientLabelValues := n.metrics.extractClientLabelValues(c); clientLabelValues != nil {
+			labelValues = append(labelValues, clientLabelValues...)
+		}
+		n.metrics.connectionsInflight.WithLabelValues(labelValues...).Dec()
 	}
 }
 
@@ -1049,7 +1057,11 @@ func (n *Node) removeClient(c *Client) {
 // Hub and Broker.
 func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
-	n.metrics.subscriptionsInflight.WithLabelValues(sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)).Inc()
+	labelValues := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
+	if clientLabelValues := n.metrics.extractClientLabelValues(sub.client); clientLabelValues != nil {
+		labelValues = append(labelValues, clientLabelValues...)
+	}
+	n.metrics.subscriptionsInflight.WithLabelValues(labelValues...).Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1102,7 +1114,11 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	defer mu.Unlock()
 	empty, wasRemoved := n.hub.removeSub(ch, c)
 	if wasRemoved {
-		n.metrics.subscriptionsInflight.WithLabelValues(c.metricName, n.metrics.getChannelNamespaceLabel(ch)).Dec()
+		labelValues := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
+		if clientLabelValues := n.metrics.extractClientLabelValues(c); clientLabelValues != nil {
+			labelValues = append(labelValues, clientLabelValues...)
+		}
+		n.metrics.subscriptionsInflight.WithLabelValues(labelValues...).Dec()
 	}
 	if empty {
 		submittedAt := time.Now()

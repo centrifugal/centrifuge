@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func BenchmarkTransportMessagesSent(b *testing.B) {
+func BenchmarkMetricsTransportMessagesSent(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -20,13 +20,13 @@ func BenchmarkTransportMessagesSent(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incTransportMessagesSent("test", protocol.FrameTypePushPublication, "channel"+strconv.Itoa(i%10), 200)
+			m.incTransportMessagesSent("test", protocol.FrameTypePushPublication, "channel"+strconv.Itoa(i%10), 200, nil)
 			i++
 		}
 	})
 }
 
-func BenchmarkTransportMessagesReceived(b *testing.B) {
+func BenchmarkMetricsTransportMessagesReceived(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 	})
@@ -36,13 +36,13 @@ func BenchmarkTransportMessagesReceived(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incTransportMessagesReceived("test", protocol.FrameTypePushPublication, "channel"+strconv.Itoa(i%10), 200)
+			m.incTransportMessagesReceived("test", protocol.FrameTypePushPublication, "channel"+strconv.Itoa(i%10), 200, nil)
 			i++
 		}
 	})
 }
 
-func BenchmarkCommandDuration(b *testing.B) {
+func BenchmarkMetricsCommandDuration(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 		GetChannelNamespaceLabel: func(channel string) string {
@@ -56,13 +56,13 @@ func BenchmarkCommandDuration(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			started := time.Now()
-			m.observeCommandDuration(protocol.FrameTypePresence, time.Since(started), "channel"+strconv.Itoa(i%1024))
+			m.observeCommandDuration(protocol.FrameTypePresence, time.Since(started), "channel"+strconv.Itoa(i%1024), nil)
 			i++
 		}
 	})
 }
 
-func BenchmarkIncReplyError(b *testing.B) {
+func BenchmarkMetricsIncReplyError(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 		GetChannelNamespaceLabel: func(channel string) string {
@@ -75,13 +75,13 @@ func BenchmarkIncReplyError(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incReplyError(protocol.FrameTypePresence, 100, "channel"+strconv.Itoa(i%1024))
+			m.incReplyError(protocol.FrameTypePresence, 100, "channel"+strconv.Itoa(i%1024), nil)
 			i++
 		}
 	})
 }
 
-func BenchmarkIncActionCount(b *testing.B) {
+func BenchmarkMetricsIncActionCount(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 		GetChannelNamespaceLabel: func(channel string) string {
@@ -100,7 +100,7 @@ func BenchmarkIncActionCount(b *testing.B) {
 	})
 }
 
-func BenchmarkIncRecover(b *testing.B) {
+func BenchmarkMetricsIncRecover(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 		GetChannelNamespaceLabel: func(channel string) string {
@@ -119,7 +119,7 @@ func BenchmarkIncRecover(b *testing.B) {
 	})
 }
 
-func BenchmarkIncDisconnect(b *testing.B) {
+func BenchmarkMetricsIncDisconnect(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 		GetChannelNamespaceLabel: func(channel string) string {
@@ -132,13 +132,13 @@ func BenchmarkIncDisconnect(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incServerDisconnect(3000)
+			m.incServerDisconnect(3000, nil)
 			i++
 		}
 	})
 }
 
-func BenchmarkIncUnsubscribe(b *testing.B) {
+func BenchmarkMetricsIncUnsubscribe(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
 		GetChannelNamespaceLabel: func(channel string) string {
@@ -151,7 +151,250 @@ func BenchmarkIncUnsubscribe(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%1024))
+			m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%1024), nil)
+			i++
+		}
+	})
+}
+
+// Benchmarks with client labels enabled
+
+func BenchmarkMetricsIncReplyError_ClientLabels(b *testing.B) {
+	registry := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test",
+		RegistererGatherer: registry,
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+		ClientLabels: []string{"region", "tier"},
+		ClientLabelsMetricWhitelist: []string{
+			"client_num_reply_errors",
+		},
+	})
+	require.NoError(b, err)
+
+	// Pre-create 100 clients with different label combinations
+	// Cardinality: 5 regions × 4 tiers = 20 unique combinations
+	regions := []string{"us-east-1", "us-west-2", "eu-west-1", "ap-south-1", "ap-northeast-1"}
+	tiers := []string{"free", "standard", "premium", "enterprise"}
+	clients := make([]*Client, 100)
+	for i := 0; i < 100; i++ {
+		clients[i] = &Client{
+			labels: map[string]string{
+				"region": regions[i%len(regions)],
+				"tier":   tiers[i%len(tiers)],
+			},
+		}
+		// Precompute metric labels to simulate real-world usage
+		m.precomputeClientMetricLabels(clients[i])
+	}
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			client := clients[i%len(clients)]
+			m.incReplyError(protocol.FrameTypePresence, 100, "channel"+strconv.Itoa(i%1024), client)
+			i++
+		}
+	})
+}
+
+func BenchmarkMetricsIncDisconnect_ClientLabels(b *testing.B) {
+	registry := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test",
+		RegistererGatherer: registry,
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+		ClientLabels: []string{"region", "tier"},
+		ClientLabelsMetricWhitelist: []string{
+			"client_num_server_disconnects",
+		},
+	})
+	require.NoError(b, err)
+
+	// Pre-create 100 clients with different label combinations
+	regions := []string{"us-east-1", "us-west-2", "eu-west-1", "ap-south-1", "ap-northeast-1"}
+	tiers := []string{"free", "standard", "premium", "enterprise"}
+	clients := make([]*Client, 100)
+	for i := 0; i < 100; i++ {
+		clients[i] = &Client{
+			labels: map[string]string{
+				"region": regions[i%len(regions)],
+				"tier":   tiers[i%len(tiers)],
+			},
+		}
+		// Precompute metric labels to simulate real-world usage
+		m.precomputeClientMetricLabels(clients[i])
+	}
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			client := clients[i%len(clients)]
+			m.incServerDisconnect(3000, client)
+			i++
+		}
+	})
+}
+
+func BenchmarkMetricsIncUnsubscribe_ClientLabels(b *testing.B) {
+	registry := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test",
+		RegistererGatherer: registry,
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+		ClientLabels: []string{"region", "tier"},
+		ClientLabelsMetricWhitelist: []string{
+			"client_num_server_unsubscribes",
+		},
+	})
+	require.NoError(b, err)
+
+	// Pre-create 100 clients with different label combinations
+	regions := []string{"us-east-1", "us-west-2", "eu-west-1", "ap-south-1", "ap-northeast-1"}
+	tiers := []string{"free", "standard", "premium", "enterprise"}
+	clients := make([]*Client, 100)
+	for i := 0; i < 100; i++ {
+		clients[i] = &Client{
+			labels: map[string]string{
+				"region": regions[i%len(regions)],
+				"tier":   tiers[i%len(tiers)],
+			},
+		}
+		// Precompute metric labels to simulate real-world usage
+		m.precomputeClientMetricLabels(clients[i])
+	}
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			client := clients[i%len(clients)]
+			m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%1024), client)
+			i++
+		}
+	})
+}
+
+func BenchmarkMetricsTransportMessagesSent_ClientLabels(b *testing.B) {
+	registry := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test",
+		RegistererGatherer: registry,
+		ClientLabels:       []string{"region", "tier"},
+		ClientLabelsMetricWhitelist: []string{
+			"transport_messages_sent",
+		},
+	})
+	require.NoError(b, err)
+
+	// Pre-create 100 clients with different label combinations
+	regions := []string{"us-east-1", "us-west-2", "eu-west-1", "ap-south-1", "ap-northeast-1"}
+	tiers := []string{"free", "standard", "premium", "enterprise"}
+	clients := make([]*Client, 100)
+	for i := 0; i < 100; i++ {
+		clients[i] = &Client{
+			labels: map[string]string{
+				"region": regions[i%len(regions)],
+				"tier":   tiers[i%len(tiers)],
+			},
+		}
+		// Precompute metric labels to simulate real-world usage
+		m.precomputeClientMetricLabels(clients[i])
+	}
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			client := clients[i%len(clients)]
+			m.incTransportMessagesSent("test", protocol.FrameTypePushPublication, "channel"+strconv.Itoa(i%10), 200, client)
+			i++
+		}
+	})
+}
+
+func BenchmarkMetricsGetTransportMessagesSentCounters_ClientLabels(b *testing.B) {
+	registry := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test",
+		RegistererGatherer: registry,
+		ClientLabels:       []string{"region", "tier"},
+		ClientLabelsMetricWhitelist: []string{
+			"transport_messages_sent",
+		},
+	})
+	require.NoError(b, err)
+
+	// Pre-create a client with labels
+	client := &Client{
+		labels: map[string]string{
+			"region": "us-east-1",
+			"tier":   "premium",
+		},
+	}
+	m.precomputeClientMetricLabels(client)
+
+	// Pre-extract values to simulate hot path
+	clientLabelValues := client.metricLabelValues
+	clientLabelCacheKey := client.metricLabelCacheKey
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			// This simulates the actual hot path in client.go writeMany
+			counters := m.getTransportMessagesSentCounters("websocket", "push_publication", "", clientLabelValues, clientLabelCacheKey)
+			counters.counterSent.Add(1)
+			counters.counterSentSize.Add(200)
+			i++
+		}
+	})
+}
+
+func BenchmarkMetricsCommandDuration_ClientLabels(b *testing.B) {
+	registry := prometheus.NewRegistry()
+	m, err := newMetricsRegistry(MetricsConfig{
+		MetricsNamespace:   "test",
+		RegistererGatherer: registry,
+		GetChannelNamespaceLabel: func(channel string) string {
+			return channel
+		},
+		ClientLabels: []string{"region", "tier"},
+		ClientLabelsMetricWhitelist: []string{
+			"client_command_duration_seconds",
+		},
+	})
+	require.NoError(b, err)
+
+	// Pre-create 100 clients with different label combinations
+	regions := []string{"us-east-1", "us-west-2", "eu-west-1", "ap-south-1", "ap-northeast-1"}
+	tiers := []string{"free", "standard", "premium", "enterprise"}
+	clients := make([]*Client, 100)
+	for i := 0; i < 100; i++ {
+		clients[i] = &Client{
+			labels: map[string]string{
+				"region": regions[i%len(regions)],
+				"tier":   tiers[i%len(tiers)],
+			},
+		}
+		// Precompute metric labels to simulate real-world usage
+		m.precomputeClientMetricLabels(clients[i])
+	}
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			client := clients[i%len(clients)]
+			m.observeCommandDuration(protocol.FrameTypeSubscribe, time.Millisecond, "channel"+strconv.Itoa(i%1024), client)
 			i++
 		}
 	})
@@ -228,10 +471,10 @@ func TestMetrics(t *testing.T) {
 					protocol.FrameTypeHistory, protocol.FrameTypeRefresh, protocol.FrameTypeSubRefresh,
 					protocol.FrameTypeSend,
 				} {
-					m.incTransportMessagesSent("test", frameType, "channel"+strconv.Itoa(i%2), 200)
-					m.incTransportMessagesReceived("test", frameType, "channel"+strconv.Itoa(i%2), 200)
-					m.observeCommandDuration(frameType, time.Second, "channel"+strconv.Itoa(i%2))
-					m.incReplyError(frameType, 100, "channel"+strconv.Itoa(i%2))
+					m.incTransportMessagesSent("test", frameType, "channel"+strconv.Itoa(i%2), 200, nil)
+					m.incTransportMessagesReceived("test", frameType, "channel"+strconv.Itoa(i%2), 200, nil)
+					m.observeCommandDuration(frameType, time.Second, "channel"+strconv.Itoa(i%2), nil)
+					m.incReplyError(frameType, 100, "channel"+strconv.Itoa(i%2), nil)
 				}
 
 				m.incActionCount("unknown", "channel")
@@ -252,9 +495,9 @@ func TestMetrics(t *testing.T) {
 				m.observePubSubDeliveryLag(100)
 				m.observePubSubDeliveryLag(-10)
 				m.observePingPongDuration(time.Second, transportWebsocket)
-				m.incServerDisconnect(3000)
-				m.incServerDisconnect(30000)
-				m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%2))
+				m.incServerDisconnect(3000, nil)
+				m.incServerDisconnect(30000, nil)
+				m.incServerUnsubscribe(2500, "channel"+strconv.Itoa(i%2), nil)
 				m.observeBroadcastDuration(time.Now(), "channel"+strconv.Itoa(i%2))
 				m.setBuildInfo("1.0.0")
 				m.setNumChannels(100)
@@ -265,6 +508,194 @@ func TestMetrics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientLabels(t *testing.T) {
+	t.Run("metrics without client labels configured", func(t *testing.T) {
+		// Use custom registry to avoid conflicts
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:   "test1",
+			RegistererGatherer: registry,
+		})
+		require.NoError(t, err)
+
+		// Without client labels, metrics should work as before
+		m.incTransportMessagesSent("ws", protocol.FrameTypePushPublication, "channel", 100, nil)
+		m.observeCommandDuration(protocol.FrameTypeConnect, time.Millisecond, "", nil)
+	})
+
+	t.Run("metrics with client labels configured and whitelisted", func(t *testing.T) {
+		// Use custom registry to avoid conflicts
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:   "test2",
+			RegistererGatherer: registry,
+			ClientLabels:       []string{"region", "tier"},
+			ClientLabelsMetricWhitelist: []string{
+				// Only need to whitelist sent (size is auto-whitelisted as they're paired)
+				"transport_messages_sent",
+				"client_command_duration_seconds",
+			},
+		})
+		require.NoError(t, err)
+
+		// Test extractClientLabelValues separately with a mock client structure
+		// We can't create a full Client without a Node, so just test the metric functions
+		// that accept nil client
+		m.incTransportMessagesSent("ws", protocol.FrameTypePushPublication, "channel", 100, nil)
+		m.observeCommandDuration(protocol.FrameTypeConnect, time.Millisecond, "", nil)
+	})
+
+	t.Run("metrics with missing client label values", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:   "test3",
+			RegistererGatherer: registry,
+			ClientLabels:       []string{"region", "tier", "auth_type"},
+			ClientLabelsMetricWhitelist: []string{
+				// Only whitelist sent - size is auto-paired
+				"transport_messages_sent",
+			},
+		})
+		require.NoError(t, err)
+
+		// Should work with nil client - empty strings used for missing labels
+		m.incTransportMessagesSent("ws", protocol.FrameTypePushPublication, "channel", 100, nil)
+	})
+
+	t.Run("metrics with client labels but not whitelisted", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:   "test4",
+			RegistererGatherer: registry,
+			ClientLabels:       []string{"region", "tier"},
+			// Empty whitelist - no metrics should get client labels
+			ClientLabelsMetricWhitelist: []string{},
+		})
+		require.NoError(t, err)
+
+		// Metrics should work but without client labels (not whitelisted)
+		m.incTransportMessagesSent("ws", protocol.FrameTypePushPublication, "channel", 100, nil)
+		m.observeCommandDuration(protocol.FrameTypeConnect, time.Millisecond, "", nil)
+	})
+
+	t.Run("extractClientLabelValues with nil client", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:            "test5",
+			RegistererGatherer:          registry,
+			ClientLabels:                []string{"region"},
+			ClientLabelsMetricWhitelist: []string{"transport_messages_sent"},
+		})
+		require.NoError(t, err)
+
+		// Should handle nil client gracefully
+		values := m.extractClientLabelValues(nil)
+		require.Nil(t, values)
+	})
+
+	t.Run("extractClientLabelValues with client without labels", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:            "test6",
+			RegistererGatherer:          registry,
+			ClientLabels:                []string{"region"},
+			ClientLabelsMetricWhitelist: []string{"transport_messages_sent"},
+		})
+		require.NoError(t, err)
+
+		// Create a minimal client-like structure for testing
+		// Since we can't create a real Client without Node, test the function logic
+		// by creating a client with no labels map
+		c := &Client{}
+		values := m.extractClientLabelValues(c)
+		require.NotNil(t, values)
+		require.Len(t, values, 1)
+		require.Equal(t, "", values[0]) // Should be empty string
+	})
+
+	t.Run("buildMetricLabels without client labels", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:   "test7",
+			RegistererGatherer: registry,
+		})
+		require.NoError(t, err)
+
+		labels := m.buildMetricLabels("transport_messages_sent", []string{"transport", "frame_type"})
+		require.Equal(t, []string{"transport", "frame_type"}, labels)
+	})
+
+	t.Run("buildMetricLabels with client labels and whitelisted", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:            "test8",
+			RegistererGatherer:          registry,
+			ClientLabels:                []string{"region", "tier"},
+			ClientLabelsMetricWhitelist: []string{"transport_messages_sent"},
+		})
+		require.NoError(t, err)
+
+		labels := m.buildMetricLabels("transport_messages_sent", []string{"transport", "frame_type"})
+		require.Equal(t, []string{"transport", "frame_type", "region", "tier"}, labels)
+	})
+
+	t.Run("buildMetricLabels with client labels but not whitelisted", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:            "test9",
+			RegistererGatherer:          registry,
+			ClientLabels:                []string{"region", "tier"},
+			ClientLabelsMetricWhitelist: []string{"other_metric"},
+		})
+		require.NoError(t, err)
+
+		labels := m.buildMetricLabels("transport_messages_sent", []string{"transport", "frame_type"})
+		require.Equal(t, []string{"transport", "frame_type"}, labels) // No client labels added
+	})
+
+	t.Run("paired metrics auto-whitelisting", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:   "test10",
+			RegistererGatherer: registry,
+			ClientLabels:       []string{"region"},
+			ClientLabelsMetricWhitelist: []string{
+				// Only whitelist sent, size should be auto-paired
+				"transport_messages_sent",
+			},
+		})
+		require.NoError(t, err)
+
+		// Both sent and sent_size should have client labels
+		require.True(t, m.clientLabelsWhitelist["transport_messages_sent"])
+		require.True(t, m.clientLabelsWhitelist["transport_messages_sent_size"])
+
+		// Should work without errors
+		m.incTransportMessagesSent("ws", protocol.FrameTypePushPublication, "channel", 100, nil)
+	})
+
+	t.Run("paired metrics auto-whitelisting via size metric", func(t *testing.T) {
+		registry := prometheus.NewRegistry()
+		m, err := newMetricsRegistry(MetricsConfig{
+			MetricsNamespace:   "test11",
+			RegistererGatherer: registry,
+			ClientLabels:       []string{"tier"},
+			ClientLabelsMetricWhitelist: []string{
+				// Only whitelist size, sent should be auto-paired
+				"transport_messages_received_size",
+			},
+		})
+		require.NoError(t, err)
+
+		// Both received and received_size should have client labels
+		require.True(t, m.clientLabelsWhitelist["transport_messages_received"])
+		require.True(t, m.clientLabelsWhitelist["transport_messages_received_size"])
+
+		// Should work without errors
+		m.incTransportMessagesReceived("ws", protocol.FrameTypePushPublication, "channel", 100, nil)
+	})
 }
 
 func Test_getHTTPTransportProto(t *testing.T) {

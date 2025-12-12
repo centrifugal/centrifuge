@@ -196,6 +196,25 @@ type MetricsConfig struct {
 	// ExposeTransportAcceptProtocol enables exposing in labels the accept protocol used by client's transport.
 	// If not enabled - empty string will be used as a label value.
 	ExposeTransportAcceptProtocol bool
+
+	// ClientLabels defines custom label names to be added to whitelisted metrics.
+	// Label values are extracted from ConnectReply.Labels set in node.OnConnecting handler.
+	// If a label is not found in the client's label map, an empty string is used.
+	// Warning: each unique combination of label values creates a new time series in Prometheus.
+	// Keep cardinality low by using controlled, finite value sets (e.g., region, tier, auth_type).
+	// Recommended limit: 3-5 labels maximum.
+	ClientLabels []string
+
+	// ClientLabelsMetricWhitelist specifies which metrics receive client labels.
+	// Format: "subsystem_name" (e.g., "node_messages_sent_count", "transport_messages_sent").
+	// Only metrics in this list will have client labels appended.
+	// If empty (and ClientLabels is non-empty), no metrics receive client labels (explicit opt-in required).
+	//
+	// Note: Some metrics are automatically paired. For example, if you whitelist "transport_messages_sent",
+	// then "transport_messages_sent_size" will also be whitelisted automatically (and vice versa) since
+	// they're always used together. Same applies to "transport_messages_received" and
+	// "transport_messages_received_size".
+	ClientLabelsMetricWhitelist []string
 }
 
 // PingPongConfig allows configuring application level ping-pong behavior.

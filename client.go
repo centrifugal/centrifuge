@@ -253,9 +253,12 @@ type Client struct {
 	info              []byte
 	storage           map[string]any
 	storageMu         sync.Mutex
-	metricName        string // Make a unique.Handle.
-	metricVersion     string // Make a unique.Handle.
-	authenticated     bool
+	metricName           string // Make a unique.Handle.
+	metricVersion        string // Make a unique.Handle.
+	labels               map[string]string
+	metricLabelValues    []string // Pre-computed label values for metrics (zero-alloc hot path)
+	metricLabelCacheKey  string   // Pre-computed cache key for metrics
+	authenticated        bool
 	clientSideRefresh bool
 	status            status
 	timerOp           timerOp
@@ -941,6 +944,22 @@ func (c *Client) IsSubscribed(ch string) bool {
 	return ok && channelHasFlag(ctx.flags, flagSubscribed)
 }
 
+// Labels returns custom labels attached to the client connection.
+// These labels are set via ConnectReply.Labels.
+func (c *Client) Labels() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.labels == nil {
+		return nil
+	}
+	// Return a copy to prevent external modifications.
+	labels := make(map[string]string, len(c.labels))
+	for k, v := range c.labels {
+		labels[k] = v
+	}
+	return labels
+}
+
 // Send data to client. This sends an asynchronous message – data will be
 // just written to connection. on client side this message can be handled
 // with Message handler.
@@ -1012,7 +1031,7 @@ func (c *Client) sendUnsubscribe(ch string, unsub Unsubscribe) error {
 		return err
 	}
 	_ = c.writeEncodedPushData(replyData, ch, protocol.FrameTypePushUnsubscribe, ChannelBatchConfig{})
-	c.node.metrics.incServerUnsubscribe(unsub.Code, ch)
+	c.node.metrics.incServerUnsubscribe(unsub.Code, ch, c)
 	return nil
 }
 
@@ -1107,7 +1126,7 @@ func (c *Client) close(disconnect Disconnect) error {
 		c.node.logger.log(newLogEntry(LogLevelDebug, "closing client connection", map[string]any{"client": c.uid, "user": c.user, "reason": disconnect.Reason}))
 	}
 	if disconnect.Code != DisconnectConnectionClosed.Code {
-		c.node.metrics.incServerDisconnect(disconnect.Code)
+		c.node.metrics.incServerDisconnect(disconnect.Code, c)
 	}
 	if c.eventHub.disconnectHandler != nil && prevStatus == statusConnected {
 		c.eventHub.disconnectHandler(DisconnectEvent{
@@ -1240,7 +1259,7 @@ func isPong(cmd *protocol.Command) bool {
 
 func (c *Client) handleCommandFinished(cmd *protocol.Command, frameType protocol.FrameType, err error, reply *protocol.Reply, started time.Time, ch string) {
 	defer func() {
-		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch)
+		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch, c)
 	}()
 	if c.node.clientEvents.commandProcessedHandler != nil {
 		event := newCommandProcessedEvent(cmd, err, reply, started)
@@ -1250,7 +1269,7 @@ func (c *Client) handleCommandFinished(cmd *protocol.Command, frameType protocol
 
 func (c *Client) handleCommandDispatchError(ch string, cmd *protocol.Command, frameType protocol.FrameType, err error, started time.Time) (*Disconnect, bool) {
 	defer func() {
-		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch)
+		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch, c)
 	}()
 	disconnect, ok := disconnectFromError(err)
 	if ok {
@@ -1292,7 +1311,7 @@ func (c *Client) dispatchCommand(cmd *protocol.Command, cmdSize int) (*Disconnec
 	var metricChannel string
 	var frameType protocol.FrameType
 	defer func() {
-		c.node.metrics.incTransportMessagesReceived(c.transport.Name(), frameType, metricChannel, cmdSize)
+		c.node.metrics.incTransportMessagesReceived(c.transport.Name(), frameType, metricChannel, cmdSize, c)
 	}()
 
 	if isPong(cmd) {
@@ -1404,7 +1423,7 @@ func (c *Client) writeEncodedCommandReply(ch string, frameType protocol.FrameTyp
 		if c.node.logEnabled(LogLevelInfo) {
 			c.node.logger.log(newLogEntry(LogLevelInfo, "client command error", map[string]any{"reply": fmt.Sprintf("%v", rep), "command": fmt.Sprintf("%v", redactCommand(cmd)), "client": c.ID(), "user": c.UserID(), "error": rep.Error.Message, "code": rep.Error.Code}))
 		}
-		c.node.metrics.incReplyError(frameType, rep.Error.Code, ch)
+		c.node.metrics.incReplyError(frameType, rep.Error.Code, ch, c)
 	}
 
 	protoType := c.transport.Protocol().toProto()
@@ -2205,7 +2224,7 @@ func (c *Client) writeError(ch string, frameType protocol.FrameType, cmd *protoc
 
 func (c *Client) writeDisconnectOrErrorFlush(ch string, frameType protocol.FrameType, cmd *protocol.Command, err error, started time.Time, rw *replyWriter) {
 	defer func() {
-		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch)
+		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch, c)
 	}()
 	disconnect, ok := disconnectFromError(err)
 	if ok {
@@ -2271,7 +2290,7 @@ func (c *Client) getRPCCommandReply(res *protocol.RPCResult) (*protocol.Reply, e
 func (c *Client) handleSend(req *protocol.SendRequest, cmd *protocol.Command, started time.Time) error {
 	// Send handler is a bit special since it's a one way command: client does not expect any reply.
 	if c.eventHub.messageHandler == nil {
-		c.node.metrics.observeCommandDuration(protocol.FrameTypeSend, time.Since(started), "")
+		c.node.metrics.observeCommandDuration(protocol.FrameTypeSend, time.Since(started), "", c)
 		// Return DisconnectNotAvailable here since otherwise client won't even know
 		// server does not have asynchronous message handler set.
 		return DisconnectNotAvailable
@@ -2338,6 +2357,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		authData          protocol.Raw
 		subscriptions     map[string]SubscribeOptions
 		clientSideRefresh bool
+		labels            map[string]string
 	)
 
 	if c.node.clientEvents.connectingHandler != nil {
@@ -2383,6 +2403,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			authData = reply.Data
 		}
 		clientSideRefresh = reply.ClientSideRefresh
+		labels = reply.Labels
 		if len(reply.Subscriptions) > 0 {
 			subscriptions = make(map[string]SubscribeOptions, len(reply.Subscriptions))
 			for ch, opts := range reply.Subscriptions {
@@ -2488,6 +2509,9 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 	c.authenticated = true
 	c.metricName = metricClientName
 	c.metricVersion = metricClientVersion
+	c.labels = labels
+	// Precompute metric label values for zero-allocation hot path
+	c.node.metrics.precomputeClientMetricLabels(c)
 	c.node.addClient(c)
 	c.mu.Unlock()
 
@@ -2642,7 +2666,7 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 		messageWriterConf := writerConfig{
 			MaxQueueSize: c.node.config.ClientQueueMaxSize,
 			WriteFn: func(item queue.Item) error {
-				c.node.metrics.incTransportMessagesSent(c.transport.Name(), item.FrameType, item.Channel, len(item.Data))
+				c.node.metrics.incTransportMessagesSent(c.transport.Name(), item.FrameType, item.Channel, len(item.Data), c)
 
 				if c.node.clientEvents.transportWriteHandler != nil {
 					pass := c.node.clientEvents.transportWriteHandler(c, TransportWriteEvent(item))
@@ -2701,8 +2725,14 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				}
 
 				// Update metrics once per unique label combination
+				// Use pre-computed client label values and cache key for zero-allocation hot path
+				c.mu.RLock()
+				clientLabelValues := c.metricLabelValues
+				clientLabelCacheKey := c.metricLabelCacheKey
+				c.mu.RUnlock()
+
 				for key, stats := range metricCounts {
-					counters := c.node.metrics.getTransportMessagesSentCounters(transportName, key.frameType, key.namespace)
+					counters := c.node.metrics.getTransportMessagesSentCounters(transportName, key.frameType, key.namespace, clientLabelValues, clientLabelCacheKey)
 					// Batch update - add count and size together
 					counters.counterSent.Add(float64(stats.count))
 					counters.counterSentSize.Add(float64(stats.size))
@@ -3724,7 +3754,7 @@ func (c *Client) logDisconnectBadRequest(message string) error {
 
 func (c *Client) logWriteInternalErrorFlush(ch string, frameType protocol.FrameType, cmd *protocol.Command, err error, message string, started time.Time, rw *replyWriter) {
 	defer func() {
-		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch)
+		c.node.metrics.observeCommandDuration(frameType, time.Since(started), ch, c)
 	}()
 	var clientErr *Error
 	if errors.As(err, &clientErr) {
