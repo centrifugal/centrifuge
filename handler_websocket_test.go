@@ -833,13 +833,13 @@ func TestWsBroadcastCompressionCache(t *testing.T) {
 
 			url := "ws" + server.URL[4:]
 
-			conns := make([]*websocket.Conn, 0, numConns)
+			connections := make([]*websocket.Conn, 0, numConns)
 			for i := 0; i < numConns; i++ {
 				conn := bm.getConn(t, "test", url, bm.compression)
-				conns = append(conns, conn)
+				connections = append(connections, conn)
 			}
 			defer func() {
-				for _, conn := range conns {
+				for _, conn := range connections {
 					_ = conn.Close()
 				}
 			}()
@@ -847,7 +847,7 @@ func TestWsBroadcastCompressionCache(t *testing.T) {
 			if err != nil {
 				require.NoError(t, err)
 			}
-			for _, conn := range conns {
+			for _, conn := range connections {
 				_, _, err = conn.ReadMessage()
 				require.NoError(t, err)
 			}
@@ -859,24 +859,29 @@ func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
 	n := defaultTestNodeBenchmark(b)
 	defer func() { _ = n.Shutdown(context.Background()) }()
 
-	payload := []byte(`{"input": "test"}`)
+	// Pre-generate payloads for unique message scenarios.
+	numUniqueMessages := 100
+	payloads := make([][]byte, numUniqueMessages)
+	for i := 0; i < numUniqueMessages; i++ {
+		payloads[i] = []byte(fmt.Sprintf(`{"input": "test", "id": %d}`, i))
+	}
 
 	benchmarks := []struct {
-		getConn     func(b testing.TB, channel string, url string, compression bool) *websocket.Conn
-		compression bool
-		cacheSizeMB int64
+		name           string
+		compression    bool
+		cacheSizeMB    int64
+		uniqueMessages int // number of unique messages to cycle through
 	}{
-		{newRealConnJSON, false, 0},
-		{newRealConnJSON, true, 0},
-		{newRealConnJSON, true, 50},
+		{"no_compress", false, 0, 1},
+		{"compress_no_cache", true, 0, 1},
+		{"compress_cache_same_msg", true, 50, 1},
+		{"compress_cache_100_msgs", true, 50, 100},
 	}
 
 	numConns := 100
 
 	for _, bm := range benchmarks {
-		benchName := "compress_" + fmt.Sprintf("%v", bm.compression) + "_" +
-			"cache_" + strconv.FormatInt(bm.cacheSizeMB, 10) + "MB"
-		b.Run(benchName, func(b *testing.B) {
+		b.Run(bm.name, func(b *testing.B) {
 			b.ReportAllocs()
 
 			mux := http.NewServeMux()
@@ -891,7 +896,7 @@ func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
 
 			conns := make([]*websocket.Conn, 0, numConns)
 			for i := 0; i < numConns; i++ {
-				conn := bm.getConn(b, "test", url, bm.compression)
+				conn := newRealConnJSON(b, "test", url, bm.compression)
 				conns = append(conns, conn)
 			}
 			defer func() {
@@ -901,6 +906,7 @@ func BenchmarkWsBroadcastCompressionCache(b *testing.B) {
 			}()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
+				payload := payloads[i%bm.uniqueMessages]
 				_, err := n.Publish("test", payload)
 				if err != nil {
 					panic(err)
