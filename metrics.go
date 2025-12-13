@@ -126,6 +126,25 @@ func (m *metrics) isClientLabelsWhitelisted(metricName string) bool {
 	return len(m.config.ClientLabels) > 0 && m.clientLabelsWhitelist[metricName]
 }
 
+// appendClientLabels appends client label values to base labels if the metric is whitelisted.
+// Returns a new slice with client labels appended, or the original base labels if not whitelisted.
+func (m *metrics) appendClientLabels(metricName string, baseLabels []string, c *Client) []string {
+	if !m.isClientLabelsWhitelisted(metricName) {
+		return baseLabels
+	}
+	clientLabelValues := m.extractClientLabelValues(c)
+	if clientLabelValues != nil {
+		result := make([]string, len(baseLabels)+len(clientLabelValues))
+		copy(result, baseLabels)
+		copy(result[len(baseLabels):], clientLabelValues)
+		return result
+	}
+	// Append empty strings for missing client labels to match metric definition
+	result := make([]string, len(baseLabels)+len(m.config.ClientLabels))
+	copy(result, baseLabels)
+	return result
+}
+
 // getOrCreateClientLabelCombinationFromLabels returns a cached combination for the given labels map.
 // This is used during client connect to precompute and cache the combination.
 func (m *metrics) getOrCreateClientLabelCombinationFromLabels(labels map[string]string) *clientLabelCombination {
@@ -660,28 +679,15 @@ type commandDurationLabels struct {
 func (m *metrics) observeCommandDuration(frameType protocol.FrameType, d time.Duration, ch string, c *Client) {
 	channelNamespace := m.getChannelNamespaceLabel(ch)
 
-	// Check if client labels are whitelisted for this metric
-	useClientLabels := m.isClientLabelsWhitelisted("client_command_duration_seconds")
-	var clientLabelValues []string
-	if useClientLabels {
-		clientLabelValues = m.extractClientLabelValues(c)
-		if clientLabelValues == nil {
-			// Create empty strings for missing client labels to match metric definition
-			clientLabelValues = make([]string, len(m.config.ClientLabels))
-		}
-	}
-
-	if (ch != "" && m.config.GetChannelNamespaceLabel != nil) || useClientLabels {
+	if (ch != "" && m.config.GetChannelNamespaceLabel != nil) || m.isClientLabelsWhitelisted("client_command_duration_seconds") {
 		labels := commandDurationLabels{
 			ChannelNamespace: channelNamespace,
 			FrameType:        frameType,
 		}
 		summary, ok := m.commandDurationCache.Load(labels)
 		if !ok {
-			labelValues := []string{frameType.String(), channelNamespace}
-			if useClientLabels {
-				labelValues = append(labelValues, clientLabelValues...)
-			}
+			baseLabels := []string{frameType.String(), channelNamespace}
+			labelValues := m.appendClientLabels("client_command_duration_seconds", baseLabels, c)
 			summary = m.commandDurationSummary.WithLabelValues(labelValues...)
 			m.commandDurationCache.Store(labels, summary)
 		}
@@ -778,19 +784,8 @@ func (m *metrics) incReplyError(frameType protocol.FrameType, code uint32, ch st
 	}
 	counter, ok := m.replyErrorCache.Load(labels)
 	if !ok {
-		labelValues := []string{frameType.String(), labels.Code, channelNamespace}
-		// Only append client labels if whitelisted for this metric
-		if m.isClientLabelsWhitelisted("client_num_reply_errors") {
-			clientLabelValues := m.extractClientLabelValues(c)
-			if clientLabelValues != nil {
-				labelValues = append(labelValues, clientLabelValues...)
-			} else {
-				// Append empty strings to match metric definition
-				for range m.config.ClientLabels {
-					labelValues = append(labelValues, "")
-				}
-			}
-		}
+		baseLabels := []string{frameType.String(), labels.Code, channelNamespace}
+		labelValues := m.appendClientLabels("client_num_reply_errors", baseLabels, c)
 		counter = m.replyErrorCount.WithLabelValues(labelValues...)
 		m.replyErrorCache.Store(labels, counter)
 	}
@@ -974,19 +969,8 @@ func (m *metrics) incServerDisconnect(code uint32, c *Client) {
 	}
 	counter, ok := m.disconnectCache.Load(labels)
 	if !ok {
-		labelValues := []string{labels.Code}
-		// Only append client labels if whitelisted for this metric
-		if m.isClientLabelsWhitelisted("client_num_server_disconnects") {
-			clientLabelValues := m.extractClientLabelValues(c)
-			if clientLabelValues != nil {
-				labelValues = append(labelValues, clientLabelValues...)
-			} else {
-				// Append empty strings to match metric definition
-				for range m.config.ClientLabels {
-					labelValues = append(labelValues, "")
-				}
-			}
-		}
+		baseLabels := []string{labels.Code}
+		labelValues := m.appendClientLabels("client_num_server_disconnects", baseLabels, c)
 		counter = m.serverDisconnectCount.WithLabelValues(labelValues...)
 		m.disconnectCache.Store(labels, counter)
 	}
@@ -1005,19 +989,8 @@ func (m *metrics) incServerUnsubscribe(code uint32, ch string, c *Client) {
 	}
 	counter, ok := m.unsubscribeCache.Load(labels)
 	if !ok {
-		labelValues := []string{labels.Code, labels.ChannelNamespace}
-		// Only append client labels if whitelisted for this metric
-		if m.isClientLabelsWhitelisted("client_num_server_unsubscribes") {
-			clientLabelValues := m.extractClientLabelValues(c)
-			if clientLabelValues != nil {
-				labelValues = append(labelValues, clientLabelValues...)
-			} else {
-				// Append empty strings to match metric definition
-				for range m.config.ClientLabels {
-					labelValues = append(labelValues, "")
-				}
-			}
-		}
+		baseLabels := []string{labels.Code, labels.ChannelNamespace}
+		labelValues := m.appendClientLabels("client_num_server_unsubscribes", baseLabels, c)
 		counter = m.serverUnsubscribeCount.WithLabelValues(labelValues...)
 		m.unsubscribeCache.Store(labels, counter)
 	}

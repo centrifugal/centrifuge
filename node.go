@@ -1027,21 +1027,10 @@ func (n *Node) addClient(c *Client) {
 	if n.config.Metrics.ExposeTransportAcceptProtocol {
 		acceptProtocol = c.transport.AcceptProtocol()
 	}
-	labelValues := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
-	// Only append client labels if they are whitelisted for this metric
-	if n.metrics.isClientLabelsWhitelisted("client_connections_inflight") {
-		clientLabelValues := n.metrics.extractClientLabelValues(c)
-		if clientLabelValues != nil {
-			labelValues = append(labelValues, clientLabelValues...)
-		} else {
-			// Append empty strings to match metric definition
-			for range n.metrics.config.ClientLabels {
-				labelValues = append(labelValues, "")
-			}
-		}
-	}
-	n.metrics.connectionsAccepted.WithLabelValues(labelValues...).Inc()
-	n.metrics.connectionsInflight.WithLabelValues(labelValues...).Inc()
+	baseLabels := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
+
+	n.metrics.connectionsAccepted.WithLabelValues(n.metrics.appendClientLabels("client_connections_accepted", baseLabels, c)...).Inc()
+	n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels("client_connections_inflight", baseLabels, c)...).Inc()
 	n.hub.add(c)
 }
 
@@ -1054,20 +1043,8 @@ func (n *Node) removeClient(c *Client) {
 		if n.config.Metrics.ExposeTransportAcceptProtocol {
 			acceptProtocol = c.transport.AcceptProtocol()
 		}
-		labelValues := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
-		// Only append client labels if they are whitelisted for this metric
-		if n.metrics.isClientLabelsWhitelisted("client_connections_inflight") {
-			clientLabelValues := n.metrics.extractClientLabelValues(c)
-			if clientLabelValues != nil {
-				labelValues = append(labelValues, clientLabelValues...)
-			} else {
-				// Append empty strings to match metric definition
-				for range n.metrics.config.ClientLabels {
-					labelValues = append(labelValues, "")
-				}
-			}
-		}
-		n.metrics.connectionsInflight.WithLabelValues(labelValues...).Dec()
+		baseLabels := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
+		n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels("client_connections_inflight", baseLabels, c)...).Dec()
 	}
 }
 
@@ -1075,20 +1052,8 @@ func (n *Node) removeClient(c *Client) {
 // Hub and Broker.
 func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
-	labelValues := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-	// Only append client labels if they are whitelisted for this metric
-	if n.metrics.isClientLabelsWhitelisted("client_subscriptions_inflight") {
-		clientLabelValues := n.metrics.extractClientLabelValues(sub.client)
-		if clientLabelValues != nil {
-			labelValues = append(labelValues, clientLabelValues...)
-		} else {
-			// Append empty strings to match metric definition
-			for range n.metrics.config.ClientLabels {
-				labelValues = append(labelValues, "")
-			}
-		}
-	}
-	n.metrics.subscriptionsInflight.WithLabelValues(labelValues...).Inc()
+	baseLabels := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
+	n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels("client_subscriptions_inflight", baseLabels, sub.client)...).Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1141,20 +1106,8 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	defer mu.Unlock()
 	empty, wasRemoved := n.hub.removeSub(ch, c)
 	if wasRemoved {
-		labelValues := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-		// Only append client labels if they are whitelisted for this metric
-		if n.metrics.isClientLabelsWhitelisted("client_subscriptions_inflight") {
-			clientLabelValues := n.metrics.extractClientLabelValues(c)
-			if clientLabelValues != nil {
-				labelValues = append(labelValues, clientLabelValues...)
-			} else {
-				// Append empty strings to match metric definition
-				for range n.metrics.config.ClientLabels {
-					labelValues = append(labelValues, "")
-				}
-			}
-		}
-		n.metrics.subscriptionsInflight.WithLabelValues(labelValues...).Dec()
+		baseLabels := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
+		n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels("client_subscriptions_inflight", baseLabels, c)...).Dec()
 	}
 	if empty {
 		submittedAt := time.Now()
