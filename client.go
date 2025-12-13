@@ -944,19 +944,11 @@ func (c *Client) IsSubscribed(ch string) bool {
 }
 
 // Labels returns custom labels attached to the client connection.
-// These labels are set via ConnectReply.Labels.
+// These labels are set via ConnectReply.Labels. The returned map must not be modified
+// by the caller - use it for reading only. Labels are set once during connect and never
+// change.
 func (c *Client) Labels() map[string]string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.labels == nil {
-		return nil
-	}
-	// Return a copy to prevent external modifications.
-	labels := make(map[string]string, len(c.labels))
-	for k, v := range c.labels {
-		labels[k] = v
-	}
-	return labels
+	return c.labels
 }
 
 // Send data to client. This sends an asynchronous message – data will be
