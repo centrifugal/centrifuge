@@ -1029,8 +1029,8 @@ func (n *Node) addClient(c *Client) {
 	}
 	baseLabels := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
 
-	n.metrics.connectionsAccepted.WithLabelValues(n.metrics.appendClientLabels("client_connections_accepted", baseLabels, c)...).Inc()
-	n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels("client_connections_inflight", baseLabels, c)...).Inc()
+	n.metrics.connectionsAccepted.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
+	n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Inc()
 	n.hub.add(c)
 }
 
@@ -1044,7 +1044,7 @@ func (n *Node) removeClient(c *Client) {
 			acceptProtocol = c.transport.AcceptProtocol()
 		}
 		baseLabels := []string{c.transport.Name(), acceptProtocol, c.metricName, c.metricVersion}
-		n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels("client_connections_inflight", baseLabels, c)...).Dec()
+		n.metrics.connectionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Dec()
 	}
 }
 
@@ -1053,7 +1053,7 @@ func (n *Node) removeClient(c *Client) {
 func (n *Node) addSubscription(ch string, sub subInfo) (int64, error) {
 	n.metrics.incActionCount("add_subscription", ch)
 	baseLabels := []string{sub.client.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-	n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels("client_subscriptions_inflight", baseLabels, sub.client)...).Inc()
+	n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, sub.client)...).Inc()
 	mu := n.subLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -1107,7 +1107,7 @@ func (n *Node) removeSubscription(ch string, c *Client) error {
 	empty, wasRemoved := n.hub.removeSub(ch, c)
 	if wasRemoved {
 		baseLabels := []string{c.metricName, n.metrics.getChannelNamespaceLabel(ch)}
-		n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels("client_subscriptions_inflight", baseLabels, c)...).Dec()
+		n.metrics.subscriptionsInflight.WithLabelValues(n.metrics.appendClientLabels(baseLabels, c)...).Dec()
 	}
 	if empty {
 		submittedAt := time.Now()

@@ -81,7 +81,7 @@ type ConnectReply struct {
 	PingPongConfig *PingPongConfig
 	// Labels is a map of custom label key-value pairs that will be attached to the client connection.
 	// Labels can be used for any application purpose. Additionally, labels defined in MetricsConfig.ClientLabels
-	// will be exported to Prometheus metrics for metrics listed in MetricsConfig.ClientLabelsMetricWhitelist.
+	// will be exported to Prometheus metrics for all client metrics.
 	// For exported metric labels: if a defined label is not found in this map, an empty string will be used.
 	Labels map[string]string
 }

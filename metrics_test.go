@@ -210,9 +210,6 @@ func BenchmarkMetricsIncReplyError_ClientLabels(b *testing.B) {
 			return channel
 		},
 		ClientLabels: []string{"region", "tier"},
-		ClientLabelsMetricWhitelist: []string{
-			"client_num_reply_errors",
-		},
 	})
 	require.NoError(b, err)
 
@@ -260,9 +257,6 @@ func BenchmarkMetricsIncDisconnect_ClientLabels(b *testing.B) {
 			return channel
 		},
 		ClientLabels: []string{"region", "tier"},
-		ClientLabelsMetricWhitelist: []string{
-			"client_num_server_disconnects",
-		},
 	})
 	require.NoError(b, err)
 
@@ -303,9 +297,6 @@ func BenchmarkMetricsIncUnsubscribe_ClientLabels(b *testing.B) {
 			return channel
 		},
 		ClientLabels: []string{"region", "tier"},
-		ClientLabelsMetricWhitelist: []string{
-			"client_num_server_unsubscribes",
-		},
 	})
 	require.NoError(b, err)
 
@@ -349,9 +340,6 @@ func BenchmarkMetricsTransportMessagesSent_ClientLabels(b *testing.B) {
 		MetricsNamespace:   "test",
 		RegistererGatherer: registry,
 		ClientLabels:       []string{"region", "tier"},
-		ClientLabelsMetricWhitelist: []string{
-			"transport_messages_sent",
-		},
 	})
 	require.NoError(b, err)
 
@@ -395,9 +383,6 @@ func BenchmarkMetricsGetTransportMessagesSentCounters_ClientLabels(b *testing.B)
 		MetricsNamespace:   "test",
 		RegistererGatherer: registry,
 		ClientLabels:       []string{"region", "tier"},
-		ClientLabelsMetricWhitelist: []string{
-			"transport_messages_sent",
-		},
 	})
 	require.NoError(b, err)
 
@@ -439,9 +424,6 @@ func BenchmarkMetricsCommandDuration_ClientLabels(b *testing.B) {
 			return channel
 		},
 		ClientLabels: []string{"region", "tier"},
-		ClientLabelsMetricWhitelist: []string{
-			"client_command_duration_seconds",
-		},
 	})
 	require.NoError(b, err)
 
@@ -611,11 +593,6 @@ func TestClientLabels(t *testing.T) {
 			MetricsNamespace:   "test2",
 			RegistererGatherer: registry,
 			ClientLabels:       []string{"region", "tier"},
-			ClientLabelsMetricWhitelist: []string{
-				// Only need to whitelist sent (size is auto-whitelisted as they're paired)
-				"transport_messages_sent",
-				"client_command_duration_seconds",
-			},
 		})
 		require.NoError(t, err)
 
@@ -632,10 +609,6 @@ func TestClientLabels(t *testing.T) {
 			MetricsNamespace:   "test3",
 			RegistererGatherer: registry,
 			ClientLabels:       []string{"region", "tier", "auth_type"},
-			ClientLabelsMetricWhitelist: []string{
-				// Only whitelist sent - size is auto-paired
-				"transport_messages_sent",
-			},
 		})
 		require.NoError(t, err)
 
@@ -649,8 +622,6 @@ func TestClientLabels(t *testing.T) {
 			MetricsNamespace:   "test4",
 			RegistererGatherer: registry,
 			ClientLabels:       []string{"region", "tier"},
-			// Empty whitelist - no metrics should get client labels
-			ClientLabelsMetricWhitelist: []string{},
 		})
 		require.NoError(t, err)
 
@@ -662,10 +633,9 @@ func TestClientLabels(t *testing.T) {
 	t.Run("extractClientLabelValues with nil client", func(t *testing.T) {
 		registry := prometheus.NewRegistry()
 		m, err := newMetricsRegistry(MetricsConfig{
-			MetricsNamespace:            "test5",
-			RegistererGatherer:          registry,
-			ClientLabels:                []string{"region"},
-			ClientLabelsMetricWhitelist: []string{"transport_messages_sent"},
+			MetricsNamespace:   "test5",
+			RegistererGatherer: registry,
+			ClientLabels:       []string{"region"},
 		})
 		require.NoError(t, err)
 
@@ -677,10 +647,9 @@ func TestClientLabels(t *testing.T) {
 	t.Run("extractClientLabelValues with client without labels", func(t *testing.T) {
 		registry := prometheus.NewRegistry()
 		m, err := newMetricsRegistry(MetricsConfig{
-			MetricsNamespace:            "test6",
-			RegistererGatherer:          registry,
-			ClientLabels:                []string{"region"},
-			ClientLabelsMetricWhitelist: []string{"transport_messages_sent"},
+			MetricsNamespace:   "test6",
+			RegistererGatherer: registry,
+			ClientLabels:       []string{"region"},
 		})
 		require.NoError(t, err)
 
@@ -702,78 +671,21 @@ func TestClientLabels(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		labels := m.buildMetricLabels("transport_messages_sent", []string{"transport", "frame_type"})
+		labels := m.buildMetricLabels([]string{"transport", "frame_type"})
 		require.Equal(t, []string{"transport", "frame_type"}, labels)
 	})
 
 	t.Run("buildMetricLabels with client labels and whitelisted", func(t *testing.T) {
 		registry := prometheus.NewRegistry()
 		m, err := newMetricsRegistry(MetricsConfig{
-			MetricsNamespace:            "test8",
-			RegistererGatherer:          registry,
-			ClientLabels:                []string{"region", "tier"},
-			ClientLabelsMetricWhitelist: []string{"transport_messages_sent"},
+			MetricsNamespace:   "test8",
+			RegistererGatherer: registry,
+			ClientLabels:       []string{"region", "tier"},
 		})
 		require.NoError(t, err)
 
-		labels := m.buildMetricLabels("transport_messages_sent", []string{"transport", "frame_type"})
+		labels := m.buildMetricLabels([]string{"transport", "frame_type"})
 		require.Equal(t, []string{"transport", "frame_type", "region", "tier"}, labels)
-	})
-
-	t.Run("buildMetricLabels with client labels but not whitelisted", func(t *testing.T) {
-		registry := prometheus.NewRegistry()
-		m, err := newMetricsRegistry(MetricsConfig{
-			MetricsNamespace:            "test9",
-			RegistererGatherer:          registry,
-			ClientLabels:                []string{"region", "tier"},
-			ClientLabelsMetricWhitelist: []string{"other_metric"},
-		})
-		require.NoError(t, err)
-
-		labels := m.buildMetricLabels("transport_messages_sent", []string{"transport", "frame_type"})
-		require.Equal(t, []string{"transport", "frame_type"}, labels) // No client labels added
-	})
-
-	t.Run("paired metrics auto-whitelisting", func(t *testing.T) {
-		registry := prometheus.NewRegistry()
-		m, err := newMetricsRegistry(MetricsConfig{
-			MetricsNamespace:   "test10",
-			RegistererGatherer: registry,
-			ClientLabels:       []string{"region"},
-			ClientLabelsMetricWhitelist: []string{
-				// Only whitelist sent, size should be auto-paired
-				"transport_messages_sent",
-			},
-		})
-		require.NoError(t, err)
-
-		// Both sent and sent_size should have client labels
-		require.True(t, m.clientLabelsWhitelist["transport_messages_sent"])
-		require.True(t, m.clientLabelsWhitelist["transport_messages_sent_size"])
-
-		// Should work without errors
-		m.incTransportMessagesSent("ws", protocol.FrameTypePushPublication, "channel", 100, nil)
-	})
-
-	t.Run("paired metrics auto-whitelisting via size metric", func(t *testing.T) {
-		registry := prometheus.NewRegistry()
-		m, err := newMetricsRegistry(MetricsConfig{
-			MetricsNamespace:   "test11",
-			RegistererGatherer: registry,
-			ClientLabels:       []string{"tier"},
-			ClientLabelsMetricWhitelist: []string{
-				// Only whitelist size, sent should be auto-paired
-				"transport_messages_received_size",
-			},
-		})
-		require.NoError(t, err)
-
-		// Both received and received_size should have client labels
-		require.True(t, m.clientLabelsWhitelist["transport_messages_received"])
-		require.True(t, m.clientLabelsWhitelist["transport_messages_received_size"])
-
-		// Should work without errors
-		m.incTransportMessagesReceived("ws", protocol.FrameTypePushPublication, "channel", 100, nil)
 	})
 }
 
