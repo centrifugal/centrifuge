@@ -158,15 +158,6 @@ type RedisBrokerConfig struct {
 	// LoadSHA1 enables loading SHA1 from Redis via SCRIPT LOAD instead of calculating
 	// it on the client side. This is useful for FIPS compliance.
 	LoadSHA1 bool
-
-	// UseChannelHashTags when enabled wraps channel names in Redis hash tags {channel}
-	// to ensure channels and their associated keys (history, result cache) are in the
-	// same hash slot. Elasticache Serverless treats PUB/SUB channels as slot-affecting
-	// during Lua execution, requiring channel names and accessed keys to hash to the same
-	// slot—unlike standard Redis Cluster behavior. Only applies to cluster mode when
-	// not using sharded PUB/SUB.
-	// See https://github.com/centrifugal/centrifugo/issues/1087#issuecomment-3667377731.
-	UseChannelHashTags bool
 }
 
 // NewRedisBroker initializes Redis Broker.
@@ -241,9 +232,6 @@ func NewRedisBroker(n *Node, config RedisBrokerConfig) (*RedisBroker, error) {
 		shard := shardWrapper.shard
 		if !shard.isCluster && b.config.NumShardedPubSubPartitions > 0 {
 			return nil, errors.New("can use sharded PUB/SUB feature (non-zero number of pub/sub partitions) only with Redis Cluster")
-		}
-		if !shard.isCluster && b.config.UseChannelHashTags {
-			return nil, errors.New("can use UseChannelHashTags option only with Redis Cluster")
 		}
 		subChannels := make([][]rueidis.DedicatedClient, 0)
 		pubSubStartChannels := make([][]*pubSubStart, 0)
@@ -617,7 +605,7 @@ func (b *RedisBroker) runPubSub(s *shardWrapper, logFields map[string]any, event
 				case <-done:
 					return
 				case msg := <-ch:
-					err := b.handleRedisClientMessage(eventHandler, channelID(msg.Channel), convert.StringToBytes(msg.Message))
+					err := b.handleRedisClientMessage(s.shard.isCluster, eventHandler, channelID(msg.Channel), convert.StringToBytes(msg.Message))
 					if err != nil {
 						b.node.metrics.incRedisBrokerPubSubErrors(b.config.Name, "handle_client_message")
 						b.node.logger.log(newErrorLogEntry(err, "error handling client message", logFields))
@@ -1115,11 +1103,14 @@ func (b *RedisBroker) removeHistory(s *shardWrapper, ch string) error {
 
 func (b *RedisBroker) messageChannelID(s *RedisShard, ch string) channelID {
 	if !b.useShardedPubSub(s) {
-		// Check if we need hash tags for serverless compatibility
-		if s.isCluster && b.config.UseChannelHashTags {
+		// In cluster mode, always use hash tags to ensure channels and keys (history,
+		// result cache) are in the same hash slot. This is required for Lua scripts in
+		// serverless Redis (e.g., AWS Elasticache Serverless) where PUBLISH commands
+		// inside Lua scripts are slot-affecting. Standard Redis Cluster works fine with
+		// this since PUBLISH is broadcast to all nodes regardless of hash slot.
+		// See https://github.com/centrifugal/centrifugo/issues/1087#issuecomment-3667377731
+		if s.isCluster {
 			// Build: messagePrefix + "{" + ch + "}"
-			// This ensures the channel is in the same hash slot as keys like
-			// prefix.stream.{ch}, which is required for Lua scripts in serverless Redis.
 			var builder strings.Builder
 			builder.Grow(len(b.messagePrefix) + 1 + len(ch) + 1)
 			builder.WriteString(b.messagePrefix)
@@ -1128,7 +1119,7 @@ func (b *RedisBroker) messageChannelID(s *RedisShard, ch string) channelID {
 			builder.WriteByte('}')
 			return channelID(builder.String())
 		}
-		// Fast path: no sharding, no hash tags
+		// Non-cluster path: no hash tags needed
 		var builder strings.Builder
 		builder.Grow(len(b.messagePrefix) + len(ch))
 		builder.WriteString(b.messagePrefix)
@@ -1136,7 +1127,7 @@ func (b *RedisBroker) messageChannelID(s *RedisShard, ch string) channelID {
 		return channelID(builder.String())
 	}
 
-	// Sharded path
+	// Sharded pub/sub path: uses partition-based hash tags
 	idx := consistentIndex(ch, b.config.NumShardedPubSubPartitions)
 	idxStr := strconv.Itoa(idx)
 
@@ -1346,30 +1337,30 @@ func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 	return channelID(builder.String())
 }
 
-func (b *RedisBroker) extractChannel(chID channelID) string {
+func (b *RedisBroker) extractChannel(isCluster bool, chID channelID) string {
 	ch := strings.TrimPrefix(string(chID), b.messagePrefix)
 
 	// Handle sharded pub/sub case: {idx}.channel
 	if b.config.NumShardedPubSubPartitions > 0 {
 		if !strings.HasPrefix(ch, "{") {
-			return ""
+			return "" // Invalid: expected {idx}.channel format
 		}
 		i := strings.Index(ch, ".")
 		if i > 0 {
 			return ch[i+1:]
 		}
-		return ""
+		return "" // Invalid: missing dot separator
 	}
 
-	// Handle UseChannelHashTags case: {channel}
-	// This is used when UseChannelHashTags is enabled for serverless compatibility.
-	if b.config.UseChannelHashTags {
+	// Handle cluster case: must have {channel} format
+	if isCluster {
 		if !strings.HasPrefix(ch, "{") || !strings.HasSuffix(ch, "}") {
-			return ""
+			return "" // Invalid: cluster requires hash tags
 		}
 		return ch[1 : len(ch)-1]
 	}
 
+	// Non-cluster: accept plain channel name
 	return ch
 }
 
@@ -1379,12 +1370,12 @@ var (
 	leaveTypePrefix = []byte("__l__")
 )
 
-func (b *RedisBroker) handleRedisClientMessage(eventHandler BrokerEventHandler, chID channelID, data []byte) error {
+func (b *RedisBroker) handleRedisClientMessage(isCluster bool, eventHandler BrokerEventHandler, chID channelID, data []byte) error {
 	pushData, typeOfPush, sp, delta, prevPayload, ok := extractPushData(data)
 	if !ok {
 		return fmt.Errorf("malformed PUB/SUB data: %s", data)
 	}
-	channel := b.extractChannel(chID)
+	channel := b.extractChannel(isCluster, chID)
 	if channel == "" {
 		return fmt.Errorf("unsupported channel: %s", chID)
 	}
