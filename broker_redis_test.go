@@ -1390,6 +1390,109 @@ func TestRedisClusterShardedPubSub(t *testing.T) {
 	}
 }
 
+func TestRedisClusterPubSubTwoNodesWithHashTags(t *testing.T) {
+	// Test UseChannelHashTags option with Redis Cluster to ensure channels
+	// and keys are in the same hash slot for serverless Redis compatibility.
+	redisConf := RedisShardConfig{
+		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		IOTimeout:        10 * time.Second,
+		ConnectTimeout:   10 * time.Second,
+	}
+
+	prefix := getUniquePrefix()
+
+	node1, _ := New(Config{})
+	s, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+	b1, _ := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix:             prefix,
+		Shards:             []*RedisShard{s},
+		UseChannelHashTags: true,
+	})
+	node1.SetBroker(b1)
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b1)
+
+	msgNum := 10
+	var numPublications int64
+	var numJoins int64
+	var numLeaves int64
+	pubCh := make(chan struct{})
+	joinCh := make(chan struct{})
+	leaveCh := make(chan struct{})
+	brokerEventHandler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error {
+			return nil
+		},
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			c := atomic.AddInt64(&numPublications, 1)
+			if c == int64(msgNum) {
+				close(pubCh)
+			}
+			return nil
+		},
+		HandleJoinFunc: func(ch string, info *ClientInfo) error {
+			c := atomic.AddInt64(&numJoins, 1)
+			if c == int64(msgNum) {
+				close(joinCh)
+			}
+			return nil
+		},
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error {
+			c := atomic.AddInt64(&numLeaves, 1)
+			if c == int64(msgNum) {
+				close(leaveCh)
+			}
+			return nil
+		},
+	}
+	_ = b1.RegisterControlEventHandler(brokerEventHandler)
+	_ = b1.RegisterBrokerEventHandler(brokerEventHandler)
+
+	for i := 0; i < msgNum; i++ {
+		require.NoError(t, b1.Subscribe("test"+strconv.Itoa(i)))
+	}
+
+	node2, _ := New(Config{})
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+
+	b2, _ := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix:             prefix,
+		Shards:             []*RedisShard{s2},
+		UseChannelHashTags: true,
+	})
+	node2.SetBroker(b2)
+	_ = node2.Run()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b2)
+
+	for i := 0; i < msgNum; i++ {
+		_, err = node2.Publish("test"+strconv.Itoa(i), []byte("123"))
+		require.NoError(t, err)
+		err = b2.PublishJoin("test"+strconv.Itoa(i), &ClientInfo{})
+		require.NoError(t, err)
+		err = b2.PublishLeave("test"+strconv.Itoa(i), &ClientInfo{})
+		require.NoError(t, err)
+	}
+
+	select {
+	case <-pubCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB message")
+	}
+	select {
+	case <-joinCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB join message")
+	}
+	select {
+	case <-leaveCh:
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for PUB/SUB leave message")
+	}
+}
+
 func waitAllNodes(tb testing.TB, node *Node, numNodes int) {
 	// Here we are waiting for 2 nodes join.
 	// Note: maybe introduce events in future?
@@ -2369,4 +2472,204 @@ func TestRedisClientSubscribeRecoveryClientSubs(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestRedisBroker_MessageChannelID_UseChannelHashTags(t *testing.T) {
+	// Create a mock shard
+	mockShard := &RedisShard{
+		isCluster: true,
+	}
+
+	t.Run("non-cluster without hash tags", func(t *testing.T) {
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{
+				UseChannelHashTags: false,
+				Prefix:             "test",
+			},
+			messagePrefix: "test.client.",
+		}
+
+		nonClusterShard := &RedisShard{isCluster: false}
+		chID := broker.messageChannelID(nonClusterShard, "mychannel")
+		require.Equal(t, channelID("test.client.mychannel"), chID)
+
+		extracted := broker.extractChannel(chID)
+		require.Equal(t, "mychannel", extracted)
+	})
+
+	t.Run("cluster without UseChannelHashTags (default)", func(t *testing.T) {
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{
+				UseChannelHashTags: false,
+				Prefix:             "test",
+			},
+			messagePrefix: "test.client.",
+		}
+
+		chID := broker.messageChannelID(mockShard, "mychannel")
+		require.Equal(t, channelID("test.client.mychannel"), chID)
+
+		extracted := broker.extractChannel(chID)
+		require.Equal(t, "mychannel", extracted)
+	})
+
+	t.Run("cluster with UseChannelHashTags enabled", func(t *testing.T) {
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{
+				UseChannelHashTags: true,
+				Prefix:             "test",
+			},
+			messagePrefix: "test.client.",
+		}
+
+		chID := broker.messageChannelID(mockShard, "mychannel")
+		require.Equal(t, channelID("test.client.{mychannel}"), chID)
+
+		extracted := broker.extractChannel(chID)
+		require.Equal(t, "mychannel", extracted)
+	})
+
+	t.Run("sharded pub/sub format (not affected by UseChannelHashTags)", func(t *testing.T) {
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{
+				UseChannelHashTags:         true, // Should not affect sharded pub/sub
+				NumShardedPubSubPartitions: 16,
+				Prefix:                     "test",
+			},
+			messagePrefix: "test.client.",
+		}
+
+		chID := broker.messageChannelID(mockShard, "mychannel")
+		// Sharded pub/sub uses {idx}.channel format
+		// The exact index depends on consistentIndex, but it should have the pattern
+		require.Contains(t, string(chID), "test.client.{")
+		require.Contains(t, string(chID), "}.mychannel")
+
+		extracted := broker.extractChannel(chID)
+		require.Equal(t, "mychannel", extracted)
+	})
+
+	t.Run("extractChannel with sharded pub/sub", func(t *testing.T) {
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{
+				UseChannelHashTags:         false,
+				NumShardedPubSubPartitions: 16,
+				Prefix:                     "test",
+			},
+			messagePrefix: "test.client.",
+		}
+
+		// Test sharded pub/sub format - should work
+		extracted := broker.extractChannel(channelID("test.client.{5}.mychannel"))
+		require.Equal(t, "mychannel", extracted)
+
+		// Test invalid format when sharded pub/sub is enabled - should return empty
+		extracted = broker.extractChannel(channelID("test.client.mychannel"))
+		require.Equal(t, "", extracted)
+
+		// Test hash tag without dot - should return empty
+		extracted = broker.extractChannel(channelID("test.client.{mychannel}"))
+		require.Equal(t, "", extracted)
+	})
+
+	t.Run("extractChannel with UseChannelHashTags", func(t *testing.T) {
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{
+				UseChannelHashTags:         true,
+				NumShardedPubSubPartitions: 0,
+				Prefix:                     "test",
+			},
+			messagePrefix: "test.client.",
+		}
+
+		// Test hash tag format - should work
+		extracted := broker.extractChannel(channelID("test.client.{mychannel}"))
+		require.Equal(t, "mychannel", extracted)
+
+		// Test invalid format when UseChannelHashTags is enabled - should return empty
+		extracted = broker.extractChannel(channelID("test.client.mychannel"))
+		require.Equal(t, "", extracted)
+
+		// Test sharded pub/sub format when UseChannelHashTags is enabled - should return empty
+		extracted = broker.extractChannel(channelID("test.client.{5}.mychannel"))
+		require.Equal(t, "", extracted)
+	})
+
+	t.Run("extractChannel without special modes", func(t *testing.T) {
+		broker := &RedisBroker{
+			config: RedisBrokerConfig{
+				UseChannelHashTags:         false,
+				NumShardedPubSubPartitions: 0,
+				Prefix:                     "test",
+			},
+			messagePrefix: "test.client.",
+		}
+
+		// Test regular channel - should work
+		extracted := broker.extractChannel(channelID("test.client.mychannel"))
+		require.Equal(t, "mychannel", extracted)
+
+		// All formats should work when no special mode is enabled
+		extracted = broker.extractChannel(channelID("test.client.{mychannel}"))
+		require.Equal(t, "{mychannel}", extracted)
+
+		extracted = broker.extractChannel(channelID("test.client.{5}.mychannel"))
+		require.Equal(t, "{5}.mychannel", extracted)
+	})
+}
+
+func TestRedisBroker_UseChannelHashTags_ValidationError(t *testing.T) {
+	// Test that UseChannelHashTags can only be used with cluster Redis
+	node := &Node{
+		config: Config{},
+		logger: newLogger(LogLevelNone, nil),
+	}
+
+	// Create a non-cluster shard
+	nonClusterShard := &RedisShard{
+		isCluster: false,
+	}
+
+	// Attempt to create broker with UseChannelHashTags on non-cluster shard
+	_, err := NewRedisBroker(node, RedisBrokerConfig{
+		Prefix:             "test",
+		UseChannelHashTags: true,
+		Shards:             []*RedisShard{nonClusterShard},
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "can use UseChannelHashTags option only with Redis Cluster")
+}
+
+func TestRedisBroker_ChannelHashTags_Consistency(t *testing.T) {
+	// This test verifies that when UseChannelHashTags is enabled,
+	// the channel name uses the same hash tag as the stream key,
+	// ensuring they both go to the same Redis Cluster slot.
+
+	mockShard := &RedisShard{
+		isCluster: true,
+	}
+
+	broker := &RedisBroker{
+		config: RedisBrokerConfig{
+			UseChannelHashTags: true,
+			Prefix:             "centrifuge",
+		},
+		messagePrefix: "centrifuge.client.",
+	}
+
+	channelName := "test-channel"
+
+	// Get the channel ID (used for PUB/SUB)
+	channelID := broker.messageChannelID(mockShard, channelName)
+	require.Equal(t, "centrifuge.client.{test-channel}", string(channelID))
+
+	// Get the stream key (used for history)
+	streamKey := broker.historyStreamKey(mockShard, channelName)
+	require.Equal(t, "centrifuge.stream.{test-channel}", string(streamKey))
+
+	// Both should have the same hash tag {test-channel}, ensuring they're in the same slot.
+	// This is required for Lua scripts in serverless Redis.
+	require.Contains(t, string(channelID), "{test-channel}")
+	require.Contains(t, string(streamKey), "{test-channel}")
 }
