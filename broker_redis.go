@@ -161,10 +161,11 @@ type RedisBrokerConfig struct {
 
 	// UseChannelHashTags when enabled wraps channel names in Redis hash tags {channel}
 	// to ensure channels and their associated keys (history, result cache) are in the
-	// same hash slot. This is required for serverless Redis implementations like AWS
-	// ElastiCache Serverless where Lua scripts require all accessed keys to be in the
-	// same slot. Only applies to cluster mode when not using sharded PUB/SUB.
-	// Default is false for backwards compatibility.
+	// same hash slot. Elasticache Serverless treats PUB/SUB channels as slot-affecting
+	// during Lua execution, requiring channel names and accessed keys to hash to the same
+	// slot—unlike standard Redis Cluster behavior. Only applies to cluster mode when
+	// not using sharded PUB/SUB.
+	// See https://github.com/centrifugal/centrifugo/issues/1087#issuecomment-3667377731.
 	UseChannelHashTags bool
 }
 
