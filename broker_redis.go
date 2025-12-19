@@ -1340,7 +1340,7 @@ func (b *RedisBroker) historyMetaKey(s *RedisShard, ch string) channelID {
 func (b *RedisBroker) extractChannel(isCluster bool, chID channelID) string {
 	ch := strings.TrimPrefix(string(chID), b.messagePrefix)
 
-	// Handle sharded pub/sub case: {idx}.channel
+	// Handle sharded PUB/SUB case: {idx}.channel
 	if b.config.NumShardedPubSubPartitions > 0 {
 		if !strings.HasPrefix(ch, "{") {
 			return "" // Invalid: expected {idx}.channel format
@@ -1354,13 +1354,14 @@ func (b *RedisBroker) extractChannel(isCluster bool, chID channelID) string {
 
 	// Handle cluster case: must have {channel} format
 	if isCluster {
-		if !strings.HasPrefix(ch, "{") || !strings.HasSuffix(ch, "}") {
-			return "" // Invalid: cluster requires hash tags
+		channelLen := len(ch)
+		if channelLen < 2 || ch[0] != '{' || ch[channelLen-1] != '}' {
+			return ""
 		}
-		return ch[1 : len(ch)-1]
+		return ch[1 : channelLen-1]
 	}
 
-	// Non-cluster: accept plain channel name
+	// Non-cluster: plain channel name
 	return ch
 }
 
