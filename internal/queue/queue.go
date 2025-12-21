@@ -16,15 +16,16 @@ type Item struct {
 // The queue is goroutine safe.
 // Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT).
 type Queue struct {
-	mu      sync.RWMutex
-	cond    *sync.Cond
-	nodes   []Item
-	head    int
-	tail    int
-	cnt     int
-	size    int
-	closed  bool
-	initCap int
+	mu         sync.RWMutex
+	cond       *sync.Cond
+	nodes      []Item
+	head       int
+	tail       int
+	cnt        int
+	size       int
+	closed     bool
+	initCap    int
+	collecting bool
 }
 
 // New Queue returns a new Item queue with initial capacity.
@@ -275,4 +276,82 @@ func (q *Queue) Size() int {
 	s := q.size
 	q.mu.RUnlock()
 	return s
+}
+
+// BeginCollect marks the start of batch collection.
+// While collecting, shrinking is deferred until FinishCollect is called.
+func (q *Queue) BeginCollect() {
+	q.mu.Lock()
+	q.collecting = true
+	q.mu.Unlock()
+}
+
+// FinishCollect marks the end of batch collection and performs shrink check.
+func (q *Queue) FinishCollect() {
+	q.mu.Lock()
+	q.collecting = false
+
+	if q.cnt == 0 {
+		q.head = 0
+		q.tail = 0
+	}
+
+	// Find n to resize to.
+	n := -1
+	k := len(q.nodes) / 2
+	for {
+		if k >= q.initCap && q.cnt <= k {
+			n = k
+		} else {
+			break
+		}
+		k /= 2
+	}
+	if n != -1 {
+		q.resize(n)
+	}
+
+	q.mu.Unlock()
+}
+
+// RemoveManyInto removes up to maxItems items from the queue into the provided buffer.
+// If maxItems is -1, it removes all available items.
+// Returns the number of items actually removed and a boolean indicating whether
+// at least one item was removed (false means no messages were available).
+// The caller must provide a buffer with sufficient capacity.
+// This method does not perform shrinking - that's deferred to FinishCollect.
+func (q *Queue) RemoveManyInto(buf []Item, maxItems int) (int, bool) {
+	q.mu.Lock()
+
+	if q.cnt == 0 {
+		q.mu.Unlock()
+		return 0, false
+	}
+
+	// Determine how many messages to remove (match RemoveMany logic)
+	var count int
+	if maxItems == -1 || q.cnt < maxItems {
+		count = q.cnt
+	} else {
+		count = maxItems
+	}
+	if count > len(buf) {
+		count = len(buf)
+	}
+
+	for i := 0; i < count; i++ {
+		buf[i] = q.nodes[q.head]
+		q.nodes[q.head] = Item{}
+		q.head = (q.head + 1) % len(q.nodes)
+		q.cnt--
+		q.size -= len(buf[i].Data)
+	}
+
+	if q.cnt == 0 {
+		q.head = 0
+		q.tail = 0
+	}
+
+	q.mu.Unlock()
+	return count, true
 }
