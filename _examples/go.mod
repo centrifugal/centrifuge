@@ -3,9 +3,9 @@ module github.com/centrifugal/centrifuge/_examples
 go 1.24.0
 
 replace github.com/centrifugal/centrifuge => ../
-replace (
-	github.com/centrifugal/protocol => ../../protocol
-)
+
+replace github.com/centrifugal/protocol => ../../protocol
+
 require (
 	github.com/centrifugal/centrifuge v0.8.2
 	github.com/centrifugal/centrifuge-go v0.10.11
@@ -25,7 +25,7 @@ require (
 	golang.org/x/net v0.47.0
 	golang.org/x/oauth2 v0.32.0
 	google.golang.org/grpc v1.76.0
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -35,7 +35,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.14.0 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
-	github.com/centrifugal/protocol v0.17.2 // indirect
+	github.com/centrifugal/protocol v0.18.2-0.20251221133122-8a98bdd35b96 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

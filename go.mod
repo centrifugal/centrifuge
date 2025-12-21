@@ -2,13 +2,9 @@ module github.com/centrifugal/centrifuge
 
 go 1.24.0
 
-replace (
-	github.com/centrifugal/protocol => ../protocol
-)
-
 require (
 	github.com/FZambia/eagle v0.2.0
-	github.com/centrifugal/protocol v0.17.2
+	github.com/centrifugal/protocol v0.18.2-0.20251221133122-8a98bdd35b96
 	github.com/google/cel-go v0.26.1
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter v1.2.4
@@ -20,7 +16,7 @@ require (
 	github.com/shadowspore/fossil-delta v0.0.0-20241213113458-1d797d70cbe3
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.18.0
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
