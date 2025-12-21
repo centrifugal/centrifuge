@@ -16,6 +16,8 @@ github.com/bytedance/sonic/loader v0.3.0 h1:dskwH8edlzNMctoruo8FPTJDF3vLtDT0sXZw
 github.com/bytedance/sonic/loader v0.3.0/go.mod h1:N8A3vUdtUebEY2/VQC0MyhYeKUFosQU6FxH2JmUe6VI=
 github.com/centrifugal/centrifuge-go v0.10.11 h1:ipq+Vcw3vUuuKpoA6hyyi+FsZoGuLmkgcyn8x5eVkc0=
 github.com/centrifugal/centrifuge-go v0.10.11/go.mod h1:yONZBopAssVw7mluSRs/6YTYkqKe+llSGIokNVlBDZ4=
+github.com/centrifugal/protocol v0.18.2-0.20251221133122-8a98bdd35b96 h1:19UmBfUAJftTqSTJOGjbmqGZLpWQgrwHbzh/ZJNrRVQ=
+github.com/centrifugal/protocol v0.18.2-0.20251221133122-8a98bdd35b96/go.mod h1:zFsp4f1ZRejq1dkyNUbabdPj4dMYOpK8RRXDwHGVpVY=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/cloudwego/base64x v0.1.6 h1:t11wG9AECkCDk5fMSoxmufanudBtJ+/HemLstXDLI2M=
