@@ -17,6 +17,59 @@ import (
 
 const numHubShards = 64
 
+var pushPool = sync.Pool{
+	New: func() any {
+		return &protocol.Push{}
+	},
+}
+
+var replyPool = sync.Pool{
+	New: func() any {
+		return &protocol.Reply{}
+	},
+}
+
+func getPush() *protocol.Push {
+	return pushPool.Get().(*protocol.Push)
+}
+
+func putPush(p *protocol.Push) {
+	p.Channel = ""
+	p.Id = 0
+	p.Pub = nil
+	p.Join = nil
+	p.Leave = nil
+	p.Message = nil
+	p.Subscribe = nil
+	p.Unsubscribe = nil
+	p.Connect = nil
+	p.Disconnect = nil
+	p.Refresh = nil
+	pushPool.Put(p)
+}
+
+func getReply() *protocol.Reply {
+	return replyPool.Get().(*protocol.Reply)
+}
+
+func putReply(r *protocol.Reply) {
+	r.Id = 0
+	r.Error = nil
+	r.Push = nil
+	r.Connect = nil
+	r.Subscribe = nil
+	r.Unsubscribe = nil
+	r.Publish = nil
+	r.Presence = nil
+	r.PresenceStats = nil
+	r.History = nil
+	r.Ping = nil
+	r.Rpc = nil
+	r.Refresh = nil
+	r.SubRefresh = nil
+	replyPool.Put(r)
+}
+
 // Hub tracks Client connections on the current Node.
 type Hub struct {
 	connShards [numHubShards]*connShard
@@ -650,7 +703,8 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 	var deltaData []byte
 	if key.ProtocolType == protocol.TypeJSON {
 		if sub.client.transport.Unidirectional() {
-			push := &protocol.Push{Pub: deltaPub}
+			push := getPush()
+			push.Pub = deltaPub
 			if key.UseID {
 				push.Id = channelSubID
 			} else {
@@ -658,25 +712,32 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 			}
 			var err error
 			deltaData, err = protocol.DefaultJsonPushEncoder.Encode(push)
+			putPush(push)
 			if err != nil {
 				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 			}
 		} else {
-			push := &protocol.Push{Pub: deltaPub}
+			push := getPush()
+			push.Pub = deltaPub
 			if key.UseID {
 				push.Id = channelSubID
 			} else {
 				push.Channel = channel
 			}
+			reply := getReply()
+			reply.Push = push
 			var err error
-			deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+			deltaData, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
+			putReply(reply)
+			putPush(push)
 			if err != nil {
 				*jsonEncodeErr = encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 			}
 		}
 	} else if key.ProtocolType == protocol.TypeProtobuf {
 		if sub.client.transport.Unidirectional() {
-			push := &protocol.Push{Pub: deltaPub}
+			push := getPush()
+			push.Pub = deltaPub
 			if key.UseID {
 				push.Id = channelSubID
 			} else {
@@ -684,18 +745,24 @@ func getDeltaData(sub subInfo, key preparedKey, channel string, deltaPub *protoc
 			}
 			var err error
 			deltaData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+			putPush(push)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			push := &protocol.Push{Pub: deltaPub}
+			push := getPush()
+			push.Pub = deltaPub
 			if key.UseID {
 				push.Id = channelSubID
 			} else {
 				push.Channel = channel
 			}
+			reply := getReply()
+			reply.Push = push
 			var err error
-			deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+			deltaData, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
+			putReply(reply)
+			putPush(push)
 			if err != nil {
 				return nil, err
 			}
@@ -802,7 +869,8 @@ func (s *subShard) broadcastPublication(
 							Channel: fullPub.Channel,
 						}
 					}
-					push := &protocol.Push{Pub: pubToUse}
+					push := getPush()
+					push.Pub = pubToUse
 					if key.UseID {
 						push.Id = channelSubID
 					} else {
@@ -810,6 +878,7 @@ func (s *subShard) broadcastPublication(
 					}
 					var err error
 					fullData, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					putPush(push)
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
@@ -824,21 +893,27 @@ func (s *subShard) broadcastPublication(
 							Channel: fullPub.Channel,
 						}
 					}
-					push := &protocol.Push{Pub: pubToUse}
+					push := getPush()
+					push.Pub = pubToUse
 					if key.UseID {
 						push.Id = channelSubID
 					} else {
 						push.Channel = channel
 					}
+					reply := getReply()
+					reply.Push = push
 					var err error
-					fullData, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					fullData, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 					if err != nil {
 						jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 					}
 				}
 			} else if key.ProtocolType == protocol.TypeProtobuf {
 				if sub.client.transport.Unidirectional() {
-					push := &protocol.Push{Pub: fullPub}
+					push := getPush()
+					push.Pub = fullPub
 					if key.UseID {
 						push.Id = channelSubID
 					} else {
@@ -846,18 +921,24 @@ func (s *subShard) broadcastPublication(
 					}
 					var err error
 					fullData, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					putPush(push)
 					if err != nil {
 						return err
 					}
 				} else {
-					push := &protocol.Push{Pub: fullPub}
+					push := getPush()
+					push.Pub = fullPub
 					if key.UseID {
 						push.Id = channelSubID
 					} else {
 						push.Channel = channel
 					}
+					reply := getReply()
+					reply.Push = push
 					var err error
-					fullData, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					fullData, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 					if err != nil {
 						return err
 					}
@@ -939,7 +1020,8 @@ func (s *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfi
 			var data []byte
 
 			if key.ProtocolType == protocol.TypeJSON {
-				push := &protocol.Push{Join: join}
+				push := getPush()
+				push.Join = join
 				if key.UseID {
 					push.Id = channelSubID
 				} else {
@@ -949,14 +1031,20 @@ func (s *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfi
 				var err error
 				if key.Unidirectional {
 					data, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					putPush(push)
 				} else {
-					data, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					reply := getReply()
+					reply.Push = push
+					data, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 				}
 				if err != nil {
 					jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 				}
 			} else if key.ProtocolType == protocol.TypeProtobuf {
-				push := &protocol.Push{Join: join}
+				push := getPush()
+				push.Join = join
 				if key.UseID {
 					push.Id = channelSubID
 				} else {
@@ -966,8 +1054,13 @@ func (s *subShard) broadcastJoin(channel string, join *protocol.Join, batchConfi
 				var err error
 				if key.Unidirectional {
 					data, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					putPush(push)
 				} else {
-					data, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					reply := getReply()
+					reply.Push = push
+					data, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 				}
 				if err != nil {
 					return err
@@ -1031,7 +1124,8 @@ func (s *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchCo
 			var data []byte
 
 			if key.ProtocolType == protocol.TypeJSON {
-				push := &protocol.Push{Leave: leave}
+				push := getPush()
+				push.Leave = leave
 				if key.UseID {
 					push.Id = channelSubID
 				} else {
@@ -1041,14 +1135,20 @@ func (s *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchCo
 				var err error
 				if key.Unidirectional {
 					data, err = protocol.DefaultJsonPushEncoder.Encode(push)
+					putPush(push)
 				} else {
-					data, err = protocol.DefaultJsonReplyEncoder.Encode(&protocol.Reply{Push: push})
+					reply := getReply()
+					reply.Push = push
+					data, err = protocol.DefaultJsonReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 				}
 				if err != nil {
 					jsonEncodeErr = &encodeError{client: sub.client.ID(), user: sub.client.UserID(), error: err}
 				}
 			} else if key.ProtocolType == protocol.TypeProtobuf {
-				push := &protocol.Push{Leave: leave}
+				push := getPush()
+				push.Leave = leave
 				if key.UseID {
 					push.Id = channelSubID
 				} else {
@@ -1058,8 +1158,13 @@ func (s *subShard) broadcastLeave(channel string, leave *protocol.Leave, batchCo
 				var err error
 				if key.Unidirectional {
 					data, err = protocol.DefaultProtobufPushEncoder.Encode(push)
+					putPush(push)
 				} else {
-					data, err = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{Push: push})
+					reply := getReply()
+					reply.Push = push
+					data, err = protocol.DefaultProtobufReplyEncoder.Encode(reply)
+					putReply(reply)
+					putPush(push)
 				}
 				if err != nil {
 					return err
