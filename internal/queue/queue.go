@@ -90,10 +90,22 @@ func (q *Queue) AddMany(items ...Item) bool {
 		q.mu.Unlock()
 		return false
 	}
-	for _, i := range items {
-		if q.cnt == len(q.nodes) {
-			q.resize(q.cnt * 2)
+
+	// Calculate space needed and resize once if necessary.
+	spaceNeeded := q.cnt + len(items)
+	if spaceNeeded > len(q.nodes) {
+		newCap := len(q.nodes)
+		if newCap == 0 {
+			newCap = q.initCap
 		}
+		for newCap < spaceNeeded {
+			newCap *= 2
+		}
+		q.resize(newCap)
+	}
+
+	// Now add all items without resize checks.
+	for _, i := range items {
 		q.nodes[q.tail] = i
 		q.tail = (q.tail + 1) % len(q.nodes)
 		q.size += len(i.Data)
