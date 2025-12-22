@@ -136,8 +136,6 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 		if bufSize == 0 {
 			bufSize = defaultMaxMessagesInFrame
 		}
-	} else if bufSize <= 0 {
-		bufSize = defaultMaxMessagesInFrame
 	}
 
 	// Get buffer from tiered pool
