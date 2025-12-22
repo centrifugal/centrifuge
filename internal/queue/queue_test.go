@@ -344,8 +344,8 @@ func TestQueueCollectingMode(t *testing.T) {
 	// Queue should not have shrunk yet
 	capBeforeFinish := q.Cap()
 
-	// Finish collecting - now shrink happens
-	q.FinishCollect()
+	// Finish collecting - now shrink happens (immediate with delay=0)
+	q.FinishCollect(0)
 
 	// Queue should have shrunk back to initCap
 	require.Equal(t, 2, q.Cap())

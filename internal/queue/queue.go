@@ -2,6 +2,7 @@ package queue
 
 import (
 	"sync"
+	"time"
 
 	"github.com/centrifugal/protocol"
 )
@@ -16,16 +17,17 @@ type Item struct {
 // The queue is goroutine safe.
 // Inspired by http://blog.dubbelboer.com/2015/04/25/go-faster-queue.html (MIT).
 type Queue struct {
-	mu         sync.RWMutex
-	cond       *sync.Cond
-	nodes      []Item
-	head       int
-	tail       int
-	cnt        int
-	size       int
-	closed     bool
-	initCap    int
-	collecting bool
+	mu          sync.RWMutex
+	cond        *sync.Cond
+	nodes       []Item
+	head        int
+	tail        int
+	cnt         int
+	size        int
+	closed      bool
+	initCap     int
+	collecting  bool
+	shrinkTimer *time.Timer
 }
 
 // New Queue returns a new Item queue with initial capacity.
@@ -286,11 +288,35 @@ func (q *Queue) BeginCollect() {
 	q.mu.Unlock()
 }
 
-// FinishCollect marks the end of batch collection and performs shrink check.
-func (q *Queue) FinishCollect() {
+// FinishCollect marks the end of batch collection and schedules delayed shrinking.
+// If shrinkDelay is 0, shrinks immediately. Otherwise, schedules shrink after delay.
+// Under load, the timer keeps resetting, keeping queue at working set size.
+func (q *Queue) FinishCollect(shrinkDelay time.Duration) {
 	q.mu.Lock()
 	q.collecting = false
 
+	if shrinkDelay == 0 {
+		// Immediate shrink
+		q.doShrinkLocked()
+		q.mu.Unlock()
+		return
+	}
+
+	// Delayed shrink - reset timer if exists, create if not
+	if q.shrinkTimer == nil {
+		q.shrinkTimer = time.AfterFunc(shrinkDelay, func() {
+			q.mu.Lock()
+			q.doShrinkLocked()
+			q.mu.Unlock()
+		})
+	} else {
+		q.shrinkTimer.Reset(shrinkDelay)
+	}
+	q.mu.Unlock()
+}
+
+// doShrinkLocked performs the actual shrinking. Must be called with q.mu held.
+func (q *Queue) doShrinkLocked() {
 	if q.cnt == 0 {
 		q.head = 0
 		q.tail = 0
@@ -310,8 +336,6 @@ func (q *Queue) FinishCollect() {
 	if n != -1 {
 		q.resize(n)
 	}
-
-	q.mu.Unlock()
 }
 
 // RemoveManyInto removes up to maxItems items from the queue into the provided buffer.

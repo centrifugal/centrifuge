@@ -112,14 +112,16 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 		return false
 	}
 
+	var shrinkDelay time.Duration
 	if writeDelay > 0 {
 		w.messages.BeginCollect()
+		shrinkDelay = time.Duration(float64(writeDelay) * 1.5)
 		tm := timers.AcquireTimer(writeDelay)
 		select {
 		case <-tm.C:
 		case <-w.closeCh:
 			timers.ReleaseTimer(tm)
-			w.messages.FinishCollect()
+			w.messages.FinishCollect(shrinkDelay)
 			return false
 		}
 		timers.ReleaseTimer(tm)
@@ -147,7 +149,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 		putItemBuf(itemBuf)
 		w.mu.Unlock()
 		if writeDelay > 0 {
-			w.messages.FinishCollect()
+			w.messages.FinishCollect(shrinkDelay)
 		}
 		return !w.messages.Closed()
 	}
@@ -164,7 +166,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 	w.mu.Unlock()
 
 	if writeDelay > 0 {
-		w.messages.FinishCollect()
+		w.messages.FinishCollect(shrinkDelay)
 	}
 
 	if writeErr != nil {
