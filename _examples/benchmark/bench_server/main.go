@@ -44,13 +44,18 @@ func main() {
 		v, _ := strconv.Atoi(os.Getenv("WRITE_DELAY"))
 		writeDelay = time.Duration(v) * time.Millisecond
 	}
+	var shrinkDelay time.Duration
+	if os.Getenv("SHRINK_DELAY") != "" {
+		v, _ := strconv.Atoi(os.Getenv("SHRINK_DELAY"))
+		shrinkDelay = time.Duration(v) * time.Millisecond
+	}
 	var maxMessagesInFrame int
 	if os.Getenv("MAX_FRAME_MESSAGES") != "" {
 		v, _ := strconv.Atoi(os.Getenv("MAX_FRAME_MESSAGES"))
 		maxMessagesInFrame = v
 	}
-	log.Printf("NumCPU: %d, WRITE_DELAY: %s, MAX_FRAME_MESSAGES: %d, QUEUE_INITIAL_CAP: %d\n",
-		runtime.NumCPU(), writeDelay, maxMessagesInFrame, queueInitialCap)
+	log.Printf("NumCPU: %d, WRITE_DELAY: %s, SHRINK_DELAY: %s, MAX_FRAME_MESSAGES: %d, QUEUE_INITIAL_CAP: %d\n",
+		runtime.NumCPU(), writeDelay, shrinkDelay, maxMessagesInFrame, queueInitialCap)
 
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:           centrifuge.LogLevelError,
@@ -85,6 +90,7 @@ func main() {
 			MaxMessagesInFrame: maxMessagesInFrame,
 			ReplyWithoutQueue:  true,
 			QueueInitialCap:    queueInitialCap,
+			QueueShrinkDelay:   shrinkDelay,
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
 			},

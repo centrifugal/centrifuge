@@ -113,6 +113,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 	}
 
 	if writeDelay > 0 {
+		// Use collect pattern with buffer pool for batching.
 		w.messages.BeginCollect()
 		tm := timers.AcquireTimer(writeDelay)
 		select {
@@ -123,50 +124,65 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 			return false
 		}
 		timers.ReleaseTimer(tm)
-	}
 
-	w.mu.Lock()
+		w.mu.Lock()
 
-	// Determine buffer size
-	bufSize := maxMessagesInFrame
-	if bufSize == -1 {
-		bufSize = w.messages.Len()
-		if bufSize == 0 {
-			bufSize = defaultMaxMessagesInFrame
+		// Determine buffer size
+		bufSize := maxMessagesInFrame
+		if bufSize == -1 {
+			bufSize = w.messages.Len()
+			if bufSize == 0 {
+				bufSize = defaultMaxMessagesInFrame
+			}
 		}
-	}
 
-	// Get buffer from tiered pool
-	itemBuf := getItemBuf(bufSize)
-	buf := itemBuf.B
+		// Get buffer from tiered pool
+		itemBuf := getItemBuf(bufSize)
+		buf := itemBuf.B
 
-	n, ok := w.messages.RemoveManyInto(buf, maxMessagesInFrame)
-	if !ok {
+		n, ok := w.messages.RemoveManyInto(buf, maxMessagesInFrame)
+		if !ok {
+			putItemBuf(itemBuf)
+			w.mu.Unlock()
+			w.messages.FinishCollect(shrinkDelay)
+			return !w.messages.Closed()
+		}
+
+		items := buf[:n]
+		var writeErr error
+		if n == 1 {
+			writeErr = w.config.WriteFn(items[0])
+		} else {
+			writeErr = w.config.WriteManyFn(items...)
+		}
+
 		putItemBuf(itemBuf)
 		w.mu.Unlock()
-		if writeDelay > 0 {
-			w.messages.FinishCollect(shrinkDelay)
+		w.messages.FinishCollect(shrinkDelay)
+
+		if writeErr != nil {
+			return false
 		}
+		return true
+	}
+
+	// No batching - use RemoveMany which handles shrinking automatically.
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	items, ok := w.messages.RemoveMany(maxMessagesInFrame)
+	if !ok {
 		return !w.messages.Closed()
 	}
 
-	items := buf[:n]
 	var writeErr error
-	if n == 1 {
+	if len(items) == 1 {
 		writeErr = w.config.WriteFn(items[0])
 	} else {
 		writeErr = w.config.WriteManyFn(items...)
 	}
 
-	putItemBuf(itemBuf)
-	w.mu.Unlock()
-
-	if writeDelay > 0 {
-		w.messages.FinishCollect(shrinkDelay)
-	}
-
 	if writeErr != nil {
-		// Write failed, transport must close itself, here we just return from routine.
 		return false
 	}
 	return true
