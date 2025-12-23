@@ -161,6 +161,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 		w.messages.FinishCollect(shrinkDelay)
 
 		if writeErr != nil {
+			// Write failed, transport must close itself, here we just return from routine.
 			return false
 		}
 		return true
@@ -183,6 +184,7 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 	}
 
 	if writeErr != nil {
+		// Write failed, transport must close itself, here we just return from routine.
 		return false
 	}
 	return true
