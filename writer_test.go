@@ -94,7 +94,7 @@ func BenchmarkWriteMerge(b *testing.B) {
 		WriteFn:     transport.writeSingle,
 		WriteManyFn: transport.writeCombined,
 	}, 0)
-	go writer.run(0, 4)
+	go writer.run(0, 4, 0)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -110,7 +110,7 @@ func BenchmarkWriteMergeDisabled(b *testing.B) {
 		WriteFn:     transport.writeSingle,
 		WriteManyFn: transport.writeCombined,
 	}, 0)
-	go writer.run(0, 1)
+	go writer.run(0, 1, 0)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -162,7 +162,7 @@ func TestWriter(t *testing.T) {
 		WriteFn:     transport.write,
 		WriteManyFn: transport.writeMany,
 	}, 0)
-	go w.run(0, 4)
+	go w.run(0, 4, 0)
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.Nil(t, disconnect)
@@ -196,7 +196,7 @@ func TestWriterWriteMany(t *testing.T) {
 
 	go func() {
 		defer close(doneCh)
-		w.run(10*time.Millisecond, maxMessagesInFrame)
+		w.run(10*time.Millisecond, maxMessagesInFrame, 0)
 	}()
 
 	for i := 0; i < numMessages; i++ {
@@ -266,7 +266,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
 	}, 0)
-	go w.run(0, 0)
+	go w.run(0, 0, 0)
 	_ = w.close(true)
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
@@ -287,7 +287,7 @@ func TestWriterWriteError(t *testing.T) {
 
 	go func() {
 		defer close(doneCh)
-		w.run(0, 0)
+		w.run(0, 0, 0)
 	}()
 
 	defer func() { _ = w.close(true) }()

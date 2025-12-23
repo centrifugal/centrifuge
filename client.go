@@ -1068,7 +1068,7 @@ func (c *Client) Disconnect(disconnect ...Disconnect) {
 }
 
 func (c *Client) close(disconnect Disconnect) error {
-	c.startWriter(0, 0, 0)
+	c.startWriter(0, 0, 0, 0)
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.connectMu.Lock()
@@ -2376,7 +2376,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 		reply, err := c.node.clientEvents.connectingHandler(c.ctx, e)
 		if err != nil {
-			c.startWriter(0, 0, 0)
+			c.startWriter(0, 0, 0, 0)
 			return err
 		}
 		if reply.PingPongConfig != nil {
@@ -2385,7 +2385,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			c.pingInterval, c.pongTimeout = getPingPongPeriodValues(c.transport.PingPongConfig())
 		}
 		c.replyWithoutQueue = reply.ReplyWithoutQueue
-		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap)
+		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap, reply.QueueShrinkDelay)
 
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
@@ -2410,7 +2410,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			}
 		}
 	} else {
-		c.startWriter(0, 0, 0)
+		c.startWriter(0, 0, 0, 0)
 		c.pingInterval, c.pongTimeout = getPingPongPeriodValues(c.transport.PingPongConfig())
 	}
 
@@ -2653,7 +2653,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 	}, nil
 }
 
-func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, queueInitialCap int) {
+func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, queueInitialCap int, queueShrinkDelay time.Duration) {
 	c.startWriterOnce.Do(func() {
 		var writeMu sync.Mutex
 		messageWriterConf := writerConfig{
@@ -2763,7 +2763,7 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 		}
 
 		c.messageWriter = newWriter(messageWriterConf, queueInitialCap)
-		go c.messageWriter.run(batchDelay, maxMessagesInFrame)
+		go c.messageWriter.run(batchDelay, maxMessagesInFrame, queueShrinkDelay)
 		if c.node.config.GetChannelBatchConfig != nil {
 			c.perChannelWriter = newPerChannelWriter(c.writeQueueItems)
 		}

@@ -76,6 +76,10 @@ type ConnectReply struct {
 	// QueueInitialCap set an initial capacity for client's message queue, the size of queue
 	// can grow further, but won't be reduced below QueueInitialCap. By default, it's 2.
 	QueueInitialCap int
+	// QueueShrinkDelay is a time Centrifuge will wait before shrinking the client's message
+	// queue after it grows. This delay helps to avoid frequent allocations/deallocations when
+	// queue size fluctuates. Zero value means queue won't be shrunk after growth.
+	QueueShrinkDelay time.Duration
 	// PingPongConfig if set, will override Transport's PingPongConfig to enable setting ping/pong interval
 	// for individual client.
 	PingPongConfig *PingPongConfig

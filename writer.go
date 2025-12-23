@@ -106,16 +106,14 @@ func putItemBuf(buf *ItemBuf) {
 	itemBufPools[idx].Put(buf)
 }
 
-func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duration) bool {
+func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duration, shrinkDelay time.Duration) bool {
 	// Wait for message from the queue.
 	if !w.messages.Wait() {
 		return false
 	}
 
-	var shrinkDelay time.Duration
 	if writeDelay > 0 {
 		w.messages.BeginCollect()
-		shrinkDelay = time.Duration(float64(writeDelay) * 1.5)
 		tm := timers.AcquireTimer(writeDelay)
 		select {
 		case <-tm.C:
@@ -176,12 +174,12 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 
 // run supposed to be run in goroutine, this goroutine will be closed as
 // soon as queue is closed.
-func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int) {
+func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int, shrinkDelay time.Duration) {
 	if maxMessagesInFrame == 0 {
 		maxMessagesInFrame = defaultMaxMessagesInFrame
 	}
 	for {
-		if ok := w.waitSendMessage(maxMessagesInFrame, writeDelay); !ok {
+		if ok := w.waitSendMessage(maxMessagesInFrame, writeDelay, shrinkDelay); !ok {
 			return
 		}
 	}
