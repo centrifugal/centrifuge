@@ -187,17 +187,15 @@ func TestWriterWriteMany(t *testing.T) {
 
 	maxMessagesInFrame := 4
 	numMessages := 4 * maxMessagesInFrame
+
+	// Timer-driven mode: run() is non-blocking when writeDelay > 0
+	w.run(10*time.Millisecond, maxMessagesInFrame, 0)
+
+	// Enqueue messages - this will trigger the timer
 	for i := 0; i < numMessages; i++ {
 		disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 		require.Nil(t, disconnect)
 	}
-
-	doneCh := make(chan struct{})
-
-	go func() {
-		defer close(doneCh)
-		w.run(10*time.Millisecond, maxMessagesInFrame, 0)
-	}()
 
 	for i := 0; i < numMessages; i++ {
 		<-transport.ch
@@ -207,12 +205,6 @@ func TestWriterWriteMany(t *testing.T) {
 	require.Equal(t, numMessages/maxMessagesInFrame, transport.writeManyCalls)
 	err := w.close(true)
 	require.NoError(t, err)
-
-	select {
-	case <-doneCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for write routine close")
-	}
 }
 
 func TestWriterWriteRemaining(t *testing.T) {

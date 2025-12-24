@@ -2,6 +2,7 @@ package centrifuge
 
 import (
 	"math/bits"
+	"runtime"
 	"sync"
 	"time"
 
@@ -22,6 +23,15 @@ type writer struct {
 	messages *queue.Queue
 	closed   bool
 	closeCh  chan struct{}
+
+	// Timer-driven mode fields (when writeDelay > 0)
+	timerMode          bool
+	writeDelay         time.Duration
+	maxMessagesInFrame int
+	shrinkDelay        time.Duration
+	flushTimer         *time.Timer
+	timerScheduled     bool
+	consecutiveFlushes int
 }
 
 func newWriter(config writerConfig, queueInitialCap int) *writer {
@@ -39,6 +49,7 @@ func newWriter(config writerConfig, queueInitialCap int) *writer {
 const (
 	defaultMaxMessagesInFrame = 16
 	maxItemBufLength          = 4096 // 2^12
+	maxConsecutiveFlushes     = 10   // yield after this many immediate flushes
 )
 
 // ItemBuf wraps []Item to avoid allocations when using sync.Pool
@@ -191,15 +202,141 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 }
 
 // run supposed to be run in goroutine, this goroutine will be closed as
-// soon as queue is closed.
+// soon as queue is closed. When writeDelay > 0, this method is non-blocking
+// and uses a timer-driven approach instead of a dedicated goroutine.
 func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int, shrinkDelay time.Duration) {
 	if maxMessagesInFrame == 0 {
 		maxMessagesInFrame = defaultMaxMessagesInFrame
 	}
+
+	// Timer-driven mode for writeDelay > 0: non-blocking, triggered by enqueue
+	if writeDelay > 0 {
+		w.mu.Lock()
+		w.timerMode = true
+		w.writeDelay = writeDelay
+		w.maxMessagesInFrame = maxMessagesInFrame
+		w.shrinkDelay = shrinkDelay
+		w.mu.Unlock()
+		return
+	}
+
+	// Traditional goroutine-based mode for writeDelay == 0
 	for {
 		if ok := w.waitSendMessage(maxMessagesInFrame, writeDelay, shrinkDelay); !ok {
 			return
 		}
+	}
+}
+
+// flush is called by the timer in timer-driven mode to batch and write messages
+func (w *writer) flush() {
+	w.mu.Lock()
+
+	w.timerScheduled = false
+
+	// Check if there are messages to flush
+	if w.messages.Len() == 0 {
+		w.mu.Unlock()
+		return
+	}
+
+	w.messages.BeginCollect()
+
+	// Determine buffer size
+	bufSize := w.maxMessagesInFrame
+	if bufSize == -1 {
+		bufSize = w.messages.Len()
+		if bufSize == 0 {
+			bufSize = defaultMaxMessagesInFrame
+		}
+	}
+
+	// Get buffer from tiered pool
+	itemBuf := getItemBuf(bufSize)
+	buf := itemBuf.B
+
+	n, ok := w.messages.RemoveManyInto(buf, w.maxMessagesInFrame)
+	if !ok {
+		putItemBuf(itemBuf)
+		w.mu.Unlock()
+		w.messages.FinishCollect(w.shrinkDelay)
+		return
+	}
+
+	items := buf[:n]
+	var writeErr error
+	if n == 1 {
+		writeErr = w.config.WriteFn(items[0])
+	} else {
+		writeErr = w.config.WriteManyFn(items...)
+	}
+
+	putItemBuf(itemBuf)
+
+	// If there are still messages and no error, schedule another flush
+	if writeErr == nil && w.messages.Len() > 0 && !w.closed {
+		remainingMessages := w.messages.Len()
+		// If we have more messages than max batch size (and max is not unlimited),
+		// we need to flush immediately to keep up, otherwise we'll fall behind.
+		if w.maxMessagesInFrame > 0 && remainingMessages >= w.maxMessagesInFrame {
+			w.consecutiveFlushes++
+			if w.consecutiveFlushes >= maxConsecutiveFlushes {
+				// We've flushed too many times in a row, yield to other goroutines
+				w.consecutiveFlushes = 0
+				w.mu.Unlock()
+				w.messages.FinishCollect(w.shrinkDelay)
+				runtime.Gosched()
+				// Schedule next flush with normal delay after yielding
+				w.mu.Lock()
+				if !w.closed {
+					w.scheduleFlushLocked()
+				}
+				w.mu.Unlock()
+				return
+			}
+			// Schedule immediate flush (0 delay)
+			w.scheduleFlushImmediateLocked()
+		} else {
+			// Messages below threshold or unlimited batch size, use normal delay
+			w.consecutiveFlushes = 0
+			w.scheduleFlushLocked()
+		}
+	} else {
+		w.consecutiveFlushes = 0
+	}
+
+	w.mu.Unlock()
+	w.messages.FinishCollect(w.shrinkDelay)
+
+	if writeErr != nil {
+		// Write failed, close the writer
+		_ = w.close(false)
+	}
+}
+
+// scheduleFlushLocked schedules a flush timer with normal delay. Must be called with w.mu held.
+func (w *writer) scheduleFlushLocked() {
+	if w.timerScheduled {
+		return
+	}
+	w.timerScheduled = true
+	if w.flushTimer == nil {
+		w.flushTimer = time.AfterFunc(w.writeDelay, w.flush)
+	} else {
+		w.flushTimer.Reset(w.writeDelay)
+	}
+}
+
+// scheduleFlushImmediateLocked schedules an immediate flush (0 delay). Must be called with w.mu held.
+func (w *writer) scheduleFlushImmediateLocked() {
+	if w.timerScheduled {
+		return
+	}
+	w.timerScheduled = true
+	if w.flushTimer == nil {
+		w.flushTimer = time.AfterFunc(0, w.flush)
+	} else {
+		w.flushTimer.Reset(0)
 	}
 }
 
@@ -211,6 +348,16 @@ func (w *writer) enqueue(item queue.Item) *Disconnect {
 	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
 		return &DisconnectSlow
 	}
+
+	// In timer mode, schedule flush if not already scheduled
+	if w.timerMode {
+		w.mu.Lock()
+		if !w.closed && !w.timerScheduled {
+			w.scheduleFlushLocked()
+		}
+		w.mu.Unlock()
+	}
+
 	return nil
 }
 
@@ -222,6 +369,16 @@ func (w *writer) enqueueMany(item ...queue.Item) *Disconnect {
 	if w.config.MaxQueueSize > 0 && w.messages.Size() > w.config.MaxQueueSize {
 		return &DisconnectSlow
 	}
+
+	// In timer mode, schedule flush if not already scheduled
+	if w.timerMode {
+		w.mu.Lock()
+		if !w.closed && !w.timerScheduled {
+			w.scheduleFlushLocked()
+		}
+		w.mu.Unlock()
+	}
+
 	return nil
 }
 
@@ -232,6 +389,11 @@ func (w *writer) close(flushRemaining bool) error {
 		return nil
 	}
 	w.closed = true
+
+	// Stop flush timer if running
+	if w.flushTimer != nil {
+		w.flushTimer.Stop()
+	}
 
 	if flushRemaining {
 		remaining := w.messages.CloseRemaining()

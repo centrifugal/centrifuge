@@ -2763,7 +2763,13 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 		}
 
 		c.messageWriter = newWriter(messageWriterConf, queueInitialCap)
-		go c.messageWriter.run(batchDelay, maxMessagesInFrame, queueShrinkDelay)
+		if batchDelay > 0 {
+			// Timer-driven mode: non-blocking, triggered by enqueue operations
+			c.messageWriter.run(batchDelay, maxMessagesInFrame, queueShrinkDelay)
+		} else {
+			// Traditional mode: dedicated goroutine for immediate writes
+			go c.messageWriter.run(batchDelay, maxMessagesInFrame, queueShrinkDelay)
+		}
 		if c.node.config.GetChannelBatchConfig != nil {
 			c.perChannelWriter = newPerChannelWriter(c.writeQueueItems)
 		}
