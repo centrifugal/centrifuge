@@ -94,7 +94,7 @@ func BenchmarkWriteMerge(b *testing.B) {
 		WriteFn:     transport.writeSingle,
 		WriteManyFn: transport.writeCombined,
 	}, 0)
-	go writer.run(0, 4)
+	go writer.run(0, 4, 0, false)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -110,7 +110,7 @@ func BenchmarkWriteMergeDisabled(b *testing.B) {
 		WriteFn:     transport.writeSingle,
 		WriteManyFn: transport.writeCombined,
 	}, 0)
-	go writer.run(0, 1)
+	go writer.run(0, 1, 0, false)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -162,7 +162,7 @@ func TestWriter(t *testing.T) {
 		WriteFn:     transport.write,
 		WriteManyFn: transport.writeMany,
 	}, 0)
-	go w.run(0, 4)
+	go w.run(0, 4, 0, false)
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 	require.Nil(t, disconnect)
@@ -187,17 +187,15 @@ func TestWriterWriteMany(t *testing.T) {
 
 	maxMessagesInFrame := 4
 	numMessages := 4 * maxMessagesInFrame
+
+	// Timer-driven mode: run() is non-blocking when writeDelay > 0 and useWriteTimer is true.
+	w.run(10*time.Millisecond, maxMessagesInFrame, 0, true)
+
+	// Enqueue messages - this will trigger the timer
 	for i := 0; i < numMessages; i++ {
 		disconnect := w.enqueue(queue.Item{Data: []byte("test")})
 		require.Nil(t, disconnect)
 	}
-
-	doneCh := make(chan struct{})
-
-	go func() {
-		defer close(doneCh)
-		w.run(10*time.Millisecond, maxMessagesInFrame)
-	}()
 
 	for i := 0; i < numMessages; i++ {
 		<-transport.ch
@@ -207,12 +205,6 @@ func TestWriterWriteMany(t *testing.T) {
 	require.Equal(t, numMessages/maxMessagesInFrame, transport.writeManyCalls)
 	err := w.close(true)
 	require.NoError(t, err)
-
-	select {
-	case <-doneCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for write routine close")
-	}
 }
 
 func TestWriterWriteRemaining(t *testing.T) {
@@ -266,7 +258,7 @@ func TestWriterDisconnectNormalOnClosedQueue(t *testing.T) {
 		WriteFn:      transport.write,
 		WriteManyFn:  transport.writeMany,
 	}, 0)
-	go w.run(0, 0)
+	go w.run(0, 0, 0, false)
 	_ = w.close(true)
 
 	disconnect := w.enqueue(queue.Item{Data: []byte("test")})
@@ -287,7 +279,7 @@ func TestWriterWriteError(t *testing.T) {
 
 	go func() {
 		defer close(doneCh)
-		w.run(0, 0)
+		w.run(0, 0, 0, false)
 	}()
 
 	defer func() { _ = w.close(true) }()
