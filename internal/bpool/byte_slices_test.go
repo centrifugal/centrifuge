@@ -162,9 +162,7 @@ func TestByteSlicesBufClearing(t *testing.T) {
 		[]byte("test2"),
 		[]byte("test3"),
 	}
-	for _, data := range testData {
-		buf.B = append(buf.B, data)
-	}
+	buf.B = append(buf.B, testData...)
 
 	require.Equal(t, 3, len(buf.B))
 
