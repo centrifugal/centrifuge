@@ -83,7 +83,8 @@ type ConnectReply struct {
 	QueueInitialCap int
 	// QueueShrinkDelay is a time Centrifuge will wait before shrinking the client's message
 	// queue after it grows. This delay helps to avoid frequent allocations/deallocations when
-	// queue size fluctuates. Zero value means queue won't be shrunk after growth.
+	// queue size fluctuates. Zero value means no delay and immediate shrinking. This option
+	// only works when WriteDelay is set to a non-zero value.
 	QueueShrinkDelay time.Duration
 	// PingPongConfig if set, will override Transport's PingPongConfig to enable setting ping/pong interval
 	// for individual client.
