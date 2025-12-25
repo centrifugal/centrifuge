@@ -809,6 +809,7 @@ func (s *subShard) broadcastPublication(
 	var (
 		jsonEncodeErr     *encodeError
 		tagsFilterDropped int
+		jsonClientFound   bool
 	)
 
 	// Get subID for this channel if it exists
@@ -961,9 +962,12 @@ func (s *subShard) broadcastPublication(
 			}
 			preparedDataByKey[key] = prepValue
 		}
-		if sub.client.transport.Protocol() == ProtocolTypeJSON && jsonEncodeErr != nil {
-			go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
-			continue
+		if sub.client.transport.Protocol() == ProtocolTypeJSON {
+			jsonClientFound = true
+			if jsonEncodeErr != nil || len(pub.Data) == 0 {
+				go func(c *Client) { c.Disconnect(DisconnectInappropriateProtocol) }(sub.client)
+				continue
+			}
 		}
 
 		// Even filtered publications need to reach writePublication for offset tracking,
@@ -977,6 +981,12 @@ func (s *subShard) broadcastPublication(
 			"user":    jsonEncodeErr.user,
 			"client":  jsonEncodeErr.client,
 			"error":   jsonEncodeErr.error,
+		}))
+	}
+	if jsonClientFound && len(pub.Data) == 0 {
+		// Log that we had clients disconnected due to empty data – which is not supported in a JSON protocol case.
+		s.logger.log(newLogEntry(LogLevelWarn, "inappropriate protocol publication – empty data for JSON client", map[string]any{
+			"channel": channel,
 		}))
 	}
 

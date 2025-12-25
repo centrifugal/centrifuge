@@ -725,6 +725,7 @@ func testUnexpectedOffsetEpochProtocolV2(t *testing.T, offset uint64, epoch stri
 
 	err = node.handlePublication("test", StreamPosition{offset, epoch}, &Publication{
 		Offset: offset,
+		Data:   []byte(`{}`),
 	}, nil, nil)
 	require.NoError(t, err)
 
@@ -749,6 +750,44 @@ func TestClientUnexpectedOffsetEpochClientV2(t *testing.T) {
 		t.Run(tt.Name, func(t *testing.T) {
 			testUnexpectedOffsetEpochProtocolV2(t, tt.Offset, tt.Epoch)
 		})
+	}
+}
+
+func TestEmptyDataDisconnectsJSONClient(t *testing.T) {
+	t.Parallel()
+	broker := NewTestBroker()
+	node := nodeWithBroker(broker)
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	done := make(chan struct{})
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(event SubscribeEvent, callback SubscribeCallback) {
+			callback(SubscribeReply{Options: SubscribeOptions{EnableRecovery: true}}, nil)
+		})
+		client.OnUnsubscribe(func(event UnsubscribeEvent) {
+			require.Equal(t, UnsubscribeCodeDisconnect, event.Code)
+			close(done)
+		})
+	})
+
+	client := newTestClientV2(t, node, "42")
+	connectClientV2(t, client)
+
+	rwWrapper := testReplyWriterWrapper()
+	err := client.handleSubscribe(&protocol.SubscribeRequest{
+		Channel: "test",
+		Recover: true,
+	}, &protocol.Command{}, time.Now(), rwWrapper.rw)
+	require.NoError(t, err)
+
+	err = node.handlePublication("test", StreamPosition{}, &Publication{}, nil, nil)
+	require.NoError(t, err)
+
+	select {
+	case <-time.After(time.Second):
+		require.Fail(t, "timeout waiting for channel close")
+	case <-done:
 	}
 }
 
