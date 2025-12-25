@@ -7,7 +7,7 @@ require (
 	github.com/centrifugal/protocol v0.17.2
 	github.com/google/cel-go v0.26.1
 	github.com/google/uuid v1.6.0
-	github.com/maypok86/otter/v2 v2.2.1
+	github.com/maypok86/otter/v2 v2.3.0
 	github.com/planetscale/vtprotobuf v0.6.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/quagmt/udecimal v1.9.0
