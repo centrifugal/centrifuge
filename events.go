@@ -80,6 +80,9 @@ type ConnectReply struct {
 	// queue after it grows. This delay helps to avoid frequent allocations/deallocations when
 	// queue size fluctuates. Zero value means queue won't be shrunk after growth.
 	QueueShrinkDelay time.Duration
+	// UseWriteTimer enables using write timer for this client connection. This mode is only
+	// active when WriteDelay is set to a non-zero value.
+	UseWriteTimer bool
 	// PingPongConfig if set, will override Transport's PingPongConfig to enable setting ping/pong interval
 	// for individual client.
 	PingPongConfig *PingPongConfig

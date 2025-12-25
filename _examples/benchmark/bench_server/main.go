@@ -49,13 +49,20 @@ func main() {
 		v, _ := strconv.Atoi(os.Getenv("SHRINK_DELAY"))
 		shrinkDelay = time.Duration(v) * time.Millisecond
 	}
+	var useWriteTimer bool
+	if os.Getenv("USE_WRITE_TIMER") == "1" || os.Getenv("USE_WRITE_TIMER") == "true" {
+		useWriteTimer = true
+	}
+	if useWriteTimer && writeDelay == 0 {
+		log.Fatal("WRITE_DELAY must be set when USE_WRITE_TIMER=1")
+	}
 	var maxMessagesInFrame int
 	if os.Getenv("MAX_FRAME_MESSAGES") != "" {
 		v, _ := strconv.Atoi(os.Getenv("MAX_FRAME_MESSAGES"))
 		maxMessagesInFrame = v
 	}
-	log.Printf("NumCPU: %d, WRITE_DELAY: %s, SHRINK_DELAY: %s, MAX_FRAME_MESSAGES: %d, QUEUE_INITIAL_CAP: %d\n",
-		runtime.NumCPU(), writeDelay, shrinkDelay, maxMessagesInFrame, queueInitialCap)
+	log.Printf("NumCPU: %d, WRITE_DELAY: %s, SHRINK_DELAY: %s, USE_WRITE_TIMER: %v, MAX_FRAME_MESSAGES: %d, QUEUE_INITIAL_CAP: %d\n",
+		runtime.NumCPU(), writeDelay, shrinkDelay, useWriteTimer, maxMessagesInFrame, queueInitialCap)
 
 	node, _ := centrifuge.New(centrifuge.Config{
 		LogLevel:           centrifuge.LogLevelError,
@@ -91,6 +98,7 @@ func main() {
 			ReplyWithoutQueue:  true,
 			QueueInitialCap:    queueInitialCap,
 			QueueShrinkDelay:   shrinkDelay,
+			UseWriteTimer:      useWriteTimer,
 			Credentials: &centrifuge.Credentials{
 				UserID: "bench",
 			},

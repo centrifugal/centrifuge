@@ -2,7 +2,6 @@ package centrifuge
 
 import (
 	"math/bits"
-	"runtime"
 	"sync"
 	"time"
 
@@ -24,14 +23,13 @@ type writer struct {
 	closed   bool
 	closeCh  chan struct{}
 
-	// Timer-driven mode fields (when writeDelay > 0)
+	// Timer-driven mode fields (when writeDelay > 0 and useWriteTimer is true).
 	timerMode          bool
 	writeDelay         time.Duration
 	maxMessagesInFrame int
 	shrinkDelay        time.Duration
 	flushTimer         *time.Timer
 	timerScheduled     bool
-	consecutiveFlushes int
 }
 
 func newWriter(config writerConfig, queueInitialCap int) *writer {
@@ -48,74 +46,7 @@ func newWriter(config writerConfig, queueInitialCap int) *writer {
 
 const (
 	defaultMaxMessagesInFrame = 16
-	maxItemBufLength          = 4096 // 2^12
-	maxConsecutiveFlushes     = 10   // yield after this many immediate flushes
 )
-
-// ItemBuf wraps []Item to avoid allocations when using sync.Pool
-type ItemBuf struct {
-	B []queue.Item
-}
-
-// pools contain pools for item slices of various capacities (power of 2)
-var itemBufPools [13]sync.Pool // supports up to 2^12 = 4096
-
-// nextLogBase2 returns log2(v) rounded up
-func nextLogBase2(v uint32) uint32 {
-	if v == 0 {
-		return 0
-	}
-	return uint32(32 - bits.LeadingZeros32(v-1))
-}
-
-// prevLogBase2 returns log2(v) rounded down
-func prevLogBase2(v uint32) uint32 {
-	if v == 0 {
-		return 0
-	}
-	next := nextLogBase2(v)
-	if v == (1 << next) {
-		return next
-	}
-	return next - 1
-}
-
-// getItemBuf returns an ItemBuf with capacity >= length
-func getItemBuf(length int) *ItemBuf {
-	if length <= 0 {
-		length = defaultMaxMessagesInFrame
-	}
-	if length > maxItemBufLength {
-		return &ItemBuf{
-			B: make([]queue.Item, length),
-		}
-	}
-	idx := nextLogBase2(uint32(length))
-	if v := itemBufPools[idx].Get(); v != nil {
-		buf := v.(*ItemBuf)
-		buf.B = buf.B[:length]
-		return buf
-	}
-	capacity := 1 << idx
-	return &ItemBuf{
-		B: make([]queue.Item, length, capacity),
-	}
-}
-
-// putItemBuf returns buf to the pool
-func putItemBuf(buf *ItemBuf) {
-	capacity := cap(buf.B)
-	if capacity == 0 || capacity > maxItemBufLength {
-		return // drop oversized buffers
-	}
-	idx := prevLogBase2(uint32(capacity))
-	// Clear the buffer
-	for i := range buf.B {
-		buf.B[i] = queue.Item{}
-	}
-	buf.B = buf.B[:0]
-	itemBufPools[idx].Put(buf)
-}
 
 func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duration, shrinkDelay time.Duration) bool {
 	// Wait for message from the queue.
@@ -124,34 +55,33 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 	}
 
 	if writeDelay > 0 {
-		// Use collect pattern with buffer pool for batching.
-		w.messages.BeginCollect()
-		tm := timers.AcquireTimer(writeDelay)
-		select {
-		case <-tm.C:
-		case <-w.closeCh:
+		if maxMessagesInFrame == -1 || w.messages.Len() < maxMessagesInFrame {
+			// Only wait if we have not enough messages to fill the frame.
+			tm := timers.AcquireTimer(writeDelay)
+			select {
+			case <-tm.C:
+			case <-w.closeCh:
+				timers.ReleaseTimer(tm)
+				w.messages.FinishCollect(shrinkDelay)
+				return false
+			}
 			timers.ReleaseTimer(tm)
-			w.messages.FinishCollect(shrinkDelay)
-			return false
 		}
-		timers.ReleaseTimer(tm)
 
 		w.mu.Lock()
-
-		// Determine buffer size
 		bufSize := maxMessagesInFrame
-		if bufSize == -1 {
+		if bufSize < 0 { // Unlimited, just use current length.
 			bufSize = w.messages.Len()
 			if bufSize == 0 {
-				bufSize = defaultMaxMessagesInFrame
+				return true
 			}
 		}
 
-		// Get buffer from tiered pool
+		// Get buffer from tiered pool.
 		itemBuf := getItemBuf(bufSize)
 		buf := itemBuf.B
 
-		n, ok := w.messages.RemoveManyInto(buf, maxMessagesInFrame)
+		n, ok := w.messages.RemoveManyInto(buf, bufSize)
 		if !ok {
 			putItemBuf(itemBuf)
 			w.mu.Unlock()
@@ -204,13 +134,13 @@ func (w *writer) waitSendMessage(maxMessagesInFrame int, writeDelay time.Duratio
 // run supposed to be run in goroutine, this goroutine will be closed as
 // soon as queue is closed. When writeDelay > 0, this method is non-blocking
 // and uses a timer-driven approach instead of a dedicated goroutine.
-func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int, shrinkDelay time.Duration) {
+func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int, shrinkDelay time.Duration, useWriteTimer bool) {
 	if maxMessagesInFrame == 0 {
 		maxMessagesInFrame = defaultMaxMessagesInFrame
 	}
 
-	// Timer-driven mode for writeDelay > 0: non-blocking, triggered by enqueue
-	if writeDelay > 0 {
+	// Timer-driven mode for writeDelay > 0 and useWriteTimer: non-blocking, triggered by enqueue.
+	if writeDelay > 0 && useWriteTimer {
 		w.mu.Lock()
 		w.timerMode = true
 		w.writeDelay = writeDelay
@@ -220,7 +150,7 @@ func (w *writer) run(writeDelay time.Duration, maxMessagesInFrame int, shrinkDel
 		return
 	}
 
-	// Traditional goroutine-based mode for writeDelay == 0
+	// Traditional dedicated goroutine mode.
 	for {
 		if ok := w.waitSendMessage(maxMessagesInFrame, writeDelay, shrinkDelay); !ok {
 			return
@@ -235,27 +165,23 @@ func (w *writer) flush() {
 	w.timerScheduled = false
 
 	// Check if there are messages to flush
-	if w.messages.Len() == 0 {
+	messagesLen := w.messages.Len()
+	if messagesLen == 0 {
 		w.mu.Unlock()
 		return
 	}
 
-	w.messages.BeginCollect()
-
 	// Determine buffer size
 	bufSize := w.maxMessagesInFrame
-	if bufSize == -1 {
-		bufSize = w.messages.Len()
-		if bufSize == 0 {
-			bufSize = defaultMaxMessagesInFrame
-		}
+	if bufSize < 0 { // Unlimited, just use current length.
+		bufSize = messagesLen
 	}
 
 	// Get buffer from tiered pool
 	itemBuf := getItemBuf(bufSize)
 	buf := itemBuf.B
 
-	n, ok := w.messages.RemoveManyInto(buf, w.maxMessagesInFrame)
+	n, ok := w.messages.RemoveManyInto(buf, bufSize)
 	if !ok {
 		putItemBuf(itemBuf)
 		w.mu.Unlock()
@@ -277,41 +203,17 @@ func (w *writer) flush() {
 	if writeErr == nil && w.messages.Len() > 0 && !w.closed {
 		remainingMessages := w.messages.Len()
 		// If we have more messages than max batch size (and max is not unlimited),
-		// we need to flush immediately to keep up, otherwise we'll fall behind.
+		// flush immediately to keep up, otherwise we'll fall behind.
 		if w.maxMessagesInFrame > 0 && remainingMessages >= w.maxMessagesInFrame {
-			w.consecutiveFlushes++
-			if w.consecutiveFlushes >= maxConsecutiveFlushes {
-				// We've flushed too many times in a row, yield to other goroutines
-				w.consecutiveFlushes = 0
-				w.mu.Unlock()
-				w.messages.FinishCollect(w.shrinkDelay)
-				runtime.Gosched()
-				// Schedule next flush with normal delay after yielding
-				w.mu.Lock()
-				if !w.closed {
-					w.scheduleFlushLocked()
-				}
-				w.mu.Unlock()
-				return
-			}
-			// Schedule immediate flush (0 delay)
 			w.scheduleFlushImmediateLocked()
 		} else {
 			// Messages below threshold or unlimited batch size, use normal delay
-			w.consecutiveFlushes = 0
 			w.scheduleFlushLocked()
 		}
-	} else {
-		w.consecutiveFlushes = 0
 	}
 
 	w.mu.Unlock()
 	w.messages.FinishCollect(w.shrinkDelay)
-
-	if writeErr != nil {
-		// Write failed, close the writer
-		_ = w.close(false)
-	}
 }
 
 // scheduleFlushLocked schedules a flush timer with normal delay. Must be called with w.mu held.
@@ -405,4 +307,73 @@ func (w *writer) close(flushRemaining bool) error {
 	}
 	close(w.closeCh)
 	return nil
+}
+
+const (
+	maxItemBufLength = 4096 // 2^12
+)
+
+// ItemBuf wraps []Item to avoid allocations when using sync.Pool
+type ItemBuf struct {
+	B []queue.Item
+}
+
+// pools contain pools for item slices of various capacities (power of 2)
+var itemBufPools [13]sync.Pool // supports up to 2^12 = 4096
+
+// nextLogBase2 returns log2(v) rounded up
+func nextLogBase2(v uint32) uint32 {
+	if v == 0 {
+		return 0
+	}
+	return uint32(32 - bits.LeadingZeros32(v-1))
+}
+
+// prevLogBase2 returns log2(v) rounded down
+func prevLogBase2(v uint32) uint32 {
+	if v == 0 {
+		return 0
+	}
+	next := nextLogBase2(v)
+	if v == (1 << next) {
+		return next
+	}
+	return next - 1
+}
+
+// getItemBuf returns an ItemBuf with capacity >= length
+func getItemBuf(length int) *ItemBuf {
+	if length <= 0 {
+		length = defaultMaxMessagesInFrame
+	}
+	if length > maxItemBufLength {
+		return &ItemBuf{
+			B: make([]queue.Item, length),
+		}
+	}
+	idx := nextLogBase2(uint32(length))
+	if v := itemBufPools[idx].Get(); v != nil {
+		buf := v.(*ItemBuf)
+		buf.B = buf.B[:length]
+		return buf
+	}
+	capacity := 1 << idx
+	return &ItemBuf{
+		B: make([]queue.Item, length, capacity),
+	}
+}
+
+// putItemBuf returns buf to the pool
+func putItemBuf(buf *ItemBuf) {
+	capacity := cap(buf.B)
+	if capacity == 0 || capacity > maxItemBufLength {
+		return // drop oversized buffers
+	}
+	idx := prevLogBase2(uint32(capacity))
+	// Clear the buffer
+	for i := range buf.B {
+		buf.B[i] = queue.Item{}
+	}
+	buf.B = buf.B[:0]
+	itemBufPools[idx].Put(buf)
 }

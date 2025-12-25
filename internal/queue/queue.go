@@ -26,7 +26,6 @@ type Queue struct {
 	size        int
 	closed      bool
 	initCap     int
-	collecting  bool
 	shrinkTimer *time.Timer
 }
 
@@ -280,20 +279,11 @@ func (q *Queue) Size() int {
 	return s
 }
 
-// BeginCollect marks the start of batch collection.
-// While collecting, shrinking is deferred until FinishCollect is called.
-func (q *Queue) BeginCollect() {
-	q.mu.Lock()
-	q.collecting = true
-	q.mu.Unlock()
-}
-
 // FinishCollect marks the end of batch collection and schedules delayed shrinking.
 // If shrinkDelay is 0, shrinks immediately. Otherwise, schedules shrink after delay.
 // Under load, the timer keeps resetting, keeping queue at working set size.
 func (q *Queue) FinishCollect(shrinkDelay time.Duration) {
 	q.mu.Lock()
-	q.collecting = false
 
 	if shrinkDelay == 0 {
 		// Immediate shrink
