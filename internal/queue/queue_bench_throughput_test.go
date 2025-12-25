@@ -84,11 +84,6 @@ func runProducerConsumer(b *testing.B, batchSize int, shrinkDelay time.Duration,
 				return
 			}
 
-			// Emulate batching with BeginCollect/FinishCollect
-			if useShrink {
-				q.BeginCollect()
-			}
-
 			q.RemoveManyInto(buf, batchSize)
 
 			time.Sleep(100 * time.Nanosecond) // Emulate write syscall.
