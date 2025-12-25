@@ -327,9 +327,6 @@ func TestQueueCollectingMode(t *testing.T) {
 	q.Add(Item{Data: []byte("msg2"), Channel: "ch"})
 	require.Equal(t, 2, q.Cap())
 
-	// Start collecting
-	q.BeginCollect()
-
 	// Add more items (will cause resize)
 	q.Add(Item{Data: []byte("msg3"), Channel: "ch"})
 	q.Add(Item{Data: []byte("msg4"), Channel: "ch"})
@@ -571,9 +568,6 @@ func TestQueueDelayedShrink(t *testing.T) {
 	}
 	require.Equal(t, 8, q.Cap())
 
-	// Start collecting
-	q.BeginCollect()
-
 	// Remove all items
 	buf := make([]Item, 10)
 	n, ok := q.RemoveManyInto(buf, -1)
@@ -606,9 +600,6 @@ func TestQueueImmediateShrink(t *testing.T) {
 	}
 	require.Equal(t, 8, q.Cap())
 
-	// Start collecting
-	q.BeginCollect()
-
 	// Remove all items
 	buf := make([]Item, 10)
 	n, ok := q.RemoveManyInto(buf, -1)
@@ -632,7 +623,6 @@ func TestQueueShrinkTimerReset(t *testing.T) {
 	require.Equal(t, 8, q.Cap())
 
 	// First collect cycle
-	q.BeginCollect()
 	buf := make([]Item, 10)
 	q.RemoveManyInto(buf, -1)
 	q.FinishCollect(100 * time.Millisecond)
@@ -645,7 +635,6 @@ func TestQueueShrinkTimerReset(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	}
-	q.BeginCollect()
 	q.RemoveManyInto(buf, -1)
 	q.FinishCollect(100 * time.Millisecond)
 
@@ -666,9 +655,6 @@ func TestQueueShrinkPartial(t *testing.T) {
 		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	}
 	require.Equal(t, 16, q.Cap())
-
-	// Start collecting
-	q.BeginCollect()
 
 	// Remove items, leaving 4
 	buf := make([]Item, 20)
@@ -693,9 +679,6 @@ func TestQueueNoShrinkBelowInitCap(t *testing.T) {
 	}
 	require.Equal(t, 8, q.Cap())
 
-	// Start collecting
-	q.BeginCollect()
-
 	// Remove all items
 	buf := make([]Item, 10)
 	q.RemoveManyInto(buf, -1)
@@ -715,7 +698,6 @@ func TestQueueShrinkEmptyQueue(t *testing.T) {
 	require.Equal(t, 0, q.Len())
 
 	// Collect on empty queue
-	q.BeginCollect()
 	q.FinishCollect(0)
 
 	// Should remain at initCap
@@ -732,7 +714,6 @@ func TestQueueMultipleShrinkCycles(t *testing.T) {
 	}
 	require.Equal(t, 8, q.Cap())
 
-	q.BeginCollect()
 	buf := make([]Item, 20)
 	q.RemoveManyInto(buf, -1)
 	q.FinishCollect(0)
@@ -744,7 +725,6 @@ func TestQueueMultipleShrinkCycles(t *testing.T) {
 	}
 	require.Equal(t, 16, q.Cap())
 
-	q.BeginCollect()
 	q.RemoveManyInto(buf, -1)
 	q.FinishCollect(0)
 	require.Equal(t, 2, q.Cap())
@@ -764,9 +744,6 @@ func TestQueueShrinkWithItemsRemaining(t *testing.T) {
 		q.Add(Item{Data: []byte("msg"), Channel: "ch"})
 	}
 	require.Equal(t, 32, q.Cap())
-
-	// Start collecting
-	q.BeginCollect()
 
 	// Remove 30 items, leaving 2
 	buf := make([]Item, 40)
