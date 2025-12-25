@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/bpool"
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/centrifuge/internal/queue"
@@ -31,23 +32,6 @@ var jsonPingPush = []byte(`{}`)
 var protobufPingPush []byte
 
 var randSource *saferand.Rand
-
-const (
-	// reuseWriteManyMessagesBuffer enables reusing a pooled buffer for messages
-	// slice in WriteManyFn to avoid allocations on each call. Set to false to
-	// use the original behavior which allocates a new slice each time.
-	reuseWriteManyMessagesBuffer = true
-	// defaultWriteManyMessagesBufferSize is the initial capacity of the pooled
-	// messages buffer. Should match the typical maxMessagesInFrame value.
-	defaultWriteManyMessagesBufferSize = 16
-)
-
-var writeManyMessagesBufPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([][]byte, 0, defaultWriteManyMessagesBufferSize)
-		return &buf
-	},
-}
 
 func init() {
 	protobufPingReply, _ = protocol.DefaultProtobufReplyEncoder.Encode(&protocol.Reply{})
@@ -2684,15 +2668,8 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				return nil
 			},
 			WriteManyFn: func(items ...queue.Item) error {
-				var messages [][]byte
-				var messagesBufPtr *[][]byte
-
-				if reuseWriteManyMessagesBuffer {
-					messagesBufPtr = writeManyMessagesBufPool.Get().(*[][]byte)
-					messages = (*messagesBufPtr)[:0]
-				} else {
-					messages = make([][]byte, 0, len(items))
-				}
+				messagesBuf := bpool.GetByteSlicesBuf(len(items))
+				defer bpool.PutByteSlicesBuf(messagesBuf)
 
 				// Batch metric updates - accumulate counts locally first
 				type metricKey struct {
@@ -2712,7 +2689,7 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 							continue
 						}
 					}
-					messages = append(messages, items[i].Data)
+					messagesBuf.B = append(messagesBuf.B, items[i].Data)
 
 					// Accumulate metrics locally
 					key := metricKey{
@@ -2734,17 +2711,8 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				}
 
 				writeMu.Lock()
-				err := c.transport.WriteMany(messages...)
+				err := c.transport.WriteMany(messagesBuf.B...)
 				writeMu.Unlock()
-
-				if reuseWriteManyMessagesBuffer {
-					// Clear references to allow GC.
-					for i := range messages {
-						messages[i] = nil
-					}
-					*messagesBufPtr = messages
-					writeManyMessagesBufPool.Put(messagesBufPtr)
-				}
 
 				if err != nil {
 					if c.node.logger.enabled(LogLevelTrace) {
