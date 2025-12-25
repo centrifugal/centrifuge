@@ -4,11 +4,7 @@ go 1.24.0
 
 require (
 	github.com/FZambia/eagle v0.2.0
-<<<<<<< HEAD
 	github.com/centrifugal/protocol v0.18.2-0.20251221133122-8a98bdd35b96
-=======
-	github.com/centrifugal/protocol v0.18.1
->>>>>>> master
 	github.com/google/cel-go v0.26.1
 	github.com/google/uuid v1.6.0
 	github.com/maypok86/otter/v2 v2.3.0
