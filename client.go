@@ -2385,7 +2385,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			c.pingInterval, c.pongTimeout = getPingPongPeriodValues(c.transport.PingPongConfig())
 		}
 		c.replyWithoutQueue = reply.ReplyWithoutQueue
-		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap, reply.QueueShrinkDelay, reply.UseWriteTimer)
+		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap, reply.QueueShrinkDelay, reply.WriteWithTimer)
 
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
@@ -2653,7 +2653,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 	}, nil
 }
 
-func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, queueInitialCap int, queueShrinkDelay time.Duration, useWriteTimer bool) {
+func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, queueInitialCap int, queueShrinkDelay time.Duration, writeWithTimer bool) {
 	c.startWriterOnce.Do(func() {
 		var writeMu sync.Mutex
 		messageWriterConf := writerConfig{
@@ -2763,7 +2763,7 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 		}
 
 		c.messageWriter = newWriter(messageWriterConf, queueInitialCap)
-		if batchDelay > 0 && useWriteTimer {
+		if batchDelay > 0 && writeWithTimer {
 			// Timer-driven mode: non-blocking, triggered by enqueue operations.
 			c.messageWriter.run(batchDelay, maxMessagesInFrame, queueShrinkDelay, true)
 		} else {
