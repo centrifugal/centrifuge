@@ -49,7 +49,7 @@ func main() {
 		writeWithTimer = true
 	}
 	if writeWithTimer && writeDelay == 0 {
-		log.Fatal("WRITE_DELAY must be set when USE_WRITE_TIMER=1")
+		log.Fatal("WRITE_DELAY must be set when WRITE_WITH_TIMER is on")
 	}
 	var shrinkDelay time.Duration
 	if os.Getenv("SHRINK_DELAY") != "" {
