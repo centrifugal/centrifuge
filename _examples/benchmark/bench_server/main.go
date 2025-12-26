@@ -113,6 +113,11 @@ func main() {
 		client.OnPublish(func(e centrifuge.PublishEvent, cb centrifuge.PublishCallback) {
 			cb(centrifuge.PublishReply{}, nil)
 		})
+
+		client.OnRPC(func(e centrifuge.RPCEvent, cb centrifuge.RPCCallback) {
+			// Echo back the request data for benchmark RPC mode
+			cb(centrifuge.RPCReply{Data: e.Data}, nil)
+		})
 	})
 
 	if err := node.Run(); err != nil {
@@ -120,7 +125,9 @@ func main() {
 	}
 
 	http.Handle("/connection/websocket", centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{
-		WriteTimeout: time.Second,
+		WriteTimeout:       time.Second,
+		UseWriteBufferPool: true,
+		ReadBufferSize:     512,
 	}))
 
 	go func() {

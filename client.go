@@ -547,16 +547,13 @@ func getPingData(uni bool, protoType ProtocolType) []byte {
 	if uni {
 		if protoType == ProtocolTypeJSON {
 			return jsonPingPush
-		} else {
-			return protobufPingPush
 		}
-	} else {
-		if protoType == ProtocolTypeJSON {
-			return jsonPingReply
-		} else {
-			return protobufPingReply
-		}
+		return protobufPingPush
 	}
+	if protoType == ProtocolTypeJSON {
+		return jsonPingReply
+	}
+	return protobufPingReply
 }
 
 func (c *Client) sendPing() {
@@ -564,6 +561,15 @@ func (c *Client) sendPing() {
 	c.lastPing = time.Now().UnixNano()
 	c.mu.Unlock()
 	unidirectional := c.transport.Unidirectional()
+	// TODO: can/should we write pings directly without going through messageWriter?
+	//err := c.messageWriter.config.WriteFn(queue.Item{
+	//	Data:      getPingData(unidirectional, c.transport.Protocol()),
+	//	FrameType: protocol.FrameTypeServerPing,
+	//})
+	//if err != nil {
+	//	go func() { _ = c.close(DisconnectWriteError) }()
+	//	return
+	//}
 	_ = c.writeEncodedPushData(getPingData(unidirectional, c.transport.Protocol()), "", protocol.FrameTypeServerPing, ChannelBatchConfig{})
 	if c.node.logEnabled(LogLevelTrace) {
 		c.traceOutReply(emptyReply)
@@ -961,10 +967,9 @@ func (c *Client) encodeReply(reply *protocol.Reply) ([]byte, error) {
 	if c.transport.Unidirectional() {
 		encoder := protocol.GetPushEncoder(protoType)
 		return encoder.Encode(reply.Push)
-	} else {
-		encoder := protocol.GetReplyEncoder(protoType)
-		return encoder.Encode(reply)
 	}
+	encoder := protocol.GetReplyEncoder(protoType)
+	return encoder.Encode(reply)
 }
 
 func (c *Client) getSendPushReply(data []byte) ([]byte, error) {
