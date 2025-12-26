@@ -42,7 +42,7 @@ func usage() {
 	log.Printf("Modes (-m):\n")
 	log.Printf("  pubsub (default) - Publish/subscribe benchmark\n")
 	log.Printf("  idle             - Keep connections idle to test connection overhead\n")
-	log.Printf("  connect-rate     - Measure connection rate performance\n")
+	log.Printf("  connect          - Measure connection rate performance\n")
 	log.Printf("  rpc              - Measure RPC throughput\n\n")
 	log.Printf("Common options:\n")
 	log.Printf("  -s uri           Server URI (default: ws://localhost:8000/connection/websocket)\n")
@@ -56,7 +56,7 @@ func usage() {
 	log.Printf("  -d SECONDS       Deadline for test completion (default: %d)\n\n", DefaultDeadline)
 	log.Printf("Idle mode options:\n")
 	log.Printf("  -w SECONDS       Wait time in seconds (default: 60)\n\n")
-	log.Printf("Connect-rate mode options:\n")
+	log.Printf("Connect mode options:\n")
 	log.Printf("  -cr RATE         Target connection rate per second (default: 100)\n\n")
 	log.Printf("RPC mode options:\n")
 	log.Printf("  -rr RATE         RPC calls per second per connection (default: 100)\n")
@@ -73,8 +73,8 @@ var numMsg = flag.Int("n", DefaultNumMsg, "Number of messages to publish")
 var msgSize = flag.Int("ms", DefaultMessageSize, "Size of the message")
 var deadline = flag.Int("d", DefaultDeadline, "Deadline for the test to finish")
 var pubRateLimit = flag.Int("pl", 0, "Rate limit for each publisher in messages per second")
-var mode = flag.String("m", "pubsub", "Benchmark mode: pubsub (default), idle, connect-rate, rpc")
-var connectRate = flag.Int("cr", 100, "Target connection rate per second (for connect-rate mode)")
+var mode = flag.String("m", "pubsub", "Benchmark mode: pubsub (default), idle, connect, rpc")
+var connectRate = flag.Int("cr", 100, "Target connection rate per second (for connect mode)")
 var waitTime = flag.Int("w", 60, "Wait time in seconds (for idle mode)")
 var rpcRate = flag.Int("rr", 100, "RPC calls per second per connection (for rpc mode)")
 
@@ -92,12 +92,12 @@ func main() {
 		runPubSubMode(args)
 	case "idle":
 		runIdleMode(args)
-	case "connect-rate":
+	case "connect":
 		runConnectRateMode(args)
 	case "rpc":
 		runRPCMode(args)
 	default:
-		log.Fatalf("Unknown mode: %s. Available modes: pubsub, idle, connect-rate, rpc", *mode)
+		log.Fatalf("Unknown mode: %s. Available modes: pubsub, idle, connect, rpc", *mode)
 	}
 }
 
@@ -407,7 +407,7 @@ func runConnectRateMode(_ []string) {
 	var failedCount int64
 	latencies := &sync.Map{} // Thread-safe map to store latencies
 
-	model := NewUIModel("connect-rate", 0, globalErrorCollector)
+	model := NewUIModel("connect", 0, globalErrorCollector)
 	model.stats["total"] = int64(*numSubs)
 	model.stats["completed"] = &completedCount
 	model.stats["failed"] = &failedCount
@@ -448,7 +448,7 @@ func runConnectRateMode(_ []string) {
 			rl.Take()
 			go func(idx int) {
 				connStart := time.Now()
-				c := newConnection("connect-rate")
+				c := newConnection("connect")
 
 				connected := make(chan bool, 1)
 				c.OnConnected(func(centrifuge.ConnectedEvent) {
@@ -1208,7 +1208,7 @@ func (m UIModel) View() string {
 	switch m.mode {
 	case "idle":
 		s.WriteString(m.renderIdleStats())
-	case "connect-rate":
+	case "connect":
 		s.WriteString(m.renderConnectRateStats())
 	case "rpc":
 		s.WriteString(m.renderRPCStats())
