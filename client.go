@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/bpool"
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/centrifuge/internal/queue"
@@ -1051,7 +1052,7 @@ func (c *Client) Disconnect(disconnect ...Disconnect) {
 }
 
 func (c *Client) close(disconnect Disconnect) error {
-	c.startWriter(0, 0, 0)
+	c.startWriter(0, 0, 0, 0, false)
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	c.connectMu.Lock()
@@ -2359,7 +2360,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 		}
 		reply, err := c.node.clientEvents.connectingHandler(c.ctx, e)
 		if err != nil {
-			c.startWriter(0, 0, 0)
+			c.startWriter(0, 0, 0, 0, false)
 			return err
 		}
 		if reply.PingPongConfig != nil {
@@ -2368,7 +2369,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			c.pingInterval, c.pongTimeout = getPingPongPeriodValues(c.transport.PingPongConfig())
 		}
 		c.replyWithoutQueue = reply.ReplyWithoutQueue
-		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap)
+		c.startWriter(reply.WriteDelay, reply.MaxMessagesInFrame, reply.QueueInitialCap, reply.QueueShrinkDelay, reply.WriteWithTimer)
 
 		if reply.Credentials != nil {
 			credentials = reply.Credentials
@@ -2393,7 +2394,7 @@ func (c *Client) connectCmd(req *protocol.ConnectRequest, cmd *protocol.Command,
 			}
 		}
 	} else {
-		c.startWriter(0, 0, 0)
+		c.startWriter(0, 0, 0, 0, false)
 		c.pingInterval, c.pongTimeout = getPingPongPeriodValues(c.transport.PingPongConfig())
 	}
 
@@ -2636,7 +2637,7 @@ func (c *Client) getConnectPushReply(res *protocol.ConnectResult) (*protocol.Rep
 	}, nil
 }
 
-func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, queueInitialCap int) {
+func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, queueInitialCap int, queueShrinkDelay time.Duration, writeWithTimer bool) {
 	c.startWriterOnce.Do(func() {
 		var writeMu sync.Mutex
 		messageWriterConf := writerConfig{
@@ -2667,7 +2668,8 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				return nil
 			},
 			WriteManyFn: func(items ...queue.Item) error {
-				messages := make([][]byte, 0, len(items))
+				messagesBuf := bpool.GetByteSlicesBuf(len(items))
+				defer bpool.PutByteSlicesBuf(messagesBuf)
 
 				// Batch metric updates - accumulate counts locally first
 				type metricKey struct {
@@ -2687,7 +2689,7 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 							continue
 						}
 					}
-					messages = append(messages, items[i].Data)
+					messagesBuf.B = append(messagesBuf.B, items[i].Data)
 
 					// Accumulate metrics locally
 					key := metricKey{
@@ -2709,8 +2711,10 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 				}
 
 				writeMu.Lock()
-				defer writeMu.Unlock()
-				if err := c.transport.WriteMany(messages...); err != nil {
+				err := c.transport.WriteMany(messagesBuf.B...)
+				writeMu.Unlock()
+
+				if err != nil {
 					if c.node.logger.enabled(LogLevelTrace) {
 						c.node.logger.log(newLogEntry(LogLevelTrace, "client write failed", map[string]any{"client": c.uid, "user": c.user, "error": err.Error()}))
 					}
@@ -2727,7 +2731,13 @@ func (c *Client) startWriter(batchDelay time.Duration, maxMessagesInFrame int, q
 		}
 
 		c.messageWriter = newWriter(messageWriterConf, queueInitialCap)
-		go c.messageWriter.run(batchDelay, maxMessagesInFrame)
+		if batchDelay > 0 && writeWithTimer {
+			// Timer-driven mode: non-blocking, triggered by enqueue operations.
+			c.messageWriter.run(batchDelay, maxMessagesInFrame, queueShrinkDelay, true)
+		} else {
+			// Traditional mode: dedicated goroutine for immediate writes.
+			go c.messageWriter.run(batchDelay, maxMessagesInFrame, queueShrinkDelay, false)
+		}
 		if c.node.config.GetChannelBatchConfig != nil {
 			c.perChannelWriter = newPerChannelWriter(c.writeQueueItems)
 		}

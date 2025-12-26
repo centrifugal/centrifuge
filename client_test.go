@@ -3724,7 +3724,7 @@ func TestClient_HandleCommandV2_Pong(t *testing.T) {
 	defer func() { _ = node.Shutdown(context.Background()) }()
 	clientV2 := newTestClientV2(t, node, "42")
 
-	clientV2.startWriter(0, 0, 0)
+	clientV2.startWriter(0, 0, 0, 0, false)
 	clientV2.sendPing()
 	ok := clientV2.HandleCommand(&protocol.Command{
 		Connect: &protocol.ConnectRequest{},

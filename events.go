@@ -68,6 +68,11 @@ type ConnectReply struct {
 	// (1000 / 100) * MaxMessagesInFrame (16 by default), i.e. 160 messages per second. This
 	// should be more than enough for target Centrifuge use cases (frontend apps) though.
 	WriteDelay time.Duration
+	// WriteWithTimer enables using write timer for this client connection. This mode is only
+	// active when WriteDelay is set to a non-zero value. In this mode Centrifuge uses a timer
+	// to schedule batched writes to the connection instead of checking for messages in a
+	// dedicated goroutine loop.
+	WriteWithTimer bool
 	// ReplyWithoutQueue when enabled will force Centrifuge to avoid using Client write
 	// queue for sending replies to commands for this connection. Replies sent directly to
 	// the Client's transport thus avoiding possible delays caused by writer loop, but replies
@@ -76,6 +81,11 @@ type ConnectReply struct {
 	// QueueInitialCap set an initial capacity for client's message queue, the size of queue
 	// can grow further, but won't be reduced below QueueInitialCap. By default, it's 2.
 	QueueInitialCap int
+	// QueueShrinkDelay is a time Centrifuge will wait before shrinking the client's message
+	// queue after it grows. This delay helps to avoid frequent allocations/deallocations when
+	// queue size fluctuates. Zero value means no delay and immediate shrinking. This option
+	// only works when WriteDelay is set to a non-zero value.
+	QueueShrinkDelay time.Duration
 	// PingPongConfig if set, will override Transport's PingPongConfig to enable setting ping/pong interval
 	// for individual client.
 	PingPongConfig *PingPongConfig
