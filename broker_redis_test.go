@@ -187,8 +187,8 @@ var historyRedisTests = []historyRedisTest{
 	{"vk_single_strm", true, false, 16379},
 	{"df_single_list", false, false, 36379},
 	{"df_single_strm", true, false, 36379},
-	{"rd_cluster_list", false, true, 7000},
-	{"rd_cluster_strm", true, true, 7000},
+	{"rd_cluster_list", false, true, 7001},
+	{"rd_cluster_strm", true, true, 7001},
 	{"vk_cluster_strm", true, true, 17000},
 }
 
@@ -1283,7 +1283,7 @@ func TestRedisPubSubTwoNodesWithDelta(t *testing.T) {
 
 func TestRedisClusterShardedPubSub(t *testing.T) {
 	redisConf := RedisShardConfig{
-		ClusterAddresses: []string{"localhost:7000", "localhost:7001", "localhost:7002"},
+		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
 		IOTimeout:        10 * time.Second,
 		ConnectTimeout:   10 * time.Second,
 	}
@@ -2521,4 +2521,111 @@ func TestRedisBroker_ClusterHashTags_Consistency(t *testing.T) {
 	// Both should have the same hash tag {test-channel}, ensuring they're in the same slot.
 	require.Contains(t, string(channelID), "{test-channel}")
 	require.Contains(t, string(streamKey), "{test-channel}")
+}
+
+func TestRedisClusterMultipleChannelsTwoNodes(t *testing.T) {
+	redisConf := RedisShardConfig{
+		ClusterAddresses: []string{"localhost:7001", "localhost:7002", "localhost:7003"},
+		IOTimeout:        10 * time.Second,
+		ConnectTimeout:   10 * time.Second,
+	}
+
+	prefix := getUniquePrefix()
+
+	// Create first node
+	node1, _ := New(Config{})
+	s1, err := NewRedisShard(node1, redisConf)
+	require.NoError(t, err)
+	b1, err := NewRedisBroker(node1, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s1},
+	})
+	require.NoError(t, err)
+	node1.SetBroker(b1)
+	defer func() { _ = node1.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b1)
+
+	// Check if Redis Cluster is available
+	result := s1.client.Do(context.Background(), s1.client.B().Ping().Build())
+	if result.Error() != nil {
+		t.Skip("Redis Cluster not available, skipping test")
+	}
+
+	numChannels := 10
+	var numPublications int64
+	pubCh := make(chan struct{})
+
+	// Track received messages per channel
+	receivedChannels := make(map[string]bool)
+	var mu sync.Mutex
+
+	brokerEventHandler := &testBrokerEventHandler{
+		HandleControlFunc: func(bytes []byte) error {
+			return nil
+		},
+		HandlePublicationFunc: func(ch string, pub *Publication, sp StreamPosition, delta bool, prevPub *Publication) error {
+			mu.Lock()
+			receivedChannels[ch] = true
+			mu.Unlock()
+
+			c := atomic.AddInt64(&numPublications, 1)
+			if c == int64(numChannels) {
+				close(pubCh)
+			}
+			return nil
+		},
+		HandleJoinFunc: func(ch string, info *ClientInfo) error {
+			return nil
+		},
+		HandleLeaveFunc: func(ch string, info *ClientInfo) error {
+			return nil
+		},
+	}
+	_ = b1.RegisterControlEventHandler(brokerEventHandler)
+	_ = b1.RegisterBrokerEventHandler(brokerEventHandler)
+
+	// Subscribe to all channels on node1
+	for i := 0; i < numChannels; i++ {
+		channelName := "channel" + strconv.Itoa(i)
+		require.NoError(t, b1.Subscribe(channelName))
+	}
+
+	// Create second node
+	node2, _ := New(Config{})
+	s2, err := NewRedisShard(node2, redisConf)
+	require.NoError(t, err)
+
+	b2, err := NewRedisBroker(node2, RedisBrokerConfig{
+		Prefix: prefix,
+		Shards: []*RedisShard{s2},
+	})
+	require.NoError(t, err)
+	node2.SetBroker(b2)
+	_ = node2.Run()
+	defer func() { _ = node2.Shutdown(context.Background()) }()
+	defer stopRedisBroker(b2)
+
+	// Publish messages from node2 to all channels
+	for i := 0; i < numChannels; i++ {
+		channelName := "channel" + strconv.Itoa(i)
+		_, err = node2.Publish(channelName, []byte("message"+strconv.Itoa(i)))
+		require.NoError(t, err)
+	}
+
+	// Wait for all publications to be received
+	select {
+	case <-pubCh:
+		// Success - verify all channels received messages
+		mu.Lock()
+		defer mu.Unlock()
+		require.Equal(t, numChannels, len(receivedChannels), "Not all channels received messages")
+		for i := 0; i < numChannels; i++ {
+			channelName := "channel" + strconv.Itoa(i)
+			require.True(t, receivedChannels[channelName], "Channel %s did not receive message", channelName)
+		}
+	case <-time.After(5 * time.Second):
+		mu.Lock()
+		defer mu.Unlock()
+		require.Fail(t, "timeout waiting for PUB/SUB messages, received %d out of %d", len(receivedChannels), numChannels)
+	}
 }

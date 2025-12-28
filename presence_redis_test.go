@@ -85,7 +85,7 @@ var redisPresenceTests = []redisPresenceTest{
 	{"rd_single", false, 6379},
 	{"df_single", false, 36379},
 	{"vk_single", false, 16379},
-	{"rd_cluster", true, 7000},
+	{"rd_cluster", true, 7001},
 	{"vk_cluster", true, 17000},
 }
 
