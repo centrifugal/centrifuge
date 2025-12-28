@@ -23,7 +23,7 @@ func TestNewRedisShard(t *testing.T) {
 		{
 			name: "redis cluster",
 			config: RedisShardConfig{
-				Address: "redis://127.0.0.1:7000",
+				Address: "redis://127.0.0.1:7001",
 			},
 			expectedCluster: true,
 		},
