@@ -313,8 +313,8 @@ const (
 	maxItemBufLength = 4096 // 2^12
 )
 
-// ItemBuf wraps []Item to avoid allocations when using sync.Pool
-type ItemBuf struct {
+// itemBuf wraps []Item to avoid allocations when using sync.Pool
+type itemBuf struct {
 	B []queue.Item
 }
 
@@ -341,30 +341,30 @@ func prevLogBase2(v uint32) uint32 {
 	return next - 1
 }
 
-// getItemBuf returns an ItemBuf with capacity >= length
-func getItemBuf(length int) *ItemBuf {
+// getItemBuf returns an itemBuf with capacity >= length
+func getItemBuf(length int) *itemBuf {
 	if length <= 0 {
 		length = defaultMaxMessagesInFrame
 	}
 	if length > maxItemBufLength {
-		return &ItemBuf{
+		return &itemBuf{
 			B: make([]queue.Item, length),
 		}
 	}
 	idx := nextLogBase2(uint32(length))
 	if v := itemBufPools[idx].Get(); v != nil {
-		buf := v.(*ItemBuf)
+		buf := v.(*itemBuf)
 		buf.B = buf.B[:length]
 		return buf
 	}
 	capacity := 1 << idx
-	return &ItemBuf{
+	return &itemBuf{
 		B: make([]queue.Item, length, capacity),
 	}
 }
 
 // putItemBuf returns buf to the pool
-func putItemBuf(buf *ItemBuf) {
+func putItemBuf(buf *itemBuf) {
 	capacity := cap(buf.B)
 	if capacity == 0 || capacity > maxItemBufLength {
 		return // drop oversized buffers
