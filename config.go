@@ -163,6 +163,10 @@ type MetricsConfig struct {
 	// RegistererGatherer is a Prometheus registerer and gatherer. If not set then a
 	// prometheus.DefaultRegisterer and prometheus.DefaultGatherer will be used.
 	RegistererGatherer RegistererGatherer
+	// ConstLabels are constant labels to attach to all Centrifuge metrics. These labels
+	// will be added to every metric exported by Centrifuge. This is useful for adding
+	// labels like environment, region, cluster, etc.
+	ConstLabels map[string]string
 
 	// GetChannelNamespaceLabel if set will be used by Centrifuge to extract channel_namespace
 	// label for channel related metrics. Make sure to maintain low cardinality of returned values
