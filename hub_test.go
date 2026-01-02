@@ -159,7 +159,7 @@ func (t *testTransport) Close(disconnect Disconnect) error {
 func TestHub(t *testing.T) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
-	})
+	}, defaultNodeRole)
 	require.NoError(t, err)
 
 	h := newHub(nil, m, 0)
@@ -908,7 +908,7 @@ func TestHubBroadcastLeave(t *testing.T) {
 func TestHubShutdown(t *testing.T) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
-	})
+	}, defaultNodeRole)
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	err = h.shutdown(context.Background())
@@ -930,7 +930,7 @@ func TestHubShutdown(t *testing.T) {
 func TestHubSubscriptions(t *testing.T) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
-	})
+	}, defaultNodeRole)
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
@@ -975,7 +975,7 @@ func TestHubSubscriptions(t *testing.T) {
 func TestUserConnections(t *testing.T) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
-	})
+	}, defaultNodeRole)
 	require.NoError(t, err)
 	h := newHub(nil, m, 0)
 	c, err := newClient(context.Background(), defaultTestNode(), newTestTransport(func() {}))
@@ -1338,7 +1338,7 @@ func BenchmarkDeltaFossil(b *testing.B) {
 func TestSubIDUniquenessAcrossShards(t *testing.T) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
-	})
+	}, defaultNodeRole)
 	require.NoError(t, err)
 
 	h := newHub(nil, m, 0)
@@ -1420,7 +1420,7 @@ func TestSubIDUniquenessAcrossShards(t *testing.T) {
 func TestSubIDShardDistribution(t *testing.T) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
-	})
+	}, defaultNodeRole)
 	require.NoError(t, err)
 
 	h := newHub(nil, m, 0)

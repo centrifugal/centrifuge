@@ -13,7 +13,7 @@ import (
 func BenchmarkTransportMessagesSent(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
-	})
+	}, defaultNodeRole)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -29,7 +29,7 @@ func BenchmarkTransportMessagesSent(b *testing.B) {
 func BenchmarkTransportMessagesReceived(b *testing.B) {
 	m, err := newMetricsRegistry(MetricsConfig{
 		MetricsNamespace: "test",
-	})
+	}, defaultNodeRole)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -48,7 +48,7 @@ func BenchmarkCommandDuration(b *testing.B) {
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
-	})
+	}, defaultNodeRole)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -68,7 +68,7 @@ func BenchmarkIncReplyError(b *testing.B) {
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
-	})
+	}, defaultNodeRole)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -87,7 +87,7 @@ func BenchmarkIncActionCount(b *testing.B) {
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
-	})
+	}, defaultNodeRole)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -106,7 +106,7 @@ func BenchmarkIncRecover(b *testing.B) {
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
-	})
+	}, defaultNodeRole)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -125,7 +125,7 @@ func BenchmarkIncDisconnect(b *testing.B) {
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
-	})
+	}, defaultNodeRole)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -144,7 +144,7 @@ func BenchmarkIncUnsubscribe(b *testing.B) {
 		GetChannelNamespaceLabel: func(channel string) string {
 			return channel
 		},
-	})
+	}, defaultNodeRole)
 	require.NoError(b, err)
 
 	b.ReportAllocs()
@@ -164,7 +164,7 @@ func TestMetrics(t *testing.T) {
 		},
 		ChannelNamespaceCacheTTL:             -1,
 		EnableRecoveredPublicationsHistogram: true,
-	})
+	}, defaultNodeRole)
 	require.Error(t, err)
 
 	testCases := []struct {
@@ -227,7 +227,7 @@ func TestMetrics(t *testing.T) {
 				RegistererGatherer:                   tc.registererGatherer,
 				ConstLabels:                          tc.constLabels,
 				EnableRecoveredPublicationsHistogram: true,
-			})
+			}, defaultNodeRole)
 			require.NoError(t, err)
 
 			for i := 0; i < 10; i++ {

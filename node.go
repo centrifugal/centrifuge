@@ -97,6 +97,8 @@ const (
 	numSubLocks            = 16384
 	numMediumLocks         = 16384
 	numSubDissolverWorkers = 64
+
+	defaultNodeRole = "default"
 )
 
 // TransportAcceptedLabels contains labels for transport connection metrics.
@@ -166,6 +168,10 @@ func New(c Config) (*Node, error) {
 		c.Name = hostname
 	}
 
+	if c.Role == "" {
+		c.Role = defaultNodeRole
+	}
+
 	var lg *logger
 	if c.LogHandler != nil {
 		lg = newLogger(c.LogLevel, c.LogHandler)
@@ -191,7 +197,7 @@ func New(c Config) (*Node, error) {
 	}
 	n.emulationSurveyHandler = newEmulationSurveyHandler(n)
 
-	m, err := newMetricsRegistry(c.Metrics)
+	m, err := newMetricsRegistry(c.Metrics, c.Role)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing metrics: %v", err)
 	}
@@ -648,6 +654,7 @@ type NodeInfo struct {
 	Uptime      uint32
 	Metrics     *Metrics
 	Data        []byte
+	Role        string
 }
 
 // Info returns aggregated stats from all nodes.
@@ -655,6 +662,10 @@ func (n *Node) Info() (Info, error) {
 	nodes := n.nodes.list()
 	nodeResults := make([]NodeInfo, len(nodes))
 	for i, nd := range nodes {
+		role := nd.Role
+		if role == "" {
+			role = defaultNodeRole
+		}
 		info := NodeInfo{
 			UID:         nd.Uid,
 			Name:        nd.Name,
@@ -665,6 +676,7 @@ func (n *Node) Info() (Info, error) {
 			NumChannels: nd.NumChannels,
 			Uptime:      nd.Uptime,
 			Data:        nd.Data,
+			Role:        role,
 		}
 		if nd.Metrics != nil {
 			info.Metrics = &Metrics{
@@ -913,6 +925,7 @@ func (n *Node) pubNode(nodeID string) error {
 		NumSubs:     uint32(n.hub.NumSubscriptions()),
 		Uptime:      uint32(time.Now().Unix() - n.startedAt),
 		Data:        data,
+		Role:        n.config.Role,
 	}
 
 	n.metricsMu.Lock()
@@ -1619,6 +1632,7 @@ func (r *nodeRegistry) add(info *controlpb.Node) bool {
 				Data:        info.Data,
 				NumSubs:     info.NumSubs,
 				Metrics:     node.Metrics,
+				Role:        info.Role,
 			}
 		}
 	} else {

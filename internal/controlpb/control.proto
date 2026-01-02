@@ -36,6 +36,7 @@ message Node {
     Metrics metrics = 8;
     bytes data = 9;
     uint32 num_subs = 10;
+    string role = 11;
 }
 
 message Metrics {

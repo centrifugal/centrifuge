@@ -1471,3 +1471,118 @@ func TestGetPresenceManager(t *testing.T) {
 	_, err = node.Presence("test2")
 	require.NoError(t, err)
 }
+
+// TestNodeRole_DefaultAssignment tests that Role defaults to defaultNodeRole when not set.
+func TestNodeRole_DefaultAssignment(t *testing.T) {
+	n, err := New(Config{})
+	require.NoError(t, err)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	require.Equal(t, defaultNodeRole, n.config.Role)
+}
+
+func TestNodeRole_CustomRole(t *testing.T) {
+	n, err := New(Config{
+		Role: "worker",
+	})
+	require.NoError(t, err)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+
+	_ = n.Run()
+
+	// Verify the role is in the node info
+	info, err := n.Info()
+	require.NoError(t, err)
+	require.Len(t, info.Nodes, 1)
+	require.Equal(t, "worker", info.Nodes[0].Role)
+}
+
+// TestNodeRole_BackwardCompatibility tests handling of nodes without role.
+func TestNodeRole_BackwardCompatibility(t *testing.T) {
+	n, err := New(Config{
+		Role: "frontend",
+	})
+	require.NoError(t, err)
+	defer func() { _ = n.Shutdown(context.Background()) }()
+	_ = n.Run()
+
+	// Simulate receiving a node message without a role (from old version)
+	oldNode := &controlpb.Node{
+		Uid:     "old-node-uid",
+		Name:    "old-node",
+		Version: "1.0.0",
+		Role:    "", // Empty role from old node
+	}
+
+	// Add the node to registry
+	isNew := n.nodes.add(oldNode)
+	require.True(t, isNew)
+
+	// Verify it was added successfully with empty role
+	info, err := n.Info()
+	require.NoError(t, err)
+	require.Len(t, info.Nodes, 2)
+
+	for _, node := range info.Nodes {
+		if node.UID == oldNode.Uid {
+			require.Equal(t, defaultNodeRole, node.Role)
+		}
+	}
+}
+
+// TestNodeRole_MultiNodeCluster tests a cluster with different node roles.
+func TestNodeRole_MultiNodeCluster(t *testing.T) {
+	// Create nodes with different roles
+	apiNode, err := New(Config{
+		Role: "api",
+	})
+	require.NoError(t, err)
+	defer func() { _ = apiNode.Shutdown(context.Background()) }()
+	_ = apiNode.Run()
+
+	workerNode, err := New(Config{
+		Role: "worker",
+	})
+	require.NoError(t, err)
+	defer func() { _ = workerNode.Shutdown(context.Background()) }()
+	_ = workerNode.Run()
+
+	wsNode, err := New(Config{
+		Role: "websocket",
+	})
+	require.NoError(t, err)
+	defer func() { _ = wsNode.Shutdown(context.Background()) }()
+	_ = wsNode.Run()
+
+	// Simulate nodes discovering each other
+	workerNodeInfo := &controlpb.Node{
+		Uid:     workerNode.uid,
+		Name:    workerNode.config.Name,
+		Role:    workerNode.config.Role,
+		Version: workerNode.config.Version,
+	}
+	wsNodeInfo := &controlpb.Node{
+		Uid:     wsNode.uid,
+		Name:    wsNode.config.Name,
+		Role:    wsNode.config.Role,
+		Version: wsNode.config.Version,
+	}
+
+	// Add all nodes to apiNode's registry
+	apiNode.nodes.add(workerNodeInfo)
+	apiNode.nodes.add(wsNodeInfo)
+
+	// Verify all nodes are visible with correct roles
+	info, err := apiNode.Info()
+	require.NoError(t, err)
+	require.Len(t, info.Nodes, 3)
+
+	roles := make(map[string]bool)
+	for _, node := range info.Nodes {
+		roles[node.Role] = true
+	}
+
+	require.True(t, roles["worker"])
+	require.True(t, roles["websocket"])
+	require.True(t, roles["api"])
+}

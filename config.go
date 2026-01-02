@@ -14,6 +14,12 @@ type Config struct {
 	// Name is a unique name of the current server Node. Name used as human-readable
 	// and meaningful node identifier. If not set then os.Hostname will be used.
 	Name string
+	// Role is a string identifier for the node's role in the cluster.
+	// This can be used to categorize nodes (e.g., "default", "worker").
+	// If not set, defaults to "default". The role is automatically included
+	// in metrics labels and shared with other nodes. Avoid large cardinality
+	// values for this setting - should be a reasonably small set of values.
+	Role string
 	// LogLevel is a log level. By default, nothing will be logged by Centrifuge.
 	LogLevel LogLevel
 	// LogHandler is a handler function Node will send logs to.

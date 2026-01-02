@@ -98,7 +98,7 @@ func getMetricsNamespace(config MetricsConfig) string {
 	return config.MetricsNamespace
 }
 
-func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
+func newMetricsRegistry(config MetricsConfig, nodeRole string) (*metrics, error) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
@@ -144,6 +144,13 @@ func newMetricsRegistry(config MetricsConfig) (*metrics, error) {
 	}
 
 	constLabels := prometheus.Labels(config.ConstLabels)
+	// Add node_role to const labels automatically
+	if constLabels == nil {
+		constLabels = prometheus.Labels{}
+	}
+	if _, exists := constLabels["node_role"]; !exists {
+		constLabels["node_role"] = nodeRole
+	}
 
 	m.messagesSentCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace:   metricsNamespace,
