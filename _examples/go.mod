@@ -1,6 +1,6 @@
 module github.com/centrifugal/centrifuge/_examples
 
-go 1.24.0
+go 1.24.9
 
 replace github.com/centrifugal/centrifuge => ../
 
@@ -22,7 +22,7 @@ require (
 	github.com/quic-go/quic-go v0.57.0
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/ratelimit v0.3.1
-	golang.org/x/net v0.47.0
+	golang.org/x/net v0.48.0
 	golang.org/x/oauth2 v0.32.0
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.11
@@ -83,7 +83,7 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/quagmt/udecimal v1.9.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/redis/rueidis v1.0.69 // indirect
+	github.com/redis/rueidis v1.0.70 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/segmentio/encoding v0.5.3 // indirect
@@ -94,10 +94,10 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/arch v0.20.0 // indirect
-	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250804133106-a7a43d27e69b // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
