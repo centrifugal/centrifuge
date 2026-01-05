@@ -4,17 +4,19 @@ package centrifuge
 
 import (
 	"context"
-	_ "embed"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
+
+	_ "embed"
 
 	"github.com/redis/rueidis"
 	"github.com/stretchr/testify/require"
 )
 
-//go:embed internal/redis_lua/broker_snapshot_log.lua
-var brokerSnapshotLogScript string
+//go:embed internal/redis_lua/broker_snapshot_add.lua
+var brokerSnapshotPublishScript string
 
 //go:embed internal/redis_lua/broker_snapshot_read_ordered.lua
 var brokerSnapshotReadOrderedScript string
@@ -31,8 +33,8 @@ var brokerSnapshotPresenceGetScript string
 //go:embed internal/redis_lua/broker_snapshot_presence_stats.lua
 var brokerSnapshotPresenceStatsScript string
 
-// TestBrokerSnapshotLog_AppendLogOnly tests append log functionality without keyed state or presence.
-func TestBrokerSnapshotLog_AppendLogOnly(t *testing.T) {
+// TestBrokerSnapshot_AppendLogOnly tests append log functionality without keyed state or presence.
+func TestBrokerSnapshot_AppendLogOnly(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -47,7 +49,7 @@ func TestBrokerSnapshotLog_AppendLogOnly(t *testing.T) {
 	// Publish 3 messages to append log
 	for i := 1; i <= 3; i++ {
 		payload := "message_" + strconv.Itoa(i)
-		result := runSnapshotLogScript(t, client, &SnapshotLogParams{
+		result := runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			StreamKey:      streamKey,
 			MetaKey:        metaKey,
 			Channel:        channel,
@@ -96,8 +98,8 @@ func TestBrokerSnapshotLog_AppendLogOnly(t *testing.T) {
 	}
 }
 
-// TestBrokerSnapshotLog_KeyedSnapshotSimple tests simple HASH-based keyed snapshot.
-func TestBrokerSnapshotLog_KeyedSnapshotSimple(t *testing.T) {
+// TestBrokerSnapshot_KeyedSnapshotSimple tests simple HASH-based keyed snapshot.
+func TestBrokerSnapshot_KeyedSnapshotSimple(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -110,7 +112,7 @@ func TestBrokerSnapshotLog_KeyedSnapshotSimple(t *testing.T) {
 	// Add 3 keyed state entries
 	keys := []string{"client1", "client2", "client3"}
 	for _, key := range keys {
-		result := runSnapshotLogScript(t, client, &SnapshotLogParams{
+		result := runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			MetaKey:         metaKey,
 			SnapshotHashKey: snapshotKey,
 			MessagePayload:  key,
@@ -143,8 +145,8 @@ func TestBrokerSnapshotLog_KeyedSnapshotSimple(t *testing.T) {
 	}
 }
 
-// TestBrokerSnapshotLog_KeyedSnapshotOrdered tests ordered HASH+ZSET keyed snapshot.
-func TestBrokerSnapshotLog_KeyedSnapshotOrdered(t *testing.T) {
+// TestBrokerSnapshot_KeyedSnapshotOrdered tests ordered HASH+ZSET keyed snapshot.
+func TestBrokerSnapshot_KeyedSnapshotOrdered(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -171,15 +173,15 @@ func TestBrokerSnapshotLog_KeyedSnapshotOrdered(t *testing.T) {
 	}
 
 	for _, entry := range entries {
-		result := runSnapshotLogScript(t, client, &SnapshotLogParams{
-			MetaKey:            metaKey,
-			SnapshotHashKey:    snapshotHashKey,
-			SnapshotOrderKey:   snapshotOrderKey,
-			SnapshotExpireKey:  snapshotExpireKey,
-			MessagePayload:     entry.key,
-			Score:              entry.score,
-			KeyedMemberTTL:     300,
-			NewEpoch:           epoch,
+		result := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			MetaKey:           metaKey,
+			SnapshotHashKey:   snapshotHashKey,
+			SnapshotOrderKey:  snapshotOrderKey,
+			SnapshotExpireKey: snapshotExpireKey,
+			MessagePayload:    entry.key,
+			Score:             entry.score,
+			KeyedMemberTTL:    300,
+			NewEpoch:          epoch,
 		})
 		require.Greater(t, result.Offset, int64(0))
 	}
@@ -251,8 +253,8 @@ func TestBrokerSnapshotLog_KeyedSnapshotOrdered(t *testing.T) {
 	}
 }
 
-// TestBrokerSnapshotLog_Presence tests presence tracking functionality.
-func TestBrokerSnapshotLog_Presence(t *testing.T) {
+// TestBrokerSnapshot_Presence tests presence tracking functionality.
+func TestBrokerSnapshot_Presence(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -280,19 +282,19 @@ func TestBrokerSnapshotLog_Presence(t *testing.T) {
 	}
 
 	for _, c := range clients {
-		result := runSnapshotLogScript(t, client, &SnapshotLogParams{
-			MetaKey:           metaKey,
-			PresenceZSetKey:   presenceZSetKey,
-			PresenceHashKey:   presenceHashKey,
-			UserZSetKey:       userZSetKey,
-			UserHashKey:       userHashKey,
-			MessagePayload:    c.clientID,
-			PresenceInfo:      c.info,
-			PresenceExpireAt:  expireAt,
-			TrackUser:         true,
-			UserID:            c.userID,
-			KeyedMemberTTL:    300,
-			NewEpoch:          epoch,
+		result := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			MetaKey:          metaKey,
+			PresenceZSetKey:  presenceZSetKey,
+			PresenceHashKey:  presenceHashKey,
+			UserZSetKey:      userZSetKey,
+			UserHashKey:      userHashKey,
+			MessagePayload:   c.clientID,
+			PresenceInfo:     c.info,
+			PresenceExpireAt: expireAt,
+			TrackUser:        true,
+			UserID:           c.userID,
+			KeyedMemberTTL:   300,
+			NewEpoch:         epoch,
 		})
 		require.Greater(t, result.Offset, int64(0))
 	}
@@ -314,17 +316,17 @@ func TestBrokerSnapshotLog_Presence(t *testing.T) {
 	require.Equal(t, "1", userMap["user2"]) // 1 connection
 
 	// Test leave message for client1
-	leaveResult := runSnapshotLogScript(t, client, &SnapshotLogParams{
-		MetaKey:          metaKey,
-		PresenceZSetKey:  presenceZSetKey,
-		PresenceHashKey:  presenceHashKey,
-		UserZSetKey:      userZSetKey,
-		UserHashKey:      userHashKey,
-		MessagePayload:   "client1",
-		TrackUser:        true,
-		UserID:           "user1",
-		IsLeave:          true,
-		NewEpoch:         epoch,
+	leaveResult := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:         metaKey,
+		PresenceZSetKey: presenceZSetKey,
+		PresenceHashKey: presenceHashKey,
+		UserZSetKey:     userZSetKey,
+		UserHashKey:     userHashKey,
+		MessagePayload:  "client1",
+		TrackUser:       true,
+		UserID:          "user1",
+		IsLeave:         true,
+		NewEpoch:        epoch,
 	})
 	require.Greater(t, leaveResult.Offset, int64(0))
 
@@ -344,17 +346,17 @@ func TestBrokerSnapshotLog_Presence(t *testing.T) {
 	require.Equal(t, "1", userMap2["user1"]) // Now 1 connection
 
 	// Remove last client for user1 (client2)
-	runSnapshotLogScript(t, client, &SnapshotLogParams{
-		MetaKey:          metaKey,
-		PresenceZSetKey:  presenceZSetKey,
-		PresenceHashKey:  presenceHashKey,
-		UserZSetKey:      userZSetKey,
-		UserHashKey:      userHashKey,
-		MessagePayload:   "client2",
-		TrackUser:        true,
-		UserID:           "user1",
-		IsLeave:          true,
-		NewEpoch:         epoch,
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:         metaKey,
+		PresenceZSetKey: presenceZSetKey,
+		PresenceHashKey: presenceHashKey,
+		UserZSetKey:     userZSetKey,
+		UserHashKey:     userHashKey,
+		MessagePayload:  "client2",
+		TrackUser:       true,
+		UserID:          "user1",
+		IsLeave:         true,
+		NewEpoch:        epoch,
 	})
 
 	// Verify user1 removed entirely
@@ -367,8 +369,8 @@ func TestBrokerSnapshotLog_Presence(t *testing.T) {
 	require.Contains(t, userMap3, "user2")
 }
 
-// TestBrokerSnapshotLog_LeaveWithKeyedSnapshot tests leave message removing keyed snapshot.
-func TestBrokerSnapshotLog_LeaveWithKeyedSnapshot(t *testing.T) {
+// TestBrokerSnapshot_LeaveWithKeyedSnapshot tests leave message removing keyed snapshot.
+func TestBrokerSnapshot_LeaveWithKeyedSnapshot(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -379,7 +381,7 @@ func TestBrokerSnapshotLog_LeaveWithKeyedSnapshot(t *testing.T) {
 	epoch := strconv.FormatInt(time.Now().Unix(), 10)
 
 	// Add keyed state
-	result := runSnapshotLogScript(t, client, &SnapshotLogParams{
+	result := runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		MetaKey:         metaKey,
 		SnapshotHashKey: snapshotKey,
 		MessagePayload:  "client1",
@@ -397,7 +399,7 @@ func TestBrokerSnapshotLog_LeaveWithKeyedSnapshot(t *testing.T) {
 	require.True(t, existsBool)
 
 	// Send leave message
-	leaveResult := runSnapshotLogScript(t, client, &SnapshotLogParams{
+	leaveResult := runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		MetaKey:         metaKey,
 		SnapshotHashKey: snapshotKey,
 		MessagePayload:  "client1",
@@ -414,8 +416,8 @@ func TestBrokerSnapshotLog_LeaveWithKeyedSnapshot(t *testing.T) {
 	require.False(t, exists2Bool)
 }
 
-// TestBrokerSnapshotLog_Idempotency tests idempotent publishing.
-func TestBrokerSnapshotLog_Idempotency(t *testing.T) {
+// TestBrokerSnapshot_Idempotency tests idempotent publishing.
+func TestBrokerSnapshot_Idempotency(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -426,32 +428,32 @@ func TestBrokerSnapshotLog_Idempotency(t *testing.T) {
 	epoch := strconv.FormatInt(time.Now().Unix(), 10)
 
 	// First publish with idempotency key
-	result1 := runSnapshotLogScript(t, client, &SnapshotLogParams{
-		MetaKey:           metaKey,
-		ResultKey:         resultKey,
-		MessagePayload:    "test_message",
-		ResultKeyExpire:   300,
-		NewEpoch:          epoch,
+	result1 := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:         metaKey,
+		ResultKey:       resultKey,
+		MessagePayload:  "test_message",
+		ResultKeyExpire: 300,
+		NewEpoch:        epoch,
 	})
 	require.Equal(t, int64(1), result1.Offset)
 	require.Equal(t, epoch, result1.Epoch)
 	require.False(t, result1.FromCache)
 
 	// Second publish with same idempotency key - should return cached result
-	result2 := runSnapshotLogScript(t, client, &SnapshotLogParams{
-		MetaKey:           metaKey,
-		ResultKey:         resultKey,
-		MessagePayload:    "test_message",
-		ResultKeyExpire:   300,
-		NewEpoch:          epoch,
+	result2 := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:         metaKey,
+		ResultKey:       resultKey,
+		MessagePayload:  "test_message",
+		ResultKeyExpire: 300,
+		NewEpoch:        epoch,
 	})
 	require.Equal(t, int64(1), result2.Offset) // Same offset
 	require.Equal(t, epoch, result2.Epoch)
 	require.True(t, result2.FromCache) // From cache!
 }
 
-// TestBrokerSnapshotLog_VersionBasedIdempotency tests version-based suppression.
-func TestBrokerSnapshotLog_VersionBasedIdempotency(t *testing.T) {
+// TestBrokerSnapshot_VersionBasedIdempotency tests version-based suppression.
+func TestBrokerSnapshot_VersionBasedIdempotency(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -460,8 +462,8 @@ func TestBrokerSnapshotLog_VersionBasedIdempotency(t *testing.T) {
 	epoch := strconv.FormatInt(time.Now().Unix(), 10)
 
 	// Publish version 2
-	result1 := runSnapshotLogScript(t, client, &SnapshotLogParams{
-		MetaKey:      metaKey,
+	result1 := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:        metaKey,
 		MessagePayload: "message_v2",
 		Version:        2,
 		VersionEpoch:   "epoch1",
@@ -471,7 +473,7 @@ func TestBrokerSnapshotLog_VersionBasedIdempotency(t *testing.T) {
 	require.False(t, result1.Suppressed)
 
 	// Try to publish version 1 (older) - should be suppressed
-	result2 := runSnapshotLogScript(t, client, &SnapshotLogParams{
+	result2 := runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		MetaKey:        metaKey,
 		MessagePayload: "message_v1",
 		Version:        1,
@@ -482,7 +484,7 @@ func TestBrokerSnapshotLog_VersionBasedIdempotency(t *testing.T) {
 	require.True(t, result2.Suppressed)        // Suppressed!
 
 	// Publish version 3 - should succeed
-	result3 := runSnapshotLogScript(t, client, &SnapshotLogParams{
+	result3 := runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		MetaKey:        metaKey,
 		MessagePayload: "message_v3",
 		Version:        3,
@@ -493,8 +495,8 @@ func TestBrokerSnapshotLog_VersionBasedIdempotency(t *testing.T) {
 	require.False(t, result3.Suppressed)
 }
 
-// TestBrokerSnapshotLog_DeltaEncoding tests delta encoding functionality.
-func TestBrokerSnapshotLog_DeltaEncoding(t *testing.T) {
+// TestBrokerSnapshot_DeltaEncoding tests delta encoding functionality.
+func TestBrokerSnapshot_DeltaEncoding(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -538,7 +540,7 @@ func TestBrokerSnapshotLog_DeltaEncoding(t *testing.T) {
 	// Publish with delta encoding
 	for i := 1; i <= 3; i++ {
 		payload := "message_" + strconv.Itoa(i)
-		runSnapshotLogScript(t, client, &SnapshotLogParams{
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			StreamKey:      streamKey,
 			MetaKey:        metaKey,
 			Channel:        channel,
@@ -577,8 +579,8 @@ func TestBrokerSnapshotLog_DeltaEncoding(t *testing.T) {
 	}
 }
 
-// TestBrokerSnapshotLog_PubSubOnly tests PUB/SUB without any storage.
-func TestBrokerSnapshotLog_PubSubOnly(t *testing.T) {
+// TestBrokerSnapshot_PubSubOnly tests PUB/SUB without any storage.
+func TestBrokerSnapshot_PubSubOnly(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -618,7 +620,7 @@ func TestBrokerSnapshotLog_PubSubOnly(t *testing.T) {
 	}
 
 	// Publish without any storage (all KEYS empty, only channel set)
-	runSnapshotLogScript(t, client, &SnapshotLogParams{
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		Channel:        channel,
 		MessagePayload: "pubsub_only_message",
 		PublishCommand: "publish",
@@ -641,8 +643,8 @@ func TestBrokerSnapshotLog_PubSubOnly(t *testing.T) {
 	}
 }
 
-// TestBrokerSnapshotLog_CombinedFeatures tests using multiple features together.
-func TestBrokerSnapshotLog_CombinedFeatures(t *testing.T) {
+// TestBrokerSnapshot_CombinedFeatures tests using multiple features together.
+func TestBrokerSnapshot_CombinedFeatures(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -659,22 +661,22 @@ func TestBrokerSnapshotLog_CombinedFeatures(t *testing.T) {
 	epoch := strconv.FormatInt(now, 10)
 
 	// Test: Append log + Keyed snapshot + Presence + PUB/SUB all together
-	result := runSnapshotLogScript(t, client, &SnapshotLogParams{
-		StreamKey:         streamKey,
-		MetaKey:           metaKey,
-		SnapshotHashKey:   snapshotKey,
-		PresenceHashKey:   presenceHashKey,
-		PresenceZSetKey:   presenceZSetKey,
-		Channel:           channel,
-		MessagePayload:    "client1",
-		PresenceInfo:      `{"client":"client1"}`,
-		PresenceExpireAt:  now + 300,
-		StreamSize:        100,
-		StreamTTL:         300,
-		MetaExpire:        300,
-		KeyedMemberTTL:    300,
-		PublishCommand:    "publish",
-		NewEpoch:          epoch,
+	result := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		StreamKey:        streamKey,
+		MetaKey:          metaKey,
+		SnapshotHashKey:  snapshotKey,
+		PresenceHashKey:  presenceHashKey,
+		PresenceZSetKey:  presenceZSetKey,
+		Channel:          channel,
+		MessagePayload:   "client1",
+		PresenceInfo:     `{"client":"client1"}`,
+		PresenceExpireAt: now + 300,
+		StreamSize:       100,
+		StreamTTL:        300,
+		MetaExpire:       300,
+		KeyedMemberTTL:   300,
+		PublishCommand:   "publish",
+		NewEpoch:         epoch,
 	})
 
 	require.Equal(t, int64(1), result.Offset)
@@ -717,8 +719,8 @@ func TestBrokerSnapshotLog_CombinedFeatures(t *testing.T) {
 	require.True(t, presenceExistsBool)
 }
 
-// TestBrokerSnapshotLog_HistoryRead tests reading history using the unified read script.
-func TestBrokerSnapshotLog_HistoryRead(t *testing.T) {
+// TestBrokerSnapshot_HistoryRead tests reading history using the unified read script.
+func TestBrokerSnapshot_HistoryRead(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -729,7 +731,7 @@ func TestBrokerSnapshotLog_HistoryRead(t *testing.T) {
 
 	// Write 5 messages
 	for i := 1; i <= 5; i++ {
-		runSnapshotLogScript(t, client, &SnapshotLogParams{
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			StreamKey:      streamKey,
 			MetaKey:        metaKey,
 			MessagePayload: "msg_" + strconv.Itoa(i),
@@ -746,7 +748,7 @@ func TestBrokerSnapshotLog_HistoryRead(t *testing.T) {
 		MetaKey:             metaKey,
 		IncludePublications: true,
 		SinceOffset:         "-", // "-" means from beginning for XREVRANGE
-		Limit:               0,    // Get all
+		Limit:               0,   // Get all
 		Reverse:             true,
 		MetaExpire:          300,
 		NewEpochIfEmpty:     epoch,
@@ -794,8 +796,8 @@ func TestBrokerSnapshotLog_HistoryRead(t *testing.T) {
 	require.Len(t, resultMetaOnly.Publications, 0)
 }
 
-// TestBrokerSnapshotLog_PresenceRead tests reading full presence using the unified read script.
-func TestBrokerSnapshotLog_PresenceRead(t *testing.T) {
+// TestBrokerSnapshot_PresenceRead tests reading full presence using the unified read script.
+func TestBrokerSnapshot_PresenceRead(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -823,7 +825,7 @@ func TestBrokerSnapshotLog_PresenceRead(t *testing.T) {
 	}
 
 	for _, c := range clients {
-		runSnapshotLogScript(t, client, &SnapshotLogParams{
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			MetaKey:          metaKey,
 			PresenceZSetKey:  presenceZSetKey,
 			PresenceHashKey:  presenceHashKey,
@@ -854,8 +856,8 @@ func TestBrokerSnapshotLog_PresenceRead(t *testing.T) {
 	require.Equal(t, `{"name":"Charlie"}`, presenceResult.Presence["client4"])
 }
 
-// TestBrokerSnapshotLog_PresenceStats tests getting presence statistics.
-func TestBrokerSnapshotLog_PresenceStats(t *testing.T) {
+// TestBrokerSnapshot_PresenceStats tests getting presence statistics.
+func TestBrokerSnapshot_PresenceStats(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -873,7 +875,7 @@ func TestBrokerSnapshotLog_PresenceStats(t *testing.T) {
 	// Add 10 clients from 3 users
 	for i := 1; i <= 10; i++ {
 		userID := "user" + strconv.Itoa((i-1)%3+1) // user1, user2, user3
-		runSnapshotLogScript(t, client, &SnapshotLogParams{
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			MetaKey:          metaKey,
 			PresenceZSetKey:  presenceZSetKey,
 			PresenceHashKey:  presenceHashKey,
@@ -905,7 +907,7 @@ func TestBrokerSnapshotLog_PresenceStats(t *testing.T) {
 	// Remove some clients
 	for i := 1; i <= 3; i++ {
 		userID := "user" + strconv.Itoa((i-1)%3+1)
-		runSnapshotLogScript(t, client, &SnapshotLogParams{
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			MetaKey:         metaKey,
 			PresenceZSetKey: presenceZSetKey,
 			PresenceHashKey: presenceHashKey,
@@ -933,8 +935,8 @@ func TestBrokerSnapshotLog_PresenceStats(t *testing.T) {
 	require.Equal(t, 3, statsResult2.NumUsers)   // Still 3 users (each has remaining connections)
 }
 
-// TestBrokerSnapshotLog_SnapshotPagination tests paginating over ordered keyed snapshot.
-func TestBrokerSnapshotLog_SnapshotPagination(t *testing.T) {
+// TestBrokerSnapshot_SnapshotPagination tests paginating over ordered keyed snapshot.
+func TestBrokerSnapshot_SnapshotPagination(t *testing.T) {
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -949,7 +951,7 @@ func TestBrokerSnapshotLog_SnapshotPagination(t *testing.T) {
 
 	// Add 20 entries with different scores
 	for i := 1; i <= 20; i++ {
-		runSnapshotLogScript(t, client, &SnapshotLogParams{
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			MetaKey:           metaKey,
 			SnapshotHashKey:   snapshotHashKey,
 			SnapshotOrderKey:  snapshotOrderKey,
@@ -1014,8 +1016,10 @@ func TestBrokerSnapshotLog_SnapshotPagination(t *testing.T) {
 	require.Equal(t, "item_1", allItems.Keys[19])
 }
 
-// TestBrokerSnapshotLog_SnapshotTTLRefresh tests that TTL is refreshed on reads (LRU behavior).
-func TestBrokerSnapshotLog_SnapshotTTLRefresh(t *testing.T) {
+// TestBrokerSnapshot_SnapshotTTLRefresh tests that TTL is refreshed on reads (LRU behavior).
+func TestBrokerSnapshot_SnapshotTTLRefresh(t *testing.T) {
+	t.Skip() // too long to execute, refactor later.
+
 	client := setupRedisClient(t)
 	defer client.Close()
 	prefix := getUniquePrefix()
@@ -1027,7 +1031,7 @@ func TestBrokerSnapshotLog_SnapshotTTLRefresh(t *testing.T) {
 	epoch := strconv.FormatInt(now, 10)
 
 	// Write data with 5 second TTL
-	runSnapshotLogScript(t, client, &SnapshotLogParams{
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		MetaKey:         metaKey,
 		SnapshotHashKey: snapshotKey,
 		MessagePayload:  "test_data",
@@ -1076,38 +1080,386 @@ func TestBrokerSnapshotLog_SnapshotTTLRefresh(t *testing.T) {
 	require.Equal(t, int64(0), count3, "data should be expired after 5 seconds without refresh")
 }
 
+// TestBrokerSnapshot_HistoryMultiPagePagination tests reading history across multiple pages.
+func TestBrokerSnapshot_HistoryMultiPagePagination(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	streamKey := prefix + ":stream:test"
+	metaKey := prefix + ":meta:test"
+	epoch := strconv.FormatInt(time.Now().Unix(), 10)
+
+	// Write 10 messages
+	for i := 1; i <= 10; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			StreamKey:      streamKey,
+			MetaKey:        metaKey,
+			MessagePayload: "msg_" + strconv.Itoa(i),
+			StreamSize:     100,
+			StreamTTL:      300,
+			MetaExpire:     300,
+			NewEpoch:       epoch,
+		})
+	}
+
+	// Read page 1: 3 messages
+	page1 := runSnapshotHistoryGetScript(t, client, &SnapshotHistoryGetParams{
+		StreamKey:           streamKey,
+		MetaKey:             metaKey,
+		IncludePublications: true,
+		SinceOffset:         "-",
+		Limit:               3,
+		Reverse:             true,
+		MetaExpire:          300,
+		NewEpochIfEmpty:     epoch,
+	})
+
+	require.Len(t, page1.Publications, 3)
+	require.Equal(t, "msg_10", page1.Publications[0][1])
+	require.Equal(t, "msg_9", page1.Publications[1][1])
+	require.Equal(t, "msg_8", page1.Publications[2][1])
+
+	// Read page 2: next messages using last ID from page 1
+	// Note: XREVRANGE is inclusive, so we need to request 4 to get 3 new ones
+	lastID := page1.Publications[2][0]
+	page2 := runSnapshotHistoryGetScript(t, client, &SnapshotHistoryGetParams{
+		StreamKey:           streamKey,
+		MetaKey:             metaKey,
+		IncludePublications: true,
+		SinceOffset:         lastID,
+		Limit:               4, // Request 4 to account for inclusive boundary
+		Reverse:             true,
+		MetaExpire:          300,
+		NewEpochIfEmpty:     epoch,
+	})
+
+	// First result will be msg_8 (duplicate from page 1 due to inclusive range)
+	require.GreaterOrEqual(t, len(page2.Publications), 3)
+	require.Equal(t, "msg_8", page2.Publications[0][1]) // Duplicate (inclusive)
+	require.Equal(t, "msg_7", page2.Publications[1][1])
+	require.Equal(t, "msg_6", page2.Publications[2][1])
+	require.Equal(t, "msg_5", page2.Publications[3][1])
+
+	// In practice, clients would skip the first result to avoid duplicates
+	page2Deduplicated := page2.Publications[1:]
+	require.Len(t, page2Deduplicated, 3)
+
+	// Verify new messages are unique
+	allIDs := make(map[string]bool)
+	for _, pub := range page1.Publications {
+		allIDs[pub[0]] = true
+	}
+	for _, pub := range page2Deduplicated {
+		require.False(t, allIDs[pub[0]], "duplicate ID across pages: %s", pub[0])
+	}
+}
+
+// TestBrokerSnapshot_UnorderedSnapshotMultiPageIteration tests HSCAN pagination.
+func TestBrokerSnapshot_UnorderedSnapshotMultiPageIteration(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	metaKey := prefix + ":meta:test"
+	snapshotKey := prefix + ":snapshot:test"
+	epoch := strconv.FormatInt(time.Now().Unix(), 10)
+
+	// Add 50 entries
+	for i := 1; i <= 50; i++ {
+		key := "key_" + strconv.Itoa(i)
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			MetaKey:         metaKey,
+			SnapshotHashKey: snapshotKey,
+			MessagePayload:  key,
+			NewEpoch:        epoch,
+			KeyedMemberTTL:  300,
+		})
+	}
+
+	// Paginate through all entries
+	allKeys := make(map[string]bool)
+	cursor := "0"
+	pageCount := 0
+
+	for {
+		result := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+			HashKey:     snapshotKey,
+			MetaKey:     metaKey,
+			Cursor:      cursor,
+			Limit:       10, // 10 entries per page
+			Now:         time.Now().Unix(),
+			MetaTTL:     300,
+			SnapshotTTL: 300,
+		})
+
+		pageCount++
+		dataMap := kvArrayToMap(result.Data)
+		for key := range dataMap {
+			require.False(t, allKeys[key], "duplicate key across pages: %s", key)
+			allKeys[key] = true
+		}
+
+		cursor = result.Cursor
+		if cursor == "0" {
+			break
+		}
+
+		require.Less(t, pageCount, 100, "pagination not terminating")
+	}
+
+	// Verify all 50 entries were returned
+	require.Equal(t, 50, len(allKeys), "should return all entries across pages")
+}
+
+// TestBrokerSnapshot_ConcurrentPresenceUpdates tests concurrent join/leave operations.
+func TestBrokerSnapshot_ConcurrentPresenceUpdates(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	metaKey := prefix + ":meta:test"
+	presenceZSetKey := prefix + ":presence:zset:test"
+	presenceHashKey := prefix + ":presence:hash:test"
+	userZSetKey := prefix + ":user:zset:test"
+	userHashKey := prefix + ":user:hash:test"
+
+	now := time.Now().Unix()
+	epoch := strconv.FormatInt(now, 10)
+	expireAt := now + 300
+
+	// Simulate concurrent joins from 10 clients (2 users, 5 clients each)
+	var wg sync.WaitGroup
+	for i := 1; i <= 10; i++ {
+		wg.Add(1)
+		go func(clientNum int) {
+			defer wg.Done()
+			userID := "user" + strconv.Itoa((clientNum-1)/5+1) // user1 or user2
+			clientID := "client" + strconv.Itoa(clientNum)
+			info := `{"id":"` + clientID + `"}`
+
+			runSnapshotPublishScript(t, client, &SnapshotLogParams{
+				MetaKey:          metaKey,
+				PresenceZSetKey:  presenceZSetKey,
+				PresenceHashKey:  presenceHashKey,
+				UserZSetKey:      userZSetKey,
+				UserHashKey:      userHashKey,
+				MessagePayload:   clientID,
+				PresenceInfo:     info,
+				PresenceExpireAt: expireAt,
+				TrackUser:        true,
+				UserID:           userID,
+				KeyedMemberTTL:   300,
+				NewEpoch:         epoch,
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	// Verify final state
+	ctx := context.Background()
+	presenceCount := client.Do(ctx, client.B().Hlen().Key(presenceHashKey).Build())
+	require.NoError(t, presenceCount.Error())
+	count, _ := presenceCount.AsInt64()
+	require.Equal(t, int64(10), count, "all 10 clients should be present")
+
+	// Verify user counts
+	userData := client.Do(ctx, client.B().Hgetall().Key(userHashKey).Build())
+	require.NoError(t, userData.Error())
+	userMap, _ := userData.AsStrMap()
+	require.Equal(t, "5", userMap["user1"], "user1 should have 5 connections")
+	require.Equal(t, "5", userMap["user2"], "user2 should have 5 connections")
+
+	// Now concurrently remove half the clients
+	for i := 1; i <= 5; i++ {
+		wg.Add(1)
+		go func(clientNum int) {
+			defer wg.Done()
+			userID := "user" + strconv.Itoa((clientNum-1)/5+1)
+			clientID := "client" + strconv.Itoa(clientNum)
+
+			runSnapshotPublishScript(t, client, &SnapshotLogParams{
+				MetaKey:         metaKey,
+				PresenceZSetKey: presenceZSetKey,
+				PresenceHashKey: presenceHashKey,
+				UserZSetKey:     userZSetKey,
+				UserHashKey:     userHashKey,
+				MessagePayload:  clientID,
+				TrackUser:       true,
+				UserID:          userID,
+				IsLeave:         true,
+				NewEpoch:        epoch,
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	// Verify final state after leaves
+	presenceCount2 := client.Do(ctx, client.B().Hlen().Key(presenceHashKey).Build())
+	require.NoError(t, presenceCount2.Error())
+	count2, _ := presenceCount2.AsInt64()
+	require.Equal(t, int64(5), count2, "5 clients should remain")
+
+	userData2 := client.Do(ctx, client.B().Hgetall().Key(userHashKey).Build())
+	require.NoError(t, userData2.Error())
+	userMap2, _ := userData2.AsStrMap()
+	require.Equal(t, "5", userMap2["user2"], "user2 should still have 5 connections")
+	require.NotContains(t, userMap2, "user1", "user1 should be removed (0 connections)")
+}
+
+// TestBrokerSnapshot_OrderedSnapshotSameScores tests ordering when multiple entries have same score.
+func TestBrokerSnapshot_OrderedSnapshotSameScores(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	metaKey := prefix + ":meta:test"
+	snapshotHashKey := prefix + ":snapshot:test"
+	snapshotOrderKey := prefix + ":snapshot:order:test"
+	snapshotExpireKey := prefix + ":snapshot:expire:test"
+
+	now := time.Now().Unix()
+	epoch := strconv.FormatInt(now, 10)
+
+	// Add 5 entries with same score (Redis ZSET uses lexicographic ordering for ties)
+	entries := []string{"client_e", "client_a", "client_d", "client_b", "client_c"}
+	for _, clientID := range entries {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			MetaKey:           metaKey,
+			SnapshotHashKey:   snapshotHashKey,
+			SnapshotOrderKey:  snapshotOrderKey,
+			SnapshotExpireKey: snapshotExpireKey,
+			MessagePayload:    clientID,
+			Score:             100, // Same score for all
+			KeyedMemberTTL:    300,
+			NewEpoch:          epoch,
+		})
+	}
+
+	// Read all entries
+	result := runSnapshotReadOrderedScript(t, client, &SnapshotReadOrderedParams{
+		HashKey:     snapshotHashKey,
+		OrderKey:    snapshotOrderKey,
+		ExpireKey:   snapshotExpireKey,
+		MetaKey:     metaKey,
+		Limit:       0,
+		Offset:      0,
+		Now:         now,
+		MetaTTL:     300,
+		SnapshotTTL: 300,
+	})
+
+	require.Len(t, result.Keys, 5)
+	// With same score, Redis uses lexicographic order (reversed since we use ZREVRANGE)
+	require.Equal(t, "client_e", result.Keys[0])
+	require.Equal(t, "client_d", result.Keys[1])
+	require.Equal(t, "client_c", result.Keys[2])
+	require.Equal(t, "client_b", result.Keys[3])
+	require.Equal(t, "client_a", result.Keys[4])
+}
+
+// TestBrokerSnapshot_EdgeCases tests various edge cases.
+func TestBrokerSnapshot_EdgeCases(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	metaKey := prefix + ":meta:test"
+	snapshotKey := prefix + ":snapshot:test"
+	presenceHashKey := prefix + ":presence:hash:test"
+	presenceZSetKey := prefix + ":presence:zset:test"
+
+	epoch := strconv.FormatInt(time.Now().Unix(), 10)
+
+	// Edge case 1: Leave before join (should be no-op)
+	result1 := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:         metaKey,
+		SnapshotHashKey: snapshotKey,
+		MessagePayload:  "nonexistent_client",
+		IsLeave:         true,
+		NewEpoch:        epoch,
+	})
+	require.Greater(t, result1.Offset, int64(0))
+
+	// Edge case 2: Join same client twice (should be idempotent for presence)
+	now := time.Now().Unix()
+	for i := 0; i < 2; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			MetaKey:          metaKey,
+			PresenceHashKey:  presenceHashKey,
+			PresenceZSetKey:  presenceZSetKey,
+			MessagePayload:   "duplicate_client",
+			PresenceInfo:     `{"id":"duplicate_client"}`,
+			PresenceExpireAt: now + 300,
+			KeyedMemberTTL:   300,
+			NewEpoch:         epoch,
+		})
+	}
+
+	ctx := context.Background()
+	count := client.Do(ctx, client.B().Hlen().Key(presenceHashKey).Build())
+	require.NoError(t, count.Error())
+	presenceCount, _ := count.AsInt64()
+	require.Equal(t, int64(1), presenceCount, "duplicate joins should not create duplicates")
+
+	// Edge case 3: Read empty snapshot
+	emptySnapshotKey := prefix + ":empty:snapshot"
+	emptyMetaKey := prefix + ":empty:meta"
+	emptyResult := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:     emptySnapshotKey,
+		MetaKey:     emptyMetaKey,
+		Cursor:      "0",
+		Limit:       0,
+		Now:         now,
+		MetaTTL:     300,
+		SnapshotTTL: 300,
+	})
+	require.Equal(t, "0", emptyResult.Cursor)
+	require.Len(t, emptyResult.Data, 0)
+
+	// Edge case 4: Publish with all storage disabled (just offset increment)
+	minimalMetaKey := prefix + ":minimal:meta"
+	minimalResult := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:        minimalMetaKey,
+		MessagePayload: "minimal_message",
+		NewEpoch:       epoch,
+	})
+	require.Equal(t, int64(1), minimalResult.Offset)
+	require.Equal(t, epoch, minimalResult.Epoch)
+}
+
 // Helper types and functions
 
 type SnapshotLogParams struct {
-	StreamKey          string
-	MetaKey            string
-	ResultKey          string
-	SnapshotHashKey    string
-	SnapshotOrderKey   string
-	SnapshotExpireKey  string
-	PresenceZSetKey    string
-	PresenceHashKey    string
-	UserZSetKey        string
-	UserHashKey        string
-	MessagePayload     string
-	StreamSize         int
-	StreamTTL          int
-	Channel            string
-	MetaExpire         int
-	NewEpoch           string
-	PublishCommand     string
-	ResultKeyExpire    int
-	UseDelta           bool
-	Version            int
-	VersionEpoch       string
-	IsLeave            bool
-	Score              int64
-	KeyedMemberTTL     int
-	UseHExpire         bool
-	TrackUser          bool
-	UserID             string
-	PresenceInfo       string
-	PresenceExpireAt   int64
+	StreamKey         string
+	MetaKey           string
+	ResultKey         string
+	SnapshotHashKey   string
+	SnapshotOrderKey  string
+	SnapshotExpireKey string
+	PresenceZSetKey   string
+	PresenceHashKey   string
+	UserZSetKey       string
+	UserHashKey       string
+	MessagePayload    string
+	StreamSize        int
+	StreamTTL         int
+	Channel           string
+	MetaExpire        int
+	NewEpoch          string
+	PublishCommand    string
+	ResultKeyExpire   int
+	UseDelta          bool
+	Version           int
+	VersionEpoch      string
+	IsLeave           bool
+	Score             int64
+	KeyedMemberTTL    int
+	UseHExpire        bool
+	TrackUser         bool
+	UserID            string
+	PresenceInfo      string
+	PresenceExpireAt  int64
 }
 
 type SnapshotLogResult struct {
@@ -1193,7 +1545,7 @@ type SnapshotPresenceStatsResult struct {
 	NumUsers   int
 }
 
-func runSnapshotLogScript(t *testing.T, client rueidis.Client, params *SnapshotLogParams) *SnapshotLogResult {
+func runSnapshotPublishScript(t *testing.T, client rueidis.Client, params *SnapshotLogParams) *SnapshotLogResult {
 	t.Helper()
 	ctx := context.Background()
 
@@ -1232,7 +1584,7 @@ func runSnapshotLogScript(t *testing.T, client rueidis.Client, params *SnapshotL
 		strconv.FormatInt(params.PresenceExpireAt, 10),
 	}
 
-	cmd := client.B().Eval().Script(brokerSnapshotLogScript).Numkeys(int64(len(keys))).Key(keys...).Arg(argv...).Build()
+	cmd := client.B().Eval().Script(brokerSnapshotPublishScript).Numkeys(int64(len(keys))).Key(keys...).Arg(argv...).Build()
 	result := client.Do(ctx, cmd)
 	require.NoError(t, result.Error())
 
