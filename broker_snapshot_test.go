@@ -106,6 +106,7 @@ func TestBrokerSnapshot_KeyedSnapshotSimple(t *testing.T) {
 
 	metaKey := prefix + ":meta:test"
 	snapshotKey := prefix + ":snapshot:test"
+	snapshotMetaKey := prefix + ":snapshot:meta:test"
 
 	epoch := strconv.FormatInt(time.Now().Unix(), 10)
 
@@ -115,6 +116,7 @@ func TestBrokerSnapshot_KeyedSnapshotSimple(t *testing.T) {
 		result := runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			MetaKey:         metaKey,
 			SnapshotHashKey: snapshotKey,
+			SnapshotMetaKey: snapshotMetaKey,
 			MessagePayload:  key,
 			NewEpoch:        epoch,
 			KeyedMemberTTL:  300,
@@ -124,13 +126,14 @@ func TestBrokerSnapshot_KeyedSnapshotSimple(t *testing.T) {
 
 	// Read back using unordered read
 	readResult := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
-		HashKey:     snapshotKey,
-		MetaKey:     metaKey,
-		Cursor:      "0",
-		Limit:       0, // Get all
-		Now:         time.Now().Unix(),
-		MetaTTL:     300,
-		SnapshotTTL: 300,
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0, // Get all
+		Now:             time.Now().Unix(),
+		MetaTTL:         300,
+		SnapshotTTL:     300,
 	})
 
 	require.Equal(t, epoch, readResult.Epoch)
@@ -1728,6 +1731,100 @@ func TestBrokerSnapshot_EdgeCases(t *testing.T) {
 	require.Equal(t, epoch, minimalResult.Epoch)
 }
 
+// TestBrokerSnapshot_EpochMismatchDetection tests that snapshot reads detect epoch mismatches.
+func TestBrokerSnapshot_EpochMismatchDetection(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+	ctx := context.Background()
+
+	metaKey := prefix + ":meta:test"
+	snapshotKey := prefix + ":snapshot:test"
+	snapshotMetaKey := prefix + ":snapshot:meta:test"
+
+	now := time.Now().Unix()
+	epoch1 := "epoch1_" + strconv.FormatInt(now, 10)
+
+	// Write snapshot entries in epoch1
+	for i := 1; i <= 3; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			MetaKey:         metaKey,
+			SnapshotHashKey: snapshotKey,
+			SnapshotMetaKey: snapshotMetaKey,
+			MessagePayload:  "client" + strconv.Itoa(i),
+			NewEpoch:        epoch1,
+			KeyedMemberTTL:  300,
+		})
+	}
+
+	// Verify snapshot has data
+	result1 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0,
+		Now:             now,
+		MetaTTL:         300,
+		SnapshotTTL:     300,
+	})
+	require.Equal(t, epoch1, result1.Epoch)
+	require.Len(t, result1.Data, 6) // 3 entries
+
+	// Simulate epoch change: delete meta key (forces new epoch on next write)
+	delCmd := client.B().Del().Key(metaKey).Build()
+	client.Do(ctx, delCmd)
+
+	// Write new message with different epoch (simulates stream reset)
+	epoch2 := "epoch2_" + strconv.FormatInt(now+1, 10)
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:        metaKey,
+		MessagePayload: "new_message",
+		NewEpoch:       epoch2,
+	})
+
+	// Read snapshot - should detect epoch mismatch and return empty
+	result2 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0,
+		Now:             now,
+		MetaTTL:         300,
+		SnapshotTTL:     300,
+	})
+
+	// Should return NEW epoch from stream, but EMPTY data (epoch mismatch)
+	require.Equal(t, epoch2, result2.Epoch, "should return current stream epoch")
+	require.Len(t, result2.Data, 0, "should return empty data due to epoch mismatch")
+
+	// Verify snapshot data still exists in Redis (not deleted, just filtered out)
+	existsCmd := client.B().Exists().Key(snapshotKey).Build()
+	exists := client.Do(ctx, existsCmd)
+	count, _ := exists.AsInt64()
+	require.Equal(t, int64(1), count, "snapshot data should still exist")
+
+	// Test with snapshot_meta deleted (simulates meta eviction)
+	delMetaCmd := client.B().Del().Key(snapshotMetaKey).Build()
+	client.Do(ctx, delMetaCmd)
+
+	result3 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0,
+		Now:             now,
+		MetaTTL:         300,
+		SnapshotTTL:     300,
+	})
+
+	// Should return empty when snapshot_meta doesn't exist
+	require.Equal(t, epoch2, result3.Epoch)
+	require.Len(t, result3.Data, 0, "should return empty when snapshot_meta missing")
+}
+
 // Helper types and functions
 
 type SnapshotLogParams struct {
@@ -1741,6 +1838,7 @@ type SnapshotLogParams struct {
 	PresenceHashKey   string
 	UserZSetKey       string
 	UserHashKey       string
+	SnapshotMetaKey   string
 	MessagePayload    string
 	StreamSize        int
 	StreamTTL         int
@@ -1770,15 +1868,16 @@ type SnapshotLogResult struct {
 }
 
 type SnapshotReadOrderedParams struct {
-	HashKey     string
-	OrderKey    string
-	ExpireKey   string
-	MetaKey     string
-	Limit       int
-	Offset      int
-	Now         int64
-	MetaTTL     int
-	SnapshotTTL int
+	HashKey         string
+	OrderKey        string
+	ExpireKey       string
+	MetaKey         string
+	SnapshotMetaKey string
+	Limit           int
+	Offset          int
+	Now             int64
+	MetaTTL         int
+	SnapshotTTL     int
 }
 
 type SnapshotReadOrderedResult struct {
@@ -1789,14 +1888,15 @@ type SnapshotReadOrderedResult struct {
 }
 
 type SnapshotReadUnorderedParams struct {
-	HashKey     string
-	ExpireKey   string
-	MetaKey     string
-	Cursor      string
-	Limit       int
-	Now         int64
-	MetaTTL     int
-	SnapshotTTL int
+	HashKey         string
+	ExpireKey       string
+	MetaKey         string
+	SnapshotMetaKey string
+	Cursor          string
+	Limit           int
+	Now             int64
+	MetaTTL         int
+	SnapshotTTL     int
 }
 
 type SnapshotReadUnorderedResult struct {
@@ -1863,6 +1963,7 @@ func runSnapshotPublishScript(t *testing.T, client rueidis.Client, params *Snaps
 		orEmpty(params.PresenceHashKey),
 		orEmpty(params.UserZSetKey),
 		orEmpty(params.UserHashKey),
+		orEmpty(params.SnapshotMetaKey),
 	}
 
 	argv := []string{
@@ -1922,6 +2023,7 @@ func runSnapshotReadOrderedScript(t *testing.T, client rueidis.Client, params *S
 		params.OrderKey,
 		params.ExpireKey,
 		params.MetaKey,
+		orEmpty(params.SnapshotMetaKey),
 	}
 
 	argv := []string{
@@ -1970,6 +2072,7 @@ func runSnapshotReadUnorderedScript(t *testing.T, client rueidis.Client, params 
 		params.HashKey,
 		orEmpty(params.ExpireKey),
 		params.MetaKey,
+		orEmpty(params.SnapshotMetaKey),
 	}
 
 	argv := []string{

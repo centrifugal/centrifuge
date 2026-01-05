@@ -2,6 +2,7 @@
 -- KEYS[1] = snapshot hash key
 -- KEYS[2] = snapshot expire zset key (optional, empty '' to disable expiration cleanup)
 -- KEYS[3] = meta key
+-- KEYS[4] = snapshot meta key
 -- ARGV[1] = cursor (use "0" to start, returned cursor for next page)
 -- ARGV[2] = limit (0 = return all via HGETALL, >0 = use HSCAN)
 -- ARGV[3] = now (current timestamp)
@@ -11,6 +12,7 @@
 local hash_key = KEYS[1]
 local expire_key = KEYS[2]
 local meta_key = KEYS[3]
+local snapshot_meta_key = KEYS[4]
 
 local cursor = ARGV[1]
 local limit = tonumber(ARGV[2])
@@ -35,6 +37,21 @@ if meta_ttl > 0 then
     redis.call("expire", meta_key, meta_ttl)
 end
 
+-- Validate snapshot epoch against stream epoch
+if snapshot_meta_key ~= '' then
+    local snapshot_meta_exists = redis.call("exists", snapshot_meta_key)
+    if snapshot_meta_exists == 0 then
+        -- No snapshot metadata = snapshot is invalid/evicted
+        return {offset, epoch, "0", {}}
+    end
+
+    local snapshot_epoch = redis.call("hget", snapshot_meta_key, "epoch")
+    if snapshot_epoch ~= epoch then
+        -- Epoch mismatch = snapshot is stale (from old epoch)
+        return {offset, epoch, "0", {}}
+    end
+end
+
 -- Cleanup expired entries (if expire_key provided)
 if expire_key ~= '' then
     local expired = redis.call("zrangebyscore", expire_key, "-inf", now_str)
@@ -50,6 +67,9 @@ if snapshot_ttl > 0 then
     redis.call("expire", hash_key, snapshot_ttl)
     if expire_key ~= '' then
         redis.call("expire", expire_key, snapshot_ttl)
+    end
+    if snapshot_meta_key ~= '' then
+        redis.call("expire", snapshot_meta_key, snapshot_ttl)
     end
 end
 

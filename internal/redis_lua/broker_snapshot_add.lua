@@ -19,6 +19,7 @@ Unified publish script supporting:
 -- KEYS[8] = presence hash key (optional, empty '' to disable)
 -- KEYS[9] = per-user zset key (optional, empty '' to disable)
 -- KEYS[10] = per-user hash key (optional, empty '' to disable)
+-- KEYS[11] = snapshot meta key (optional, empty '' to disable)
 
 -- ==== ARGV ====
 -- ARGV[1]  = message_payload (or client_id for presence operations)
@@ -52,6 +53,7 @@ local presence_zset_key = KEYS[7]
 local presence_hash_key = KEYS[8]
 local user_zset_key = KEYS[9]
 local user_hash_key = KEYS[10]
+local snapshot_meta_key = KEYS[11]
 
 -- Local variables from ARGV
 local message_payload = ARGV[1]
@@ -198,6 +200,17 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
                 -- Still set whole-hash TTL as safety net
                 redis.call("expire", snapshot_hash_key, tonumber(keyed_member_ttl))
             end
+        end
+    end
+
+    -- Update snapshot metadata with current epoch
+    if snapshot_meta_key ~= '' then
+        local now = tonumber(redis.call("time")[1])
+        redis.call("hset", snapshot_meta_key, "epoch", current_epoch)
+        redis.call("hset", snapshot_meta_key, "updated_at", tostring(now))
+        -- Snapshot meta should persist as long or longer than snapshot data
+        if tonumber(keyed_member_ttl) > 0 then
+            redis.call("expire", snapshot_meta_key, tonumber(keyed_member_ttl))
         end
     end
 end

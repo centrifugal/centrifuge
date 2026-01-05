@@ -3,6 +3,7 @@
 -- KEYS[2] = snapshot order zset key
 -- KEYS[3] = snapshot expire zset key
 -- KEYS[4] = meta key
+-- KEYS[5] = snapshot meta key
 -- ARGV[1] = limit (0 = no limit, return all)
 -- ARGV[2] = offset (for pagination)
 -- ARGV[3] = now (current timestamp for expiration cleanup)
@@ -13,6 +14,7 @@ local hash_key = KEYS[1]
 local order_key = KEYS[2]
 local expire_key = KEYS[3]
 local meta_key = KEYS[4]
+local snapshot_meta_key = KEYS[5]
 
 local limit = tonumber(ARGV[1])
 local page_offset = tonumber(ARGV[2])
@@ -36,11 +38,29 @@ if meta_ttl > 0 then
     redis.call("expire", meta_key, meta_ttl)
 end
 
+-- Validate snapshot epoch against stream epoch
+if snapshot_meta_key ~= '' then
+    local snapshot_meta_exists = redis.call("exists", snapshot_meta_key)
+    if snapshot_meta_exists == 0 then
+        -- No snapshot metadata = snapshot is invalid/evicted
+        return {stream_offset, epoch, {}, {}}
+    end
+
+    local snapshot_epoch = redis.call("hget", snapshot_meta_key, "epoch")
+    if snapshot_epoch ~= epoch then
+        -- Epoch mismatch = snapshot is stale (from old epoch)
+        return {stream_offset, epoch, {}, {}}
+    end
+end
+
 -- Refresh snapshot TTL on read (LRU behavior)
 if snapshot_ttl > 0 then
     redis.call("expire", hash_key, snapshot_ttl)
     redis.call("expire", order_key, snapshot_ttl)
     redis.call("expire", expire_key, snapshot_ttl)
+    if snapshot_meta_key ~= '' then
+        redis.call("expire", snapshot_meta_key, snapshot_ttl)
+    end
 end
 
 -- Cleanup expired entries
