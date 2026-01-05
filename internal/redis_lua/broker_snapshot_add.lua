@@ -170,6 +170,22 @@ end
 -- ==== Step 5: Add/update keyed snapshot ====
 -- Skip for leave messages (they already removed entries in Step 4)
 if snapshot_hash_key ~= '' and is_leave ~= "1" then
+    -- Check if snapshot is from a different epoch - clear if so
+    if snapshot_meta_key ~= '' then
+        local old_snapshot_epoch = redis.call("hget", snapshot_meta_key, "epoch")
+        if old_snapshot_epoch and old_snapshot_epoch ~= current_epoch then
+            -- Epoch changed - clear old snapshot data
+            redis.call("del", snapshot_hash_key)
+            if snapshot_order_key ~= '' then
+                redis.call("del", snapshot_order_key)
+            end
+            if snapshot_expire_key ~= '' then
+                redis.call("del", snapshot_expire_key)
+            end
+            redis.call("del", snapshot_meta_key)
+        end
+    end
+
     if snapshot_order_key ~= '' and snapshot_expire_key ~= '' then
         -- Ordered keyed state (HASH + ZSET)
         local now = tonumber(redis.call("time")[1])
@@ -217,6 +233,22 @@ end
 
 -- ==== Step 6: Add/update presence (for non-leave messages) ====
 if presence_hash_key ~= '' and presence_info ~= '' and is_leave ~= "1" then
+    -- Check if presence is from a different epoch - clear if so
+    if snapshot_meta_key ~= '' then
+        local old_presence_epoch = redis.call("hget", snapshot_meta_key, "epoch")
+        if old_presence_epoch and old_presence_epoch ~= current_epoch then
+            -- Epoch changed - clear old presence data
+            redis.call("del", presence_hash_key)
+            if presence_zset_key ~= '' then
+                redis.call("del", presence_zset_key)
+            end
+            redis.call("del", user_hash_key)
+            if user_zset_key ~= '' then
+                redis.call("del", user_zset_key)
+            end
+        end
+    end
+
     local isNewClient = false
     if track_user ~= '0' then
         isNewClient = redis.call("hexists", presence_hash_key, message_payload) == 0
@@ -262,8 +294,49 @@ end
 -- ==== Step 7: Update append log (if stream keys provided) ====
 if stream_key ~= '' and meta_key ~= '' then
     if top_offset == 1 then
-        -- If a new epoch starts (thus top_offset is 1), try to delete the existing stream
+        -- Offset is 1 - could be first message ever OR epoch change
+        -- Only clear if there's old data from a DIFFERENT epoch
+        local should_clear = false
+        if snapshot_meta_key ~= '' then
+            local old_epoch = redis.call("hget", snapshot_meta_key, "epoch")
+            if old_epoch and old_epoch ~= current_epoch then
+                -- Epoch changed - old snapshot exists from different epoch
+                should_clear = true
+            end
+        end
+
+        -- Delete the existing stream (always on offset 1)
         redis.call("del", stream_key)
+
+        if should_clear then
+            -- Clear snapshot data from previous epoch
+            if snapshot_hash_key ~= '' then
+                redis.call("del", snapshot_hash_key)
+            end
+            if snapshot_order_key ~= '' then
+                redis.call("del", snapshot_order_key)
+            end
+            if snapshot_expire_key ~= '' then
+                redis.call("del", snapshot_expire_key)
+            end
+            if snapshot_meta_key ~= '' then
+                redis.call("del", snapshot_meta_key)
+            end
+
+            -- Clear presence data from previous epoch
+            if presence_hash_key ~= '' then
+                redis.call("del", presence_hash_key)
+            end
+            if presence_zset_key ~= '' then
+                redis.call("del", presence_zset_key)
+            end
+            if user_hash_key ~= '' then
+                redis.call("del", user_hash_key)
+            end
+            if user_zset_key ~= '' then
+                redis.call("del", user_zset_key)
+            end
+        end
     end
 
     local xadd_args = { stream_key, "MAXLEN", stream_size, top_offset, "e", current_epoch, "d", message_payload }

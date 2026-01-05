@@ -1731,6 +1731,254 @@ func TestBrokerSnapshot_EdgeCases(t *testing.T) {
 	require.Equal(t, epoch, minimalResult.Epoch)
 }
 
+// TestBrokerSnapshot_ClientRecovery demonstrates complete client recovery using snapshot.
+func TestBrokerSnapshot_ClientRecovery(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	streamKey := prefix + ":stream:test"
+	metaKey := prefix + ":meta:test"
+	snapshotKey := prefix + ":snapshot:test"
+	snapshotMetaKey := prefix + ":snapshot:meta:test"
+	presenceHashKey := prefix + ":presence:hash:test"
+
+	now := time.Now().Unix()
+	epoch := strconv.FormatInt(now, 10)
+
+	// === PHASE 1: Client connects and sees initial state ===
+
+	// Publish messages 1-5 (with presence updates)
+	for i := 1; i <= 5; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			StreamKey:        streamKey,
+			MetaKey:          metaKey,
+			SnapshotHashKey:  snapshotKey,
+			SnapshotMetaKey:  snapshotMetaKey,
+			PresenceHashKey:  presenceHashKey,
+			MessagePayload:   "client" + strconv.Itoa(i),
+			PresenceInfo:     `{"id":"client` + strconv.Itoa(i) + `"}`,
+			PresenceExpireAt: now + 300,
+			StreamSize:       100,
+			StreamTTL:        300,
+			MetaExpire:       300,
+			KeyedMemberTTL:   300,
+			NewEpoch:         epoch,
+		})
+	}
+
+	// Client reads snapshot at offset 5
+	clientLastOffset := int64(5)
+	clientLastEpoch := epoch
+
+	snapshot1 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0,
+		Now:             now,
+		MetaTTL:         300,
+		SnapshotTTL:     300,
+	})
+
+	require.Equal(t, int64(5), snapshot1.Offset, "snapshot should show offset 5")
+	require.Equal(t, epoch, snapshot1.Epoch)
+	require.Len(t, kvArrayToMap(snapshot1.Data), 5, "should have 5 clients")
+
+	// === PHASE 2: Client disconnects, more messages arrive ===
+
+	// Publish messages 6-10 (creating gap)
+	for i := 6; i <= 10; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			StreamKey:        streamKey,
+			MetaKey:          metaKey,
+			SnapshotHashKey:  snapshotKey,
+			SnapshotMetaKey:  snapshotMetaKey,
+			PresenceHashKey:  presenceHashKey,
+			MessagePayload:   "client" + strconv.Itoa(i),
+			PresenceInfo:     `{"id":"client` + strconv.Itoa(i) + `"}`,
+			PresenceExpireAt: now + 300,
+			StreamSize:       100,
+			StreamTTL:        300,
+			MetaExpire:       300,
+			KeyedMemberTTL:   300,
+			NewEpoch:         epoch,
+		})
+	}
+
+	// === PHASE 3: Client reconnects - RECOVERY SCENARIO 1 (Gap Detection) ===
+
+	snapshot2 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0,
+		Now:             now,
+		MetaTTL:         300,
+		SnapshotTTL:     300,
+	})
+
+	// Recovery Decision Logic
+	require.Equal(t, epoch, snapshot2.Epoch, "epoch unchanged - same session")
+
+	gap := snapshot2.Offset - clientLastOffset
+	require.Equal(t, int64(5), gap, "client missed 5 messages (6-10)")
+
+	// Client can choose recovery strategy based on gap:
+	if gap > 0 {
+		// Option A: Use snapshot (current state) + subscribe from current offset
+		currentState := kvArrayToMap(snapshot2.Data)
+		require.Len(t, currentState, 10, "snapshot has all 10 clients")
+
+		// Client would subscribe from offset 10 for future updates
+		subscribeFromOffset := snapshot2.Offset // 10
+		require.Equal(t, int64(10), subscribeFromOffset)
+
+		// Option B: Fetch history to fill gap (if needed)
+		ctx := context.Background()
+		historyCmd := client.B().Xrevrange().Key(streamKey).End("+").Start("-").Count(10).Build()
+		historyResult := client.Do(ctx, historyCmd)
+		historyEntries, _ := historyResult.ToArray()
+		require.GreaterOrEqual(t, len(historyEntries), 5, "history contains gap messages")
+	}
+
+	// === PHASE 4: Publish normal messages (no presence) ===
+
+	// Messages 11-15 go to stream only (not presence/snapshot)
+	for i := 11; i <= 15; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			StreamKey:      streamKey,
+			MetaKey:        metaKey,
+			MessagePayload: "msg_" + strconv.Itoa(i),
+			StreamSize:     100,
+			StreamTTL:      300,
+			MetaExpire:     300,
+			NewEpoch:       epoch,
+		})
+	}
+
+	// === PHASE 5: Client reads snapshot - demonstrates staleness ===
+
+	snapshot3 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0,
+		Now:             now,
+		MetaTTL:         300,
+		SnapshotTTL:     300,
+	})
+
+	// Snapshot offset is 15 (current stream), but data is from offset 10 (last presence update)
+	require.Equal(t, int64(15), snapshot3.Offset, "stream has progressed to offset 15")
+	require.Len(t, kvArrayToMap(snapshot3.Data), 10, "snapshot still has 10 clients (no updates in msgs 11-15)")
+
+	// This demonstrates:
+	// - snapshot.Offset = current stream position (15)
+	// - snapshot.Data = state from last update (offset 10)
+	// - Client subscribes from offset 15 to catch future updates
+
+	// === PHASE 6: Simulate epoch change (stream reset) ===
+
+	ctx := context.Background()
+
+	// Delete meta key to force new epoch
+	client.Do(ctx, client.B().Del().Key(metaKey).Build())
+
+	newEpoch := "epoch2_" + strconv.FormatInt(now+1000, 10)
+
+	// New message with new epoch
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		StreamKey:      streamKey,
+		MetaKey:        metaKey,
+		MessagePayload: "first_in_new_epoch",
+		StreamSize:     100,
+		StreamTTL:      300,
+		MetaExpire:     300,
+		NewEpoch:       newEpoch,
+	})
+
+	// === PHASE 7: Client reconnects - RECOVERY SCENARIO 2 (Epoch Changed) ===
+
+	snapshot4 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0,
+		Now:             now,
+		MetaTTL:         300,
+		SnapshotTTL:     300,
+	})
+
+	// Epoch mismatch detected!
+	require.Equal(t, newEpoch, snapshot4.Epoch, "stream has new epoch")
+	require.Len(t, snapshot4.Data, 0, "snapshot data cleared due to epoch mismatch")
+
+	// Recovery: Client detects epoch changed
+	if snapshot4.Epoch != clientLastEpoch {
+		// Epoch changed - full resync
+		// - Discard old state
+		// - Use new snapshot (currently empty)
+		// - Subscribe from new offset in new epoch
+		require.Equal(t, int64(1), snapshot4.Offset, "new epoch starts at offset 1")
+
+		// Client would:
+		// 1. Clear local state
+		// 2. Use snapshot as new baseline (empty in this case)
+		// 3. Subscribe from offset 1, epoch newEpoch
+	}
+
+	// === PHASE 8: Rebuild snapshot in new epoch ===
+
+	// Add new presence in new epoch
+	for i := 1; i <= 3; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			StreamKey:        streamKey,
+			MetaKey:          metaKey,
+			SnapshotHashKey:  snapshotKey,
+			SnapshotMetaKey:  snapshotMetaKey,
+			PresenceHashKey:  presenceHashKey,
+			MessagePayload:   "new_client" + strconv.Itoa(i),
+			PresenceInfo:     `{"id":"new_client` + strconv.Itoa(i) + `"}`,
+			PresenceExpireAt: now + 300,
+			StreamSize:       100,
+			StreamTTL:        300,
+			MetaExpire:       300,
+			KeyedMemberTTL:   300,
+			NewEpoch:         newEpoch,
+		})
+	}
+
+	// === PHASE 9: Client reads snapshot - RECOVERY SCENARIO 3 (All caught up) ===
+
+	snapshot5 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:         snapshotKey,
+		MetaKey:         metaKey,
+		SnapshotMetaKey: snapshotMetaKey,
+		Cursor:          "0",
+		Limit:           0,
+		Now:             now,
+		MetaTTL:         300,
+		SnapshotTTL:     300,
+	})
+
+	require.Equal(t, newEpoch, snapshot5.Epoch)
+	require.Equal(t, int64(4), snapshot5.Offset, "offset 1 (epoch msg) + 3 presence = 4")
+
+	// Snapshot was cleared on epoch change (top_offset == 1)
+	// Only new clients from new epoch should be present
+	currentState := kvArrayToMap(snapshot5.Data)
+	require.Len(t, currentState, 3, "only new clients from new epoch")
+	require.Contains(t, currentState, "new_client1", "new clients added in new epoch")
+	require.Contains(t, currentState, "new_client2")
+	require.Contains(t, currentState, "new_client3")
+	require.NotContains(t, currentState, "client1", "old clients cleared on epoch change")
+}
+
 // TestBrokerSnapshot_EpochMismatchDetection tests that snapshot reads detect epoch mismatches.
 func TestBrokerSnapshot_EpochMismatchDetection(t *testing.T) {
 	client := setupRedisClient(t)
