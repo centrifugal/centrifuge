@@ -163,13 +163,11 @@ if is_leave == "1" then
             end
         end
     end
-
-    -- Return leave info (no append log write for leave)
-    return { top_offset, current_epoch, "0", "0" }
 end
 
 -- ==== Step 5: Add/update keyed snapshot ====
-if snapshot_hash_key ~= '' then
+-- Skip for leave messages (they already removed entries in Step 4)
+if snapshot_hash_key ~= '' and is_leave ~= "1" then
     if snapshot_order_key ~= '' and snapshot_expire_key ~= '' then
         -- Ordered keyed state (HASH + ZSET)
         local now = tonumber(redis.call("time")[1])
@@ -182,14 +180,22 @@ if snapshot_hash_key ~= '' then
         redis.call("expire", snapshot_order_key, ttl)
         redis.call("expire", snapshot_expire_key, ttl)
     else
-        -- Simple HASH keyed snapshot
+        -- Simple HASH keyed snapshot (unordered)
         redis.call("hset", snapshot_hash_key, message_payload, message_payload)
         if tonumber(keyed_member_ttl) > 0 then
             if use_hexpire == "1" then
-                -- Redis 7.4+ HEXPIRE per-field
+                -- Redis 7.4+ HEXPIRE per-field TTL
                 redis.call("hexpire", snapshot_hash_key, tonumber(keyed_member_ttl), "FIELDS", "1", message_payload)
             else
-                -- fallback: expire entire hash
+                -- Fallback for Redis < 7.4: use expire ZSET for per-entry expiration
+                -- (same pattern as presence_add.lua)
+                if snapshot_expire_key ~= '' then
+                    local now = tonumber(redis.call("time")[1])
+                    local expire_at = now + tonumber(keyed_member_ttl)
+                    redis.call("zadd", snapshot_expire_key, expire_at, message_payload)
+                    redis.call("expire", snapshot_expire_key, tonumber(keyed_member_ttl))
+                end
+                -- Still set whole-hash TTL as safety net
                 redis.call("expire", snapshot_hash_key, tonumber(keyed_member_ttl))
             end
         end
@@ -197,7 +203,7 @@ if snapshot_hash_key ~= '' then
 end
 
 -- ==== Step 6: Add/update presence (for non-leave messages) ====
-if presence_hash_key ~= '' and presence_info ~= '' then
+if presence_hash_key ~= '' and presence_info ~= '' and is_leave ~= "1" then
     local isNewClient = false
     if track_user ~= '0' then
         isNewClient = redis.call("hexists", presence_hash_key, message_payload) == 0
@@ -240,7 +246,7 @@ if presence_hash_key ~= '' and presence_info ~= '' then
     end
 end
 
--- ==== Step 7: Update append log (only if enabled) ====
+-- ==== Step 7: Update append log (if stream keys provided) ====
 if stream_key ~= '' and meta_key ~= '' then
     if top_offset == 1 then
         -- If a new epoch starts (thus top_offset is 1), try to delete the existing stream

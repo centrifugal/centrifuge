@@ -1358,6 +1358,306 @@ func TestBrokerSnapshot_OrderedSnapshotSameScores(t *testing.T) {
 	require.Equal(t, "client_a", result.Keys[4])
 }
 
+// TestBrokerSnapshot_SimpleSnapshotExpiration tests per-entry expiration for simple HASH snapshots (no ordering).
+func TestBrokerSnapshot_SimpleSnapshotExpiration(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	metaKey := prefix + ":meta:test"
+	snapshotHashKey := prefix + ":snapshot:test"
+	snapshotExpireKey := prefix + ":snapshot:expire:test"
+
+	now := time.Now().Unix()
+	epoch := strconv.FormatInt(now, 10)
+
+	// Add 3 entries with different expiration times
+	// Entry 1: expires in 2 seconds
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:           metaKey,
+		SnapshotHashKey:   snapshotHashKey,
+		SnapshotExpireKey: snapshotExpireKey,
+		MessagePayload:    "short_lived",
+		KeyedMemberTTL:    2,
+		UseHExpire:        false, // Force ZSET-based expiration
+		NewEpoch:          epoch,
+	})
+
+	// Entry 2: expires in 10 seconds
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:           metaKey,
+		SnapshotHashKey:   snapshotHashKey,
+		SnapshotExpireKey: snapshotExpireKey,
+		MessagePayload:    "long_lived",
+		KeyedMemberTTL:    10,
+		UseHExpire:        false,
+		NewEpoch:          epoch,
+	})
+
+	// Entry 3: already expired (for immediate cleanup test)
+	ctx := context.Background()
+	client.Do(ctx, client.B().Hset().Key(snapshotHashKey).FieldValue().FieldValue("already_expired", "already_expired").Build())
+	client.Do(ctx, client.B().Zadd().Key(snapshotExpireKey).ScoreMember().ScoreMember(float64(now-100), "already_expired").Build())
+
+	// Read immediately - should have 2 entries (expired one cleaned up)
+	result1 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:     snapshotHashKey,
+		ExpireKey:   snapshotExpireKey,
+		MetaKey:     metaKey,
+		Cursor:      "0",
+		Limit:       0,
+		Now:         now,
+		MetaTTL:     300,
+		SnapshotTTL: 300,
+	})
+
+	dataMap1 := kvArrayToMap(result1.Data)
+	require.Len(t, dataMap1, 2, "should have 2 entries after cleanup")
+	require.Contains(t, dataMap1, "short_lived")
+	require.Contains(t, dataMap1, "long_lived")
+	require.NotContains(t, dataMap1, "already_expired")
+
+	// Wait 3 seconds for short_lived to expire
+	time.Sleep(3 * time.Second)
+
+	// Read again - short_lived should be cleaned up
+	result2 := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:     snapshotHashKey,
+		ExpireKey:   snapshotExpireKey,
+		MetaKey:     metaKey,
+		Cursor:      "0",
+		Limit:       0,
+		Now:         time.Now().Unix(),
+		MetaTTL:     300,
+		SnapshotTTL: 300,
+	})
+
+	dataMap2 := kvArrayToMap(result2.Data)
+	require.Len(t, dataMap2, 1, "should have 1 entry after short_lived expires")
+	require.Contains(t, dataMap2, "long_lived")
+	require.NotContains(t, dataMap2, "short_lived")
+}
+
+// TestBrokerSnapshot_JoinLeaveStreamLogging tests optional join/leave message logging to stream.
+// Stream logging is controlled by passing/omitting StreamKey and MetaKey parameters.
+func TestBrokerSnapshot_JoinLeaveStreamLogging(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	streamKey := prefix + ":stream:test"
+	metaKey := prefix + ":meta:test"
+	presenceHashKey := prefix + ":presence:hash:test"
+	presenceZSetKey := prefix + ":presence:zset:test"
+
+	ctx := context.Background()
+	now := time.Now().Unix()
+	epoch := strconv.FormatInt(now, 10)
+
+	// Test 1: Join WITH stream logging (pass StreamKey and MetaKey)
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		StreamKey:        streamKey,
+		MetaKey:          metaKey,
+		PresenceHashKey:  presenceHashKey,
+		PresenceZSetKey:  presenceZSetKey,
+		MessagePayload:   "client1",
+		PresenceInfo:     `{"id":"client1"}`,
+		PresenceExpireAt: now + 300,
+		StreamSize:       100,
+		StreamTTL:        300,
+		MetaExpire:       300,
+		KeyedMemberTTL:   300,
+		NewEpoch:         epoch,
+	})
+
+	// Verify join was logged to stream
+	entries1 := client.Do(ctx, client.B().Xlen().Key(streamKey).Build())
+	require.NoError(t, entries1.Error())
+	count1, _ := entries1.AsInt64()
+	require.Equal(t, int64(1), count1, "join should be in stream")
+
+	// Test 2: Join WITHOUT stream logging (omit StreamKey/MetaKey)
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		// No StreamKey/MetaKey = don't log to stream
+		PresenceHashKey:  presenceHashKey,
+		PresenceZSetKey:  presenceZSetKey,
+		MessagePayload:   "client2",
+		PresenceInfo:     `{"id":"client2"}`,
+		PresenceExpireAt: now + 300,
+		KeyedMemberTTL:   300,
+		NewEpoch:         epoch,
+	})
+
+	// Stream count should still be 1 (join not logged)
+	entries2 := client.Do(ctx, client.B().Xlen().Key(streamKey).Build())
+	require.NoError(t, entries2.Error())
+	count2, _ := entries2.AsInt64()
+	require.Equal(t, int64(1), count2, "join should NOT be in stream")
+
+	// Test 3: Leave WITHOUT stream logging (omit StreamKey/MetaKey)
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		// No StreamKey/MetaKey = don't log to stream
+		PresenceHashKey: presenceHashKey,
+		PresenceZSetKey: presenceZSetKey,
+		MessagePayload:  "client1",
+		IsLeave:         true,
+		NewEpoch:        epoch,
+	})
+
+	// Verify presence removed but stream unchanged
+	presenceExists := client.Do(ctx, client.B().Hexists().Key(presenceHashKey).Field("client1").Build())
+	require.NoError(t, presenceExists.Error())
+	exists, _ := presenceExists.AsBool()
+	require.False(t, exists, "client1 should be removed from presence")
+
+	entries3 := client.Do(ctx, client.B().Xlen().Key(streamKey).Build())
+	require.NoError(t, entries3.Error())
+	count3, _ := entries3.AsInt64()
+	require.Equal(t, int64(1), count3, "leave should NOT be in stream")
+
+	// Test 4: Leave WITH stream logging (pass StreamKey and MetaKey)
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		StreamKey:       streamKey,
+		MetaKey:         metaKey,
+		PresenceHashKey: presenceHashKey,
+		PresenceZSetKey: presenceZSetKey,
+		MessagePayload:  "client2",
+		StreamSize:      100,
+		StreamTTL:       300,
+		IsLeave:         true,
+		NewEpoch:        epoch,
+	})
+
+	// Verify leave was logged to stream
+	entries4 := client.Do(ctx, client.B().Xlen().Key(streamKey).Build())
+	require.NoError(t, entries4.Error())
+	count4, _ := entries4.AsInt64()
+	require.Equal(t, int64(2), count4, "leave should be in stream")
+
+	// Verify the leave message payload
+	lastEntry := client.Do(ctx, client.B().Xrevrange().Key(streamKey).End("+").Start("-").Count(1).Build())
+	require.NoError(t, lastEntry.Error())
+	entryArr, _ := lastEntry.ToArray()
+	require.Len(t, entryArr, 1)
+	entryValues, _ := entryArr[0].ToArray()
+	fieldValues, _ := entryValues[1].ToArray()
+	var leavePayload string
+	for i := 0; i < len(fieldValues); i += 2 {
+		k, _ := fieldValues[i].ToString()
+		if k == "d" {
+			leavePayload, _ = fieldValues[i+1].ToString()
+			break
+		}
+	}
+	require.Equal(t, "client2", leavePayload, "leave message should contain client2")
+}
+
+// TestBrokerSnapshot_RecoveryFromSnapshot tests that snapshot reads return offset+epoch for recovery.
+func TestBrokerSnapshot_RecoveryFromSnapshot(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	streamKey := prefix + ":stream:test"
+	metaKey := prefix + ":meta:test"
+	snapshotHashKey := prefix + ":snapshot:test"
+
+	now := time.Now().Unix()
+	epoch := strconv.FormatInt(now, 10)
+
+	// Simulate server state: mix of logged and unlogged messages
+	// offset 1-3: normal messages (logged to stream)
+	for i := 1; i <= 3; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			StreamKey:      streamKey,
+			MetaKey:        metaKey,
+			MessagePayload: "msg_" + strconv.Itoa(i),
+			StreamSize:     100,
+			StreamTTL:      300,
+			MetaExpire:     300,
+			NewEpoch:       epoch,
+		})
+	}
+
+	// offset 4: join (NOT logged to stream, only in snapshot)
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:         metaKey,
+		SnapshotHashKey: snapshotHashKey,
+		MessagePayload:  "client1",
+		KeyedMemberTTL:  300,
+		NewEpoch:        epoch,
+	})
+
+	// offset 5-7: more normal messages (logged to stream)
+	for i := 5; i <= 7; i++ {
+		runSnapshotPublishScript(t, client, &SnapshotLogParams{
+			StreamKey:      streamKey,
+			MetaKey:        metaKey,
+			MessagePayload: "msg_" + strconv.Itoa(i),
+			StreamSize:     100,
+			StreamTTL:      300,
+			MetaExpire:     300,
+			NewEpoch:       epoch,
+		})
+	}
+
+	// Fresh client connects - reads snapshot to get current state
+	snapshotResult := runSnapshotReadUnorderedScript(t, client, &SnapshotReadUnorderedParams{
+		HashKey:     snapshotHashKey,
+		MetaKey:     metaKey,
+		Cursor:      "0",
+		Limit:       0,
+		Now:         now,
+		MetaTTL:     300,
+		SnapshotTTL: 300,
+	})
+
+	// Verify snapshot returns BOTH offset and epoch
+	require.Equal(t, int64(7), snapshotResult.Offset, "snapshot should return current offset")
+	require.Equal(t, epoch, snapshotResult.Epoch, "snapshot should return current epoch")
+
+	// Verify snapshot data
+	dataMap := kvArrayToMap(snapshotResult.Data)
+	require.Contains(t, dataMap, "client1", "snapshot should contain joined client")
+
+	// Client can now use offset+epoch to start consuming from stream
+	// Simulating: client subscribes from offset 7 with epoch
+	// (In real code, client would use these to call history API with proper offset/epoch)
+
+	// Test ordered snapshot as well
+	snapshotOrderKey := prefix + ":snapshot:order:test"
+	snapshotExpireKey := prefix + ":snapshot:expire:test"
+
+	// Add to ordered snapshot
+	runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:           metaKey,
+		SnapshotHashKey:   snapshotHashKey,
+		SnapshotOrderKey:  snapshotOrderKey,
+		SnapshotExpireKey: snapshotExpireKey,
+		MessagePayload:    "client2",
+		Score:             100,
+		KeyedMemberTTL:    300,
+		NewEpoch:          epoch,
+	})
+
+	orderedResult := runSnapshotReadOrderedScript(t, client, &SnapshotReadOrderedParams{
+		HashKey:     snapshotHashKey,
+		OrderKey:    snapshotOrderKey,
+		ExpireKey:   snapshotExpireKey,
+		MetaKey:     metaKey,
+		Limit:       0,
+		Offset:      0,
+		Now:         now,
+		MetaTTL:     300,
+		SnapshotTTL: 300,
+	})
+
+	// Verify ordered snapshot also returns offset+epoch
+	require.Equal(t, int64(8), orderedResult.Offset, "ordered snapshot should return current offset")
+	require.Equal(t, epoch, orderedResult.Epoch, "ordered snapshot should return current epoch")
+	require.Contains(t, orderedResult.Keys, "client2")
+}
+
 // TestBrokerSnapshot_EdgeCases tests various edge cases.
 func TestBrokerSnapshot_EdgeCases(t *testing.T) {
 	client := setupRedisClient(t)
@@ -1482,6 +1782,7 @@ type SnapshotReadOrderedParams struct {
 }
 
 type SnapshotReadOrderedResult struct {
+	Offset int64
 	Epoch  string
 	Keys   []string
 	Values []string
@@ -1489,6 +1790,7 @@ type SnapshotReadOrderedResult struct {
 
 type SnapshotReadUnorderedParams struct {
 	HashKey     string
+	ExpireKey   string
 	MetaKey     string
 	Cursor      string
 	Limit       int
@@ -1498,6 +1800,7 @@ type SnapshotReadUnorderedParams struct {
 }
 
 type SnapshotReadUnorderedResult struct {
+	Offset int64
 	Epoch  string
 	Cursor string
 	Data   []string // key-value pairs as flat array
@@ -1635,18 +1938,24 @@ func runSnapshotReadOrderedScript(t *testing.T, client rueidis.Client, params *S
 
 	arr, err := result.ToArray()
 	require.NoError(t, err)
-	require.Len(t, arr, 3)
+	require.Len(t, arr, 4)
 
-	epoch, err := arr[0].ToString()
+	offset, err := arr[0].ToString()
 	require.NoError(t, err)
 
-	keysArr, err := arr[1].AsStrSlice()
+	epoch, err := arr[1].ToString()
 	require.NoError(t, err)
 
-	valuesArr, err := arr[2].AsStrSlice()
+	keysArr, err := arr[2].AsStrSlice()
 	require.NoError(t, err)
+
+	valuesArr, err := arr[3].AsStrSlice()
+	require.NoError(t, err)
+
+	offsetInt, _ := strconv.ParseInt(offset, 10, 64)
 
 	return &SnapshotReadOrderedResult{
+		Offset: offsetInt,
 		Epoch:  epoch,
 		Keys:   keysArr,
 		Values: valuesArr,
@@ -1659,6 +1968,7 @@ func runSnapshotReadUnorderedScript(t *testing.T, client rueidis.Client, params 
 
 	keys := []string{
 		params.HashKey,
+		orEmpty(params.ExpireKey),
 		params.MetaKey,
 	}
 
@@ -1676,18 +1986,24 @@ func runSnapshotReadUnorderedScript(t *testing.T, client rueidis.Client, params 
 
 	arr, err := result.ToArray()
 	require.NoError(t, err)
-	require.Len(t, arr, 3)
+	require.Len(t, arr, 4)
 
-	epoch, err := arr[0].ToString()
+	offset, err := arr[0].ToString()
 	require.NoError(t, err)
 
-	cursor, err := arr[1].ToString()
+	epoch, err := arr[1].ToString()
 	require.NoError(t, err)
 
-	dataArr, err := arr[2].AsStrSlice()
+	cursor, err := arr[2].ToString()
 	require.NoError(t, err)
+
+	dataArr, err := arr[3].AsStrSlice()
+	require.NoError(t, err)
+
+	offsetInt, _ := strconv.ParseInt(offset, 10, 64)
 
 	return &SnapshotReadUnorderedResult{
+		Offset: offsetInt,
 		Epoch:  epoch,
 		Cursor: cursor,
 		Data:   dataArr,

@@ -15,17 +15,23 @@ local expire_key = KEYS[3]
 local meta_key = KEYS[4]
 
 local limit = tonumber(ARGV[1])
-local offset = tonumber(ARGV[2])
+local page_offset = tonumber(ARGV[2])
 local now_str = ARGV[3]
 local meta_ttl = tonumber(ARGV[4])
 local snapshot_ttl = tonumber(ARGV[5])
 
--- Update meta epoch + TTL
+-- Update meta epoch + TTL and get current stream offset
 local epoch = redis.call("hget", meta_key, "e")
 if not epoch then
     epoch = now_str
     redis.call("hset", meta_key, "e", epoch)
 end
+
+local stream_offset = redis.call("hget", meta_key, "s")
+if not stream_offset then
+    stream_offset = "0"
+end
+
 if meta_ttl > 0 then
     redis.call("expire", meta_key, meta_ttl)
 end
@@ -49,17 +55,17 @@ end
 -- Fetch ordered keys (descending)
 local keys
 if limit > 0 then
-    keys = redis.call("zrevrange", order_key, offset, offset + limit - 1)
+    keys = redis.call("zrevrange", order_key, page_offset, page_offset + limit - 1)
 else
     keys = redis.call("zrevrange", order_key, 0, -1)
 end
 
 local key_count = #keys
 if key_count == 0 then
-    return {epoch, {}, {}}
+    return {stream_offset, epoch, {}, {}}
 end
 
 -- Fetch values in one call
 local values = redis.call("hmget", hash_key, unpack(keys))
 
-return {epoch, keys, values}
+return {stream_offset, epoch, keys, values}
