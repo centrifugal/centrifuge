@@ -266,8 +266,8 @@ func TestBrokerSnapshot_Presence(t *testing.T) {
 	prefix := getUniquePrefix()
 
 	metaKey := prefix + ":meta:test"
-	presenceSnapshotHashKey := prefix + ":presence:snapshot:test"   // Using snapshot hash for presence
-	presenceSnapshotExpireKey := prefix + ":presence:expire:test"   // Using snapshot expire zset
+	presenceSnapshotHashKey := prefix + ":presence:snapshot:test" // Using snapshot hash for presence
+	presenceSnapshotExpireKey := prefix + ":presence:expire:test" // Using snapshot expire zset
 	userZSetKey := prefix + ":user:zset:test"
 	userHashKey := prefix + ":user:hash:test"
 
@@ -869,10 +869,10 @@ func TestBrokerSnapshot_PresenceRead(t *testing.T) {
 
 	// Read full presence
 	presenceResult := runSnapshotPresenceGetScript(t, client, &SnapshotPresenceGetParams{
-		SnapshotExpireKey:  presenceSnapshotExpireKey,
-		SnapshotHashKey:    presenceSnapshotHashKey,
-		Now:             now,
-		UseHExpire:      false,
+		SnapshotExpireKey: presenceSnapshotExpireKey,
+		SnapshotHashKey:   presenceSnapshotHashKey,
+		Now:               now,
+		UseHExpire:        false,
 	})
 
 	require.Len(t, presenceResult.Presence, 4)
@@ -901,28 +901,28 @@ func TestBrokerSnapshot_PresenceStats(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		userID := "user" + strconv.Itoa((i-1)%3+1) // user1, user2, user3
 		runSnapshotPublishScript(t, client, &SnapshotLogParams{
-			MetaKey:          metaKey,
-			SnapshotExpireKey:   presenceSnapshotExpireKey,
-			SnapshotHashKey:     presenceSnapshotHashKey,
-			UserZSetKey:      userZSetKey,
-			UserHashKey:      userHashKey,
-			MessageKey:       "client" + strconv.Itoa(i),
-			MessagePayload:   "client" + strconv.Itoa(i),
-			TrackUser:        true,
-			UserID:           userID,
-			KeyedMemberTTL:   300,
-			NewEpoch:         epoch,
+			MetaKey:           metaKey,
+			SnapshotExpireKey: presenceSnapshotExpireKey,
+			SnapshotHashKey:   presenceSnapshotHashKey,
+			UserZSetKey:       userZSetKey,
+			UserHashKey:       userHashKey,
+			MessageKey:        "client" + strconv.Itoa(i),
+			MessagePayload:    "client" + strconv.Itoa(i),
+			TrackUser:         true,
+			UserID:            userID,
+			KeyedMemberTTL:    300,
+			NewEpoch:          epoch,
 		})
 	}
 
 	// Get presence stats
 	statsResult := runSnapshotPresenceStatsScript(t, client, &SnapshotPresenceStatsParams{
-		SnapshotExpireKey:  presenceSnapshotExpireKey,
-		SnapshotHashKey:    presenceSnapshotHashKey,
-		UserZSetKey:     userZSetKey,
-		UserHashKey:     userHashKey,
-		Now:             now,
-		UseHExpire:      false,
+		SnapshotExpireKey: presenceSnapshotExpireKey,
+		SnapshotHashKey:   presenceSnapshotHashKey,
+		UserZSetKey:       userZSetKey,
+		UserHashKey:       userHashKey,
+		Now:               now,
+		UseHExpire:        false,
 	})
 
 	require.Equal(t, 10, statsResult.NumClients)
@@ -932,28 +932,28 @@ func TestBrokerSnapshot_PresenceStats(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		userID := "user" + strconv.Itoa((i-1)%3+1)
 		runSnapshotPublishScript(t, client, &SnapshotLogParams{
-			MetaKey:         metaKey,
-			SnapshotExpireKey:  presenceSnapshotExpireKey,
-			SnapshotHashKey:    presenceSnapshotHashKey,
-			UserZSetKey:     userZSetKey,
-			UserHashKey:     userHashKey,
-			MessageKey:      "client" + strconv.Itoa(i),
-			MessagePayload:  "client" + strconv.Itoa(i),
-			TrackUser:       true,
-			UserID:          userID,
-			IsLeave:         true,
-			NewEpoch:        epoch,
+			MetaKey:           metaKey,
+			SnapshotExpireKey: presenceSnapshotExpireKey,
+			SnapshotHashKey:   presenceSnapshotHashKey,
+			UserZSetKey:       userZSetKey,
+			UserHashKey:       userHashKey,
+			MessageKey:        "client" + strconv.Itoa(i),
+			MessagePayload:    "client" + strconv.Itoa(i),
+			TrackUser:         true,
+			UserID:            userID,
+			IsLeave:           true,
+			NewEpoch:          epoch,
 		})
 	}
 
 	// Get updated stats
 	statsResult2 := runSnapshotPresenceStatsScript(t, client, &SnapshotPresenceStatsParams{
-		SnapshotExpireKey:  presenceSnapshotExpireKey,
-		SnapshotHashKey:    presenceSnapshotHashKey,
-		UserZSetKey:     userZSetKey,
-		UserHashKey:     userHashKey,
-		Now:             now,
-		UseHExpire:      false,
+		SnapshotExpireKey: presenceSnapshotExpireKey,
+		SnapshotHashKey:   presenceSnapshotHashKey,
+		UserZSetKey:       userZSetKey,
+		UserHashKey:       userHashKey,
+		Now:               now,
+		UseHExpire:        false,
 	})
 
 	require.Equal(t, 7, statsResult2.NumClients) // 10 - 3 = 7
@@ -1306,17 +1306,17 @@ func TestBrokerSnapshot_ConcurrentPresenceUpdates(t *testing.T) {
 			clientID := "client" + strconv.Itoa(clientNum)
 
 			runSnapshotPublishScript(t, client, &SnapshotLogParams{
-				MetaKey:         metaKey,
-				SnapshotExpireKey:  presenceSnapshotExpireKey,
-				SnapshotHashKey:    presenceSnapshotHashKey,
-				UserZSetKey:     userZSetKey,
-				UserHashKey:     userHashKey,
-				MessageKey:      clientID,
-				MessagePayload:  clientID,
-				TrackUser:       true,
-				UserID:          userID,
-				IsLeave:         true,
-				NewEpoch:        epoch,
+				MetaKey:           metaKey,
+				SnapshotExpireKey: presenceSnapshotExpireKey,
+				SnapshotHashKey:   presenceSnapshotHashKey,
+				UserZSetKey:       userZSetKey,
+				UserHashKey:       userHashKey,
+				MessageKey:        clientID,
+				MessagePayload:    clientID,
+				TrackUser:         true,
+				UserID:            userID,
+				IsLeave:           true,
+				NewEpoch:          epoch,
 			})
 		}(i)
 	}
@@ -1487,17 +1487,17 @@ func TestBrokerSnapshot_JoinLeaveStreamLogging(t *testing.T) {
 
 	// Test 1: Join WITH stream logging (pass StreamKey and MetaKey)
 	runSnapshotPublishScript(t, client, &SnapshotLogParams{
-		StreamKey:        streamKey,
-		MetaKey:          metaKey,
-		SnapshotHashKey:     presenceSnapshotHashKey,
-		SnapshotExpireKey:   presenceSnapshotExpireKey,
-		MessageKey:       "client1",
-		MessagePayload:   "client1",
-		StreamSize:       100,
-		StreamTTL:        300,
-		MetaExpire:       300,
-		KeyedMemberTTL:   300,
-		NewEpoch:         epoch,
+		StreamKey:         streamKey,
+		MetaKey:           metaKey,
+		SnapshotHashKey:   presenceSnapshotHashKey,
+		SnapshotExpireKey: presenceSnapshotExpireKey,
+		MessageKey:        "client1",
+		MessagePayload:    "client1",
+		StreamSize:        100,
+		StreamTTL:         300,
+		MetaExpire:        300,
+		KeyedMemberTTL:    300,
+		NewEpoch:          epoch,
 	})
 
 	// Verify join was logged to stream
@@ -1509,12 +1509,12 @@ func TestBrokerSnapshot_JoinLeaveStreamLogging(t *testing.T) {
 	// Test 2: Join WITHOUT stream logging (omit StreamKey/MetaKey)
 	runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		// No StreamKey/MetaKey = don't log to stream
-		SnapshotHashKey:     presenceSnapshotHashKey,
-		SnapshotExpireKey:   presenceSnapshotExpireKey,
-		MessageKey:       "client2",
-		MessagePayload:   "client2",
-		KeyedMemberTTL:   300,
-		NewEpoch:         epoch,
+		SnapshotHashKey:   presenceSnapshotHashKey,
+		SnapshotExpireKey: presenceSnapshotExpireKey,
+		MessageKey:        "client2",
+		MessagePayload:    "client2",
+		KeyedMemberTTL:    300,
+		NewEpoch:          epoch,
 	})
 
 	// Stream count should still be 1 (join not logged)
@@ -1526,12 +1526,12 @@ func TestBrokerSnapshot_JoinLeaveStreamLogging(t *testing.T) {
 	// Test 3: Leave WITHOUT stream logging (omit StreamKey/MetaKey)
 	runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		// No StreamKey/MetaKey = don't log to stream
-		SnapshotHashKey:    presenceSnapshotHashKey,
-		SnapshotExpireKey:  presenceSnapshotExpireKey,
-		MessageKey:      "client1",
-		MessagePayload:  "client1",
-		IsLeave:         true,
-		NewEpoch:        epoch,
+		SnapshotHashKey:   presenceSnapshotHashKey,
+		SnapshotExpireKey: presenceSnapshotExpireKey,
+		MessageKey:        "client1",
+		MessagePayload:    "client1",
+		IsLeave:           true,
+		NewEpoch:          epoch,
 	})
 
 	// Verify presence removed but stream unchanged
@@ -1547,16 +1547,16 @@ func TestBrokerSnapshot_JoinLeaveStreamLogging(t *testing.T) {
 
 	// Test 4: Leave WITH stream logging (pass StreamKey and MetaKey)
 	runSnapshotPublishScript(t, client, &SnapshotLogParams{
-		StreamKey:       streamKey,
-		MetaKey:         metaKey,
-		SnapshotHashKey:    presenceSnapshotHashKey,
-		SnapshotExpireKey:  presenceSnapshotExpireKey,
-		MessageKey:      "client2",
-		MessagePayload:  "client2",
-		StreamSize:      100,
-		StreamTTL:       300,
-		IsLeave:         true,
-		NewEpoch:        epoch,
+		StreamKey:         streamKey,
+		MetaKey:           metaKey,
+		SnapshotHashKey:   presenceSnapshotHashKey,
+		SnapshotExpireKey: presenceSnapshotExpireKey,
+		MessageKey:        "client2",
+		MessagePayload:    "client2",
+		StreamSize:        100,
+		StreamTTL:         300,
+		IsLeave:           true,
+		NewEpoch:          epoch,
 	})
 
 	// Verify leave was logged to stream
@@ -1721,13 +1721,13 @@ func TestBrokerSnapshot_EdgeCases(t *testing.T) {
 	now := time.Now().Unix()
 	for i := 0; i < 2; i++ {
 		runSnapshotPublishScript(t, client, &SnapshotLogParams{
-			MetaKey:          metaKey,
-			SnapshotHashKey:     presenceSnapshotHashKey,
-			SnapshotExpireKey:   presenceSnapshotExpireKey,
-			MessageKey:       "duplicate_client",
-			MessagePayload:   "duplicate_client",
-			KeyedMemberTTL:   300,
-			NewEpoch:         epoch,
+			MetaKey:           metaKey,
+			SnapshotHashKey:   presenceSnapshotHashKey,
+			SnapshotExpireKey: presenceSnapshotExpireKey,
+			MessageKey:        "duplicate_client",
+			MessagePayload:    "duplicate_client",
+			KeyedMemberTTL:    300,
+			NewEpoch:          epoch,
 		})
 	}
 

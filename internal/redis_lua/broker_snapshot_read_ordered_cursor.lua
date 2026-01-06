@@ -1,5 +1,3 @@
--- This requires evaluation!!!
-
 -- Read ordered keyed snapshot with CURSOR-BASED pagination and expiration cleanup.
 -- KEYS[1] = snapshot hash key
 -- KEYS[2] = snapshot order zset key
@@ -79,7 +77,7 @@ local min_score = "-inf"
 local max_score = cursor == "+" and "+inf" or "(" .. cursor  -- exclusive upper bound if cursor provided
 
 -- Fetch keys in descending score order
-local range_args = {order_key, max_score, min_score, "LIMIT", 0}
+local range_args = {order_key, max_score, min_score, "WITHSCORES", "LIMIT", 0}
 if limit > 0 then
     table.insert(range_args, limit)
 else
