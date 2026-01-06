@@ -1,3 +1,9 @@
+-- Maybe we need to use epoch suffixed keys to not manually delete old keys on epoch change?
+-- Maybe we must allow users to publish data and full state for the key separately? In this case we
+-- can shift from publishing full keyed state on every message publishing incremental updates only but
+-- still store full keyed state in Redis. So Centrifuge clients can fetch full keyed state on join and then
+-- apply incremental updates received via messages.
+
 --[[
 Unified publish script supporting:
 1. Append log with offset/epoch for continuity.
@@ -78,10 +84,10 @@ local presence_expire_at = ARGV[19]
 
 -- ==== Step 0: Idempotency check ====
 if result_key_expire ~= '' and result_key ~= '' then
-    local cached = redis.call("hmget", result_key, "e", "s")
-    if cached[1] then
-        -- Already processed this message, return stored offset/epoch
-        return { cached[2], cached[1], "1", "0" }
+    local epoch = redis.call("hget", result_key, "e")
+    if epoch then
+        local offset = redis.call("hget", result_key, "s")
+        return { offset, epoch, "1", "0" }
     end
 end
 
@@ -373,7 +379,7 @@ end
 -- ==== Step 9: Store result key for idempotency ====
 if result_key_expire ~= '' and result_key ~= '' then
     redis.call("hset", result_key, "e", current_epoch, "s", top_offset)
-    redis.call("expire", result_key, tonumber(result_key_expire))
+    redis.call("expire", result_key, result_key_expire)
 end
 
 -- ==== Step 10: Return top_offset and epoch ====
