@@ -12,6 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var snapshotPublishLuaScript *rueidis.Lua
+
+func init() {
+	snapshotPublishLuaScript = rueidis.NewLuaScript(brokerSnapshotPublishScript)
+}
+
 func runSnapshotPublishScriptBench(b *testing.B, client rueidis.Client, params *SnapshotLogParams) *SnapshotLogResult {
 	b.Helper()
 	ctx := context.Background()
@@ -49,8 +55,7 @@ func runSnapshotPublishScriptBench(b *testing.B, client rueidis.Client, params *
 		params.UserID,
 	}
 
-	cmd := client.B().Eval().Script(brokerSnapshotPublishScript).Numkeys(int64(len(keys))).Key(keys...).Arg(argv...).Build()
-	result := client.Do(ctx, cmd)
+	result := snapshotPublishLuaScript.Exec(ctx, client, keys, argv)
 	require.NoError(b, result.Error())
 
 	arrInterface, err := result.ToArray()
@@ -102,19 +107,23 @@ func BenchmarkBrokerSnapshot_AppendLogOnly(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		payload := "message_" + strconv.Itoa(i)
-		runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
-			StreamKey:      streamKey,
-			MetaKey:        metaKey,
-			MessageKey:     "",
-			MessagePayload: payload,
-			StreamSize:     10000,
-			StreamTTL:      300,
-			MetaExpire:     300,
-			NewEpoch:       epoch,
-		})
-	}
+	i := 0
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i++
+			payload := "message_" + strconv.Itoa(i)
+			runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
+				StreamKey:      streamKey,
+				MetaKey:        metaKey,
+				MessageKey:     "",
+				MessagePayload: payload,
+				StreamSize:     10000,
+				StreamTTL:      300,
+				MetaExpire:     300,
+				NewEpoch:       epoch,
+			})
+		}
+	})
 }
 
 // BenchmarkBrokerSnapshot_KeyedSnapshotSimple benchmarks simple HASH-based keyed snapshot.
@@ -133,17 +142,21 @@ func BenchmarkBrokerSnapshot_KeyedSnapshotSimple(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		key := "client" + strconv.Itoa(i)
-		runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
-			MetaKey:         metaKey,
-			SnapshotHashKey: snapshotKey,
-			MessageKey:      key,
-			MessagePayload:  key,
-			NewEpoch:        epoch,
-			KeyedMemberTTL:  300,
-		})
-	}
+	i := 0
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i++
+			key := "client" + strconv.Itoa(i)
+			runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
+				MetaKey:         metaKey,
+				SnapshotHashKey: snapshotKey,
+				MessageKey:      key,
+				MessagePayload:  key,
+				NewEpoch:        epoch,
+				KeyedMemberTTL:  300,
+			})
+		}
+	})
 }
 
 // BenchmarkBrokerSnapshot_KeyedSnapshotOrdered benchmarks ordered HASH+ZSET keyed snapshot.
@@ -164,20 +177,24 @@ func BenchmarkBrokerSnapshot_KeyedSnapshotOrdered(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		key := "client" + strconv.Itoa(i)
-		runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
-			MetaKey:           metaKey,
-			SnapshotHashKey:   snapshotHashKey,
-			SnapshotOrderKey:  snapshotOrderKey,
-			SnapshotExpireKey: snapshotExpireKey,
-			MessageKey:        key,
-			MessagePayload:    key,
-			Score:             int64(i),
-			KeyedMemberTTL:    300,
-			NewEpoch:          epoch,
-		})
-	}
+	i := 0
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i++
+			key := "client" + strconv.Itoa(i)
+			runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
+				MetaKey:           metaKey,
+				SnapshotHashKey:   snapshotHashKey,
+				SnapshotOrderKey:  snapshotOrderKey,
+				SnapshotExpireKey: snapshotExpireKey,
+				MessageKey:        key,
+				MessagePayload:    key,
+				Score:             int64(i),
+				KeyedMemberTTL:    300,
+				NewEpoch:          epoch,
+			})
+		}
+	})
 }
 
 // BenchmarkBrokerSnapshot_Presence benchmarks presence tracking functionality.
@@ -187,8 +204,8 @@ func BenchmarkBrokerSnapshot_Presence(b *testing.B) {
 
 	prefix := "bench_presence"
 	metaKey := prefix + ":meta"
-	presenceSnapshotHashKey := prefix + ":presence:snapshot"   // Presence uses snapshot hash
-	presenceSnapshotExpireKey := prefix + ":presence:expire"   // Presence uses snapshot expire zset
+	presenceSnapshotHashKey := prefix + ":presence:snapshot" // Presence uses snapshot hash
+	presenceSnapshotExpireKey := prefix + ":presence:expire" // Presence uses snapshot expire zset
 	userZSetKey := prefix + ":user:zset"
 	userHashKey := prefix + ":user:hash"
 
@@ -200,24 +217,28 @@ func BenchmarkBrokerSnapshot_Presence(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		clientID := "client" + strconv.Itoa(i)
-		userID := "user" + strconv.Itoa(i%100) // 100 different users.
-		info := `{"client":"` + clientID + `","user":"` + userID + `"}`
-		runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
-			MetaKey:           metaKey,
-			SnapshotHashKey:   presenceSnapshotHashKey,   // Presence uses snapshot hash
-			SnapshotExpireKey: presenceSnapshotExpireKey, // Presence uses snapshot expire
-			UserZSetKey:       userZSetKey,
-			UserHashKey:       userHashKey,
-			MessageKey:        clientID,
-			MessagePayload:    info, // Presence info goes in payload
-			TrackUser:         true,
-			UserID:            userID,
-			KeyedMemberTTL:    300,
-			NewEpoch:          epoch,
-		})
-	}
+	i := 0
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i++
+			clientID := "client" + strconv.Itoa(i)
+			userID := "user" + strconv.Itoa(i%100) // 100 different users.
+			info := `{"client":"` + clientID + `","user":"` + userID + `"}`
+			runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
+				MetaKey:           metaKey,
+				SnapshotHashKey:   presenceSnapshotHashKey,   // Presence uses snapshot hash
+				SnapshotExpireKey: presenceSnapshotExpireKey, // Presence uses snapshot expire
+				UserZSetKey:       userZSetKey,
+				UserHashKey:       userHashKey,
+				MessageKey:        clientID,
+				MessagePayload:    info, // Presence info goes in payload
+				TrackUser:         true,
+				UserID:            userID,
+				KeyedMemberTTL:    300,
+				NewEpoch:          epoch,
+			})
+		}
+	})
 }
 
 // BenchmarkBrokerSnapshot_CombinedFeatures benchmarks using multiple features together.
@@ -229,8 +250,8 @@ func BenchmarkBrokerSnapshot_CombinedFeatures(b *testing.B) {
 	streamKey := prefix + ":stream"
 	metaKey := prefix + ":meta"
 	snapshotKey := prefix + ":snapshot"
-	presenceSnapshotHashKey := prefix + ":presence:snapshot"   // Presence uses snapshot hash
-	presenceSnapshotExpireKey := prefix + ":presence:expire"   // Presence uses snapshot expire zset
+	presenceSnapshotHashKey := prefix + ":presence:snapshot" // Presence uses snapshot hash
+	presenceSnapshotExpireKey := prefix + ":presence:expire" // Presence uses snapshot expire zset
 	channel := prefix + ":channel"
 
 	client.Do(context.Background(), client.B().Del().Key(streamKey, metaKey, snapshotKey, presenceSnapshotHashKey, presenceSnapshotExpireKey).Build())
@@ -241,24 +262,28 @@ func BenchmarkBrokerSnapshot_CombinedFeatures(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		clientID := "client" + strconv.Itoa(i)
-		// Benchmark: keyed state update (presence is similar, just uses different keys)
-		runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
-			StreamKey:       streamKey,
-			MetaKey:         metaKey,
-			SnapshotHashKey: snapshotKey, // Keyed state snapshot
-			Channel:         channel,
-			MessageKey:      clientID,
-			MessagePayload:  clientID,
-			StreamSize:      10000,
-			StreamTTL:       300,
-			MetaExpire:      300,
-			KeyedMemberTTL:  300,
-			PublishCommand:  "publish",
-			NewEpoch:        epoch,
-		})
-	}
+	i := 0
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i++
+			clientID := "client" + strconv.Itoa(i)
+			// Benchmark: keyed state update (presence is similar, just uses different keys)
+			runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
+				StreamKey:       streamKey,
+				MetaKey:         metaKey,
+				SnapshotHashKey: snapshotKey, // Keyed state snapshot
+				Channel:         channel,
+				MessageKey:      clientID,
+				MessagePayload:  clientID,
+				StreamSize:      10000,
+				StreamTTL:       300,
+				MetaExpire:      300,
+				KeyedMemberTTL:  300,
+				PublishCommand:  "publish",
+				NewEpoch:        epoch,
+			})
+		}
+	})
 }
 
 // BenchmarkBrokerSnapshot_PubSubOnly benchmarks PUB/SUB without any storage.
@@ -272,14 +297,18 @@ func BenchmarkBrokerSnapshot_PubSubOnly(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		payload := "message_" + strconv.Itoa(i)
-		runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
-			Channel:        channel,
-			MessageKey:     "",
-			MessagePayload: payload,
-			PublishCommand: "publish",
-			NewEpoch:       epoch,
-		})
-	}
+	i := 0
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i++
+			payload := "message_" + strconv.Itoa(i)
+			runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
+				Channel:        channel,
+				MessageKey:     "",
+				MessagePayload: payload,
+				PublishCommand: "publish",
+				NewEpoch:       epoch,
+			})
+		}
+	})
 }
