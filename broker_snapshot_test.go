@@ -1764,6 +1764,143 @@ func TestBrokerSnapshot_EdgeCases(t *testing.T) {
 	require.Equal(t, epoch, minimalResult.Epoch)
 }
 
+// TestBrokerSnapshot_SeparateSnapshotPayload tests MessageKeyPayload feature.
+// When MessageKeyPayload is set, it should be used for snapshot storage while
+// MessagePayload is used for stream and PUB/SUB.
+func TestBrokerSnapshot_SeparateSnapshotPayload(t *testing.T) {
+	client := setupRedisClient(t)
+	defer client.Close()
+	prefix := getUniquePrefix()
+
+	streamKey := prefix + ":stream:test"
+	metaKey := prefix + ":meta:test"
+	snapshotHashKey := prefix + ":snapshot:test"
+	snapshotMetaKey := prefix + ":snapshot:meta:test"
+	channel := prefix + ":channel:test"
+
+	ctx := context.Background()
+	now := time.Now().Unix()
+	epoch := strconv.FormatInt(now, 10)
+
+	// Set up PUB/SUB to capture published message
+	c, cancel := client.Dedicate()
+	defer cancel()
+
+	receivedMessage := make(chan string, 1)
+	subscribed := make(chan struct{})
+
+	wait := c.SetPubSubHooks(rueidis.PubSubHooks{
+		OnMessage: func(m rueidis.PubSubMessage) {
+			receivedMessage <- m.Message
+		},
+		OnSubscription: func(s rueidis.PubSubSubscription) {
+			if s.Kind == "subscribe" && s.Channel == channel {
+				close(subscribed)
+			}
+		},
+	})
+
+	// Subscribe to channel
+	err := c.Do(ctx, c.B().Subscribe().Channel(channel).Build()).Error()
+	require.NoError(t, err)
+
+	// Wait for subscription confirmation
+	select {
+	case <-subscribed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscription timeout")
+	}
+
+	// Publish with separate payloads
+	streamPayload := "stream_and_pubsub_payload"
+	snapshotPayload := "snapshot_only_payload"
+
+	result := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		StreamKey:         streamKey,
+		MetaKey:           metaKey,
+		SnapshotHashKey:   snapshotHashKey,
+		SnapshotMetaKey:   snapshotMetaKey,
+		Channel:           channel,
+		MessageKey:        "client1",
+		MessagePayload:    streamPayload,   // For stream and PUB/SUB
+		MessageKeyPayload: snapshotPayload, // For snapshot
+		StreamSize:        100,
+		StreamTTL:         300,
+		MetaExpire:        300,
+		KeyedMemberTTL:    300,
+		PublishCommand:    "publish",
+		NewEpoch:          epoch,
+	})
+
+	require.Equal(t, int64(1), result.Offset)
+	require.Equal(t, epoch, result.Epoch)
+
+	// Verify snapshot contains MessageKeyPayload
+	snapshotData := client.Do(ctx, client.B().Hget().Key(snapshotHashKey).Field("client1").Build())
+	require.NoError(t, snapshotData.Error())
+	snapshotValue, err := snapshotData.ToString()
+	require.NoError(t, err)
+	require.Equal(t, snapshotPayload, snapshotValue, "snapshot should contain MessageKeyPayload")
+
+	// Verify stream contains MessagePayload
+	entries := client.Do(ctx, client.B().Xrevrange().Key(streamKey).End("+").Start("-").Count(1).Build())
+	require.NoError(t, entries.Error())
+	arr, err := entries.ToArray()
+	require.NoError(t, err)
+	require.Len(t, arr, 1)
+
+	entryValues, err := arr[0].ToArray()
+	require.NoError(t, err)
+	fieldValues, err := entryValues[1].ToArray()
+	require.NoError(t, err)
+
+	var streamValue string
+	for i := 0; i < len(fieldValues); i += 2 {
+		k, _ := fieldValues[i].ToString()
+		if k == "d" {
+			streamValue, _ = fieldValues[i+1].ToString()
+			break
+		}
+	}
+	require.Equal(t, streamPayload, streamValue, "stream should contain MessagePayload")
+
+	// Verify PUB/SUB contains MessagePayload
+	select {
+	case msg := <-receivedMessage:
+		require.Contains(t, msg, streamPayload, "PUB/SUB should contain MessagePayload")
+	case <-time.After(2 * time.Second):
+		t.Fatal("message receive timeout")
+	}
+
+	// Clean up
+	_ = c.Do(ctx, c.B().Unsubscribe().Channel(channel).Build())
+	select {
+	case <-wait:
+	case <-time.After(1 * time.Second):
+	}
+
+	// Test 2: Verify that when MessageKeyPayload is empty, MessagePayload is used for snapshot
+	result2 := runSnapshotPublishScript(t, client, &SnapshotLogParams{
+		MetaKey:           metaKey,
+		SnapshotHashKey:   snapshotHashKey,
+		SnapshotMetaKey:   snapshotMetaKey,
+		MessageKey:        "client2",
+		MessagePayload:    "unified_payload",
+		MessageKeyPayload: "", // Empty - should use MessagePayload for snapshot
+		KeyedMemberTTL:    300,
+		NewEpoch:          epoch,
+	})
+
+	require.Equal(t, int64(2), result2.Offset)
+
+	// Verify snapshot contains MessagePayload (not empty)
+	snapshotData2 := client.Do(ctx, client.B().Hget().Key(snapshotHashKey).Field("client2").Build())
+	require.NoError(t, snapshotData2.Error())
+	snapshotValue2, err := snapshotData2.ToString()
+	require.NoError(t, err)
+	require.Equal(t, "unified_payload", snapshotValue2, "snapshot should use MessagePayload when MessageKeyPayload is empty")
+}
+
 // TestBrokerSnapshot_ClientRecovery demonstrates complete client recovery using snapshot.
 func TestBrokerSnapshot_ClientRecovery(t *testing.T) {
 	client := setupRedisClient(t)
@@ -2117,6 +2254,7 @@ type SnapshotLogParams struct {
 	SnapshotMetaKey   string
 	MessageKey        string // Client ID for presence, state key for keyed state
 	MessagePayload    string // Presence info for presence, state value for keyed state
+	MessageKeyPayload string // Optional: payload for snapshot only (if empty, uses MessagePayload)
 	StreamSize        int
 	StreamTTL         int
 	Channel           string
@@ -2258,6 +2396,7 @@ func runSnapshotPublishScript(t *testing.T, client rueidis.Client, params *Snaps
 		boolToStr(params.UseHExpire),
 		boolToStr(params.TrackUser),
 		params.UserID,
+		orEmpty(params.MessageKeyPayload),
 	}
 
 	cmd := client.B().Eval().Script(brokerSnapshotPublishScript).Numkeys(int64(len(keys))).Key(keys...).Arg(argv...).Build()

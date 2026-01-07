@@ -21,7 +21,7 @@ Unified publish script supporting:
 
 -- ==== ARGV ====
 -- ARGV[1]  = message_key (Key for snapshot field - Client ID for presence, state key for keyed state)
--- ARGV[2]  = message_payload (Data for stream, publish, and snapshot value)
+-- ARGV[2]  = message_payload (Data for stream and publish, also for snapshot if message_key_payload is empty)
 -- ARGV[3]  = stream_size (MAXLEN)
 -- ARGV[4]  = stream_ttl (seconds)
 -- ARGV[5]  = channel (for PUBLISH, empty '' to disable)
@@ -38,6 +38,7 @@ Unified publish script supporting:
 -- ARGV[16] = use_hexpire ("0" or "1" - Redis 7.4+ per-field TTL)
 -- ARGV[17] = track_user ("0" or "1" - enable user tracking for presence)
 -- ARGV[18] = user_id (user identifier for presence tracking)
+-- ARGV[19] = message_key_payload (optional payload for snapshot only, empty '' to use message_payload)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -69,6 +70,13 @@ local keyed_member_ttl = ARGV[15]
 local use_hexpire = ARGV[16]
 local track_user = ARGV[17]
 local user_id = ARGV[18]
+local message_key_payload = ARGV[19]
+
+-- Determine which payload to use for snapshot storage
+local snapshot_payload = message_payload
+if message_key_payload and message_key_payload ~= '' then
+    snapshot_payload = message_key_payload
+end
 
 -- ==== Step 0: Idempotency check ====
 if result_key_expire ~= '' and result_key ~= '' then
@@ -192,7 +200,7 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
         -- Ordered keyed state (HASH + ZSET)
         local now = tonumber(redis.call("time")[1])
         local expire_at = now + tonumber(keyed_member_ttl)
-        redis.call("hset", snapshot_hash_key, message_key, message_payload)
+        redis.call("hset", snapshot_hash_key, message_key, snapshot_payload)
         redis.call("zadd", snapshot_order_key, tonumber(score), message_key)
         redis.call("zadd", snapshot_expire_key, expire_at, message_key)
         local ttl = tonumber(keyed_member_ttl)
@@ -201,7 +209,7 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
         redis.call("expire", snapshot_expire_key, ttl)
     else
         -- Simple HASH keyed snapshot (unordered)
-        redis.call("hset", snapshot_hash_key, message_key, message_payload)
+        redis.call("hset", snapshot_hash_key, message_key, snapshot_payload)
         if tonumber(keyed_member_ttl) > 0 then
             if use_hexpire == "1" then
                 -- Redis 7.4+ HEXPIRE per-field TTL
