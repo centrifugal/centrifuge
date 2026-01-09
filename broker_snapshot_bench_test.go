@@ -204,8 +204,8 @@ func BenchmarkBrokerSnapshot_Presence(b *testing.B) {
 
 	prefix := "bench_presence"
 	metaKey := prefix + ":meta"
-	presenceSnapshotHashKey := prefix + ":presence:snapshot" // Presence uses snapshot hash
-	presenceSnapshotExpireKey := prefix + ":presence:expire" // Presence uses snapshot expire zset
+	presenceSnapshotHashKey := prefix + ":presence:snapshot" // Members uses snapshot hash
+	presenceSnapshotExpireKey := prefix + ":presence:expire" // Members uses snapshot expire zset
 	userZSetKey := prefix + ":user:zset"
 	userHashKey := prefix + ":user:hash"
 
@@ -226,12 +226,12 @@ func BenchmarkBrokerSnapshot_Presence(b *testing.B) {
 			info := `{"client":"` + clientID + `","user":"` + userID + `"}`
 			runSnapshotPublishScriptBench(b, client, &SnapshotLogParams{
 				MetaKey:           metaKey,
-				SnapshotHashKey:   presenceSnapshotHashKey,   // Presence uses snapshot hash
-				SnapshotExpireKey: presenceSnapshotExpireKey, // Presence uses snapshot expire
+				SnapshotHashKey:   presenceSnapshotHashKey,   // Members uses snapshot hash
+				SnapshotExpireKey: presenceSnapshotExpireKey, // Members uses snapshot expire
 				UserZSetKey:       userZSetKey,
 				UserHashKey:       userHashKey,
 				MessageKey:        clientID,
-				MessagePayload:    info, // Presence info goes in payload
+				MessagePayload:    info, // Members info goes in payload
 				TrackUser:         true,
 				UserID:            userID,
 				KeyedMemberTTL:    300,
@@ -250,8 +250,8 @@ func BenchmarkBrokerSnapshot_CombinedFeatures(b *testing.B) {
 	streamKey := prefix + ":stream"
 	metaKey := prefix + ":meta"
 	snapshotKey := prefix + ":snapshot"
-	presenceSnapshotHashKey := prefix + ":presence:snapshot" // Presence uses snapshot hash
-	presenceSnapshotExpireKey := prefix + ":presence:expire" // Presence uses snapshot expire zset
+	presenceSnapshotHashKey := prefix + ":presence:snapshot" // Members uses snapshot hash
+	presenceSnapshotExpireKey := prefix + ":presence:expire" // Members uses snapshot expire zset
 	channel := prefix + ":channel"
 
 	client.Do(context.Background(), client.B().Del().Key(streamKey, metaKey, snapshotKey, presenceSnapshotHashKey, presenceSnapshotExpireKey).Build())

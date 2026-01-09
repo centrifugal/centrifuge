@@ -5,7 +5,12 @@ Unified publish script supporting:
 3. Per-user tracking for presence (connection count optimization).
 4. Leave messages (remove from keyed snapshot + user tracking).
 5. Idempotency via result key.
-6. Delta or full payload publishing.
+6. Delta or full payload publishing with simplified format.
+
+Publishing format (via PUBLISH/SPUBLISH):
+- Non-delta: "offset:epoch:protobuf" where protobuf is protocol.Push
+- Delta: "d:offset:epoch:prev_len:prev_push:curr_len:curr_push"
+  Both prev and curr are protocol.Push messages (fetched from stream)
 --]]
 
 -- ==== KEYS ====
@@ -15,19 +20,19 @@ Unified publish script supporting:
 -- KEYS[4] = snapshot hash key (optional, empty '' to disable) - used for both keyed state AND presence
 -- KEYS[5] = snapshot order zset key (optional, empty '' to disable)
 -- KEYS[6] = snapshot expire zset key (optional, empty '' to disable)
--- KEYS[7] = per-user zset key (optional, empty '' to disable) - for presence user tracking
--- KEYS[8] = per-user hash key (optional, empty '' to disable) - for presence user tracking
+-- KEYS[7] = aggregation zset key (optional, empty '' to disable) - for generic aggregations (e.g., user tracking in presence)
+-- KEYS[8] = aggregation hash key (optional, empty '' to disable) - for generic aggregations (e.g., user tracking in presence)
 -- KEYS[9] = snapshot meta key (optional, empty '' to disable)
 
 -- ==== ARGV ====
 -- ARGV[1]  = message_key (Key for snapshot field - Client ID for presence, state key for keyed state)
--- ARGV[2]  = message_payload (Data for stream and publish, also for snapshot if message_key_payload is empty)
+-- ARGV[2]  = message_payload (protocol.Push for stream and publishing)
 -- ARGV[3]  = stream_size (MAXLEN)
 -- ARGV[4]  = stream_ttl (seconds)
 -- ARGV[5]  = channel (for PUBLISH, empty '' to disable)
 -- ARGV[6]  = meta_expire (seconds, "0" to disable)
 -- ARGV[7]  = new_epoch_if_empty
--- ARGV[8]  = publish_command (e.g., "publish")
+-- ARGV[8]  = publish_command (e.g., "PUBLISH" or "SPUBLISH", empty '' to disable)
 -- ARGV[9]  = result_key_expire (for idempotency, empty '' to disable)
 -- ARGV[10] = use_delta ("0" or "1")
 -- ARGV[11] = version ("0" to disable version-based idempotency)
@@ -36,9 +41,9 @@ Unified publish script supporting:
 -- ARGV[14] = score (for ordered keyed state)
 -- ARGV[15] = keyed_member_ttl (seconds for keyed snapshot TTL)
 -- ARGV[16] = use_hexpire ("0" or "1" - Redis 7.4+ per-field TTL)
--- ARGV[17] = track_user ("0" or "1" - enable user tracking for presence)
--- ARGV[18] = user_id (user identifier for presence tracking)
--- ARGV[19] = message_key_payload (optional payload for snapshot only, empty '' to use message_payload)
+-- ARGV[17] = aggregation_key (aggregation identifier, empty "" to disable - e.g., aggregation_value for presence)
+-- ARGV[18] = aggregation_value (value to aggregate by - e.g., aggregation_value for presence user counting)
+-- ARGV[19] = message_key_payload (payload for snapshot storage - Publication for pubs, ClientInfo for presence)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -47,8 +52,8 @@ local result_key = KEYS[3]
 local snapshot_hash_key = KEYS[4]
 local snapshot_order_key = KEYS[5]
 local snapshot_expire_key = KEYS[6]
-local user_zset_key = KEYS[7]
-local user_hash_key = KEYS[8]
+local aggregation_zset_key = KEYS[7]
+local aggregation_hash_key = KEYS[8]
 local snapshot_meta_key = KEYS[9]
 
 -- Local variables from ARGV
@@ -68,8 +73,8 @@ local is_leave = ARGV[13]
 local score = ARGV[14]
 local keyed_member_ttl = ARGV[15]
 local use_hexpire = ARGV[16]
-local track_user = ARGV[17]
-local user_id = ARGV[18]
+local aggregation_key = ARGV[17]
+local aggregation_value = ARGV[18]
 local message_key_payload = ARGV[19]
 
 -- Determine which payload to use for snapshot storage
@@ -138,7 +143,7 @@ if is_leave == "1" then
     if snapshot_hash_key ~= '' then
         -- Check if client exists (for user tracking)
         local clientExists = false
-        if track_user ~= '0' and user_hash_key ~= '' then
+        if aggregation_key ~= '0' and aggregation_hash_key ~= '' then
             clientExists = redis.call("hexists", snapshot_hash_key, message_key) == 1
         end
 
@@ -152,13 +157,13 @@ if is_leave == "1" then
         end
 
         -- Update user tracking if enabled
-        if track_user ~= '0' and clientExists and user_hash_key ~= '' then
-            local connectionsCount = redis.call("hincrby", user_hash_key, user_id, -1)
+        if aggregation_key ~= '0' and clientExists and aggregation_hash_key ~= '' then
+            local connectionsCount = redis.call("hincrby", aggregation_hash_key, aggregation_value, -1)
             if connectionsCount <= 0 then
-                if use_hexpire == '0' and user_zset_key ~= '' then
-                    redis.call("zrem", user_zset_key, user_id)
+                if use_hexpire == '0' and aggregation_zset_key ~= '' then
+                    redis.call("zrem", aggregation_zset_key, aggregation_value)
                 end
-                redis.call("hdel", user_hash_key, user_id)
+                redis.call("hdel", aggregation_hash_key, aggregation_value)
             end
         end
     end
@@ -182,17 +187,17 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
             end
             redis.call("del", snapshot_meta_key)
             -- Clear user tracking data from previous epoch
-            if user_hash_key ~= '' then
-                redis.call("del", user_hash_key)
+            if aggregation_hash_key ~= '' then
+                redis.call("del", aggregation_hash_key)
             end
-            if user_zset_key ~= '' then
-                redis.call("del", user_zset_key)
+            if aggregation_zset_key ~= '' then
+                redis.call("del", aggregation_zset_key)
             end
         end
     end
 
     -- Check if this is a new client (for user tracking)
-    if track_user ~= '0' then
+    if aggregation_key ~= '0' then
         wasNewClient = redis.call("hexists", snapshot_hash_key, message_key) == 0
     end
 
@@ -200,7 +205,9 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
         -- Ordered keyed state (HASH + ZSET)
         local now = tonumber(redis.call("time")[1])
         local expire_at = now + tonumber(keyed_member_ttl)
-        redis.call("hset", snapshot_hash_key, message_key, snapshot_payload)
+        -- Store revision with payload: offset:epoch:payload
+        local snapshot_value = top_offset .. ":" .. current_epoch .. ":" .. snapshot_payload
+        redis.call("hset", snapshot_hash_key, message_key, snapshot_value)
         redis.call("zadd", snapshot_order_key, tonumber(score), message_key)
         redis.call("zadd", snapshot_expire_key, expire_at, message_key)
         local ttl = tonumber(keyed_member_ttl)
@@ -209,7 +216,9 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
         redis.call("expire", snapshot_expire_key, ttl)
     else
         -- Simple HASH keyed snapshot (unordered)
-        redis.call("hset", snapshot_hash_key, message_key, snapshot_payload)
+        -- Store revision with payload: offset:epoch:payload
+        local snapshot_value = top_offset .. ":" .. current_epoch .. ":" .. snapshot_payload
+        redis.call("hset", snapshot_hash_key, message_key, snapshot_value)
         if tonumber(keyed_member_ttl) > 0 then
             if use_hexpire == "1" then
                 -- Redis 7.4+ HEXPIRE per-field TTL
@@ -242,21 +251,21 @@ end
 
 -- ==== Step 6: User tracking (for presence) ====
 -- Update per-user connection count if tracking is enabled and this was a new client
-if track_user ~= '0' and user_hash_key ~= '' and wasNewClient and is_leave ~= "1" then
-    redis.call("hincrby", user_hash_key, user_id, 1)
+if aggregation_key ~= '0' and aggregation_hash_key ~= '' and wasNewClient and is_leave ~= "1" then
+    redis.call("hincrby", aggregation_hash_key, aggregation_value, 1)
     if tonumber(keyed_member_ttl) > 0 then
-        redis.call("expire", user_hash_key, tonumber(keyed_member_ttl))
+        redis.call("expire", aggregation_hash_key, tonumber(keyed_member_ttl))
     end
-    if use_hexpire == '0' and user_zset_key ~= '' then
+    if use_hexpire == '0' and aggregation_zset_key ~= '' then
         local now = tonumber(redis.call("time")[1])
         local expire_at = now + tonumber(keyed_member_ttl)
-        redis.call("zadd", user_zset_key, expire_at, user_id)
+        redis.call("zadd", aggregation_zset_key, expire_at, aggregation_value)
         if tonumber(keyed_member_ttl) > 0 then
-            redis.call("expire", user_zset_key, tonumber(keyed_member_ttl))
+            redis.call("expire", aggregation_zset_key, tonumber(keyed_member_ttl))
         end
     else
         if tonumber(keyed_member_ttl) > 0 then
-            redis.call("hexpire", user_hash_key, tonumber(keyed_member_ttl), "FIELDS", "1", user_id)
+            redis.call("hexpire", aggregation_hash_key, tonumber(keyed_member_ttl), "FIELDS", "1", aggregation_value)
         end
     end
 end
@@ -293,11 +302,11 @@ if stream_key ~= '' and meta_key ~= '' then
                 redis.call("del", snapshot_meta_key)
             end
             -- Clear user tracking data from previous epoch
-            if user_hash_key ~= '' then
-                redis.call("del", user_hash_key)
+            if aggregation_hash_key ~= '' then
+                redis.call("del", aggregation_hash_key)
             end
-            if user_zset_key ~= '' then
-                redis.call("del", user_zset_key)
+            if aggregation_zset_key ~= '' then
+                redis.call("del", aggregation_zset_key)
             end
         end
     end
@@ -309,10 +318,11 @@ if stream_key ~= '' and meta_key ~= '' then
     end
 end
 
--- ==== Step 8: Publish to channel (optional delta) ====
-if channel ~= '' then
+-- ==== Step 8: Publish to channel (simplified format) ====
+if channel ~= '' and publish_command ~= '' then
     local payload
     if use_delta == "1" and stream_key ~= '' then
+        -- Delta format: d:offset:epoch:prev_len:prev_protobuf:curr_len:curr_protobuf
         local prev_payload = ""
         if top_offset > 1 then
             local prev_entries = redis.call("xrevrange", stream_key, "+", "-", "COUNT", 1)
@@ -326,9 +336,10 @@ if channel ~= '' then
                 end
             end
         end
-        payload = "__d1:" .. top_offset .. ":" .. current_epoch .. ":" .. #prev_payload .. ":" .. prev_payload .. ":" .. #message_payload .. ":" .. message_payload
+        payload = "d:" .. top_offset .. ":" .. current_epoch .. ":" .. #prev_payload .. ":" .. prev_payload .. ":" .. #message_payload .. ":" .. message_payload
     else
-        payload = "__p1:" .. top_offset .. ":" .. current_epoch .. "__" .. message_payload
+        -- Non-delta format: offset:epoch:protobuf
+        payload = top_offset .. ":" .. current_epoch .. ":" .. message_payload
     end
     redis.call(publish_command, channel, payload)
 end

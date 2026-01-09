@@ -27,9 +27,6 @@ var brokerSnapshotReadUnorderedScript string
 //go:embed internal/redis_lua/broker_snapshot_history_get.lua
 var brokerSnapshotHistoryGetScript string
 
-//go:embed internal/redis_lua/broker_snapshot_presence_get.lua
-var brokerSnapshotPresenceGetScript string
-
 //go:embed internal/redis_lua/broker_snapshot_presence_stats.lua
 var brokerSnapshotPresenceStatsScript string
 
@@ -294,7 +291,7 @@ func TestBrokerSnapshot_Presence(t *testing.T) {
 			UserZSetKey:       userZSetKey,
 			UserHashKey:       userHashKey,
 			MessageKey:        c.clientID,
-			MessagePayload:    c.info, // Presence info goes directly in payload
+			MessagePayload:    c.info, // Members info goes directly in payload
 			TrackUser:         true,
 			UserID:            c.userID,
 			KeyedMemberTTL:    300,
@@ -727,10 +724,10 @@ func TestBrokerSnapshot_CombinedFeatures(t *testing.T) {
 	presenceResult := runSnapshotPublishScript(t, client, &SnapshotLogParams{
 		StreamKey:         streamKey,
 		MetaKey:           metaKey,
-		SnapshotHashKey:   presenceSnapshotHashKey, // Presence uses snapshot hash
+		SnapshotHashKey:   presenceSnapshotHashKey, // Members uses snapshot hash
 		SnapshotExpireKey: presenceSnapshotExpireKey,
 		MessageKey:        "client1",
-		MessagePayload:    `{"client":"client1"}`, // Presence info in payload
+		MessagePayload:    `{"client":"client1"}`, // Members info in payload
 		StreamSize:        100,
 		StreamTTL:         300,
 		KeyedMemberTTL:    300,
@@ -822,64 +819,6 @@ func TestBrokerSnapshot_HistoryRead(t *testing.T) {
 	require.Equal(t, int64(5), resultMetaOnly.TopOffset)
 	require.Equal(t, epoch, resultMetaOnly.Epoch)
 	require.Len(t, resultMetaOnly.Publications, 0)
-}
-
-// TestBrokerSnapshot_PresenceRead tests reading full presence using the unified read script.
-func TestBrokerSnapshot_PresenceRead(t *testing.T) {
-	client := setupRedisClient(t)
-	defer client.Close()
-	prefix := getUniquePrefix()
-
-	metaKey := prefix + ":meta:test"
-	presenceSnapshotExpireKey := prefix + ":presence:expire:test"
-	presenceSnapshotHashKey := prefix + ":presence:snapshot:test"
-	userZSetKey := prefix + ":user:zset:test"
-	userHashKey := prefix + ":user:hash:test"
-
-	now := time.Now().Unix()
-	epoch := strconv.FormatInt(now, 10)
-
-	// Add 4 clients (3 users)
-	clients := []struct {
-		clientID string
-		userID   string
-		info     string
-	}{
-		{"client1", "user1", `{"name":"Alice","conn":1}`},
-		{"client2", "user1", `{"name":"Alice","conn":2}`},
-		{"client3", "user2", `{"name":"Bob"}`},
-		{"client4", "user3", `{"name":"Charlie"}`},
-	}
-
-	for _, c := range clients {
-		runSnapshotPublishScript(t, client, &SnapshotLogParams{
-			MetaKey:           metaKey,
-			SnapshotHashKey:   presenceSnapshotHashKey,   // Presence uses snapshot hash
-			SnapshotExpireKey: presenceSnapshotExpireKey, // Presence uses snapshot expire
-			UserZSetKey:       userZSetKey,
-			UserHashKey:       userHashKey,
-			MessageKey:        c.clientID,
-			MessagePayload:    c.info, // Presence info goes in payload
-			TrackUser:         true,
-			UserID:            c.userID,
-			KeyedMemberTTL:    300,
-			NewEpoch:          epoch,
-		})
-	}
-
-	// Read full presence
-	presenceResult := runSnapshotPresenceGetScript(t, client, &SnapshotPresenceGetParams{
-		SnapshotExpireKey: presenceSnapshotExpireKey,
-		SnapshotHashKey:   presenceSnapshotHashKey,
-		Now:               now,
-		UseHExpire:        false,
-	})
-
-	require.Len(t, presenceResult.Presence, 4)
-	require.Equal(t, `{"name":"Alice","conn":1}`, presenceResult.Presence["client1"])
-	require.Equal(t, `{"name":"Alice","conn":2}`, presenceResult.Presence["client2"])
-	require.Equal(t, `{"name":"Bob"}`, presenceResult.Presence["client3"])
-	require.Equal(t, `{"name":"Charlie"}`, presenceResult.Presence["client4"])
 }
 
 // TestBrokerSnapshot_PresenceStats tests getting presence statistics.
@@ -1922,10 +1861,10 @@ func TestBrokerSnapshot_ClientRecovery(t *testing.T) {
 		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			StreamKey:       streamKey,
 			MetaKey:         metaKey,
-			SnapshotHashKey: presenceSnapshotHashKey, // Presence snapshot
+			SnapshotHashKey: presenceSnapshotHashKey, // Members snapshot
 			SnapshotMetaKey: snapshotMetaKey,
 			MessageKey:      "client" + strconv.Itoa(i),
-			MessagePayload:  `{"id":"client` + strconv.Itoa(i) + `"}`, // Presence info
+			MessagePayload:  `{"id":"client` + strconv.Itoa(i) + `"}`, // Members info
 			StreamSize:      100,
 			StreamTTL:       300,
 			MetaExpire:      300,
@@ -1960,10 +1899,10 @@ func TestBrokerSnapshot_ClientRecovery(t *testing.T) {
 		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			StreamKey:       streamKey,
 			MetaKey:         metaKey,
-			SnapshotHashKey: presenceSnapshotHashKey, // Presence snapshot
+			SnapshotHashKey: presenceSnapshotHashKey, // Members snapshot
 			SnapshotMetaKey: snapshotMetaKey,
 			MessageKey:      "client" + strconv.Itoa(i),
-			MessagePayload:  `{"id":"client` + strconv.Itoa(i) + `"}`, // Presence info
+			MessagePayload:  `{"id":"client` + strconv.Itoa(i) + `"}`, // Members info
 			StreamSize:      100,
 			StreamTTL:       300,
 			MetaExpire:      300,
@@ -2106,10 +2045,10 @@ func TestBrokerSnapshot_ClientRecovery(t *testing.T) {
 		runSnapshotPublishScript(t, client, &SnapshotLogParams{
 			StreamKey:       streamKey,
 			MetaKey:         metaKey,
-			SnapshotHashKey: presenceSnapshotHashKey, // Presence snapshot
+			SnapshotHashKey: presenceSnapshotHashKey, // Members snapshot
 			SnapshotMetaKey: snapshotMetaKey,
 			MessageKey:      "new_client" + strconv.Itoa(i),
-			MessagePayload:  `{"id":"new_client` + strconv.Itoa(i) + `"}`, // Presence info
+			MessagePayload:  `{"id":"new_client` + strconv.Itoa(i) + `"}`, // Members info
 			StreamSize:      100,
 			StreamTTL:       300,
 			MetaExpire:      300,
@@ -2253,7 +2192,7 @@ type SnapshotLogParams struct {
 	UserHashKey       string // Optional: for presence user tracking
 	SnapshotMetaKey   string
 	MessageKey        string // Client ID for presence, state key for keyed state
-	MessagePayload    string // Presence info for presence, state value for keyed state
+	MessagePayload    string // Members info for presence, state value for keyed state
 	MessageKeyPayload string // Optional: payload for snapshot only (if empty, uses MessagePayload)
 	StreamSize        int
 	StreamTTL         int
@@ -2337,8 +2276,8 @@ type SnapshotHistoryGetResult struct {
 }
 
 type SnapshotPresenceGetParams struct {
-	SnapshotHashKey   string // Presence hash (unified with keyed snapshot)
-	SnapshotExpireKey string // Presence expire zset (unified with keyed snapshot)
+	SnapshotHashKey   string // Members hash (unified with keyed snapshot)
+	SnapshotExpireKey string // Members expire zset (unified with keyed snapshot)
 	Now               int64
 	UseHExpire        bool
 }
@@ -2348,8 +2287,8 @@ type SnapshotPresenceGetResult struct {
 }
 
 type SnapshotPresenceStatsParams struct {
-	SnapshotHashKey   string // Presence hash (unified with keyed snapshot)
-	SnapshotExpireKey string // Presence expire zset (unified with keyed snapshot)
+	SnapshotHashKey   string // Members hash (unified with keyed snapshot)
+	SnapshotExpireKey string // Members expire zset (unified with keyed snapshot)
 	UserZSetKey       string // User tracking zset
 	UserHashKey       string // User tracking hash
 	Now               int64
@@ -2587,39 +2526,6 @@ func runSnapshotHistoryGetScript(t *testing.T, client rueidis.Client, params *Sn
 		TopOffset:    topOffset,
 		Epoch:        epoch,
 		Publications: publications,
-	}
-}
-
-func runSnapshotPresenceGetScript(t *testing.T, client rueidis.Client, params *SnapshotPresenceGetParams) *SnapshotPresenceGetResult {
-	t.Helper()
-	ctx := context.Background()
-
-	keys := []string{
-		params.SnapshotHashKey,
-		params.SnapshotExpireKey,
-	}
-
-	argv := []string{
-		strconv.FormatInt(params.Now, 10),
-		boolToStr(params.UseHExpire),
-	}
-
-	cmd := client.B().Eval().Script(brokerSnapshotPresenceGetScript).Numkeys(int64(len(keys))).Key(keys...).Arg(argv...).Build()
-	result := client.Do(ctx, cmd)
-	require.NoError(t, result.Error())
-
-	dataArr, err := result.AsStrSlice()
-	require.NoError(t, err)
-
-	presence := make(map[string]string)
-	for i := 0; i < len(dataArr); i += 2 {
-		if i+1 < len(dataArr) {
-			presence[dataArr[i]] = dataArr[i+1]
-		}
-	}
-
-	return &SnapshotPresenceGetResult{
-		Presence: presence,
 	}
 }
 
