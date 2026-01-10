@@ -4,8 +4,6 @@ go 1.24.9
 
 replace github.com/centrifugal/protocol => ../protocol
 
-replace github.com/redis/rueidis => ../rueidis
-
 require (
 	github.com/FZambia/eagle v0.2.0
 	github.com/centrifugal/protocol v0.18.2

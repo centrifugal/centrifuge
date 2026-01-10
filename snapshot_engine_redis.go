@@ -1074,7 +1074,7 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 		includePubsStr = "1"
 	}
 
-	res, cleanup := e.readStreamScript.ExecUnsafe(ctx, s.shard.client,
+	replies, err := e.readStreamScript.Exec(ctx, s.shard.client,
 		[]string{e.streamKey(s.shard, ch), e.metaKey(s.shard, ch)},
 		[]string{
 			includePubsStr,
@@ -1084,9 +1084,7 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 			metaExpire,
 			e.node.ID(),
 		},
-	)
-	defer cleanup()
-	replies, err := res.ToArray()
+	).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
