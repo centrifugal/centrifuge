@@ -52,15 +52,10 @@ if snapshot_meta_key ~= '' then
     end
 end
 
--- Cleanup expired entries (if expire_key provided)
-if expire_key ~= '' then
-    local expired = redis.call("zrangebyscore", expire_key, "-inf", now_str)
-    local expired_len = #expired
-    if expired_len > 0 then
-        redis.call("hdel", hash_key, unpack(expired))
-        redis.call("zremrangebyscore", expire_key, "-inf", now_str)
-    end
-end
+-- IMPORTANT: We do NOT cleanup expired entries here.
+-- Expired entries MUST be removed by the cleanup worker (broker_snapshot_cleanup.lua)
+-- which generates LEAVE events to the stream, updates user tracking, etc.
+-- Inline cleanup would bypass LEAVE event generation, breaking convergence guarantees.
 
 -- Refresh snapshot TTL on read (LRU behavior)
 if snapshot_ttl > 0 then

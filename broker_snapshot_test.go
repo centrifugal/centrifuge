@@ -24,7 +24,7 @@ var brokerSnapshotReadOrderedScript string
 //go:embed internal/redis_lua/broker_snapshot_read_unordered.lua
 var brokerSnapshotReadUnorderedScript string
 
-//go:embed internal/redis_lua/broker_snapshot_history_get.lua
+//go:embed internal/redis_lua/broker_snapshot_stream_read.lua
 var brokerSnapshotHistoryGetScript string
 
 //go:embed internal/redis_lua/broker_snapshot_presence_stats.lua

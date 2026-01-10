@@ -5,7 +5,7 @@
 -- KEYS[4] = meta key
 -- KEYS[5] = snapshot meta key
 -- ARGV[1] = limit (0 = no limit, return all)
--- ARGV[2] = offset (for pagination)
+-- ARGV[2] = offset (for pagination, starting position)
 -- ARGV[3] = now (current timestamp for expiration cleanup)
 -- ARGV[4] = meta_ttl (seconds, 0 to disable)
 -- ARGV[5] = snapshot_ttl (seconds, 0 to disable - refreshes TTL on read)

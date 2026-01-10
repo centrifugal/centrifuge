@@ -5,6 +5,7 @@ package centrifuge
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"testing"
 	"time"
@@ -12,6 +13,11 @@ import (
 	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
+
+// randomChannel generates a unique channel name for testing to avoid cross-test pollution.
+func randomChannel(prefix string) string {
+	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), rand.Intn(100000))
+}
 
 func newTestSnapshotRedisEngine(tb testing.TB, n *Node) *SnapshotEngine {
 	redisConf := testSingleRedisConf(6379)
@@ -54,7 +60,7 @@ func TestSnapshotEngine_StatefulChannel(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_stateful_channel"
+	channel := randomChannel("test_stateful")
 
 	// Publish some keyed state updates
 	_, _, err := engine.Publish(ctx, channel, []byte("data1"), EnginePublishOptions{
@@ -112,7 +118,7 @@ func TestSnapshotEngine_StatefulChannelOrdered(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_ordered_channel"
+	channel := randomChannel("test_ordered")
 
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
@@ -150,7 +156,7 @@ func TestSnapshotEngine_SnapshotRevision(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_revision_channel"
+	channel := randomChannel("test_revision")
 
 	// Publish a keyed state update
 	pos1, _, err := engine.Publish(ctx, channel, []byte("data1"), EnginePublishOptions{
@@ -200,7 +206,7 @@ func TestSnapshotEngine_ConvergedMembership(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_presence_channel"
+	channel := randomChannel("test_presence")
 
 	// Add presence for multiple clients
 	client1 := ClientInfo{
@@ -272,7 +278,7 @@ func TestSnapshotEngine_PresenceStream(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_presence_stream_channel"
+	channel := randomChannel("test_presence_stream")
 
 	client := ClientInfo{
 		ClientID: "client1",
@@ -299,8 +305,8 @@ func TestSnapshotEngine_PresenceStream(t *testing.T) {
 	require.Greater(t, streamPos.Offset, uint64(0))
 
 	// Verify event types
-	require.Equal(t, "join", events[0].Type)
-	require.Equal(t, "leave", events[1].Type)
+	require.False(t, events[0].Removed)
+	require.True(t, events[1].Removed)
 	require.Equal(t, "client1", events[0].Info.ClientID)
 	require.Equal(t, "client1", events[1].Info.ClientID)
 
@@ -315,7 +321,7 @@ func TestSnapshotEngine_SnapshotPagination(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_pagination_channel"
+	channel := randomChannel("test_pagination")
 
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
@@ -372,7 +378,7 @@ func TestSnapshotEngine_EpochHandling(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_epoch_channel"
+	channel := randomChannel("test_epoch")
 
 	// Publish initial data
 	pos1, _, err := engine.Publish(ctx, channel, []byte("data1"), EnginePublishOptions{
@@ -405,7 +411,7 @@ func TestSnapshotEngine_Idempotency(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_idempotency_channel"
+	channel := randomChannel("test_idempotency")
 
 	// Publish with idempotency key
 	pos1, fromCache1, err := engine.Publish(ctx, channel, []byte("data1"), EnginePublishOptions{
@@ -451,7 +457,7 @@ func TestSnapshotEngine_VersionedPublishing(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "test_version_channel"
+	channel := randomChannel("test_version")
 
 	// Publish with version 2 (version 0 means "disable version check")
 	pos1, _, err := engine.Publish(ctx, channel, []byte("data_v2"), EnginePublishOptions{
@@ -502,9 +508,11 @@ func TestSnapshotEngine_MultipleChannels(t *testing.T) {
 	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
+	channel1 := randomChannel("test_multi1")
+	channel2 := randomChannel("test_multi2")
 
 	// Publish to channel1
-	_, _, err := engine.Publish(ctx, "channel1", []byte("data1"), EnginePublishOptions{
+	_, _, err := engine.Publish(ctx, channel1, []byte("data1"), EnginePublishOptions{
 		Key:        "key1",
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -513,7 +521,7 @@ func TestSnapshotEngine_MultipleChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish to channel2
-	_, _, err = engine.Publish(ctx, "channel2", []byte("data2"), EnginePublishOptions{
+	_, _, err = engine.Publish(ctx, channel2, []byte("data2"), EnginePublishOptions{
 		Key:        "key2",
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -522,7 +530,7 @@ func TestSnapshotEngine_MultipleChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read channel1 snapshot
-	entries1, _, _, err := engine.ReadSnapshot(ctx, "channel1", ReadSnapshotOptions{
+	entries1, _, _, err := engine.ReadSnapshot(ctx, channel1, ReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -532,7 +540,7 @@ func TestSnapshotEngine_MultipleChannels(t *testing.T) {
 	require.Equal(t, []byte("data1"), snapshot1["key1"])
 
 	// Read channel2 snapshot
-	entries2, _, _, err := engine.ReadSnapshot(ctx, "channel2", ReadSnapshotOptions{
+	entries2, _, _, err := engine.ReadSnapshot(ctx, channel2, ReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})

@@ -25,6 +25,13 @@ type Publication struct {
 	// This is a case for wildcard subscriptions. Client SDK then should use this channel
 	// in PublicationContext.
 	Channel string
+	// Key is used for keyed snapshots (state and presence/membership).
+	// For presence: Key = ClientID.
+	// For keyed state: Key = arbitrary string key.
+	Key string
+	// Removed indicates this is a remove/leave event (true) vs add/join event (false).
+	// Used in keyed snapshots and presence streams to distinguish event types.
+	Removed bool
 }
 
 // ClientInfo contains information about client connection.
