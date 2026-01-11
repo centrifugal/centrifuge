@@ -178,9 +178,11 @@ func BenchmarkSnapshotEngine_ReadStream(b *testing.B) {
 	channel := randomChannel("bench_read_stream")
 
 	// Prepopulate stream with 1000 messages
+	var sp StreamPosition
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
-		_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
+		var err error
+		sp, _, err = engine.Publish(ctx, channel, data, EnginePublishOptions{
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 		})
@@ -192,11 +194,14 @@ func BenchmarkSnapshotEngine_ReadStream(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
+	sp.Offset = sp.Offset - 100
+
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
+			_, _, err := engine.ReadStreamZero(ctx, channel, ReadStreamOptions{
 				Filter: HistoryFilter{
-					Limit: 100, // Read last 100 messages
+					Limit: 100,
+					Since: &sp,
 				},
 			})
 			if err != nil {
@@ -234,7 +239,7 @@ func BenchmarkSnapshotEngine_ReadSnapshotFull(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+			_, _, _, err := engine.ReadSnapshotZero(ctx, channel, ReadSnapshotOptions{
 				Limit:       0, // Read all
 				SnapshotTTL: 300 * time.Second,
 			})

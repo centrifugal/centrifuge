@@ -1,0 +1,26 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/centrifugal/centrifuge
+cpu: Apple M4
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7638	    154355 ns/op	   13706 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7497	    156620 ns/op	   13729 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7533	    153961 ns/op	   13725 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7470	    154908 ns/op	   13734 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7442	    156441 ns/op	   13742 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7563	    154336 ns/op	   13718 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7627	    157168 ns/op	   13707 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7582	    156914 ns/op	   13716 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7707	    152134 ns/op	   13694 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadStream-10          	    7834	    150907 ns/op	   13672 B/op	     209 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4525	    249401 ns/op	   68311 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4786	    251124 ns/op	   68184 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4678	    246008 ns/op	   68235 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4749	    250312 ns/op	   68206 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4663	    248387 ns/op	   68245 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4741	    246642 ns/op	   68209 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4570	    249106 ns/op	   68277 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4730	    249611 ns/op	   68201 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4694	    246388 ns/op	   68235 B/op	      12 allocs/op
+BenchmarkSnapshotEngineZero_ReadSnapshotFull-10    	    4596	    252347 ns/op	   68287 B/op	      12 allocs/op
+PASS
+ok  	github.com/centrifugal/centrifuge	26.656s

@@ -1,16 +1,20 @@
 package centrifuge
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
+	"github.com/centrifugal/centrifuge/internal/bpool"
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/protocol"
 	"github.com/redis/rueidis"
@@ -331,8 +335,8 @@ func NewSnapshotEngine(n *Node, conf SnapshotEngineConfig) (*SnapshotEngine, err
 	e.shardChannel = conf.Prefix + redisPubSubShardChannelSuffix
 	e.messagePrefix = conf.Prefix + redisClientChannelPrefix
 
-	for _, shardWrapper := range e.shards {
-		shard := shardWrapper.shard
+	for _, wrapper := range e.shards {
+		shard := wrapper.shard
 		if !shard.isCluster && e.conf.NumShardedPubSubPartitions > 0 {
 			return nil, errors.New("can use sharded PUB/SUB feature (non-zero number of pub/sub partitions) only with Redis Cluster")
 		}
@@ -356,8 +360,8 @@ func NewSnapshotEngine(n *Node, conf SnapshotEngineConfig) (*SnapshotEngine, err
 			}
 		}
 
-		shardWrapper.subClients = subChannels
-		shardWrapper.pubSubStartChannels = pubSubStartChannels
+		wrapper.subClients = subChannels
+		wrapper.pubSubStartChannels = pubSubStartChannels
 	}
 
 	// Start background cleanup worker for guaranteed remove events on expiry.
@@ -874,6 +878,13 @@ func (e *SnapshotEngine) ReadSnapshot(ctx context.Context, ch string, opts ReadS
 	return e.readUnorderedSnapshot(ctx, ch, opts)
 }
 
+func (e *SnapshotEngine) ReadSnapshotZero(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+	if opts.Ordered {
+		return e.readOrderedSnapshot(ctx, ch, opts)
+	}
+	return e.readUnorderedSnapshotZero(ctx, ch, opts)
+}
+
 func (e *SnapshotEngine) readUnorderedSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
@@ -952,6 +963,168 @@ func (e *SnapshotEngine) readUnorderedSnapshot(ctx context.Context, ch string, o
 	return entries, streamPos, nextCursor, nil
 }
 
+func (e *SnapshotEngine) readUnorderedSnapshotZero(
+	ctx context.Context,
+	ch string,
+	opts ReadSnapshotOptions,
+) ([]SnapshotEntry, StreamPosition, string, error) {
+	s := e.getShard(ch)
+
+	snapshotTTL := "0"
+	if opts.SnapshotTTL > 0 {
+		snapshotTTL = strconv.FormatInt(int64(opts.SnapshotTTL.Seconds()), 10)
+	}
+
+	cursor := opts.Cursor
+	if cursor == "" {
+		cursor = "0"
+	}
+
+	var (
+		streamPos  StreamPosition
+		nextCursor string
+		entries    []SnapshotEntry
+	)
+
+	err := e.readUnorderedScript.ExecWithReader(
+		ctx,
+		s.shard.client,
+		[]string{
+			e.snapshotHashKey(s.shard, ch),
+			e.snapshotExpireKey(s.shard, ch),
+			e.metaKey(s.shard, ch),
+			e.snapshotMetaKey(s.shard, ch),
+		},
+		[]string{
+			cursor,
+			strconv.Itoa(opts.Limit),
+			strconv.FormatInt(time.Now().Unix(), 10),
+			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
+			snapshotTTL,
+		},
+		func(r *bufio.Reader, typ byte) error {
+			if typ != '*' {
+				return fmt.Errorf("unexpected RESP type: %q", typ)
+			}
+
+			n, err := rueidis.ReadInt(r)
+			if err != nil {
+				return err
+			}
+			if n != 4 {
+				return fmt.Errorf("wrong number of replies: %d", n)
+			}
+
+			// --- reply[0]: offset ---
+			if b, _ := r.ReadByte(); b != '$' {
+				return fmt.Errorf("expected blob offset")
+			}
+			l, _ := rueidis.ReadInt(r)
+			if l > 0 {
+				buf, err := readBlobZeroAlloc(r, l)
+				if err != nil {
+					return err
+				}
+				streamPos.Offset, err = strconv.ParseUint(
+					unsafe.String(&buf[0], len(buf)), 10, 64,
+				)
+				if err != nil {
+					return err
+				}
+			}
+
+			// --- reply[1]: epoch ---
+			if b, _ := r.ReadByte(); b != '$' {
+				return fmt.Errorf("expected blob epoch")
+			}
+			l, _ = rueidis.ReadInt(r)
+			if l > 0 {
+				buf, err := readBlobZeroAlloc(r, l)
+				if err != nil {
+					return err
+				}
+				streamPos.Epoch = unsafe.String(&buf[0], len(buf))
+			}
+
+			// --- reply[2]: cursor ---
+			if b, _ := r.ReadByte(); b != '$' {
+				return fmt.Errorf("expected blob cursor")
+			}
+			l, _ = rueidis.ReadInt(r)
+			if l > 0 {
+				buf, err := readBlobZeroAlloc(r, l)
+				if err != nil {
+					return err
+				}
+				nextCursor = unsafe.String(&buf[0], len(buf))
+			}
+
+			// --- reply[3]: key-value array ---
+			if b, _ := r.ReadByte(); b != '*' {
+				return fmt.Errorf("expected kv array")
+			}
+			kvCount, err := rueidis.ReadInt(r)
+			if err != nil {
+				return err
+			}
+
+			entries = make([]SnapshotEntry, 0, kvCount/2)
+
+			for i := int64(0); i < kvCount; i += 2 {
+				// key
+				if b, _ := r.ReadByte(); b != '$' {
+					return fmt.Errorf("expected key blob")
+				}
+				klen, _ := rueidis.ReadInt(r)
+				kb, err := readBlobZeroAlloc(r, klen)
+				if err != nil {
+					return err
+				}
+				key := unsafe.String(&kb[0], len(kb))
+
+				// value
+				if b, _ := r.ReadByte(); b != '$' {
+					return fmt.Errorf("expected value blob")
+				}
+				vlen, _ := rueidis.ReadInt(r)
+				vb, err := readBlobZeroAlloc(r, vlen)
+				if err != nil {
+					return err
+				}
+
+				// value format: offset:epoch:payload
+				entryOffset, entryEpoch, payload, err := parseSnapshotValue(vb)
+				if err != nil {
+					continue
+				}
+
+				entries = append(entries, SnapshotEntry{
+					Key:     key,
+					Payload: payload, // payload already copied by parser
+					Revision: StreamPosition{
+						Offset: entryOffset,
+						Epoch:  entryEpoch,
+					},
+				})
+			}
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		return nil, StreamPosition{}, "", err
+	}
+
+	// Validate snapshot revision (unchanged semantics)
+	if opts.SnapshotRevision != nil &&
+		opts.SnapshotRevision.Epoch != streamPos.Epoch {
+		return nil, streamPos, nextCursor, nil
+	}
+
+	return entries, streamPos, nextCursor, nil
+}
+
 // readOrderedSnapshot uses offset-based pagination (not cursor), so returns empty cursor.
 func (e *SnapshotEngine) readOrderedSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
 	s := e.getShard(ch)
@@ -1027,6 +1200,319 @@ func (e *SnapshotEngine) readOrderedSnapshot(ctx context.Context, ch string, opt
 	return entries, streamPos, "", nil
 }
 
+// readBlobZeroAlloc reads a RESP blob payload of the given length.
+// It returns a slice backed by bufio.Reader internal memory.
+// The slice is valid only until the next read/discard.
+//
+// It consumes: <payload>\r\n
+//
+// Intended for use inside DoWithReader callbacks.
+func readBlobZeroAlloc(r *bufio.Reader, length int64) ([]byte, error) {
+	if length < 0 {
+		return nil, rueidis.Nil
+	}
+
+	if length == 0 {
+		_, err := r.Discard(2) // \r\n
+		return nil, err
+	}
+
+	b, err := r.Peek(int(length))
+	if err != nil {
+		return nil, err
+	}
+
+	// discard payload + CRLF
+	if _, err := r.Discard(int(length) + 2); err != nil {
+		return nil, err
+	}
+
+	return b, nil
+}
+
+func (e *SnapshotEngine) ReadStreamZero(
+	ctx context.Context,
+	ch string,
+	opts ReadStreamOptions,
+) ([]*Publication, StreamPosition, error) {
+	s := e.getShard(ch)
+
+	// ----- argument preparation (unchanged) -----
+
+	var includePubs = true
+	var offset string
+
+	if opts.Filter.Since != nil {
+		if opts.Filter.Reverse {
+			offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
+			if offset == "0" {
+				includePubs = false
+			}
+		} else {
+			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
+		}
+	} else {
+		offset = "-"
+		if opts.Filter.Reverse {
+			offset = "+"
+		}
+	}
+
+	limit := opts.Filter.Limit
+	if limit == 0 {
+		includePubs = false
+	}
+	if limit < 0 {
+		limit = 0
+	}
+
+	reverse := "0"
+	if opts.Filter.Reverse {
+		reverse = "1"
+	}
+
+	metaExpire := "0"
+	if opts.MetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
+	} else if e.node.config.HistoryMetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
+	}
+
+	includePubsStr := "0"
+	if includePubs {
+		includePubsStr = "1"
+	}
+
+	var (
+		streamPos StreamPosition
+		pubs      []*Publication
+	)
+
+	err := e.readStreamScript.ExecWithReader(
+		ctx,
+		s.shard.client,
+		[]string{
+			e.streamKey(s.shard, ch),
+			e.metaKey(s.shard, ch),
+		},
+		[]string{
+			includePubsStr,
+			offset,
+			strconv.Itoa(limit),
+			reverse,
+			metaExpire,
+			e.node.ID(),
+		},
+		func(r *bufio.Reader, typ byte) error {
+			if typ != '*' {
+				return fmt.Errorf("unexpected RESP type: %q", typ)
+			}
+
+			n, err := rueidis.ReadInt(r)
+			if err != nil {
+				return err
+			}
+			if n < 2 {
+				return fmt.Errorf("wrong number of replies: %d", n)
+			}
+
+			// ---- reply[0]: top offset ----
+			b, err := r.ReadByte()
+			if err != nil {
+				return err
+			}
+
+			switch b {
+			case ':':
+				v, err := rueidis.ReadInt(r)
+				if err != nil && err != rueidis.Nil {
+					return err
+				}
+				streamPos.Offset = uint64(v)
+
+			case '$':
+				l, err := rueidis.ReadInt(r)
+				if err != nil {
+					return err
+				}
+				if l > 0 {
+					buf, err := readBlobZeroAlloc(r, l)
+					if err != nil {
+						return err
+					}
+					v, err := strconv.ParseUint(
+						unsafe.String(&buf[0], len(buf)),
+						10,
+						64,
+					)
+					if err != nil {
+						return err
+					}
+					streamPos.Offset = v
+				}
+
+			default:
+				return fmt.Errorf("unexpected RESP type for offset: %q", b)
+			}
+
+			// ---- reply[1]: epoch ----
+			if b, err := r.ReadByte(); err != nil {
+				return err
+			} else if b != '$' {
+				return fmt.Errorf("expected blob string for epoch")
+			}
+
+			epochLen, err := rueidis.ReadInt(r)
+			if err != nil {
+				return err
+			}
+			if epochLen > 0 {
+				buf, err := readBlobZeroAlloc(r, epochLen)
+				if err != nil {
+					return err
+				}
+				streamPos.Epoch = unsafe.String(&buf[0], len(buf))
+			}
+
+			if !includePubs || n < 3 {
+				return nil
+			}
+
+			// ---- reply[2]: publications ----
+			if b, err := r.ReadByte(); err != nil {
+				return err
+			} else if b != '*' {
+				return fmt.Errorf("expected publications array")
+			}
+
+			pubCount, err := rueidis.ReadInt(r)
+			if err != nil {
+				return err
+			}
+
+			pubs = make([]*Publication, 0, pubCount)
+
+			for i := int64(0); i < pubCount; i++ {
+				// entry = [id, fields]
+				if b, err := r.ReadByte(); err != nil {
+					return err
+				} else if b != '*' {
+					return fmt.Errorf("expected entry array")
+				}
+
+				if _, err := rueidis.ReadInt(r); err != nil {
+					return err
+				}
+
+				// ---- id ----
+				if b, err := r.ReadByte(); err != nil {
+					return err
+				} else if b != '$' {
+					return fmt.Errorf("expected blob id")
+				}
+
+				idLen, err := rueidis.ReadInt(r)
+				if err != nil {
+					return err
+				}
+
+				idBuf, err := readBlobZeroAlloc(r, idLen)
+				if err != nil {
+					return err
+				}
+
+				idStr := unsafe.String(&idBuf[0], len(idBuf))
+				hyphen := strings.IndexByte(idStr, '-')
+				if hyphen <= 0 {
+					return fmt.Errorf("invalid stream id")
+				}
+
+				pubOffset, err := strconv.ParseUint(idStr[:hyphen], 10, 64)
+				if err != nil {
+					return err
+				}
+
+				// ---- fields ----
+				if b, err := r.ReadByte(); err != nil {
+					return err
+				} else if b != '*' {
+					return fmt.Errorf("expected fields array")
+				}
+
+				fieldCount, err := rueidis.ReadInt(r)
+				if err != nil {
+					return err
+				}
+
+				var payload *bpool.ByteBuffer
+
+				for j := int64(0); j < fieldCount; j += 2 {
+					// key
+					if _, err := r.ReadByte(); err != nil {
+						return err
+					}
+					klen, err := rueidis.ReadInt(r)
+					if err != nil {
+						return err
+					}
+
+					kb, err := readBlobZeroAlloc(r, klen)
+					if err != nil {
+						return err
+					}
+					isData := klen == 1 && kb[0] == 'd'
+
+					// value
+					if _, err := r.ReadByte(); err != nil {
+						return err
+					}
+					vlen, err := rueidis.ReadInt(r)
+					if err != nil {
+						return err
+					}
+
+					if isData {
+						payload = bpool.GetByteBuffer(int(vlen))
+						payload.B = payload.B[:vlen]
+						if _, err := io.ReadFull(r, payload.B); err != nil {
+							return err
+						}
+					} else {
+						if _, err := r.Discard(int(vlen)); err != nil {
+							return err
+						}
+					}
+					if _, err := r.Discard(2); err != nil {
+						return err
+					}
+				}
+
+				if payload == nil {
+					return errors.New("no payload data found in entry")
+				}
+
+				var protoPub protocol.Publication
+				if err := protoPub.UnmarshalVT(payload.B); err != nil {
+					bpool.PutByteBuffer(payload)
+					return err
+				}
+				bpool.PutByteBuffer(payload)
+
+				protoPub.Offset = pubOffset
+				pubs = append(pubs, pubFromProto(&protoPub))
+			}
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	return pubs, streamPos, nil
+}
+
 // ReadStream retrieves publication stream for a channel.
 func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	s := e.getShard(ch)
@@ -1040,7 +1526,8 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 				includePubs = false
 			}
 		} else {
-			offset = strconv.FormatUint(opts.Filter.Since.Offset, 10)
+			// Use offset+1 because XRANGE is inclusive, but "since" should be exclusive
+			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
 		}
 	} else {
 		offset = "-"
@@ -1133,17 +1620,18 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 			return nil, StreamPosition{}, err
 		}
 
-		// Find the "d" field which contains the payload
-		var payload string
+		var payload []byte
 		for i := 0; i < len(fieldsArr)-1; i += 2 {
-			fieldName, _ := fieldsArr[i].ToString()
-			if fieldName == "d" {
-				payload, _ = fieldsArr[i+1].ToString()
-				break
+			k, _ := fieldsArr[i].ToString()
+			if k != "d" {
+				continue
 			}
+			v, _ := fieldsArr[i+1].ToString()
+			payload = convert.StringToBytes(v)
+			break
 		}
-		if payload == "" {
-			continue // Skip entries without payload
+		if payload == nil {
+			return nil, StreamPosition{}, errors.New("no payload data found in entry")
 		}
 
 		hyphenPos := strings.Index(id, "-")
@@ -1156,7 +1644,7 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 		}
 
 		var protoPub protocol.Publication
-		err = protoPub.UnmarshalVT(convert.StringToBytes(payload))
+		err = protoPub.UnmarshalVT(payload)
 		if err != nil {
 			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
