@@ -1812,6 +1812,80 @@ func (e *SnapshotEngine) ReadStreamZero(
 	return pubs, streamPos, nil
 }
 
+// Implement this idea to get more effective read from Redis.
+//// 1. Lua returns top_offset + epoch
+//topOffset, epoch := getMetaFromLua(metaKey, newEpochIfEmpty)
+//
+//// 2. Go XRANGE from since_offset -> topOffset (careful to not avoid values beyond topOffset, maybe requires keeping offset and epoch in every value in stream)
+//cmd := client.B().Xrange().
+//	Key(streamKey).
+//	Start(sinceOffset).End(strconv.FormatUint(topOffset, 10)).
+//	Count(limit).
+//	Build()
+//
+//if !opts.Filter.Reverse && includePubs {
+//	// Determine limit
+//	xRangeLimit := int64(limit)
+//	if xRangeLimit <= 0 {
+//		xRangeLimit = 1000 // safe maximum
+//	}
+//
+//	// XRANGE from since_offset to "+"
+//	cmd := s.shard.client.B().Xrange().
+//		Key(e.streamKey(s.shard, ch)).
+//		Start(offset).End("+").
+//		Count(xRangeLimit).
+//		Build()
+//
+//	result := s.shard.client.Do(ctx, cmd)
+//	if result.Error() != nil {
+//		if errors.Is(result.Error(), rueidis.Nil) {
+//			// No entries, return empty slice
+//			return nil, StreamPosition{}, nil
+//		}
+//		return nil, StreamPosition{}, result.Error()
+//	}
+//
+//	xRange, err := result.AsXRange()
+//	if err != nil {
+//		return nil, StreamPosition{}, err
+//	}
+//
+//	pubs := make([]*Publication, 0, len(xRange))
+//	for _, entry := range xRange {
+//		payload := []byte{}
+//		if val, ok := entry.FieldValues["d"]; ok {
+//			payload = []byte(val)
+//		}
+//
+//		hyphenPos := strings.Index(entry.ID, "-")
+//		if hyphenPos <= 0 {
+//			continue
+//		}
+//		pubOffset, _ := strconv.ParseUint(entry.ID[:hyphenPos], 10, 64)
+//
+//		var protoPub protocol.Publication
+//		protoPub.UnmarshalVT(payload)
+//		protoPub.Offset = pubOffset
+//
+//		pubs = append(pubs, &Publication{
+//			Offset:  protoPub.Offset,
+//			Data:    protoPub.Data,
+//			Info:    infoFromProto(protoPub.GetInfo()),
+//			Tags:    protoPub.GetTags(),
+//			Time:    protoPub.Time,
+//			Key:     protoPub.GetKey(),
+//			Removed: protoPub.GetRemoved(),
+//		})
+//
+//		// Move offset forward
+//		offset = entry.ID
+//	}
+//
+//	// Return with topOffset/epoch from meta (call Lua if needed)
+//	return pubs, StreamPosition{}, nil
+//}
+
 // ReadStream retrieves publication stream for a channel.
 func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	s := e.getShard(ch)
