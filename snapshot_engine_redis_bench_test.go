@@ -198,7 +198,7 @@ func BenchmarkSnapshotEngine_ReadStream(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
+			_, _, err := engine.ReadStreamZero(ctx, channel, ReadStreamOptions{
 				Filter: HistoryFilter{
 					Limit: 100,
 					Since: &sp,

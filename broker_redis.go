@@ -1,7 +1,6 @@
 package centrifuge
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -858,13 +857,7 @@ func (b *RedisBroker) publish(s *shardWrapper, ch string, data []byte, opts Publ
 					return StreamPosition{}, false, nil
 				}
 				cmd := s.shard.client.B().Publish().Channel(string(publishChannel)).Message(convert.BytesToString(byteMessage)).Build()
-				//resp = s.shard.client.Do(context.Background(), cmd)
-
-				err = s.shard.client.DoWithReader(context.Background(), cmd, func(r *bufio.Reader, typ byte) error {
-					// Consume the response fully to avoid connection corruption.
-					return rueidis.DiscardResponse(r, typ)
-				})
-				return StreamPosition{}, false, err
+				resp = s.shard.client.Do(context.Background(), cmd)
 			} else {
 				resp = b.publishIdempotentScript.Exec(
 					context.Background(),
