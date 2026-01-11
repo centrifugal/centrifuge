@@ -38,24 +38,22 @@ end
 local pubs = {}
 
 if include_publications ~= "0" then
-    if limit ~= "0" then
-        if reverse == "0" then
+    if reverse == "0" then
+        -- Forward read: always from since_offset
+        if limit ~= "0" then
             pubs = redis.call("xrange", stream_key, since_offset, "+", "COUNT", limit)
         else
-            local get_offset = top_offset
-            if since_offset ~= "-" and since_offset ~= "0" then
-                get_offset = since_offset
-            end
-            pubs = redis.call("xrevrange", stream_key, get_offset, "-", "COUNT", limit)
+            pubs = redis.call("xrange", stream_key, since_offset, "+")
         end
     else
-        if reverse == "0" then
-            pubs = redis.call("xrange", stream_key, since_offset, "+")
+        -- Reverse read: compute get_offset
+        local get_offset = top_offset
+        if since_offset ~= "-" and since_offset ~= "0" then
+            get_offset = since_offset
+        end
+        if limit ~= "0" then
+            pubs = redis.call("xrevrange", stream_key, get_offset, "-", "COUNT", limit)
         else
-            local get_offset = top_offset
-            if since_offset ~= "-" and since_offset ~= "0" then
-                get_offset = since_offset
-            end
             pubs = redis.call("xrevrange", stream_key, get_offset, "-")
         end
     end

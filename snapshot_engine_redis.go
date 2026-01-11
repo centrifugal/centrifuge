@@ -1230,6 +1230,294 @@ func readBlobZeroAlloc(r *bufio.Reader, length int64) ([]byte, error) {
 	return b, nil
 }
 
+//func (e *SnapshotEngine) ReadStreamZero(
+//	ctx context.Context,
+//	ch string,
+//	opts ReadStreamOptions,
+//) ([]*Publication, StreamPosition, error) {
+//	s := e.getShard(ch)
+//
+//	// ----- argument preparation (unchanged) -----
+//	var includePubs = true
+//	var offset string
+//	if opts.Filter.Since != nil {
+//		if opts.Filter.Reverse {
+//			offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
+//			if offset == "0" {
+//				includePubs = false
+//			}
+//		} else {
+//			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
+//		}
+//	} else {
+//		offset = "-"
+//		if opts.Filter.Reverse {
+//			offset = "+"
+//		}
+//	}
+//
+//	limit := opts.Filter.Limit
+//	if limit == 0 {
+//		includePubs = false
+//	}
+//	if limit < 0 {
+//		limit = 0
+//	}
+//
+//	reverse := "0"
+//	if opts.Filter.Reverse {
+//		reverse = "1"
+//	}
+//
+//	metaExpire := "0"
+//	if opts.MetaTTL > 0 {
+//		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
+//	} else if e.node.config.HistoryMetaTTL > 0 {
+//		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
+//	}
+//
+//	includePubsStr := "0"
+//	if includePubs {
+//		includePubsStr = "1"
+//	}
+//
+//	var (
+//		streamPos  StreamPosition
+//		pubs       []*Publication
+//		pubStructs []Publication
+//	)
+//
+//	// ----- execute Lua script with reader callback -----
+//	err := e.readStreamScript.ExecWithReader(
+//		ctx,
+//		s.shard.client,
+//		[]string{
+//			e.streamKey(s.shard, ch),
+//			e.metaKey(s.shard, ch),
+//		},
+//		[]string{
+//			includePubsStr,
+//			offset,
+//			strconv.Itoa(limit),
+//			reverse,
+//			metaExpire,
+//			e.node.ID(),
+//		},
+//		func(r *bufio.Reader, typ byte) error {
+//			if typ != '*' {
+//				return fmt.Errorf("unexpected RESP type: %q", typ)
+//			}
+//
+//			n, err := rueidis.ReadInt(r)
+//			if err != nil {
+//				return err
+//			}
+//			if n < 2 {
+//				return fmt.Errorf("wrong number of replies: %d", n)
+//			}
+//
+//			// ---- reply[0]: top offset ----
+//			b, err := r.ReadByte()
+//			if err != nil {
+//				return err
+//			}
+//			switch b {
+//			case ':':
+//				v, err := rueidis.ReadInt(r)
+//				if err != nil && err != rueidis.Nil {
+//					return err
+//				}
+//				streamPos.Offset = uint64(v)
+//			case '$':
+//				l, err := rueidis.ReadInt(r)
+//				if err != nil {
+//					return err
+//				}
+//				if l > 0 {
+//					buf, err := readBlobZeroAlloc(r, l)
+//					if err != nil {
+//						return err
+//					}
+//					v, err := strconv.ParseUint(
+//						unsafe.String(&buf[0], len(buf)),
+//						10,
+//						64,
+//					)
+//					if err != nil {
+//						return err
+//					}
+//					streamPos.Offset = v
+//				}
+//			default:
+//				return fmt.Errorf("unexpected RESP type for offset: %q", b)
+//			}
+//
+//			// ---- reply[1]: epoch ----
+//			if b, err := r.ReadByte(); err != nil {
+//				return err
+//			} else if b != '$' {
+//				return fmt.Errorf("expected blob string for epoch")
+//			}
+//			epochLen, err := rueidis.ReadInt(r)
+//			if err != nil {
+//				return err
+//			}
+//			if epochLen > 0 {
+//				buf, err := readBlobZeroAlloc(r, epochLen)
+//				if err != nil {
+//					return err
+//				}
+//				streamPos.Epoch = unsafe.String(&buf[0], len(buf))
+//			}
+//
+//			if !includePubs || n < 3 {
+//				return nil
+//			}
+//
+//			// ---- reply[2]: publications ----
+//			if b, err := r.ReadByte(); err != nil {
+//				return err
+//			} else if b != '*' {
+//				return fmt.Errorf("expected publications array")
+//			}
+//			pubCount, err := rueidis.ReadInt(r)
+//			if err != nil {
+//				return err
+//			}
+//			if pubCount == 0 {
+//				return nil
+//			}
+//
+//			// preallocate Publication structs
+//			pubStructs = make([]Publication, pubCount)
+//			pubs = pubs[:0] // reuse slice if needed
+//			if cap(pubs) < int(pubCount) {
+//				pubs = make([]*Publication, 0, pubCount)
+//			}
+//
+//			for i := int64(0); i < pubCount; i++ {
+//				// ---- entry array [id, fields] ----
+//				if b, err := r.ReadByte(); err != nil {
+//					return err
+//				} else if b != '*' {
+//					return fmt.Errorf("expected entry array")
+//				}
+//				if _, err := rueidis.ReadInt(r); err != nil {
+//					return err
+//				}
+//
+//				// ---- id ----
+//				if b, err := r.ReadByte(); err != nil {
+//					return err
+//				} else if b != '$' {
+//					return fmt.Errorf("expected blob id")
+//				}
+//				idLen, err := rueidis.ReadInt(r)
+//				if err != nil {
+//					return err
+//				}
+//				idBuf, err := readBlobZeroAlloc(r, idLen)
+//				if err != nil {
+//					return err
+//				}
+//				idStr := unsafe.String(&idBuf[0], len(idBuf))
+//				hyphen := strings.IndexByte(idStr, '-')
+//				if hyphen <= 0 {
+//					return fmt.Errorf("invalid stream id")
+//				}
+//				pubOffset, err := strconv.ParseUint(idStr[:hyphen], 10, 64)
+//				if err != nil {
+//					return err
+//				}
+//
+//				// ---- fields ----
+//				if b, err := r.ReadByte(); err != nil {
+//					return err
+//				} else if b != '*' {
+//					return fmt.Errorf("expected fields array")
+//				}
+//				fieldCount, err := rueidis.ReadInt(r)
+//				if err != nil {
+//					return err
+//				}
+//
+//				var payload *bpool.ByteBuffer
+//				for j := int64(0); j < fieldCount; j += 2 {
+//					// key
+//					if _, err := r.ReadByte(); err != nil {
+//						return err
+//					}
+//					klen, err := rueidis.ReadInt(r)
+//					if err != nil {
+//						return err
+//					}
+//					kb, err := readBlobZeroAlloc(r, klen)
+//					if err != nil {
+//						return err
+//					}
+//					isData := klen == 1 && kb[0] == 'd'
+//
+//					// value
+//					if _, err := r.ReadByte(); err != nil {
+//						return err
+//					}
+//					vlen, err := rueidis.ReadInt(r)
+//					if err != nil {
+//						return err
+//					}
+//					if isData {
+//						payload = bpool.GetByteBuffer(int(vlen))
+//						payload.B = payload.B[:vlen]
+//						if _, err := io.ReadFull(r, payload.B); err != nil {
+//							return err
+//						}
+//					} else {
+//						if _, err := r.Discard(int(vlen)); err != nil {
+//							return err
+//						}
+//					}
+//					if _, err := r.Discard(2); err != nil {
+//						return err
+//					}
+//				}
+//
+//				if payload == nil {
+//					return errors.New("no payload data found in entry")
+//				}
+//
+//				// ---- unmarshal payload into preallocated struct ----
+//				pp := &pubStructs[i]
+//				var protoPub protocol.Publication
+//				if err := protoPub.UnmarshalVT(payload.B); err != nil {
+//					bpool.PutByteBuffer(payload)
+//					return err
+//				}
+//				bpool.PutByteBuffer(payload)
+//
+//				protoPub.Offset = pubOffset
+//
+//				pp.Offset = protoPub.Offset
+//				pp.Data = protoPub.Data
+//				pp.Info = infoFromProto(protoPub.GetInfo())
+//				pp.Tags = protoPub.GetTags()
+//				pp.Time = protoPub.Time
+//				pp.Key = protoPub.GetKey()
+//				pp.Removed = protoPub.GetRemoved()
+//
+//				pubs = append(pubs, pp)
+//			}
+//
+//			return nil
+//		},
+//	)
+//
+//	if err != nil {
+//		return nil, StreamPosition{}, err
+//	}
+//
+//	return pubs, streamPos, nil
+//}
+
 func (e *SnapshotEngine) ReadStreamZero(
 	ctx context.Context,
 	ch string,
@@ -1391,6 +1679,7 @@ func (e *SnapshotEngine) ReadStreamZero(
 			}
 
 			pubs = make([]*Publication, 0, pubCount)
+			pubStructs := make([]Publication, pubCount)
 
 			for i := int64(0); i < pubCount; i++ {
 				// entry = [id, fields]
@@ -1499,7 +1788,17 @@ func (e *SnapshotEngine) ReadStreamZero(
 				bpool.PutByteBuffer(payload)
 
 				protoPub.Offset = pubOffset
-				pubs = append(pubs, pubFromProto(&protoPub))
+
+				pp := &pubStructs[i]
+				pp.Offset = protoPub.Offset
+				pp.Data = protoPub.Data
+				pp.Info = infoFromProto(protoPub.GetInfo())
+				pp.Tags = protoPub.GetTags()
+				pp.Time = protoPub.Time
+				pp.Key = protoPub.GetKey()
+				pp.Removed = protoPub.GetRemoved()
+
+				pubs = append(pubs, pp)
 			}
 
 			return nil
@@ -1600,6 +1899,7 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 		return nil, StreamPosition{}, err
 	}
 
+	pubStructs := make([]Publication, len(pubValues))
 	pubs := make([]*Publication, 0, len(pubValues))
 	for _, v := range pubValues {
 		entry, err := v.ToArray()
@@ -1649,7 +1949,17 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
 		protoPub.Offset = pubOffset
-		pubs = append(pubs, pubFromProto(&protoPub))
+
+		pp := &pubStructs[len(pubs)]
+		pp.Offset = protoPub.Offset
+		pp.Data = protoPub.Data
+		pp.Info = infoFromProto(protoPub.GetInfo())
+		pp.Tags = protoPub.GetTags()
+		pp.Time = protoPub.Time
+		pp.Key = protoPub.GetKey()
+		pp.Removed = protoPub.GetRemoved()
+
+		pubs = append(pubs, pp)
 	}
 	return pubs, streamPos, nil
 }

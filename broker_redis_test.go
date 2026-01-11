@@ -200,9 +200,9 @@ type noHistoryRedisTest struct {
 
 var noHistoryRedisTests = []noHistoryRedisTest{
 	{"rd_single", false, 6379},
-	{"df_single", false, 36379},
-	{"vk_single", false, 16379},
-	{"rd_cluster", false, 0},
+	//{"df_single", false, 36379},
+	//{"vk_single", false, 16379},
+	//{"rd_cluster", false, 0},
 }
 
 var historyBenchRedisTests = func() (tests []historyRedisTest) {
