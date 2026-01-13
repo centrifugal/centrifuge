@@ -42,6 +42,7 @@ if version ~= "0" then
             return { offset_num, current_epoch, "0", "1" }
         end
     end
+    redis.call("hset", meta_key, "v", version, "ve", version_epoch)
 end
 
 -- Only increment offset if not suppressed
@@ -49,10 +50,6 @@ local top_offset = redis.call("hincrby", meta_key, "s", 1)
 
 if meta_expire ~= '0' then
     redis.call("expire", meta_key, meta_expire)
-end
-
-if version ~= "0" then
-    redis.call("hset", meta_key, "v", version, "ve", version_epoch)
 end
 
 local prev_message_payload = ""
