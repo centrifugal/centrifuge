@@ -35,7 +35,7 @@ func BenchmarkSnapshotEngine_PublishStreamOnly(b *testing.B) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
-			_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
+			_, _, err := engine.Publish(ctx, channel, "", data, EnginePublishOptions{
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 			})
@@ -63,8 +63,7 @@ func BenchmarkSnapshotEngine_PublishKeyedStateSimple(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
-				Key:        key,
+			_, _, err := engine.Publish(ctx, channel, key, data, EnginePublishOptions{
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				MemberTTL:  300 * time.Second,
@@ -93,8 +92,7 @@ func BenchmarkSnapshotEngine_PublishKeyedStateOrdered(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
-				Key:        key,
+			_, _, err := engine.Publish(ctx, channel, key, data, EnginePublishOptions{
 				Ordered:    true,
 				Score:      i,
 				StreamSize: 10000,
@@ -156,8 +154,7 @@ func BenchmarkSnapshotEngine_PublishCombined(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
-				Key:        key,
+			_, _, err := engine.Publish(ctx, channel, key, data, EnginePublishOptions{
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				MemberTTL:  300 * time.Second,
@@ -170,7 +167,7 @@ func BenchmarkSnapshotEngine_PublishCombined(b *testing.B) {
 }
 
 // BenchmarkSnapshotEngine_ReadStream benchmarks reading from stream.
-func BenchmarkSnapshotEngine_ReadStream(b *testing.B) {
+func BenchmarkRueidis_ReadStream(b *testing.B) {
 	engine, cleanup := setupSnapshotEngineBench(b)
 	defer cleanup()
 
@@ -182,7 +179,7 @@ func BenchmarkSnapshotEngine_ReadStream(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
 		var err error
-		sp, _, err = engine.Publish(ctx, channel, data, EnginePublishOptions{
+		sp, _, err = engine.Publish(ctx, channel, "", data, EnginePublishOptions{
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 		})
@@ -194,13 +191,13 @@ func BenchmarkSnapshotEngine_ReadStream(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	sp.Offset = sp.Offset - 100
+	sp.Offset = sp.Offset - 1000
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := engine.ReadStreamZero(ctx, channel, ReadStreamOptions{
+			_, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
 				Filter: HistoryFilter{
-					Limit: 100,
+					Limit: 1000,
 					Since: &sp,
 				},
 			})
@@ -212,7 +209,7 @@ func BenchmarkSnapshotEngine_ReadStream(b *testing.B) {
 }
 
 // BenchmarkSnapshotEngine_ReadSnapshotFull benchmarks reading full unordered snapshot.
-func BenchmarkSnapshotEngine_ReadSnapshotFull(b *testing.B) {
+func BenchmarkRueidis_ReadSnapshotFull(b *testing.B) {
 	engine, cleanup := setupSnapshotEngineBench(b)
 	defer cleanup()
 
@@ -223,8 +220,7 @@ func BenchmarkSnapshotEngine_ReadSnapshotFull(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
-			Key:        key,
+		_, _, err := engine.Publish(ctx, channel, key, data, EnginePublishOptions{
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			MemberTTL:  300 * time.Second,
@@ -239,7 +235,7 @@ func BenchmarkSnapshotEngine_ReadSnapshotFull(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _, err := engine.ReadSnapshotZero(ctx, channel, ReadSnapshotOptions{
+			_, _, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
 				Limit:       0, // Read all
 				SnapshotTTL: 300 * time.Second,
 			})
@@ -262,8 +258,7 @@ func BenchmarkSnapshotEngine_ReadSnapshotPaginated(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
-			Key:        key,
+		_, _, err := engine.Publish(ctx, channel, key, data, EnginePublishOptions{
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			MemberTTL:  300 * time.Second,
@@ -302,8 +297,7 @@ func BenchmarkSnapshotEngine_ReadSnapshotOrdered(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
-			Key:        key,
+		_, _, err := engine.Publish(ctx, channel, key, data, EnginePublishOptions{
 			Ordered:    true,
 			Score:      int64(i),
 			StreamSize: 10000,
@@ -460,7 +454,7 @@ func BenchmarkSnapshotEngine_IdempotentPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			idempotencyKey := fmt.Sprintf("key_%d", i)
-			_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
+			_, _, err := engine.Publish(ctx, channel, "", data, EnginePublishOptions{
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
 				StreamSize:          10000,
@@ -490,8 +484,7 @@ func BenchmarkSnapshotEngine_VersionedPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("data_%d", i))
-			_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
-				Key:        key,
+			_, _, err := engine.Publish(ctx, channel, key, data, EnginePublishOptions{
 				Version:    uint64(i),
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,

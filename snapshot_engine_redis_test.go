@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"strconv"
 	"testing"
 	"time"
 
@@ -63,24 +62,21 @@ func TestSnapshotEngine_StatefulChannel(t *testing.T) {
 	channel := randomChannel("test_stateful")
 
 	// Publish some keyed state updates
-	_, _, err := engine.Publish(ctx, channel, []byte("data1"), EnginePublishOptions{
-		Key:        "key1",
+	_, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), EnginePublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		MemberTTL:  300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, _, err = engine.Publish(ctx, channel, []byte("data2"), EnginePublishOptions{
-		Key:        "key2",
+	_, _, err = engine.Publish(ctx, channel, "key2", []byte("data2"), EnginePublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		MemberTTL:  300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, _, err = engine.Publish(ctx, channel, []byte("data1_updated"), EnginePublishOptions{
-		Key:        "key1", // Update existing key
+	_, _, err = engine.Publish(ctx, channel, "key1", []byte("data1_updated"), EnginePublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		MemberTTL:  300 * time.Second,
@@ -122,8 +118,7 @@ func TestSnapshotEngine_StatefulChannelOrdered(t *testing.T) {
 
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
-		_, _, err := engine.Publish(ctx, channel, []byte(fmt.Sprintf("data%d", i)), EnginePublishOptions{
-			Key:        fmt.Sprintf("key%d", i),
+		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), EnginePublishOptions{
 			Ordered:    true,
 			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
 			StreamSize: 100,
@@ -159,8 +154,7 @@ func TestSnapshotEngine_SnapshotRevision(t *testing.T) {
 	channel := randomChannel("test_revision")
 
 	// Publish a keyed state update
-	pos1, _, err := engine.Publish(ctx, channel, []byte("data1"), EnginePublishOptions{
-		Key:        "key1",
+	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), EnginePublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		MemberTTL:  300 * time.Second,
@@ -169,8 +163,7 @@ func TestSnapshotEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, uint64(1), pos1.Offset)
 
 	// Publish another update
-	pos2, _, err := engine.Publish(ctx, channel, []byte("data2"), EnginePublishOptions{
-		Key:        "key2",
+	pos2, _, err := engine.Publish(ctx, channel, "key2", []byte("data2"), EnginePublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		MemberTTL:  300 * time.Second,
@@ -242,7 +235,7 @@ func TestSnapshotEngine_ConvergedMembership(t *testing.T) {
 	// Get presence stats (uses generic aggregations)
 	stats, err := engine.MemberStats(ctx, channel)
 	require.NoError(t, err)
-	require.Equal(t, 3, stats.NumClients)
+	require.Equal(t, 3, stats.NumKeys)
 	require.Equal(t, 2, stats.NumUsers) // user1 and user2
 
 	// Remove one client from user1
@@ -258,7 +251,7 @@ func TestSnapshotEngine_ConvergedMembership(t *testing.T) {
 	// Stats should show user1 still present (client2 is still there)
 	stats, err = engine.MemberStats(ctx, channel)
 	require.NoError(t, err)
-	require.Equal(t, 2, stats.NumClients)
+	require.Equal(t, 2, stats.NumKeys)
 	require.Equal(t, 2, stats.NumUsers) // Still 2 users
 
 	// Remove second client from user1
@@ -268,7 +261,7 @@ func TestSnapshotEngine_ConvergedMembership(t *testing.T) {
 	// Now user1 should be gone from aggregation
 	stats, err = engine.MemberStats(ctx, channel)
 	require.NoError(t, err)
-	require.Equal(t, 1, stats.NumClients)
+	require.Equal(t, 1, stats.NumKeys)
 	require.Equal(t, 1, stats.NumUsers) // Only user2 remains
 }
 
@@ -325,8 +318,7 @@ func TestSnapshotEngine_SnapshotPagination(t *testing.T) {
 
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
-		_, _, err := engine.Publish(ctx, channel, []byte(fmt.Sprintf("data%d", i)), EnginePublishOptions{
-			Key:        fmt.Sprintf("key%d", i),
+		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), EnginePublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 			MemberTTL:  300 * time.Second,
@@ -381,8 +373,7 @@ func TestSnapshotEngine_EpochHandling(t *testing.T) {
 	channel := randomChannel("test_epoch")
 
 	// Publish initial data
-	pos1, _, err := engine.Publish(ctx, channel, []byte("data1"), EnginePublishOptions{
-		Key:        "key1",
+	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), EnginePublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		MemberTTL:  300 * time.Second,
@@ -414,8 +405,7 @@ func TestSnapshotEngine_Idempotency(t *testing.T) {
 	channel := randomChannel("test_idempotency")
 
 	// Publish with idempotency key
-	pos1, fromCache1, err := engine.Publish(ctx, channel, []byte("data1"), EnginePublishOptions{
-		Key:                 "key1",
+	pos1, fromCache1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), EnginePublishOptions{
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -427,8 +417,7 @@ func TestSnapshotEngine_Idempotency(t *testing.T) {
 	require.Equal(t, uint64(1), pos1.Offset)
 
 	// Publish again with same idempotency key
-	pos2, fromCache2, err := engine.Publish(ctx, channel, []byte("data1_different"), EnginePublishOptions{
-		Key:                 "key1",
+	pos2, fromCache2, err := engine.Publish(ctx, channel, "key1", []byte("data1_different"), EnginePublishOptions{
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -460,8 +449,7 @@ func TestSnapshotEngine_VersionedPublishing(t *testing.T) {
 	channel := randomChannel("test_version")
 
 	// Publish with version 2 (version 0 means "disable version check")
-	pos1, _, err := engine.Publish(ctx, channel, []byte("data_v2"), EnginePublishOptions{
-		Key:        "key1",
+	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v2"), EnginePublishOptions{
 		Version:    2,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -471,8 +459,7 @@ func TestSnapshotEngine_VersionedPublishing(t *testing.T) {
 	require.Equal(t, uint64(1), pos1.Offset)
 
 	// Try to publish older version (should be suppressed)
-	pos2, _, err := engine.Publish(ctx, channel, []byte("data_v1"), EnginePublishOptions{
-		Key:        "key1",
+	pos2, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v1"), EnginePublishOptions{
 		Version:    1,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -482,8 +469,7 @@ func TestSnapshotEngine_VersionedPublishing(t *testing.T) {
 	require.Equal(t, pos1.Offset, pos2.Offset) // Same offset (suppressed)
 
 	// Publish newer version
-	pos3, _, err := engine.Publish(ctx, channel, []byte("data_v3"), EnginePublishOptions{
-		Key:        "key1",
+	pos3, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v3"), EnginePublishOptions{
 		Version:    3,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
@@ -512,8 +498,7 @@ func TestSnapshotEngine_MultipleChannels(t *testing.T) {
 	channel2 := randomChannel("test_multi2")
 
 	// Publish to channel1
-	_, _, err := engine.Publish(ctx, channel1, []byte("data1"), EnginePublishOptions{
-		Key:        "key1",
+	_, _, err := engine.Publish(ctx, channel1, "key1", []byte("data1"), EnginePublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		MemberTTL:  300 * time.Second,
@@ -521,8 +506,7 @@ func TestSnapshotEngine_MultipleChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish to channel2
-	_, _, err = engine.Publish(ctx, channel2, []byte("data2"), EnginePublishOptions{
-		Key:        "key2",
+	_, _, err = engine.Publish(ctx, channel2, "key2", []byte("data2"), EnginePublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		MemberTTL:  300 * time.Second,
@@ -613,87 +597,222 @@ func TestParseSnapshotValue(t *testing.T) {
 	}
 }
 
-// Benchmark tests
-func BenchmarkSnapshotEngine_Publish(b *testing.B) {
+// TestSnapshotEngine_ReadStream2 tests the 2-call version of ReadStream.
+func TestSnapshotEngine_ReadStream2(t *testing.T) {
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(b, node)
+	engine := newTestSnapshotRedisEngine(t, node)
 
 	ctx := context.Background()
-	channel := "bench_channel"
-	data := []byte("benchmark data")
+	channel := randomChannel("test_readstream2")
 
-	b.ResetTimer()
-	i := 0
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			i++
-			_, _, err := engine.Publish(ctx, channel, data, EnginePublishOptions{
-				Key:        strconv.Itoa(i),
-				StreamSize: 1000,
-				StreamTTL:  300 * time.Second,
-				MemberTTL:  300 * time.Second,
-			})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-func BenchmarkSnapshotEngine_AddPresence(b *testing.B) {
-	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(b, node)
-
-	ctx := context.Background()
-	channel := "bench_presence_channel"
-
-	b.ResetTimer()
-	i := 0
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			i++
-			client := ClientInfo{
-				ClientID: strconv.Itoa(i),
-				UserID:   strconv.Itoa(i % 100), // 100 unique users
-			}
-			err := engine.AddMember(ctx, channel, client, EnginePresenceOptions{})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-func BenchmarkSnapshotEngine_ReadSnapshot(b *testing.B) {
-	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(b, node)
-
-	ctx := context.Background()
-	channel := "bench_snapshot_channel"
-
-	// Prepopulate with 100 entries
-	for i := 0; i < 100; i++ {
-		_, _, err := engine.Publish(ctx, channel, []byte(fmt.Sprintf("data%d", i)), EnginePublishOptions{
-			Key:        fmt.Sprintf("key%d", i),
-			StreamSize: 1000,
+	// Publish 5 messages to stream
+	for i := 1; i <= 5; i++ {
+		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), EnginePublishOptions{
+			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
-			MemberTTL:  300 * time.Second,
 		})
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(t, err)
 	}
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, _, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
-				Limit:       100,
-				SnapshotTTL: 300 * time.Second,
-			})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
+	// Test 1: Read all messages (forward)
+	pubs, streamPos, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Limit: -1,
+		},
 	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 5)
+	require.NotEmpty(t, streamPos.Epoch)
+	require.Equal(t, uint64(5), streamPos.Offset)
+	require.Equal(t, []byte("msg_1"), pubs[0].Data)
+	require.Equal(t, []byte("msg_5"), pubs[4].Data)
+
+	// Test 2: Read all messages (reverse)
+	pubsRev, streamPosRev, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Limit:   -1,
+			Reverse: true,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubsRev, 5)
+	require.Equal(t, uint64(5), streamPosRev.Offset)
+	require.Equal(t, []byte("msg_5"), pubsRev[0].Data)
+	require.Equal(t, []byte("msg_1"), pubsRev[4].Data)
+
+	// Test 3: Read with limit
+	pubsLimited, _, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Limit: 2,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubsLimited, 2)
+	require.Equal(t, []byte("msg_1"), pubsLimited[0].Data)
+	require.Equal(t, []byte("msg_2"), pubsLimited[1].Data)
+
+	// Test 4: Read since offset
+	pubsSince, _, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Since: &StreamPosition{
+				Offset: 2,
+				Epoch:  streamPos.Epoch,
+			},
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubsSince, 3)
+	require.Equal(t, []byte("msg_3"), pubsSince[0].Data)
+	require.Equal(t, []byte("msg_5"), pubsSince[2].Data)
+
+	// Test 5: Metadata-only read
+	pubsMeta, streamPosMeta, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Limit: 0, // metadata only
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, pubsMeta)
+	require.Equal(t, uint64(5), streamPosMeta.Offset)
+	require.NotEmpty(t, streamPosMeta.Epoch)
+}
+
+// TestSnapshotEngine_ReadStreamZero2 tests the 2-call zero-alloc version of ReadStream.
+func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_readstreamzero2")
+
+	// Publish 5 messages to stream
+	for i := 1; i <= 5; i++ {
+		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), EnginePublishOptions{
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Test 1: Read all messages (forward)
+	pubs, streamPos, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 5)
+	require.NotEmpty(t, streamPos.Epoch)
+	require.Equal(t, uint64(5), streamPos.Offset)
+	require.Equal(t, []byte("msg_1"), pubs[0].Data)
+	require.Equal(t, []byte("msg_5"), pubs[4].Data)
+
+	// Test 2: Read all messages (reverse)
+	pubsRev, streamPosRev, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Limit:   -1,
+			Reverse: true,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubsRev, 5)
+	require.Equal(t, uint64(5), streamPosRev.Offset)
+	require.Equal(t, []byte("msg_5"), pubsRev[0].Data)
+	require.Equal(t, []byte("msg_1"), pubsRev[4].Data)
+
+	// Test 3: Read with limit
+	pubsLimited, _, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Limit: 2,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubsLimited, 2)
+	require.Equal(t, []byte("msg_1"), pubsLimited[0].Data)
+	require.Equal(t, []byte("msg_2"), pubsLimited[1].Data)
+
+	// Test 4: Read since offset
+	pubsSince, _, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Since: &StreamPosition{
+				Offset: 2,
+				Epoch:  streamPos.Epoch,
+			},
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubsSince, 3)
+	require.Equal(t, []byte("msg_3"), pubsSince[0].Data)
+	require.Equal(t, []byte("msg_5"), pubsSince[2].Data)
+
+	// Test 5: Metadata-only read
+	pubsMeta, streamPosMeta, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{
+			Limit: 0, // metadata only
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, pubsMeta)
+	require.Equal(t, uint64(5), streamPosMeta.Offset)
+	require.NotEmpty(t, streamPosMeta.Epoch)
+}
+
+// TestSnapshotEngine_ReadStream2_Compatibility tests that ReadStream2 returns same results as ReadStream.
+func TestSnapshotEngine_ReadStream2_Compatibility(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_compat")
+
+	// Publish 10 messages
+	for i := 1; i <= 10; i++ {
+		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), EnginePublishOptions{
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Compare ReadStream and ReadStream2 results
+	pubs1, pos1, err1 := engine.ReadStream(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{Limit: -1},
+	})
+	require.NoError(t, err1)
+
+	pubs2, pos2, err2 := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{Limit: -1},
+	})
+	require.NoError(t, err2)
+
+	// Compare results
+	require.Equal(t, len(pubs1), len(pubs2))
+	require.Equal(t, pos1.Offset, pos2.Offset)
+	require.Equal(t, pos1.Epoch, pos2.Epoch)
+	for i := range pubs1 {
+		require.Equal(t, pubs1[i].Data, pubs2[i].Data)
+		require.Equal(t, pubs1[i].Offset, pubs2[i].Offset)
+	}
+
+	// Compare ReadStreamZero and ReadStreamZero2 results
+	pubs3, pos3, err3 := engine.ReadStreamZero(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{Limit: -1},
+	})
+	require.NoError(t, err3)
+
+	pubs4, pos4, err4 := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{Limit: -1},
+	})
+	require.NoError(t, err4)
+
+	// Compare results
+	require.Equal(t, len(pubs3), len(pubs4))
+	require.Equal(t, pos3.Offset, pos4.Offset)
+	require.Equal(t, pos3.Epoch, pos4.Epoch)
+	for i := range pubs3 {
+		require.Equal(t, pubs3[i].Data, pubs4[i].Data)
+		require.Equal(t, pubs3[i].Offset, pubs4[i].Offset)
+	}
 }

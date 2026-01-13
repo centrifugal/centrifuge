@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/protocol"
 	"github.com/redis/rueidis"
+	"github.com/redis/rueidis/resp"
 )
 
 // RedisEngine PUB/SUB Message Formats
@@ -57,6 +57,8 @@ var (
 	brokerSnapshotReadUnorderedScriptSource string
 	//go:embed internal/redis_lua/broker_snapshot_stream_read.lua
 	brokerSnapshotReadStreamScriptSource string
+	//go:embed internal/redis_lua/broker_snapshot_stream_read_meta.lua
+	brokerSnapshotReadStreamMetaScriptSource string
 	//go:embed internal/redis_lua/broker_snapshot_presence_stats.lua
 	brokerSnapshotPresenceStatsScriptSource string
 	//go:embed internal/redis_lua/broker_snapshot_cleanup.lua
@@ -70,7 +72,7 @@ type Engine interface {
 	Unsubscribe(ch string) error
 
 	// Publish allows sending data into a channel. It can optionally use history and keyed snapshots.
-	Publish(ctx context.Context, ch string, data []byte, opts EnginePublishOptions) (StreamPosition, bool, error)
+	Publish(ctx context.Context, ch string, key string, data []byte, opts EnginePublishOptions) (StreamPosition, bool, error)
 	// Unpublish removes a key from keyed state snapshot. This is the counterpart to Publish()
 	// for keyed state - it removes a specific key from the snapshot without affecting other keys.
 	Unpublish(ctx context.Context, ch string, key string, opts EngineUnpublishOptions) (StreamPosition, error)
@@ -110,7 +112,6 @@ type engineShardWrapper struct {
 
 // EnginePublishOptions defines options for publishing.
 type EnginePublishOptions struct {
-	Key                 string
 	Tags                map[string]string
 	ClientInfo          *ClientInfo
 	IdempotencyKey      string
@@ -144,8 +145,8 @@ type EngineUnpublishOptions struct {
 }
 
 type EngineMemberStats struct {
-	NumClients int
-	NumUsers   int
+	NumKeys  int
+	NumUsers int
 }
 
 // ReadStreamOptions define some fields to alter ReadStream method behavior.
@@ -174,8 +175,8 @@ type ReadSnapshotOptions struct {
 // Client MUST filter entries where entry.Revision <= requested snapshot_revision.
 type SnapshotEntry struct {
 	Key      string
-	Payload  []byte
 	Revision StreamPosition // When this entry was written (offset, epoch)
+	Payload  []byte
 }
 
 // SnapshotEngine is a Redis-based engine that provides support for:
@@ -197,12 +198,13 @@ type SnapshotEngine struct {
 
 	shards []*engineShardWrapper
 
-	addScript           *rueidis.Lua
-	readOrderedScript   *rueidis.Lua
-	readUnorderedScript *rueidis.Lua
-	readStreamScript    *rueidis.Lua
-	presenceStatsScript *rueidis.Lua
-	cleanupScript       *rueidis.Lua
+	addScript            *rueidis.Lua
+	readOrderedScript    *rueidis.Lua
+	readUnorderedScript  *rueidis.Lua
+	readStreamScript     *rueidis.Lua
+	readStreamMetaScript *rueidis.Lua
+	presenceStatsScript  *rueidis.Lua
+	cleanupScript        *rueidis.Lua
 
 	closeCh       chan struct{}
 	closeOnce     sync.Once
@@ -320,6 +322,10 @@ func NewSnapshotEngine(n *Node, conf SnapshotEngineConfig) (*SnapshotEngine, err
 		),
 		readStreamScript: rueidis.NewLuaScript(
 			brokerSnapshotReadStreamScriptSource,
+			rueidis.WithLoadSHA1(conf.LoadSHA1),
+		),
+		readStreamMetaScript: rueidis.NewLuaScript(
+			brokerSnapshotReadStreamMetaScriptSource,
 			rueidis.WithLoadSHA1(conf.LoadSHA1),
 		),
 		presenceStatsScript: rueidis.NewLuaScript(
@@ -616,12 +622,12 @@ func (e *SnapshotEngine) Close(_ context.Context) error {
 }
 
 // Publish publishes data to a stateful channel with optional keyed state.
-func (e *SnapshotEngine) Publish(ctx context.Context, ch string, data []byte, opts EnginePublishOptions) (StreamPosition, bool, error) {
+func (e *SnapshotEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts EnginePublishOptions) (StreamPosition, bool, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
 	// Fast path for non-history, non-idempotent, non-keyed publications.
-	if opts.StreamSize == 0 && opts.StreamTTL == 0 && opts.IdempotencyKey == "" && opts.Key == "" {
+	if opts.StreamSize == 0 && opts.StreamTTL == 0 && opts.IdempotencyKey == "" && key == "" {
 		if e.conf.SkipPubSub {
 			return StreamPosition{}, false, nil
 		}
@@ -657,10 +663,9 @@ func (e *SnapshotEngine) Publish(ctx context.Context, ch string, data []byte, op
 		Info: infoToProto(opts.ClientInfo),
 		Tags: opts.Tags,
 		Time: time.Now().UnixMilli(),
+		Key:  key,
 	}
-	if opts.Key != "" {
-		protoPub.Key = opts.Key
-	}
+
 	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {
 		return StreamPosition{}, false, err
@@ -684,7 +689,7 @@ func (e *SnapshotEngine) Publish(ctx context.Context, ch string, data []byte, op
 		metaKey = e.metaKey(s.shard, ch)
 	}
 
-	if opts.Key != "" {
+	if key != "" {
 		snapshotHashKey = e.snapshotHashKey(s.shard, ch)
 		snapshotMetaKey = e.snapshotMetaKey(s.shard, ch)
 		if opts.Ordered {
@@ -728,9 +733,9 @@ func (e *SnapshotEngine) Publish(ctx context.Context, ch string, data []byte, op
 	leaveHashKey := ""
 	cleanupRegKey := ""
 	var leaveBytes []byte
-	if opts.MemberTTL > 0 && opts.Key != "" && snapshotExpireKey != "" {
+	if opts.MemberTTL > 0 && key != "" && snapshotExpireKey != "" {
 		removePub := &protocol.Publication{
-			Key:     opts.Key,
+			Key:     key,
 			Removed: true,
 			Time:    time.Now().UnixMilli(),
 		}
@@ -749,7 +754,7 @@ func (e *SnapshotEngine) Publish(ctx context.Context, ch string, data []byte, op
 			leaveHashKey, cleanupRegKey, "", // Leave hash and cleanup registration for keyed state, no aggregation mapping
 		},
 		[]string{
-			opts.Key,                           // message_key
+			key,                                // message_key
 			convert.BytesToString(byteMessage), // message_payload (Publication - for stream, publishing, and snapshot)
 			strconv.Itoa(opts.StreamSize),
 			strconv.FormatInt(int64(opts.StreamTTL.Seconds()), 10),
@@ -1002,31 +1007,20 @@ func (e *SnapshotEngine) readUnorderedSnapshotZero(
 			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10),
 			snapshotTTL,
 		},
-		func(r *bufio.Reader, typ byte) error {
-			if typ != '*' {
-				return fmt.Errorf("unexpected RESP type: %q", typ)
-			}
-
-			n, err := rueidis.ReadInt(r)
-			if err != nil {
+		func(r *bufio.Reader) error {
+			rr := resp.NewReader(r)
+			if err := rr.ExpectArrayWithLen(4); err != nil {
 				return err
-			}
-			if n != 4 {
-				return fmt.Errorf("wrong number of replies: %d", n)
 			}
 
 			// --- reply[0]: offset ---
-			if b, _ := r.ReadByte(); b != '$' {
-				return fmt.Errorf("expected blob offset")
+			offsetBytes, err := rr.ReadStringBytes()
+			if err != nil {
+				return err
 			}
-			l, _ := rueidis.ReadInt(r)
-			if l > 0 {
-				buf, err := readBlobZeroAlloc(r, l)
-				if err != nil {
-					return err
-				}
+			if offsetBytes != nil {
 				streamPos.Offset, err = strconv.ParseUint(
-					unsafe.String(&buf[0], len(buf)), 10, 64,
+					unsafe.String(&offsetBytes[0], len(offsetBytes)), 10, 64,
 				)
 				if err != nil {
 					return err
@@ -1034,73 +1028,56 @@ func (e *SnapshotEngine) readUnorderedSnapshotZero(
 			}
 
 			// --- reply[1]: epoch ---
-			if b, _ := r.ReadByte(); b != '$' {
-				return fmt.Errorf("expected blob epoch")
-			}
-			l, _ = rueidis.ReadInt(r)
-			if l > 0 {
-				buf, err := readBlobZeroAlloc(r, l)
-				if err != nil {
-					return err
-				}
-				streamPos.Epoch = unsafe.String(&buf[0], len(buf))
-			}
-
-			// --- reply[2]: cursor ---
-			if b, _ := r.ReadByte(); b != '$' {
-				return fmt.Errorf("expected blob cursor")
-			}
-			l, _ = rueidis.ReadInt(r)
-			if l > 0 {
-				buf, err := readBlobZeroAlloc(r, l)
-				if err != nil {
-					return err
-				}
-				nextCursor = unsafe.String(&buf[0], len(buf))
-			}
-
-			// --- reply[3]: key-value array ---
-			if b, _ := r.ReadByte(); b != '*' {
-				return fmt.Errorf("expected kv array")
-			}
-			kvCount, err := rueidis.ReadInt(r)
+			epochBytes, err := rr.ReadStringBytes()
 			if err != nil {
 				return err
 			}
+			if epochBytes != nil {
+				streamPos.Epoch = unsafe.String(&epochBytes[0], len(epochBytes))
+			}
 
+			// --- reply[2]: cursor ---
+			cursorBytes, err := rr.ReadStringBytes()
+			if err != nil && !errors.Is(err, rueidis.Nil) {
+				return err
+			}
+			if cursorBytes != nil {
+				nextCursor = unsafe.String(&cursorBytes[0], len(cursorBytes))
+			}
+
+			// --- reply[3]: key-value array ---
+			kvCount, err := rr.ExpectArray()
+			if err != nil {
+				return err
+			}
 			entries = make([]SnapshotEntry, 0, kvCount/2)
 
 			for i := int64(0); i < kvCount; i += 2 {
-				// key
-				if b, _ := r.ReadByte(); b != '$' {
-					return fmt.Errorf("expected key blob")
-				}
-				klen, _ := rueidis.ReadInt(r)
-				kb, err := readBlobZeroAlloc(r, klen)
+				// Read next key
+				keyBytes, err := rr.ReadStringBytes()
 				if err != nil {
 					return err
 				}
-				key := unsafe.String(&kb[0], len(kb))
+				// Make a safe copy
+				key := convert.BytesToString(append([]byte(nil), keyBytes...))
 
-				// value
-				if b, _ := r.ReadByte(); b != '$' {
-					return fmt.Errorf("expected value blob")
-				}
-				vlen, _ := rueidis.ReadInt(r)
-				vb, err := readBlobZeroAlloc(r, vlen)
+				// Read corresponding value
+				valBytes, err := rr.ReadStringBytes()
 				if err != nil {
 					return err
 				}
-
-				// value format: offset:epoch:payload
-				entryOffset, entryEpoch, payload, err := parseSnapshotValue(vb)
+				// Parse value: offset:epoch:payload
+				entryOffset, entryEpoch, payloadBytes, err := parseSnapshotValue(valBytes)
 				if err != nil {
+					// skip malformed entries
 					continue
 				}
+				// Safe copy of payload
+				payload := append([]byte(nil), payloadBytes...)
 
 				entries = append(entries, SnapshotEntry{
 					Key:     key,
-					Payload: payload, // payload already copied by parser
+					Payload: payload,
 					Revision: StreamPosition{
 						Offset: entryOffset,
 						Epoch:  entryEpoch,
@@ -1200,36 +1177,6 @@ func (e *SnapshotEngine) readOrderedSnapshot(ctx context.Context, ch string, opt
 	return entries, streamPos, "", nil
 }
 
-// readBlobZeroAlloc reads a RESP blob payload of the given length.
-// It returns a slice backed by bufio.Reader internal memory.
-// The slice is valid only until the next read/discard.
-//
-// It consumes: <payload>\r\n
-//
-// Intended for use inside DoWithReader callbacks.
-func readBlobZeroAlloc(r *bufio.Reader, length int64) ([]byte, error) {
-	if length < 0 {
-		return nil, rueidis.Nil
-	}
-
-	if length == 0 {
-		_, err := r.Discard(2) // \r\n
-		return nil, err
-	}
-
-	b, err := r.Peek(int(length))
-	if err != nil {
-		return nil, err
-	}
-
-	// discard payload + CRLF
-	if _, err := r.Discard(int(length) + 2); err != nil {
-		return nil, err
-	}
-
-	return b, nil
-}
-
 func (e *SnapshotEngine) ReadStreamZero(
 	ctx context.Context,
 	ch string,
@@ -1301,12 +1248,11 @@ func (e *SnapshotEngine) ReadStreamZero(
 			metaExpire,
 			e.node.ID(),
 		},
-		func(r *bufio.Reader, typ byte) error {
-			if typ != '*' {
-				return fmt.Errorf("unexpected RESP type: %q", typ)
-			}
+		func(r *bufio.Reader) error {
+			rr := resp.NewReader(r)
 
-			n, err := rueidis.ReadInt(r)
+			// ---- top-level reply ----
+			n, err := rr.ExpectArray()
 			if err != nil {
 				return err
 			}
@@ -1315,107 +1261,60 @@ func (e *SnapshotEngine) ReadStreamZero(
 			}
 
 			// ---- reply[0]: top offset ----
-			b, err := r.ReadByte()
-			if err != nil {
-				return err
-			}
-
-			switch b {
-			case ':':
-				v, err := rueidis.ReadInt(r)
-				if err != nil && !errors.Is(err, rueidis.Nil) {
+			switch rr.PeekKind() {
+			case resp.KindInt:
+				v, err := rr.ReadInt64()
+				if err != nil {
 					return err
 				}
 				streamPos.Offset = uint64(v)
-
-			case '$':
-				l, err := rueidis.ReadInt(r)
+			case resp.KindString:
+				buf, err := rr.ReadStringBytes()
 				if err != nil {
 					return err
 				}
-				if l > 0 {
-					buf, err := readBlobZeroAlloc(r, l)
-					if err != nil {
-						return err
-					}
-					v, err := strconv.ParseUint(
-						unsafe.String(&buf[0], len(buf)),
-						10,
-						64,
-					)
-					if err != nil {
-						return err
-					}
-					streamPos.Offset = v
+				v, err := strconv.ParseUint(
+					unsafe.String(&buf[0], len(buf)),
+					10,
+					64,
+				)
+				if err != nil {
+					return err
 				}
-
+				streamPos.Offset = v
 			default:
-				return fmt.Errorf("unexpected RESP type for offset: %q", b)
+				return fmt.Errorf("unexpected RESP kind for offset")
 			}
 
-			// ---- reply[1]: epoch ----
-			if b, err := r.ReadByte(); err != nil {
-				return err
-			} else if b != '$' {
-				return fmt.Errorf("expected blob string for epoch")
-			}
-
-			epochLen, err := rueidis.ReadInt(r)
+			buf, err := rr.ReadStringBytes()
 			if err != nil {
 				return err
 			}
-			if epochLen > 0 {
-				buf, err := readBlobZeroAlloc(r, epochLen)
-				if err != nil {
-					return err
-				}
-				streamPos.Epoch = unsafe.String(&buf[0], len(buf))
-			}
+			// Make a safe copy of the bytes.
+			safeBuf := make([]byte, len(buf))
+			copy(safeBuf, buf)
+			streamPos.Epoch = convert.BytesToString(safeBuf)
 
 			if !includePubs || n < 3 {
 				return nil
 			}
 
 			// ---- reply[2]: publications ----
-			if b, err := r.ReadByte(); err != nil {
-				return err
-			} else if b != '*' {
-				return fmt.Errorf("expected publications array")
-			}
-
-			pubCount, err := rueidis.ReadInt(r)
+			pubCount, err := rr.ExpectArray()
 			if err != nil {
 				return err
 			}
 
-			pubs = make([]*Publication, 0, pubCount)
-			pubStructs := make([]Publication, pubCount)
+			pubs = make([]*Publication, pubCount)
 
 			for i := int64(0); i < pubCount; i++ {
 				// entry = [id, fields]
-				if b, err := r.ReadByte(); err != nil {
-					return err
-				} else if b != '*' {
-					return fmt.Errorf("expected entry array")
-				}
-
-				if _, err := rueidis.ReadInt(r); err != nil {
+				if _, err := rr.ExpectArray(); err != nil {
 					return err
 				}
 
 				// ---- id ----
-				if b, err := r.ReadByte(); err != nil {
-					return err
-				} else if b != '$' {
-					return fmt.Errorf("expected blob id")
-				}
-
-				idLen, err := rueidis.ReadInt(r)
-				if err != nil {
-					return err
-				}
-
-				idBuf, err := readBlobZeroAlloc(r, idLen)
+				idBuf, err := rr.ReadStringBytes()
 				if err != nil {
 					return err
 				}
@@ -1432,13 +1331,7 @@ func (e *SnapshotEngine) ReadStreamZero(
 				}
 
 				// ---- fields ----
-				if b, err := r.ReadByte(); err != nil {
-					return err
-				} else if b != '*' {
-					return fmt.Errorf("expected fields array")
-				}
-
-				fieldCount, err := rueidis.ReadInt(r)
+				fieldCount, err := rr.ExpectArray()
 				if err != nil {
 					return err
 				}
@@ -1447,42 +1340,25 @@ func (e *SnapshotEngine) ReadStreamZero(
 
 				for j := int64(0); j < fieldCount; j += 2 {
 					// key
-					if _, err := r.ReadByte(); err != nil {
-						return err
-					}
-					klen, err := rueidis.ReadInt(r)
+					key, err := rr.ReadStringBytes()
 					if err != nil {
 						return err
 					}
-
-					kb, err := readBlobZeroAlloc(r, klen)
-					if err != nil {
-						return err
-					}
-					isData := klen == 1 && kb[0] == 'd'
+					isData := len(key) == 1 && key[0] == 'd'
 
 					// value
-					if _, err := r.ReadByte(); err != nil {
-						return err
-					}
-					vlen, err := rueidis.ReadInt(r)
-					if err != nil {
-						return err
-					}
-
 					if isData {
-						payload = bpool.GetByteBuffer(int(vlen))
-						payload.B = payload.B[:vlen]
-						if _, err := io.ReadFull(r, payload.B); err != nil {
+						vbuf, err := rr.ReadStringBytes()
+						if err != nil {
 							return err
 						}
+						payload = bpool.GetByteBuffer(len(vbuf))
+						payload.B = payload.B[:len(vbuf)]
+						copy(payload.B, vbuf)
 					} else {
-						if _, err := r.Discard(int(vlen)); err != nil {
+						if err := rr.SkipValue(); err != nil {
 							return err
 						}
-					}
-					if _, err := r.Discard(2); err != nil {
-						return err
 					}
 				}
 
@@ -1499,7 +1375,7 @@ func (e *SnapshotEngine) ReadStreamZero(
 
 				protoPub.Offset = pubOffset
 
-				pp := &pubStructs[i]
+				pp := pubs[i]
 				pp.Offset = protoPub.Offset
 				pp.Data = protoPub.Data
 				pp.Info = infoFromProto(protoPub.GetInfo())
@@ -1507,10 +1383,9 @@ func (e *SnapshotEngine) ReadStreamZero(
 				pp.Time = protoPub.Time
 				pp.Key = protoPub.GetKey()
 				pp.Removed = protoPub.GetRemoved()
-
-				pubs = append(pubs, pp)
+				pp.Channel = protoPub.GetChannel()
+				pubs[i] = pp
 			}
-
 			return nil
 		},
 	)
@@ -1522,79 +1397,244 @@ func (e *SnapshotEngine) ReadStreamZero(
 	return pubs, streamPos, nil
 }
 
-// Implement this idea to get more effective read from Redis.
-//// 1. Lua returns top_offset + epoch
-//topOffset, epoch := getMetaFromLua(metaKey, newEpochIfEmpty)
-//
-//// 2. Go XRANGE from since_offset -> topOffset (careful to not avoid values beyond topOffset, maybe requires keeping offset and epoch in every value in stream)
-//cmd := client.B().Xrange().
-//	Key(streamKey).
-//	Start(sinceOffset).End(strconv.FormatUint(topOffset, 10)).
-//	Count(limit).
-//	Build()
-//
-//if !opts.Filter.Reverse && includePubs {
-//	// Determine limit
-//	xRangeLimit := int64(limit)
-//	if xRangeLimit <= 0 {
-//		xRangeLimit = 1000 // safe maximum
-//	}
-//
-//	// XRANGE from since_offset to "+"
-//	cmd := s.shard.client.B().Xrange().
-//		Key(e.streamKey(s.shard, ch)).
-//		Start(offset).End("+").
-//		Count(xRangeLimit).
-//		Build()
-//
-//	result := s.shard.client.Do(ctx, cmd)
-//	if result.Error() != nil {
-//		if errors.Is(result.Error(), rueidis.Nil) {
-//			// No entries, return empty slice
-//			return nil, StreamPosition{}, nil
-//		}
-//		return nil, StreamPosition{}, result.Error()
-//	}
-//
-//	xRange, err := result.AsXRange()
-//	if err != nil {
-//		return nil, StreamPosition{}, err
-//	}
-//
-//	pubs := make([]*Publication, 0, len(xRange))
-//	for _, entry := range xRange {
-//		payload := []byte{}
-//		if val, ok := entry.FieldValues["d"]; ok {
-//			payload = []byte(val)
-//		}
-//
-//		hyphenPos := strings.Index(entry.ID, "-")
-//		if hyphenPos <= 0 {
-//			continue
-//		}
-//		pubOffset, _ := strconv.ParseUint(entry.ID[:hyphenPos], 10, 64)
-//
-//		var protoPub protocol.Publication
-//		protoPub.UnmarshalVT(payload)
-//		protoPub.Offset = pubOffset
-//
-//		pubs = append(pubs, &Publication{
-//			Offset:  protoPub.Offset,
-//			Data:    protoPub.Data,
-//			Info:    infoFromProto(protoPub.GetInfo()),
-//			Tags:    protoPub.GetTags(),
-//			Time:    protoPub.Time,
-//			Key:     protoPub.GetKey(),
-//			Removed: protoPub.GetRemoved(),
-//		})
-//
-//		// Move offset forward
-//		offset = entry.ID
-//	}
-//
-//	// Return with topOffset/epoch from meta (call Lua if needed)
-//	return pubs, StreamPosition{}, nil
-//}
+// ReadStreamZero2 is a 2-call version of ReadStreamZero with zero-alloc optimizations.
+// Call 1: Get metadata (epoch, top_offset) using simpler Lua script with ExecWithReader
+// Call 2: Read publications using native XRANGE/XREVRANGE with DoWithReader
+// Key difference: Must filter out publications with offset > top_offset (non-atomic).
+func (e *SnapshotEngine) ReadStreamZero2(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
+	s := e.getShard(ch)
+
+	// 1. Parse options (same as ReadStream/ReadStreamZero)
+	var includePubs = true
+	var offset string
+	if opts.Filter.Since != nil {
+		if opts.Filter.Reverse {
+			offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
+			if offset == "0" {
+				includePubs = false
+			}
+		} else {
+			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
+		}
+	} else {
+		offset = "-"
+		if opts.Filter.Reverse {
+			offset = "+"
+		}
+	}
+
+	limit := opts.Filter.Limit
+	if limit == 0 {
+		includePubs = false
+	}
+	if limit < 0 {
+		limit = 0
+	}
+
+	metaExpire := "0"
+	if opts.MetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
+	} else if e.node.config.HistoryMetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
+	}
+
+	// 2. Call 1: Get metadata with ExecWithReader (zero-alloc)
+	var streamPos StreamPosition
+
+	err := e.readStreamMetaScript.ExecWithReader(
+		ctx,
+		s.shard.client,
+		[]string{e.metaKey(s.shard, ch)},
+		[]string{metaExpire, e.node.ID()},
+		func(r *bufio.Reader) error {
+			rr := resp.NewReader(r)
+
+			// Top-level must be an array of at least 2 elements
+			n, err := rr.ExpectArray()
+			if err != nil {
+				return err
+			}
+			if n < 2 {
+				return fmt.Errorf("wrong number of replies: %d", n)
+			}
+
+			// ---- reply[0]: top offset ----
+			switch rr.PeekKind() {
+			case resp.KindInt:
+				v, err := rr.ReadInt64()
+				if err != nil && !errors.Is(err, rueidis.Nil) {
+					return err
+				}
+				streamPos.Offset = uint64(v)
+			case resp.KindString:
+				b, err := rr.ReadStringBytes()
+				if err != nil {
+					return err
+				}
+				if len(b) > 0 {
+					v, err := strconv.ParseUint(unsafe.String(&b[0], len(b)), 10, 64)
+					if err != nil {
+						return err
+					}
+					streamPos.Offset = v
+				}
+			default:
+				return fmt.Errorf("unexpected RESP type for offset: %q", rr.PeekKind())
+			}
+
+			// ---- reply[1]: epoch ----
+			b, err := rr.ReadStringBytes()
+			if err != nil && !errors.Is(err, rueidis.Nil) {
+				return err
+			}
+			if len(b) > 0 {
+				streamPos.Epoch = unsafe.String(&b[0], len(b))
+			}
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	// 3. Early return if metadata-only
+	if !includePubs {
+		return nil, streamPos, nil
+	}
+
+	topOffset := streamPos.Offset
+
+	// 4. Call 2: Execute XRANGE with DoWithReader (zero-alloc)
+	streamKey := e.streamKey(s.shard, ch)
+	var cmd rueidis.Completed
+
+	if opts.Filter.Reverse {
+		builder := s.shard.client.B().Xrevrange().Key(streamKey).End(offset).Start("-")
+		if limit > 0 {
+			cmd = builder.Count(int64(limit)).Build()
+		} else {
+			cmd = builder.Build()
+		}
+	} else {
+		builder := s.shard.client.B().Xrange().Key(streamKey).Start(offset).End("+")
+		if limit > 0 {
+			cmd = builder.Count(int64(limit)).Build()
+		} else {
+			cmd = builder.Build()
+		}
+	}
+
+	var pubs []*Publication
+	var pubStructs []*Publication
+
+	err = s.shard.client.DoWithReader(ctx, cmd, func(r *bufio.Reader) error {
+		rr := resp.NewReader(r)
+
+		// Top-level must be an array
+		entryCount, err := rr.ExpectArray()
+		if err != nil {
+			return err
+		}
+
+		if entryCount > 0 {
+			pubs = make([]*Publication, 0, entryCount)
+			pubStructs = make([]*Publication, entryCount)
+		}
+
+		for i := int64(0); i < entryCount; i++ {
+			// Each entry = [id, fields]
+			if _, err := rr.ExpectArray(); err != nil {
+				return err
+			}
+
+			// ---- id ----
+			idBytes, err := rr.ReadStringBytes()
+			if err != nil {
+				return err
+			}
+			idStr := unsafe.String(&idBytes[0], len(idBytes))
+			hyphen := strings.IndexByte(idStr, '-')
+			if hyphen <= 0 {
+				return fmt.Errorf("invalid stream id")
+			}
+
+			pubOffset, err := strconv.ParseUint(idStr[:hyphen], 10, 64)
+			if err != nil {
+				return err
+			}
+
+			// Filter entries written after metadata read
+			if pubOffset > topOffset {
+				if err := rr.SkipValue(); err != nil { // skip fields array
+					return err
+				}
+				continue
+			}
+
+			// ---- fields ----
+			fieldCount, err := rr.ExpectArray()
+			if err != nil {
+				return err
+			}
+
+			var payload *bpool.ByteBuffer
+
+			for j := int64(0); j < fieldCount; j += 2 {
+				// key
+				keyBytes, err := rr.ReadStringBytes()
+				if err != nil {
+					return err
+				}
+				isData := len(keyBytes) == 1 && keyBytes[0] == 'd'
+
+				// value
+				valBytes, err := rr.ReadStringBytes()
+				if err != nil {
+					return err
+				}
+
+				if isData {
+					payload = bpool.GetByteBuffer(len(valBytes))
+					payload.B = payload.B[:len(valBytes)]
+					copy(payload.B, valBytes)
+				}
+			}
+
+			if payload == nil {
+				return errors.New("no payload data found in entry")
+			}
+
+			var protoPub protocol.Publication
+			if err := protoPub.UnmarshalVT(payload.B); err != nil {
+				bpool.PutByteBuffer(payload)
+				return err
+			}
+			bpool.PutByteBuffer(payload)
+
+			protoPub.Offset = pubOffset
+
+			pp := pubStructs[len(pubs)]
+			pp.Offset = protoPub.Offset
+			pp.Data = protoPub.Data
+			pp.Info = infoFromProto(protoPub.GetInfo())
+			pp.Tags = protoPub.GetTags()
+			pp.Time = protoPub.Time
+			pp.Key = protoPub.GetKey()
+			pp.Removed = protoPub.GetRemoved()
+
+			pubs = append(pubs, pp)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	return pubs, streamPos, nil
+}
 
 // ReadStream retrieves publication stream for a channel.
 func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
@@ -1683,9 +1723,8 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 		return nil, StreamPosition{}, err
 	}
 
-	pubStructs := make([]Publication, len(pubValues))
-	pubs := make([]*Publication, 0, len(pubValues))
-	for _, v := range pubValues {
+	pubs := make([]*Publication, len(pubValues))
+	for j, v := range pubValues {
 		entry, err := v.ToArray()
 		if err != nil {
 			return nil, StreamPosition{}, err
@@ -1734,7 +1773,7 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 		}
 		protoPub.Offset = pubOffset
 
-		pp := &pubStructs[len(pubs)]
+		pp := pubs[j]
 		pp.Offset = protoPub.Offset
 		pp.Data = protoPub.Data
 		pp.Info = infoFromProto(protoPub.GetInfo())
@@ -1742,9 +1781,179 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 		pp.Time = protoPub.Time
 		pp.Key = protoPub.GetKey()
 		pp.Removed = protoPub.GetRemoved()
-
-		pubs = append(pubs, pp)
+		pubs[j] = pp
 	}
+	return pubs, streamPos, nil
+}
+
+// ReadStream2 is a 2-call version of ReadStream that splits metadata and publication reads.
+// Call 1: Get metadata (epoch, top_offset) using simpler Lua script
+// Call 2: Read publications using native XRANGE/XREVRANGE
+// Key difference: Must filter out publications with offset > top_offset (non-atomic).
+func (e *SnapshotEngine) ReadStream2(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
+	s := e.getShard(ch)
+
+	// 1. Parse options (same as ReadStream)
+	var includePubs = true
+	var offset string
+	if opts.Filter.Since != nil {
+		if opts.Filter.Reverse {
+			offset = strconv.FormatUint(opts.Filter.Since.Offset-1, 10)
+			if offset == "0" {
+				includePubs = false
+			}
+		} else {
+			// Use offset+1 because XRANGE is inclusive, but "since" should be exclusive
+			offset = strconv.FormatUint(opts.Filter.Since.Offset+1, 10)
+		}
+	} else {
+		offset = "-"
+		if opts.Filter.Reverse {
+			offset = "+"
+		}
+	}
+
+	limit := opts.Filter.Limit
+	if limit == 0 {
+		includePubs = false
+	}
+	if limit < 0 {
+		limit = 0
+	}
+
+	metaExpire := "0"
+	if opts.MetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
+	} else if e.node.config.HistoryMetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
+	}
+
+	// 2. Call 1: Get metadata using new simpler Lua script
+	metaReplies, err := e.readStreamMetaScript.Exec(ctx, s.shard.client,
+		[]string{e.metaKey(s.shard, ch)},
+		[]string{metaExpire, e.node.ID()},
+	).ToArray()
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	if len(metaReplies) < 2 {
+		return nil, StreamPosition{}, fmt.Errorf("wrong number of replies: %d", len(metaReplies))
+	}
+
+	topOffset, err := metaReplies[0].AsUint64()
+	if err != nil && !rueidis.IsRedisNil(err) {
+		return nil, StreamPosition{}, fmt.Errorf("could not parse top offset: %w", err)
+	}
+
+	epoch, err := metaReplies[1].ToString()
+	if err != nil {
+		return nil, StreamPosition{}, fmt.Errorf("could not parse epoch: %w", err)
+	}
+
+	streamPos := StreamPosition{Offset: topOffset, Epoch: epoch}
+
+	// 3. Early return if metadata-only
+	if !includePubs {
+		return nil, streamPos, nil
+	}
+
+	// 4. Call 2: Execute native XRANGE/XREVRANGE
+	streamKey := e.streamKey(s.shard, ch)
+	var cmd rueidis.Completed
+
+	if opts.Filter.Reverse {
+		builder := s.shard.client.B().Xrevrange().Key(streamKey).End(offset).Start("-")
+		if limit > 0 {
+			cmd = builder.Count(int64(limit)).Build()
+		} else {
+			cmd = builder.Build()
+		}
+	} else {
+		builder := s.shard.client.B().Xrange().Key(streamKey).Start(offset).End("+")
+		if limit > 0 {
+			cmd = builder.Count(int64(limit)).Build()
+		} else {
+			cmd = builder.Build()
+		}
+	}
+
+	result, err := s.shard.client.Do(ctx, cmd).ToArray()
+	if err != nil {
+		return nil, StreamPosition{}, err
+	}
+
+	// 5. Parse stream entries and filter by topOffset
+	pubs := make([]*Publication, len(result))
+
+	for j, v := range result {
+		entry, err := v.ToArray()
+		if err != nil {
+			return nil, StreamPosition{}, err
+		}
+		if len(entry) != 2 {
+			return nil, StreamPosition{}, fmt.Errorf("invalid publication format")
+		}
+		id, err := entry[0].ToString()
+		if err != nil {
+			return nil, StreamPosition{}, err
+		}
+
+		// Extract offset from stream ID "123-0" -> 123
+		hyphenPos := strings.Index(id, "-")
+		if hyphenPos <= 0 {
+			return nil, StreamPosition{}, fmt.Errorf("unexpected offset format: %s", id)
+		}
+		pubOffset, err := strconv.ParseUint(id[:hyphenPos], 10, 64)
+		if err != nil {
+			return nil, StreamPosition{}, err
+		}
+
+		// CRITICAL: Filter entries written after metadata read
+		if pubOffset > topOffset {
+			continue
+		}
+
+		// entry[1] is an array of [field, value, field, value, ...]
+		fieldsArr, err := entry[1].ToArray()
+		if err != nil {
+			return nil, StreamPosition{}, err
+		}
+
+		var payload []byte
+		for i := 0; i < len(fieldsArr)-1; i += 2 {
+			k, _ := fieldsArr[i].ToString()
+			if k != "d" {
+				continue
+			}
+			v, _ := fieldsArr[i+1].ToString()
+			payload = convert.StringToBytes(v)
+			break
+		}
+		if payload == nil {
+			return nil, StreamPosition{}, errors.New("no payload data found in entry")
+		}
+
+		var protoPub protocol.Publication
+		err = protoPub.UnmarshalVT(payload)
+		if err != nil {
+			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
+		}
+		protoPub.Offset = pubOffset
+
+		pp := pubs[j]
+		pp.Offset = protoPub.Offset
+		pp.Data = protoPub.Data
+		pp.Info = infoFromProto(protoPub.GetInfo())
+		pp.Tags = protoPub.GetTags()
+		pp.Time = protoPub.Time
+		pp.Key = protoPub.GetKey()
+		pp.Removed = protoPub.GetRemoved()
+		pp.Channel = protoPub.GetChannel()
+
+		pubs[j] = pp
+	}
+
 	return pubs, streamPos, nil
 }
 
@@ -2055,7 +2264,7 @@ func (e *SnapshotEngine) MemberStats(ctx context.Context, ch string) (EngineMemb
 	if err != nil {
 		return EngineMemberStats{}, err
 	}
-	return EngineMemberStats{NumClients: int(numClients), NumUsers: int(numUsers)}, nil
+	return EngineMemberStats{NumKeys: int(numClients), NumUsers: int(numUsers)}, nil
 }
 
 // ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.
@@ -2063,9 +2272,8 @@ func (e *SnapshotEngine) MemberStats(ctx context.Context, ch string) (EngineMemb
 // If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
 // Returns Publications with Key=ClientID, Info=ClientInfo, Offset/Epoch for revision.
 func (e *SnapshotEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]*Publication, StreamPosition, error) {
-	// ReadPresenceSnapshot is just ReadSnapshot with SnapshotEntry → Publication unmarshaling
-	// This reuses all the snapshot reading logic
-
+	// ReadPresenceSnapshot is just ReadSnapshot with SnapshotEntry → Publication unmarshaling.
+	// This reuses all the snapshot reading logic.
 	snapshotEntries, streamPos, _, err := e.ReadSnapshot(ctx, ch, opts)
 	if err != nil {
 		return nil, StreamPosition{}, err
@@ -2080,14 +2288,9 @@ func (e *SnapshotEngine) ReadPresenceSnapshot(ctx context.Context, ch string, op
 			// Skip malformed entries
 			continue
 		}
-
-		// Convert to Publication with revision info
 		pub := pubFromProto(&protoPub)
 		pub.Offset = entry.Revision.Offset
-		// Ensure Key matches the Redis hash key (should already be set from protoPub, but be explicit)
-		if pub.Key == "" {
-			pub.Key = entry.Key
-		}
+		pub.Key = entry.Key
 		pubs = append(pubs, pub)
 	}
 	return pubs, streamPos, nil
@@ -2097,12 +2300,7 @@ func (e *SnapshotEngine) ReadPresenceSnapshot(ctx context.Context, ch string, op
 // Returns Publications with Info=ClientInfo and Removed flag (true for leave, false for join).
 func (e *SnapshotEngine) ReadPresenceStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	// ReadPresenceStream is literally just ReadStream - presence streams store Publications
-	// Publication.Removed distinguishes join (false) from leave (true)
-
-	if e.conf.PresenceStreamSize == 0 {
-		return nil, StreamPosition{}, nil
-	}
-
+	// Publication.Removed distinguishes join (false) from leave (true) events.
 	return e.ReadStream(ctx, ch, opts)
 }
 

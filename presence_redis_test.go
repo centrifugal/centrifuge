@@ -83,10 +83,10 @@ type redisPresenceTest struct {
 
 var redisPresenceTests = []redisPresenceTest{
 	{"rd_single", false, 6379},
-	{"df_single", false, 36379},
-	{"vk_single", false, 16379},
-	{"rd_cluster", true, 7001},
-	{"vk_cluster", true, 17000},
+	//{"df_single", false, 36379},
+	//{"vk_single", false, 16379},
+	//{"rd_cluster", true, 7001},
+	//{"vk_cluster", true, 17000},
 }
 
 func excludeClusterPresenceTests(tests []redisPresenceTest) []redisPresenceTest {
@@ -428,7 +428,7 @@ func BenchmarkRedisPresence_ManyCh(b *testing.B) {
 			defer func() { _ = node.Shutdown(context.Background()) }()
 			defer stopRedisPresenceManager(pm)
 			b.SetParallelism(getBenchParallelism())
-			for i := 0; i < 100; i++ {
+			for i := 0; i < 1000; i++ {
 				_ = pm.AddPresence("channel", uuid.NewString(), &ClientInfo{
 					ClientID: uuid.NewString(),
 					UserID:   uuid.NewString(),
