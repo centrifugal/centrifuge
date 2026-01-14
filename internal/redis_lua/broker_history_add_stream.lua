@@ -27,22 +27,29 @@ if current_epoch == false then
     redis.call("hset", meta_key, "e", current_epoch)
 end
 
+if version ~= "0" then
+    local prev_version_values = redis.call("hmget", meta_key, "v", "ve", "s")
+    local prev_version = prev_version_values[1]
+    local prev_version_epoch = prev_version_values[2]
+    local current_offset = prev_version_values[3]
+    if prev_version then
+        if (version_epoch == "" or version_epoch == prev_version_epoch) and (tonumber(prev_version) >= tonumber(version)) then
+            -- Suppressed: return current offset without incrementing
+            local offset_num = 0
+            if current_offset then
+                offset_num = tonumber(current_offset)
+            end
+            return { offset_num, current_epoch, "0", "1" }
+        end
+    end
+    redis.call("hset", meta_key, "v", version, "ve", version_epoch)
+end
+
+-- Only increment offset if not suppressed
 local top_offset = redis.call("hincrby", meta_key, "s", 1)
 
 if meta_expire ~= '0' then
     redis.call("expire", meta_key, meta_expire)
-end
-
-if version ~= "0" then
-    local prev_version_values = redis.call("hmget", meta_key, "v", "ve")
-    local prev_version = prev_version_values[1]
-    local prev_version_epoch = prev_version_values[2]
-    if prev_version then
-        if (version_epoch == "" or version_epoch == prev_version_epoch) and (tonumber(prev_version) >= tonumber(version)) then
-            return { top_offset, current_epoch, "0", "1" }
-        end
-    end
-    redis.call("hset", meta_key, "v", version, "ve", version_epoch)
 end
 
 local prev_message_payload = ""
