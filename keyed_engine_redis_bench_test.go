@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func setupSnapshotEngineBench(b *testing.B) (*SnapshotEngine, func()) {
+func setupSnapshotEngineBench(b *testing.B) (*RedisKeyedEngine, func()) {
 	b.Helper()
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(b, node)
@@ -167,7 +167,7 @@ func BenchmarkSnapshotEngine_PublishCombined(b *testing.B) {
 }
 
 // BenchmarkSnapshotEngine_ReadStream benchmarks reading from stream.
-func BenchmarkRueidis_ReadStream(b *testing.B) {
+func BenchmarkSnapshotEngine_ReadStream(b *testing.B) {
 	engine, cleanup := setupSnapshotEngineBench(b)
 	defer cleanup()
 
@@ -195,7 +195,7 @@ func BenchmarkRueidis_ReadStream(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
+			_, _, err := engine.ReadStreamZero(ctx, channel, ReadStreamOptions{
 				Filter: HistoryFilter{
 					Limit: 1000,
 					Since: &sp,
@@ -209,7 +209,7 @@ func BenchmarkRueidis_ReadStream(b *testing.B) {
 }
 
 // BenchmarkSnapshotEngine_ReadSnapshotFull benchmarks reading full unordered snapshot.
-func BenchmarkRueidis_ReadSnapshotFull(b *testing.B) {
+func BenchmarkSnapshotEngine_ReadSnapshotFull(b *testing.B) {
 	engine, cleanup := setupSnapshotEngineBench(b)
 	defer cleanup()
 
@@ -390,7 +390,7 @@ func BenchmarkSnapshotEngine_MemberStats(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, err := engine.MemberStats(ctx, channel)
+			_, err := engine.Stats(ctx, channel)
 			if err != nil {
 				b.Fatal(err)
 			}

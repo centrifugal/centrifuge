@@ -23,9 +23,8 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- KEYS[7] = aggregation zset key (optional, empty '' to disable) - for generic aggregations (e.g., user tracking in presence)
 -- KEYS[8] = aggregation hash key (optional, empty '' to disable) - for generic aggregations (e.g., user tracking in presence)
 -- KEYS[9] = snapshot meta key (optional, empty '' to disable)
--- KEYS[10] = leave payload hash key (optional, empty '' to disable) - stores pre-constructed LEAVE Publication for cleanup
--- KEYS[11] = cleanup registration zset key (optional, empty '' to disable) - for scheduling cleanup
--- KEYS[12] = aggregation mapping hash key (optional, empty '' to disable) - stores client_id -> aggregation_value mapping for cleanup
+-- KEYS[10] = cleanup registration zset key (optional, empty '' to disable) - for scheduling cleanup
+-- KEYS[11] = aggregation mapping hash key (optional, empty '' to disable) - stores client_id -> aggregation_value mapping for cleanup
 
 -- ==== ARGV ====
 -- ARGV[1]  = message_key (Key for snapshot field - Client ID for presence, state key for keyed state)
@@ -47,8 +46,7 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[17] = aggregation_key (aggregation identifier, empty "" to disable - e.g., "user_id" for presence)
 -- ARGV[18] = aggregation_value (value to aggregate by - e.g., actual user ID for presence user counting)
 -- ARGV[19] = message_key_payload (optional alternative payload for snapshot storage - not used when message_payload is Publication)
--- ARGV[20] = leave_payload (pre-constructed LEAVE Publication for cleanup, empty '' to disable)
--- ARGV[21] = channel_for_cleanup (channel name for cleanup registration, empty '' to disable)
+-- ARGV[20] = channel_for_cleanup (channel name for cleanup registration, empty '' to disable)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -60,9 +58,8 @@ local snapshot_expire_key = KEYS[6]
 local aggregation_zset_key = KEYS[7]
 local aggregation_hash_key = KEYS[8]
 local snapshot_meta_key = KEYS[9]
-local leave_hash_key = KEYS[10]
-local cleanup_registration_key = KEYS[11]
-local aggregation_mapping_key = KEYS[12]
+local cleanup_registration_key = KEYS[10]
+local aggregation_mapping_key = KEYS[11]
 
 -- Local variables from ARGV
 local message_key = ARGV[1]
@@ -84,8 +81,7 @@ local use_hexpire = ARGV[16]
 local aggregation_key = ARGV[17]
 local aggregation_value = ARGV[18]
 local message_key_payload = ARGV[19]
-local leave_payload = ARGV[20]
-local channel_for_cleanup = ARGV[21]
+local channel_for_cleanup = ARGV[20]
 
 -- Determine which payload to use for snapshot storage
 local snapshot_payload = message_payload
@@ -157,11 +153,8 @@ if is_leave == "1" then
             clientExists = redis.call("hexists", snapshot_hash_key, message_key) == 1
         end
 
-        -- Remove from snapshot and leave hash
+        -- Remove from snapshot
         redis.call("hdel", snapshot_hash_key, message_key)
-        if leave_hash_key ~= '' then
-            redis.call("hdel", leave_hash_key, message_key)
-        end
         if aggregation_mapping_key ~= '' then
             redis.call("hdel", aggregation_mapping_key, message_key)
         end
@@ -227,10 +220,6 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
             if aggregation_zset_key ~= '' then
                 redis.call("del", aggregation_zset_key)
             end
-            -- Clear leave payload hash from previous epoch
-            if leave_hash_key ~= '' then
-                redis.call("del", leave_hash_key)
-            end
             -- Clear aggregation mapping from previous epoch
             if aggregation_mapping_key ~= '' then
                 redis.call("del", aggregation_mapping_key)
@@ -267,26 +256,20 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
         local snapshot_value = top_offset .. ":" .. current_epoch .. ":" .. snapshot_payload
         redis.call("hset", snapshot_hash_key, message_key, snapshot_value)
         if ttl > 0 then
+            -- Always populate expire ZSET for cleanup script to discover expirations
+            -- This enables guaranteed LEAVE events even when using HEXPIRE
+            if snapshot_expire_key ~= '' then
+                redis.call("zadd", snapshot_expire_key, expire_at, message_key)
+                redis.call("expire", snapshot_expire_key, ttl)
+            end
+
             if use_hexpire == "1" then
-                -- Redis 7.4+ HEXPIRE per-field TTL
+                -- Redis 7.4+ HEXPIRE per-field TTL (defense in depth)
                 redis.call("hexpire", snapshot_hash_key, ttl, "FIELDS", "1", message_key)
             else
-                -- Fallback for Redis < 7.4: use expire ZSET for per-entry expiration
-                if snapshot_expire_key ~= '' then
-                    redis.call("zadd", snapshot_expire_key, expire_at, message_key)
-                    redis.call("expire", snapshot_expire_key, ttl)
-                end
                 -- Still set whole-hash TTL as safety net
                 redis.call("expire", snapshot_hash_key, ttl)
             end
-        end
-    end
-
-    -- Store leave payload for cleanup (enables guaranteed LEAVE events on expiry)
-    if leave_hash_key ~= '' and leave_payload ~= '' then
-        redis.call("hset", leave_hash_key, message_key, leave_payload)
-        if ttl > 0 then
-            redis.call("expire", leave_hash_key, ttl)
         end
     end
 
@@ -294,7 +277,13 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
     if aggregation_mapping_key ~= '' and aggregation_key ~= '0' and aggregation_value ~= '' then
         redis.call("hset", aggregation_mapping_key, message_key, aggregation_value)
         if ttl > 0 then
-            redis.call("expire", aggregation_mapping_key, ttl)
+            if use_hexpire == "1" then
+                -- Redis 7.4+ per-field TTL for aggregation mappings
+                redis.call("hexpire", aggregation_mapping_key, ttl, "FIELDS", "1", message_key)
+            else
+                -- Whole hash TTL as fallback
+                redis.call("expire", aggregation_mapping_key, ttl)
+            end
         end
     end
 
@@ -376,10 +365,6 @@ if stream_key ~= '' and meta_key ~= '' then
             end
             if aggregation_zset_key ~= '' then
                 redis.call("del", aggregation_zset_key)
-            end
-            -- Clear leave payload hash from previous epoch
-            if leave_hash_key ~= '' then
-                redis.call("del", leave_hash_key)
             end
             -- Clear aggregation mapping from previous epoch
             if aggregation_mapping_key ~= '' then

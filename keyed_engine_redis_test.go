@@ -18,7 +18,7 @@ func randomChannel(prefix string) string {
 	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), rand.Intn(100000))
 }
 
-func newTestSnapshotRedisEngine(tb testing.TB, n *Node) *SnapshotEngine {
+func newTestSnapshotRedisEngine(tb testing.TB, n *Node) *RedisKeyedEngine {
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
@@ -43,11 +43,11 @@ func snapshotToMap(entries []SnapshotEntry) map[string][]byte {
 	for _, e := range entries {
 		// Payload is a marshaled Publication - extract the Data field
 		var pub protocol.Publication
-		if err := pub.UnmarshalVT(e.Payload); err == nil {
+		if err := pub.UnmarshalVT(e.State); err == nil {
 			result[e.Key] = pub.Data
 		} else {
 			// Fallback to raw payload if not a Publication
-			result[e.Key] = e.Payload
+			result[e.Key] = e.State
 		}
 	}
 	return result
@@ -233,10 +233,10 @@ func TestSnapshotEngine_ConvergedMembership(t *testing.T) {
 	require.Equal(t, "user2", presence["client3"].UserID)
 
 	// Get presence stats (uses generic aggregations)
-	stats, err := engine.MemberStats(ctx, channel)
+	stats, err := engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 3, stats.NumKeys)
-	require.Equal(t, 2, stats.NumUsers) // user1 and user2
+	require.Equal(t, 2, stats.NumAggregatedKeys) // user1 and user2
 
 	// Remove one client from user1
 	err = engine.RemoveMember(ctx, channel, client1, EnginePresenceOptions{})
@@ -249,20 +249,20 @@ func TestSnapshotEngine_ConvergedMembership(t *testing.T) {
 	require.NotContains(t, presence, "client1")
 
 	// Stats should show user1 still present (client2 is still there)
-	stats, err = engine.MemberStats(ctx, channel)
+	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.NumKeys)
-	require.Equal(t, 2, stats.NumUsers) // Still 2 users
+	require.Equal(t, 2, stats.NumAggregatedKeys) // Still 2 users
 
 	// Remove second client from user1
 	err = engine.RemoveMember(ctx, channel, client2, EnginePresenceOptions{})
 	require.NoError(t, err)
 
 	// Now user1 should be gone from aggregation
-	stats, err = engine.MemberStats(ctx, channel)
+	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.NumKeys)
-	require.Equal(t, 1, stats.NumUsers) // Only user2 remains
+	require.Equal(t, 1, stats.NumAggregatedKeys) // Only user2 remains
 }
 
 // TestSnapshotEngine_PresenceStream tests presence event stream (joins/leaves).
@@ -815,4 +815,270 @@ func TestSnapshotEngine_ReadStream2_Compatibility(t *testing.T) {
 		require.Equal(t, pubs3[i].Data, pubs4[i].Data)
 		require.Equal(t, pubs3[i].Offset, pubs4[i].Offset)
 	}
+}
+
+// TestSnapshotEngine_CleanupGeneratesLeaveMessages verifies that the Lua cleanup script
+// correctly generates minimal LEAVE messages (key + removed + timestamp) when entries expire.
+func TestSnapshotEngine_CleanupGeneratesLeaveMessages(t *testing.T) {
+	node, _ := New(Config{})
+
+	// Create engine with PresenceTTL for testing
+	redisConf := testSingleRedisConf(6379)
+	shard, err := NewRedisShard(node, redisConf)
+	require.NoError(t, err)
+	engine, err := NewSnapshotEngine(node, SnapshotEngineConfig{
+		Shards:                []*RedisShard{shard},
+		PresenceTTL:           30 * time.Second, // Set long TTL so expire ZSET doesn't disappear
+		PresenceStreamSize:    100,
+		PresenceStreamTTL:     300 * time.Second,
+		PresenceStreamMetaTTL: 3600 * time.Second,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := randomChannel("test_leave")
+
+	// Add a member (TTL comes from engine config: 2 seconds)
+	clientID := "client123"
+	clientInfo := ClientInfo{
+		ClientID: clientID,
+		UserID:   "user123",
+	}
+	err = engine.AddMember(ctx, channel, clientInfo, EnginePresenceOptions{})
+	require.NoError(t, err)
+	t.Logf("Added member %s", clientID)
+
+	// Check what keys were created and what's in the expire ZSET
+	shardWrapper := engine.shards[0]
+	keys := []string{
+		engine.snapshotHashKey(shardWrapper.shard, channel),
+		engine.snapshotExpireKey(shardWrapper.shard, channel),
+		engine.streamKey(shardWrapper.shard, channel),
+		engine.metaKey(shardWrapper.shard, channel),
+	}
+	for _, key := range keys {
+		exists, err := shardWrapper.shard.client.Do(ctx, shardWrapper.shard.client.B().Exists().Key(key).Build()).AsBool()
+		require.NoError(t, err)
+		t.Logf("Key %s exists: %v", key, exists)
+	}
+
+	// Check expire ZSET contents immediately
+	cmd := shardWrapper.shard.client.B().Zrangebyscore().Key(engine.snapshotExpireKey(shardWrapper.shard, channel)).Min("0").Max("+inf").Withscores().Build()
+	result, err := shardWrapper.shard.client.Do(ctx, cmd).AsStrSlice()
+	require.NoError(t, err)
+	t.Logf("Expire ZSET immediately after add: %v", result)
+
+	// Verify the stream contains the ADD event
+	streamInitial, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamInitial, 1, "Should have 1 ADD event in stream")
+	require.Equal(t, clientID, streamInitial[0].Key)
+	require.False(t, streamInitial[0].Removed, "Initial event should be ADD (Removed=false)")
+	t.Logf("Initial stream event: Offset=%d Key=%q Removed=%v", streamInitial[0].Offset, streamInitial[0].Key, streamInitial[0].Removed)
+
+	// Don't wait for actual expiration - we'll simulate it by passing a future "now" value to cleanup
+	time.Sleep(1 * time.Second)
+
+	// Check if cleanup is registered (should be set by AddMember)
+	cleanupKey := engine.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
+
+	// Manually trigger cleanup with a "now" value that's 31 seconds in the future
+	// This simulates that the member (with 30s TTL) has expired
+	now := time.Now().Unix() + 31
+	t.Logf("Running cleanup with simulated future time (now + 31 seconds)")
+
+	err = engine.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, now)
+	require.NoError(t, err)
+	t.Logf("Cleanup completed")
+
+	// Read the stream after cleanup - should have ADD + LEAVE events
+	pubs, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
+		Filter: HistoryFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 2, "Expected 2 events in stream (ADD + LEAVE)")
+
+	// Log all events
+	for i, pub := range pubs {
+		t.Logf("  [%d] Offset=%d Key=%q Removed=%v Time=%d", i, pub.Offset, pub.Key, pub.Removed, pub.Time)
+	}
+
+	// Verify the LEAVE event
+	leaveEvent := pubs[1] // Second event should be LEAVE
+	require.Equal(t, clientID, leaveEvent.Key, "LEAVE event should have correct client ID")
+	require.True(t, leaveEvent.Removed, "LEAVE event should have Removed=true")
+	require.Greater(t, leaveEvent.Time, int64(0), "LEAVE event should have timestamp")
+	require.Empty(t, leaveEvent.Data, "LEAVE event should have no data")
+
+	t.Logf("SUCCESS: Lua cleanup script correctly generated minimal LEAVE event")
+	t.Logf("  Key: %s, Removed: %v, Time: %d", leaveEvent.Key, leaveEvent.Removed, leaveEvent.Time)
+}
+
+// TestSnapshotEngine_AggregationWithMultipleConnections verifies that user aggregation
+// correctly tracks multiple connections from the same user.
+func TestSnapshotEngine_AggregationWithMultipleConnections(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_aggregation")
+
+	userID := "alice"
+
+	// Alice opens 3 connections
+	conn1 := "conn_1"
+	conn2 := "conn_2"
+	conn3 := "conn_3"
+
+	// Add first connection
+	err := engine.AddMember(ctx, channel, ClientInfo{
+		ClientID: conn1,
+		UserID:   userID,
+	}, EnginePresenceOptions{})
+	require.NoError(t, err)
+
+	// Check stats
+	stats, err := engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumKeys, "Should have 1 client connection")
+	require.Equal(t, 1, stats.NumAggregatedKeys, "Should have 1 unique user")
+	t.Logf("After conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+
+	// Add second connection (same user)
+	err = engine.AddMember(ctx, channel, ClientInfo{
+		ClientID: conn2,
+		UserID:   userID,
+	}, EnginePresenceOptions{})
+	require.NoError(t, err)
+
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.NumKeys, "Should have 2 client connections")
+	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user")
+	t.Logf("After conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+
+	// Add third connection (same user)
+	err = engine.AddMember(ctx, channel, ClientInfo{
+		ClientID: conn3,
+		UserID:   userID,
+	}, EnginePresenceOptions{})
+	require.NoError(t, err)
+
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.NumKeys, "Should have 3 client connections")
+	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user")
+	t.Logf("After conn3: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+
+	// Remove first connection
+	err = engine.RemoveMember(ctx, channel, ClientInfo{
+		ClientID: conn1,
+		UserID:   userID,
+	}, EnginePresenceOptions{})
+	require.NoError(t, err)
+
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.NumKeys, "Should have 2 client connections")
+	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user (2 connections remain)")
+	t.Logf("After removing conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+
+	// Remove second connection
+	err = engine.RemoveMember(ctx, channel, ClientInfo{
+		ClientID: conn2,
+		UserID:   userID,
+	}, EnginePresenceOptions{})
+	require.NoError(t, err)
+
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumKeys, "Should have 1 client connection")
+	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user (1 connection remains)")
+	t.Logf("After removing conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+
+	// Remove third connection (last one)
+	err = engine.RemoveMember(ctx, channel, ClientInfo{
+		ClientID: conn3,
+		UserID:   userID,
+	}, EnginePresenceOptions{})
+	require.NoError(t, err)
+
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys, "Should have 0 client connections")
+	require.Equal(t, 0, stats.NumAggregatedKeys, "Should have 0 unique users (all connections closed)")
+	t.Logf("After removing conn3 (last): %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+
+	t.Logf("SUCCESS: Aggregation correctly tracks multiple connections per user")
+}
+
+// TestSnapshotEngine_AggregationWithCleanup verifies that cleanup script
+// correctly updates aggregation when connections expire.
+func TestSnapshotEngine_AggregationWithCleanup(t *testing.T) {
+	node, _ := New(Config{})
+
+	redisConf := testSingleRedisConf(6379)
+	shard, err := NewRedisShard(node, redisConf)
+	require.NoError(t, err)
+	engine, err := NewSnapshotEngine(node, SnapshotEngineConfig{
+		Shards:                []*RedisShard{shard},
+		PresenceTTL:           30 * time.Second,
+		PresenceStreamSize:    100,
+		PresenceStreamTTL:     300 * time.Second,
+		PresenceStreamMetaTTL: 3600 * time.Second,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := randomChannel("test_agg_cleanup")
+
+	userID := "alice"
+
+	// Alice opens 2 connections
+	conn1 := "conn_1"
+	conn2 := "conn_2"
+
+	err = engine.AddMember(ctx, channel, ClientInfo{
+		ClientID: conn1,
+		UserID:   userID,
+	}, EnginePresenceOptions{})
+	require.NoError(t, err)
+
+	err = engine.AddMember(ctx, channel, ClientInfo{
+		ClientID: conn2,
+		UserID:   userID,
+	}, EnginePresenceOptions{})
+	require.NoError(t, err)
+
+	// Verify 2 connections, 1 user
+	stats, err := engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.NumKeys, "Should have 2 connections")
+	require.Equal(t, 1, stats.NumAggregatedKeys, "Should have 1 unique user")
+	t.Logf("Before cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+
+	// Simulate conn1 expiring via cleanup script
+	shardWrapper := engine.shards[0]
+	cleanupKey := engine.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
+	now := time.Now().Unix() + 31 // Simulate future
+
+	err = engine.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, now)
+	require.NoError(t, err)
+
+	// After cleanup of both expired connections
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys, "Should have 0 connections (both cleaned up)")
+	require.Equal(t, 0, stats.NumAggregatedKeys, "Should have 0 users (aggregation updated correctly)")
+	t.Logf("After cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+
+	t.Logf("SUCCESS: Cleanup script correctly updates aggregation")
 }

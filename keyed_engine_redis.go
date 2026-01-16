@@ -16,92 +16,27 @@ import (
 	"github.com/centrifugal/centrifuge/internal/bpool"
 	"github.com/centrifugal/centrifuge/internal/convert"
 	"github.com/centrifugal/protocol"
+	"github.com/google/uuid"
 	"github.com/redis/rueidis"
 	"github.com/redis/rueidis/resp"
 )
 
-// RedisEngine PUB/SUB Message Formats
-// ====================================
-//
-// This engine uses simplified message formats published by Lua scripts:
-//
-// 1. No prefix (backward compatibility):
-//    - Raw protobuf bytes (Publication, Join, or Leave)
-//    - Used by direct PUBLISH calls without Lua scripts
-//
-// 2. Non-delta publications/presence:
-//    - Format: "offset:epoch:protobuf"
-//    - Where protobuf is protocol.Push containing Publication/Join/Leave
-//    - Example: "123:node-1:..." where ... is marshaled Push
-//
-// 3. Delta publications:
-//    - Format: "d:offset:epoch:prev_len:prev_push:curr_len:curr_push"
-//    - Where prev_push and curr_push are protocol.Push with Publication
-//    - Example: "d:123:node-1:50:...:60:..." where ... are marshaled Push messages
-//    - Enables atomic publishing of current + previous publication for delta compression
-//    - Both prev and curr are fetched from stream which now stores Push (not Publication)
-//
-// Storage:
-// - Streams (XADD): protocol.Push containing Publication (for pub history) or Join/Leave (for presence)
-// - Snapshots (HSET): For keyed state - depends on use case; For presence - protocol.ClientInfo
-//
-// The Lua script (broker_snapshot_add.lua) is responsible for formatting messages
-// before publishing them via PUBLISH/SPUBLISH commands.
-
 var (
-	//go:embed internal/redis_lua/broker_snapshot_add.lua
+	//go:embed internal/redis_lua/keyed_engine_add.lua
 	brokerSnapshotPublishScriptSource string
-	//go:embed internal/redis_lua/broker_snapshot_read_ordered.lua
+	//go:embed internal/redis_lua/keyed_engine_read_ordered.lua
 	brokerSnapshotReadOrderedScriptSource string
-	//go:embed internal/redis_lua/broker_snapshot_read_unordered.lua
+	//go:embed internal/redis_lua/keyed_engine_read_unordered.lua
 	brokerSnapshotReadUnorderedScriptSource string
-	//go:embed internal/redis_lua/broker_snapshot_stream_read.lua
+	//go:embed internal/redis_lua/keyed_engine_stream_read.lua
 	brokerSnapshotReadStreamScriptSource string
-	//go:embed internal/redis_lua/broker_snapshot_stream_read_meta.lua
+	//go:embed internal/redis_lua/keyed_engine_stream_read_meta.lua
 	brokerSnapshotReadStreamMetaScriptSource string
-	//go:embed internal/redis_lua/broker_snapshot_presence_stats.lua
+	//go:embed internal/redis_lua/keyed_engine_stats.lua
 	brokerSnapshotPresenceStatsScriptSource string
-	//go:embed internal/redis_lua/broker_snapshot_cleanup.lua
+	//go:embed internal/redis_lua/keyed_engine_cleanup.lua
 	brokerSnapshotCleanupScriptSource string
 )
-
-type Engine interface {
-	// Subscribe subscribes server to channel and returns error if it fails.
-	Subscribe(ch string) error
-	// Unsubscribe unsubscribes server from channel and returns error if it fails.
-	Unsubscribe(ch string) error
-
-	// Publish allows sending data into a channel. It can optionally use history and keyed snapshots.
-	Publish(ctx context.Context, ch string, key string, data []byte, opts EnginePublishOptions) (StreamPosition, bool, error)
-	// Unpublish removes a key from keyed state snapshot. This is the counterpart to Publish()
-	// for keyed state - it removes a specific key from the snapshot without affecting other keys.
-	Unpublish(ctx context.Context, ch string, key string, opts EngineUnpublishOptions) (StreamPosition, error)
-	// ReadStream retrieves publications from stream for a channel.
-	ReadStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error)
-	// ReadSnapshot retrieves a snapshot for a channel with per-entry revisions.
-	// Each entry includes its revision so client can filter: entry.Revision <= snapshot_revision.
-	// Returns entries, current stream position, next cursor for pagination, and error.
-	// If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
-	// Cursor "0" or "" means end of iteration.
-	ReadSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error)
-
-	// AddMember adds a client to presence in a channel.
-	AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error
-	// RemoveMember removes a client from presence in a channel.
-	RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error
-	// Members returns actual presence information for a channel (simple query without revisions).
-	Members(ctx context.Context, ch string) (map[string]*ClientInfo, error)
-	// MemberStats returns short stats of current presence data.
-	MemberStats(ctx context.Context, ch string) (EngineMemberStats, error)
-
-	// ReadPresenceStream retrieves presence event stream (joins/leaves) for recovery.
-	// Returns Publications with Info field (ClientInfo) and Removed flag (true for leave, false for join).
-	ReadPresenceStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error)
-	// ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.
-	// Returns Publications with Key=ClientID, Info=ClientInfo, and Offset/Epoch for revision tracking.
-	// Presence doesn't use cursor pagination - returns all entries.
-	ReadPresenceSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]*Publication, StreamPosition, error)
-}
 
 type engineShardWrapper struct {
 	shard               *RedisShard
@@ -110,89 +45,38 @@ type engineShardWrapper struct {
 	pubSubStartChannels [][]*pubSubStart
 }
 
-// EnginePublishOptions defines options for publishing.
-type EnginePublishOptions struct {
-	Tags                map[string]string
-	ClientInfo          *ClientInfo
-	IdempotencyKey      string
-	IdempotentResultTTL time.Duration
-	StreamSize          int
-	StreamTTL           time.Duration
-	StreamMetaTTL       time.Duration
-	UseDelta            bool
-	Version             uint64
-	VersionEpoch        string
-	Ordered             bool
-	Score               int64
-	MemberTTL           time.Duration
-}
-
-// EnginePresenceOptions defines options for presence operations.
-type EnginePresenceOptions struct {
-	SendPush bool
-}
-
-// EngineUnpublishOptions defines options for unpublishing (removing a key from keyed state).
-type EngineUnpublishOptions struct {
-	// SendPush whether to publish removal notification to subscribers.
-	SendPush bool
-	// StreamSize for appending removal event to stream (0 to disable).
-	StreamSize int
-	// StreamTTL for stream entries.
-	StreamTTL time.Duration
-	// StreamMetaTTL for stream metadata.
-	StreamMetaTTL time.Duration
-}
-
-type EngineMemberStats struct {
-	NumKeys  int
-	NumUsers int
-}
-
-// ReadStreamOptions define some fields to alter ReadStream method behavior.
-type ReadStreamOptions struct {
-	// Filter for history publications.
-	Filter HistoryFilter
-	// MetaTTL allows overriding default (set in Config.HistoryMetaTTL) history
-	// meta information expiration time.
-	MetaTTL time.Duration
-}
-
-// ReadSnapshotOptions defines options for reading a snapshot.
-type ReadSnapshotOptions struct {
-	// SnapshotRevision is the revision client received during subscribe.
-	// Server validates snapshot epoch matches this revision's epoch.
-	// If epoch changed, server returns empty result forcing client to restart.
-	SnapshotRevision *StreamPosition
-	Ordered          bool
-	Cursor           string
-	Limit            int
-	Offset           int
-	SnapshotTTL      time.Duration
-}
-
-// SnapshotEntry represents a single entry in a snapshot with its revision.
-// Client MUST filter entries where entry.Revision <= requested snapshot_revision.
-type SnapshotEntry struct {
-	Key      string
-	Revision StreamPosition // When this entry was written (offset, epoch)
-	Payload  []byte
-}
-
-// SnapshotEngine is a Redis-based engine that provides support for:
+// RedisKeyedEngine is a Redis-based KeyedEngine that provides support for:
 // 1. Stateful channels - keyed state with revisions
 // 2. Converged membership - presence with ordering and recovery
 //
 // Both features share the same abstraction:
-// - A keyed snapshot at some revision (epoch, offset)
-// - A log of changes after that revision
-// - Revisions are totally ordered per channel
+// - Snapshot – a key-based snapshot
+// - Stream - a log of changes – state and update revision for each key.
+// - Revisions are ordered per channel
 //
-// Key differences from RedisEngine:
-// - Snapshot entries include revision (epoch, offset)
-// - Clients can paginate snapshots and reconcile with live stream
-// - Generic aggregations instead of hardcoded user tracking
-type SnapshotEngine struct {
+// Message Formats
+// ===============
+//
+// This engine uses simplified message formats published by Lua scripts:
+//
+// 1. No prefix:
+//   - Raw protobuf bytes (Publication)
+//   - Used by direct PUBLISH calls without Lua scripts when stream is not used.
+//
+// 2. Non-delta publications:
+//   - Format: "offset:epoch:Publication"
+//   - Where Publication is in protobuf format.
+//
+// 3. Delta publications:
+//   - Format: "d:offset:epoch:prev_len:prev_publication:curr_len:curr_publication"
+//   - Where prev_publication and curr_publication are protocol.Publication in protobuf.
+//   - Enables atomic publishing of current + previous publication for delta compression of publication data.
+//   - Prev is atomically fetched from stream.
+//
+// Storage:
+// - Streams (XADD): keeps protocol.Publication
+// - Snapshots (HSET): For keyed state - may keep latest protocol.Publication or custom state.
+type RedisKeyedEngine struct {
 	node *Node
 	conf SnapshotEngineConfig
 
@@ -212,9 +96,9 @@ type SnapshotEngine struct {
 	messagePrefix string
 }
 
-var _ Engine = (*SnapshotEngine)(nil)
+var _ KeyedEngine = (*RedisKeyedEngine)(nil)
 
-// SnapshotEngineConfig is a config for SnapshotEngine.
+// SnapshotEngineConfig is a config for RedisKeyedEngine.
 type SnapshotEngineConfig struct {
 	// Shards is a slice of RedisShard to use. At least one shard must be provided.
 	Shards []*RedisShard
@@ -260,8 +144,8 @@ type SnapshotEngineConfig struct {
 	CleanupBatchSize int
 }
 
-// NewSnapshotEngine initializes SnapshotEngine.
-func NewSnapshotEngine(n *Node, conf SnapshotEngineConfig) (*SnapshotEngine, error) {
+// NewSnapshotEngine initializes RedisKeyedEngine.
+func NewSnapshotEngine(n *Node, conf SnapshotEngineConfig) (*RedisKeyedEngine, error) {
 	if len(conf.Shards) == 0 {
 		return nil, errors.New("snapshot engine: no shards provided")
 	}
@@ -304,7 +188,7 @@ func NewSnapshotEngine(n *Node, conf SnapshotEngineConfig) (*SnapshotEngine, err
 		shardWrappers = append(shardWrappers, &engineShardWrapper{shard: s})
 	}
 
-	e := &SnapshotEngine{
+	e := &RedisKeyedEngine{
 		node:   n,
 		conf:   conf,
 		shards: shardWrappers,
@@ -415,40 +299,38 @@ func parseSnapshotValue(val []byte) (uint64, string, []byte, error) {
 	return offset, epoch, payload, nil
 }
 
-func (e *SnapshotEngine) useShardedPubSub(s *RedisShard) bool {
+func (e *RedisKeyedEngine) useShardedPubSub(s *RedisShard) bool {
 	return s.isCluster && e.conf.NumShardedPubSubPartitions > 0
 }
 
-func (e *SnapshotEngine) getShard(channel string) *engineShardWrapper {
+func (e *RedisKeyedEngine) getShard(channel string) *engineShardWrapper {
 	if len(e.shards) == 1 {
 		return e.shards[0]
 	}
 	return e.shards[consistentIndex(channel, len(e.shards))]
 }
 
-// Key generation methods (similar to RedisEngine but for new engine)
-
-func (e *SnapshotEngine) streamKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) streamKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":stream:")
 }
 
-func (e *SnapshotEngine) metaKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) metaKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":meta:")
 }
 
-func (e *SnapshotEngine) snapshotHashKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) snapshotHashKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":snapshot:")
 }
 
-func (e *SnapshotEngine) snapshotOrderKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) snapshotOrderKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":snapshot:order:")
 }
 
-func (e *SnapshotEngine) snapshotExpireKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) snapshotExpireKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":snapshot:expire:")
 }
 
-func (e *SnapshotEngine) snapshotMetaKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) snapshotMetaKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":snapshot:meta:")
 }
 
@@ -459,23 +341,19 @@ func (e *SnapshotEngine) snapshotMetaKey(s *RedisShard, ch string) string {
 // - metaKey instead of presenceStreamMetaKey
 // This unifies presence and keyed state - both are just keyed snapshots with different configs.
 
-func (e *SnapshotEngine) aggregationZSetKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) aggregationZSetKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":aggregation:zset:")
 }
 
-func (e *SnapshotEngine) aggregationHashKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) aggregationHashKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":aggregation:hash:")
 }
 
-func (e *SnapshotEngine) leavePayloadHashKey(s *RedisShard, ch string) string {
-	return e.buildKey(s, ch, ":leave:")
-}
-
-func (e *SnapshotEngine) aggregationMappingHashKey(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) aggregationMappingHashKey(s *RedisShard, ch string) string {
 	return e.buildKey(s, ch, ":aggmap:")
 }
 
-func (e *SnapshotEngine) cleanupRegistrationKey(s *RedisShard) string {
+func (e *RedisKeyedEngine) cleanupRegistrationKey(s *RedisShard) string {
 	// Cleanup registration key is per-shard, not per-channel
 	// Uses partition-based hash tag for cluster compatibility
 	if !s.isCluster {
@@ -489,7 +367,7 @@ func (e *SnapshotEngine) cleanupRegistrationKey(s *RedisShard) string {
 	return e.conf.Prefix + ":cleanup:channels"
 }
 
-func (e *SnapshotEngine) cleanupRegistrationKeyForChannel(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) cleanupRegistrationKeyForChannel(s *RedisShard, ch string) string {
 	// Get the cleanup registration key with proper hash tag for the channel's partition
 	// Single registration ZSET works for ALL keyed snapshots (presence, state, etc.)
 	if !s.isCluster {
@@ -499,11 +377,11 @@ func (e *SnapshotEngine) cleanupRegistrationKeyForChannel(s *RedisShard, ch stri
 		idx := consistentIndex(ch, e.conf.NumShardedPubSubPartitions)
 		return e.conf.Prefix + ":cleanup:channels:{" + strconv.Itoa(idx) + "}"
 	}
-	// For non-sharded cluster, use channel-based hash tag
+	// For non-sharded cluster, use channel-based hashtag.
 	return e.conf.Prefix + ":cleanup:channels:{" + ch + "}"
 }
 
-func (e *SnapshotEngine) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) string {
+func (e *RedisKeyedEngine) resultCacheKey(s *RedisShard, ch string, idempotencyKey string) string {
 	if !s.isCluster {
 		var builder strings.Builder
 		builder.Grow(len(e.conf.Prefix) + 9 + len(ch) + 1 + len(idempotencyKey))
@@ -543,7 +421,7 @@ func (e *SnapshotEngine) resultCacheKey(s *RedisShard, ch string, idempotencyKey
 }
 
 // buildKey is a helper function to build Redis keys with proper cluster hash tag support
-func (e *SnapshotEngine) buildKey(s *RedisShard, ch string, infix string) string {
+func (e *RedisKeyedEngine) buildKey(s *RedisShard, ch string, infix string) string {
 	if !s.isCluster {
 		var builder strings.Builder
 		builder.Grow(len(e.conf.Prefix) + len(infix) + len(ch))
@@ -579,7 +457,7 @@ func (e *SnapshotEngine) buildKey(s *RedisShard, ch string, infix string) string
 	return builder.String()
 }
 
-func (e *SnapshotEngine) messageChannelID(s *RedisShard, ch string) string {
+func (e *RedisKeyedEngine) messageChannelID(s *RedisShard, ch string) string {
 	if !e.useShardedPubSub(s) {
 		if s.isCluster {
 			var builder strings.Builder
@@ -614,7 +492,7 @@ func (e *SnapshotEngine) messageChannelID(s *RedisShard, ch string) string {
 }
 
 // Close closes the engine.
-func (e *SnapshotEngine) Close(_ context.Context) error {
+func (e *RedisKeyedEngine) Close(_ context.Context) error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
 	})
@@ -622,7 +500,7 @@ func (e *SnapshotEngine) Close(_ context.Context) error {
 }
 
 // Publish publishes data to a stateful channel with optional keyed state.
-func (e *SnapshotEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts EnginePublishOptions) (StreamPosition, bool, error) {
+func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts EnginePublishOptions) (StreamPosition, bool, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -728,22 +606,9 @@ func (e *SnapshotEngine) Publish(ctx context.Context, ch string, key string, dat
 		chID = ""
 	}
 
-	// Pre-construct remove publication for cleanup (enables guaranteed remove events on expiry)
-	// Only needed if MemberTTL is set (keyed state with expiration)
-	leaveHashKey := ""
+	// Setup cleanup registration if MemberTTL is set (keyed state with expiration)
 	cleanupRegKey := ""
-	var leaveBytes []byte
 	if opts.MemberTTL > 0 && key != "" && snapshotExpireKey != "" {
-		removePub := &protocol.Publication{
-			Key:     key,
-			Removed: true,
-			Time:    time.Now().UnixMilli(),
-		}
-		leaveBytes, err = removePub.MarshalVT()
-		if err != nil {
-			return StreamPosition{}, false, err
-		}
-		leaveHashKey = e.buildKey(s.shard, ch, ":state:leave:")
 		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
 	}
 
@@ -751,7 +616,7 @@ func (e *SnapshotEngine) Publish(ctx context.Context, ch string, key string, dat
 		[]string{
 			streamKey, metaKey, resultKey, snapshotHashKey, snapshotOrderKey, snapshotExpireKey,
 			"", "", snapshotMetaKey, // No aggregation keys for regular publish
-			leaveHashKey, cleanupRegKey, "", // Leave hash and cleanup registration for keyed state, no aggregation mapping
+			cleanupRegKey, "", // Cleanup registration for keyed state, no aggregation mapping
 		},
 		[]string{
 			key,                                // message_key
@@ -760,19 +625,20 @@ func (e *SnapshotEngine) Publish(ctx context.Context, ch string, key string, dat
 			strconv.FormatInt(int64(opts.StreamTTL.Seconds()), 10),
 			chID, // channel (for Lua to publish)
 			metaExpire,
-			e.node.ID(), // new_epoch_if_empty
+			uuid.New().String(), // new_epoch_if_empty
 			publishCommand,
 			resultExpire,
 			useDelta,
 			version,
 			opts.VersionEpoch,
-			"0", // is_leave
+			"0", // is_remove
 			strconv.FormatInt(opts.Score, 10),
 			strconv.FormatInt(int64(opts.MemberTTL.Seconds()), 10),
-			"0", "", "", // use_hexpire, aggregation_key, aggregation_value
-			"",                                // message_key_payload (not used - message_payload is Publication)
-			convert.BytesToString(leaveBytes), // leave_payload (pre-constructed remove Publication)
-			ch,                                // channel_for_cleanup (for cleanup registration)
+			"0", // use_hexpire
+			"",  // aggregation_key
+			"",  // aggregation_value
+			"",  // key_state
+			ch,  // channel_for_cleanup (for cleanup registration)
 		},
 	).ToArray()
 	if err != nil {
@@ -783,7 +649,7 @@ func (e *SnapshotEngine) Publish(ctx context.Context, ch string, key string, dat
 }
 
 // Unpublish removes a key from keyed state snapshot.
-func (e *SnapshotEngine) Unpublish(ctx context.Context, ch string, key string, opts EngineUnpublishOptions) (StreamPosition, error) {
+func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts EngineUnpublishOptions) (StreamPosition, error) {
 	if key == "" {
 		return StreamPosition{}, fmt.Errorf("key is required for unpublish")
 	}
@@ -842,7 +708,7 @@ func (e *SnapshotEngine) Unpublish(ctx context.Context, ch string, key string, o
 			"", // No order key for unpublish
 			snapshotExpireKey,
 			"", "", snapshotMetaKey, // No aggregation keys for unpublish
-			"", "", "", // No leave hash, cleanup registration, or aggregation mapping for unpublish
+			"", "", // No cleanup registration or aggregation mapping for unpublish
 		},
 		[]string{
 			key,                             // message_key
@@ -859,8 +725,8 @@ func (e *SnapshotEngine) Unpublish(ctx context.Context, ch string, key string, o
 			"0",    // keyed_member_ttl
 			"0",    // use_hexpire
 			"", "", // aggregation_key, aggregation_value
-			"",     // message_key_payload (empty - we're removing)
-			"", "", // leave_payload, channel_for_cleanup (not used for unpublish)
+			"", // message_key_payload (empty - we're removing)
+			"", // channel_for_cleanup (not used for unpublish)
 		},
 	).ToArray()
 	if err != nil {
@@ -876,21 +742,21 @@ func (e *SnapshotEngine) Unpublish(ctx context.Context, ch string, key string, o
 // If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
 // Returns entries, stream position, next cursor for pagination, and error.
 // Cursor "0" or "" means end of iteration.
-func (e *SnapshotEngine) ReadSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *RedisKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
 	if opts.Ordered {
 		return e.readOrderedSnapshot(ctx, ch, opts)
 	}
 	return e.readUnorderedSnapshot(ctx, ch, opts)
 }
 
-func (e *SnapshotEngine) ReadSnapshotZero(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *RedisKeyedEngine) ReadSnapshotZero(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
 	if opts.Ordered {
 		return e.readOrderedSnapshot(ctx, ch, opts)
 	}
 	return e.readUnorderedSnapshotZero(ctx, ch, opts)
 }
 
-func (e *SnapshotEngine) readUnorderedSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *RedisKeyedEngine) readUnorderedSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -957,8 +823,8 @@ func (e *SnapshotEngine) readUnorderedSnapshot(ctx context.Context, ch string, o
 		}
 
 		entries = append(entries, SnapshotEntry{
-			Key:     key,
-			Payload: payload,
+			Key:   key,
+			State: payload,
 			Revision: StreamPosition{
 				Offset: entryOffset,
 				Epoch:  entryEpoch,
@@ -968,7 +834,7 @@ func (e *SnapshotEngine) readUnorderedSnapshot(ctx context.Context, ch string, o
 	return entries, streamPos, nextCursor, nil
 }
 
-func (e *SnapshotEngine) readUnorderedSnapshotZero(
+func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 	ctx context.Context,
 	ch string,
 	opts ReadSnapshotOptions,
@@ -1076,8 +942,8 @@ func (e *SnapshotEngine) readUnorderedSnapshotZero(
 				payload := append([]byte(nil), payloadBytes...)
 
 				entries = append(entries, SnapshotEntry{
-					Key:     key,
-					Payload: payload,
+					Key:   key,
+					State: payload,
 					Revision: StreamPosition{
 						Offset: entryOffset,
 						Epoch:  entryEpoch,
@@ -1103,7 +969,7 @@ func (e *SnapshotEngine) readUnorderedSnapshotZero(
 }
 
 // readOrderedSnapshot uses offset-based pagination (not cursor), so returns empty cursor.
-func (e *SnapshotEngine) readOrderedSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -1165,8 +1031,8 @@ func (e *SnapshotEngine) readOrderedSnapshot(ctx context.Context, ch string, opt
 		}
 
 		entries = append(entries, SnapshotEntry{
-			Key:     key,
-			Payload: payload,
+			Key:   key,
+			State: payload,
 			Revision: StreamPosition{
 				Offset: entryOffset,
 				Epoch:  entryEpoch,
@@ -1177,7 +1043,7 @@ func (e *SnapshotEngine) readOrderedSnapshot(ctx context.Context, ch string, opt
 	return entries, streamPos, "", nil
 }
 
-func (e *SnapshotEngine) ReadStreamZero(
+func (e *RedisKeyedEngine) ReadStreamZero(
 	ctx context.Context,
 	ch string,
 	opts ReadStreamOptions,
@@ -1305,7 +1171,7 @@ func (e *SnapshotEngine) ReadStreamZero(
 				return err
 			}
 
-			pubs = make([]*Publication, pubCount)
+			pubs = make([]*Publication, 0, pubCount)
 
 			for i := int64(0); i < pubCount; i++ {
 				// entry = [id, fields]
@@ -1374,17 +1240,15 @@ func (e *SnapshotEngine) ReadStreamZero(
 				bpool.PutByteBuffer(payload)
 
 				protoPub.Offset = pubOffset
-
-				pp := pubs[i]
-				pp.Offset = protoPub.Offset
-				pp.Data = protoPub.Data
-				pp.Info = infoFromProto(protoPub.GetInfo())
-				pp.Tags = protoPub.GetTags()
-				pp.Time = protoPub.Time
-				pp.Key = protoPub.GetKey()
-				pp.Removed = protoPub.GetRemoved()
-				pp.Channel = protoPub.GetChannel()
-				pubs[i] = pp
+				pubs = append(pubs, &Publication{
+					Offset:  protoPub.Offset,
+					Data:    protoPub.Data,
+					Info:    infoFromProto(protoPub.GetInfo()),
+					Tags:    protoPub.GetTags(),
+					Time:    protoPub.Time,
+					Key:     protoPub.GetKey(),
+					Removed: protoPub.GetRemoved(),
+				})
 			}
 			return nil
 		},
@@ -1401,7 +1265,7 @@ func (e *SnapshotEngine) ReadStreamZero(
 // Call 1: Get metadata (epoch, top_offset) using simpler Lua script with ExecWithReader
 // Call 2: Read publications using native XRANGE/XREVRANGE with DoWithReader
 // Key difference: Must filter out publications with offset > top_offset (non-atomic).
-func (e *SnapshotEngine) ReadStreamZero2(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisKeyedEngine) ReadStreamZero2(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	s := e.getShard(ch)
 
 	// 1. Parse options (same as ReadStream/ReadStreamZero)
@@ -1483,13 +1347,14 @@ func (e *SnapshotEngine) ReadStreamZero2(ctx context.Context, ch string, opts Re
 			}
 
 			// ---- reply[1]: epoch ----
-			b, err := rr.ReadStringBytes()
-			if err != nil && !errors.Is(err, rueidis.Nil) {
+			buf, err := rr.ReadStringBytes()
+			if err != nil {
 				return err
 			}
-			if len(b) > 0 {
-				streamPos.Epoch = unsafe.String(&b[0], len(b))
-			}
+			// Make a safe copy of the bytes.
+			safeBuf := make([]byte, len(buf))
+			copy(safeBuf, buf)
+			streamPos.Epoch = convert.BytesToString(safeBuf)
 
 			return nil
 		},
@@ -1526,7 +1391,6 @@ func (e *SnapshotEngine) ReadStreamZero2(ctx context.Context, ch string, opts Re
 	}
 
 	var pubs []*Publication
-	var pubStructs []*Publication
 
 	err = s.shard.client.DoWithReader(ctx, cmd, func(r *bufio.Reader) error {
 		rr := resp.NewReader(r)
@@ -1539,7 +1403,6 @@ func (e *SnapshotEngine) ReadStreamZero2(ctx context.Context, ch string, opts Re
 
 		if entryCount > 0 {
 			pubs = make([]*Publication, 0, entryCount)
-			pubStructs = make([]*Publication, entryCount)
 		}
 
 		for i := int64(0); i < entryCount; i++ {
@@ -1613,17 +1476,15 @@ func (e *SnapshotEngine) ReadStreamZero2(ctx context.Context, ch string, opts Re
 			bpool.PutByteBuffer(payload)
 
 			protoPub.Offset = pubOffset
-
-			pp := pubStructs[len(pubs)]
-			pp.Offset = protoPub.Offset
-			pp.Data = protoPub.Data
-			pp.Info = infoFromProto(protoPub.GetInfo())
-			pp.Tags = protoPub.GetTags()
-			pp.Time = protoPub.Time
-			pp.Key = protoPub.GetKey()
-			pp.Removed = protoPub.GetRemoved()
-
-			pubs = append(pubs, pp)
+			pubs = append(pubs, &Publication{
+				Offset:  protoPub.Offset,
+				Data:    protoPub.Data,
+				Info:    infoFromProto(protoPub.GetInfo()),
+				Tags:    protoPub.GetTags(),
+				Time:    protoPub.Time,
+				Key:     protoPub.GetKey(),
+				Removed: protoPub.GetRemoved(),
+			})
 		}
 
 		return nil
@@ -1637,7 +1498,7 @@ func (e *SnapshotEngine) ReadStreamZero2(ctx context.Context, ch string, opts Re
 }
 
 // ReadStream retrieves publication stream for a channel.
-func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisKeyedEngine) ReadStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	s := e.getShard(ch)
 
 	var includePubs = true
@@ -1771,17 +1632,17 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 		if err != nil {
 			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
-		protoPub.Offset = pubOffset
 
-		pp := pubs[j]
-		pp.Offset = protoPub.Offset
-		pp.Data = protoPub.Data
-		pp.Info = infoFromProto(protoPub.GetInfo())
-		pp.Tags = protoPub.GetTags()
-		pp.Time = protoPub.Time
-		pp.Key = protoPub.GetKey()
-		pp.Removed = protoPub.GetRemoved()
-		pubs[j] = pp
+		protoPub.Offset = pubOffset
+		pubs[j] = &Publication{
+			Offset:  protoPub.Offset,
+			Data:    protoPub.Data,
+			Info:    infoFromProto(protoPub.GetInfo()),
+			Tags:    protoPub.GetTags(),
+			Time:    protoPub.Time,
+			Key:     protoPub.GetKey(),
+			Removed: protoPub.GetRemoved(),
+		}
 	}
 	return pubs, streamPos, nil
 }
@@ -1790,7 +1651,7 @@ func (e *SnapshotEngine) ReadStream(ctx context.Context, ch string, opts ReadStr
 // Call 1: Get metadata (epoch, top_offset) using simpler Lua script
 // Call 2: Read publications using native XRANGE/XREVRANGE
 // Key difference: Must filter out publications with offset > top_offset (non-atomic).
-func (e *SnapshotEngine) ReadStream2(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisKeyedEngine) ReadStream2(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	s := e.getShard(ch)
 
 	// 1. Parse options (same as ReadStream)
@@ -1884,9 +1745,9 @@ func (e *SnapshotEngine) ReadStream2(ctx context.Context, ch string, opts ReadSt
 	}
 
 	// 5. Parse stream entries and filter by topOffset
-	pubs := make([]*Publication, len(result))
+	pubs := make([]*Publication, 0, len(result))
 
-	for j, v := range result {
+	for _, v := range result {
 		entry, err := v.ToArray()
 		if err != nil {
 			return nil, StreamPosition{}, err
@@ -1939,26 +1800,25 @@ func (e *SnapshotEngine) ReadStream2(ctx context.Context, ch string, opts ReadSt
 		if err != nil {
 			return nil, StreamPosition{}, fmt.Errorf("can not unmarshal value to Publication: %v", err)
 		}
+
 		protoPub.Offset = pubOffset
-
-		pp := pubs[j]
-		pp.Offset = protoPub.Offset
-		pp.Data = protoPub.Data
-		pp.Info = infoFromProto(protoPub.GetInfo())
-		pp.Tags = protoPub.GetTags()
-		pp.Time = protoPub.Time
-		pp.Key = protoPub.GetKey()
-		pp.Removed = protoPub.GetRemoved()
-		pp.Channel = protoPub.GetChannel()
-
-		pubs[j] = pp
+		pubs = append(pubs, &Publication{
+			Offset:  protoPub.Offset,
+			Data:    protoPub.Data,
+			Info:    infoFromProto(protoPub.GetInfo()),
+			Tags:    protoPub.GetTags(),
+			Time:    protoPub.Time,
+			Key:     protoPub.GetKey(),
+			Removed: protoPub.GetRemoved(),
+			Channel: protoPub.GetChannel(),
+		})
 	}
 
 	return pubs, streamPos, nil
 }
 
 // AddMember adds a client to converged membership (presence with ordering).
-func (e *SnapshotEngine) AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
+func (e *RedisKeyedEngine) AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
 	// AddMember is just Publish with a Publication that has Key=clientID, Info=clientInfo, Data=nil
 	// This reuses all the Publish logic for keyed snapshots with aggregation support
 
@@ -2006,28 +1866,10 @@ func (e *SnapshotEngine) AddMember(ctx context.Context, ch string, info ClientIn
 		aggregationValue = info.UserID
 	}
 
-	// Pre-construct LEAVE Publication for cleanup (enables guaranteed LEAVE events on expiry)
-	// NOTE: The timestamp is set at join time, not when cleanup actually runs.
-	// This means LEAVE events from cleanup may have timestamps in the past
-	// (up to PresenceTTL seconds old). This is acceptable because:
-	// 1. Clients use revision (epoch, offset) for ordering, not timestamps
-	// 2. The exact leave time is when TTL expires, which this timestamp approximates
-	leaveHashKey := ""
+	// Setup cleanup registration and aggregation mapping for presence with stream
 	cleanupRegKey := ""
 	aggMappingKey := ""
-	var leaveBytes []byte
 	if e.conf.PresenceStreamSize > 0 {
-		leavePub := &protocol.Publication{
-			Key:     info.ClientID,
-			Info:    infoToProto(&info),
-			Removed: true,
-			Time:    time.Now().UnixMilli(),
-		}
-		leaveBytes, err = leavePub.MarshalVT()
-		if err != nil {
-			return err
-		}
-		leaveHashKey = e.leavePayloadHashKey(s.shard, ch)
 		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
 		if info.UserID != "" {
 			aggMappingKey = e.aggregationMappingHashKey(s.shard, ch)
@@ -2043,9 +1885,8 @@ func (e *SnapshotEngine) AddMember(ctx context.Context, ch string, info ClientIn
 			e.aggregationZSetKey(s.shard, ch),
 			e.aggregationHashKey(s.shard, ch),
 			"",            // No snapshot meta key for presence (uses stream meta directly)
-			leaveHashKey,  // KEYS[10]: leave payload hash key
-			cleanupRegKey, // KEYS[11]: cleanup registration zset key
-			aggMappingKey, // KEYS[12]: aggregation mapping hash key
+			cleanupRegKey, // KEYS[10]: cleanup registration zset key
+			aggMappingKey, // KEYS[11]: aggregation mapping hash key
 		},
 		[]string{
 			info.ClientID,                   // message_key
@@ -2060,19 +1901,18 @@ func (e *SnapshotEngine) AddMember(ctx context.Context, ch string, info ClientIn
 			"0", // is_leave
 			"0", // score
 			strconv.FormatInt(int64(e.conf.PresenceTTL.Seconds()), 10),
-			"0",                               // use_hexpire
-			aggregationKey,                    // aggregation_key (e.g., "user_id")
-			aggregationValue,                  // aggregation_value (e.g., actual user ID)
-			"",                                // message_key_payload (not used - message_payload is Publication)
-			convert.BytesToString(leaveBytes), // leave_payload (pre-constructed LEAVE Publication)
-			ch,                                // channel_for_cleanup (channel name for registration)
+			"0",              // use_hexpire
+			aggregationKey,   // aggregation_key (e.g., "user_id")
+			aggregationValue, // aggregation_value (e.g., actual user ID)
+			"",               // message_key_payload (not used - message_payload is Publication)
+			ch,               // channel_for_cleanup (channel name for registration)
 		},
 	).ToArray()
 	return err
 }
 
 // RemoveMember removes a client from converged membership.
-func (e *SnapshotEngine) RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
+func (e *RedisKeyedEngine) RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
 	// RemoveMember is just Publish with a Publication that has Removed=true
 	// This reuses all the Publish logic for keyed snapshots with aggregation support
 
@@ -2121,12 +1961,10 @@ func (e *SnapshotEngine) RemoveMember(ctx context.Context, ch string, info Clien
 		aggregationValue = info.UserID
 	}
 
-	// Leave hash key and cleanup registration for proper cleanup handling
-	leaveHashKey := ""
+	// Cleanup registration for proper cleanup handling
 	cleanupRegKey := ""
 	aggMappingKey := ""
 	if e.conf.PresenceStreamSize > 0 {
-		leaveHashKey = e.leavePayloadHashKey(s.shard, ch)
 		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
 		if info.UserID != "" {
 			aggMappingKey = e.aggregationMappingHashKey(s.shard, ch)
@@ -2142,9 +1980,8 @@ func (e *SnapshotEngine) RemoveMember(ctx context.Context, ch string, info Clien
 			e.aggregationZSetKey(s.shard, ch),
 			e.aggregationHashKey(s.shard, ch),
 			"",            // No snapshot meta key for presence
-			leaveHashKey,  // KEYS[10]: leave payload hash key (to clean up)
-			cleanupRegKey, // KEYS[11]: cleanup registration key (to update after remove)
-			aggMappingKey, // KEYS[12]: aggregation mapping hash key
+			cleanupRegKey, // KEYS[10]: cleanup registration key (to update after remove)
+			aggMappingKey, // KEYS[11]: aggregation mapping hash key
 		},
 		[]string{
 			info.ClientID,                   // message_key
@@ -2163,7 +2000,6 @@ func (e *SnapshotEngine) RemoveMember(ctx context.Context, ch string, info Clien
 			aggregationKey,   // aggregation_key
 			aggregationValue, // aggregation_value
 			"",               // message_key_payload (not used - message_payload is Publication)
-			"",               // leave_payload (empty - not needed for explicit leave)
 			ch,               // channel_for_cleanup (needed to update cleanup registration)
 		},
 	).ToArray()
@@ -2171,7 +2007,7 @@ func (e *SnapshotEngine) RemoveMember(ctx context.Context, ch string, info Clien
 }
 
 // Members returns actual presence information for a channel.
-func (e *SnapshotEngine) Members(ctx context.Context, ch string) (map[string]*ClientInfo, error) {
+func (e *RedisKeyedEngine) Members(ctx context.Context, ch string) (map[string]*ClientInfo, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -2232,46 +2068,40 @@ func (e *SnapshotEngine) Members(ctx context.Context, ch string) (map[string]*Cl
 }
 
 // MemberStats returns short stats of current presence data.
-func (e *SnapshotEngine) MemberStats(ctx context.Context, ch string) (EngineMemberStats, error) {
+// This is a read-only operation - cleanup is handled by the cleanup worker.
+func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (SnapshotStats, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
-
-	now := time.Now().Unix()
 
 	replies, err := e.presenceStatsScript.Exec(ctx, shardClient,
 		[]string{
 			e.snapshotHashKey(s.shard, ch),
-			e.snapshotExpireKey(s.shard, ch),
-			e.aggregationZSetKey(s.shard, ch),
 			e.aggregationHashKey(s.shard, ch),
 		},
-		[]string{
-			strconv.FormatInt(now, 10),
-			"0", // use_hexpire
-		},
+		nil, // No arguments needed for read-only stats
 	).ToArray()
 	if err != nil {
-		return EngineMemberStats{}, err
+		return SnapshotStats{}, err
 	}
 	if len(replies) != 2 {
-		return EngineMemberStats{}, errors.New("wrong number of replies from script")
+		return SnapshotStats{}, errors.New("wrong number of replies from script")
 	}
-	numClients, err := replies[0].AsInt64()
+	numKeys, err := replies[0].AsInt64()
 	if err != nil {
-		return EngineMemberStats{}, err
+		return SnapshotStats{}, err
 	}
-	numUsers, err := replies[1].AsInt64()
+	numAggregated, err := replies[1].AsInt64()
 	if err != nil {
-		return EngineMemberStats{}, err
+		return SnapshotStats{}, err
 	}
-	return EngineMemberStats{NumKeys: int(numClients), NumUsers: int(numUsers)}, nil
+	return SnapshotStats{NumKeys: int(numKeys), NumAggregatedKeys: int(numAggregated)}, nil
 }
 
 // ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.
 // Each entry includes its revision so client can filter: entry.Revision <= snapshot_revision.
 // If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
 // Returns Publications with Key=ClientID, Info=ClientInfo, Offset/Epoch for revision.
-func (e *SnapshotEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisKeyedEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts ReadSnapshotOptions) ([]*Publication, StreamPosition, error) {
 	// ReadPresenceSnapshot is just ReadSnapshot with SnapshotEntry → Publication unmarshaling.
 	// This reuses all the snapshot reading logic.
 	snapshotEntries, streamPos, _, err := e.ReadSnapshot(ctx, ch, opts)
@@ -2283,7 +2113,7 @@ func (e *SnapshotEngine) ReadPresenceSnapshot(ctx context.Context, ch string, op
 	for _, entry := range snapshotEntries {
 		// Unmarshal Publication from snapshot payload
 		var protoPub protocol.Publication
-		err := protoPub.UnmarshalVT(entry.Payload)
+		err := protoPub.UnmarshalVT(entry.State)
 		if err != nil {
 			// Skip malformed entries
 			continue
@@ -2298,14 +2128,14 @@ func (e *SnapshotEngine) ReadPresenceSnapshot(ctx context.Context, ch string, op
 
 // ReadPresenceStream retrieves presence event stream (joins/leaves) for a channel.
 // Returns Publications with Info=ClientInfo and Removed flag (true for leave, false for join).
-func (e *SnapshotEngine) ReadPresenceStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
+func (e *RedisKeyedEngine) ReadPresenceStream(ctx context.Context, ch string, opts ReadStreamOptions) ([]*Publication, StreamPosition, error) {
 	// ReadPresenceStream is literally just ReadStream - presence streams store Publications
 	// Publication.Removed distinguishes join (false) from leave (true) events.
 	return e.ReadStream(ctx, ch, opts)
 }
 
 // RegisterEventHandler registers a BrokerEventHandler to handle messages from Pub/Sub.
-func (e *SnapshotEngine) RegisterEventHandler(h BrokerEventHandler) error {
+func (e *RedisKeyedEngine) RegisterEventHandler(h BrokerEventHandler) error {
 	// Run all shards.
 	for _, wrapper := range e.shards {
 		err := e.runPubSubShard(wrapper, h)
@@ -2325,7 +2155,7 @@ func (e *SnapshotEngine) RegisterEventHandler(h BrokerEventHandler) error {
 	return nil
 }
 
-func (e *SnapshotEngine) runPubSubShard(s *engineShardWrapper, h BrokerEventHandler) error {
+func (e *RedisKeyedEngine) runPubSubShard(s *engineShardWrapper, h BrokerEventHandler) error {
 	if e.conf.SkipPubSub {
 		return nil
 	}
@@ -2358,7 +2188,7 @@ func (e *SnapshotEngine) runPubSubShard(s *engineShardWrapper, h BrokerEventHand
 }
 
 // runForever keeps another function running indefinitely.
-func (e *SnapshotEngine) runForever(fn func()) {
+func (e *RedisKeyedEngine) runForever(fn func()) {
 	for {
 		select {
 		case <-e.closeCh:
@@ -2377,8 +2207,8 @@ func (e *SnapshotEngine) runForever(fn func()) {
 // runCleanupWorker runs the background cleanup worker that generates LEAVE events
 // for expired presence entries. This ensures guaranteed delivery of LEAVE events
 // even when clients disconnect without explicit leave.
-func (e *SnapshotEngine) runCleanupWorker(ctx context.Context) {
-	if e.conf.CleanupInterval <= 0 || e.conf.PresenceStreamSize <= 0 {
+func (e *RedisKeyedEngine) runCleanupWorker(ctx context.Context) {
+	if e.conf.CleanupInterval <= 0 {
 		return
 	}
 
@@ -2398,15 +2228,15 @@ func (e *SnapshotEngine) runCleanupWorker(ctx context.Context) {
 }
 
 // runCleanupCycle processes all shards and cleans up expired presence entries.
-func (e *SnapshotEngine) runCleanupCycle(ctx context.Context) {
+func (e *RedisKeyedEngine) runCleanupCycle(ctx context.Context) {
 	now := time.Now().Unix()
 
-	for _, shardWrapper := range e.shards {
+	for _, wrapper := range e.shards {
 		if ctx.Err() != nil {
 			return
 		}
 
-		shard := shardWrapper.shard
+		shard := wrapper.shard
 
 		// Get cleanup registration key(s) based on cluster configuration
 		var cleanupKeys []string
@@ -2455,7 +2285,7 @@ func (e *SnapshotEngine) runCleanupCycle(ctx context.Context) {
 }
 
 // getChannelsForCleanup returns channels that have expired entries.
-func (e *SnapshotEngine) getChannelsForCleanup(ctx context.Context, client rueidis.Client, cleanupKey string, now int64) ([]string, error) {
+func (e *RedisKeyedEngine) getChannelsForCleanup(ctx context.Context, client rueidis.Client, cleanupKey string, now int64) ([]string, error) {
 	// Get channels with score <= now (have expired entries)
 	cmd := client.B().Zrangebyscore().Key(cleanupKey).Min("0").Max(strconv.FormatInt(now, 10)).Limit(0, 100).Build()
 	result, err := client.Do(ctx, cmd).AsStrSlice()
@@ -2466,7 +2296,7 @@ func (e *SnapshotEngine) getChannelsForCleanup(ctx context.Context, client rueid
 }
 
 // cleanupChannel runs the cleanup script for a single channel.
-func (e *SnapshotEngine) cleanupChannel(ctx context.Context, shard *RedisShard, ch string, cleanupKey string, now int64) error {
+func (e *RedisKeyedEngine) cleanupChannel(ctx context.Context, shard *RedisShard, ch string, cleanupKey string, now int64) error {
 	s := e.getShard(ch)
 
 	// Determine publish command
@@ -2495,8 +2325,7 @@ func (e *SnapshotEngine) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			e.aggregationZSetKey(s.shard, ch),      // KEYS[5]: aggregation zset key
 			e.aggregationHashKey(s.shard, ch),      // KEYS[6]: aggregation hash key
 			cleanupKey,                             // KEYS[7]: cleanup registration zset key
-			e.leavePayloadHashKey(shard, ch),       // KEYS[8]: leave payload hash key
-			e.aggregationMappingHashKey(shard, ch), // KEYS[9]: aggregation mapping hash key
+			e.aggregationMappingHashKey(shard, ch), // KEYS[8]: aggregation mapping hash key
 		},
 		[]string{
 			strconv.FormatInt(now, 10),              // ARGV[1]: now
@@ -2509,13 +2338,13 @@ func (e *SnapshotEngine) cleanupChannel(ctx context.Context, shard *RedisShard, 
 			e.node.ID(), // ARGV[8]: new_epoch_if_empty
 			"0",         // ARGV[9]: use_hexpire
 			ch,          // ARGV[10]: channel_for_cleanup
+			"1",         // ARGV[11]: force_consistency
 		},
 	).ToArray()
-
 	return err
 }
 
-func (e *SnapshotEngine) runPubSub(s *engineShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
+func (e *RedisKeyedEngine) runPubSub(s *engineShardWrapper, logFields map[string]any, eventHandler BrokerEventHandler, clusterShardIndex, psShardIndex int, useShardedPubSub bool, startOnce func(error)) {
 	numProcessors := e.conf.numPubSubProcessors
 	numResubscribeShards := e.conf.numResubscribeShards
 
@@ -2702,7 +2531,7 @@ func (e *SnapshotEngine) runPubSub(s *engineShardWrapper, logFields map[string]a
 	}
 }
 
-func (e *SnapshotEngine) logResubscribed(numChannels int, elapsed time.Duration, logFields map[string]any) {
+func (e *RedisKeyedEngine) logResubscribed(numChannels int, elapsed time.Duration, logFields map[string]any) {
 	combinedLogFields := make(map[string]any, len(logFields)+2)
 	for k, v := range logFields {
 		combinedLogFields[k] = v
@@ -2712,7 +2541,7 @@ func (e *SnapshotEngine) logResubscribed(numChannels int, elapsed time.Duration,
 	e.node.logger.log(newLogEntry(LogLevelDebug, "resubscribed to channels", combinedLogFields))
 }
 
-func (e *SnapshotEngine) pubSubShardChannelID(clusterShardIndex int, psShardIndex int, useShardedPubSub bool) string {
+func (e *RedisKeyedEngine) pubSubShardChannelID(clusterShardIndex int, psShardIndex int, useShardedPubSub bool) string {
 	psShardStr := strconv.Itoa(psShardIndex)
 	if !useShardedPubSub {
 		var builder strings.Builder
@@ -2735,7 +2564,7 @@ func (e *SnapshotEngine) pubSubShardChannelID(clusterShardIndex int, psShardInde
 	return builder.String()
 }
 
-func (e *SnapshotEngine) extractChannel(isCluster bool, chID string) string {
+func (e *RedisKeyedEngine) extractChannel(isCluster bool, chID string) string {
 	ch := strings.TrimPrefix(chID, e.messagePrefix)
 
 	// Handle sharded PUB/SUB case: {idx}.channel
@@ -2763,7 +2592,7 @@ func (e *SnapshotEngine) extractChannel(isCluster bool, chID string) string {
 	return ch
 }
 
-func (e *SnapshotEngine) handleRedisClientMessage(isCluster bool, eventHandler BrokerEventHandler, chID string, data []byte) error {
+func (e *RedisKeyedEngine) handleRedisClientMessage(isCluster bool, eventHandler BrokerEventHandler, chID string, data []byte) error {
 	// Parse message: supports backward compat (no prefix), non-delta, and delta formats
 	offset, epoch, protobuf, isDelta, prevProtobuf, err := parseMessage(data)
 	if err != nil {
@@ -2814,7 +2643,7 @@ func (e *SnapshotEngine) handleRedisClientMessage(isCluster bool, eventHandler B
 }
 
 // Subscribe to a channel.
-func (e *SnapshotEngine) Subscribe(ch string) error {
+func (e *RedisKeyedEngine) Subscribe(ch string) error {
 	s := e.getShard(ch)
 	if e.node.logEnabled(LogLevelDebug) {
 		e.node.logger.log(newLogEntry(LogLevelDebug, "subscribe node on channel", map[string]any{"channel": ch}))
@@ -2843,7 +2672,7 @@ func (e *SnapshotEngine) Subscribe(ch string) error {
 }
 
 // Unsubscribe from a channel.
-func (e *SnapshotEngine) Unsubscribe(ch string) error {
+func (e *RedisKeyedEngine) Unsubscribe(ch string) error {
 	s := e.getShard(ch)
 	if e.node.logEnabled(LogLevelDebug) {
 		e.node.logger.log(newLogEntry(LogLevelDebug, "unsubscribe node from channel", map[string]any{"channel": ch}))
