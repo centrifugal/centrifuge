@@ -62,29 +62,29 @@ func TestSnapshotEngine_StatefulChannel(t *testing.T) {
 	channel := randomChannel("test_stateful")
 
 	// Publish some keyed state updates
-	_, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), EnginePublishOptions{
+	_, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, _, err = engine.Publish(ctx, channel, "key2", []byte("data2"), EnginePublishOptions{
+	_, _, err = engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, _, err = engine.Publish(ctx, channel, "key1", []byte("data1_updated"), EnginePublishOptions{
+	_, _, err = engine.Publish(ctx, channel, "key1", []byte("data1_updated"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	// Read snapshot
-	entries, streamPos, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+	entries, streamPos, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -99,7 +99,7 @@ func TestSnapshotEngine_StatefulChannel(t *testing.T) {
 	require.Equal(t, []byte("data2"), snapshot["key2"])
 
 	// Read stream to verify all publications are in history
-	pubs, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
+	pubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit: -1, // Get all
 		},
@@ -118,18 +118,18 @@ func TestSnapshotEngine_StatefulChannelOrdered(t *testing.T) {
 
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
-		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), EnginePublishOptions{
+		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
-			MemberTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		require.NoError(t, err)
 	}
 
 	// Read ordered snapshot (descending by score)
-	entries, _, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Ordered:     true,
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
@@ -154,26 +154,26 @@ func TestSnapshotEngine_SnapshotRevision(t *testing.T) {
 	channel := randomChannel("test_revision")
 
 	// Publish a keyed state update
-	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), EnginePublishOptions{
+	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), pos1.Offset)
 
 	// Publish another update
-	pos2, _, err := engine.Publish(ctx, channel, "key2", []byte("data2"), EnginePublishOptions{
+	pos2, _, err := engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), pos2.Offset)
 	require.Equal(t, pos1.Epoch, pos2.Epoch) // Same epoch
 
 	// Read snapshot - entries now include per-entry revisions
-	entries, streamPos, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+	entries, streamPos, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -287,7 +287,7 @@ func TestSnapshotEngine_PresenceStream(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read presence stream
-	events, streamPos, err := engine.ReadPresenceStream(ctx, channel, ReadStreamOptions{
+	events, streamPos, err := engine.ReadPresenceStream(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit: -1, // Get all
 		},
@@ -318,17 +318,17 @@ func TestSnapshotEngine_SnapshotPagination(t *testing.T) {
 
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
-		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), EnginePublishOptions{
+		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
-			MemberTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		require.NoError(t, err)
 	}
 
 	// Read snapshot with limit - HSCAN COUNT is a hint, not a guarantee
 	// For small hashes, Redis may return all entries in one go
-	page1, pos1, cursor, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+	page1, pos1, cursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Limit:       3,
 		Cursor:      "",
 		SnapshotTTL: 300 * time.Second,
@@ -344,7 +344,7 @@ func TestSnapshotEngine_SnapshotPagination(t *testing.T) {
 
 	// Continue reading until cursor is "0" (end of iteration)
 	for cursor != "" && cursor != "0" {
-		page, pos, newCursor, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+		page, pos, newCursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 			Limit:       3,
 			Cursor:      cursor,
 			SnapshotTTL: 300 * time.Second,
@@ -373,16 +373,16 @@ func TestSnapshotEngine_EpochHandling(t *testing.T) {
 	channel := randomChannel("test_epoch")
 
 	// Publish initial data
-	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), EnginePublishOptions{
+	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 	epoch1 := pos1.Epoch
 
 	// Read snapshot
-	entries, streamPos1, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+	entries, streamPos1, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -405,24 +405,24 @@ func TestSnapshotEngine_Idempotency(t *testing.T) {
 	channel := randomChannel("test_idempotency")
 
 	// Publish with idempotency key
-	pos1, fromCache1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), EnginePublishOptions{
+	pos1, fromCache1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
 		StreamTTL:           300 * time.Second,
-		MemberTTL:           300 * time.Second,
+		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.False(t, fromCache1)
 	require.Equal(t, uint64(1), pos1.Offset)
 
 	// Publish again with same idempotency key
-	pos2, fromCache2, err := engine.Publish(ctx, channel, "key1", []byte("data1_different"), EnginePublishOptions{
+	pos2, fromCache2, err := engine.Publish(ctx, channel, "key1", []byte("data1_different"), KeyedPublishOptions{
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
 		StreamTTL:           300 * time.Second,
-		MemberTTL:           300 * time.Second,
+		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.True(t, fromCache2)
@@ -430,7 +430,7 @@ func TestSnapshotEngine_Idempotency(t *testing.T) {
 	require.Equal(t, pos1.Epoch, pos2.Epoch)   // Same epoch
 
 	// Snapshot should still have original data (second publish was cached/skipped)
-	entries, _, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -449,37 +449,37 @@ func TestSnapshotEngine_VersionedPublishing(t *testing.T) {
 	channel := randomChannel("test_version")
 
 	// Publish with version 2 (version 0 means "disable version check")
-	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v2"), EnginePublishOptions{
+	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v2"), KeyedPublishOptions{
 		Version:    2,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), pos1.Offset)
 
 	// Try to publish older version (should be suppressed)
-	pos2, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v1"), EnginePublishOptions{
+	pos2, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v1"), KeyedPublishOptions{
 		Version:    1,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Equal(t, pos1.Offset, pos2.Offset) // Same offset (suppressed)
 
 	// Publish newer version
-	pos3, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v3"), EnginePublishOptions{
+	pos3, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v3"), KeyedPublishOptions{
 		Version:    3,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), pos3.Offset) // New offset
 
 	// Snapshot should have v3 data
-	entries, _, _, err := engine.ReadSnapshot(ctx, channel, ReadSnapshotOptions{
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -498,23 +498,23 @@ func TestSnapshotEngine_MultipleChannels(t *testing.T) {
 	channel2 := randomChannel("test_multi2")
 
 	// Publish to channel1
-	_, _, err := engine.Publish(ctx, channel1, "key1", []byte("data1"), EnginePublishOptions{
+	_, _, err := engine.Publish(ctx, channel1, "key1", []byte("data1"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	// Publish to channel2
-	_, _, err = engine.Publish(ctx, channel2, "key2", []byte("data2"), EnginePublishOptions{
+	_, _, err = engine.Publish(ctx, channel2, "key2", []byte("data2"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
-		MemberTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
 	// Read channel1 snapshot
-	entries1, _, _, err := engine.ReadSnapshot(ctx, channel1, ReadSnapshotOptions{
+	entries1, _, _, err := engine.ReadSnapshot(ctx, channel1, KeyedReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -524,7 +524,7 @@ func TestSnapshotEngine_MultipleChannels(t *testing.T) {
 	require.Equal(t, []byte("data1"), snapshot1["key1"])
 
 	// Read channel2 snapshot
-	entries2, _, _, err := engine.ReadSnapshot(ctx, channel2, ReadSnapshotOptions{
+	entries2, _, _, err := engine.ReadSnapshot(ctx, channel2, KeyedReadSnapshotOptions{
 		Limit:       100,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -607,7 +607,7 @@ func TestSnapshotEngine_ReadStream2(t *testing.T) {
 
 	// Publish 5 messages to stream
 	for i := 1; i <= 5; i++ {
-		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), EnginePublishOptions{
+		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -615,7 +615,7 @@ func TestSnapshotEngine_ReadStream2(t *testing.T) {
 	}
 
 	// Test 1: Read all messages (forward)
-	pubs, streamPos, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+	pubs, streamPos, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit: -1,
 		},
@@ -628,7 +628,7 @@ func TestSnapshotEngine_ReadStream2(t *testing.T) {
 	require.Equal(t, []byte("msg_5"), pubs[4].Data)
 
 	// Test 2: Read all messages (reverse)
-	pubsRev, streamPosRev, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+	pubsRev, streamPosRev, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit:   -1,
 			Reverse: true,
@@ -641,7 +641,7 @@ func TestSnapshotEngine_ReadStream2(t *testing.T) {
 	require.Equal(t, []byte("msg_1"), pubsRev[4].Data)
 
 	// Test 3: Read with limit
-	pubsLimited, _, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+	pubsLimited, _, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit: 2,
 		},
@@ -652,7 +652,7 @@ func TestSnapshotEngine_ReadStream2(t *testing.T) {
 	require.Equal(t, []byte("msg_2"), pubsLimited[1].Data)
 
 	// Test 4: Read since offset
-	pubsSince, _, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+	pubsSince, _, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Since: &StreamPosition{
 				Offset: 2,
@@ -667,7 +667,7 @@ func TestSnapshotEngine_ReadStream2(t *testing.T) {
 	require.Equal(t, []byte("msg_5"), pubsSince[2].Data)
 
 	// Test 5: Metadata-only read
-	pubsMeta, streamPosMeta, err := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+	pubsMeta, streamPosMeta, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit: 0, // metadata only
 		},
@@ -688,7 +688,7 @@ func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
 
 	// Publish 5 messages to stream
 	for i := 1; i <= 5; i++ {
-		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), EnginePublishOptions{
+		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -696,7 +696,7 @@ func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
 	}
 
 	// Test 1: Read all messages (forward)
-	pubs, streamPos, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+	pubs, streamPos, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit: -1,
 		},
@@ -709,7 +709,7 @@ func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
 	require.Equal(t, []byte("msg_5"), pubs[4].Data)
 
 	// Test 2: Read all messages (reverse)
-	pubsRev, streamPosRev, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+	pubsRev, streamPosRev, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit:   -1,
 			Reverse: true,
@@ -722,7 +722,7 @@ func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
 	require.Equal(t, []byte("msg_1"), pubsRev[4].Data)
 
 	// Test 3: Read with limit
-	pubsLimited, _, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+	pubsLimited, _, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit: 2,
 		},
@@ -733,7 +733,7 @@ func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
 	require.Equal(t, []byte("msg_2"), pubsLimited[1].Data)
 
 	// Test 4: Read since offset
-	pubsSince, _, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+	pubsSince, _, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Since: &StreamPosition{
 				Offset: 2,
@@ -748,7 +748,7 @@ func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
 	require.Equal(t, []byte("msg_5"), pubsSince[2].Data)
 
 	// Test 5: Metadata-only read
-	pubsMeta, streamPosMeta, err := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+	pubsMeta, streamPosMeta, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{
 			Limit: 0, // metadata only
 		},
@@ -769,7 +769,7 @@ func TestSnapshotEngine_ReadStream2_Compatibility(t *testing.T) {
 
 	// Publish 10 messages
 	for i := 1; i <= 10; i++ {
-		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), EnginePublishOptions{
+		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -777,12 +777,12 @@ func TestSnapshotEngine_ReadStream2_Compatibility(t *testing.T) {
 	}
 
 	// Compare ReadStream and ReadStream2 results
-	pubs1, pos1, err1 := engine.ReadStream(ctx, channel, ReadStreamOptions{
+	pubs1, pos1, err1 := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{Limit: -1},
 	})
 	require.NoError(t, err1)
 
-	pubs2, pos2, err2 := engine.ReadStream2(ctx, channel, ReadStreamOptions{
+	pubs2, pos2, err2 := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{Limit: -1},
 	})
 	require.NoError(t, err2)
@@ -797,12 +797,12 @@ func TestSnapshotEngine_ReadStream2_Compatibility(t *testing.T) {
 	}
 
 	// Compare ReadStreamZero and ReadStreamZero2 results
-	pubs3, pos3, err3 := engine.ReadStreamZero(ctx, channel, ReadStreamOptions{
+	pubs3, pos3, err3 := engine.ReadStreamZero(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{Limit: -1},
 	})
 	require.NoError(t, err3)
 
-	pubs4, pos4, err4 := engine.ReadStreamZero2(ctx, channel, ReadStreamOptions{
+	pubs4, pos4, err4 := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{Limit: -1},
 	})
 	require.NoError(t, err4)
@@ -872,7 +872,7 @@ func TestSnapshotEngine_CleanupGeneratesLeaveMessages(t *testing.T) {
 	t.Logf("Expire ZSET immediately after add: %v", result)
 
 	// Verify the stream contains the ADD event
-	streamInitial, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
+	streamInitial, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{Limit: -1},
 	})
 	require.NoError(t, err)
@@ -897,7 +897,7 @@ func TestSnapshotEngine_CleanupGeneratesLeaveMessages(t *testing.T) {
 	t.Logf("Cleanup completed")
 
 	// Read the stream after cleanup - should have ADD + LEAVE events
-	pubs, _, err := engine.ReadStream(ctx, channel, ReadStreamOptions{
+	pubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
 		Filter: HistoryFilter{Limit: -1},
 	})
 	require.NoError(t, err)
@@ -1081,4 +1081,442 @@ func TestSnapshotEngine_AggregationWithCleanup(t *testing.T) {
 	t.Logf("After cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
 
 	t.Logf("SUCCESS: Cleanup script correctly updates aggregation")
+}
+
+// TestSnapshotEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
+// in correct score order (ascending by score).
+func TestSnapshotEngine_OrderedSnapshotOrdering(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_ordering")
+
+	// Publish entries with specific scores (out of order to test sorting)
+	testCases := []struct {
+		key   string
+		score int64
+		data  string
+	}{
+		{"key_c", 30, "data_c"},
+		{"key_a", 10, "data_a"},
+		{"key_e", 50, "data_e"},
+		{"key_b", 20, "data_b"},
+		{"key_d", 40, "data_d"},
+	}
+
+	for _, tc := range testCases {
+		_, _, err := engine.Publish(ctx, channel, tc.key, []byte(tc.data), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      tc.score,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read ordered snapshot - should be sorted by score (ascending)
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Limit:       100,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 5, "Should have all 5 entries")
+
+	// Verify ordering by score (descending: 50, 40, 30, 20, 10)
+	expectedOrder := []string{"key_e", "key_d", "key_c", "key_b", "key_a"}
+	for i, entry := range entries {
+		require.Equal(t, expectedOrder[i], entry.Key, "Entry %d should be %s", i, expectedOrder[i])
+	}
+
+	t.Logf("SUCCESS: Entries returned in correct descending score order: %v", expectedOrder)
+}
+
+// TestSnapshotEngine_OrderedSnapshotPagination tests that pagination over ordered snapshots
+// maintains correct ordering across pages.
+func TestSnapshotEngine_OrderedSnapshotPagination(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_pagination")
+
+	// Publish 20 entries with scores 100, 200, 300, ..., 2000
+	for i := 1; i <= 20; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		score := int64(i * 100)
+		data := fmt.Sprintf("data_%02d", i)
+
+		_, _, err := engine.Publish(ctx, channel, key, []byte(data), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      score,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read first page (offset=0, limit=5)
+	page1, pos1, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Offset:      0,
+		Limit:       5,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, page1, 5, "First page should have 5 entries")
+
+	// Verify first page ordering (descending: 20, 19, 18, 17, 16)
+	for i := 0; i < 5; i++ {
+		expectedKey := fmt.Sprintf("key_%02d", 20-i)
+		require.Equal(t, expectedKey, page1[i].Key, "Page 1, entry %d should be %s", i, expectedKey)
+	}
+
+	// Read second page (offset=5, limit=5)
+	page2, pos2, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Offset:      5,
+		Limit:       5,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, page2, 5, "Second page should have 5 entries")
+	require.Equal(t, pos1.Epoch, pos2.Epoch, "Epoch should be consistent across pages")
+
+	// Verify second page ordering (descending: 15, 14, 13, 12, 11)
+	for i := 0; i < 5; i++ {
+		expectedKey := fmt.Sprintf("key_%02d", 15-i)
+		require.Equal(t, expectedKey, page2[i].Key, "Page 2, entry %d should be %s", i, expectedKey)
+	}
+
+	// Read third page (offset=10, limit=5)
+	page3, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Offset:      10,
+		Limit:       5,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, page3, 5, "Third page should have 5 entries")
+
+	// Verify third page ordering (descending: 10, 09, 08, 07, 06)
+	for i := 0; i < 5; i++ {
+		expectedKey := fmt.Sprintf("key_%02d", 10-i)
+		require.Equal(t, expectedKey, page3[i].Key, "Page 3, entry %d should be %s", i, expectedKey)
+	}
+
+	// Read fourth page (offset=15, limit=5)
+	page4, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Offset:      15,
+		Limit:       5,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, page4, 5, "Fourth page should have 5 entries")
+
+	// Verify fourth page ordering (descending: 05, 04, 03, 02, 01)
+	for i := 0; i < 5; i++ {
+		expectedKey := fmt.Sprintf("key_%02d", 5-i)
+		require.Equal(t, expectedKey, page4[i].Key, "Page 4, entry %d should be %s", i, expectedKey)
+	}
+
+	// Collect all keys to verify no duplicates
+	allKeys := make(map[string]bool)
+	for _, entries := range [][]SnapshotEntry{
+		page1,
+		page2,
+		page3,
+		page4,
+	} {
+		for _, entry := range entries {
+			require.False(t, allKeys[entry.Key], "Duplicate key found: %s", entry.Key)
+			allKeys[entry.Key] = true
+		}
+	}
+
+	require.Len(t, allKeys, 20, "Should have collected all 20 unique keys")
+
+	t.Logf("SUCCESS: Pagination maintains correct ordering across 4 pages")
+}
+
+// TestSnapshotEngine_OrderedSnapshotWithNegativeScores tests ordering with negative scores.
+func TestSnapshotEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_negative")
+
+	// Publish entries with negative, zero, and positive scores
+	testCases := []struct {
+		key   string
+		score int64
+	}{
+		{"key_pos", 100},
+		{"key_neg", -50},
+		{"key_zero", 0},
+		{"key_neg2", -100},
+		{"key_pos2", 50},
+	}
+
+	for _, tc := range testCases {
+		_, _, err := engine.Publish(ctx, channel, tc.key, []byte("data"), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      tc.score,
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read ordered snapshot
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Limit:       100,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 5)
+
+	// Verify ordering (descending: 100, 50, 0, -50, -100)
+	expectedOrder := []string{"key_pos", "key_pos2", "key_zero", "key_neg", "key_neg2"}
+	for i, entry := range entries {
+		require.Equal(t, expectedOrder[i], entry.Key, "Entry %d should be %s", i, expectedOrder[i])
+	}
+
+	t.Logf("SUCCESS: Negative scores handled correctly in descending ordering")
+}
+
+// TestSnapshotEngine_OrderedSnapshotWithSameScores tests ordering stability when scores are equal.
+func TestSnapshotEngine_OrderedSnapshotWithSameScores(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_same_scores")
+
+	// Publish multiple entries with the same score
+	// Redis ZSET uses lexicographic ordering for members with equal scores
+	for i := 1; i <= 5; i++ {
+		key := fmt.Sprintf("key_%d", i)
+		_, _, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      100, // Same score for all
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read ordered snapshot
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Limit:       100,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 5)
+
+	// With same scores, Redis sorts lexicographically by member (key)
+	// With zrevrange (descending), we get reverse lexicographic: key_5, key_4, key_3, key_2, key_1
+	for i := 0; i < 5; i++ {
+		expectedKey := fmt.Sprintf("key_%d", 5-i)
+		require.Equal(t, expectedKey, entries[i].Key, "Entry %d should be %s (reverse lexicographic order)", i, expectedKey)
+	}
+
+	t.Logf("SUCCESS: Equal scores maintain reverse lexicographic ordering")
+}
+
+// TestSnapshotEngine_OrderedSnapshotPaginationBoundaries tests edge cases in pagination.
+func TestSnapshotEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_boundaries")
+
+	// Publish 10 entries
+	for i := 1; i <= 10; i++ {
+		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      int64(i * 10),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Test 1: Offset beyond entries (should return empty)
+	empty, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Offset:      100,
+		Limit:       10,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Empty(t, empty, "Offset beyond entries should return empty")
+
+	// Test 2: Limit larger than remaining entries (descending order: 10, 09, 08, ..., 01)
+	lastPage, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Offset:      8,
+		Limit:       10,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, lastPage, 2, "Should return only remaining 2 entries")
+	require.Equal(t, "key_02", lastPage[0].Key) // Position 8 in descending order
+	require.Equal(t, "key_01", lastPage[1].Key) // Position 9 in descending order
+
+	// Test 3: Offset at last entry
+	last, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Offset:      9,
+		Limit:       10,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, last, 1, "Should return only last entry")
+	require.Equal(t, "key_01", last[0].Key) // Position 9 in descending order
+
+	// Test 4: Zero limit (should return all)
+	all, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Offset:      0,
+		Limit:       0,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, all, 10, "Zero limit should return all entries")
+
+	t.Logf("SUCCESS: Pagination boundary cases handled correctly")
+}
+
+// TestSnapshotEngine_OrderedSnapshotFullPagination tests complete pagination loop.
+func TestSnapshotEngine_OrderedSnapshotFullPagination(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_full_pagination")
+
+	totalEntries := 37 // Odd number to test edge cases
+	pageSize := 10
+
+	// Publish entries
+	for i := 1; i <= totalEntries; i++ {
+		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%03d", i), []byte(fmt.Sprintf("data_%03d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      int64(i * 10),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Paginate through all entries
+	allKeys := []string{}
+	offset := 0
+
+	for {
+		entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Ordered:     true,
+			Offset:      offset,
+			Limit:       pageSize,
+			SnapshotTTL: 300 * time.Second,
+		})
+		require.NoError(t, err)
+
+		if len(entries) == 0 {
+			break
+		}
+
+		for _, entry := range entries {
+			allKeys = append(allKeys, entry.Key)
+		}
+
+		offset += len(entries)
+
+		// Prevent infinite loop
+		if offset > totalEntries+10 {
+			t.Fatal("Pagination loop exceeded expected iterations")
+		}
+	}
+
+	// Verify we got all entries in correct descending order (037, 036, ..., 001)
+	require.Len(t, allKeys, totalEntries, "Should have paginated through all %d entries", totalEntries)
+
+	for i := 0; i < totalEntries; i++ {
+		expectedKey := fmt.Sprintf("key_%03d", totalEntries-i)
+		require.Equal(t, expectedKey, allKeys[i], "Entry %d should be %s", i, expectedKey)
+	}
+
+	t.Logf("SUCCESS: Full pagination through %d entries in descending order completed correctly", totalEntries)
+}
+
+// TestSnapshotEngine_OrderedSnapshotUpdatePreservesOrder tests that updating an entry's score
+// changes its position in the ordered snapshot.
+func TestSnapshotEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_ordered_update")
+
+	// Publish 5 entries
+	for i := 1; i <= 5; i++ {
+		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%d", i), []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      int64(i * 10), // 10, 20, 30, 40, 50
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read initial order (descending: 50, 40, 30, 20, 10)
+	entries1, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Limit:       100,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "key_5", entries1[0].Key) // Highest score (50)
+	require.Equal(t, "key_1", entries1[4].Key) // Lowest score (10)
+
+	// Update key_1 to have highest score (60)
+	_, _, err = engine.Publish(ctx, channel, "key_1", []byte("updated_data"), KeyedPublishOptions{
+		Ordered:    true,
+		Score:      60, // Now highest
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read updated order
+	entries2, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered:     true,
+		Limit:       100,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries2, 5)
+
+	// Verify new order (descending: 60, 50, 40, 30, 20)
+	expectedOrder := []string{"key_1", "key_5", "key_4", "key_3", "key_2"}
+	for i, entry := range entries2 {
+		require.Equal(t, expectedOrder[i], entry.Key, "After update, entry %d should be %s", i, expectedOrder[i])
+	}
+
+	t.Logf("SUCCESS: Updating score correctly reorders entries in descending order")
 }
