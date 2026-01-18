@@ -1,5 +1,3 @@
-//go:build integration
-
 package centrifuge
 
 import (
@@ -10,22 +8,23 @@ import (
 	"time"
 )
 
-func setupSnapshotEngineBench(b *testing.B) (*RedisKeyedEngine, func()) {
+func setupMemoryKeyedEngineBench(b *testing.B) (*MemoryKeyedEngine, func()) {
 	b.Helper()
 	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(b, node)
+	engine, _ := NewMemoryKeyedEngine(node, MemoryKeyedEngineConfig{})
+	_ = engine.RegisterBrokerEventHandler(nil)
 	return engine, func() {
 		_ = node.Shutdown(context.Background())
 	}
 }
 
-// BenchmarkRedisKeyedEngine_PublishStreamOnly benchmarks publishing to stream without snapshots.
-func BenchmarkRedisKeyedEngine_PublishStreamOnly(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_PublishStreamOnly benchmarks publishing to stream without snapshots.
+func BenchmarkMemoryKeyedEngine_PublishStreamOnly(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_stream")
+	channel := "bench_stream"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -46,13 +45,13 @@ func BenchmarkRedisKeyedEngine_PublishStreamOnly(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_PublishKeyedStateSimple benchmarks simple keyed state (HASH only).
-func BenchmarkRedisKeyedEngine_PublishKeyedStateSimple(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_PublishKeyedStateSimple benchmarks simple keyed state.
+func BenchmarkMemoryKeyedEngine_PublishKeyedStateSimple(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_keyed_simple")
+	channel := "bench_keyed_simple"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -75,13 +74,13 @@ func BenchmarkRedisKeyedEngine_PublishKeyedStateSimple(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_PublishKeyedStateOrdered benchmarks ordered keyed state (HASH+ZSET).
-func BenchmarkRedisKeyedEngine_PublishKeyedStateOrdered(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_PublishKeyedStateOrdered benchmarks ordered keyed state.
+func BenchmarkMemoryKeyedEngine_PublishKeyedStateOrdered(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_keyed_ordered")
+	channel := "bench_keyed_ordered"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -106,44 +105,13 @@ func BenchmarkRedisKeyedEngine_PublishKeyedStateOrdered(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_AddMember benchmarks presence/membership operations.
-func BenchmarkRedisKeyedEngine_AddMember(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_PublishCombined benchmarks publishing with stream + snapshot.
+func BenchmarkMemoryKeyedEngine_PublishCombined(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_presence")
-
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	var counter int64
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			i := atomic.AddInt64(&counter, 1)
-			clientID := fmt.Sprintf("client%d", i)
-			userID := fmt.Sprintf("user%d", i%100) // 100 different users
-
-			err := engine.AddMember(ctx, channel, ClientInfo{
-				ClientID: clientID,
-				UserID:   userID,
-			}, EnginePresenceOptions{
-				Publish: false, // Don't publish for benchmark
-			})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-// BenchmarkRedisKeyedEngine_PublishCombined benchmarks publishing with stream + snapshot.
-func BenchmarkRedisKeyedEngine_PublishCombined(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
-	defer cleanup()
-
-	ctx := context.Background()
-	channel := randomChannel("bench_combined")
+	channel := "bench_combined"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -166,13 +134,13 @@ func BenchmarkRedisKeyedEngine_PublishCombined(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_ReadStream benchmarks reading from stream.
-func BenchmarkRedisKeyedEngine_ReadStream(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_ReadStream benchmarks reading from stream.
+func BenchmarkMemoryKeyedEngine_ReadStream(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_read_stream")
+	channel := "bench_read_stream"
 
 	// Prepopulate stream with 1000 messages
 	var sp StreamPosition
@@ -195,7 +163,7 @@ func BenchmarkRedisKeyedEngine_ReadStream(b *testing.B) {
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := engine.ReadStreamZero(ctx, channel, KeyedReadStreamOptions{
+			_, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
 				Filter: HistoryFilter{
 					Limit: 1000,
 					Since: &sp,
@@ -208,13 +176,13 @@ func BenchmarkRedisKeyedEngine_ReadStream(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_ReadSnapshotFull benchmarks reading full unordered snapshot.
-func BenchmarkRedisKeyedEngine_ReadSnapshotFull(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_ReadSnapshotFull benchmarks reading full unordered snapshot.
+func BenchmarkMemoryKeyedEngine_ReadSnapshotFull(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_read_snapshot")
+	channel := "bench_read_snapshot"
 
 	// Prepopulate snapshot with 1000 entries
 	for i := 0; i < 1000; i++ {
@@ -246,13 +214,13 @@ func BenchmarkRedisKeyedEngine_ReadSnapshotFull(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_ReadSnapshotPaginated benchmarks paginated snapshot reads.
-func BenchmarkRedisKeyedEngine_ReadSnapshotPaginated(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_ReadSnapshotPaginated benchmarks paginated snapshot reads.
+func BenchmarkMemoryKeyedEngine_ReadSnapshotPaginated(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_read_snapshot_paginated")
+	channel := "bench_read_snapshot_paginated"
 
 	// Prepopulate snapshot with 1000 entries
 	for i := 0; i < 1000; i++ {
@@ -285,13 +253,13 @@ func BenchmarkRedisKeyedEngine_ReadSnapshotPaginated(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_ReadSnapshotOrdered benchmarks reading ordered snapshot.
-func BenchmarkRedisKeyedEngine_ReadSnapshotOrdered(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_ReadSnapshotOrdered benchmarks reading ordered snapshot.
+func BenchmarkMemoryKeyedEngine_ReadSnapshotOrdered(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_read_snapshot_ordered")
+	channel := "bench_read_snapshot_ordered"
 
 	// Prepopulate ordered snapshot with 1000 entries
 	for i := 0; i < 1000; i++ {
@@ -326,59 +294,22 @@ func BenchmarkRedisKeyedEngine_ReadSnapshotOrdered(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_Members benchmarks reading presence members.
-func BenchmarkRedisKeyedEngine_Members(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_Stats benchmarks reading snapshot statistics.
+func BenchmarkMemoryKeyedEngine_Stats(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_members")
+	channel := "bench_stats"
 
-	// Prepopulate with 1000 members
+	// Prepopulate snapshot with 1000 entries
 	for i := 0; i < 1000; i++ {
-		clientID := fmt.Sprintf("client%d", i)
-		userID := fmt.Sprintf("user%d", i%100)
-		err := engine.AddMember(ctx, channel, ClientInfo{
-			ClientID: clientID,
-			UserID:   userID,
-		}, EnginePresenceOptions{
-			Publish: false,
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := engine.Members(ctx, channel)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-// BenchmarkRedisKeyedEngine_MemberStats benchmarks reading presence stats.
-func BenchmarkRedisKeyedEngine_MemberStats(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
-	defer cleanup()
-
-	ctx := context.Background()
-	channel := randomChannel("bench_member_stats")
-
-	// Prepopulate with 1000 members (100 unique users)
-	for i := 0; i < 1000; i++ {
-		clientID := fmt.Sprintf("client%d", i)
-		userID := fmt.Sprintf("user%d", i%100)
-		err := engine.AddMember(ctx, channel, ClientInfo{
-			ClientID: clientID,
-			UserID:   userID,
-		}, EnginePresenceOptions{
-			Publish: false,
+		key := fmt.Sprintf("key%d", i)
+		data := []byte(fmt.Sprintf("data%d", i))
+		_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			StreamSize: 10000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -398,23 +329,22 @@ func BenchmarkRedisKeyedEngine_MemberStats(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_ReadPresenceSnapshot benchmarks reading presence snapshot with revisions.
-func BenchmarkRedisKeyedEngine_ReadPresenceSnapshot(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_Remove benchmarks removing keys.
+func BenchmarkMemoryKeyedEngine_Remove(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_presence_snapshot")
+	channel := "bench_remove"
 
-	// Prepopulate with 1000 members
-	for i := 0; i < 1000; i++ {
-		clientID := fmt.Sprintf("client%d", i)
-		userID := fmt.Sprintf("user%d", i%100)
-		err := engine.AddMember(ctx, channel, ClientInfo{
-			ClientID: clientID,
-			UserID:   userID,
-		}, EnginePresenceOptions{
-			Publish: false,
+	// Prepopulate with keys
+	for i := 0; i < 10000; i++ {
+		key := fmt.Sprintf("key%d", i)
+		data := []byte(fmt.Sprintf("data%d", i))
+		_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			StreamSize: 10000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -424,11 +354,15 @@ func BenchmarkRedisKeyedEngine_ReadPresenceSnapshot(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
+	var counter int64
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, err := engine.ReadPresenceSnapshot(ctx, channel, KeyedReadSnapshotOptions{
-				Limit:       0, // Read all
-				SnapshotTTL: 300 * time.Second,
+			i := atomic.AddInt64(&counter, 1)
+			key := fmt.Sprintf("key%d", i)
+			_, err := engine.Remove(ctx, channel, key, KeyedRemoveOptions{
+				Publish:    false,
+				StreamSize: 10000,
+				StreamTTL:  300 * time.Second,
 			})
 			if err != nil {
 				b.Fatal(err)
@@ -437,13 +371,13 @@ func BenchmarkRedisKeyedEngine_ReadPresenceSnapshot(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_IdempotentPublish benchmarks idempotent publishing.
-func BenchmarkRedisKeyedEngine_IdempotentPublish(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_IdempotentPublish benchmarks idempotent publishing.
+func BenchmarkMemoryKeyedEngine_IdempotentPublish(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_idempotent")
+	channel := "bench_idempotent"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -467,13 +401,13 @@ func BenchmarkRedisKeyedEngine_IdempotentPublish(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_VersionedPublish benchmarks version-based publishing.
-func BenchmarkRedisKeyedEngine_VersionedPublish(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
+// BenchmarkMemoryKeyedEngine_VersionedPublish benchmarks version-based publishing.
+func BenchmarkMemoryKeyedEngine_VersionedPublish(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
 	defer cleanup()
 
 	ctx := context.Background()
-	channel := randomChannel("bench_versioned")
+	channel := "bench_versioned"
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -486,6 +420,50 @@ func BenchmarkRedisKeyedEngine_VersionedPublish(b *testing.B) {
 			data := []byte(fmt.Sprintf("data_%d", i))
 			_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
 				Version:    uint64(i),
+				StreamSize: 10000,
+				StreamTTL:  300 * time.Second,
+				KeyTTL:     300 * time.Second,
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+// BenchmarkMemoryKeyedEngine_PublishWithDelta benchmarks publishing with delta compression.
+func BenchmarkMemoryKeyedEngine_PublishWithDelta(b *testing.B) {
+	engine, cleanup := setupMemoryKeyedEngineBench(b)
+	defer cleanup()
+
+	ctx := context.Background()
+	channel := "bench_delta"
+
+	// Prepopulate with some keys
+	for i := 0; i < 100; i++ {
+		key := fmt.Sprintf("key%d", i)
+		data := []byte(fmt.Sprintf("initial_data%d", i))
+		_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			StreamSize: 10000,
+			StreamTTL:  300 * time.Second,
+			KeyTTL:     300 * time.Second,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	var counter int64
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			i := atomic.AddInt64(&counter, 1)
+			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
+			data := []byte(fmt.Sprintf("updated_data_%d", i))
+			_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+				UseDelta:   true,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,

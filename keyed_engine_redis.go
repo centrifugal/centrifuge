@@ -79,7 +79,7 @@ type engineShardWrapper struct {
 // - Snapshots (HSET): For keyed state - may keep latest protocol.Publication or custom state.
 type RedisKeyedEngine struct {
 	node *Node
-	conf SnapshotEngineConfig
+	conf RedisKeyedEngineConfig
 
 	shards []*engineShardWrapper
 
@@ -99,8 +99,8 @@ type RedisKeyedEngine struct {
 
 var _ KeyedEngine = (*RedisKeyedEngine)(nil)
 
-// SnapshotEngineConfig is a config for RedisKeyedEngine.
-type SnapshotEngineConfig struct {
+// RedisKeyedEngineConfig is a config for RedisKeyedEngine.
+type RedisKeyedEngineConfig struct {
 	// Shards is a slice of RedisShard to use. At least one shard must be provided.
 	Shards []*RedisShard
 	// Prefix to use before every channel name and key in Redis.
@@ -147,8 +147,8 @@ type SnapshotEngineConfig struct {
 	PresenceStreamMetaTTL time.Duration
 }
 
-// NewSnapshotEngine initializes RedisKeyedEngine.
-func NewSnapshotEngine(n *Node, conf SnapshotEngineConfig) (*RedisKeyedEngine, error) {
+// NewRedisKeyedEngine initializes RedisKeyedEngine.
+func NewRedisKeyedEngine(n *Node, conf RedisKeyedEngineConfig) (*RedisKeyedEngine, error) {
 	if len(conf.Shards) == 0 {
 		return nil, errors.New("snapshot engine: no shards provided")
 	}

@@ -22,7 +22,7 @@ func newTestSnapshotRedisEngine(tb testing.TB, n *Node) *RedisKeyedEngine {
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(n, redisConf)
 	require.NoError(tb, err)
-	e, err := NewSnapshotEngine(n, SnapshotEngineConfig{
+	e, err := NewRedisKeyedEngine(n, RedisKeyedEngineConfig{
 		Shards:                []*RedisShard{shard},
 		PresenceTTL:           60 * time.Second,
 		PresenceStreamSize:    100,
@@ -53,8 +53,8 @@ func snapshotToMap(entries []SnapshotEntry) map[string][]byte {
 	return result
 }
 
-// TestSnapshotEngine_StatefulChannel tests stateful channel with keyed state and revisions.
-func TestSnapshotEngine_StatefulChannel(t *testing.T) {
+// TestRedisKeyedEngine_StatefulChannel tests stateful channel with keyed state and revisions.
+func TestRedisKeyedEngine_StatefulChannel(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -108,8 +108,8 @@ func TestSnapshotEngine_StatefulChannel(t *testing.T) {
 	require.Len(t, pubs, 3) // All 3 publications in stream
 }
 
-// TestSnapshotEngine_StatefulChannelOrdered tests ordered stateful channel.
-func TestSnapshotEngine_StatefulChannelOrdered(t *testing.T) {
+// TestRedisKeyedEngine_StatefulChannelOrdered tests ordered stateful channel.
+func TestRedisKeyedEngine_StatefulChannelOrdered(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -145,8 +145,8 @@ func TestSnapshotEngine_StatefulChannelOrdered(t *testing.T) {
 	}
 }
 
-// TestSnapshotEngine_SnapshotRevision tests that snapshot values include revisions.
-func TestSnapshotEngine_SnapshotRevision(t *testing.T) {
+// TestRedisKeyedEngine_SnapshotRevision tests that snapshot values include revisions.
+func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -193,8 +193,8 @@ func TestSnapshotEngine_SnapshotRevision(t *testing.T) {
 	}
 }
 
-// TestSnapshotEngine_ConvergedMembership tests presence with revisions and ordering.
-func TestSnapshotEngine_ConvergedMembership(t *testing.T) {
+// TestRedisKeyedEngine_ConvergedMembership tests presence with revisions and ordering.
+func TestRedisKeyedEngine_ConvergedMembership(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -265,8 +265,8 @@ func TestSnapshotEngine_ConvergedMembership(t *testing.T) {
 	require.Equal(t, 1, stats.NumAggregatedKeys) // Only user2 remains
 }
 
-// TestSnapshotEngine_PresenceStream tests presence event stream (joins/leaves).
-func TestSnapshotEngine_PresenceStream(t *testing.T) {
+// TestRedisKeyedEngine_PresenceStream tests presence event stream (joins/leaves).
+func TestRedisKeyedEngine_PresenceStream(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -308,8 +308,8 @@ func TestSnapshotEngine_PresenceStream(t *testing.T) {
 	require.Equal(t, uint64(2), events[1].Offset)
 }
 
-// TestSnapshotEngine_SnapshotPagination tests cursor-based snapshot pagination.
-func TestSnapshotEngine_SnapshotPagination(t *testing.T) {
+// TestRedisKeyedEngine_SnapshotPagination tests cursor-based snapshot pagination.
+func TestRedisKeyedEngine_SnapshotPagination(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -364,8 +364,8 @@ func TestSnapshotEngine_SnapshotPagination(t *testing.T) {
 	require.Len(t, allKeys, 10)
 }
 
-// TestSnapshotEngine_EpochHandling tests epoch changes and snapshot invalidation.
-func TestSnapshotEngine_EpochHandling(t *testing.T) {
+// TestRedisKeyedEngine_EpochHandling tests epoch changes and snapshot invalidation.
+func TestRedisKeyedEngine_EpochHandling(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -396,8 +396,8 @@ func TestSnapshotEngine_EpochHandling(t *testing.T) {
 	require.NotEmpty(t, epoch1)
 }
 
-// TestSnapshotEngine_Idempotency tests idempotent publishing.
-func TestSnapshotEngine_Idempotency(t *testing.T) {
+// TestRedisKeyedEngine_Idempotency tests idempotent publishing.
+func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -440,8 +440,8 @@ func TestSnapshotEngine_Idempotency(t *testing.T) {
 	require.Equal(t, []byte("data1"), snapshot["key1"])
 }
 
-// TestSnapshotEngine_VersionedPublishing tests version-based idempotency.
-func TestSnapshotEngine_VersionedPublishing(t *testing.T) {
+// TestRedisKeyedEngine_VersionedPublishing tests version-based idempotency.
+func TestRedisKeyedEngine_VersionedPublishing(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -488,8 +488,8 @@ func TestSnapshotEngine_VersionedPublishing(t *testing.T) {
 	require.Equal(t, []byte("data_v3"), snapshot["key1"])
 }
 
-// TestSnapshotEngine_MultipleChannels tests multiple channels independently.
-func TestSnapshotEngine_MultipleChannels(t *testing.T) {
+// TestRedisKeyedEngine_MultipleChannels tests multiple channels independently.
+func TestRedisKeyedEngine_MultipleChannels(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -597,8 +597,8 @@ func TestParseSnapshotValue(t *testing.T) {
 	}
 }
 
-// TestSnapshotEngine_ReadStream2 tests the 2-call version of ReadStream.
-func TestSnapshotEngine_ReadStream2(t *testing.T) {
+// TestRedisKeyedEngine_ReadStream2 tests the 2-call version of ReadStream.
+func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -678,8 +678,8 @@ func TestSnapshotEngine_ReadStream2(t *testing.T) {
 	require.NotEmpty(t, streamPosMeta.Epoch)
 }
 
-// TestSnapshotEngine_ReadStreamZero2 tests the 2-call zero-alloc version of ReadStream.
-func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
+// TestRedisKeyedEngine_ReadStreamZero2 tests the 2-call zero-alloc version of ReadStream.
+func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -759,8 +759,8 @@ func TestSnapshotEngine_ReadStreamZero2(t *testing.T) {
 	require.NotEmpty(t, streamPosMeta.Epoch)
 }
 
-// TestSnapshotEngine_ReadStream2_Compatibility tests that ReadStream2 returns same results as ReadStream.
-func TestSnapshotEngine_ReadStream2_Compatibility(t *testing.T) {
+// TestRedisKeyedEngine_ReadStream2_Compatibility tests that ReadStream2 returns same results as ReadStream.
+func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -817,16 +817,16 @@ func TestSnapshotEngine_ReadStream2_Compatibility(t *testing.T) {
 	}
 }
 
-// TestSnapshotEngine_CleanupGeneratesLeaveMessages verifies that the Lua cleanup script
+// TestRedisKeyedEngine_CleanupGeneratesLeaveMessages verifies that the Lua cleanup script
 // correctly generates minimal LEAVE messages (key + removed + timestamp) when entries expire.
-func TestSnapshotEngine_CleanupGeneratesLeaveMessages(t *testing.T) {
+func TestRedisKeyedEngine_CleanupGeneratesLeaveMessages(t *testing.T) {
 	node, _ := New(Config{})
 
 	// Create engine with PresenceTTL for testing
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(node, redisConf)
 	require.NoError(t, err)
-	engine, err := NewSnapshotEngine(node, SnapshotEngineConfig{
+	engine, err := NewRedisKeyedEngine(node, RedisKeyedEngineConfig{
 		Shards:                []*RedisShard{shard},
 		PresenceTTL:           30 * time.Second, // Set long TTL so expire ZSET doesn't disappear
 		PresenceStreamSize:    100,
@@ -919,9 +919,9 @@ func TestSnapshotEngine_CleanupGeneratesLeaveMessages(t *testing.T) {
 	t.Logf("  Key: %s, Removed: %v, Time: %d", leaveEvent.Key, leaveEvent.Removed, leaveEvent.Time)
 }
 
-// TestSnapshotEngine_AggregationWithMultipleConnections verifies that user aggregation
+// TestRedisKeyedEngine_AggregationWithMultipleConnections verifies that user aggregation
 // correctly tracks multiple connections from the same user.
-func TestSnapshotEngine_AggregationWithMultipleConnections(t *testing.T) {
+func TestRedisKeyedEngine_AggregationWithMultipleConnections(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -1017,15 +1017,15 @@ func TestSnapshotEngine_AggregationWithMultipleConnections(t *testing.T) {
 	t.Logf("SUCCESS: Aggregation correctly tracks multiple connections per user")
 }
 
-// TestSnapshotEngine_AggregationWithCleanup verifies that cleanup script
+// TestRedisKeyedEngine_AggregationWithCleanup verifies that cleanup script
 // correctly updates aggregation when connections expire.
-func TestSnapshotEngine_AggregationWithCleanup(t *testing.T) {
+func TestRedisKeyedEngine_AggregationWithCleanup(t *testing.T) {
 	node, _ := New(Config{})
 
 	redisConf := testSingleRedisConf(6379)
 	shard, err := NewRedisShard(node, redisConf)
 	require.NoError(t, err)
-	engine, err := NewSnapshotEngine(node, SnapshotEngineConfig{
+	engine, err := NewRedisKeyedEngine(node, RedisKeyedEngineConfig{
 		Shards:                []*RedisShard{shard},
 		PresenceTTL:           30 * time.Second,
 		PresenceStreamSize:    100,
@@ -1083,9 +1083,9 @@ func TestSnapshotEngine_AggregationWithCleanup(t *testing.T) {
 	t.Logf("SUCCESS: Cleanup script correctly updates aggregation")
 }
 
-// TestSnapshotEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
+// TestRedisKeyedEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
 // in correct score order (ascending by score).
-func TestSnapshotEngine_OrderedSnapshotOrdering(t *testing.T) {
+func TestRedisKeyedEngine_OrderedSnapshotOrdering(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -1134,9 +1134,9 @@ func TestSnapshotEngine_OrderedSnapshotOrdering(t *testing.T) {
 	t.Logf("SUCCESS: Entries returned in correct descending score order: %v", expectedOrder)
 }
 
-// TestSnapshotEngine_OrderedSnapshotPagination tests that pagination over ordered snapshots
+// TestRedisKeyedEngine_OrderedSnapshotPagination tests that pagination over ordered snapshots
 // maintains correct ordering across pages.
-func TestSnapshotEngine_OrderedSnapshotPagination(t *testing.T) {
+func TestRedisKeyedEngine_OrderedSnapshotPagination(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -1243,8 +1243,8 @@ func TestSnapshotEngine_OrderedSnapshotPagination(t *testing.T) {
 	t.Logf("SUCCESS: Pagination maintains correct ordering across 4 pages")
 }
 
-// TestSnapshotEngine_OrderedSnapshotWithNegativeScores tests ordering with negative scores.
-func TestSnapshotEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
+// TestRedisKeyedEngine_OrderedSnapshotWithNegativeScores tests ordering with negative scores.
+func TestRedisKeyedEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -1292,8 +1292,8 @@ func TestSnapshotEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 	t.Logf("SUCCESS: Negative scores handled correctly in descending ordering")
 }
 
-// TestSnapshotEngine_OrderedSnapshotWithSameScores tests ordering stability when scores are equal.
-func TestSnapshotEngine_OrderedSnapshotWithSameScores(t *testing.T) {
+// TestRedisKeyedEngine_OrderedSnapshotWithSameScores tests ordering stability when scores are equal.
+func TestRedisKeyedEngine_OrderedSnapshotWithSameScores(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -1333,8 +1333,8 @@ func TestSnapshotEngine_OrderedSnapshotWithSameScores(t *testing.T) {
 	t.Logf("SUCCESS: Equal scores maintain reverse lexicographic ordering")
 }
 
-// TestSnapshotEngine_OrderedSnapshotPaginationBoundaries tests edge cases in pagination.
-func TestSnapshotEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
+// TestRedisKeyedEngine_OrderedSnapshotPaginationBoundaries tests edge cases in pagination.
+func TestRedisKeyedEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -1399,8 +1399,8 @@ func TestSnapshotEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 	t.Logf("SUCCESS: Pagination boundary cases handled correctly")
 }
 
-// TestSnapshotEngine_OrderedSnapshotFullPagination tests complete pagination loop.
-func TestSnapshotEngine_OrderedSnapshotFullPagination(t *testing.T) {
+// TestRedisKeyedEngine_OrderedSnapshotFullPagination tests complete pagination loop.
+func TestRedisKeyedEngine_OrderedSnapshotFullPagination(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
@@ -1462,9 +1462,9 @@ func TestSnapshotEngine_OrderedSnapshotFullPagination(t *testing.T) {
 	t.Logf("SUCCESS: Full pagination through %d entries in descending order completed correctly", totalEntries)
 }
 
-// TestSnapshotEngine_OrderedSnapshotUpdatePreservesOrder tests that updating an entry's score
+// TestRedisKeyedEngine_OrderedSnapshotUpdatePreservesOrder tests that updating an entry's score
 // changes its position in the ordered snapshot.
-func TestSnapshotEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
+func TestRedisKeyedEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 	node, _ := New(Config{})
 	engine := newTestSnapshotRedisEngine(t, node)
 
