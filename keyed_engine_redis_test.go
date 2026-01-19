@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,17 +37,11 @@ func newTestSnapshotRedisEngine(tb testing.TB, n *Node) *RedisKeyedEngine {
 
 // snapshotToMap converts []SnapshotEntry to map for easier testing.
 // It extracts the raw data from the Publication protobuf payload.
-func snapshotToMap(entries []SnapshotEntry) map[string][]byte {
-	result := make(map[string][]byte, len(entries))
-	for _, e := range entries {
-		// Payload is a marshaled Publication - extract the Data field
-		var pub protocol.Publication
-		if err := pub.UnmarshalVT(e.State); err == nil {
-			result[e.Key] = pub.Data
-		} else {
-			// Fallback to raw payload if not a Publication
-			result[e.Key] = e.State
-		}
+func snapshotToMap(pubs []*Publication) map[string][]byte {
+	result := make(map[string][]byte, len(pubs))
+	for _, pub := range pubs {
+		// Extract data from Publication
+		result[pub.Key] = pub.Data
 	}
 	return result
 }
@@ -186,10 +179,10 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, []byte("data1"), snapshot["key1"])
 	require.Equal(t, []byte("data2"), snapshot["key2"])
 
-	// Verify per-entry revisions
-	for _, entry := range entries {
-		require.NotEmpty(t, entry.Revision.Epoch)
-		require.Greater(t, entry.Revision.Offset, uint64(0))
+	// Verify per-entry offsets (epoch is in streamPos, same for all)
+	require.NotEmpty(t, streamPos.Epoch)
+	for _, pub := range entries {
+		require.Greater(t, pub.Offset, uint64(0))
 	}
 }
 
@@ -1226,15 +1219,15 @@ func TestRedisKeyedEngine_OrderedSnapshotPagination(t *testing.T) {
 
 	// Collect all keys to verify no duplicates
 	allKeys := make(map[string]bool)
-	for _, entries := range [][]SnapshotEntry{
+	for _, entries := range [][]*Publication{
 		page1,
 		page2,
 		page3,
 		page4,
 	} {
-		for _, entry := range entries {
-			require.False(t, allKeys[entry.Key], "Duplicate key found: %s", entry.Key)
-			allKeys[entry.Key] = true
+		for _, pub := range entries {
+			require.False(t, allKeys[pub.Key], "Duplicate key found: %s", pub.Key)
+			allKeys[pub.Key] = true
 		}
 	}
 

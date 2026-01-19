@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/centrifugal/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,17 +21,11 @@ func newTestMemoryKeyedEngine(tb testing.TB, n *Node) *MemoryKeyedEngine {
 }
 
 // snapshotToMapMemory converts []SnapshotEntry to map for easier testing.
-func snapshotToMapMemory(entries []SnapshotEntry) map[string][]byte {
-	result := make(map[string][]byte, len(entries))
-	for _, e := range entries {
-		// For memory engine, State is either raw data or marshaled Publication
-		var pub protocol.Publication
-		if err := pub.UnmarshalVT(e.State); err == nil {
-			result[e.Key] = pub.Data
-		} else {
-			// Fallback to raw payload
-			result[e.Key] = e.State
-		}
+func snapshotToMapMemory(pubs []*Publication) map[string][]byte {
+	result := make(map[string][]byte, len(pubs))
+	for _, pub := range pubs {
+		// Extract data from Publication
+		result[pub.Key] = pub.Data
 	}
 	return result
 }
@@ -170,10 +163,10 @@ func TestMemoryKeyedEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, []byte("data1"), snapshot["key1"])
 	require.Equal(t, []byte("data2"), snapshot["key2"])
 
-	// Verify per-entry revisions
-	for _, entry := range entries {
-		require.NotEmpty(t, entry.Revision.Epoch)
-		require.Greater(t, entry.Revision.Offset, uint64(0))
+	// Verify per-entry offsets (epoch is in streamPos, same for all)
+	require.NotEmpty(t, streamPos.Epoch)
+	for _, pub := range entries {
+		require.Greater(t, pub.Offset, uint64(0))
 	}
 }
 
@@ -750,7 +743,7 @@ func TestMemoryKeyedEngine_Remove(t *testing.T) {
 	require.Len(t, entries, 2)
 
 	// Remove key1
-	_, err = engine.Unpublish(ctx, channel, "key1", KeyedRemoveOptions{
+	_, err = engine.Unpublish(ctx, channel, "key1", KeyedUnpublishOptions{
 		Publish:    true,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,

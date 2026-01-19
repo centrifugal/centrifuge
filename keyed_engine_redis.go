@@ -502,6 +502,11 @@ func (e *RedisKeyedEngine) Close(_ context.Context) error {
 	return nil
 }
 
+func (e *RedisKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error {
+	// TODO: implement.
+	return nil
+}
+
 // Publish publishes data to a stateful channel with optional keyed state.
 func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (StreamPosition, bool, error) {
 	s := e.getShard(ch)
@@ -652,7 +657,7 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 }
 
 // Unpublish removes a key from keyed state snapshot.
-func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error) {
+func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, error) {
 	if key == "" {
 		return StreamPosition{}, fmt.Errorf("key is required for unpublish")
 	}
@@ -745,21 +750,21 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 // If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
 // Returns entries, stream position, next cursor for pagination, and error.
 // Cursor "0" or "" means end of iteration.
-func (e *RedisKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *RedisKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
 	if opts.Ordered {
 		return e.readOrderedSnapshot(ctx, ch, opts)
 	}
 	return e.readUnorderedSnapshot(ctx, ch, opts)
 }
 
-func (e *RedisKeyedEngine) ReadSnapshotZero(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *RedisKeyedEngine) ReadSnapshotZero(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
 	if opts.Ordered {
 		return e.readOrderedSnapshot(ctx, ch, opts)
 	}
 	return e.readUnorderedSnapshotZero(ctx, ch, opts)
 }
 
-func (e *RedisKeyedEngine) readUnorderedSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *RedisKeyedEngine) readUnorderedSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -813,35 +818,38 @@ func (e *RedisKeyedEngine) readUnorderedSnapshot(ctx context.Context, ch string,
 	}
 
 	// Parse snapshot values with revisions
-	entries := make([]SnapshotEntry, 0, len(dataArr)/2)
+	pubs := make([]*Publication, 0, len(dataArr)/2)
 	for i := 0; i < len(dataArr); i += 2 {
 		key, _ := dataArr[i].ToString()
 		val, _ := dataArr[i+1].AsBytes()
 
 		// Parse value: offset:epoch:payload
-		entryOffset, entryEpoch, payload, err := parseSnapshotValue(val)
+		entryOffset, _, payload, err := parseSnapshotValue(val)
 		if err != nil {
 			// Skip malformed entries
 			continue
 		}
 
-		entries = append(entries, SnapshotEntry{
-			Key:   key,
-			State: payload,
-			Revision: StreamPosition{
-				Offset: entryOffset,
-				Epoch:  entryEpoch,
-			},
-		})
+		// Unmarshal Publication from protobuf payload
+		var protoPub protocol.Publication
+		if err := protoPub.UnmarshalVT(payload); err != nil {
+			// Skip malformed entries
+			continue
+		}
+
+		pub := pubFromProto(&protoPub)
+		pub.Key = key
+		pub.Offset = entryOffset
+		pubs = append(pubs, pub)
 	}
-	return entries, streamPos, nextCursor, nil
+	return pubs, streamPos, nextCursor, nil
 }
 
 func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 	ctx context.Context,
 	ch string,
 	opts KeyedReadSnapshotOptions,
-) ([]SnapshotEntry, StreamPosition, string, error) {
+) ([]*Publication, StreamPosition, string, error) {
 	s := e.getShard(ch)
 
 	snapshotTTL := "0"
@@ -857,7 +865,7 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 	var (
 		streamPos  StreamPosition
 		nextCursor string
-		entries    []SnapshotEntry
+		pubs       []*Publication
 	)
 
 	err := e.readUnorderedScript.ExecWithReader(
@@ -919,7 +927,7 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 			if err != nil {
 				return err
 			}
-			entries = make([]SnapshotEntry, 0, kvCount/2)
+			pubs = make([]*Publication, 0, kvCount/2)
 
 			for i := int64(0); i < kvCount; i += 2 {
 				// Read next key
@@ -936,22 +944,22 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 					return err
 				}
 				// Parse value: offset:epoch:payload
-				entryOffset, entryEpoch, payloadBytes, err := parseSnapshotValue(valBytes)
+				entryOffset, _, payloadBytes, err := parseSnapshotValue(valBytes)
 				if err != nil {
 					// skip malformed entries
 					continue
 				}
-				// Safe copy of payload
-				payload := append([]byte(nil), payloadBytes...)
+				// Unmarshal Publication from protobuf payload
+				var protoPub protocol.Publication
+				if err := protoPub.UnmarshalVT(payloadBytes); err != nil {
+					// Skip malformed entries
+					continue
+				}
 
-				entries = append(entries, SnapshotEntry{
-					Key:   key,
-					State: payload,
-					Revision: StreamPosition{
-						Offset: entryOffset,
-						Epoch:  entryEpoch,
-					},
-				})
+			pub := pubFromProto(&protoPub)
+			pub.Key = key
+			pub.Offset = entryOffset
+			pubs = append(pubs, pub)
 			}
 
 			return nil
@@ -968,11 +976,11 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 		return nil, streamPos, nextCursor, nil
 	}
 
-	return entries, streamPos, nextCursor, nil
+	return pubs, streamPos, nextCursor, nil
 }
 
 // readOrderedSnapshot uses offset-based pagination (not cursor), so returns empty cursor.
-func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -1021,29 +1029,32 @@ func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, o
 	}
 
 	// Parse snapshot values with revisions
-	entries := make([]SnapshotEntry, 0, len(keysArr))
+	pubs := make([]*Publication, 0, len(keysArr))
 	for i := 0; i < len(keysArr); i++ {
 		key, _ := keysArr[i].ToString()
 		val, _ := valuesArr[i].AsBytes()
 
 		// Parse value: offset:epoch:payload
-		entryOffset, entryEpoch, payload, err := parseSnapshotValue(val)
+		entryOffset, _, payload, err := parseSnapshotValue(val)
 		if err != nil {
 			// Skip malformed entries
 			continue
 		}
 
-		entries = append(entries, SnapshotEntry{
-			Key:   key,
-			State: payload,
-			Revision: StreamPosition{
-				Offset: entryOffset,
-				Epoch:  entryEpoch,
-			},
-		})
+		// Unmarshal Publication from protobuf payload
+		var protoPub protocol.Publication
+		if err := protoPub.UnmarshalVT(payload); err != nil {
+			// Skip malformed entries
+			continue
+		}
+
+		pub := pubFromProto(&protoPub)
+		pub.Key = key
+		pub.Offset = entryOffset
+		pubs = append(pubs, pub)
 	}
 
-	return entries, streamPos, "", nil
+	return pubs, streamPos, "", nil
 }
 
 func (e *RedisKeyedEngine) ReadStreamZero(
@@ -2072,7 +2083,7 @@ func (e *RedisKeyedEngine) Members(ctx context.Context, ch string) (map[string]*
 
 // MemberStats returns short stats of current presence data.
 // This is a read-only operation - cleanup is handled by the cleanup worker.
-func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (KeyedSnapshotStats, error) {
+func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
@@ -2084,20 +2095,20 @@ func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (KeyedSnapshotS
 		nil, // No arguments needed for read-only stats
 	).ToArray()
 	if err != nil {
-		return KeyedSnapshotStats{}, err
+		return KeyedStats{}, err
 	}
 	if len(replies) != 2 {
-		return KeyedSnapshotStats{}, errors.New("wrong number of replies from script")
+		return KeyedStats{}, errors.New("wrong number of replies from script")
 	}
 	numKeys, err := replies[0].AsInt64()
 	if err != nil {
-		return KeyedSnapshotStats{}, err
+		return KeyedStats{}, err
 	}
 	numAggregated, err := replies[1].AsInt64()
 	if err != nil {
-		return KeyedSnapshotStats{}, err
+		return KeyedStats{}, err
 	}
-	return KeyedSnapshotStats{NumKeys: int(numKeys), NumAggregatedKeys: int(numAggregated)}, nil
+	return KeyedStats{NumKeys: int(numKeys), NumAggregatedKeys: int(numAggregated)}, nil
 }
 
 // ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.
@@ -2105,26 +2116,11 @@ func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (KeyedSnapshotS
 // If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
 // Returns Publications with Key=ClientID, Info=ClientInfo, Offset/Epoch for revision.
 func (e *RedisKeyedEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, error) {
-	// ReadPresenceSnapshot is just ReadSnapshot with SnapshotEntry → Publication unmarshaling.
+	// ReadPresenceSnapshot is just ReadSnapshot - it already returns Publications with Key and Offset set.
 	// This reuses all the snapshot reading logic.
-	snapshotEntries, streamPos, _, err := e.ReadSnapshot(ctx, ch, opts)
+	pubs, streamPos, _, err := e.ReadSnapshot(ctx, ch, opts)
 	if err != nil {
 		return nil, StreamPosition{}, err
-	}
-
-	pubs := make([]*Publication, 0, len(snapshotEntries))
-	for _, entry := range snapshotEntries {
-		// Unmarshal Publication from snapshot payload
-		var protoPub protocol.Publication
-		err := protoPub.UnmarshalVT(entry.State)
-		if err != nil {
-			// Skip malformed entries
-			continue
-		}
-		pub := pubFromProto(&protoPub)
-		pub.Offset = entry.Revision.Offset
-		pub.Key = entry.Key
-		pubs = append(pubs, pub)
 	}
 	return pubs, streamPos, nil
 }

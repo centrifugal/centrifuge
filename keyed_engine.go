@@ -16,34 +16,27 @@ type KeyedEngine interface {
 	Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (StreamPosition, bool, error)
 	// Unpublish removes a key from keyed state snapshot and optionally sends remove
 	// Publication to stream.
-	Unpublish(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error)
+	Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, error)
 
 	// ReadStream retrieves publications from stream for a channel, with cursor
 	// pagination support.
 	ReadStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error)
 	// ReadSnapshot retrieves a snapshot for a channel with per-entry revisions.
-	// Each entry includes its revision so client can filter: entry.Revision <= snapshot_revision.
-	// Returns entries, current stream position, next cursor for pagination, and error.
+	// Returns publications (each with Key and Offset set), current stream position (with Epoch),
+	// next cursor for pagination, and error.
+	// Client must filter entries where pub.Offset <= snapshot_revision.Offset and compare epochs.
 	// If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
 	// Cursor "" means end of iteration.
-	ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error)
+	ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error)
 
 	// Stats returns short stats of snapshot.
-	Stats(ctx context.Context, ch string) (KeyedSnapshotStats, error)
+	Stats(ctx context.Context, ch string) (KeyedStats, error)
 
-	// NOT NEEDED FOR KeyedEngine - since may be built on core methods.
-	//// AddMember adds a client to presence in a channel.
-	//AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error
-	//// RemoveMember removes a client from presence in a channel.
-	//RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error
-	//// ReadPresenceStream retrieves presence event stream (joins/leaves) for recovery.
-	//// Returns Publications with Info field (ClientInfo) and Removed flag (true for leave, false for join).
-	//ReadPresenceStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error)
-	//// ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.
-	//// Returns Publications with Key=ClientID, Info=ClientInfo, and Offset/Epoch for revision tracking.
-	//// Presence doesn't use cursor pagination - returns all entries.
-	//ReadPresenceSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, error)
+	// Remove channel data from storage: stream and snapshot.
+	Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error
 }
+
+type KeyedRemoveOptions struct{}
 
 // KeyedPublishOptions defines options for publishing.
 type KeyedPublishOptions struct {
@@ -72,8 +65,8 @@ type EnginePresenceOptions struct {
 	Publish bool
 }
 
-// KeyedRemoveOptions defines options for unpublishing (removing a key from keyed state).
-type KeyedRemoveOptions struct {
+// KeyedUnpublishOptions defines options for unpublishing (removing a key from keyed state).
+type KeyedUnpublishOptions struct {
 	// Publish whether to publish removal notification to subscribers.
 	Publish bool
 
@@ -85,7 +78,7 @@ type KeyedRemoveOptions struct {
 	StreamMetaTTL time.Duration
 }
 
-type KeyedSnapshotStats struct {
+type KeyedStats struct {
 	NumKeys           int
 	NumAggregatedKeys int
 }
@@ -110,12 +103,4 @@ type KeyedReadSnapshotOptions struct {
 	Limit            int
 	Offset           int
 	SnapshotTTL      time.Duration
-}
-
-// SnapshotEntry represents a single entry in a snapshot with its revision.
-// Client MUST filter entries where entry.Revision <= requested snapshot_revision.
-type SnapshotEntry struct {
-	Key      string         // Key of entry.
-	Revision StreamPosition // StreamPosition of corresponding publication (offset, epoch).
-	State    []byte         // State of key – in many cases the latest Publication.
 }

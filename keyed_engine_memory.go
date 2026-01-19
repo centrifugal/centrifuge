@@ -74,6 +74,11 @@ func (e *MemoryKeyedEngine) pubLock(ch string) *sync.Mutex {
 	return e.pubLocks[index(ch, numPubLocks)]
 }
 
+func (e *MemoryKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error {
+	// TODO: implement.
+	return nil
+}
+
 // Subscribe is noop here.
 func (e *MemoryKeyedEngine) Subscribe(_ string) error {
 	return nil
@@ -131,7 +136,7 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 }
 
 // Unpublish removes a key from keyed state.
-func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error) {
+func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
@@ -160,12 +165,12 @@ func (e *MemoryKeyedEngine) ReadStream(ctx context.Context, ch string, opts Keye
 }
 
 // ReadSnapshot retrieves keyed snapshot with revisions.
-func (e *MemoryKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (e *MemoryKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
 	return e.keyedHub.getSnapshot(ch, opts)
 }
 
 // Stats returns snapshot statistics.
-func (e *MemoryKeyedEngine) Stats(ctx context.Context, ch string) (KeyedSnapshotStats, error) {
+func (e *MemoryKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, error) {
 	return e.keyedHub.getStats(ch)
 }
 
@@ -215,7 +220,7 @@ func (e *MemoryKeyedEngine) RemoveMember(ctx context.Context, ch string, info Cl
 	mu.Lock()
 	defer mu.Unlock()
 
-	removeOpts := KeyedRemoveOptions{
+	removeOpts := KeyedUnpublishOptions{
 		Publish:    opts.Publish,
 		StreamSize: 10000,
 		StreamTTL:  300 * time.Second,
@@ -250,12 +255,17 @@ func (e *MemoryKeyedEngine) Members(ctx context.Context, ch string) (map[string]
 	}
 
 	members := make(map[string]*ClientInfo, len(entries))
-	for _, entry := range entries {
-		var info ClientInfo
-		if err := json.Unmarshal(entry.State, &info); err != nil {
-			continue
+	for _, pub := range entries {
+		if pub.Info != nil {
+			members[pub.Key] = pub.Info
+		} else {
+			// Fallback: unmarshal from Data if Info is not set
+			var info ClientInfo
+			if err := json.Unmarshal(pub.Data, &info); err != nil {
+				continue
+			}
+			members[pub.Key] = &info
 		}
-		members[entry.Key] = &info
 	}
 
 	return members, nil
@@ -263,26 +273,11 @@ func (e *MemoryKeyedEngine) Members(ctx context.Context, ch string) (map[string]
 
 // ReadPresenceSnapshot retrieves presence snapshot with revisions.
 func (e *MemoryKeyedEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, error) {
-	entries, streamPos, _, err := e.keyedHub.getSnapshot(ch, opts)
+	pubs, streamPos, _, err := e.keyedHub.getSnapshot(ch, opts)
 	if err != nil {
 		return nil, StreamPosition{}, err
 	}
-
-	pubs := make([]*Publication, 0, len(entries))
-	for _, entry := range entries {
-		var info ClientInfo
-		if err := json.Unmarshal(entry.State, &info); err != nil {
-			continue
-		}
-		pub := &Publication{
-			Key:    entry.Key,
-			Data:   entry.State,
-			Info:   &info,
-			Offset: entry.Revision.Offset,
-		}
-		pubs = append(pubs, pub)
-	}
-
+	// getSnapshot already returns Publications with Key and Offset set
 	return pubs, streamPos, nil
 }
 
@@ -370,10 +365,10 @@ type keyedChannel struct {
 }
 
 type snapshotEntry struct {
-	Key      string
-	Revision StreamPosition
-	State    []byte
-	Score    int64 // For ordered snapshots
+	Key         string
+	Revision    StreamPosition
+	Publication *Publication
+	Score       int64 // For ordered snapshots
 }
 
 func newKeyedHub(historyMetaTTL time.Duration, closeCh chan struct{}) *keyedHub {
@@ -482,11 +477,7 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 		// Get previous publication for delta
 		if channel, ok := h.channels[ch]; ok {
 			if entry, ok := channel.snapshot[key]; ok {
-				prevPub = &Publication{
-					Data:   entry.State,
-					Offset: entry.Revision.Offset,
-					Key:    key,
-				}
+				prevPub = entry.Publication
 			}
 		}
 	}
@@ -559,10 +550,10 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 	// Handle keyed snapshot
 	if key != "" {
 		entry := &snapshotEntry{
-			Key:      key,
-			Revision: streamPosition,
-			State:    pub.Data,
-			Score:    opts.Score,
+			Key:         key,
+			Revision:    streamPosition,
+			Publication: pub,
+			Score:       opts.Score,
 		}
 
 		channel.snapshot[key] = entry
@@ -583,7 +574,7 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 	return streamPosition, prevPub, false, nil
 }
 
-func (h *keyedHub) remove(ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error) {
+func (h *keyedHub) remove(ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -595,11 +586,8 @@ func (h *keyedHub) remove(ch string, key string, opts KeyedRemoveOptions) (Strea
 	// Get the entry before removing to extract Info if present
 	var info *ClientInfo
 	if entry, ok := channel.snapshot[key]; ok {
-		// Try to unmarshal ClientInfo from State (for presence)
-		var clientInfo ClientInfo
-		if err := json.Unmarshal(entry.State, &clientInfo); err == nil {
-			info = &clientInfo
-		}
+		// Get ClientInfo from Publication (for presence)
+		info = entry.Publication.Info
 	}
 
 	// Remove from snapshot
@@ -727,7 +715,7 @@ func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publica
 	return pubs, streamPosition, nil
 }
 
-func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error) {
+func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
 	// Always use write lock since we cache sorted keys for all snapshots
 	h.Lock()
 	defer h.Unlock()
@@ -758,7 +746,7 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]Snap
 		}
 	}
 
-	var entries []SnapshotEntry
+	var pubs []*Publication
 
 	// Rebuild sorted keys if dirty (applies to both ordered and non-ordered)
 	if channel.sortedKeysDirty || len(channel.sortedKeys) != len(channel.snapshot) {
@@ -794,7 +782,7 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]Snap
 		}
 
 		if offset >= totalKeys {
-			return []SnapshotEntry{}, streamPosition, "", nil
+			return []*Publication{}, streamPosition, "", nil
 		}
 
 		startIdx = offset
@@ -808,31 +796,28 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]Snap
 		}
 	}
 
-	// Build only the entries we need (avoids allocating full slice then slicing)
-	entries = make([]SnapshotEntry, endIdx-startIdx)
+	// Build only the pubs we need (avoids allocating full slice then slicing)
+	pubs = make([]*Publication, endIdx-startIdx)
 	for i := startIdx; i < endIdx; i++ {
 		key := channel.sortedKeys[i]
 		entry := channel.snapshot[key]
-		entries[i-startIdx] = SnapshotEntry{
-			Key:      entry.Key,
-			Revision: entry.Revision,
-			State:    entry.State,
-		}
+		// Return the stored Publication pointer directly - it already has Key and Offset set
+		pubs[i-startIdx] = entry.Publication
 	}
 
-	return entries, streamPosition, cursor, nil
+	return pubs, streamPosition, cursor, nil
 }
 
-func (h *keyedHub) getStats(ch string) (KeyedSnapshotStats, error) {
+func (h *keyedHub) getStats(ch string) (KeyedStats, error) {
 	h.RLock()
 	defer h.RUnlock()
 
 	channel, ok := h.channels[ch]
 	if !ok {
-		return KeyedSnapshotStats{}, nil
+		return KeyedStats{}, nil
 	}
 
-	return KeyedSnapshotStats{
+	return KeyedStats{
 		NumKeys:           len(channel.snapshot),
 		NumAggregatedKeys: 0, // Not applicable for memory engine
 	}, nil
