@@ -173,6 +173,7 @@ func TestMetrics(t *testing.T) {
 		getChannelNamespaceLabel  func(channel string) string
 		channelNamespaceCacheSize int
 		registererGatherer        RegistererGatherer
+		constLabels               map[string]string
 	}{
 		{
 			name: "no channel namespace",
@@ -204,6 +205,17 @@ func TestMetrics(t *testing.T) {
 			},
 			metricsNamespace: "test",
 		},
+		{
+			name: "with const labels",
+			getChannelNamespaceLabel: func(channel string) string {
+				return channel
+			},
+			constLabels: map[string]string{
+				"environment": "test",
+				"region":      "us-east-1",
+			},
+			registererGatherer: prometheus.NewRegistry(),
+		},
 	}
 
 	for _, tc := range testCases {
@@ -213,6 +225,7 @@ func TestMetrics(t *testing.T) {
 				GetChannelNamespaceLabel:             tc.getChannelNamespaceLabel,
 				ChannelNamespaceCacheSize:            tc.channelNamespaceCacheSize,
 				RegistererGatherer:                   tc.registererGatherer,
+				ConstLabels:                          tc.constLabels,
 				EnableRecoveredPublicationsHistogram: true,
 			})
 			require.NoError(t, err)
