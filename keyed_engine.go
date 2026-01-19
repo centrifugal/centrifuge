@@ -14,9 +14,10 @@ type KeyedEngine interface {
 	// Publish allows sending data into a channel. It can optionally use stream
 	// and keyed snapshots.
 	Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (StreamPosition, bool, error)
-	// Remove removes a key from keyed state snapshot and optionally sends remove
+	// Unpublish removes a key from keyed state snapshot and optionally sends remove
 	// Publication to stream.
-	Remove(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error)
+	Unpublish(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error)
+
 	// ReadStream retrieves publications from stream for a channel, with cursor
 	// pagination support.
 	ReadStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error)
@@ -26,6 +27,7 @@ type KeyedEngine interface {
 	// If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
 	// Cursor "" means end of iteration.
 	ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]SnapshotEntry, StreamPosition, string, error)
+
 	// Stats returns short stats of snapshot.
 	Stats(ctx context.Context, ch string) (KeyedSnapshotStats, error)
 

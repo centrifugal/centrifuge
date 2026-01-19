@@ -130,8 +130,8 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	return streamTop, false, nil
 }
 
-// Remove removes a key from keyed state.
-func (e *MemoryKeyedEngine) Remove(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error) {
+// Unpublish removes a key from keyed state.
+func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()

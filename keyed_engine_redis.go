@@ -651,8 +651,8 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 	return parseAddScriptResult(replies)
 }
 
-// Remove removes a key from keyed state snapshot.
-func (e *RedisKeyedEngine) Remove(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error) {
+// Unpublish removes a key from keyed state snapshot.
+func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedRemoveOptions) (StreamPosition, error) {
 	if key == "" {
 		return StreamPosition{}, fmt.Errorf("key is required for unpublish")
 	}

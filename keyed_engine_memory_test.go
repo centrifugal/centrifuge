@@ -750,7 +750,7 @@ func TestMemoryKeyedEngine_Remove(t *testing.T) {
 	require.Len(t, entries, 2)
 
 	// Remove key1
-	_, err = engine.Remove(ctx, channel, "key1", KeyedRemoveOptions{
+	_, err = engine.Unpublish(ctx, channel, "key1", KeyedRemoveOptions{
 		Publish:    true,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
