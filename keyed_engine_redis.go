@@ -813,8 +813,8 @@ func (e *RedisKeyedEngine) readUnorderedSnapshot(ctx context.Context, ch string,
 
 	// Validate epoch if client provided snapshot revision
 	if opts.SnapshotRevision != nil && opts.SnapshotRevision.Epoch != streamEpoch {
-		// Epoch changed - return empty entries, client must restart
-		return nil, streamPos, nextCursor, nil
+		// Epoch changed, client needs to restart from beginning
+		return nil, streamPos, nextCursor, ErrorUnrecoverablePosition
 	}
 
 	// Parse snapshot values with revisions
@@ -973,7 +973,7 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 	// Validate snapshot revision (unchanged semantics)
 	if opts.SnapshotRevision != nil &&
 		opts.SnapshotRevision.Epoch != streamPos.Epoch {
-		return nil, streamPos, nextCursor, nil
+		return nil, streamPos, nextCursor, ErrorUnrecoverablePosition
 	}
 
 	return pubs, streamPos, nextCursor, nil
@@ -1024,8 +1024,8 @@ func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, o
 
 	// Validate epoch if client provided snapshot revision
 	if opts.SnapshotRevision != nil && opts.SnapshotRevision.Epoch != streamEpoch {
-		// Epoch changed - return empty entries, client must restart
-		return nil, streamPos, "", nil
+		// Epoch changed, client needs to restart from beginning
+		return nil, streamPos, "", ErrorUnrecoverablePosition
 	}
 
 	// Parse snapshot values with revisions

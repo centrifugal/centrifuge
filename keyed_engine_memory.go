@@ -741,8 +741,8 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 	// Check if client requested specific snapshot revision
 	if opts.SnapshotRevision != nil {
 		if streamPosition.Epoch != opts.SnapshotRevision.Epoch {
-			// Epoch changed, return empty to force client restart
-			return nil, streamPosition, "", nil
+			// Epoch changed, client needs to restart from beginning
+			return nil, streamPosition, "", ErrorUnrecoverablePosition
 		}
 	}
 
