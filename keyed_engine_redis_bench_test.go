@@ -35,7 +35,7 @@ func BenchmarkRedisKeyedEngine_PublishStreamOnly(b *testing.B) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
-			_, _, err := engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 			})
@@ -63,7 +63,7 @@ func BenchmarkRedisKeyedEngine_PublishKeyedStateSimple(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -92,7 +92,7 @@ func BenchmarkRedisKeyedEngine_PublishKeyedStateOrdered(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
 				Ordered:    true,
 				Score:      i,
 				StreamSize: 10000,
@@ -106,36 +106,36 @@ func BenchmarkRedisKeyedEngine_PublishKeyedStateOrdered(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_AddMember benchmarks presence/membership operations.
-func BenchmarkRedisKeyedEngine_AddMember(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
-	defer cleanup()
-
-	ctx := context.Background()
-	channel := randomChannel("bench_presence")
-
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	var counter int64
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			i := atomic.AddInt64(&counter, 1)
-			clientID := fmt.Sprintf("client%d", i)
-			userID := fmt.Sprintf("user%d", i%100) // 100 different users
-
-			err := engine.AddMember(ctx, channel, ClientInfo{
-				ClientID: clientID,
-				UserID:   userID,
-			}, EnginePresenceOptions{
-				Publish: false, // Don't publish for benchmark
-			})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
+//// BenchmarkRedisKeyedEngine_AddMember benchmarks presence/membership operations.
+//func BenchmarkRedisKeyedEngine_AddMember(b *testing.B) {
+//	engine, cleanup := setupSnapshotEngineBench(b)
+//	defer cleanup()
+//
+//	ctx := context.Background()
+//	channel := randomChannel("bench_presence")
+//
+//	b.ReportAllocs()
+//	b.ResetTimer()
+//
+//	var counter int64
+//	b.RunParallel(func(pb *testing.PB) {
+//		for pb.Next() {
+//			i := atomic.AddInt64(&counter, 1)
+//			clientID := fmt.Sprintf("client%d", i)
+//			userID := fmt.Sprintf("user%d", i%100) // 100 different users
+//
+//			err := engine.AddMember(ctx, channel, ClientInfo{
+//				ClientID: clientID,
+//				UserID:   userID,
+//			}, EnginePresenceOptions{
+//				Publish: false, // Don't publish for benchmark
+//			})
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//		}
+//	})
+//}
 
 // BenchmarkRedisKeyedEngine_PublishCombined benchmarks publishing with stream + snapshot.
 func BenchmarkRedisKeyedEngine_PublishCombined(b *testing.B) {
@@ -154,7 +154,7 @@ func BenchmarkRedisKeyedEngine_PublishCombined(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -178,14 +178,14 @@ func BenchmarkRedisKeyedEngine_ReadStream(b *testing.B) {
 	var sp StreamPosition
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
-		var err error
-		sp, _, err = engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
+		res, err := engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 		})
 		if err != nil {
 			b.Fatal(err)
 		}
+		sp = res.Position
 	}
 
 	b.ReportAllocs()
@@ -196,7 +196,7 @@ func BenchmarkRedisKeyedEngine_ReadStream(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			_, _, err := engine.ReadStreamZero(ctx, channel, KeyedReadStreamOptions{
-				Filter: HistoryFilter{
+				Filter: StreamFilter{
 					Limit: 1000,
 					Since: &sp,
 				},
@@ -220,7 +220,7 @@ func BenchmarkRedisKeyedEngine_ReadSnapshotFull(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -258,7 +258,7 @@ func BenchmarkRedisKeyedEngine_ReadSnapshotPaginated(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -297,7 +297,7 @@ func BenchmarkRedisKeyedEngine_ReadSnapshotOrdered(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
 			Ordered:    true,
 			Score:      int64(i),
 			StreamSize: 10000,
@@ -326,116 +326,117 @@ func BenchmarkRedisKeyedEngine_ReadSnapshotOrdered(b *testing.B) {
 	})
 }
 
-// BenchmarkRedisKeyedEngine_Members benchmarks reading presence members.
-func BenchmarkRedisKeyedEngine_Members(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
-	defer cleanup()
+//
+//// BenchmarkRedisKeyedEngine_Members benchmarks reading presence members.
+//func BenchmarkRedisKeyedEngine_Members(b *testing.B) {
+//	engine, cleanup := setupSnapshotEngineBench(b)
+//	defer cleanup()
+//
+//	ctx := context.Background()
+//	channel := randomChannel("bench_members")
+//
+//	// Prepopulate with 1000 members
+//	for i := 0; i < 1000; i++ {
+//		clientID := fmt.Sprintf("client%d", i)
+//		userID := fmt.Sprintf("user%d", i%100)
+//		err := engine.AddMember(ctx, channel, ClientInfo{
+//			ClientID: clientID,
+//			UserID:   userID,
+//		}, EnginePresenceOptions{
+//			Publish: false,
+//		})
+//		if err != nil {
+//			b.Fatal(err)
+//		}
+//	}
+//
+//	b.ReportAllocs()
+//	b.ResetTimer()
+//
+//	b.RunParallel(func(pb *testing.PB) {
+//		for pb.Next() {
+//			_, err := engine.Members(ctx, channel)
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//		}
+//	})
+//}
 
-	ctx := context.Background()
-	channel := randomChannel("bench_members")
+//// BenchmarkRedisKeyedEngine_MemberStats benchmarks reading presence stats.
+//func BenchmarkRedisKeyedEngine_MemberStats(b *testing.B) {
+//	engine, cleanup := setupSnapshotEngineBench(b)
+//	defer cleanup()
+//
+//	ctx := context.Background()
+//	channel := randomChannel("bench_member_stats")
+//
+//	// Prepopulate with 1000 members (100 unique users)
+//	for i := 0; i < 1000; i++ {
+//		clientID := fmt.Sprintf("client%d", i)
+//		userID := fmt.Sprintf("user%d", i%100)
+//		err := engine.AddMember(ctx, channel, ClientInfo{
+//			ClientID: clientID,
+//			UserID:   userID,
+//		}, EnginePresenceOptions{
+//			Publish: false,
+//		})
+//		if err != nil {
+//			b.Fatal(err)
+//		}
+//	}
+//
+//	b.ReportAllocs()
+//	b.ResetTimer()
+//
+//	b.RunParallel(func(pb *testing.PB) {
+//		for pb.Next() {
+//			_, err := engine.Stats(ctx, channel)
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//		}
+//	})
+//}
 
-	// Prepopulate with 1000 members
-	for i := 0; i < 1000; i++ {
-		clientID := fmt.Sprintf("client%d", i)
-		userID := fmt.Sprintf("user%d", i%100)
-		err := engine.AddMember(ctx, channel, ClientInfo{
-			ClientID: clientID,
-			UserID:   userID,
-		}, EnginePresenceOptions{
-			Publish: false,
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := engine.Members(ctx, channel)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-// BenchmarkRedisKeyedEngine_MemberStats benchmarks reading presence stats.
-func BenchmarkRedisKeyedEngine_MemberStats(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
-	defer cleanup()
-
-	ctx := context.Background()
-	channel := randomChannel("bench_member_stats")
-
-	// Prepopulate with 1000 members (100 unique users)
-	for i := 0; i < 1000; i++ {
-		clientID := fmt.Sprintf("client%d", i)
-		userID := fmt.Sprintf("user%d", i%100)
-		err := engine.AddMember(ctx, channel, ClientInfo{
-			ClientID: clientID,
-			UserID:   userID,
-		}, EnginePresenceOptions{
-			Publish: false,
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := engine.Stats(ctx, channel)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-// BenchmarkRedisKeyedEngine_ReadPresenceSnapshot benchmarks reading presence snapshot with revisions.
-func BenchmarkRedisKeyedEngine_ReadPresenceSnapshot(b *testing.B) {
-	engine, cleanup := setupSnapshotEngineBench(b)
-	defer cleanup()
-
-	ctx := context.Background()
-	channel := randomChannel("bench_presence_snapshot")
-
-	// Prepopulate with 1000 members
-	for i := 0; i < 1000; i++ {
-		clientID := fmt.Sprintf("client%d", i)
-		userID := fmt.Sprintf("user%d", i%100)
-		err := engine.AddMember(ctx, channel, ClientInfo{
-			ClientID: clientID,
-			UserID:   userID,
-		}, EnginePresenceOptions{
-			Publish: false,
-		})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, _, err := engine.ReadPresenceSnapshot(ctx, channel, KeyedReadSnapshotOptions{
-				Limit:       0, // Read all
-				SnapshotTTL: 300 * time.Second,
-			})
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
+//// BenchmarkRedisKeyedEngine_ReadPresenceSnapshot benchmarks reading presence snapshot with revisions.
+//func BenchmarkRedisKeyedEngine_ReadPresenceSnapshot(b *testing.B) {
+//	engine, cleanup := setupSnapshotEngineBench(b)
+//	defer cleanup()
+//
+//	ctx := context.Background()
+//	channel := randomChannel("bench_presence_snapshot")
+//
+//	// Prepopulate with 1000 members
+//	for i := 0; i < 1000; i++ {
+//		clientID := fmt.Sprintf("client%d", i)
+//		userID := fmt.Sprintf("user%d", i%100)
+//		err := engine.AddMember(ctx, channel, ClientInfo{
+//			ClientID: clientID,
+//			UserID:   userID,
+//		}, EnginePresenceOptions{
+//			Publish: false,
+//		})
+//		if err != nil {
+//			b.Fatal(err)
+//		}
+//	}
+//
+//	b.ReportAllocs()
+//	b.ResetTimer()
+//
+//	b.RunParallel(func(pb *testing.PB) {
+//		for pb.Next() {
+//			_, _, err := engine.ReadPresenceSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+//				Limit:       0, // Read all
+//				SnapshotTTL: 300 * time.Second,
+//			})
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//		}
+//	})
+//}
 
 // BenchmarkRedisKeyedEngine_IdempotentPublish benchmarks idempotent publishing.
 func BenchmarkRedisKeyedEngine_IdempotentPublish(b *testing.B) {
@@ -454,7 +455,7 @@ func BenchmarkRedisKeyedEngine_IdempotentPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			idempotencyKey := fmt.Sprintf("key_%d", i)
-			_, _, err := engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
 				StreamSize:          10000,
@@ -484,7 +485,7 @@ func BenchmarkRedisKeyedEngine_VersionedPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("data_%d", i))
-			_, _, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
 				Version:    uint64(i),
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,

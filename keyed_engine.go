@@ -12,20 +12,25 @@ type KeyedEngine interface {
 	Unsubscribe(ch string) error
 
 	// Publish allows sending data into a channel. It can optionally use stream
-	// and keyed snapshots.
-	Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (StreamPosition, bool, error)
+	// and keyed snapshots. Returns KeyedPublishResult with Applied=true only when
+	// the snapshot was actually changed. When Applied=false (due to idempotency
+	// suppression or out-of-order version), no message is appended to stream
+	// and no publication is sent to PUB/SUB.
+	Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (KeyedPublishResult, error)
 	// Unpublish removes a key from keyed state snapshot and optionally sends remove
-	// Publication to stream.
-	Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, error)
+	// Publication to stream. Returns KeyedPublishResult with Applied=true only when
+	// the key was actually removed from the snapshot. When Applied=false (key not
+	// found), no message is appended to stream and no publication is sent.
+	Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (KeyedPublishResult, error)
 
 	// ReadStream retrieves publications from stream for a channel, with cursor
 	// pagination support.
 	ReadStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error)
-	// ReadSnapshot retrieves a snapshot for a channel with per-entry revisions.
-	// Returns publications (each with Key and Offset set), current stream position (with Epoch),
+	// ReadSnapshot retrieves a snapshot for a channel – list of saved Publication (usually latest per key).
+	// Returns publications (each with Key and Offset set), current stream position (top offset/epoch),
 	// next cursor for pagination, and error.
-	// Client must filter entries where pub.Offset <= snapshot_revision.Offset and compare epochs.
-	// If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
+	// Client must filter entries where pub.Offset >= first_page_revision.Offset.
+	// If opts.Revision is provided and epoch changed, must return ErrorUnrecoverablePosition.
 	// Cursor "" means end of iteration.
 	ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error)
 
@@ -36,39 +41,40 @@ type KeyedEngine interface {
 	Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error
 }
 
-type KeyedRemoveOptions struct{}
-
 // KeyedPublishOptions defines options for publishing.
 type KeyedPublishOptions struct {
-	Tags       map[string]string
-	ClientInfo *ClientInfo
+	// Publish is whether to publish to subscribers.
+	Publish bool
 
+	// IdempotencyKey for suppressing duplicates in IdempotentResultTTL window.
 	IdempotencyKey      string
 	IdempotentResultTTL time.Duration
 
+	// StreamSize for appending removal event to stream (0 to disable).
+	StreamSize int
+	// StreamTTL for stream entries.
+	StreamTTL time.Duration
+	// StreamMetaTTL for stream metadata.
+	StreamMetaTTL time.Duration
+
+	Tags         map[string]string
+	ClientInfo   *ClientInfo
 	UseDelta     bool
 	Version      uint64
 	VersionEpoch string
-
-	StreamSize    int
-	StreamTTL     time.Duration
-	StreamMetaTTL time.Duration
-
-	KeyTTL time.Duration
-
-	Ordered bool
-	Score   int64
-}
-
-// EnginePresenceOptions defines options for presence operations.
-type EnginePresenceOptions struct {
-	Publish bool
+	KeyTTL       time.Duration
+	Ordered      bool
+	Score        int64
 }
 
 // KeyedUnpublishOptions defines options for unpublishing (removing a key from keyed state).
 type KeyedUnpublishOptions struct {
-	// Publish whether to publish removal notification to subscribers.
+	// Publish whether to publish removal to subscribers.
 	Publish bool
+
+	// IdempotencyKey for suppressing duplicates in IdempotentResultTTL window.
+	IdempotencyKey      string
+	IdempotentResultTTL time.Duration
 
 	// StreamSize for appending removal event to stream (0 to disable).
 	StreamSize int
@@ -78,15 +84,23 @@ type KeyedUnpublishOptions struct {
 	StreamMetaTTL time.Duration
 }
 
-type KeyedStats struct {
-	NumKeys           int
-	NumAggregatedKeys int
+// StreamFilter allows filtering stream according to fields set.
+type StreamFilter struct {
+	// Since if set is used to extract publications from stream since provided StreamPosition.
+	Since *StreamPosition
+	// Limit number of publications to return.
+	// -1 means no limit - i.e. return all publications currently in stream.
+	// 0 means that caller only interested in current stream top position so
+	// Broker should not return any publications.
+	Limit int
+	// Reverse direction.
+	Reverse bool
 }
 
 // KeyedReadStreamOptions define some fields to alter ReadStream method behavior.
 type KeyedReadStreamOptions struct {
 	// Filter for history publications.
-	Filter HistoryFilter
+	Filter StreamFilter
 	// MetaTTL allows overriding default (set in Config.HistoryMetaTTL) history
 	// meta information expiration time.
 	MetaTTL time.Duration
@@ -94,13 +108,35 @@ type KeyedReadStreamOptions struct {
 
 // KeyedReadSnapshotOptions defines options for reading a snapshot.
 type KeyedReadSnapshotOptions struct {
-	// SnapshotRevision is the revision client received during subscribe.
+	// Revision is the revision client received during subscribe.
 	// Server validates snapshot epoch matches this revision's epoch.
-	// If epoch changed, server returns empty result forcing client to restart.
-	SnapshotRevision *StreamPosition
-	Ordered          bool
-	Cursor           string
-	Limit            int
-	Offset           int
-	SnapshotTTL      time.Duration
+	// If epoch changed, server returns error.
+	Revision    *StreamPosition
+	Ordered     bool
+	Cursor      string
+	Limit       int
+	Offset      int
+	SnapshotTTL time.Duration
 }
+
+// KeyedStats provide current statistics for channel in KeyedEngine.
+type KeyedStats struct {
+	NumKeys           int
+	NumAggregatedKeys int
+}
+
+// KeyedPublishResult contains the result of Publish or Unpublish operation.
+type KeyedPublishResult struct {
+	// Position is the current stream position after the operation.
+	Position StreamPosition
+	// Applied is true only when the operation actually changed the snapshot.
+	// It is false when:
+	// - Suppressed due to idempotency key (duplicate detected)
+	// - Skipped due to out-of-order version
+	// - Key not found (for Unpublish)
+	// When Applied is false, no message is appended to the stream and no
+	// publication is sent to PUB/SUB.
+	Applied bool
+}
+
+type KeyedRemoveOptions struct{}

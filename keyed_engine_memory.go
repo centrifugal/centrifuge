@@ -3,7 +3,6 @@ package centrifuge
 import (
 	"container/heap"
 	"context"
-	"encoding/json"
 	"sort"
 	"strconv"
 	"sync"
@@ -90,14 +89,14 @@ func (e *MemoryKeyedEngine) Unsubscribe(_ string) error {
 }
 
 // Publish publishes data to channel with optional key for keyed state.
-func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (StreamPosition, bool, error) {
+func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (KeyedPublishResult, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
 
 	if opts.IdempotencyKey != "" {
 		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
-			return res, true, nil
+			return KeyedPublishResult{Position: res, Applied: false}, nil
 		}
 	}
 
@@ -112,10 +111,10 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	var prevPub *Publication
 	streamTop, prevPub, skip, err := e.keyedHub.add(ch, key, pub, opts)
 	if err != nil {
-		return StreamPosition{}, false, err
+		return KeyedPublishResult{}, err
 	}
 	if skip {
-		return streamTop, false, nil
+		return KeyedPublishResult{Position: streamTop, Applied: false}, nil
 	}
 
 	pub.Offset = streamTop.Offset
@@ -129,21 +128,25 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	}
 
 	if e.eventHandler != nil {
-		return streamTop, false, e.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
+		return KeyedPublishResult{Position: streamTop, Applied: true}, e.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
 	}
 
-	return streamTop, false, nil
+	return KeyedPublishResult{Position: streamTop, Applied: true}, nil
 }
 
 // Unpublish removes a key from keyed state.
-func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, error) {
+func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (KeyedPublishResult, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
 
-	streamTop, err := e.keyedHub.remove(ch, key, opts)
+	streamTop, applied, err := e.keyedHub.remove(ch, key, opts)
 	if err != nil {
-		return StreamPosition{}, err
+		return KeyedPublishResult{}, err
+	}
+
+	if !applied {
+		return KeyedPublishResult{Position: streamTop, Applied: false}, nil
 	}
 
 	if opts.Publish && e.eventHandler != nil {
@@ -153,10 +156,10 @@ func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string
 			Offset:  streamTop.Offset,
 			Time:    time.Now().UnixMilli(),
 		}
-		return streamTop, e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
+		return KeyedPublishResult{Position: streamTop, Applied: true}, e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
 	}
 
-	return streamTop, nil
+	return KeyedPublishResult{Position: streamTop, Applied: true}, nil
 }
 
 // ReadStream retrieves publications from stream.
@@ -172,118 +175,6 @@ func (e *MemoryKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts Ke
 // Stats returns snapshot statistics.
 func (e *MemoryKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, error) {
 	return e.keyedHub.getStats(ch)
-}
-
-// AddMember adds a client to presence in a channel.
-func (e *MemoryKeyedEngine) AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
-	mu := e.pubLock(ch)
-	mu.Lock()
-	defer mu.Unlock()
-
-	data, err := json.Marshal(info)
-	if err != nil {
-		return err
-	}
-
-	keyedOpts := KeyedPublishOptions{
-		StreamSize: 10000,             // Default stream size for presence
-		StreamTTL:  300 * time.Second, // Default TTL
-		KeyTTL:     60 * time.Second,  // Presence TTL (auto-expire)
-	}
-
-	streamTop, _, _, err := e.keyedHub.add(ch, info.ClientID, &Publication{
-		Key:  info.ClientID,
-		Data: data,
-		Info: &info,
-	}, keyedOpts)
-	if err != nil {
-		return err
-	}
-
-	if opts.Publish && e.eventHandler != nil {
-		pub := &Publication{
-			Key:    info.ClientID,
-			Data:   data,
-			Info:   &info,
-			Offset: streamTop.Offset,
-			Time:   time.Now().UnixMilli(),
-		}
-		return e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
-	}
-
-	return nil
-}
-
-// RemoveMember removes a client from presence in a channel.
-func (e *MemoryKeyedEngine) RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
-	mu := e.pubLock(ch)
-	mu.Lock()
-	defer mu.Unlock()
-
-	removeOpts := KeyedUnpublishOptions{
-		Publish:    opts.Publish,
-		StreamSize: 10000,
-		StreamTTL:  300 * time.Second,
-	}
-
-	streamTop, err := e.keyedHub.remove(ch, info.ClientID, removeOpts)
-	if err != nil {
-		return err
-	}
-
-	if opts.Publish && e.eventHandler != nil {
-		pub := &Publication{
-			Key:     info.ClientID,
-			Removed: true,
-			Info:    &info,
-			Offset:  streamTop.Offset,
-			Time:    time.Now().UnixMilli(),
-		}
-		return e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
-	}
-
-	return nil
-}
-
-// Members returns all members in a presence channel.
-func (e *MemoryKeyedEngine) Members(ctx context.Context, ch string) (map[string]*ClientInfo, error) {
-	entries, _, _, err := e.keyedHub.getSnapshot(ch, KeyedReadSnapshotOptions{
-		Limit: 0, // Get all
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	members := make(map[string]*ClientInfo, len(entries))
-	for _, pub := range entries {
-		if pub.Info != nil {
-			members[pub.Key] = pub.Info
-		} else {
-			// Fallback: unmarshal from Data if Info is not set
-			var info ClientInfo
-			if err := json.Unmarshal(pub.Data, &info); err != nil {
-				continue
-			}
-			members[pub.Key] = &info
-		}
-	}
-
-	return members, nil
-}
-
-// ReadPresenceSnapshot retrieves presence snapshot with revisions.
-func (e *MemoryKeyedEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, error) {
-	pubs, streamPos, _, err := e.keyedHub.getSnapshot(ch, opts)
-	if err != nil {
-		return nil, StreamPosition{}, err
-	}
-	// getSnapshot already returns Publications with Key and Offset set
-	return pubs, streamPos, nil
-}
-
-// ReadPresenceStream retrieves presence event stream.
-func (e *MemoryKeyedEngine) ReadPresenceStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error) {
-	return e.keyedHub.getStream(ch, opts)
 }
 
 // RegisterEventHandler registers event handler.
@@ -574,21 +465,33 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 	return streamPosition, prevPub, false, nil
 }
 
-func (h *keyedHub) remove(ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, error) {
+func (h *keyedHub) remove(ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, bool, error) {
 	h.Lock()
 	defer h.Unlock()
 
 	channel, ok := h.channels[ch]
 	if !ok {
-		return StreamPosition{}, nil
+		return StreamPosition{}, false, nil
 	}
 
 	// Get the entry before removing to extract Info if present
 	var info *ClientInfo
-	if entry, ok := channel.snapshot[key]; ok {
+	entry, keyExists := channel.snapshot[key]
+	if keyExists {
 		// Get ClientInfo from Publication (for presence)
 		info = entry.Publication.Info
+	} else {
+		// Key doesn't exist, nothing to remove
+		var streamPosition StreamPosition
+		if channel.stream != nil {
+			streamPosition = StreamPosition{
+				Offset: channel.stream.Top(),
+				Epoch:  channel.stream.Epoch(),
+			}
+		}
+		return streamPosition, false, nil
 	}
+	_ = info // Info is used below in stream addition
 
 	// Remove from snapshot
 	delete(channel.snapshot, key)
@@ -629,7 +532,7 @@ func (h *keyedHub) remove(ch string, key string, opts KeyedUnpublishOptions) (St
 		}
 	}
 
-	return streamPosition, nil
+	return streamPosition, true, nil
 }
 
 func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error) {
@@ -739,8 +642,8 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 	}
 
 	// Check if client requested specific snapshot revision
-	if opts.SnapshotRevision != nil {
-		if streamPosition.Epoch != opts.SnapshotRevision.Epoch {
+	if opts.Revision != nil {
+		if streamPosition.Epoch != opts.Revision.Epoch {
 			// Epoch changed, client needs to restart from beginning
 			return nil, streamPosition, "", ErrorUnrecoverablePosition
 		}
@@ -857,3 +760,115 @@ func (h *keyedHub) updateMetaTTL(ch string, metaTTL time.Duration) {
 		h.nextRemoveCheck = removeAt
 	}
 }
+
+//// AddMember adds a client to presence in a channel.
+//func (e *MemoryKeyedEngine) AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
+//	mu := e.pubLock(ch)
+//	mu.Lock()
+//	defer mu.Unlock()
+//
+//	data, err := json.Marshal(info)
+//	if err != nil {
+//		return err
+//	}
+//
+//	keyedOpts := KeyedPublishOptions{
+//		StreamSize: 10000,             // Default stream size for presence
+//		StreamTTL:  300 * time.Second, // Default TTL
+//		KeyTTL:     60 * time.Second,  // Presence TTL (auto-expire)
+//	}
+//
+//	streamTop, _, _, err := e.keyedHub.add(ch, info.ClientID, &Publication{
+//		Key:  info.ClientID,
+//		Data: data,
+//		Info: &info,
+//	}, keyedOpts)
+//	if err != nil {
+//		return err
+//	}
+//
+//	if opts.Publish && e.eventHandler != nil {
+//		pub := &Publication{
+//			Key:    info.ClientID,
+//			Data:   data,
+//			Info:   &info,
+//			Offset: streamTop.Offset,
+//			Time:   time.Now().UnixMilli(),
+//		}
+//		return e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
+//	}
+//
+//	return nil
+//}
+//
+//// RemoveMember removes a client from presence in a channel.
+//func (e *MemoryKeyedEngine) RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
+//	mu := e.pubLock(ch)
+//	mu.Lock()
+//	defer mu.Unlock()
+//
+//	removeOpts := KeyedUnpublishOptions{
+//		Publish:    opts.Publish,
+//		StreamSize: 10000,
+//		StreamTTL:  300 * time.Second,
+//	}
+//
+//	streamTop, err := e.keyedHub.remove(ch, info.ClientID, removeOpts)
+//	if err != nil {
+//		return err
+//	}
+//
+//	if opts.Publish && e.eventHandler != nil {
+//		pub := &Publication{
+//			Key:     info.ClientID,
+//			Removed: true,
+//			Info:    &info,
+//			Offset:  streamTop.Offset,
+//			Time:    time.Now().UnixMilli(),
+//		}
+//		return e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
+//	}
+//
+//	return nil
+//}
+//
+//// Members returns all members in a presence channel.
+//func (e *MemoryKeyedEngine) Members(ctx context.Context, ch string) (map[string]*ClientInfo, error) {
+//	entries, _, _, err := e.keyedHub.getSnapshot(ch, KeyedReadSnapshotOptions{
+//		Limit: 0, // Get all
+//	})
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	members := make(map[string]*ClientInfo, len(entries))
+//	for _, pub := range entries {
+//		if pub.Info != nil {
+//			members[pub.Key] = pub.Info
+//		} else {
+//			// Fallback: unmarshal from Data if Info is not set
+//			var info ClientInfo
+//			if err := json.Unmarshal(pub.Data, &info); err != nil {
+//				continue
+//			}
+//			members[pub.Key] = &info
+//		}
+//	}
+//
+//	return members, nil
+//}
+//
+//// ReadPresenceSnapshot retrieves presence snapshot with revisions.
+//func (e *MemoryKeyedEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, error) {
+//	pubs, streamPos, _, err := e.keyedHub.getSnapshot(ch, opts)
+//	if err != nil {
+//		return nil, StreamPosition{}, err
+//	}
+//	// getSnapshot already returns Publications with Key and Offset set
+//	return pubs, streamPos, nil
+//}
+//
+//// ReadPresenceStream retrieves presence event stream.
+//func (e *MemoryKeyedEngine) ReadPresenceStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error) {
+//	return e.keyedHub.getStream(ch, opts)
+//}

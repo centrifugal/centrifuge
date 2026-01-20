@@ -508,14 +508,14 @@ func (e *RedisKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRemo
 }
 
 // Publish publishes data to a stateful channel with optional keyed state.
-func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (StreamPosition, bool, error) {
+func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (KeyedPublishResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
 	// Fast path for non-history, non-idempotent, non-keyed publications.
 	if opts.StreamSize == 0 && opts.StreamTTL == 0 && opts.IdempotencyKey == "" && key == "" {
 		if e.conf.SkipPubSub {
-			return StreamPosition{}, false, nil
+			return KeyedPublishResult{Applied: true}, nil
 		}
 		protoPub := &protocol.Publication{
 			Data: data,
@@ -530,7 +530,7 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 		}
 		pushBytes, err := push.MarshalVT()
 		if err != nil {
-			return StreamPosition{}, false, err
+			return KeyedPublishResult{}, err
 		}
 
 		payload := "0::" + convert.BytesToString(pushBytes)
@@ -538,10 +538,10 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 		chID := e.messageChannelID(s.shard, ch)
 		if e.useShardedPubSub(s.shard) {
 			cmd := shardClient.B().Spublish().Channel(chID).Message(payload).Build()
-			return StreamPosition{}, false, shardClient.Do(ctx, cmd).Error()
+			return KeyedPublishResult{Applied: true}, shardClient.Do(ctx, cmd).Error()
 		}
 		cmd := shardClient.B().Publish().Channel(chID).Message(payload).Build()
-		return StreamPosition{}, false, shardClient.Do(ctx, cmd).Error()
+		return KeyedPublishResult{Applied: true}, shardClient.Do(ctx, cmd).Error()
 	}
 
 	protoPub := &protocol.Publication{
@@ -554,7 +554,7 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 
 	byteMessage, err := protoPub.MarshalVT()
 	if err != nil {
-		return StreamPosition{}, false, err
+		return KeyedPublishResult{}, err
 	}
 
 	var resultKey string
@@ -650,16 +650,16 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 		},
 	).ToArray()
 	if err != nil {
-		return StreamPosition{}, false, err
+		return KeyedPublishResult{}, err
 	}
 
 	return parseAddScriptResult(replies)
 }
 
 // Unpublish removes a key from keyed state snapshot.
-func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, error) {
+func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (KeyedPublishResult, error) {
 	if key == "" {
-		return StreamPosition{}, fmt.Errorf("key is required for unpublish")
+		return KeyedPublishResult{}, fmt.Errorf("key is required for unpublish")
 	}
 
 	s := e.getShard(ch)
@@ -706,7 +706,7 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 	}
 	pubBytes, err := protoPub.MarshalVT()
 	if err != nil {
-		return StreamPosition{}, err
+		return KeyedPublishResult{}, err
 	}
 
 	replies, err := e.addScript.Exec(ctx, shardClient,
@@ -738,16 +738,15 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 		},
 	).ToArray()
 	if err != nil {
-		return StreamPosition{}, err
+		return KeyedPublishResult{}, err
 	}
 
-	streamPos, _, err := parseAddScriptResult(replies)
-	return streamPos, err
+	return parseAddScriptResult(replies)
 }
 
 // ReadSnapshot retrieves snapshot entries with per-entry revisions for a channel.
 // Each entry includes its revision so client can filter: entry.Revision <= snapshot_revision.
-// If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
+// If opts.Revision is provided and epoch changed, returns empty entries.
 // Returns entries, stream position, next cursor for pagination, and error.
 // Cursor "0" or "" means end of iteration.
 func (e *RedisKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
@@ -812,7 +811,7 @@ func (e *RedisKeyedEngine) readUnorderedSnapshot(ctx context.Context, ch string,
 	streamPos := StreamPosition{Offset: streamOffset, Epoch: streamEpoch}
 
 	// Validate epoch if client provided snapshot revision
-	if opts.SnapshotRevision != nil && opts.SnapshotRevision.Epoch != streamEpoch {
+	if opts.Revision != nil && opts.Revision.Epoch != streamEpoch {
 		// Epoch changed, client needs to restart from beginning
 		return nil, streamPos, nextCursor, ErrorUnrecoverablePosition
 	}
@@ -956,10 +955,10 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 					continue
 				}
 
-			pub := pubFromProto(&protoPub)
-			pub.Key = key
-			pub.Offset = entryOffset
-			pubs = append(pubs, pub)
+				pub := pubFromProto(&protoPub)
+				pub.Key = key
+				pub.Offset = entryOffset
+				pubs = append(pubs, pub)
 			}
 
 			return nil
@@ -971,8 +970,8 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 	}
 
 	// Validate snapshot revision (unchanged semantics)
-	if opts.SnapshotRevision != nil &&
-		opts.SnapshotRevision.Epoch != streamPos.Epoch {
+	if opts.Revision != nil &&
+		opts.Revision.Epoch != streamPos.Epoch {
 		return nil, streamPos, nextCursor, ErrorUnrecoverablePosition
 	}
 
@@ -1023,7 +1022,7 @@ func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, o
 	streamPos := StreamPosition{Offset: streamOffset, Epoch: streamEpoch}
 
 	// Validate epoch if client provided snapshot revision
-	if opts.SnapshotRevision != nil && opts.SnapshotRevision.Epoch != streamEpoch {
+	if opts.Revision != nil && opts.Revision.Epoch != streamEpoch {
 		// Epoch changed, client needs to restart from beginning
 		return nil, streamPos, "", ErrorUnrecoverablePosition
 	}
@@ -1831,257 +1830,7 @@ func (e *RedisKeyedEngine) ReadStream2(ctx context.Context, ch string, opts Keye
 	return pubs, streamPos, nil
 }
 
-// AddMember adds a client to converged membership (presence with ordering).
-func (e *RedisKeyedEngine) AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
-	// AddMember is just Publish with a Publication that has Key=clientID, Info=clientInfo, Data=nil
-	// This reuses all the Publish logic for keyed snapshots with aggregation support
-
-	protoPub := &protocol.Publication{
-		Key:  info.ClientID,
-		Info: infoToProto(&info),
-		Time: time.Now().UnixMilli(),
-	}
-	pubBytes, err := protoPub.MarshalVT()
-	if err != nil {
-		return err
-	}
-
-	s := e.getShard(ch)
-	shardClient := s.shard.client
-
-	// Optional presence stream for recovery
-	var streamKey, metaKey, metaExpire string
-	if e.conf.PresenceStreamSize > 0 {
-		streamKey = e.streamKey(s.shard, ch)
-		metaKey = e.metaKey(s.shard, ch)
-		if e.conf.PresenceStreamMetaTTL > 0 {
-			metaExpire = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
-		} else {
-			metaExpire = "0"
-		}
-	}
-
-	publishCommand := ""
-	var chID string
-	if opts.Publish {
-		if e.useShardedPubSub(s.shard) {
-			publishCommand = "SPUBLISH"
-		} else {
-			publishCommand = "PUBLISH"
-		}
-		chID = e.messageChannelID(s.shard, ch)
-	}
-
-	// Use aggregation for user counting
-	aggregationKey := ""
-	aggregationValue := ""
-	if info.UserID != "" {
-		aggregationKey = "user_id"
-		aggregationValue = info.UserID
-	}
-
-	// Setup cleanup registration and aggregation mapping for presence with stream
-	cleanupRegKey := ""
-	aggMappingKey := ""
-	if e.conf.PresenceStreamSize > 0 {
-		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
-		if info.UserID != "" {
-			aggMappingKey = e.aggregationMappingHashKey(s.shard, ch)
-		}
-	}
-
-	_, err = e.addScript.Exec(ctx, shardClient,
-		[]string{
-			streamKey, metaKey, "", // Optional presence stream, no result key
-			e.snapshotHashKey(s.shard, ch),
-			"", // No order key for presence
-			e.snapshotExpireKey(s.shard, ch),
-			e.aggregationZSetKey(s.shard, ch),
-			e.aggregationHashKey(s.shard, ch),
-			"",            // No snapshot meta key for presence (uses stream meta directly)
-			cleanupRegKey, // KEYS[10]: cleanup registration zset key
-			aggMappingKey, // KEYS[11]: aggregation mapping hash key
-		},
-		[]string{
-			info.ClientID,                   // message_key
-			convert.BytesToString(pubBytes), // message_payload (Publication for stream, publishing, and snapshot)
-			strconv.Itoa(e.conf.PresenceStreamSize),
-			strconv.FormatInt(int64(e.conf.PresenceStreamTTL.Seconds()), 10),
-			chID, // channel (for Lua to publish)
-			metaExpire,
-			e.node.ID(),
-			publishCommand,   // Lua will publish
-			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
-			"0", // is_leave
-			"0", // score
-			strconv.FormatInt(int64(e.conf.PresenceTTL.Seconds()), 10),
-			"0",              // use_hexpire
-			aggregationKey,   // aggregation_key (e.g., "user_id")
-			aggregationValue, // aggregation_value (e.g., actual user ID)
-			"",               // message_key_payload (not used - message_payload is Publication)
-			ch,               // channel_for_cleanup (channel name for registration)
-		},
-	).ToArray()
-	return err
-}
-
-// RemoveMember removes a client from converged membership.
-func (e *RedisKeyedEngine) RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
-	// RemoveMember is just Publish with a Publication that has Removed=true
-	// This reuses all the Publish logic for keyed snapshots with aggregation support
-
-	protoPub := &protocol.Publication{
-		Key:     info.ClientID,
-		Info:    infoToProto(&info),
-		Removed: true,
-		Time:    time.Now().UnixMilli(),
-	}
-	pubBytes, err := protoPub.MarshalVT()
-	if err != nil {
-		return err
-	}
-
-	s := e.getShard(ch)
-	shardClient := s.shard.client
-
-	// Optional presence stream for recovery
-	var streamKey, metaKey, metaExpire string
-	if e.conf.PresenceStreamSize > 0 {
-		streamKey = e.streamKey(s.shard, ch)
-		metaKey = e.metaKey(s.shard, ch)
-		if e.conf.PresenceStreamMetaTTL > 0 {
-			metaExpire = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
-		} else {
-			metaExpire = "0"
-		}
-	}
-
-	publishCommand := ""
-	var chID string
-	if opts.Publish {
-		if e.useShardedPubSub(s.shard) {
-			publishCommand = "SPUBLISH"
-		} else {
-			publishCommand = "PUBLISH"
-		}
-		chID = e.messageChannelID(s.shard, ch)
-	}
-
-	// Use aggregation for user counting
-	aggregationKey := ""
-	aggregationValue := ""
-	if info.UserID != "" {
-		aggregationKey = "user_id"
-		aggregationValue = info.UserID
-	}
-
-	// Cleanup registration for proper cleanup handling
-	cleanupRegKey := ""
-	aggMappingKey := ""
-	if e.conf.PresenceStreamSize > 0 {
-		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
-		if info.UserID != "" {
-			aggMappingKey = e.aggregationMappingHashKey(s.shard, ch)
-		}
-	}
-
-	_, err = e.addScript.Exec(ctx, shardClient,
-		[]string{
-			streamKey, metaKey, "", // Optional presence stream, no result key
-			e.snapshotHashKey(s.shard, ch),
-			"", // No order key for presence
-			e.snapshotExpireKey(s.shard, ch),
-			e.aggregationZSetKey(s.shard, ch),
-			e.aggregationHashKey(s.shard, ch),
-			"",            // No snapshot meta key for presence
-			cleanupRegKey, // KEYS[10]: cleanup registration key (to update after remove)
-			aggMappingKey, // KEYS[11]: aggregation mapping hash key
-		},
-		[]string{
-			info.ClientID,                   // message_key
-			convert.BytesToString(pubBytes), // message_payload (Publication with Removed=true for stream and publishing)
-			strconv.Itoa(e.conf.PresenceStreamSize),
-			strconv.FormatInt(int64(e.conf.PresenceStreamTTL.Seconds()), 10),
-			chID, // channel (for Lua to publish)
-			metaExpire,
-			e.node.ID(),
-			publishCommand,   // Lua will publish
-			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
-			"1", // is_leave
-			"0", // score
-			strconv.FormatInt(int64(e.conf.PresenceTTL.Seconds()), 10),
-			"0",              // use_hexpire
-			aggregationKey,   // aggregation_key
-			aggregationValue, // aggregation_value
-			"",               // message_key_payload (not used - message_payload is Publication)
-			ch,               // channel_for_cleanup (needed to update cleanup registration)
-		},
-	).ToArray()
-	return err
-}
-
-// Members returns actual presence information for a channel.
-func (e *RedisKeyedEngine) Members(ctx context.Context, ch string) (map[string]*ClientInfo, error) {
-	s := e.getShard(ch)
-	shardClient := s.shard.client
-
-	metaTTL := "0"
-	if e.conf.PresenceStreamMetaTTL > 0 {
-		metaTTL = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
-	}
-
-	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,
-		[]string{
-			e.snapshotHashKey(s.shard, ch),   // hash_key
-			e.snapshotExpireKey(s.shard, ch), // expire_key
-			e.metaKey(s.shard, ch),           // meta_key
-			"",                               // snapshot_meta_key (not used for presence)
-		},
-		[]string{
-			"0", // cursor (start)
-			"0", // limit (0 = HGETALL)
-			strconv.FormatInt(time.Now().Unix(), 10),
-			metaTTL,
-			"0", // snapshot_ttl (don't refresh on read)
-		},
-	).ToArray()
-	if err != nil {
-		return nil, err
-	}
-	if len(replies) < 4 {
-		return nil, errors.New("wrong number of replies")
-	}
-
-	dataArr, _ := replies[3].ToArray()
-	if len(dataArr) == 0 {
-		return nil, nil
-	}
-
-	m := make(map[string]*ClientInfo, len(dataArr)/2)
-	for i := 0; i < len(dataArr); i += 2 {
-		k, _ := dataArr[i].ToString()
-		v, _ := dataArr[i+1].AsBytes()
-
-		// Parse snapshot value: offset:epoch:publication_bytes
-		_, _, payload, err := parseSnapshotValue(v)
-		if err != nil {
-			// Skip malformed entries
-			continue
-		}
-
-		var pub protocol.Publication
-		err = pub.UnmarshalVT(payload)
-		if err != nil {
-			return nil, err
-		}
-		if pub.Info != nil {
-			m[k] = infoFromProto(pub.Info)
-		}
-	}
-	return m, nil
-}
-
-// MemberStats returns short stats of current presence data.
+// Stats returns short stats of current presence data.
 // This is a read-only operation - cleanup is handled by the cleanup worker.
 func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, error) {
 	s := e.getShard(ch)
@@ -2113,7 +1862,7 @@ func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, er
 
 // ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.
 // Each entry includes its revision so client can filter: entry.Revision <= snapshot_revision.
-// If opts.SnapshotRevision is provided and epoch changed, returns empty entries.
+// If opts.Revision is provided and epoch changed, returns empty entries.
 // Returns Publications with Key=ClientID, Info=ClientInfo, Offset/Epoch for revision.
 func (e *RedisKeyedEngine) ReadPresenceSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, error) {
 	// ReadPresenceSnapshot is just ReadSnapshot - it already returns Publications with Key and Offset set.
@@ -2815,24 +2564,287 @@ func parseDeltaMessage(data []byte) (uint64, string, []byte, bool, []byte, error
 }
 
 // parseAddScriptResult parses the result from the add script.
-func parseAddScriptResult(replies []rueidis.RedisMessage) (StreamPosition, bool, error) {
+func parseAddScriptResult(replies []rueidis.RedisMessage) (KeyedPublishResult, error) {
 	if len(replies) < 2 {
-		return StreamPosition{}, false, fmt.Errorf("wrong number of replies from script: %d", len(replies))
+		return KeyedPublishResult{}, fmt.Errorf("wrong number of replies from script: %d", len(replies))
 	}
 	offset, err := replies[0].AsUint64()
 	if err != nil && !rueidis.IsRedisNil(err) {
-		return StreamPosition{}, false, fmt.Errorf("could not parse offset: %w", err)
+		return KeyedPublishResult{}, fmt.Errorf("could not parse offset: %w", err)
 	}
 	epoch, err := replies[1].ToString()
 	if err != nil {
-		return StreamPosition{}, false, fmt.Errorf("could not parse epoch: %w", err)
+		return KeyedPublishResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
-	fromCache := false
+
+	// Check if suppressed due to idempotency (3rd value = "1") or version (4th value = "1")
+	// Applied is true only when neither suppression flag is set.
+	applied := true
 	if len(replies) >= 3 {
 		fromCacheVal, err := replies[2].ToString()
 		if err == nil && fromCacheVal == "1" {
-			fromCache = true
+			applied = false // Suppressed due to idempotency cache
 		}
 	}
-	return StreamPosition{Offset: offset, Epoch: epoch}, fromCache, nil
+	if len(replies) >= 4 && applied {
+		versionSuppressedVal, err := replies[3].ToString()
+		if err == nil && versionSuppressedVal == "1" {
+			applied = false // Suppressed due to out-of-order version
+		}
+	}
+
+	return KeyedPublishResult{
+		Position: StreamPosition{Offset: offset, Epoch: epoch},
+		Applied:  applied,
+	}, nil
 }
+
+//// AddMember adds a client to converged membership (presence with ordering).
+//func (e *RedisKeyedEngine) AddMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
+//	// AddMember is just Publish with a Publication that has Key=clientID, Info=clientInfo, Data=nil
+//	// This reuses all the Publish logic for keyed snapshots with aggregation support
+//
+//	protoPub := &protocol.Publication{
+//		Key:  info.ClientID,
+//		Info: infoToProto(&info),
+//		Time: time.Now().UnixMilli(),
+//	}
+//	pubBytes, err := protoPub.MarshalVT()
+//	if err != nil {
+//		return err
+//	}
+//
+//	s := e.getShard(ch)
+//	shardClient := s.shard.client
+//
+//	// Optional presence stream for recovery
+//	var streamKey, metaKey, metaExpire string
+//	if e.conf.PresenceStreamSize > 0 {
+//		streamKey = e.streamKey(s.shard, ch)
+//		metaKey = e.metaKey(s.shard, ch)
+//		if e.conf.PresenceStreamMetaTTL > 0 {
+//			metaExpire = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
+//		} else {
+//			metaExpire = "0"
+//		}
+//	}
+//
+//	publishCommand := ""
+//	var chID string
+//	if opts.Publish {
+//		if e.useShardedPubSub(s.shard) {
+//			publishCommand = "SPUBLISH"
+//		} else {
+//			publishCommand = "PUBLISH"
+//		}
+//		chID = e.messageChannelID(s.shard, ch)
+//	}
+//
+//	// Use aggregation for user counting
+//	aggregationKey := ""
+//	aggregationValue := ""
+//	if info.UserID != "" {
+//		aggregationKey = "user_id"
+//		aggregationValue = info.UserID
+//	}
+//
+//	// Setup cleanup registration and aggregation mapping for presence with stream
+//	cleanupRegKey := ""
+//	aggMappingKey := ""
+//	if e.conf.PresenceStreamSize > 0 {
+//		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
+//		if info.UserID != "" {
+//			aggMappingKey = e.aggregationMappingHashKey(s.shard, ch)
+//		}
+//	}
+//
+//	_, err = e.addScript.Exec(ctx, shardClient,
+//		[]string{
+//			streamKey, metaKey, "", // Optional presence stream, no result key
+//			e.snapshotHashKey(s.shard, ch),
+//			"", // No order key for presence
+//			e.snapshotExpireKey(s.shard, ch),
+//			e.aggregationZSetKey(s.shard, ch),
+//			e.aggregationHashKey(s.shard, ch),
+//			"",            // No snapshot meta key for presence (uses stream meta directly)
+//			cleanupRegKey, // KEYS[10]: cleanup registration zset key
+//			aggMappingKey, // KEYS[11]: aggregation mapping hash key
+//		},
+//		[]string{
+//			info.ClientID,                   // message_key
+//			convert.BytesToString(pubBytes), // message_payload (Publication for stream, publishing, and snapshot)
+//			strconv.Itoa(e.conf.PresenceStreamSize),
+//			strconv.FormatInt(int64(e.conf.PresenceStreamTTL.Seconds()), 10),
+//			chID, // channel (for Lua to publish)
+//			metaExpire,
+//			e.node.ID(),
+//			publishCommand,   // Lua will publish
+//			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
+//			"0", // is_leave
+//			"0", // score
+//			strconv.FormatInt(int64(e.conf.PresenceTTL.Seconds()), 10),
+//			"0",              // use_hexpire
+//			aggregationKey,   // aggregation_key (e.g., "user_id")
+//			aggregationValue, // aggregation_value (e.g., actual user ID)
+//			"",               // message_key_payload (not used - message_payload is Publication)
+//			ch,               // channel_for_cleanup (channel name for registration)
+//		},
+//	).ToArray()
+//	return err
+//}
+//
+//// RemoveMember removes a client from converged membership.
+//func (e *RedisKeyedEngine) RemoveMember(ctx context.Context, ch string, info ClientInfo, opts EnginePresenceOptions) error {
+//	// RemoveMember is just Publish with a Publication that has Removed=true
+//	// This reuses all the Publish logic for keyed snapshots with aggregation support
+//
+//	protoPub := &protocol.Publication{
+//		Key:     info.ClientID,
+//		Info:    infoToProto(&info),
+//		Removed: true,
+//		Time:    time.Now().UnixMilli(),
+//	}
+//	pubBytes, err := protoPub.MarshalVT()
+//	if err != nil {
+//		return err
+//	}
+//
+//	s := e.getShard(ch)
+//	shardClient := s.shard.client
+//
+//	// Optional presence stream for recovery
+//	var streamKey, metaKey, metaExpire string
+//	if e.conf.PresenceStreamSize > 0 {
+//		streamKey = e.streamKey(s.shard, ch)
+//		metaKey = e.metaKey(s.shard, ch)
+//		if e.conf.PresenceStreamMetaTTL > 0 {
+//			metaExpire = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
+//		} else {
+//			metaExpire = "0"
+//		}
+//	}
+//
+//	publishCommand := ""
+//	var chID string
+//	if opts.Publish {
+//		if e.useShardedPubSub(s.shard) {
+//			publishCommand = "SPUBLISH"
+//		} else {
+//			publishCommand = "PUBLISH"
+//		}
+//		chID = e.messageChannelID(s.shard, ch)
+//	}
+//
+//	// Use aggregation for user counting
+//	aggregationKey := ""
+//	aggregationValue := ""
+//	if info.UserID != "" {
+//		aggregationKey = "user_id"
+//		aggregationValue = info.UserID
+//	}
+//
+//	// Cleanup registration for proper cleanup handling
+//	cleanupRegKey := ""
+//	aggMappingKey := ""
+//	if e.conf.PresenceStreamSize > 0 {
+//		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
+//		if info.UserID != "" {
+//			aggMappingKey = e.aggregationMappingHashKey(s.shard, ch)
+//		}
+//	}
+//
+//	_, err = e.addScript.Exec(ctx, shardClient,
+//		[]string{
+//			streamKey, metaKey, "", // Optional presence stream, no result key
+//			e.snapshotHashKey(s.shard, ch),
+//			"", // No order key for presence
+//			e.snapshotExpireKey(s.shard, ch),
+//			e.aggregationZSetKey(s.shard, ch),
+//			e.aggregationHashKey(s.shard, ch),
+//			"",            // No snapshot meta key for presence
+//			cleanupRegKey, // KEYS[10]: cleanup registration key (to update after remove)
+//			aggMappingKey, // KEYS[11]: aggregation mapping hash key
+//		},
+//		[]string{
+//			info.ClientID,                   // message_key
+//			convert.BytesToString(pubBytes), // message_payload (Publication with Removed=true for stream and publishing)
+//			strconv.Itoa(e.conf.PresenceStreamSize),
+//			strconv.FormatInt(int64(e.conf.PresenceStreamTTL.Seconds()), 10),
+//			chID, // channel (for Lua to publish)
+//			metaExpire,
+//			e.node.ID(),
+//			publishCommand,   // Lua will publish
+//			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
+//			"1", // is_leave
+//			"0", // score
+//			strconv.FormatInt(int64(e.conf.PresenceTTL.Seconds()), 10),
+//			"0",              // use_hexpire
+//			aggregationKey,   // aggregation_key
+//			aggregationValue, // aggregation_value
+//			"",               // message_key_payload (not used - message_payload is Publication)
+//			ch,               // channel_for_cleanup (needed to update cleanup registration)
+//		},
+//	).ToArray()
+//	return err
+//}
+//
+//// Members returns actual presence information for a channel.
+//func (e *RedisKeyedEngine) Members(ctx context.Context, ch string) (map[string]*ClientInfo, error) {
+//	s := e.getShard(ch)
+//	shardClient := s.shard.client
+//
+//	metaTTL := "0"
+//	if e.conf.PresenceStreamMetaTTL > 0 {
+//		metaTTL = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
+//	}
+//
+//	replies, err := e.readUnorderedScript.Exec(ctx, shardClient,
+//		[]string{
+//			e.snapshotHashKey(s.shard, ch),   // hash_key
+//			e.snapshotExpireKey(s.shard, ch), // expire_key
+//			e.metaKey(s.shard, ch),           // meta_key
+//			"",                               // snapshot_meta_key (not used for presence)
+//		},
+//		[]string{
+//			"0", // cursor (start)
+//			"0", // limit (0 = HGETALL)
+//			strconv.FormatInt(time.Now().Unix(), 10),
+//			metaTTL,
+//			"0", // snapshot_ttl (don't refresh on read)
+//		},
+//	).ToArray()
+//	if err != nil {
+//		return nil, err
+//	}
+//	if len(replies) < 4 {
+//		return nil, errors.New("wrong number of replies")
+//	}
+//
+//	dataArr, _ := replies[3].ToArray()
+//	if len(dataArr) == 0 {
+//		return nil, nil
+//	}
+//
+//	m := make(map[string]*ClientInfo, len(dataArr)/2)
+//	for i := 0; i < len(dataArr); i += 2 {
+//		k, _ := dataArr[i].ToString()
+//		v, _ := dataArr[i+1].AsBytes()
+//
+//		// Parse snapshot value: offset:epoch:publication_bytes
+//		_, _, payload, err := parseSnapshotValue(v)
+//		if err != nil {
+//			// Skip malformed entries
+//			continue
+//		}
+//
+//		var pub protocol.Publication
+//		err = pub.UnmarshalVT(payload)
+//		if err != nil {
+//			return nil, err
+//		}
+//		if pub.Info != nil {
+//			m[k] = infoFromProto(pub.Info)
+//		}
+//	}
+//	return m, nil
+//}

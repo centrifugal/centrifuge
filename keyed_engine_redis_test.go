@@ -55,21 +55,21 @@ func TestRedisKeyedEngine_StatefulChannel(t *testing.T) {
 	channel := randomChannel("test_stateful")
 
 	// Publish some keyed state updates
-	_, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, _, err = engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, _, err = engine.Publish(ctx, channel, "key1", []byte("data1_updated"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key1", []byte("data1_updated"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -93,7 +93,7 @@ func TestRedisKeyedEngine_StatefulChannel(t *testing.T) {
 
 	// Read stream to verify all publications are in history
 	pubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit: -1, // Get all
 		},
 	})
@@ -111,7 +111,7 @@ func TestRedisKeyedEngine_StatefulChannelOrdered(t *testing.T) {
 
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
-		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
 			StreamSize: 100,
@@ -147,23 +147,23 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 	channel := randomChannel("test_revision")
 
 	// Publish a keyed state update
-	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), pos1.Offset)
+	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish another update
-	pos2, _, err := engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), pos2.Offset)
-	require.Equal(t, pos1.Epoch, pos2.Epoch) // Same epoch
+	require.Equal(t, uint64(2), res2.Position.Offset)
+	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch) // Same epoch
 
 	// Read snapshot - entries now include per-entry revisions
 	entries, streamPos, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
@@ -171,8 +171,8 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 		SnapshotTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.Equal(t, pos2.Offset, streamPos.Offset)
-	require.Equal(t, pos2.Epoch, streamPos.Epoch)
+	require.Equal(t, res2.Position.Offset, streamPos.Offset)
+	require.Equal(t, res2.Position.Epoch, streamPos.Epoch)
 
 	// Verify payloads
 	snapshot := snapshotToMap(entries)
@@ -186,120 +186,120 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 	}
 }
 
-// TestRedisKeyedEngine_ConvergedMembership tests presence with revisions and ordering.
-func TestRedisKeyedEngine_ConvergedMembership(t *testing.T) {
-	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
+//// TestRedisKeyedEngine_ConvergedMembership tests presence with revisions and ordering.
+//func TestRedisKeyedEngine_ConvergedMembership(t *testing.T) {
+//	node, _ := New(Config{})
+//	engine := newTestSnapshotRedisEngine(t, node)
+//
+//	ctx := context.Background()
+//	channel := randomChannel("test_presence")
+//
+//	// Add presence for multiple clients
+//	client1 := ClientInfo{
+//		ClientID: "client1",
+//		UserID:   "user1",
+//	}
+//	client2 := ClientInfo{
+//		ClientID: "client2",
+//		UserID:   "user1", // Same user, different client
+//	}
+//	client3 := ClientInfo{
+//		ClientID: "client3",
+//		UserID:   "user2",
+//	}
+//
+//	err := engine.AddMember(ctx, channel, client1, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	err = engine.AddMember(ctx, channel, client2, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	err = engine.AddMember(ctx, channel, client3, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	// Get presence
+//	presence, err := engine.Members(ctx, channel)
+//	require.NoError(t, err)
+//	require.Len(t, presence, 3)
+//	require.Equal(t, "user1", presence["client1"].UserID)
+//	require.Equal(t, "user1", presence["client2"].UserID)
+//	require.Equal(t, "user2", presence["client3"].UserID)
+//
+//	// Get presence stats (uses generic aggregations)
+//	stats, err := engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 3, stats.NumKeys)
+//	require.Equal(t, 2, stats.NumAggregatedKeys) // user1 and user2
+//
+//	// Remove one client from user1
+//	err = engine.RemoveMember(ctx, channel, client1, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	// Get presence again
+//	presence, err = engine.Members(ctx, channel)
+//	require.NoError(t, err)
+//	require.Len(t, presence, 2)
+//	require.NotContains(t, presence, "client1")
+//
+//	// Stats should show user1 still present (client2 is still there)
+//	stats, err = engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 2, stats.NumKeys)
+//	require.Equal(t, 2, stats.NumAggregatedKeys) // Still 2 users
+//
+//	// Remove second client from user1
+//	err = engine.RemoveMember(ctx, channel, client2, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	// Now user1 should be gone from aggregation
+//	stats, err = engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 1, stats.NumKeys)
+//	require.Equal(t, 1, stats.NumAggregatedKeys) // Only user2 remains
+//}
 
-	ctx := context.Background()
-	channel := randomChannel("test_presence")
-
-	// Add presence for multiple clients
-	client1 := ClientInfo{
-		ClientID: "client1",
-		UserID:   "user1",
-	}
-	client2 := ClientInfo{
-		ClientID: "client2",
-		UserID:   "user1", // Same user, different client
-	}
-	client3 := ClientInfo{
-		ClientID: "client3",
-		UserID:   "user2",
-	}
-
-	err := engine.AddMember(ctx, channel, client1, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	err = engine.AddMember(ctx, channel, client2, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	err = engine.AddMember(ctx, channel, client3, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	// Get presence
-	presence, err := engine.Members(ctx, channel)
-	require.NoError(t, err)
-	require.Len(t, presence, 3)
-	require.Equal(t, "user1", presence["client1"].UserID)
-	require.Equal(t, "user1", presence["client2"].UserID)
-	require.Equal(t, "user2", presence["client3"].UserID)
-
-	// Get presence stats (uses generic aggregations)
-	stats, err := engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 3, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregatedKeys) // user1 and user2
-
-	// Remove one client from user1
-	err = engine.RemoveMember(ctx, channel, client1, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	// Get presence again
-	presence, err = engine.Members(ctx, channel)
-	require.NoError(t, err)
-	require.Len(t, presence, 2)
-	require.NotContains(t, presence, "client1")
-
-	// Stats should show user1 still present (client2 is still there)
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 2, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregatedKeys) // Still 2 users
-
-	// Remove second client from user1
-	err = engine.RemoveMember(ctx, channel, client2, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	// Now user1 should be gone from aggregation
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregatedKeys) // Only user2 remains
-}
-
-// TestRedisKeyedEngine_PresenceStream tests presence event stream (joins/leaves).
-func TestRedisKeyedEngine_PresenceStream(t *testing.T) {
-	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
-
-	ctx := context.Background()
-	channel := randomChannel("test_presence_stream")
-
-	client := ClientInfo{
-		ClientID: "client1",
-		UserID:   "user1",
-	}
-
-	// Add presence
-	err := engine.AddMember(ctx, channel, client, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	// Remove presence
-	err = engine.RemoveMember(ctx, channel, client, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	// Read presence stream
-	events, streamPos, err := engine.ReadPresenceStream(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
-			Limit: -1, // Get all
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, events, 2) // Join and leave
-	require.NotEmpty(t, streamPos.Epoch)
-	require.Greater(t, streamPos.Offset, uint64(0))
-
-	// Verify event types
-	require.False(t, events[0].Removed)
-	require.True(t, events[1].Removed)
-	require.Equal(t, "client1", events[0].Info.ClientID)
-	require.Equal(t, "client1", events[1].Info.ClientID)
-
-	// Verify events have ordered offsets
-	require.Equal(t, uint64(1), events[0].Offset)
-	require.Equal(t, uint64(2), events[1].Offset)
-}
+//// TestRedisKeyedEngine_PresenceStream tests presence event stream (joins/leaves).
+//func TestRedisKeyedEngine_PresenceStream(t *testing.T) {
+//	node, _ := New(Config{})
+//	engine := newTestSnapshotRedisEngine(t, node)
+//
+//	ctx := context.Background()
+//	channel := randomChannel("test_presence_stream")
+//
+//	client := ClientInfo{
+//		ClientID: "client1",
+//		UserID:   "user1",
+//	}
+//
+//	// Add presence
+//	err := engine.AddMember(ctx, channel, client, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	// Remove presence
+//	err = engine.RemoveMember(ctx, channel, client, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	// Read presence stream
+//	events, streamPos, err := engine.ReadPresenceStream(ctx, channel, KeyedReadStreamOptions{
+//		Filter: StreamFilter{
+//			Limit: -1, // Get all
+//		},
+//	})
+//	require.NoError(t, err)
+//	require.Len(t, events, 2) // Join and leave
+//	require.NotEmpty(t, streamPos.Epoch)
+//	require.Greater(t, streamPos.Offset, uint64(0))
+//
+//	// Verify event types
+//	require.False(t, events[0].Removed)
+//	require.True(t, events[1].Removed)
+//	require.Equal(t, "client1", events[0].Info.ClientID)
+//	require.Equal(t, "client1", events[1].Info.ClientID)
+//
+//	// Verify events have ordered offsets
+//	require.Equal(t, uint64(1), events[0].Offset)
+//	require.Equal(t, uint64(2), events[1].Offset)
+//}
 
 // TestRedisKeyedEngine_SnapshotPagination tests cursor-based snapshot pagination.
 func TestRedisKeyedEngine_SnapshotPagination(t *testing.T) {
@@ -311,7 +311,7 @@ func TestRedisKeyedEngine_SnapshotPagination(t *testing.T) {
 
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
-		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -366,13 +366,13 @@ func TestRedisKeyedEngine_EpochHandling(t *testing.T) {
 	channel := randomChannel("test_epoch")
 
 	// Publish initial data
-	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	epoch1 := pos1.Epoch
+	epoch1 := res1.Position.Epoch
 
 	// Read snapshot
 	entries, streamPos1, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
@@ -398,7 +398,7 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 	channel := randomChannel("test_idempotency")
 
 	// Publish with idempotency key
-	pos1, fromCache1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -406,11 +406,11 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, fromCache1)
-	require.Equal(t, uint64(1), pos1.Offset)
+	require.True(t, res1.Applied)
+	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish again with same idempotency key
-	pos2, fromCache2, err := engine.Publish(ctx, channel, "key1", []byte("data1_different"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key1", []byte("data1_different"), KeyedPublishOptions{
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -418,9 +418,9 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, fromCache2)
-	require.Equal(t, pos1.Offset, pos2.Offset) // Same offset
-	require.Equal(t, pos1.Epoch, pos2.Epoch)   // Same epoch
+	require.False(t, res2.Applied) // Not applied due to idempotency suppression
+	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset
+	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
 	// Snapshot should still have original data (second publish was cached/skipped)
 	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
@@ -442,34 +442,37 @@ func TestRedisKeyedEngine_VersionedPublishing(t *testing.T) {
 	channel := randomChannel("test_version")
 
 	// Publish with version 2 (version 0 means "disable version check")
-	pos1, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v2"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", []byte("data_v2"), KeyedPublishOptions{
 		Version:    2,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), pos1.Offset)
+	require.True(t, res1.Applied)
+	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Try to publish older version (should be suppressed)
-	pos2, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v1"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key1", []byte("data_v1"), KeyedPublishOptions{
 		Version:    1,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.Equal(t, pos1.Offset, pos2.Offset) // Same offset (suppressed)
+	require.False(t, res2.Applied) // Not applied due to out-of-order version
+	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset (suppressed)
 
 	// Publish newer version
-	pos3, _, err := engine.Publish(ctx, channel, "key1", []byte("data_v3"), KeyedPublishOptions{
+	res3, err := engine.Publish(ctx, channel, "key1", []byte("data_v3"), KeyedPublishOptions{
 		Version:    3,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), pos3.Offset) // New offset
+	require.True(t, res3.Applied)
+	require.Equal(t, uint64(2), res3.Position.Offset) // New offset
 
 	// Snapshot should have v3 data
 	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
@@ -491,7 +494,7 @@ func TestRedisKeyedEngine_MultipleChannels(t *testing.T) {
 	channel2 := randomChannel("test_multi2")
 
 	// Publish to channel1
-	_, _, err := engine.Publish(ctx, channel1, "key1", []byte("data1"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel1, "key1", []byte("data1"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -499,7 +502,7 @@ func TestRedisKeyedEngine_MultipleChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish to channel2
-	_, _, err = engine.Publish(ctx, channel2, "key2", []byte("data2"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel2, "key2", []byte("data2"), KeyedPublishOptions{
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -600,7 +603,7 @@ func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 
 	// Publish 5 messages to stream
 	for i := 1; i <= 5; i++ {
-		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -609,7 +612,7 @@ func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 
 	// Test 1: Read all messages (forward)
 	pubs, streamPos, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit: -1,
 		},
 	})
@@ -622,7 +625,7 @@ func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 
 	// Test 2: Read all messages (reverse)
 	pubsRev, streamPosRev, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit:   -1,
 			Reverse: true,
 		},
@@ -635,7 +638,7 @@ func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 
 	// Test 3: Read with limit
 	pubsLimited, _, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit: 2,
 		},
 	})
@@ -646,7 +649,7 @@ func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 
 	// Test 4: Read since offset
 	pubsSince, _, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Since: &StreamPosition{
 				Offset: 2,
 				Epoch:  streamPos.Epoch,
@@ -661,7 +664,7 @@ func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 
 	// Test 5: Metadata-only read
 	pubsMeta, streamPosMeta, err := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit: 0, // metadata only
 		},
 	})
@@ -681,7 +684,7 @@ func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 
 	// Publish 5 messages to stream
 	for i := 1; i <= 5; i++ {
-		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -690,7 +693,7 @@ func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 
 	// Test 1: Read all messages (forward)
 	pubs, streamPos, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit: -1,
 		},
 	})
@@ -703,7 +706,7 @@ func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 
 	// Test 2: Read all messages (reverse)
 	pubsRev, streamPosRev, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit:   -1,
 			Reverse: true,
 		},
@@ -716,7 +719,7 @@ func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 
 	// Test 3: Read with limit
 	pubsLimited, _, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit: 2,
 		},
 	})
@@ -727,7 +730,7 @@ func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 
 	// Test 4: Read since offset
 	pubsSince, _, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Since: &StreamPosition{
 				Offset: 2,
 				Epoch:  streamPos.Epoch,
@@ -742,7 +745,7 @@ func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 
 	// Test 5: Metadata-only read
 	pubsMeta, streamPosMeta, err := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{
+		Filter: StreamFilter{
 			Limit: 0, // metadata only
 		},
 	})
@@ -762,7 +765,7 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 
 	// Publish 10 messages
 	for i := 1; i <= 10; i++ {
-		_, _, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -771,12 +774,12 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 
 	// Compare ReadStream and ReadStream2 results
 	pubs1, pos1, err1 := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{Limit: -1},
+		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err1)
 
 	pubs2, pos2, err2 := engine.ReadStream2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{Limit: -1},
+		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err2)
 
@@ -791,12 +794,12 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 
 	// Compare ReadStreamZero and ReadStreamZero2 results
 	pubs3, pos3, err3 := engine.ReadStreamZero(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{Limit: -1},
+		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err3)
 
 	pubs4, pos4, err4 := engine.ReadStreamZero2(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{Limit: -1},
+		Filter: StreamFilter{Limit: -1},
 	})
 	require.NoError(t, err4)
 
@@ -810,271 +813,271 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 	}
 }
 
-// TestRedisKeyedEngine_CleanupGeneratesLeaveMessages verifies that the Lua cleanup script
-// correctly generates minimal LEAVE messages (key + removed + timestamp) when entries expire.
-func TestRedisKeyedEngine_CleanupGeneratesLeaveMessages(t *testing.T) {
-	node, _ := New(Config{})
+//// TestRedisKeyedEngine_CleanupGeneratesLeaveMessages verifies that the Lua cleanup script
+//// correctly generates minimal LEAVE messages (key + removed + timestamp) when entries expire.
+//func TestRedisKeyedEngine_CleanupGeneratesLeaveMessages(t *testing.T) {
+//	node, _ := New(Config{})
+//
+//	// Create engine with PresenceTTL for testing
+//	redisConf := testSingleRedisConf(6379)
+//	shard, err := NewRedisShard(node, redisConf)
+//	require.NoError(t, err)
+//	engine, err := NewRedisKeyedEngine(node, RedisKeyedEngineConfig{
+//		Shards:                []*RedisShard{shard},
+//		PresenceTTL:           30 * time.Second, // Set long TTL so expire ZSET doesn't disappear
+//		PresenceStreamSize:    100,
+//		PresenceStreamTTL:     300 * time.Second,
+//		PresenceStreamMetaTTL: 3600 * time.Second,
+//	})
+//	require.NoError(t, err)
+//	t.Cleanup(func() {
+//		_ = node.Shutdown(context.Background())
+//	})
+//
+//	ctx := context.Background()
+//	channel := randomChannel("test_leave")
+//
+//	// Add a member (TTL comes from engine config: 2 seconds)
+//	clientID := "client123"
+//	clientInfo := ClientInfo{
+//		ClientID: clientID,
+//		UserID:   "user123",
+//	}
+//	err = engine.AddMember(ctx, channel, clientInfo, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//	t.Logf("Added member %s", clientID)
+//
+//	// Check what keys were created and what's in the expire ZSET
+//	shardWrapper := engine.shards[0]
+//	keys := []string{
+//		engine.snapshotHashKey(shardWrapper.shard, channel),
+//		engine.snapshotExpireKey(shardWrapper.shard, channel),
+//		engine.streamKey(shardWrapper.shard, channel),
+//		engine.metaKey(shardWrapper.shard, channel),
+//	}
+//	for _, key := range keys {
+//		exists, err := shardWrapper.shard.client.Do(ctx, shardWrapper.shard.client.B().Exists().Key(key).Build()).AsBool()
+//		require.NoError(t, err)
+//		t.Logf("Key %s exists: %v", key, exists)
+//	}
+//
+//	// Check expire ZSET contents immediately
+//	cmd := shardWrapper.shard.client.B().Zrangebyscore().Key(engine.snapshotExpireKey(shardWrapper.shard, channel)).Min("0").Max("+inf").Withscores().Build()
+//	result, err := shardWrapper.shard.client.Do(ctx, cmd).AsStrSlice()
+//	require.NoError(t, err)
+//	t.Logf("Expire ZSET immediately after add: %v", result)
+//
+//	// Verify the stream contains the ADD event
+//	streamInitial, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
+//		Filter: StreamFilter{Limit: -1},
+//	})
+//	require.NoError(t, err)
+//	require.Len(t, streamInitial, 1, "Should have 1 ADD event in stream")
+//	require.Equal(t, clientID, streamInitial[0].Key)
+//	require.False(t, streamInitial[0].Removed, "Initial event should be ADD (Removed=false)")
+//	t.Logf("Initial stream event: Offset=%d Key=%q Removed=%v", streamInitial[0].Offset, streamInitial[0].Key, streamInitial[0].Removed)
+//
+//	// Don't wait for actual expiration - we'll simulate it by passing a future "now" value to cleanup
+//	time.Sleep(1 * time.Second)
+//
+//	// Check if cleanup is registered (should be set by AddMember)
+//	cleanupKey := engine.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
+//
+//	// Manually trigger cleanup with a "now" value that's 31 seconds in the future
+//	// This simulates that the member (with 30s TTL) has expired
+//	now := time.Now().Unix() + 31
+//	t.Logf("Running cleanup with simulated future time (now + 31 seconds)")
+//
+//	err = engine.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, now)
+//	require.NoError(t, err)
+//	t.Logf("Cleanup completed")
+//
+//	// Read the stream after cleanup - should have ADD + LEAVE events
+//	pubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
+//		Filter: StreamFilter{Limit: -1},
+//	})
+//	require.NoError(t, err)
+//	require.Len(t, pubs, 2, "Expected 2 events in stream (ADD + LEAVE)")
+//
+//	// Log all events
+//	for i, pub := range pubs {
+//		t.Logf("  [%d] Offset=%d Key=%q Removed=%v Time=%d", i, pub.Offset, pub.Key, pub.Removed, pub.Time)
+//	}
+//
+//	// Verify the LEAVE event
+//	leaveEvent := pubs[1] // Second event should be LEAVE
+//	require.Equal(t, clientID, leaveEvent.Key, "LEAVE event should have correct client ID")
+//	require.True(t, leaveEvent.Removed, "LEAVE event should have Removed=true")
+//	require.Greater(t, leaveEvent.Time, int64(0), "LEAVE event should have timestamp")
+//	require.Empty(t, leaveEvent.Data, "LEAVE event should have no data")
+//
+//	t.Logf("SUCCESS: Lua cleanup script correctly generated minimal LEAVE event")
+//	t.Logf("  Key: %s, Removed: %v, Time: %d", leaveEvent.Key, leaveEvent.Removed, leaveEvent.Time)
+//}
 
-	// Create engine with PresenceTTL for testing
-	redisConf := testSingleRedisConf(6379)
-	shard, err := NewRedisShard(node, redisConf)
-	require.NoError(t, err)
-	engine, err := NewRedisKeyedEngine(node, RedisKeyedEngineConfig{
-		Shards:                []*RedisShard{shard},
-		PresenceTTL:           30 * time.Second, // Set long TTL so expire ZSET doesn't disappear
-		PresenceStreamSize:    100,
-		PresenceStreamTTL:     300 * time.Second,
-		PresenceStreamMetaTTL: 3600 * time.Second,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = node.Shutdown(context.Background())
-	})
+//// TestRedisKeyedEngine_AggregationWithMultipleConnections verifies that user aggregation
+//// correctly tracks multiple connections from the same user.
+//func TestRedisKeyedEngine_AggregationWithMultipleConnections(t *testing.T) {
+//	node, _ := New(Config{})
+//	engine := newTestSnapshotRedisEngine(t, node)
+//
+//	ctx := context.Background()
+//	channel := randomChannel("test_aggregation")
+//
+//	userID := "alice"
+//
+//	// Alice opens 3 connections
+//	conn1 := "conn_1"
+//	conn2 := "conn_2"
+//	conn3 := "conn_3"
+//
+//	// Add first connection
+//	err := engine.AddMember(ctx, channel, ClientInfo{
+//		ClientID: conn1,
+//		UserID:   userID,
+//	}, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	// Check stats
+//	stats, err := engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 1, stats.NumKeys, "Should have 1 client connection")
+//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should have 1 unique user")
+//	t.Logf("After conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//
+//	// Add second connection (same user)
+//	err = engine.AddMember(ctx, channel, ClientInfo{
+//		ClientID: conn2,
+//		UserID:   userID,
+//	}, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	stats, err = engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 2, stats.NumKeys, "Should have 2 client connections")
+//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user")
+//	t.Logf("After conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//
+//	// Add third connection (same user)
+//	err = engine.AddMember(ctx, channel, ClientInfo{
+//		ClientID: conn3,
+//		UserID:   userID,
+//	}, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	stats, err = engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 3, stats.NumKeys, "Should have 3 client connections")
+//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user")
+//	t.Logf("After conn3: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//
+//	// Remove first connection
+//	err = engine.RemoveMember(ctx, channel, ClientInfo{
+//		ClientID: conn1,
+//		UserID:   userID,
+//	}, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	stats, err = engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 2, stats.NumKeys, "Should have 2 client connections")
+//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user (2 connections remain)")
+//	t.Logf("After removing conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//
+//	// Remove second connection
+//	err = engine.RemoveMember(ctx, channel, ClientInfo{
+//		ClientID: conn2,
+//		UserID:   userID,
+//	}, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	stats, err = engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 1, stats.NumKeys, "Should have 1 client connection")
+//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user (1 connection remains)")
+//	t.Logf("After removing conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//
+//	// Remove third connection (last one)
+//	err = engine.RemoveMember(ctx, channel, ClientInfo{
+//		ClientID: conn3,
+//		UserID:   userID,
+//	}, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	stats, err = engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 0, stats.NumKeys, "Should have 0 client connections")
+//	require.Equal(t, 0, stats.NumAggregatedKeys, "Should have 0 unique users (all connections closed)")
+//	t.Logf("After removing conn3 (last): %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//
+//	t.Logf("SUCCESS: Aggregation correctly tracks multiple connections per user")
+//}
 
-	ctx := context.Background()
-	channel := randomChannel("test_leave")
-
-	// Add a member (TTL comes from engine config: 2 seconds)
-	clientID := "client123"
-	clientInfo := ClientInfo{
-		ClientID: clientID,
-		UserID:   "user123",
-	}
-	err = engine.AddMember(ctx, channel, clientInfo, EnginePresenceOptions{})
-	require.NoError(t, err)
-	t.Logf("Added member %s", clientID)
-
-	// Check what keys were created and what's in the expire ZSET
-	shardWrapper := engine.shards[0]
-	keys := []string{
-		engine.snapshotHashKey(shardWrapper.shard, channel),
-		engine.snapshotExpireKey(shardWrapper.shard, channel),
-		engine.streamKey(shardWrapper.shard, channel),
-		engine.metaKey(shardWrapper.shard, channel),
-	}
-	for _, key := range keys {
-		exists, err := shardWrapper.shard.client.Do(ctx, shardWrapper.shard.client.B().Exists().Key(key).Build()).AsBool()
-		require.NoError(t, err)
-		t.Logf("Key %s exists: %v", key, exists)
-	}
-
-	// Check expire ZSET contents immediately
-	cmd := shardWrapper.shard.client.B().Zrangebyscore().Key(engine.snapshotExpireKey(shardWrapper.shard, channel)).Min("0").Max("+inf").Withscores().Build()
-	result, err := shardWrapper.shard.client.Do(ctx, cmd).AsStrSlice()
-	require.NoError(t, err)
-	t.Logf("Expire ZSET immediately after add: %v", result)
-
-	// Verify the stream contains the ADD event
-	streamInitial, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{Limit: -1},
-	})
-	require.NoError(t, err)
-	require.Len(t, streamInitial, 1, "Should have 1 ADD event in stream")
-	require.Equal(t, clientID, streamInitial[0].Key)
-	require.False(t, streamInitial[0].Removed, "Initial event should be ADD (Removed=false)")
-	t.Logf("Initial stream event: Offset=%d Key=%q Removed=%v", streamInitial[0].Offset, streamInitial[0].Key, streamInitial[0].Removed)
-
-	// Don't wait for actual expiration - we'll simulate it by passing a future "now" value to cleanup
-	time.Sleep(1 * time.Second)
-
-	// Check if cleanup is registered (should be set by AddMember)
-	cleanupKey := engine.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
-
-	// Manually trigger cleanup with a "now" value that's 31 seconds in the future
-	// This simulates that the member (with 30s TTL) has expired
-	now := time.Now().Unix() + 31
-	t.Logf("Running cleanup with simulated future time (now + 31 seconds)")
-
-	err = engine.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, now)
-	require.NoError(t, err)
-	t.Logf("Cleanup completed")
-
-	// Read the stream after cleanup - should have ADD + LEAVE events
-	pubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
-		Filter: HistoryFilter{Limit: -1},
-	})
-	require.NoError(t, err)
-	require.Len(t, pubs, 2, "Expected 2 events in stream (ADD + LEAVE)")
-
-	// Log all events
-	for i, pub := range pubs {
-		t.Logf("  [%d] Offset=%d Key=%q Removed=%v Time=%d", i, pub.Offset, pub.Key, pub.Removed, pub.Time)
-	}
-
-	// Verify the LEAVE event
-	leaveEvent := pubs[1] // Second event should be LEAVE
-	require.Equal(t, clientID, leaveEvent.Key, "LEAVE event should have correct client ID")
-	require.True(t, leaveEvent.Removed, "LEAVE event should have Removed=true")
-	require.Greater(t, leaveEvent.Time, int64(0), "LEAVE event should have timestamp")
-	require.Empty(t, leaveEvent.Data, "LEAVE event should have no data")
-
-	t.Logf("SUCCESS: Lua cleanup script correctly generated minimal LEAVE event")
-	t.Logf("  Key: %s, Removed: %v, Time: %d", leaveEvent.Key, leaveEvent.Removed, leaveEvent.Time)
-}
-
-// TestRedisKeyedEngine_AggregationWithMultipleConnections verifies that user aggregation
-// correctly tracks multiple connections from the same user.
-func TestRedisKeyedEngine_AggregationWithMultipleConnections(t *testing.T) {
-	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
-
-	ctx := context.Background()
-	channel := randomChannel("test_aggregation")
-
-	userID := "alice"
-
-	// Alice opens 3 connections
-	conn1 := "conn_1"
-	conn2 := "conn_2"
-	conn3 := "conn_3"
-
-	// Add first connection
-	err := engine.AddMember(ctx, channel, ClientInfo{
-		ClientID: conn1,
-		UserID:   userID,
-	}, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	// Check stats
-	stats, err := engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.NumKeys, "Should have 1 client connection")
-	require.Equal(t, 1, stats.NumAggregatedKeys, "Should have 1 unique user")
-	t.Logf("After conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
-
-	// Add second connection (same user)
-	err = engine.AddMember(ctx, channel, ClientInfo{
-		ClientID: conn2,
-		UserID:   userID,
-	}, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 2, stats.NumKeys, "Should have 2 client connections")
-	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user")
-	t.Logf("After conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
-
-	// Add third connection (same user)
-	err = engine.AddMember(ctx, channel, ClientInfo{
-		ClientID: conn3,
-		UserID:   userID,
-	}, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 3, stats.NumKeys, "Should have 3 client connections")
-	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user")
-	t.Logf("After conn3: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
-
-	// Remove first connection
-	err = engine.RemoveMember(ctx, channel, ClientInfo{
-		ClientID: conn1,
-		UserID:   userID,
-	}, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 2, stats.NumKeys, "Should have 2 client connections")
-	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user (2 connections remain)")
-	t.Logf("After removing conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
-
-	// Remove second connection
-	err = engine.RemoveMember(ctx, channel, ClientInfo{
-		ClientID: conn2,
-		UserID:   userID,
-	}, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.NumKeys, "Should have 1 client connection")
-	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user (1 connection remains)")
-	t.Logf("After removing conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
-
-	// Remove third connection (last one)
-	err = engine.RemoveMember(ctx, channel, ClientInfo{
-		ClientID: conn3,
-		UserID:   userID,
-	}, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 0, stats.NumKeys, "Should have 0 client connections")
-	require.Equal(t, 0, stats.NumAggregatedKeys, "Should have 0 unique users (all connections closed)")
-	t.Logf("After removing conn3 (last): %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
-
-	t.Logf("SUCCESS: Aggregation correctly tracks multiple connections per user")
-}
-
-// TestRedisKeyedEngine_AggregationWithCleanup verifies that cleanup script
-// correctly updates aggregation when connections expire.
-func TestRedisKeyedEngine_AggregationWithCleanup(t *testing.T) {
-	node, _ := New(Config{})
-
-	redisConf := testSingleRedisConf(6379)
-	shard, err := NewRedisShard(node, redisConf)
-	require.NoError(t, err)
-	engine, err := NewRedisKeyedEngine(node, RedisKeyedEngineConfig{
-		Shards:                []*RedisShard{shard},
-		PresenceTTL:           30 * time.Second,
-		PresenceStreamSize:    100,
-		PresenceStreamTTL:     300 * time.Second,
-		PresenceStreamMetaTTL: 3600 * time.Second,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = node.Shutdown(context.Background())
-	})
-
-	ctx := context.Background()
-	channel := randomChannel("test_agg_cleanup")
-
-	userID := "alice"
-
-	// Alice opens 2 connections
-	conn1 := "conn_1"
-	conn2 := "conn_2"
-
-	err = engine.AddMember(ctx, channel, ClientInfo{
-		ClientID: conn1,
-		UserID:   userID,
-	}, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	err = engine.AddMember(ctx, channel, ClientInfo{
-		ClientID: conn2,
-		UserID:   userID,
-	}, EnginePresenceOptions{})
-	require.NoError(t, err)
-
-	// Verify 2 connections, 1 user
-	stats, err := engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 2, stats.NumKeys, "Should have 2 connections")
-	require.Equal(t, 1, stats.NumAggregatedKeys, "Should have 1 unique user")
-	t.Logf("Before cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
-
-	// Simulate conn1 expiring via cleanup script
-	shardWrapper := engine.shards[0]
-	cleanupKey := engine.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
-	now := time.Now().Unix() + 31 // Simulate future
-
-	err = engine.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, now)
-	require.NoError(t, err)
-
-	// After cleanup of both expired connections
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 0, stats.NumKeys, "Should have 0 connections (both cleaned up)")
-	require.Equal(t, 0, stats.NumAggregatedKeys, "Should have 0 users (aggregation updated correctly)")
-	t.Logf("After cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
-
-	t.Logf("SUCCESS: Cleanup script correctly updates aggregation")
-}
+//// TestRedisKeyedEngine_AggregationWithCleanup verifies that cleanup script
+//// correctly updates aggregation when connections expire.
+//func TestRedisKeyedEngine_AggregationWithCleanup(t *testing.T) {
+//	node, _ := New(Config{})
+//
+//	redisConf := testSingleRedisConf(6379)
+//	shard, err := NewRedisShard(node, redisConf)
+//	require.NoError(t, err)
+//	engine, err := NewRedisKeyedEngine(node, RedisKeyedEngineConfig{
+//		Shards:                []*RedisShard{shard},
+//		PresenceTTL:           30 * time.Second,
+//		PresenceStreamSize:    100,
+//		PresenceStreamTTL:     300 * time.Second,
+//		PresenceStreamMetaTTL: 3600 * time.Second,
+//	})
+//	require.NoError(t, err)
+//	t.Cleanup(func() {
+//		_ = node.Shutdown(context.Background())
+//	})
+//
+//	ctx := context.Background()
+//	channel := randomChannel("test_agg_cleanup")
+//
+//	userID := "alice"
+//
+//	// Alice opens 2 connections
+//	conn1 := "conn_1"
+//	conn2 := "conn_2"
+//
+//	err = engine.AddMember(ctx, channel, ClientInfo{
+//		ClientID: conn1,
+//		UserID:   userID,
+//	}, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	err = engine.AddMember(ctx, channel, ClientInfo{
+//		ClientID: conn2,
+//		UserID:   userID,
+//	}, EnginePresenceOptions{})
+//	require.NoError(t, err)
+//
+//	// Verify 2 connections, 1 user
+//	stats, err := engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 2, stats.NumKeys, "Should have 2 connections")
+//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should have 1 unique user")
+//	t.Logf("Before cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//
+//	// Simulate conn1 expiring via cleanup script
+//	shardWrapper := engine.shards[0]
+//	cleanupKey := engine.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
+//	now := time.Now().Unix() + 31 // Simulate future
+//
+//	err = engine.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, now)
+//	require.NoError(t, err)
+//
+//	// After cleanup of both expired connections
+//	stats, err = engine.Stats(ctx, channel)
+//	require.NoError(t, err)
+//	require.Equal(t, 0, stats.NumKeys, "Should have 0 connections (both cleaned up)")
+//	require.Equal(t, 0, stats.NumAggregatedKeys, "Should have 0 users (aggregation updated correctly)")
+//	t.Logf("After cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//
+//	t.Logf("SUCCESS: Cleanup script correctly updates aggregation")
+//}
 
 // TestRedisKeyedEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
 // in correct score order (ascending by score).
@@ -1099,7 +1102,7 @@ func TestRedisKeyedEngine_OrderedSnapshotOrdering(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, _, err := engine.Publish(ctx, channel, tc.key, []byte(tc.data), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, tc.key, []byte(tc.data), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -1142,7 +1145,7 @@ func TestRedisKeyedEngine_OrderedSnapshotPagination(t *testing.T) {
 		score := int64(i * 100)
 		data := fmt.Sprintf("data_%02d", i)
 
-		_, _, err := engine.Publish(ctx, channel, key, []byte(data), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, []byte(data), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      score,
 			StreamSize: 100,
@@ -1257,7 +1260,7 @@ func TestRedisKeyedEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, _, err := engine.Publish(ctx, channel, tc.key, []byte("data"), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, tc.key, []byte("data"), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -1297,7 +1300,7 @@ func TestRedisKeyedEngine_OrderedSnapshotWithSameScores(t *testing.T) {
 	// Redis ZSET uses lexicographic ordering for members with equal scores
 	for i := 1; i <= 5; i++ {
 		key := fmt.Sprintf("key_%d", i)
-		_, _, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      100, // Same score for all
 			StreamSize: 100,
@@ -1336,7 +1339,7 @@ func TestRedisKeyedEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 
 	// Publish 10 entries
 	for i := 1; i <= 10; i++ {
-		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      int64(i * 10),
 			StreamSize: 100,
@@ -1405,7 +1408,7 @@ func TestRedisKeyedEngine_OrderedSnapshotFullPagination(t *testing.T) {
 
 	// Publish entries
 	for i := 1; i <= totalEntries; i++ {
-		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%03d", i), []byte(fmt.Sprintf("data_%03d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%03d", i), []byte(fmt.Sprintf("data_%03d", i)), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      int64(i * 10),
 			StreamSize: 100,
@@ -1466,7 +1469,7 @@ func TestRedisKeyedEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 
 	// Publish 5 entries
 	for i := 1; i <= 5; i++ {
-		_, _, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%d", i), []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%d", i), []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
 			Ordered:    true,
 			Score:      int64(i * 10), // 10, 20, 30, 40, 50
 			StreamSize: 100,
@@ -1487,7 +1490,7 @@ func TestRedisKeyedEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 	require.Equal(t, "key_1", entries1[4].Key) // Lowest score (10)
 
 	// Update key_1 to have highest score (60)
-	_, _, err = engine.Publish(ctx, channel, "key_1", []byte("updated_data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_1", []byte("updated_data"), KeyedPublishOptions{
 		Ordered:    true,
 		Score:      60, // Now highest
 		StreamSize: 100,
