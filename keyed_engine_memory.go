@@ -384,6 +384,27 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 		h.channels[ch] = channel
 	}
 
+	// Check KeyMode condition before proceeding
+	if key != "" && opts.KeyMode != KeyModeReplace {
+		_, keyExists := channel.snapshot[key]
+		if opts.KeyMode == KeyModeIfNew && keyExists {
+			// KeyModeIfNew but key already exists - skip
+			var pos StreamPosition
+			if channel.stream != nil {
+				pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+			}
+			return pos, nil, true, nil
+		}
+		if opts.KeyMode == KeyModeIfExists && !keyExists {
+			// KeyModeIfExists but key doesn't exist - skip
+			var pos StreamPosition
+			if channel.stream != nil {
+				pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+			}
+			return pos, nil, true, nil
+		}
+	}
+
 	var streamPosition StreamPosition
 
 	// Handle stream

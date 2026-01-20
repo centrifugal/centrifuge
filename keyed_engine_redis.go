@@ -642,11 +642,12 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 			"0", // is_remove
 			strconv.FormatInt(opts.Score, 10),
 			strconv.FormatInt(int64(opts.KeyTTL.Seconds()), 10),
-			"0", // use_hexpire
-			"",  // aggregation_key
-			"",  // aggregation_value
-			"",  // key_state
-			ch,  // channel_for_cleanup (for cleanup registration)
+			"0",                 // use_hexpire
+			"",                  // aggregation_key
+			"",                  // aggregation_value
+			"",                  // key_state
+			ch,                  // channel_for_cleanup (for cleanup registration)
+			string(opts.KeyMode), // key_mode
 		},
 	).ToArray()
 	if err != nil {
@@ -735,6 +736,7 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 			"", "", // aggregation_key, aggregation_value
 			"", // message_key_payload (empty - we're removing)
 			"", // channel_for_cleanup (not used for unpublish)
+			"", // key_mode (not used for unpublish)
 		},
 	).ToArray()
 	if err != nil {

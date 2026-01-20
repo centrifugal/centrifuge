@@ -5,6 +5,24 @@ import (
 	"time"
 )
 
+// KeyMode controls conditional publishing based on key existence in the snapshot.
+type KeyMode string
+
+const (
+	// KeyModeReplace always writes the key (default behavior, backward compatible).
+	KeyModeReplace KeyMode = ""
+
+	// KeyModeIfNew only writes if the key does NOT exist in the snapshot.
+	// Use cases: lobby slots, distributed locks, first-claim resources.
+	// When key already exists, Applied=false is returned.
+	KeyModeIfNew KeyMode = "if_new"
+
+	// KeyModeIfExists only writes if the key ALREADY exists in the snapshot.
+	// Use cases: heartbeats, update-only operations, presence renewal.
+	// When key does not exist, Applied=false is returned.
+	KeyModeIfExists KeyMode = "if_exists"
+)
+
 type KeyedEngine interface {
 	// Subscribe subscribes server to channel and returns error if it fails.
 	Subscribe(ch string) error
@@ -65,6 +83,10 @@ type KeyedPublishOptions struct {
 	KeyTTL       time.Duration
 	Ordered      bool
 	Score        int64
+
+	// KeyMode controls conditional publishing based on key existence.
+	// Default (empty) always writes. See KeyModeIfNew and KeyModeIfExists.
+	KeyMode KeyMode
 }
 
 // KeyedUnpublishOptions defines options for unpublishing (removing a key from keyed state).
@@ -133,6 +155,7 @@ type KeyedPublishResult struct {
 	// It is false when:
 	// - Suppressed due to idempotency key (duplicate detected)
 	// - Skipped due to out-of-order version
+	// - KeyMode condition not met (KeyModeIfNew when key exists, KeyModeIfExists when key absent)
 	// - Key not found (for Unpublish)
 	// When Applied is false, no message is appended to the stream and no
 	// publication is sent to PUB/SUB.

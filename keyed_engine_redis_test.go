@@ -1516,3 +1516,136 @@ func TestRedisKeyedEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 
 	t.Logf("SUCCESS: Updating score correctly reorders entries in descending order")
 }
+
+// TestRedisKeyedEngine_KeyModeIfNew tests KeyModeIfNew - only write if key doesn't exist.
+func TestRedisKeyedEngine_KeyModeIfNew(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_keymode_if_new")
+
+	// First publish with KeyModeIfNew should succeed (key doesn't exist)
+	res1, err := engine.Publish(ctx, channel, "slot1", []byte("player1"), KeyedPublishOptions{
+		KeyMode:    KeyModeIfNew,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res1.Applied, "First publish should be applied")
+	require.Equal(t, uint64(1), res1.Position.Offset)
+
+	// Second publish with KeyModeIfNew should be suppressed (key exists)
+	res2, err := engine.Publish(ctx, channel, "slot1", []byte("player2"), KeyedPublishOptions{
+		KeyMode:    KeyModeIfNew,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res2.Applied, "Second publish should be suppressed (key exists)")
+	require.Equal(t, uint64(1), res2.Position.Offset, "Offset should not change")
+
+	// Verify snapshot still has original data
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit:       100,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, []byte("player1"), entries[0].Data)
+
+	// Verify stream only has one entry (second was suppressed)
+	pubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
+		Filter: StreamFilter{Limit: -1},
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+}
+
+// TestRedisKeyedEngine_KeyModeIfExists tests KeyModeIfExists - only write if key exists.
+func TestRedisKeyedEngine_KeyModeIfExists(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_keymode_if_exists")
+
+	// First publish with KeyModeIfExists should be suppressed (key doesn't exist)
+	res1, err := engine.Publish(ctx, channel, "presence1", []byte("heartbeat1"), KeyedPublishOptions{
+		KeyMode:    KeyModeIfExists,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res1.Applied, "First publish should be suppressed (key doesn't exist)")
+
+	// Create the key first with regular publish
+	res2, err := engine.Publish(ctx, channel, "presence1", []byte("initial"), KeyedPublishOptions{
+		KeyMode:    KeyModeReplace, // or just leave empty
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Applied, "Regular publish should be applied")
+
+	// Now publish with KeyModeIfExists should succeed (key exists)
+	res3, err := engine.Publish(ctx, channel, "presence1", []byte("heartbeat2"), KeyedPublishOptions{
+		KeyMode:    KeyModeIfExists,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res3.Applied, "Third publish should be applied (key exists)")
+
+	// Verify snapshot has updated data
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit:       100,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, []byte("heartbeat2"), entries[0].Data)
+}
+
+// TestRedisKeyedEngine_KeyModeReplace tests default KeyModeReplace behavior.
+func TestRedisKeyedEngine_KeyModeReplace(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+
+	ctx := context.Background()
+	channel := randomChannel("test_keymode_replace")
+
+	// First publish (key doesn't exist)
+	res1, err := engine.Publish(ctx, channel, "key1", []byte("value1"), KeyedPublishOptions{
+		KeyMode:    KeyModeReplace, // explicit, same as default
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res1.Applied)
+
+	// Second publish (key exists) - should still apply
+	res2, err := engine.Publish(ctx, channel, "key1", []byte("value2"), KeyedPublishOptions{
+		KeyMode:    KeyModeReplace,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res2.Applied, "Replace should always apply")
+
+	// Verify snapshot has updated data
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit:       100,
+		SnapshotTTL: 300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, []byte("value2"), entries[0].Data)
+}

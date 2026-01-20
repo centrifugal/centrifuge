@@ -47,6 +47,7 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[18] = aggregation_value (value to aggregate by - e.g., actual user ID for presence user counting)
 -- ARGV[19] = message_key_payload (optional alternative payload for snapshot storage - not used when message_payload is Publication)
 -- ARGV[20] = channel_for_cleanup (channel name for cleanup registration, empty '' to disable)
+-- ARGV[21] = key_mode ("" for replace/always, "if_new" only if key doesn't exist, "if_exists" only if key exists)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -82,6 +83,7 @@ local aggregation_key = ARGV[17]
 local aggregation_value = ARGV[18]
 local message_key_payload = ARGV[19]
 local channel_for_cleanup = ARGV[20]
+local key_mode = ARGV[21] or ""
 
 -- Determine which payload to use for snapshot storage
 local snapshot_payload = message_payload
@@ -122,6 +124,21 @@ if meta_key ~= '' then
                 end
                 return { offset_num, current_epoch, "0", "1" }
             end
+        end
+    end
+
+    -- ==== Step 2b: KeyMode check (BEFORE incrementing offset) ====
+    if key_mode ~= "" and message_key ~= "" and snapshot_hash_key ~= "" and is_leave ~= "1" then
+        local key_exists = redis.call("hexists", snapshot_hash_key, message_key) == 1
+        if key_mode == "if_new" and key_exists then
+            -- KeyModeIfNew but key already exists - suppress
+            local current_offset = redis.call("hget", meta_key, "s") or 0
+            return { tonumber(current_offset), current_epoch, "0", "1" }
+        end
+        if key_mode == "if_exists" and not key_exists then
+            -- KeyModeIfExists but key doesn't exist - suppress
+            local current_offset = redis.call("hget", meta_key, "s") or 0
+            return { tonumber(current_offset), current_epoch, "0", "1" }
         end
     end
 
