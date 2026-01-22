@@ -823,6 +823,9 @@ func (e *RedisKeyedEngine) readUnorderedSnapshot(ctx context.Context, ch string,
 	}
 	streamEpoch, _ := replies[1].ToString()
 	nextCursor, _ := replies[2].ToString()
+	if nextCursor == "0" {
+		nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
+	}
 	dataArr, _ := replies[3].ToArray()
 
 	streamPos := StreamPosition{Offset: streamOffset, Epoch: streamEpoch}
@@ -937,6 +940,9 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 			if cursorBytes != nil {
 				nextCursor = unsafe.String(&cursorBytes[0], len(cursorBytes))
 			}
+			if nextCursor == "0" {
+				nextCursor = "" // Convert Redis HSCAN "0" (complete) to empty string
+			}
 
 			// --- reply[3]: key-value array ---
 			kvCount, err := rr.ExpectArray()
@@ -995,7 +1001,8 @@ func (e *RedisKeyedEngine) readUnorderedSnapshotZero(
 	return pubs, streamPos, nextCursor, nil
 }
 
-// readOrderedSnapshot uses offset-based pagination (not cursor), so returns empty cursor.
+// readOrderedSnapshot uses key-based cursor pagination for continuity.
+// Cursor format: "score\x00key" to ensure no entries are skipped during concurrent modifications.
 func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
@@ -1003,6 +1010,13 @@ func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, o
 	snapshotTTL := "0"
 	if opts.SnapshotTTL > 0 {
 		snapshotTTL = strconv.FormatInt(int64(opts.SnapshotTTL.Seconds()), 10)
+	}
+
+	// Parse cursor: "score\x00key" format
+	cursorScore := ""
+	cursorKey := ""
+	if opts.Cursor != "" {
+		cursorScore, cursorKey = parseOrderedCursor(opts.Cursor)
 	}
 
 	replies, err := e.readOrderedScript.Exec(ctx, shardClient,
@@ -1014,17 +1028,18 @@ func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, o
 			e.snapshotMetaKey(s.shard, ch),
 		},
 		[]string{
-			strconv.Itoa(opts.Limit),                                             // ARGV[1] = limit
-			strconv.Itoa(opts.Offset),                                            // ARGV[2] = offset
-			strconv.FormatInt(time.Now().Unix(), 10),                             // ARGV[3] = now
-			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10), // ARGV[4] = meta_ttl
-			snapshotTTL, // ARGV[5] = snapshot_ttl
+			strconv.Itoa(opts.Limit),                 // ARGV[1] = limit
+			cursorScore,                              // ARGV[2] = cursor_score
+			cursorKey,                                // ARGV[3] = cursor_key
+			strconv.FormatInt(time.Now().Unix(), 10), // ARGV[4] = now
+			strconv.FormatInt(int64(e.node.config.HistoryMetaTTL.Seconds()), 10), // ARGV[5] = meta_ttl
+			snapshotTTL, // ARGV[6] = snapshot_ttl
 		},
 	).ToArray()
 	if err != nil {
 		return nil, StreamPosition{}, "", err
 	}
-	if len(replies) < 4 {
+	if len(replies) < 6 {
 		return nil, StreamPosition{}, "", errors.New("wrong number of replies")
 	}
 
@@ -1035,6 +1050,8 @@ func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, o
 	streamEpoch, _ := replies[1].ToString()
 	keysArr, _ := replies[2].ToArray()
 	valuesArr, _ := replies[3].ToArray()
+	nextCursorScore, _ := replies[4].ToString()
+	nextCursorKey, _ := replies[5].ToString()
 
 	streamPos := StreamPosition{Offset: streamOffset, Epoch: streamEpoch}
 
@@ -1070,7 +1087,28 @@ func (e *RedisKeyedEngine) readOrderedSnapshot(ctx context.Context, ch string, o
 		pubs = append(pubs, pub)
 	}
 
-	return pubs, streamPos, "", nil
+	// Build cursor for next page
+	cursor := ""
+	if nextCursorScore != "" && nextCursorKey != "" {
+		cursor = makeOrderedCursor(nextCursorScore, nextCursorKey)
+	}
+
+	return pubs, streamPos, cursor, nil
+}
+
+// makeOrderedCursor creates a cursor for ordered snapshots: "score\x00key"
+func makeOrderedCursor(score, key string) string {
+	return score + "\x00" + key
+}
+
+// parseOrderedCursor parses an ordered cursor into score and key strings.
+func parseOrderedCursor(cursor string) (string, string) {
+	for i := 0; i < len(cursor); i++ {
+		if cursor[i] == '\x00' {
+			return cursor[:i], cursor[i+1:]
+		}
+	}
+	return "", ""
 }
 
 func (e *RedisKeyedEngine) ReadStreamZero(

@@ -246,9 +246,9 @@ type keyedHub struct {
 	closeCh         chan struct{}
 	// Key TTL tracking
 	nextKeyExpireCheck int64
-	keyExpireQueue     priority.Queue          // priority queue of {ch:key, expireAt}
-	keyExpires         map[string]int64        // "ch:key" -> expireAt
-	eventHandler       BrokerEventHandler      // for publishing removal events
+	keyExpireQueue     priority.Queue     // priority queue of {ch:key, expireAt}
+	keyExpires         map[string]int64   // "ch:key" -> expireAt
+	eventHandler       BrokerEventHandler // for publishing removal events
 }
 
 // keyedChannel represents keyed state for a single channel.
@@ -879,9 +879,15 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 		}
 
 		// Sort by score (descending) for ordered snapshots, lexicographically for non-ordered
+		// For ordered: use stable secondary sort by key to enable key-based cursor
 		if opts.Ordered && channel.ordered {
 			sort.Slice(channel.sortedKeys, func(i, j int) bool {
-				return channel.scores[channel.sortedKeys[i]] > channel.scores[channel.sortedKeys[j]]
+				si := channel.scores[channel.sortedKeys[i]]
+				sj := channel.scores[channel.sortedKeys[j]]
+				if si != sj {
+					return si > sj // Primary: score descending
+				}
+				return channel.sortedKeys[i] < channel.sortedKeys[j] // Secondary: key ascending
 			})
 		} else {
 			sort.Strings(channel.sortedKeys) // Lexicographic sort for consistency
@@ -889,33 +895,53 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 		channel.sortedKeysDirty = false
 	}
 
-	// Calculate pagination range first
 	totalKeys := len(channel.sortedKeys)
-	startIdx := 0
+	if totalKeys == 0 {
+		return []*Publication{}, streamPosition, "", nil
+	}
+
+	// Key-based cursor pagination for continuity during concurrent modifications.
+	// Instead of integer offset (which shifts when entries are added/removed),
+	// we use the last seen key as cursor. This ensures:
+	// - Entries that move across cursor boundary are modified (new offset) -> in stream
+	// - No entries are permanently skipped
+	// - Duplicates are filtered by offset > streamPos or deduped by key
+
+	var startIdx int
+	if opts.Cursor != "" {
+		if opts.Ordered && channel.ordered {
+			// Ordered cursor format: "score\x00key"
+			startIdx = h.findOrderedCursorPosition(channel, opts.Cursor)
+		} else {
+			// Unordered cursor: just the key (lexicographic)
+			startIdx = h.findUnorderedCursorPosition(channel.sortedKeys, opts.Cursor)
+		}
+	}
+
+	if startIdx >= totalKeys {
+		return []*Publication{}, streamPosition, "", nil
+	}
+
 	endIdx := totalKeys
 	cursor := ""
 
 	if opts.Limit > 0 {
-		offset := opts.Offset
-		if opts.Cursor != "" {
-			// Parse cursor - using strconv is faster than fmt
-			if parsed, err := strconv.Atoi(opts.Cursor); err == nil {
-				offset = parsed
-			}
-		}
-
-		if offset >= totalKeys {
-			return []*Publication{}, streamPosition, "", nil
-		}
-
-		startIdx = offset
-		endIdx = offset + opts.Limit
+		endIdx = startIdx + opts.Limit
 		if endIdx > totalKeys {
 			endIdx = totalKeys
 		}
 
+		// Set cursor to last key in this page (for next page)
 		if endIdx < totalKeys {
-			cursor = strconv.Itoa(endIdx)
+			lastKey := channel.sortedKeys[endIdx-1]
+			if opts.Ordered && channel.ordered {
+				// Ordered cursor: "score\x00key"
+				lastScore := channel.scores[lastKey]
+				cursor = h.makeOrderedCursor(lastScore, lastKey)
+			} else {
+				// Unordered cursor: just the key
+				cursor = lastKey
+			}
 		}
 	}
 
@@ -929,6 +955,49 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 	}
 
 	return pubs, streamPosition, cursor, nil
+}
+
+// makeOrderedCursor creates a cursor for ordered snapshots: "score\x00key"
+func (h *keyedHub) makeOrderedCursor(score int64, key string) string {
+	return strconv.FormatInt(score, 10) + "\x00" + key
+}
+
+// parseOrderedCursor parses an ordered cursor into score and key.
+func (h *keyedHub) parseOrderedCursor(cursor string) (int64, string) {
+	for i := 0; i < len(cursor); i++ {
+		if cursor[i] == '\x00' {
+			score, _ := strconv.ParseInt(cursor[:i], 10, 64)
+			return score, cursor[i+1:]
+		}
+	}
+	// Invalid cursor format, return values that will start from beginning
+	return 0, ""
+}
+
+// findUnorderedCursorPosition finds the position after the cursor key using binary search.
+// Returns the index of the first key > cursor.
+func (h *keyedHub) findUnorderedCursorPosition(sortedKeys []string, cursor string) int {
+	// Binary search for the first key > cursor
+	return sort.Search(len(sortedKeys), func(i int) bool {
+		return sortedKeys[i] > cursor
+	})
+}
+
+// findOrderedCursorPosition finds the position after the cursor (score, key) in ordered snapshot.
+// For ordered snapshots sorted by (score DESC, key ASC), finds first entry where:
+// - score < cursorScore, OR
+// - score == cursorScore AND key > cursorKey
+func (h *keyedHub) findOrderedCursorPosition(channel *keyedChannel, cursor string) int {
+	cursorScore, cursorKey := h.parseOrderedCursor(cursor)
+
+	return sort.Search(len(channel.sortedKeys), func(i int) bool {
+		key := channel.sortedKeys[i]
+		score := channel.scores[key]
+		if score != cursorScore {
+			return score < cursorScore // Score descending: looking for score < cursorScore
+		}
+		return key > cursorKey // Same score: looking for key > cursorKey
+	})
 }
 
 func (h *keyedHub) getStats(ch string) (KeyedStats, error) {

@@ -383,7 +383,7 @@ func TestMemoryKeyedEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res2.Applied) // Not applied due to idempotency suppression
+	require.False(t, res2.Applied)                               // Not applied due to idempotency suppression
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
@@ -425,7 +425,7 @@ func TestMemoryKeyedEngine_VersionedPublishing(t *testing.T) {
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res2.Applied) // Not applied due to out-of-order version
+	require.False(t, res2.Applied)                               // Not applied due to out-of-order version
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset (suppressed)
 
 	// Publish newer version
@@ -571,15 +571,15 @@ func TestMemoryKeyedEngine_OrderedSnapshotPagination(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Read first page (offset=0, limit=5)
-	page1, pos1, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+	// Read first page (limit=5, no cursor)
+	page1, pos1, cursor1, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Ordered:     true,
-		Offset:      0,
 		Limit:       5,
 		SnapshotTTL: 300 * time.Second,
 	})
 	require.NoError(t, err)
 	require.Len(t, page1, 5, "First page should have 5 entries")
+	require.NotEmpty(t, cursor1, "Should have cursor for next page")
 
 	// Verify first page ordering (descending: 20, 19, 18, 17, 16)
 	for i := 0; i < 5; i++ {
@@ -587,10 +587,10 @@ func TestMemoryKeyedEngine_OrderedSnapshotPagination(t *testing.T) {
 		require.Equal(t, expectedKey, page1[i].Key, "Page 1, entry %d should be %s", i, expectedKey)
 	}
 
-	// Read second page (offset=5, limit=5)
+	// Read second page (using cursor)
 	page2, pos2, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
 		Ordered:     true,
-		Offset:      5,
+		Cursor:      cursor1,
 		Limit:       5,
 		SnapshotTTL: 300 * time.Second,
 	})
@@ -1095,4 +1095,695 @@ func TestMemoryKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys, "All keys should be cleaned up")
 	require.Equal(t, 0, stats.NumAggregatedKeys, "All aggregations should be cleaned up")
+}
+
+// =============================================================================
+// Pagination Continuity Tests
+//
+// These tests verify that key-based cursor pagination ensures no entries are
+// permanently lost when the snapshot changes during iteration.
+// The invariant is: snapshot_entries + stream_changes = complete_data
+// =============================================================================
+
+// simulateClientRecovery simulates what a client does:
+// 1. Read snapshot pages, capturing streamPos from first page
+// 2. Filter out entries with offset > streamPos (added during iteration)
+// 3. Read stream from streamPos to get all changes
+// 4. Apply stream changes (updates, removals) to get final state
+func simulateClientRecovery(
+	t *testing.T,
+	engine KeyedEngine,
+	channel string,
+	ordered bool,
+	pageSize int,
+) map[string][]byte {
+	ctx := context.Background()
+
+	// Step 1: Read all snapshot pages
+	allEntries := make(map[string]*Publication)
+	var firstStreamPos StreamPosition
+	cursor := ""
+	pageNum := 0
+
+	for {
+		pubs, streamPos, nextCursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Limit:   pageSize,
+			Cursor:  cursor,
+			Ordered: ordered,
+		})
+		require.NoError(t, err)
+
+		if pageNum == 0 {
+			firstStreamPos = streamPos
+		}
+		pageNum++
+
+		// Step 2: Filter entries - only accept those with offset <= firstStreamPos
+		for _, pub := range pubs {
+			if pub.Offset <= firstStreamPos.Offset {
+				allEntries[pub.Key] = pub
+			}
+		}
+
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+
+	// Step 3: Read stream from firstStreamPos
+	streamPubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &firstStreamPos,
+			Limit: -1, // Get all
+		},
+	})
+	require.NoError(t, err)
+
+	// Step 4: Apply stream changes
+	for _, pub := range streamPubs {
+		if pub.Removed {
+			delete(allEntries, pub.Key)
+		} else {
+			allEntries[pub.Key] = pub
+		}
+	}
+
+	// Convert to simple map for comparison
+	result := make(map[string][]byte, len(allEntries))
+	for k, pub := range allEntries {
+		result[k] = pub.Data
+	}
+	return result
+}
+
+// TestMemoryKeyedEngine_UnorderedContinuity_EntryRemoved tests that removing
+// an entry during unordered pagination doesn't cause data loss.
+func TestMemoryKeyedEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+	ctx := context.Background()
+	channel := "test_unordered_continuity_remove"
+
+	// Create 20 entries: key_00 to key_19
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read first page (keys key_00 to key_09 lexicographically)
+	pubs1, streamPos1, cursor1, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs1, 10)
+	require.NotEmpty(t, cursor1)
+
+	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
+	// This would cause key_11 to shift into position 10, potentially being skipped
+	// with integer offset pagination
+	_, err = engine.Unpublish(ctx, channel, "key_10", KeyedUnpublishOptions{
+		Publish:    true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read second page with cursor
+	pubs2, _, cursor2, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit:  10,
+		Cursor: cursor1,
+	})
+	require.NoError(t, err)
+
+	// Combine snapshot entries, filter by streamPos1
+	snapshotKeys := make(map[string]bool)
+	for _, pub := range pubs1 {
+		if pub.Offset <= streamPos1.Offset {
+			snapshotKeys[pub.Key] = true
+		}
+	}
+	for _, pub := range pubs2 {
+		if pub.Offset <= streamPos1.Offset {
+			snapshotKeys[pub.Key] = true
+		}
+	}
+	// Continue if more pages
+	cursor := cursor2
+	for cursor != "" {
+		pubs, _, nextCursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Limit:  10,
+			Cursor: cursor,
+		})
+		require.NoError(t, err)
+		for _, pub := range pubs {
+			if pub.Offset <= streamPos1.Offset {
+				snapshotKeys[pub.Key] = true
+			}
+		}
+		cursor = nextCursor
+	}
+
+	// Read stream to get changes since streamPos1
+	streamPubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &streamPos1,
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+
+	// Apply stream changes
+	for _, pub := range streamPubs {
+		if pub.Removed {
+			delete(snapshotKeys, pub.Key)
+		}
+	}
+
+	// Verify: should have 19 keys (key_10 was removed)
+	require.Len(t, snapshotKeys, 19, "Should have 19 keys after removal")
+	require.NotContains(t, snapshotKeys, "key_10", "key_10 should be removed")
+
+	// Verify key_11 wasn't skipped (this was the bug with integer offsets)
+	require.Contains(t, snapshotKeys, "key_11", "key_11 should not be skipped")
+}
+
+// TestMemoryKeyedEngine_UnorderedContinuity_EntryAdded tests that adding
+// an entry during unordered pagination doesn't cause issues.
+func TestMemoryKeyedEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+	ctx := context.Background()
+	channel := "test_unordered_continuity_add"
+
+	// Create 20 entries: key_00 to key_19
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read first page
+	pubs1, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs1, 10)
+
+	// CONCURRENT MODIFICATION: Add new entry that lexicographically comes before cursor
+	// This would shift entries with integer offset pagination
+	_, err = engine.Publish(ctx, channel, "key_05b", []byte("data_05b"), KeyedPublishOptions{
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Simulate full client recovery
+	result := simulateClientRecovery(t, engine, channel, false, 10)
+
+	// Verify: should have 21 keys (original 20 + new key_05b)
+	require.Len(t, result, 21, "Should have 21 keys after addition")
+	require.Contains(t, result, "key_05b", "key_05b should be present")
+	require.Equal(t, []byte("data_05b"), result["key_05b"])
+}
+
+// TestMemoryKeyedEngine_OrderedContinuity_HigherScoreAdded tests that adding
+// an entry with higher score during ordered pagination doesn't cause data loss.
+func TestMemoryKeyedEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+	ctx := context.Background()
+	channel := "test_ordered_continuity_higher"
+
+	// Create 20 entries with scores 100, 200, ..., 2000
+	for i := 1; i <= 20; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      int64(i * 100),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read first page (should get keys with highest scores: key_20, key_19, ..., key_11)
+	pubs1, _, cursor1, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered: true,
+		Limit:   10,
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs1, 10)
+	require.NotEmpty(t, cursor1)
+
+	// Verify first page has highest scores
+	require.Equal(t, "key_20", pubs1[0].Key, "First entry should be key_20 (score 2000)")
+
+	// CONCURRENT MODIFICATION: Add entry with HIGHEST score
+	// This entry would appear at position 0, shifting all entries
+	_, err = engine.Publish(ctx, channel, "key_top", []byte("data_top"), KeyedPublishOptions{
+		Ordered:    true,
+		Score:      5000, // Higher than any existing
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Simulate full client recovery
+	result := simulateClientRecovery(t, engine, channel, true, 10)
+
+	// Verify: should have 21 keys
+	require.Len(t, result, 21, "Should have 21 keys")
+	require.Contains(t, result, "key_top", "key_top should be present via stream recovery")
+	require.Equal(t, []byte("data_top"), result["key_top"])
+
+	// Verify no keys were lost
+	for i := 1; i <= 20; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		require.Contains(t, result, key, "%s should be present", key)
+	}
+}
+
+// TestMemoryKeyedEngine_OrderedContinuity_LowerScoreAdded tests that adding
+// an entry with lower score during ordered pagination works correctly.
+func TestMemoryKeyedEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+	ctx := context.Background()
+	channel := "test_ordered_continuity_lower"
+
+	// Create 20 entries
+	for i := 1; i <= 20; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      int64(i * 100),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read first page
+	_, _, cursor1, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered: true,
+		Limit:   10,
+	})
+	require.NoError(t, err)
+
+	// CONCURRENT MODIFICATION: Add entry with LOWEST score
+	// This entry appears at end, shouldn't affect pagination much
+	_, err = engine.Publish(ctx, channel, "key_bottom", []byte("data_bottom"), KeyedPublishOptions{
+		Ordered:    true,
+		Score:      1, // Lower than any existing
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Continue reading with cursor - just verify it works
+	pubs2, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered: true,
+		Limit:   10,
+		Cursor:  cursor1,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, pubs2)
+
+	// Simulate full recovery
+	result := simulateClientRecovery(t, engine, channel, true, 10)
+
+	require.Len(t, result, 21, "Should have 21 keys")
+	require.Contains(t, result, "key_bottom", "key_bottom should be present")
+}
+
+// TestMemoryKeyedEngine_OrderedContinuity_ScoreChanged tests that changing
+// an entry's score during pagination (causing reordering) doesn't lose data.
+func TestMemoryKeyedEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+	ctx := context.Background()
+	channel := "test_ordered_continuity_score_change"
+
+	// Create 20 entries
+	for i := 1; i <= 20; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      int64(i * 100),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read first page (key_20 down to key_11)
+	pubs1, streamPos1, cursor1, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered: true,
+		Limit:   10,
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs1, 10)
+
+	// CONCURRENT MODIFICATION: Change score of key_05 to make it jump to top
+	// key_05 had score 500, now gets score 3000 (highest)
+	// This entry was NOT in first page, but now would appear at position 0
+	_, err = engine.Publish(ctx, channel, "key_05", []byte("data_05_updated"), KeyedPublishOptions{
+		Ordered:    true,
+		Score:      3000,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read second page - key_05 jumped out of this range
+	pubs2, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered: true,
+		Limit:   10,
+		Cursor:  cursor1,
+	})
+	require.NoError(t, err)
+
+	// Combine and filter
+	snapshotData := make(map[string][]byte)
+	for _, pub := range pubs1 {
+		if pub.Offset <= streamPos1.Offset {
+			snapshotData[pub.Key] = pub.Data
+		}
+	}
+	for _, pub := range pubs2 {
+		if pub.Offset <= streamPos1.Offset {
+			snapshotData[pub.Key] = pub.Data
+		}
+	}
+
+	// Read stream and apply changes
+	streamPubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &streamPos1,
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+
+	for _, pub := range streamPubs {
+		if pub.Removed {
+			delete(snapshotData, pub.Key)
+		} else {
+			snapshotData[pub.Key] = pub.Data
+		}
+	}
+
+	// Verify: should have 20 keys, key_05 should have updated data
+	require.Len(t, snapshotData, 20, "Should have 20 keys")
+	require.Equal(t, []byte("data_05_updated"), snapshotData["key_05"], "key_05 should have updated data from stream")
+}
+
+// TestMemoryKeyedEngine_OrderedContinuity_EntryRemoved tests that removing
+// an entry during ordered pagination doesn't cause data loss.
+func TestMemoryKeyedEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+	ctx := context.Background()
+	channel := "test_ordered_continuity_remove"
+
+	// Create 20 entries
+	for i := 1; i <= 20; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      int64(i * 100),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read first page (key_20 down to key_11)
+	pubs1, streamPos1, cursor1, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered: true,
+		Limit:   10,
+	})
+	require.NoError(t, err)
+
+	// CONCURRENT MODIFICATION: Remove key_10 (first entry of next page)
+	_, err = engine.Unpublish(ctx, channel, "key_10", KeyedUnpublishOptions{
+		Publish:    true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read remaining pages
+	allSnapshotData := make(map[string][]byte)
+	for _, pub := range pubs1 {
+		if pub.Offset <= streamPos1.Offset {
+			allSnapshotData[pub.Key] = pub.Data
+		}
+	}
+
+	cursor := cursor1
+	for cursor != "" {
+		pubs, _, nextCursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Ordered: true,
+			Limit:   10,
+			Cursor:  cursor,
+		})
+		require.NoError(t, err)
+		for _, pub := range pubs {
+			if pub.Offset <= streamPos1.Offset {
+				allSnapshotData[pub.Key] = pub.Data
+			}
+		}
+		cursor = nextCursor
+	}
+
+	// Apply stream changes
+	streamPubs, _, err := engine.ReadStream(ctx, channel, KeyedReadStreamOptions{
+		Filter: StreamFilter{
+			Since: &streamPos1,
+			Limit: -1,
+		},
+	})
+	require.NoError(t, err)
+
+	for _, pub := range streamPubs {
+		if pub.Removed {
+			delete(allSnapshotData, pub.Key)
+		} else {
+			allSnapshotData[pub.Key] = pub.Data
+		}
+	}
+
+	// Verify: should have 19 keys (key_10 removed)
+	require.Len(t, allSnapshotData, 19, "Should have 19 keys after removal")
+	require.NotContains(t, allSnapshotData, "key_10", "key_10 should be removed")
+
+	// Verify key_09 wasn't skipped (the key that shifted up when key_10 was removed)
+	require.Contains(t, allSnapshotData, "key_09", "key_09 should not be skipped")
+}
+
+// TestMemoryKeyedEngine_OrderedContinuity_MultipleChanges tests recovery
+// with multiple concurrent changes during pagination.
+func TestMemoryKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+	ctx := context.Background()
+	channel := "test_ordered_continuity_multi"
+
+	// Create 30 entries
+	for i := 1; i <= 30; i++ {
+		key := fmt.Sprintf("key_%02d", i)
+		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+			Ordered:    true,
+			Score:      int64(i * 100),
+			StreamSize: 100,
+			StreamTTL:  300 * time.Second,
+		})
+		require.NoError(t, err)
+	}
+
+	// Read first page
+	_, _, cursor1, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered: true,
+		Limit:   10,
+	})
+	require.NoError(t, err)
+
+	// CONCURRENT MODIFICATIONS:
+	// 1. Add new highest score entry
+	_, err = engine.Publish(ctx, channel, "key_new_top", []byte("data_new_top"), KeyedPublishOptions{
+		Ordered:    true,
+		Score:      5000,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// 2. Remove an entry from middle
+	_, err = engine.Unpublish(ctx, channel, "key_15", KeyedUnpublishOptions{
+		Publish:    true,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// 3. Update score of an entry (move it)
+	_, err = engine.Publish(ctx, channel, "key_05", []byte("data_05_moved"), KeyedPublishOptions{
+		Ordered:    true,
+		Score:      4000, // Move from 500 to 4000
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read second page
+	_, _, cursor2, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Ordered: true,
+		Limit:   10,
+		Cursor:  cursor1,
+	})
+	require.NoError(t, err)
+
+	// 4. Add new lowest score entry
+	_, err = engine.Publish(ctx, channel, "key_new_bottom", []byte("data_new_bottom"), KeyedPublishOptions{
+		Ordered:    true,
+		Score:      1,
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read remaining pages
+	cursor := cursor2
+	for cursor != "" {
+		_, _, nextCursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Ordered: true,
+			Limit:   10,
+			Cursor:  cursor,
+		})
+		require.NoError(t, err)
+		cursor = nextCursor
+	}
+
+	// Simulate full client recovery
+	result := simulateClientRecovery(t, engine, channel, true, 10)
+
+	// Expected:
+	// - Original 30 entries
+	// - Minus key_15 (removed)
+	// - Plus key_new_top and key_new_bottom
+	// = 31 entries
+	require.Len(t, result, 31, "Should have 31 keys")
+	require.NotContains(t, result, "key_15", "key_15 should be removed")
+	require.Contains(t, result, "key_new_top", "key_new_top should be present")
+	require.Contains(t, result, "key_new_bottom", "key_new_bottom should be present")
+	require.Equal(t, []byte("data_05_moved"), result["key_05"], "key_05 should have updated data")
+}
+
+// TestMemoryKeyedEngine_CursorFormat tests that cursor format is correct.
+func TestMemoryKeyedEngine_CursorFormat(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+	ctx := context.Background()
+
+	t.Run("unordered cursor is key-based", func(t *testing.T) {
+		channel := "test_cursor_unordered"
+
+		// Create entries
+		for i := 0; i < 20; i++ {
+			key := fmt.Sprintf("key_%02d", i)
+			_, err := engine.Publish(ctx, channel, key, []byte("data"), KeyedPublishOptions{
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+			})
+			require.NoError(t, err)
+		}
+
+		// Read first page
+		pubs, _, cursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Limit: 10,
+		})
+		require.NoError(t, err)
+		require.Len(t, pubs, 10)
+
+		// Cursor should be the last key (key_09 for lexicographic order)
+		require.Equal(t, "key_09", cursor, "Cursor should be last key of page")
+
+		// Read next page with cursor
+		pubs2, _, cursor2, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Limit:  10,
+			Cursor: cursor,
+		})
+		require.NoError(t, err)
+		require.Len(t, pubs2, 10)
+
+		// First entry of second page should be after cursor
+		require.Equal(t, "key_10", pubs2[0].Key, "First entry of page 2 should be key_10")
+		// Last entry should be key_19
+		require.Equal(t, "key_19", pubs2[9].Key, "Last entry of page 2 should be key_19")
+		// No more pages, cursor should be empty
+		require.Empty(t, cursor2, "Cursor should be empty when no more pages")
+	})
+
+	t.Run("ordered cursor is score:key format", func(t *testing.T) {
+		channel := "test_cursor_ordered"
+
+		// Create entries with different scores
+		for i := 1; i <= 20; i++ {
+			key := fmt.Sprintf("key_%02d", i)
+			_, err := engine.Publish(ctx, channel, key, []byte("data"), KeyedPublishOptions{
+				Ordered:    true,
+				Score:      int64(i * 100),
+				StreamSize: 100,
+				StreamTTL:  300 * time.Second,
+			})
+			require.NoError(t, err)
+		}
+
+		// Read first page (highest scores first)
+		pubs, _, cursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Ordered: true,
+			Limit:   10,
+		})
+		require.NoError(t, err)
+		require.Len(t, pubs, 10)
+
+		// First entry should be key_20 (highest score 2000)
+		require.Equal(t, "key_20", pubs[0].Key)
+		// Last entry should be key_11 (score 1100)
+		require.Equal(t, "key_11", pubs[9].Key)
+
+		// Cursor format should be "score\x00key"
+		require.Contains(t, cursor, "\x00", "Cursor should contain separator")
+		parts := make([]string, 0, 2)
+		for i := 0; i < len(cursor); i++ {
+			if cursor[i] == '\x00' {
+				parts = append(parts, cursor[:i], cursor[i+1:])
+				break
+			}
+		}
+		require.Len(t, parts, 2)
+		require.Equal(t, "1100", parts[0], "Cursor score should be 1100")
+		require.Equal(t, "key_11", parts[1], "Cursor key should be key_11")
+
+		// Read next page
+		pubs2, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+			Ordered: true,
+			Limit:   10,
+			Cursor:  cursor,
+		})
+		require.NoError(t, err)
+		require.Len(t, pubs2, 10)
+
+		// First entry of page 2 should be key_10 (score 1000, which is < 1100)
+		require.Equal(t, "key_10", pubs2[0].Key, "First entry of page 2 should be key_10")
+	})
 }
