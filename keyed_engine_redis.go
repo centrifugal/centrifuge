@@ -620,11 +620,19 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
 	}
 
+	// Setup aggregation keys if aggregation is enabled
+	var aggregationZSetKey, aggregationHashKey, aggregationMappingKey string
+	if opts.AggregationKey != "" && key != "" {
+		aggregationZSetKey = e.aggregationZSetKey(s.shard, ch)
+		aggregationHashKey = e.aggregationHashKey(s.shard, ch)
+		aggregationMappingKey = e.aggregationMappingHashKey(s.shard, ch)
+	}
+
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
 			streamKey, metaKey, resultKey, snapshotHashKey, snapshotOrderKey, snapshotExpireKey,
-			"", "", snapshotMetaKey, // No aggregation keys for regular publish
-			cleanupRegKey, "", // Cleanup registration for keyed state, no aggregation mapping
+			aggregationZSetKey, aggregationHashKey, snapshotMetaKey,
+			cleanupRegKey, aggregationMappingKey,
 		},
 		[]string{
 			key,                                // message_key
@@ -642,12 +650,12 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 			"0", // is_remove
 			strconv.FormatInt(opts.Score, 10),
 			strconv.FormatInt(int64(opts.KeyTTL.Seconds()), 10),
-			"0",                 // use_hexpire
-			"",                  // aggregation_key
-			"",                  // aggregation_value
-			"",                  // key_state
-			ch,                  // channel_for_cleanup (for cleanup registration)
-			string(opts.KeyMode), // key_mode
+			"0",                   // use_hexpire
+			opts.AggregationKey,   // aggregation_key
+			opts.AggregationValue, // aggregation_value
+			"",                    // key_state
+			ch,                    // channel_for_cleanup (for cleanup registration)
+			string(opts.KeyMode),  // key_mode
 		},
 	).ToArray()
 	if err != nil {
@@ -710,14 +718,20 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 		return KeyedPublishResult{}, err
 	}
 
+	// Always setup aggregation keys for Unpublish to enable auto-discovery
+	// The Lua script will auto-discover aggregation value from stored mapping if not provided
+	aggregationZSetKey := e.aggregationZSetKey(s.shard, ch)
+	aggregationHashKey := e.aggregationHashKey(s.shard, ch)
+	aggregationMappingKey := e.aggregationMappingHashKey(s.shard, ch)
+
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
 			streamKey, metaKey, "", // Optional stream, no result key
 			snapshotHashKey,
 			"", // No order key for unpublish
 			snapshotExpireKey,
-			"", "", snapshotMetaKey, // No aggregation keys for unpublish
-			"", "", // No cleanup registration or aggregation mapping for unpublish
+			aggregationZSetKey, aggregationHashKey, snapshotMetaKey,
+			"", aggregationMappingKey, // No cleanup registration, but aggregation mapping for leave
 		},
 		[]string{
 			key,                             // message_key
@@ -729,14 +743,15 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 			e.node.ID(), // new_epoch_if_empty
 			publishCommand,
 			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
-			"1",    // is_leave (this triggers removal)
-			"0",    // score
-			"0",    // keyed_member_ttl
-			"0",    // use_hexpire
-			"", "", // aggregation_key, aggregation_value
-			"", // message_key_payload (empty - we're removing)
-			"", // channel_for_cleanup (not used for unpublish)
-			"", // key_mode (not used for unpublish)
+			"1",                   // is_leave (this triggers removal)
+			"0",                   // score
+			"0",                   // keyed_member_ttl
+			"0",                   // use_hexpire
+			opts.AggregationKey,   // aggregation_key (optional hint)
+			opts.AggregationValue, // aggregation_value (optional, auto-discovered if empty)
+			"",                    // message_key_payload (empty - we're removing)
+			"",                    // channel_for_cleanup (not used for unpublish)
+			"",                    // key_mode (not used for unpublish)
 		},
 	).ToArray()
 	if err != nil {
@@ -2047,8 +2062,6 @@ func (e *RedisKeyedEngine) getChannelsForCleanup(ctx context.Context, client rue
 
 // cleanupChannel runs the cleanup script for a single channel.
 func (e *RedisKeyedEngine) cleanupChannel(ctx context.Context, shard *RedisShard, ch string, cleanupKey string, now int64) error {
-	s := e.getShard(ch)
-
 	// Determine publish command
 	publishCommand := ""
 	chID := ""
@@ -2072,8 +2085,8 @@ func (e *RedisKeyedEngine) cleanupChannel(ctx context.Context, shard *RedisShard
 			e.snapshotExpireKey(shard, ch),         // KEYS[2]: snapshot expire zset key
 			e.streamKey(shard, ch),                 // KEYS[3]: stream key
 			e.metaKey(shard, ch),                   // KEYS[4]: stream meta key
-			e.aggregationZSetKey(s.shard, ch),      // KEYS[5]: aggregation zset key
-			e.aggregationHashKey(s.shard, ch),      // KEYS[6]: aggregation hash key
+			e.aggregationZSetKey(shard, ch),        // KEYS[5]: aggregation zset key
+			e.aggregationHashKey(shard, ch),        // KEYS[6]: aggregation hash key
 			cleanupKey,                             // KEYS[7]: cleanup registration zset key
 			e.aggregationMappingHashKey(shard, ch), // KEYS[8]: aggregation mapping hash key
 		},

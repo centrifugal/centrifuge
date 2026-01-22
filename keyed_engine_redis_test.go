@@ -1079,6 +1079,81 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	t.Logf("SUCCESS: Cleanup script correctly updates aggregation")
 //}
 
+// TestRedisKeyedEngine_AggregationCleanupOnTTL verifies that cleanup script
+// correctly updates aggregation counts when snapshot keys expire via TTL.
+func TestRedisKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
+	node, _ := New(Config{})
+
+	redisConf := testSingleRedisConf(6379)
+	shard, err := NewRedisShard(node, redisConf)
+	require.NoError(t, err)
+	engine, err := NewRedisKeyedEngine(node, RedisKeyedEngineConfig{
+		Shards:                []*RedisShard{shard},
+		PresenceTTL:           2 * time.Second, // Short TTL for testing
+		PresenceStreamSize:    100,
+		PresenceStreamTTL:     300 * time.Second,
+		PresenceStreamMetaTTL: 3600 * time.Second,
+		CleanupInterval:       100 * time.Millisecond, // Fast cleanup for testing
+		CleanupBatchSize:      100,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = node.Shutdown(context.Background())
+	})
+
+	ctx := context.Background()
+	channel := randomChannel("test_agg_cleanup_ttl")
+
+	// Alice opens 2 connections with aggregation
+	_, err = engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           2 * time.Second, // Short TTL
+		AggregationKey:   "user_id",
+		AggregationValue: "alice",
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           2 * time.Second, // Short TTL
+		AggregationKey:   "user_id",
+		AggregationValue: "alice",
+	})
+	require.NoError(t, err)
+
+	// Bob opens 1 connection
+	_, err = engine.Publish(ctx, channel, "conn3", []byte("data"), KeyedPublishOptions{
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           2 * time.Second, // Short TTL
+		AggregationKey:   "user_id",
+		AggregationValue: "bob",
+	})
+	require.NoError(t, err)
+
+	// Verify initial state: 3 connections, 2 unique users
+	stats, err := engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.NumKeys)
+	require.Equal(t, 2, stats.NumAggregatedKeys)
+
+	// Simulate cleanup by calling cleanupChannel with future timestamp
+	shardWrapper := engine.shards[0]
+	cleanupKey := engine.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
+	futureTime := time.Now().Unix() + 10 // 10 seconds in the future
+
+	err = engine.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, futureTime)
+	require.NoError(t, err)
+
+	// After cleanup: should have 0 connections, 0 users
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys, "All keys should be cleaned up")
+	require.Equal(t, 0, stats.NumAggregatedKeys, "All aggregations should be cleaned up")
+}
+
 // TestRedisKeyedEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
 // in correct score order (ascending by score).
 func TestRedisKeyedEngine_OrderedSnapshotOrdering(t *testing.T) {
@@ -1648,4 +1723,141 @@ func TestRedisKeyedEngine_KeyModeReplace(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, []byte("value2"), entries[0].Data)
+}
+
+// TestRedisKeyedEngine_Aggregation tests aggregation tracking (e.g., counting unique users).
+func TestRedisKeyedEngine_Aggregation(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+	ctx := context.Background()
+	channel := randomChannel("test_aggregation")
+
+	// Simulate presence scenario: multiple connections (keys) per user (aggregation value)
+	// User "alice" has 2 connections
+	_, err := engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+		AggregationKey:   "user_id",
+		AggregationValue: "alice",
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+		AggregationKey:   "user_id",
+		AggregationValue: "alice",
+	})
+	require.NoError(t, err)
+
+	// User "bob" has 1 connection
+	_, err = engine.Publish(ctx, channel, "conn3", []byte("data"), KeyedPublishOptions{
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+		AggregationKey:   "user_id",
+		AggregationValue: "bob",
+	})
+	require.NoError(t, err)
+
+	// Check stats - should have 3 keys and 2 aggregated keys (unique users)
+	stats, err := engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.NumKeys)
+	require.Equal(t, 2, stats.NumAggregatedKeys)
+
+	// Remove one of alice's connections
+	_, err = engine.Unpublish(ctx, channel, "conn1", KeyedUnpublishOptions{
+		AggregationKey:   "user_id",
+		AggregationValue: "alice",
+	})
+	require.NoError(t, err)
+
+	// Check stats - should have 2 keys, still 2 unique users
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.NumKeys)
+	require.Equal(t, 2, stats.NumAggregatedKeys)
+
+	// Remove alice's last connection
+	_, err = engine.Unpublish(ctx, channel, "conn2", KeyedUnpublishOptions{
+		AggregationKey:   "user_id",
+		AggregationValue: "alice",
+	})
+	require.NoError(t, err)
+
+	// Check stats - should have 1 key, 1 unique user (bob)
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumKeys)
+	require.Equal(t, 1, stats.NumAggregatedKeys)
+
+	// Remove bob's connection
+	_, err = engine.Unpublish(ctx, channel, "conn3", KeyedUnpublishOptions{
+		AggregationKey:   "user_id",
+		AggregationValue: "bob",
+	})
+	require.NoError(t, err)
+
+	// Check stats - should have 0 keys, 0 unique users
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+	require.Equal(t, 0, stats.NumAggregatedKeys)
+}
+
+// TestRedisKeyedEngine_AggregationAutoDiscovery tests that Unpublish auto-discovers
+// aggregation values from stored mapping when not provided in options.
+func TestRedisKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestSnapshotRedisEngine(t, node)
+	ctx := context.Background()
+	channel := randomChannel("test_aggregation_autodiscover")
+
+	// Publish with aggregation
+	_, err := engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+		AggregationKey:   "user_id",
+		AggregationValue: "alice",
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+		AggregationKey:   "user_id",
+		AggregationValue: "alice",
+	})
+	require.NoError(t, err)
+
+	// Verify initial state
+	stats, err := engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.NumKeys)
+	require.Equal(t, 1, stats.NumAggregatedKeys)
+
+	// Unpublish WITHOUT providing aggregation options - should auto-discover
+	_, err = engine.Unpublish(ctx, channel, "conn1", KeyedUnpublishOptions{})
+	require.NoError(t, err)
+
+	// Should still have 1 unique user (alice still has conn2)
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.NumKeys)
+	require.Equal(t, 1, stats.NumAggregatedKeys)
+
+	// Unpublish last connection without aggregation options
+	_, err = engine.Unpublish(ctx, channel, "conn2", KeyedUnpublishOptions{})
+	require.NoError(t, err)
+
+	// Should have 0 keys and 0 unique users
+	stats, err = engine.Stats(ctx, channel)
+	require.NoError(t, err)
+	require.Equal(t, 0, stats.NumKeys)
+	require.Equal(t, 0, stats.NumAggregatedKeys)
 }

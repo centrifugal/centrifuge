@@ -165,9 +165,15 @@ if is_leave == "1" then
     -- Remove from keyed snapshot (works for both state and presence)
     if snapshot_hash_key ~= '' then
         -- Check if client exists (for user tracking)
-        local clientExists = false
-        if aggregation_key ~= '0' and aggregation_hash_key ~= '' then
-            clientExists = redis.call("hexists", snapshot_hash_key, message_key) == 1
+        local clientExists = redis.call("hexists", snapshot_hash_key, message_key) == 1
+
+        -- Auto-discover aggregation_value from mapping if not provided (optimization: skip HGET if provided)
+        local effective_aggregation_value = aggregation_value
+        if aggregation_mapping_key ~= '' and aggregation_hash_key ~= '' and clientExists then
+            if effective_aggregation_value == '' or effective_aggregation_value == nil then
+                -- Not provided - read from mapping before deletion
+                effective_aggregation_value = redis.call("hget", aggregation_mapping_key, message_key)
+            end
         end
 
         -- Remove from snapshot
@@ -200,14 +206,14 @@ if is_leave == "1" then
             end
         end
 
-        -- Update user tracking if enabled
-        if aggregation_key ~= '0' and clientExists and aggregation_hash_key ~= '' then
-            local connectionsCount = redis.call("hincrby", aggregation_hash_key, aggregation_value, -1)
+        -- Update aggregation tracking if enabled (auto-discovered or provided)
+        if effective_aggregation_value and effective_aggregation_value ~= '' and clientExists and aggregation_hash_key ~= '' then
+            local connectionsCount = redis.call("hincrby", aggregation_hash_key, effective_aggregation_value, -1)
             if connectionsCount <= 0 then
                 if use_hexpire == '0' and aggregation_zset_key ~= '' then
-                    redis.call("zrem", aggregation_zset_key, aggregation_value)
+                    redis.call("zrem", aggregation_zset_key, effective_aggregation_value)
                 end
-                redis.call("hdel", aggregation_hash_key, aggregation_value)
+                redis.call("hdel", aggregation_hash_key, effective_aggregation_value)
             end
         end
     end
