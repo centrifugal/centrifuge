@@ -45,6 +45,8 @@ type Node struct {
 	controller Controller
 	// broker is responsible for PUB/SUB and history streaming mechanics.
 	broker Broker
+	// keyedEngine is responsible for keyed state and stream operations.
+	keyedEngine KeyedEngine
 	// presenceManager is responsible for presence information management.
 	presenceManager PresenceManager
 	// nodes contains registry of known nodes.
@@ -262,6 +264,16 @@ func (n *Node) SetBroker(b Broker) {
 // SetPresenceManager allows setting PresenceManager to use.
 func (n *Node) SetPresenceManager(m PresenceManager) {
 	n.presenceManager = m
+}
+
+// SetKeyedEngine allows setting KeyedEngine to use.
+func (n *Node) SetKeyedEngine(e KeyedEngine) {
+	n.keyedEngine = e
+}
+
+// KeyedEngine returns node's KeyedEngine. Can be nil if not configured.
+func (n *Node) KeyedEngine() KeyedEngine {
+	return n.keyedEngine
 }
 
 // Hub returns node's Hub.

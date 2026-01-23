@@ -146,6 +146,10 @@ type SubscribeOptions struct {
 	// Important note here, since channel permissions are managed on channel level, tags filtering
 	// must be used as a bandwidth optimization, not an access control mechanism.
 	AllowTagsFilter bool
+	// EnableKeyed allows keyed subscription for this channel.
+	EnableKeyed bool
+	// KeyedPresenceAvailable indicates that presence data is available for sub-subscription.
+	KeyedPresenceAvailable bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

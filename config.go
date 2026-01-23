@@ -135,6 +135,9 @@ type Config struct {
 	// ClientTimerScheduler if set will be used for scheduling client timers.
 	// This is an EXPERIMENTAL API.
 	ClientTimerScheduler TimerScheduler
+	// KeyedMaxPaginationLimit sets the maximum number of items a client can request
+	// per page in keyed subscription pagination requests. Zero means no limit.
+	KeyedMaxPaginationLimit int
 }
 
 const (

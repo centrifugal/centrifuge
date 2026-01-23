@@ -13,7 +13,7 @@ message SubscribeRequest {
   // ... existing fields 1-14 unchanged ...
 
   bool keyed = 15;              // Indicates keyed subscription mode
-  int32 keyed_phase = 16;       // 0=SNAPSHOT, 1=STREAM
+  int32 keyed_phase = 16;       // Request phase: 0=SNAPSHOT, 1=STREAM, 2=LIVE
   string keyed_cursor = 17;     // Pagination cursor for snapshot phase
   int32 keyed_limit = 18;       // Max entries per page (0 = server default)
   uint64 keyed_offset = 19;     // Stream position offset for validation/streaming
@@ -30,7 +30,7 @@ message SubscribeResult {
   // ... existing fields 1-14 unchanged ...
 
   bool keyed = 15;              // Server confirms keyed mode
-  int32 keyed_phase = 16;       // 0=SNAPSHOT, 1=STREAMING (result phase)
+  int32 keyed_phase = 16;       // The result phase of the operation (SNAPSHOT, STREAM, or LIVE)
   string keyed_cursor = 17;     // Next page cursor (empty = last page)
   bool keyed_presence_available = 18;  // Server indicates presence is available for this channel
   // Note: publications (7), offset (9), epoch (6) reuse existing fields
@@ -43,19 +43,19 @@ message SubscribeResult {
 const (
     KeyedPhaseSnapshot  int32 = 0  // Paginating over snapshot (keyed state)
     KeyedPhaseStream    int32 = 1  // Paginating over stream (history catch-up)
-    KeyedPhaseStreaming int32 = 2  // Join pub/sub, switch to real-time streaming
+    KeyedPhaseLive      int32 = 2  // Join pub/sub, switch to real-time streaming
 )
 ```
 
 **Request phases:**
 - `SNAPSHOT` = "give me next snapshot page"
 - `STREAM` = "give me next stream page (history catch-up)"
-- `STREAMING` = "I'm ready to join pub/sub" (triggers coordination point)
+- `LIVE` = "I'm ready to join pub/sub" (triggers coordination point)
 
 **Response phases:**
 - `SNAPSHOT` = "here's snapshot data, may be more"
 - `STREAM` = "here's stream data, may be more"
-- `STREAMING` = "joined pub/sub, now streaming real-time"
+- `LIVE` = "joined pub/sub, now streaming real-time"
 
 ## Server-Side Implementation
 
@@ -67,7 +67,7 @@ client.go
 │   ├── handleKeyedSubscribe()          // NEW: Router for keyed subscriptions
 │   │   ├── handleKeyedSnapshotPhase()  // Snapshot pagination (stateless)
 │   │   ├── handleKeyedStreamPhase()    // Stream pagination (stateless)
-│   │   ├── handleKeyedStreamingPhase() // Join pub/sub (COORDINATION)
+│   │   ├── handleKeyedLivePhase()      // Join pub/sub (COORDINATION)
 │   │   └── handleKeyedPresenceSubscribe() // Presence sub-subscription
 │   └── [existing callback path]        // UNCHANGED: Regular subscriptions
 ```
@@ -89,11 +89,12 @@ type SubscribeEvent struct {
 // SubscribeOptions - add keyed options
 type SubscribeOptions struct {
     // ... existing fields ...
-    EnableKeyed           bool          // NEW: Allow keyed subscription for this channel
-    KeyedPresenceAvailable bool         // NEW: Server indicates presence is available
+    EnableKeyed            bool // NEW: Allow keyed subscription for this channel
+    KeyedPresenceAvailable bool // NEW: Server indicates presence is available for sub-subscription
+    MaintainPresence       bool // NEW: Maintain this client's presence in the channel
 }
 
-// Application handler validates keyed mode
+// Application handler validates keyed mode and enables presence
 node.OnSubscribing(func(ctx context.Context, client *Client, e SubscribeEvent) (SubscribeReply, error) {
     // If client requested keyed mode, validate it's allowed
     if e.Keyed {
@@ -103,7 +104,10 @@ node.OnSubscribing(func(ctx context.Context, client *Client, e SubscribeEvent) (
         return SubscribeReply{
             Options: SubscribeOptions{
                 EnableKeyed:            true,
-                KeyedPresenceAvailable: true,  // Optional: indicate presence is available
+                // Optional: indicate presence data is available for a sub-subscription
+                KeyedPresenceAvailable: true,
+                // Optional: maintain this client's presence in the channel
+                MaintainPresence:       true,
             },
         }, nil
     }
@@ -121,10 +125,10 @@ node.OnSubscribing(func(ctx context.Context, client *Client, e SubscribeEvent) (
 6. Server proceeds with keyed subscription, tracks authorization
 
 **Important: OnSubscribe is called ONLY ONCE (initial request)**
-- Initial request (first SNAPSHOT or STREAMING) → OnSubscribe callback runs
+- Initial request (first SNAPSHOT or LIVE) → OnSubscribe callback runs
 - Server tracks authorized subscription (e.g., in `c.keyedSubscribing` map)
 - Subsequent requests (pagination) → No callback, just verify authorization exists
-- On STREAMING phase → Move from `keyedSubscribing` to `c.channels` (fully subscribed)
+- On LIVE phase → Move from `keyedSubscribing` to `c.channels` (fully subscribed)
 
 ### Subscription State Tracking
 
@@ -132,11 +136,11 @@ node.OnSubscribing(func(ctx context.Context, client *Client, e SubscribeEvent) (
 type Client struct {
     // ... existing fields ...
 
-    // Tracks keyed subscriptions that are still loading (not yet streaming)
+    // Tracks keyed subscriptions that are still loading (not yet live)
     // Key: channel name, Value: authorization info from OnSubscribe
     keyedSubscribing map[string]*keyedSubscribeState
 
-    // Existing: fully subscribed channels (including keyed after STREAMING phase)
+    // Existing: fully subscribed channels (including keyed after LIVE phase)
     channels map[string]ChannelContext
 }
 
@@ -150,7 +154,7 @@ type keyedSubscribeState struct {
 **State transitions:**
 1. Initial request → OnSubscribe callback → add to `keyedSubscribing`
 2. Pagination requests → verify in `keyedSubscribing`, no callback
-3. STREAMING request → coordination → move to `channels`, remove from `keyedSubscribing`
+3. LIVE request → coordination → move to `channels`, remove from `keyedSubscribing`
 
 ### Key Implementation Details
 
@@ -169,22 +173,84 @@ type keyedSubscribeState struct {
    - No buffering, no pub/sub subscription - stateless like snapshot
    - Client continues with updated offset until ready to join
 
-4. **handleKeyedStreamingPhase()** - Join pub/sub (coordination point):
+4. **handleKeyedLivePhase()** - Join pub/sub (coordination point):
    - `StartBuffering()` before any reads
    - `Subscribe()` to pub/sub via KeyedEngine
    - `ReadStream()` for remaining missed publications
    - `LockBufferAndReadBuffered()` + merge
    - Add to `c.channels` with keyed flag
-   - Send response with `phase=STREAMING`, then `StopBuffering()`
+   - Send response with `phase=LIVE`, then `StopBuffering()`
+
+## Controlling Pagination Behavior
+
+Once a keyed subscription is authorized, the client can make many subsequent pagination requests. To protect the server from abuse and provide application-level control, we will introduce a combination of automatic concurrency control, a configurable request limit, and an optional callback hook.
+
+### 1. Automatic Concurrency Control
+
+To prevent a single client from overwhelming the server by sending multiple pagination requests for the same channel simultaneously, the server will enforce serial processing.
+
+*   **Mechanism:** The server will internally maintain a lock for each `(client, channel)` pair for the duration of a `SNAPSHOT` or `STREAM` phase request.
+*   **Behavior:** If a client sends a pagination request for a channel while another pagination request for that same channel is already in progress, the new request will be immediately rejected with an `ErrorConcurrentPagination`. This forces any given client to wait for a response before sending the next pagination request for a channel, effectively ensuring serial operation.
+
+### 2. Configuration-Based Request Limit
+
+To protect against requests for an excessive number of items in a single page, a new server-wide configuration option will be added.
+
+```go
+// In node.Config
+type Config struct {
+    // ...
+    KeyedMaxPaginationLimit int // Max items a client can request per page.
+}
+```
+
+The server will automatically cap the `keyed_limit` from any client's pagination request to this value. This prevents oversized queries that could strain the backend `KeyedEngine`.
+
+### 3. Optional `OnPagination` Hook for Custom Logic
+
+For maximum flexibility, we will introduce a new optional callback, `OnPagination`. If this hook is registered, it will be called for every `SNAPSHOT` and `STREAM` request before the concurrency lock is taken. This allows for dynamic, fine-grained validation.
+
+```go
+// Event sent to the hook
+type PaginationEvent struct {
+    Client  *Client
+    Channel string
+    Phase   int32 // SNAPSHOT or STREAM
+    Limit   int32 // The limit requested by the client
+    // ... plus other relevant request fields like Cursor, Offset
+}
+
+// Reply from the hook
+type PaginationReply struct {
+    // Override the limit for this specific request.
+    // The server will still cap this against KeyedMaxPaginationLimit.
+    OverrideLimit int32
+}
+
+// Example usage
+node.OnPagination(func(ctx context.Context, e PaginationEvent) (PaginationReply, error) {
+    // Example: Implement stricter limits for free-tier users
+    if e.Client.IsFreeTier() && e.Limit > 100 {
+        return PaginationReply{OverrideLimit: 100}, nil
+    }
+
+    // Example: Reject requests to a specific channel pattern
+    if strings.HasPrefix(e.Channel, "system:") {
+        return PaginationReply{}, errors.New("permission denied")
+    }
+
+    return PaginationReply{}, nil
+})
+```
 
 ## Three Subscribe Modes
 
 ### Mode 1: Latest Only (no recovery)
 ```
-Client → Server: keyed=true, phase=STREAMING, offset=0, epoch=""
-Server → Client: keyed=true, phase=STREAMING, offset=<current>, epoch=<current>
+Client → Server: keyed=true, phase=LIVE, offset=0, epoch=""
+Server → Client: keyed=true, phase=LIVE, offset=<current>, epoch=<current>
 ```
-- Client immediately requests STREAMING phase (no pagination)
+- Client immediately requests LIVE phase (no pagination)
 - Server runs coordination, joins pub/sub, returns current position
 
 ### Mode 2: Recovery from Position (stream catch-up with pagination)
@@ -200,19 +266,19 @@ Server → Client: publications=[5501-6000], offset=6000, phase=STREAM
 
 ... continue until client decides they're caught up enough ...
 
-Client → Server: keyed=true, phase=STREAMING, offset=9500, epoch="abc"  ← REQUEST TO JOIN
-Server → Client: publications=[9501-9800], offset=9800, phase=STREAMING (joined pub/sub)
+Client → Server: keyed=true, phase=LIVE, offset=9500, epoch="abc"  ← REQUEST TO JOIN
+Server → Client: publications=[9501-9800], offset=9800, phase=LIVE (joined pub/sub)
 ```
 
 **Key behavior:**
 - `phase=STREAM` (request) = "give me stream data, not joining yet"
-- `phase=STREAMING` (request) = "join pub/sub now" - **this triggers coordination point**
+- `phase=LIVE` (request) = "join pub/sub now" - **this triggers coordination point**
 - Server returns `phase=STREAM` while paginating (not yet joined)
-- Server returns `phase=STREAMING` only when joined pub/sub
-- Client controls when to trigger coordination point by sending `phase=STREAMING`
+- Server returns `phase=LIVE` only when joined pub/sub
+- Client controls when to trigger coordination point by sending `phase=LIVE`
 - No cursor needed - offset-based continuation works naturally for ordered streams
 
-### Mode 3: Full Two-Phase (snapshot + stream + streaming)
+### Mode 3: Full Two-Phase (snapshot + stream + live)
 ```
 Phase 1 - Snapshot pagination:
   Client → Server: keyed=true, phase=SNAPSHOT, limit=100, cursor=""
@@ -224,38 +290,28 @@ Phase 2 (optional) - Stream pagination (if client has old position to catch up):
   Server → Client: publications=[500], offset=5500, phase=STREAM
   ... continue until caught up enough ...
 
-Phase 3 - Join streaming:
-  Client → Server: keyed=true, phase=STREAMING, offset=5500, epoch="abc"
-  Server → Client: publications=[remaining], phase=STREAMING (joined pub/sub)
+Phase 3 - Join live:
+  Client → Server: keyed=true, phase=LIVE, offset=5500, epoch="abc"
+  Server → Client: publications=[remaining], phase=LIVE (joined pub/sub)
 ```
 
-## Presence Sub-Subscription
+## Presence
 
-Presence uses the **same two-phase protocol** but as a sub-subscription of the main channel.
+Presence information (i.e., who is currently subscribed to a channel) is exposed as a separate, special-purpose keyed channel. This allows clients to subscribe to presence information using the same two-phase protocol.
 
-### Presence Flow
+### Presence Maintenance (Server-Side)
 
-```
-Client → Server: keyed=true, presence=true, phase=SNAPSHOT, limit=100, cursor=""
-Server:
-  1. Verify main subscription exists for base channel
-  2. Use {channel}:presence as actual keyed channel
-  3. Return presence snapshot page
+A client's own presence is maintained by the server as part of the **main channel subscription**, not the presence sub-subscription. This is controlled by the application via the `OnSubscribe` callback. When the main subscription becomes active, the server automatically publishes and refreshes the client's presence information to a derived presence channel (e.g., `{channel}:presence`).
 
-... pagination continues ...
+**Flow:**
+1. Client subscribes to the main channel (e.g., `chat:123`).
+2. The `OnSubscribe` handler returns a `SubscribeReply` with `MaintainPresence: true`.
+3. When the client's subscription becomes fully active (i.e., after the coordination point), the server calls `startPresenceMaintenance()`.
+4. On disconnect, `onDisconnect()` removes the client's presence from all channels where it was being maintained.
 
-Client → Server: keyed=true, presence=true, phase=STREAM, offset=X, epoch="Y"
-Server:
-  1. Join pub/sub for {channel}:presence
-  2. Start auto-maintaining this client's presence (backend-managed)
-  3. Return phase=STREAMING
-```
-
-### Server-Side Presence Maintenance (Backend-Managed)
-
-When client enters STREAM phase for presence:
 ```go
-func (c *Client) startPresenceMaintenance(presenceChannel string) {
+func (c *Client) startPresenceMaintenance(channel string) {
+    presenceChannel := channel + ":presence"
     // 1. Publish initial presence via KeyedEngine
     presenceInfo := &ClientInfo{
         ClientID: c.ID(),
@@ -270,44 +326,60 @@ func (c *Client) startPresenceMaintenance(presenceChannel string) {
 }
 
 func (c *Client) onDisconnect() {
-    // Remove presence for all active presence subscriptions
-    for ch := range c.presenceSubs {
+    // Remove presence for all channels where it was maintained
+    for ch := range c.presenceMaintainedChannels {
         c.node.keyedEngine.Unpublish(ctx, ch+":presence", c.ID(),
             KeyedUnpublishOptions{Publish: true})
     }
 }
 ```
 
-### Handler Implementation
+### Presence Sub-Subscription (Read-Only View)
+
+To *read* the presence information, a client uses a sub-subscription. This is a read-only operation and does not affect the client's own presence status. It follows the standard two-phase subscribe protocol on the derived presence channel.
+
+**Flow:**
+1. Client must have an active subscription to the main channel.
+2. Client sends a `SubscribeRequest` with `keyed=true`, `presence=true`, and the desired `phase` (`SNAPSHOT` or `LIVE`).
+
+```
+// Example: paginate through presence snapshot, then go live
+Client → Server: keyed=true, presence=true, phase=SNAPSHOT, channel="chat:123"
+Server → Client: publications=[presence data], cursor="page2", phase=SNAPSHOT
+
+Client → Server: keyed=true, presence=true, phase=LIVE, channel="chat:123"
+Server → Client: publications=[remaining], phase=LIVE (joined presence stream)
+```
+
+The server handler becomes a simple wrapper that validates the main subscription and routes to the standard phase handlers.
 
 ```go
 func (c *Client) handleKeyedPresenceSubscribe(req) (*SubscribeResult, error) {
-    // 1. Verify main subscription exists
+    // 1. Verify main subscription exists on the base channel
     if _, exists := c.channels[req.Channel]; !exists {
-        return nil, ErrorNotSubscribed  // Must subscribe to main first
+        return nil, ErrorNotSubscribed
     }
 
-    // 2. Presence is always keyed
+    // 2. Presence is always a keyed subscription on a derived channel name
     presenceChannel := req.Channel + ":presence"
 
-    // 3. Use same snapshot/stream handlers with presenceChannel
+    // 3. Use same snapshot/live handlers
     if req.KeyedPhase == KeyedPhaseSnapshot {
         return c.handleKeyedSnapshotPhase(presenceChannel, req)
     }
-
-    // 4. On STREAM phase, also start auto-maintenance
-    result, err := c.handleKeyedStreamPhase(presenceChannel, req)
-    if err == nil {
-        c.startPresenceMaintenance(presenceChannel)
-        c.presenceSubs[req.Channel] = true
+    if req.KeyedPhase == KeyedPhaseLive {
+        // Here we just join the pub/sub, no special maintenance logic
+        return c.handleKeyedLivePhase(presenceChannel, req)
     }
-    return result, err
+    return nil, ErrorBadRequest
 }
 ```
 
+This design cleanly separates the act of *being present* (part of the main subscription) from the act of *observing presence* (a read-only sub-subscription).
+
 ## Coordination Point
 
-The coordination point (buffering + subscribe + merge) is **fast and contained within a single request** - triggered by **client sending `phase=STREAMING`**.
+The coordination point (buffering + subscribe + merge) is **fast and contained within a single request** - triggered by **client sending `phase=LIVE`**.
 
 ### How Server Determines Coordination Point
 
@@ -316,10 +388,10 @@ The coordination point (buffering + subscribe + merge) is **fast and contained w
 ```
 phase=SNAPSHOT  → Server: just read snapshot, return snapshot data
 phase=STREAM    → Server: just read stream, return stream data
-phase=STREAMING → Server: RUN COORDINATION (buffering + subscribe + merge)
+phase=LIVE      → Server: RUN COORDINATION (buffering + subscribe + merge)
 ```
 
-**The trigger is simple:** When server receives `phase=STREAMING`, it runs the coordination logic.
+**The trigger is simple:** When server receives `phase=LIVE`, it runs the coordination logic.
 
 ### During Pagination (stateless, no coordination)
 
@@ -337,7 +409,7 @@ phase=STREAMING → Server: RUN COORDINATION (buffering + subscribe + merge)
 
 ### Coordination Request (fast, single request)
 
-When client sends `phase=STREAMING`:
+When client sends `phase=LIVE`:
 
 ```
 Single Request Timeline:
@@ -346,7 +418,7 @@ Single Request Timeline:
 ├── 3. ReadStream(since: clientOffset)  // Get remaining missed pubs
 ├── 4. LockBufferAndReadBuffered()      // Get buffered pubs
 ├── 5. MergePublications()              // Combine recovered + buffered
-├── 6. WriteResponse(phase=STREAMING)   // Send to client
+├── 6. WriteResponse(phase=LIVE)        // Send to client
 └── 7. StopBuffering(channel)           // Release buffer
 ```
 
@@ -357,6 +429,7 @@ This is the same fast coordination pattern as regular subscription recovery - th
 | Error | When | Client Action |
 |-------|------|---------------|
 | `ErrorUnrecoverablePosition` | Epoch changed during pagination or stream read | Restart from snapshot beginning |
+| `ErrorConcurrentPagination`| Client sends a pagination request while another is in progress for the same channel | Wait for the outstanding request to finish, then retry |
 | `ErrorBadRequest` | Invalid phase or parameters | Fix request |
 | `ErrorNotAvailable` | No KeyedEngine configured | Fall back or error |
 
@@ -370,12 +443,13 @@ This is the same fast coordination pattern as regular subscription recovery - th
    - Add `Keyed` and `Presence` fields to SubscribeEvent
 
 3. **`/Users/fz/centrifugal/centrifuge/options.go`**
-   - Add `EnableKeyed` and `KeyedPresenceAvailable` fields to SubscribeOptions
+   - Add `EnableKeyed`, `KeyedPresenceAvailable`, and `MaintainPresence` fields to SubscribeOptions
 
 4. **`/Users/fz/centrifugal/centrifuge/client.go`**
    - Add `handleKeyedSubscribe()` function - router for keyed subscriptions
    - Add `handleKeyedSnapshotPhase()` function - stateless snapshot pagination
-   - Add `handleKeyedStreamPhase()` function - stream recovery + join pub/sub
+   - Add `handleKeyedStreamPhase()` function - stream recovery
+   - Add `handleKeyedLivePhase()` function - join pub/sub
    - Add `handleKeyedPresenceSubscribe()` function - presence sub-subscription
    - Add `startPresenceMaintenance()` / `stopPresenceMaintenance()` functions
    - Modify `handleSubscribe()` to route keyed requests after OnSubscribe validates
@@ -405,7 +479,25 @@ This is the same fast coordination pattern as regular subscription recovery - th
 3. Add new tests for presence sub-subscription:
    - Presence requires main subscription first (ErrorNotSubscribed)
    - Presence snapshot pagination
-   - Presence auto-maintenance on STREAM phase join
+   - Presence maintenance (from main subscription) starts on LIVE phase join
    - Presence cleanup on disconnect
    - Presence cleanup on main unsubscribe
 4. Test protocol compatibility with old clients (should ignore new fields)
+
+## SDK flow
+
+SNAPSHOT phase:
+Server returns all snapshot entries (possibly paginated internally)
+SDK buffers internally until snapshot is complete
+
+STREAM phase (if catching up):
+Server returns incremental stream entries
+SDK buffers until LIVE
+
+LIVE phase:
+Server returns remaining stream entries
+SDK fires onSubscribed with all snapshot publications
+SDK flushes buffered stream entries via onPublication
+
+Post-subscription:
+All new publications flow directly to onPublication

@@ -190,6 +190,8 @@ type SubscribeEvent struct {
 	Recoverable bool
 	// JoinLeave is true when Client wants to receive join/leave messages.
 	JoinLeave bool
+	// Keyed is true when Client requested keyed subscription mode.
+	Keyed bool
 }
 
 // SubscribeCallback should be called as soon as handler decides what to do
@@ -367,6 +369,30 @@ type HistoryCallback func(HistoryReply, error)
 
 // HistoryHandler must handle incoming command from client.
 type HistoryHandler func(HistoryEvent, HistoryCallback)
+
+// PresenceSubscribeEvent contains fields related to presence subscribe event.
+// Presence subscriptions are first-class keyed subscriptions that track
+// active connections on a channel independently from data subscriptions.
+type PresenceSubscribeEvent struct {
+	// Channel client wants to subscribe to presence for.
+	Channel string
+	// Data received from client as part of Subscribe Command.
+	Data []byte
+}
+
+// PresenceSubscribeReply contains fields determining the reaction on presence subscribe event.
+type PresenceSubscribeReply struct {
+	// Allowed indicates whether the client is allowed to subscribe to presence.
+	Allowed bool
+}
+
+// PresenceSubscribeCallback should be called as soon as handler decides what to do
+// with presence subscribe event.
+type PresenceSubscribeCallback func(PresenceSubscribeReply, error)
+
+// PresenceSubscribeHandler called when client wants to subscribe to presence on a channel.
+// Presence is a first-class keyed subscription that tracks active connections.
+type PresenceSubscribeHandler func(PresenceSubscribeEvent, PresenceSubscribeCallback)
 
 // StateSnapshotHandler must return a copy of current client's
 // internal state. Returning a copy is important to avoid data races.

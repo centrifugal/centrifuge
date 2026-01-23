@@ -769,14 +769,14 @@ func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publica
 	}
 
 	h.RLock()
-	defer h.RUnlock()
 
 	channel, ok := h.channels[ch]
 	if !ok {
 		h.RUnlock()
 		h.Lock()
-		defer h.Unlock()
-		return nil, h.createStreamPosition(ch), nil
+		streamPos := h.createStreamPosition(ch)
+		h.Unlock()
+		return nil, streamPos, nil
 	}
 
 	filter := opts.Filter
@@ -785,8 +785,9 @@ func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publica
 	if stream == nil {
 		h.RUnlock()
 		h.Lock()
-		defer h.Unlock()
-		return nil, h.createStreamPosition(ch), nil
+		streamPos := h.createStreamPosition(ch)
+		h.Unlock()
+		return nil, streamPos, nil
 	}
 
 	streamPosition := StreamPosition{
@@ -796,10 +797,12 @@ func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publica
 
 	if filter.Since == nil {
 		if filter.Limit == 0 {
+			h.RUnlock()
 			return nil, streamPosition, nil
 		}
 		items, _, err := stream.Get(0, false, filter.Limit, filter.Reverse)
 		if err != nil {
+			h.RUnlock()
 			return nil, StreamPosition{}, err
 		}
 		pubs := make([]*Publication, len(items))
@@ -808,6 +811,7 @@ func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publica
 			pub.Offset = item.Offset // Set offset from stream item
 			pubs[i] = pub
 		}
+		h.RUnlock()
 		return pubs, streamPosition, nil
 	}
 
@@ -815,6 +819,7 @@ func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publica
 
 	if !filter.Reverse {
 		if streamPosition.Offset == since.Offset && since.Epoch == stream.Epoch() {
+			h.RUnlock()
 			return nil, streamPosition, nil
 		}
 	}
@@ -826,6 +831,7 @@ func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publica
 
 	items, _, err := stream.Get(streamOffset, true, filter.Limit, filter.Reverse)
 	if err != nil {
+		h.RUnlock()
 		return nil, StreamPosition{}, err
 	}
 
@@ -835,6 +841,7 @@ func (h *keyedHub) getStream(ch string, opts KeyedReadStreamOptions) ([]*Publica
 		pub.Offset = item.Offset // Set offset from stream item
 		pubs[i] = pub
 	}
+	h.RUnlock()
 	return pubs, streamPosition, nil
 }
 
