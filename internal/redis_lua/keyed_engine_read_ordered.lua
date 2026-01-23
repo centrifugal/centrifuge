@@ -2,6 +2,9 @@
 -- Uses (score, key) cursor instead of integer offset to ensure no entries are
 -- skipped when the snapshot changes during pagination.
 --
+-- Ordering: (score DESC, key DESC) - matches Redis native ZREVRANGE ordering.
+-- This allows direct use of Redis commands without Lua filtering.
+--
 -- KEYS[1] = snapshot hash key
 -- KEYS[2] = snapshot order zset key
 -- KEYS[3] = snapshot expire zset key
@@ -47,13 +50,11 @@ end
 if snapshot_meta_key ~= '' then
     local snapshot_meta_exists = redis.call("exists", snapshot_meta_key)
     if snapshot_meta_exists == 0 then
-        -- No snapshot metadata = snapshot is invalid/evicted
         return {stream_offset, epoch, {}, {}, "", ""}
     end
 
     local snapshot_epoch = redis.call("hget", snapshot_meta_key, "epoch")
     if snapshot_epoch ~= epoch then
-        -- Epoch mismatch = snapshot is stale (from old epoch)
         return {stream_offset, epoch, {}, {}, "", ""}
     end
 end
@@ -70,90 +71,107 @@ end
 
 -- Cleanup expired entries
 local expired = redis.call("zrangebyscore", expire_key, "-inf", now_str)
-local expired_len = #expired
-if expired_len > 0 then
+if #expired > 0 then
     redis.call("hdel", hash_key, unpack(expired))
     redis.call("zrem", order_key, unpack(expired))
     redis.call("zremrangebyscore", expire_key, "-inf", now_str)
 end
 
--- Key-based cursor pagination:
--- For ordered snapshots sorted by (score DESC, key ASC within same score),
--- find entries "after" cursor where:
---   score < cursor_score, OR
---   (score == cursor_score AND key > cursor_key)
+-- Key-based cursor pagination using native Redis ordering (score DESC, key DESC).
+-- For cursor (cursor_score, cursor_key), we need entries "after" it:
+--   score < cursor_score, OR (score == cursor_score AND key < cursor_key)
 --
--- Redis ZSET sorts by (score ASC, key LEX ASC), so ZREVRANGE gives (score DESC, key LEX DESC).
--- Within same score, we need entries with key > cursor_key, but ZREVRANGE gives key DESC.
--- So we fetch extra entries and filter in Lua.
+-- Strategy:
+-- 1. Get entries with score < cursor_score (use exclusive bound)
+-- 2. Get entries with score == cursor_score AND key < cursor_key (filter in Lua, but only same-score bucket)
+-- This minimizes Lua filtering to just the cursor's score bucket.
 
-local result_keys = {}
 local fetch_limit = limit
 if limit > 0 then
-    -- Fetch extra to account for filtering within same score
-    fetch_limit = limit + 100
+    fetch_limit = limit + 1  -- Fetch one extra to detect if there's more
 end
 
-local all_keys
+local keys_to_fetch = {}
+local last_score = nil
+
 if cursor_score_str == "" then
-    -- First page: start from highest score
+    -- First page: simple ZREVRANGE
+    local all_keys
     if fetch_limit > 0 then
         all_keys = redis.call("zrevrange", order_key, 0, fetch_limit - 1, "WITHSCORES")
     else
         all_keys = redis.call("zrevrange", order_key, 0, -1, "WITHSCORES")
     end
+
+    -- Parse result (key, score, key, score, ...)
+    for i = 1, #all_keys, 2 do
+        keys_to_fetch[#keys_to_fetch + 1] = all_keys[i]
+        last_score = tonumber(all_keys[i + 1])
+    end
 else
-    -- Subsequent pages: get entries with score <= cursor_score
+    -- Subsequent page: need entries after cursor (score DESC, key DESC)
     local cursor_score = tonumber(cursor_score_str)
-    if fetch_limit > 0 then
-        all_keys = redis.call("zrevrangebyscore", order_key, cursor_score, "-inf", "WITHSCORES", "LIMIT", 0, fetch_limit)
-    else
-        all_keys = redis.call("zrevrangebyscore", order_key, cursor_score, "-inf", "WITHSCORES")
-    end
-end
 
--- Parse WITHSCORES result (key, score, key, score, ...)
--- Filter based on cursor position
-local keys_to_fetch = {}
-local scores_map = {}
-local cursor_score = nil
-if cursor_score_str ~= "" then
-    cursor_score = tonumber(cursor_score_str)
-end
+    -- Step 1: Get entries from cursor's score bucket with key < cursor_key
+    -- ZREVRANGEBYLEX only works when all scores are same, so we use ZRANGEBYLEX on same-score subset
+    -- Actually, we need to filter manually for same-score entries
 
-for i = 1, #all_keys, 2 do
-    local key = all_keys[i]
-    local score = tonumber(all_keys[i + 1])
+    -- First, get entries with score == cursor_score
+    local same_score = redis.call("zrangebyscore", order_key, cursor_score, cursor_score)
 
-    -- Check if this entry is "after" the cursor
-    local include = true
-    if cursor_score ~= nil then
-        if score > cursor_score then
-            -- score > cursor_score: this entry is "before" cursor, skip
-            include = false
-        elseif score == cursor_score then
-            -- Same score: include only if key > cursor_key (lexicographic)
-            if key <= cursor_key then
-                include = false
-            end
+    -- Filter: keep entries with key < cursor_key (for DESC order, smaller keys come later)
+    for i = 1, #same_score do
+        local k = same_score[i]
+        if k < cursor_key then
+            keys_to_fetch[#keys_to_fetch + 1] = k
         end
-        -- score < cursor_score: include (this entry is "after" cursor)
     end
 
-    if include then
-        table.insert(keys_to_fetch, key)
-        scores_map[key] = score
+    -- Sort by key DESC (to match ZREVRANGE ordering within same score)
+    table.sort(keys_to_fetch, function(a, b) return a > b end)
 
-        -- Stop if we have enough
-        if limit > 0 and #keys_to_fetch >= limit then
-            break
+    last_score = cursor_score
+
+    -- Step 2: Get entries with score < cursor_score
+    local remaining_needed = 0
+    if limit > 0 then
+        remaining_needed = fetch_limit - #keys_to_fetch
+    end
+
+    if limit == 0 or remaining_needed > 0 then
+        local lower_entries
+        if remaining_needed > 0 then
+            lower_entries = redis.call("zrevrangebyscore", order_key, "(" .. cursor_score_str, "-inf", "WITHSCORES", "LIMIT", 0, remaining_needed)
+        else
+            lower_entries = redis.call("zrevrangebyscore", order_key, "(" .. cursor_score_str, "-inf", "WITHSCORES")
+        end
+
+        for i = 1, #lower_entries, 2 do
+            keys_to_fetch[#keys_to_fetch + 1] = lower_entries[i]
+            last_score = tonumber(lower_entries[i + 1])
         end
     end
 end
 
+-- Determine if there are more entries and trim to limit
+local has_more = false
 local key_count = #keys_to_fetch
+
 if key_count == 0 then
     return {stream_offset, epoch, {}, {}, "", ""}
+end
+
+if limit > 0 and key_count > limit then
+    has_more = true
+    -- Trim to limit
+    local trimmed = {}
+    for i = 1, limit do
+        trimmed[i] = keys_to_fetch[i]
+    end
+    keys_to_fetch = trimmed
+    key_count = limit
+    -- Get the actual last score for cursor
+    last_score = tonumber(redis.call("zscore", order_key, keys_to_fetch[key_count]))
 end
 
 -- Fetch values in one call
@@ -162,30 +180,9 @@ local values = redis.call("hmget", hash_key, unpack(keys_to_fetch))
 -- Build next cursor from last entry
 local next_cursor_score = ""
 local next_cursor_key = ""
-
--- Check if there might be more entries
-local has_more = false
-if limit > 0 then
-    local last_key = keys_to_fetch[key_count]
-    local last_score = scores_map[last_key]
-
-    -- Check if there are more entries after this one
-    local remaining = redis.call("zrevrangebyscore", order_key, last_score, "-inf", "LIMIT", 0, 2, "WITHSCORES")
-    -- Count entries that would come after our last entry
-    local count_after = 0
-    for i = 1, #remaining, 2 do
-        local k = remaining[i]
-        local s = tonumber(remaining[i + 1])
-        if s < last_score or (s == last_score and k > last_key) then
-            count_after = count_after + 1
-        end
-    end
-
-    if count_after > 0 or #remaining > 2 then
-        has_more = true
-        next_cursor_score = tostring(last_score)
-        next_cursor_key = last_key
-    end
+if has_more then
+    next_cursor_score = tostring(last_score)
+    next_cursor_key = keys_to_fetch[key_count]
 end
 
 return {stream_offset, epoch, keys_to_fetch, values, next_cursor_score, next_cursor_key}

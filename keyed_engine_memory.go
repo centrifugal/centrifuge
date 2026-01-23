@@ -879,7 +879,7 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 		}
 
 		// Sort by score (descending) for ordered snapshots, lexicographically for non-ordered
-		// For ordered: use stable secondary sort by key to enable key-based cursor
+		// For ordered: use (score DESC, key DESC) to match Redis native ZREVRANGE ordering
 		if opts.Ordered && channel.ordered {
 			sort.Slice(channel.sortedKeys, func(i, j int) bool {
 				si := channel.scores[channel.sortedKeys[i]]
@@ -887,7 +887,7 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 				if si != sj {
 					return si > sj // Primary: score descending
 				}
-				return channel.sortedKeys[i] < channel.sortedKeys[j] // Secondary: key ascending
+				return channel.sortedKeys[i] > channel.sortedKeys[j] // Secondary: key descending
 			})
 		} else {
 			sort.Strings(channel.sortedKeys) // Lexicographic sort for consistency
@@ -984,9 +984,9 @@ func (h *keyedHub) findUnorderedCursorPosition(sortedKeys []string, cursor strin
 }
 
 // findOrderedCursorPosition finds the position after the cursor (score, key) in ordered snapshot.
-// For ordered snapshots sorted by (score DESC, key ASC), finds first entry where:
+// For ordered snapshots sorted by (score DESC, key DESC), finds first entry where:
 // - score < cursorScore, OR
-// - score == cursorScore AND key > cursorKey
+// - score == cursorScore AND key < cursorKey
 func (h *keyedHub) findOrderedCursorPosition(channel *keyedChannel, cursor string) int {
 	cursorScore, cursorKey := h.parseOrderedCursor(cursor)
 
@@ -996,7 +996,7 @@ func (h *keyedHub) findOrderedCursorPosition(channel *keyedChannel, cursor strin
 		if score != cursorScore {
 			return score < cursorScore // Score descending: looking for score < cursorScore
 		}
-		return key > cursorKey // Same score: looking for key > cursorKey
+		return key < cursorKey // Same score, key descending: looking for key < cursorKey
 	})
 }
 
@@ -1010,8 +1010,8 @@ func (h *keyedHub) getStats(ch string) (KeyedStats, error) {
 	}
 
 	return KeyedStats{
-		NumKeys:           len(channel.snapshot),
-		NumAggregatedKeys: len(channel.aggregations),
+		NumKeys:            len(channel.snapshot),
+		NumAggregationKeys: len(channel.aggregations),
 	}, nil
 }
 

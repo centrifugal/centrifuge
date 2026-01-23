@@ -949,7 +949,7 @@ func TestMemoryKeyedEngine_Aggregation(t *testing.T) {
 	stats, err := engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 3, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregatedKeys)
+	require.Equal(t, 2, stats.NumAggregationKeys)
 
 	// Remove one of alice's connections
 	_, err = engine.Unpublish(ctx, channel, "conn1", KeyedUnpublishOptions{
@@ -962,7 +962,7 @@ func TestMemoryKeyedEngine_Aggregation(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregatedKeys)
+	require.Equal(t, 2, stats.NumAggregationKeys)
 
 	// Remove alice's last connection
 	_, err = engine.Unpublish(ctx, channel, "conn2", KeyedUnpublishOptions{
@@ -975,7 +975,7 @@ func TestMemoryKeyedEngine_Aggregation(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregatedKeys)
+	require.Equal(t, 1, stats.NumAggregationKeys)
 
 	// Remove bob's connection
 	_, err = engine.Unpublish(ctx, channel, "conn3", KeyedUnpublishOptions{
@@ -988,7 +988,7 @@ func TestMemoryKeyedEngine_Aggregation(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys)
-	require.Equal(t, 0, stats.NumAggregatedKeys)
+	require.Equal(t, 0, stats.NumAggregationKeys)
 }
 
 // TestMemoryKeyedEngine_AggregationAutoDiscovery tests that Unpublish auto-discovers
@@ -1022,7 +1022,7 @@ func TestMemoryKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	stats, err := engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregatedKeys)
+	require.Equal(t, 1, stats.NumAggregationKeys)
 
 	// Unpublish WITHOUT providing aggregation options - should auto-discover
 	_, err = engine.Unpublish(ctx, channel, "conn1", KeyedUnpublishOptions{})
@@ -1032,7 +1032,7 @@ func TestMemoryKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregatedKeys)
+	require.Equal(t, 1, stats.NumAggregationKeys)
 
 	// Unpublish last connection without aggregation options
 	_, err = engine.Unpublish(ctx, channel, "conn2", KeyedUnpublishOptions{})
@@ -1042,7 +1042,7 @@ func TestMemoryKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys)
-	require.Equal(t, 0, stats.NumAggregatedKeys)
+	require.Equal(t, 0, stats.NumAggregationKeys)
 }
 
 // TestMemoryKeyedEngine_AggregationCleanupOnTTL verifies that key TTL expiration
@@ -1085,7 +1085,7 @@ func TestMemoryKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	stats, err := engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 3, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregatedKeys)
+	require.Equal(t, 2, stats.NumAggregationKeys)
 
 	// Wait for TTL to expire plus cleanup interval
 	time.Sleep(2500 * time.Millisecond)
@@ -1094,7 +1094,7 @@ func TestMemoryKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys, "All keys should be cleaned up")
-	require.Equal(t, 0, stats.NumAggregatedKeys, "All aggregations should be cleaned up")
+	require.Equal(t, 0, stats.NumAggregationKeys, "All aggregations should be cleaned up")
 }
 
 // =============================================================================

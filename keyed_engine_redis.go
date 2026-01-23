@@ -1912,7 +1912,7 @@ func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, er
 	if err != nil {
 		return KeyedStats{}, err
 	}
-	return KeyedStats{NumKeys: int(numKeys), NumAggregatedKeys: int(numAggregated)}, nil
+	return KeyedStats{NumKeys: int(numKeys), NumAggregationKeys: int(numAggregated)}, nil
 }
 
 // ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.

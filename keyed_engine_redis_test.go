@@ -229,7 +229,7 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 //	stats, err := engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 3, stats.NumKeys)
-//	require.Equal(t, 2, stats.NumAggregatedKeys) // user1 and user2
+//	require.Equal(t, 2, stats.NumAggregationKeys) // user1 and user2
 //
 //	// Remove one client from user1
 //	err = engine.RemoveMember(ctx, channel, client1, EnginePresenceOptions{})
@@ -245,7 +245,7 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 //	stats, err = engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 2, stats.NumKeys)
-//	require.Equal(t, 2, stats.NumAggregatedKeys) // Still 2 users
+//	require.Equal(t, 2, stats.NumAggregationKeys) // Still 2 users
 //
 //	// Remove second client from user1
 //	err = engine.RemoveMember(ctx, channel, client2, EnginePresenceOptions{})
@@ -255,7 +255,7 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 //	stats, err = engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 1, stats.NumKeys)
-//	require.Equal(t, 1, stats.NumAggregatedKeys) // Only user2 remains
+//	require.Equal(t, 1, stats.NumAggregationKeys) // Only user2 remains
 //}
 
 //// TestRedisKeyedEngine_PresenceStream tests presence event stream (joins/leaves).
@@ -942,8 +942,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	stats, err := engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 1, stats.NumKeys, "Should have 1 client connection")
-//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should have 1 unique user")
-//	t.Logf("After conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//	require.Equal(t, 1, stats.NumAggregationKeys, "Should have 1 unique user")
+//	t.Logf("After conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregationKeys)
 //
 //	// Add second connection (same user)
 //	err = engine.AddMember(ctx, channel, ClientInfo{
@@ -955,8 +955,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	stats, err = engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 2, stats.NumKeys, "Should have 2 client connections")
-//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user")
-//	t.Logf("After conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//	require.Equal(t, 1, stats.NumAggregationKeys, "Should still have 1 unique user")
+//	t.Logf("After conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregationKeys)
 //
 //	// Add third connection (same user)
 //	err = engine.AddMember(ctx, channel, ClientInfo{
@@ -968,8 +968,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	stats, err = engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 3, stats.NumKeys, "Should have 3 client connections")
-//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user")
-//	t.Logf("After conn3: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//	require.Equal(t, 1, stats.NumAggregationKeys, "Should still have 1 unique user")
+//	t.Logf("After conn3: %d clients, %d users", stats.NumKeys, stats.NumAggregationKeys)
 //
 //	// Remove first connection
 //	err = engine.RemoveMember(ctx, channel, ClientInfo{
@@ -981,8 +981,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	stats, err = engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 2, stats.NumKeys, "Should have 2 client connections")
-//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user (2 connections remain)")
-//	t.Logf("After removing conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//	require.Equal(t, 1, stats.NumAggregationKeys, "Should still have 1 unique user (2 connections remain)")
+//	t.Logf("After removing conn1: %d clients, %d users", stats.NumKeys, stats.NumAggregationKeys)
 //
 //	// Remove second connection
 //	err = engine.RemoveMember(ctx, channel, ClientInfo{
@@ -994,8 +994,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	stats, err = engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 1, stats.NumKeys, "Should have 1 client connection")
-//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should still have 1 unique user (1 connection remains)")
-//	t.Logf("After removing conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//	require.Equal(t, 1, stats.NumAggregationKeys, "Should still have 1 unique user (1 connection remains)")
+//	t.Logf("After removing conn2: %d clients, %d users", stats.NumKeys, stats.NumAggregationKeys)
 //
 //	// Remove third connection (last one)
 //	err = engine.RemoveMember(ctx, channel, ClientInfo{
@@ -1007,8 +1007,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	stats, err = engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 0, stats.NumKeys, "Should have 0 client connections")
-//	require.Equal(t, 0, stats.NumAggregatedKeys, "Should have 0 unique users (all connections closed)")
-//	t.Logf("After removing conn3 (last): %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//	require.Equal(t, 0, stats.NumAggregationKeys, "Should have 0 unique users (all connections closed)")
+//	t.Logf("After removing conn3 (last): %d clients, %d users", stats.NumKeys, stats.NumAggregationKeys)
 //
 //	t.Logf("SUCCESS: Aggregation correctly tracks multiple connections per user")
 //}
@@ -1058,8 +1058,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	stats, err := engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 2, stats.NumKeys, "Should have 2 connections")
-//	require.Equal(t, 1, stats.NumAggregatedKeys, "Should have 1 unique user")
-//	t.Logf("Before cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//	require.Equal(t, 1, stats.NumAggregationKeys, "Should have 1 unique user")
+//	t.Logf("Before cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregationKeys)
 //
 //	// Simulate conn1 expiring via cleanup script
 //	shardWrapper := engine.shards[0]
@@ -1073,8 +1073,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	stats, err = engine.Stats(ctx, channel)
 //	require.NoError(t, err)
 //	require.Equal(t, 0, stats.NumKeys, "Should have 0 connections (both cleaned up)")
-//	require.Equal(t, 0, stats.NumAggregatedKeys, "Should have 0 users (aggregation updated correctly)")
-//	t.Logf("After cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregatedKeys)
+//	require.Equal(t, 0, stats.NumAggregationKeys, "Should have 0 users (aggregation updated correctly)")
+//	t.Logf("After cleanup: %d clients, %d users", stats.NumKeys, stats.NumAggregationKeys)
 //
 //	t.Logf("SUCCESS: Cleanup script correctly updates aggregation")
 //}
@@ -1137,7 +1137,7 @@ func TestRedisKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	stats, err := engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 3, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregatedKeys)
+	require.Equal(t, 2, stats.NumAggregationKeys)
 
 	// Simulate cleanup by calling cleanupChannel with future timestamp
 	shardWrapper := engine.shards[0]
@@ -1151,7 +1151,7 @@ func TestRedisKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys, "All keys should be cleaned up")
-	require.Equal(t, 0, stats.NumAggregatedKeys, "All aggregations should be cleaned up")
+	require.Equal(t, 0, stats.NumAggregationKeys, "All aggregations should be cleaned up")
 }
 
 // TestRedisKeyedEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
@@ -1797,7 +1797,7 @@ func TestRedisKeyedEngine_Aggregation(t *testing.T) {
 	stats, err := engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 3, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregatedKeys)
+	require.Equal(t, 2, stats.NumAggregationKeys)
 
 	// Remove one of alice's connections
 	_, err = engine.Unpublish(ctx, channel, "conn1", KeyedUnpublishOptions{
@@ -1810,7 +1810,7 @@ func TestRedisKeyedEngine_Aggregation(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregatedKeys)
+	require.Equal(t, 2, stats.NumAggregationKeys)
 
 	// Remove alice's last connection
 	_, err = engine.Unpublish(ctx, channel, "conn2", KeyedUnpublishOptions{
@@ -1823,7 +1823,7 @@ func TestRedisKeyedEngine_Aggregation(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregatedKeys)
+	require.Equal(t, 1, stats.NumAggregationKeys)
 
 	// Remove bob's connection
 	_, err = engine.Unpublish(ctx, channel, "conn3", KeyedUnpublishOptions{
@@ -1836,7 +1836,7 @@ func TestRedisKeyedEngine_Aggregation(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys)
-	require.Equal(t, 0, stats.NumAggregatedKeys)
+	require.Equal(t, 0, stats.NumAggregationKeys)
 }
 
 // TestRedisKeyedEngine_AggregationAutoDiscovery tests that Unpublish auto-discovers
@@ -1870,7 +1870,7 @@ func TestRedisKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	stats, err := engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 2, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregatedKeys)
+	require.Equal(t, 1, stats.NumAggregationKeys)
 
 	// Unpublish WITHOUT providing aggregation options - should auto-discover
 	_, err = engine.Unpublish(ctx, channel, "conn1", KeyedUnpublishOptions{})
@@ -1880,7 +1880,7 @@ func TestRedisKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregatedKeys)
+	require.Equal(t, 1, stats.NumAggregationKeys)
 
 	// Unpublish last connection without aggregation options
 	_, err = engine.Unpublish(ctx, channel, "conn2", KeyedUnpublishOptions{})
@@ -1890,7 +1890,7 @@ func TestRedisKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	stats, err = engine.Stats(ctx, channel)
 	require.NoError(t, err)
 	require.Equal(t, 0, stats.NumKeys)
-	require.Equal(t, 0, stats.NumAggregatedKeys)
+	require.Equal(t, 0, stats.NumAggregationKeys)
 }
 
 // =============================================================================

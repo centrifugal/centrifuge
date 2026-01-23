@@ -160,8 +160,8 @@ type KeyedReadSnapshotOptions struct {
 
 // KeyedStats provide current statistics for channel in KeyedEngine.
 type KeyedStats struct {
-	NumKeys           int
-	NumAggregatedKeys int
+	NumKeys            int
+	NumAggregationKeys int
 }
 
 // KeyedPublishResult contains the result of Publish or Unpublish operation.
