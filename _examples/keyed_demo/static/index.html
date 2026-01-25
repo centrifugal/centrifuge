@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keyed Subscriptions Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: rgba(255,255,255,0.8);
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .demos {
+            display: grid;
+            gap: 20px;
+        }
+        .demo-card {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            transition: transform 0.2s;
+        }
+        .demo-card:hover {
+            transform: translateY(-5px);
+        }
+        .demo-card h2 {
+            margin: 0 0 10px 0;
+            color: #333;
+        }
+        .demo-card p {
+            color: #666;
+            margin: 0 0 20px 0;
+            line-height: 1.6;
+        }
+        .demo-card a {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+        .demo-card a:hover {
+            opacity: 0.9;
+        }
+        .icon {
+            font-size: 40px;
+            margin-bottom: 15px;
+        }
+        .features {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+        .feature {
+            background: #f0f0f0;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <h1>Keyed Subscriptions Demo</h1>
+    <p class="subtitle">Real-time state synchronization with Centrifuge</p>
+
+    <div class="demos">
+        <div class="demo-card">
+            <div class="icon">🖱️</div>
+            <h2>Ephemeral Cursors</h2>
+            <div class="features">
+                <span class="feature">Real-time sync</span>
+                <span class="feature">Snapshot on join</span>
+                <span class="feature">Auto-cleanup</span>
+            </div>
+            <p>
+                See other users' cursor positions in real-time. Like Figma or Google Docs -
+                when you join, you immediately see where everyone's cursor is, and movements
+                are synchronized instantly.
+            </p>
+            <a href="/cursors.html">Open Cursors Demo →</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="icon">🎮</div>
+            <h2>Game Lobby</h2>
+            <div class="features">
+                <span class="feature">2-player slots</span>
+                <span class="feature">Live updates</span>
+                <span class="feature">Auto-start</span>
+            </div>
+            <p>
+                A simple 2-player lobby. Players can join slots, and when both slots are
+                filled, the game automatically starts. Perfect for matchmaking scenarios
+                where you need synchronized state.
+            </p>
+            <a href="/lobby.html">Open Lobby Demo →</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="icon">🏆</div>
+            <h2>Live Leaderboard</h2>
+            <div class="features">
+                <span class="feature">Ordered by score</span>
+                <span class="feature">Click counter</span>
+                <span class="feature">Presence</span>
+            </div>
+            <p>
+                A real-time leaderboard where each click increments your score. The
+                leaderboard is automatically sorted by score. Also shows who's currently
+                online using keyed presence subscriptions.
+            </p>
+            <a href="/leaderboard.html">Open Leaderboard Demo →</a>
+        </div>
+    </div>
+</body>
+</html>

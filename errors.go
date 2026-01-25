@@ -116,9 +116,4 @@ var (
 		Message:   "concurrent pagination",
 		Temporary: true,
 	}
-	// ErrorNotSubscribed means client is not subscribed to the channel.
-	ErrorNotSubscribed = &Error{
-		Code:    114,
-		Message: "not subscribed",
-	}
 )

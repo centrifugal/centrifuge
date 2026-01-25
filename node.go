@@ -1351,10 +1351,13 @@ func pubToProto(pub *Publication) *protocol.Publication {
 		return nil
 	}
 	return &protocol.Publication{
-		Offset: pub.Offset,
-		Data:   pub.Data,
-		Info:   infoToProto(pub.Info),
-		Tags:   pub.Tags,
+		Offset:  pub.Offset,
+		Data:    pub.Data,
+		Info:    infoToProto(pub.Info),
+		Tags:    pub.Tags,
+		Channel: pub.Channel,
+		Removed: pub.Removed,
+		Key:     pub.Key,
 	}
 }
 
@@ -1368,6 +1371,7 @@ func pubFromProto(pub *protocol.Publication) *Publication {
 		Info:    infoFromProto(pub.GetInfo()),
 		Tags:    pub.GetTags(),
 		Time:    pub.Time,
+		Channel: pub.GetChannel(),
 		Key:     pub.GetKey(),
 		Removed: pub.GetRemoved(),
 	}

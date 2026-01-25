@@ -43,19 +43,19 @@ func init() {
 // All its methods are not goroutine-safe and supposed to be called
 // once inside Node ConnectHandler.
 type clientEventHub struct {
-	aliveHandler            AliveHandler
-	disconnectHandler       DisconnectHandler
-	subscribeHandler        SubscribeHandler
-	unsubscribeHandler      UnsubscribeHandler
-	publishHandler          PublishHandler
-	refreshHandler          RefreshHandler
-	subRefreshHandler       SubRefreshHandler
-	rpcHandler              RPCHandler
-	messageHandler          MessageHandler
-	presenceHandler         PresenceHandler
-	presenceStatsHandler    PresenceStatsHandler
-	historyHandler          HistoryHandler
-	stateSnapshotHandler    StateSnapshotHandler
+	aliveHandler             AliveHandler
+	disconnectHandler        DisconnectHandler
+	subscribeHandler         SubscribeHandler
+	unsubscribeHandler       UnsubscribeHandler
+	publishHandler           PublishHandler
+	refreshHandler           RefreshHandler
+	subRefreshHandler        SubRefreshHandler
+	rpcHandler               RPCHandler
+	messageHandler           MessageHandler
+	presenceHandler          PresenceHandler
+	presenceStatsHandler     PresenceStatsHandler
+	historyHandler           HistoryHandler
+	stateSnapshotHandler     StateSnapshotHandler
 	presenceSubscribeHandler PresenceSubscribeHandler
 }
 
@@ -845,6 +845,11 @@ func (c *Client) updatePresence() {
 
 func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx ChannelContext) bool {
 	if !channelHasFlag(chCtx.flags, flagPositioning) {
+		return true
+	}
+	// Keyed channels use KeyedEngine for stream management, not Broker.
+	// TODO: fixme.
+	if channelHasFlag(chCtx.flags, flagKeyed) {
 		return true
 	}
 	nowUnix := c.node.nowTimeGetter().Unix()
@@ -1795,6 +1800,24 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 			return *disconnect
 		}
 		return replyError
+	}
+
+	// For keyed subscription continuation requests (pagination or live phase),
+	// bypass the OnSubscribe callback - we already authorized on the first request.
+	if req.Keyed && (req.KeyedCursor != "" || req.KeyedPhase != KeyedPhaseSnapshot) {
+		c.mu.RLock()
+		state, ok := c.keyedSubscribing[req.Channel]
+		c.mu.RUnlock()
+		if ok {
+			// Use stored options from first request.
+			reply := SubscribeReply{Options: state.options}
+			if handleErr := c.handleKeyedSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
+			}
+			return nil
+		}
+		// No state found - this shouldn't happen, return error.
+		return ErrorPermissionDenied
 	}
 
 	event := SubscribeEvent{

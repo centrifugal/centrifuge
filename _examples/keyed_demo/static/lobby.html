@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Lobby - Keyed Subscriptions Demo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            min-height: 100vh;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #888;
+            margin-bottom: 40px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 30px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #f44;
+        }
+        .status-dot.connected {
+            background: #4f4;
+        }
+        .lobby-container {
+            display: flex;
+            gap: 40px;
+            margin-bottom: 40px;
+        }
+        .slot {
+            width: 250px;
+            height: 300px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
+            border: 2px solid transparent;
+        }
+        .slot.occupied {
+            background: rgba(76, 175, 80, 0.2);
+            border-color: rgba(76, 175, 80, 0.5);
+        }
+        .slot.mine {
+            border-color: #4fc3f7;
+            box-shadow: 0 0 20px rgba(79, 195, 247, 0.3);
+        }
+        .slot-number {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 20px;
+        }
+        .slot-empty {
+            font-size: 60px;
+            color: #555;
+            margin-bottom: 20px;
+        }
+        .slot-avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            margin-bottom: 15px;
+        }
+        .slot-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        .slot-status {
+            color: #4caf50;
+            font-size: 14px;
+        }
+        .slot-btn {
+            margin-top: 20px;
+            padding: 12px 30px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .slot-btn.join {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .slot-btn.join:hover {
+            transform: scale(1.05);
+        }
+        .slot-btn.leave {
+            background: #f44336;
+            color: white;
+        }
+        .slot-btn.leave:hover {
+            background: #d32f2f;
+        }
+        .slot-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .game-event {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(76, 175, 80, 0.95);
+            padding: 40px 60px;
+            border-radius: 16px;
+            text-align: center;
+            font-size: 24px;
+            font-weight: 600;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            z-index: 1000;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.05); }
+        }
+        .hidden {
+            display: none !important;
+        }
+        .name-input {
+            margin-bottom: 30px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .name-input input {
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            width: 200px;
+        }
+        .back-link {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            color: #888;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            color: white;
+        }
+        .vs {
+            font-size: 48px;
+            color: #555;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Game Lobby</h1>
+    <p class="subtitle">2-player lobby with real-time slot synchronization</p>
+
+    <div class="status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting...</span>
+    </div>
+
+    <div class="name-input">
+        <input type="text" id="playerName" placeholder="Enter your name" maxlength="20">
+    </div>
+
+    <div class="lobby-container">
+        <div class="slot" id="slot1">
+            <div class="slot-number">Player 1</div>
+            <div class="slot-empty">?</div>
+            <button class="slot-btn join" onclick="joinSlot(1)">Join Slot</button>
+        </div>
+
+        <div class="vs">VS</div>
+
+        <div class="slot" id="slot2">
+            <div class="slot-number">Player 2</div>
+            <div class="slot-empty">?</div>
+            <button class="slot-btn join" onclick="joinSlot(2)">Join Slot</button>
+        </div>
+    </div>
+
+    <div class="game-event hidden" id="gameEvent">
+        <div id="gameEventText"></div>
+    </div>
+
+    <a href="/" class="back-link">← Back to demos</a>
+
+    <script src="http://localhost:2000/centrifuge.js"></script>
+    <script>
+        const userId = 'user_' + Math.random().toString(36).substr(2, 8);
+        let mySlot = null;
+
+        // Slots state.
+        const slots = {
+            slot_1: null,
+            slot_2: null
+        };
+
+        function getPlayerName() {
+            return document.getElementById('playerName').value.trim() || 'Player ' + userId.substr(5, 4).toUpperCase();
+        }
+
+        function renderSlot(slotNum) {
+            const slotEl = document.getElementById('slot' + slotNum);
+            const slotData = slots['slot_' + slotNum];
+
+            if (slotData) {
+                const isMine = slotData.userId === userId;
+                slotEl.className = 'slot occupied' + (isMine ? ' mine' : '');
+                slotEl.innerHTML = `
+                    <div class="slot-number">Player ${slotNum}</div>
+                    <div class="slot-avatar">${slotData.name.charAt(0).toUpperCase()}</div>
+                    <div class="slot-name">${slotData.name}${isMine ? ' (you)' : ''}</div>
+                    <div class="slot-status">Ready!</div>
+                    ${isMine ? `<button class="slot-btn leave" onclick="leaveSlot(${slotNum})">Leave</button>` : ''}
+                `;
+            } else {
+                slotEl.className = 'slot';
+                const canJoin = mySlot === null;
+                slotEl.innerHTML = `
+                    <div class="slot-number">Player ${slotNum}</div>
+                    <div class="slot-empty">?</div>
+                    <button class="slot-btn join" onclick="joinSlot(${slotNum})" ${canJoin ? '' : 'disabled'}>Join Slot</button>
+                `;
+            }
+        }
+
+        function renderAllSlots() {
+            renderSlot(1);
+            renderSlot(2);
+        }
+
+        function showGameEvent(message) {
+            const el = document.getElementById('gameEvent');
+            document.getElementById('gameEventText').textContent = message;
+            el.classList.remove('hidden');
+            setTimeout(() => {
+                el.classList.add('hidden');
+            }, 3000);
+        }
+
+        // Connect to Centrifuge.
+        const centrifuge = new Centrifuge('ws://localhost:3000/connection/websocket', {
+            name: userId
+        });
+
+        centrifuge.on('connected', () => {
+            document.getElementById('statusDot').classList.add('connected');
+            document.getElementById('statusText').textContent = 'Connected';
+        });
+
+        centrifuge.on('disconnected', () => {
+            document.getElementById('statusDot').classList.remove('connected');
+            document.getElementById('statusText').textContent = 'Disconnected';
+        });
+
+        // Subscribe to lobby channel with keyed mode.
+        const sub = centrifuge.newSubscription('lobby', {
+            keyed: true,
+            keyedLimit: 10
+        });
+
+        sub.on('subscribed', (ctx) => {
+            console.log('Subscribed to lobby');
+
+            // Process snapshot.
+            if (ctx.publications) {
+                for (const pub of ctx.publications) {
+                    if (pub.key && pub.key.startsWith('slot_')) {
+                        try {
+                            slots[pub.key] = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
+                            if (slots[pub.key].userId === userId) {
+                                mySlot = parseInt(pub.key.split('_')[1]);
+                            }
+                        } catch (e) {
+                            console.error('Error parsing slot data:', e);
+                        }
+                    }
+                }
+            }
+            renderAllSlots();
+        });
+
+        sub.on('publication', (ctx) => {
+            console.log('Publication:', ctx);
+
+            if (ctx.key === 'game_event') {
+                if (!ctx.removed) {
+                    try {
+                        const data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+                        showGameEvent(data.message);
+                    } catch (e) {}
+                }
+                return;
+            }
+
+            if (ctx.key && ctx.key.startsWith('slot_')) {
+                if (ctx.removed) {
+                    const wasMySlot = slots[ctx.key]?.userId === userId;
+                    slots[ctx.key] = null;
+                    if (wasMySlot) {
+                        mySlot = null;
+                    }
+                } else {
+                    try {
+                        slots[ctx.key] = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+                    } catch (e) {
+                        console.error('Error parsing slot data:', e);
+                    }
+                }
+                renderAllSlots();
+            }
+        });
+
+        sub.subscribe();
+        centrifuge.connect();
+
+        // Join a slot.
+        async function joinSlot(slotNum) {
+            if (mySlot !== null) return;
+
+            try {
+                const result = await centrifuge.rpc('lobby:join', {
+                    slot: slotNum,
+                    name: getPlayerName()
+                });
+                mySlot = slotNum;
+                const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+                slots['slot_' + slotNum] = data;
+                renderAllSlots();
+            } catch (err) {
+                console.error('Error joining slot:', err);
+                if (err.message === 'slot already taken') {
+                    alert('This slot is already taken!');
+                }
+            }
+        }
+
+        // Leave a slot.
+        async function leaveSlot(slotNum) {
+            if (mySlot !== slotNum) return;
+
+            try {
+                await centrifuge.rpc('lobby:leave', { slot: slotNum });
+                mySlot = null;
+                slots['slot_' + slotNum] = null;
+                renderAllSlots();
+            } catch (err) {
+                console.error('Error leaving slot:', err);
+            }
+        }
+    </script>
+</body>
+</html>
