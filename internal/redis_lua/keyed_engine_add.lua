@@ -96,7 +96,7 @@ if result_key_expire ~= '' and result_key ~= '' then
     local epoch = redis.call("hget", result_key, "e")
     if epoch then
         local offset = redis.call("hget", result_key, "s")
-        return { offset, epoch, "1", "0" }
+        return { offset, epoch, "idempotency" }
     end
 end
 
@@ -122,7 +122,7 @@ if meta_key ~= '' then
                 if current_offset then
                     offset_num = tonumber(current_offset)
                 end
-                return { offset_num, current_epoch, "0", "1" }
+                return { offset_num, current_epoch, "version" }
             end
         end
     end
@@ -133,12 +133,12 @@ if meta_key ~= '' then
         if key_mode == "if_new" and key_exists then
             -- KeyModeIfNew but key already exists - suppress
             local current_offset = redis.call("hget", meta_key, "s") or 0
-            return { tonumber(current_offset), current_epoch, "0", "1" }
+            return { tonumber(current_offset), current_epoch, "key_exists" }
         end
         if key_mode == "if_exists" and not key_exists then
             -- KeyModeIfExists but key doesn't exist - suppress
             local current_offset = redis.call("hget", meta_key, "s") or 0
-            return { tonumber(current_offset), current_epoch, "0", "1" }
+            return { tonumber(current_offset), current_epoch, "key_not_found" }
         end
     end
 
@@ -440,4 +440,4 @@ if result_key_expire ~= '' and result_key ~= '' then
 end
 
 -- ==== Step 10: Return top_offset and epoch ====
-return { top_offset, current_epoch, "0", "0" }
+return { top_offset, current_epoch, "" }

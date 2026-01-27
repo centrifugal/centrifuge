@@ -1802,22 +1802,36 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		return replyError
 	}
 
-	// For keyed subscription continuation requests (pagination or live phase),
+	// For keyed subscription continuation requests (pagination or non-snapshot phase with existing state),
 	// bypass the OnSubscribe callback - we already authorized on the first request.
-	if req.Keyed && (req.KeyedCursor != "" || req.KeyedPhase != KeyedPhaseSnapshot) {
+	if req.Keyed {
 		c.mu.RLock()
-		state, ok := c.keyedSubscribing[req.Channel]
+		state, hasState := c.keyedSubscribing[req.Channel]
 		c.mu.RUnlock()
-		if ok {
-			// Use stored options from first request.
+
+		// Cursor set means pagination continuation - requires state.
+		if req.KeyedCursor != "" {
+			if !hasState {
+				// Continuation without prior state is invalid.
+				return ErrorPermissionDenied
+			}
 			reply := SubscribeReply{Options: state.options}
 			if handleErr := c.handleKeyedSubscribe(req, reply, cmd, started, rw); handleErr != nil {
 				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
 			}
 			return nil
 		}
-		// No state found - this shouldn't happen, return error.
-		return ErrorPermissionDenied
+
+		// Non-snapshot phase with existing state means continuation.
+		if req.KeyedPhase != KeyedPhaseSnapshot && hasState {
+			reply := SubscribeReply{Options: state.options}
+			if handleErr := c.handleKeyedSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+				c.writeDisconnectOrErrorFlush(req.Channel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
+			}
+			return nil
+		}
+
+		// Otherwise (initial snapshot, or direct live without prior state) - go through OnSubscribe callback.
 	}
 
 	event := SubscribeEvent{

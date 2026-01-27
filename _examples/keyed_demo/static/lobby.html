@@ -14,23 +14,29 @@
             color: white;
             min-height: 100vh;
             margin: 0;
-            padding: 40px 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 30px;
         }
         h1 {
             margin-bottom: 10px;
         }
         .subtitle {
             color: #888;
-            margin-bottom: 40px;
+            margin-bottom: 20px;
         }
         .status {
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 8px;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
         .status-dot {
             width: 10px;
@@ -41,125 +47,287 @@
         .status-dot.connected {
             background: #4f4;
         }
-        .lobby-container {
-            display: flex;
-            gap: 40px;
-            margin-bottom: 40px;
+        .main-content {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 30px;
         }
-        .slot {
-            width: 250px;
-            height: 300px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 16px;
+        /* Sidebar - Online Users */
+        .sidebar {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
             padding: 20px;
+            height: fit-content;
+        }
+        .sidebar h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .online-count {
+            background: #4caf50;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+        }
+        .user-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .user-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 5px;
+            background: rgba(255,255,255,0.05);
+        }
+        .user-item.me {
+            background: rgba(79, 195, 247, 0.2);
+            border: 1px solid rgba(79, 195, 247, 0.3);
+        }
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .user-name {
+            flex: 1;
+            font-size: 14px;
+        }
+        /* Main Area */
+        .main-area {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s;
-            border: 2px solid transparent;
+            gap: 20px;
         }
-        .slot.occupied {
-            background: rgba(76, 175, 80, 0.2);
-            border-color: rgba(76, 175, 80, 0.5);
+        /* Create Game Section */
+        .create-game {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
         }
-        .slot.mine {
-            border-color: #4fc3f7;
-            box-shadow: 0 0 20px rgba(79, 195, 247, 0.3);
-        }
-        .slot-number {
-            font-size: 14px;
-            color: #888;
-            margin-bottom: 20px;
-        }
-        .slot-empty {
-            font-size: 60px;
-            color: #555;
-            margin-bottom: 20px;
-        }
-        .slot-avatar {
-            width: 80px;
-            height: 80px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
+        .create-game h2 {
+            font-size: 16px;
             margin-bottom: 15px;
         }
-        .slot-name {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 10px;
+        .create-form {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
         }
-        .slot-status {
-            color: #4caf50;
-            font-size: 14px;
-        }
-        .slot-btn {
-            margin-top: 20px;
-            padding: 12px 30px;
+        .create-form input, .create-form select {
+            padding: 10px 15px;
             border-radius: 8px;
             border: none;
-            font-size: 16px;
+            font-size: 14px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+        }
+        .create-form input::placeholder {
+            color: #888;
+        }
+        .create-form input {
+            flex: 1;
+            min-width: 200px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
         }
-        .slot-btn.join {
+        .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
         }
-        .slot-btn.join:hover {
-            transform: scale(1.05);
+        .btn-primary:hover {
+            transform: scale(1.02);
         }
-        .slot-btn.leave {
+        .btn-danger {
             background: #f44336;
             color: white;
         }
-        .slot-btn.leave:hover {
+        .btn-danger:hover {
             background: #d32f2f;
         }
-        .slot-btn:disabled {
+        .btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
             transform: none;
         }
-        .game-event {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(76, 175, 80, 0.95);
-            padding: 40px 60px;
-            border-radius: 16px;
-            text-align: center;
-            font-size: 24px;
-            font-weight: 600;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-            z-index: 1000;
-            animation: pulse 1s infinite;
+        /* Games List */
+        .games-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            flex: 1;
         }
-        @keyframes pulse {
-            0%, 100% { transform: translate(-50%, -50%) scale(1); }
-            50% { transform: translate(-50%, -50%) scale(1.05); }
+        .games-section h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        .games-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+        }
+        .game-card {
+            background: rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.2s;
+        }
+        .game-card:hover {
+            background: rgba(255,255,255,0.12);
+        }
+        .game-card.my-game {
+            border: 1px solid rgba(79, 195, 247, 0.3);
+        }
+        .game-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .game-name {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .game-id {
+            font-size: 12px;
+            color: #888;
+        }
+        .slots-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .slot {
+            flex: 1;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+        .slot:hover:not(.occupied) {
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(255,255,255,0.2);
+        }
+        .slot.occupied {
+            background: rgba(76, 175, 80, 0.2);
+            cursor: default;
+        }
+        .slot.mine {
+            background: rgba(79, 195, 247, 0.2);
+            border-color: rgba(79, 195, 247, 0.5);
+        }
+        .slot-label {
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        .slot-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        .slot-name {
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .slot-empty {
+            font-size: 24px;
+            color: #555;
+        }
+        .game-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .no-games {
+            text-align: center;
+            color: #888;
+            padding: 40px;
+        }
+        /* Game Started Overlay */
+        .game-started-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .game-started-modal {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            max-width: 400px;
+            animation: scaleIn 0.3s ease;
+        }
+        @keyframes scaleIn {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .game-started-modal h2 {
+            color: #4caf50;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+        .game-started-players {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .game-started-player {
+            text-align: center;
+        }
+        .game-started-player .slot-avatar {
+            width: 60px;
+            height: 60px;
+            font-size: 24px;
+            margin: 0 auto 10px;
+        }
+        .vs-text {
+            font-size: 24px;
+            font-weight: bold;
+            color: #555;
+            display: flex;
+            align-items: center;
         }
         .hidden {
             display: none !important;
-        }
-        .name-input {
-            margin-bottom: 30px;
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        .name-input input {
-            padding: 12px 16px;
-            border-radius: 8px;
-            border: none;
-            font-size: 16px;
-            width: 200px;
         }
         .back-link {
             position: fixed;
@@ -171,44 +339,83 @@
         .back-link:hover {
             color: white;
         }
-        .vs {
-            font-size: 48px;
-            color: #555;
-            font-weight: bold;
+        /* Player name input */
+        .player-name-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .player-name-section label {
+            font-size: 14px;
+            color: #888;
+        }
+        .player-name-section input {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: none;
+            font-size: 14px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            width: 200px;
         }
     </style>
 </head>
 <body>
-    <h1>Game Lobby</h1>
-    <p class="subtitle">2-player lobby with real-time slot synchronization</p>
+    <div class="container">
+        <header>
+            <h1>Game Lobby</h1>
+            <p class="subtitle">Create and join multiplayer games with real-time synchronization</p>
+            <div class="status">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Connecting...</span>
+            </div>
+        </header>
 
-    <div class="status">
-        <div class="status-dot" id="statusDot"></div>
-        <span id="statusText">Connecting...</span>
-    </div>
-
-    <div class="name-input">
-        <input type="text" id="playerName" placeholder="Enter your name" maxlength="20">
-    </div>
-
-    <div class="lobby-container">
-        <div class="slot" id="slot1">
-            <div class="slot-number">Player 1</div>
-            <div class="slot-empty">?</div>
-            <button class="slot-btn join" onclick="joinSlot(1)">Join Slot</button>
+        <div class="player-name-section">
+            <label>Your Name:</label>
+            <input type="text" id="playerName" placeholder="Enter your name" maxlength="20">
         </div>
 
-        <div class="vs">VS</div>
+        <div class="main-content">
+            <aside class="sidebar">
+                <h2>Online Users <span class="online-count" id="onlineCount">0</span></h2>
+                <ul class="user-list" id="userList"></ul>
+            </aside>
 
-        <div class="slot" id="slot2">
-            <div class="slot-number">Player 2</div>
-            <div class="slot-empty">?</div>
-            <button class="slot-btn join" onclick="joinSlot(2)">Join Slot</button>
+            <div class="main-area">
+                <section class="create-game">
+                    <h2>Create New Game</h2>
+                    <div class="create-form">
+                        <input type="text" id="gameName" placeholder="Game name (e.g., 'Quick Match')" maxlength="30">
+                        <select id="maxPlayers">
+                            <option value="2">2 Players</option>
+                            <option value="3">3 Players</option>
+                            <option value="4">4 Players</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="createGame()">Create Game</button>
+                    </div>
+                </section>
+
+                <section class="games-section">
+                    <h2>Available Games</h2>
+                    <div class="games-list" id="gamesList">
+                        <div class="no-games">No games available. Create one to get started!</div>
+                    </div>
+                </section>
+            </div>
         </div>
     </div>
 
-    <div class="game-event hidden" id="gameEvent">
-        <div id="gameEventText"></div>
+    <div class="game-started-overlay hidden" id="gameStartedOverlay">
+        <div class="game-started-modal">
+            <h2>Game Starting!</h2>
+            <div class="game-started-players" id="gameStartedPlayers"></div>
+            <p>Get ready to play!</p>
+        </div>
     </div>
 
     <a href="/" class="back-link">← Back to demos</a>
@@ -216,65 +423,53 @@
     <script src="http://localhost:2000/centrifuge.js"></script>
     <script>
         const userId = 'user_' + Math.random().toString(36).substr(2, 8);
-        let mySlot = null;
+        let myClientId = null;
 
-        // Slots state.
-        const slots = {
-            slot_1: null,
-            slot_2: null
-        };
+        // State
+        const onlineUsers = new Map(); // clientId -> {userId, name, color}
+        const availableGames = new Map(); // gameId -> GameInfo
+        const gameSubscriptions = new Map(); // gameId -> {sub, slots}
+        const mySlots = new Map(); // gameId -> slotNum
+
+        // Generate a stable color from a string identifier using HSL for pleasant colors.
+        function stringToColor(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+                hash = hash & hash;
+            }
+            const hue = Math.abs(hash) % 360;
+            return `hsl(${hue}, 70%, 50%)`;
+        }
 
         function getPlayerName() {
             return document.getElementById('playerName').value.trim() || 'Player ' + userId.substr(5, 4).toUpperCase();
         }
 
-        function renderSlot(slotNum) {
-            const slotEl = document.getElementById('slot' + slotNum);
-            const slotData = slots['slot_' + slotNum];
+        // Initialize player name
+        document.getElementById('playerName').value = 'Player ' + userId.substr(5, 4).toUpperCase();
 
-            if (slotData) {
-                const isMine = slotData.userId === userId;
-                slotEl.className = 'slot occupied' + (isMine ? ' mine' : '');
-                slotEl.innerHTML = `
-                    <div class="slot-number">Player ${slotNum}</div>
-                    <div class="slot-avatar">${slotData.name.charAt(0).toUpperCase()}</div>
-                    <div class="slot-name">${slotData.name}${isMine ? ' (you)' : ''}</div>
-                    <div class="slot-status">Ready!</div>
-                    ${isMine ? `<button class="slot-btn leave" onclick="leaveSlot(${slotNum})">Leave</button>` : ''}
-                `;
-            } else {
-                slotEl.className = 'slot';
-                const canJoin = mySlot === null;
-                slotEl.innerHTML = `
-                    <div class="slot-number">Player ${slotNum}</div>
-                    <div class="slot-empty">?</div>
-                    <button class="slot-btn join" onclick="joinSlot(${slotNum})" ${canJoin ? '' : 'disabled'}>Join Slot</button>
-                `;
-            }
-        }
-
-        function renderAllSlots() {
-            renderSlot(1);
-            renderSlot(2);
-        }
-
-        function showGameEvent(message) {
-            const el = document.getElementById('gameEvent');
-            document.getElementById('gameEventText').textContent = message;
-            el.classList.remove('hidden');
-            setTimeout(() => {
-                el.classList.add('hidden');
-            }, 3000);
-        }
-
-        // Connect to Centrifuge.
+        // Connect to Centrifuge
         const centrifuge = new Centrifuge('ws://localhost:3000/connection/websocket', {
             name: userId
         });
 
-        centrifuge.on('connected', () => {
+        centrifuge.on('connected', (ctx) => {
+            // Clean up old entry if clientId changed (reconnection)
+            if (myClientId && myClientId !== ctx.client) {
+                onlineUsers.delete(myClientId);
+            }
+            myClientId = ctx.client;
             document.getElementById('statusDot').classList.add('connected');
             document.getElementById('statusText').textContent = 'Connected';
+
+            // Add ourselves to online users
+            onlineUsers.set(myClientId, {
+                userId: userId,
+                name: getPlayerName(),
+                color: stringToColor(userId)
+            });
+            renderOnlineUsers();
         });
 
         centrifuge.on('disconnected', () => {
@@ -282,101 +477,370 @@
             document.getElementById('statusText').textContent = 'Disconnected';
         });
 
-        // Subscribe to lobby channel with keyed mode.
-        const sub = centrifuge.newSubscription('lobby', {
+        // Subscribe to games list (keyed channel)
+        const gamesSub = centrifuge.newSubscription('games', {
             keyed: true,
-            keyedLimit: 10
+            keyedLimit: 50
         });
 
-        sub.on('subscribed', (ctx) => {
-            console.log('Subscribed to lobby');
-
-            // Process snapshot.
+        gamesSub.on('subscribed', (ctx) => {
+            console.log('Subscribed to games list');
             if (ctx.publications) {
                 for (const pub of ctx.publications) {
-                    if (pub.key && pub.key.startsWith('slot_')) {
+                    if (pub.key && !pub.removed) {
                         try {
-                            slots[pub.key] = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
-                            if (slots[pub.key].userId === userId) {
-                                mySlot = parseInt(pub.key.split('_')[1]);
-                            }
+                            const game = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
+                            availableGames.set(pub.key, game);
+                            subscribeToGame(pub.key, game.maxPlayers);
                         } catch (e) {
-                            console.error('Error parsing slot data:', e);
+                            console.error('Error parsing game:', e);
                         }
                     }
                 }
             }
-            renderAllSlots();
+            renderGames();
         });
 
-        sub.on('publication', (ctx) => {
-            console.log('Publication:', ctx);
+        gamesSub.on('publication', (ctx) => {
+            if (!ctx.key) return;
 
-            if (ctx.key === 'game_event') {
-                if (!ctx.removed) {
-                    try {
-                        const data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-                        showGameEvent(data.message);
-                    } catch (e) {}
+            if (ctx.removed) {
+                availableGames.delete(ctx.key);
+                unsubscribeFromGame(ctx.key);
+            } else {
+                try {
+                    const game = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+                    availableGames.set(ctx.key, game);
+                    subscribeToGame(ctx.key, game.maxPlayers);
+                } catch (e) {
+                    console.error('Error parsing game:', e);
                 }
+            }
+            renderGames();
+        });
+
+        // Subscribe to lobby channel for presence tracking.
+        // This subscription enables presence - the server will track us in lobby:presence.
+        const lobbySub = centrifuge.newSubscription('lobby', {
+            keyed: true,
+            keyedLimit: 1
+        });
+
+        lobbySub.on('subscribed', () => {
+            console.log('Subscribed to lobby (for presence)');
+        });
+
+        // Subscribe to presence for online users.
+        // SDK automatically appends :presence suffix to the channel.
+        // Presence subscriptions use keyed mode - publications have client info.
+        const presenceSub = centrifuge.newPresenceSubscription('lobby');
+
+        presenceSub.on('subscribed', (ctx) => {
+            console.log('Presence subscribed:', ctx);
+            // Keyed subscriptions return publications array with client info.
+            if (ctx.publications) {
+                for (const pub of ctx.publications) {
+                    // Key is the client ID, info contains user details.
+                    if (pub.key && pub.key !== myClientId && pub.info) {
+                        onlineUsers.set(pub.key, {
+                            userId: pub.info.user,
+                            name: pub.info.user ? 'Player ' + pub.info.user.substr(5, 4).toUpperCase() : 'Anonymous',
+                            color: stringToColor(pub.info.user || pub.key)
+                        });
+                    }
+                }
+            }
+            renderOnlineUsers();
+        });
+
+        presenceSub.on('publication', (ctx) => {
+            console.log('Presence publication:', ctx);
+            // Key is the client ID, info contains user details.
+            if (!ctx.key || ctx.key === myClientId) return;
+
+            if (ctx.removed) {
+                // User left.
+                onlineUsers.delete(ctx.key);
+            } else if (ctx.info) {
+                // User joined or updated.
+                onlineUsers.set(ctx.key, {
+                    userId: ctx.info.user,
+                    name: ctx.info.user ? 'Player ' + ctx.info.user.substr(5, 4).toUpperCase() : 'Anonymous',
+                    color: stringToColor(ctx.info.user || ctx.key)
+                });
+            }
+            renderOnlineUsers();
+        });
+
+        // Subscribe to a specific game channel
+        function subscribeToGame(gameId, maxPlayers) {
+            if (gameSubscriptions.has(gameId)) return;
+
+            const channel = 'game:' + gameId;
+            const sub = centrifuge.newSubscription(channel, {
+                keyed: true,
+                keyedLimit: 10
+            });
+
+            const gameState = {
+                sub: sub,
+                slots: {},
+                maxPlayers: maxPlayers
+            };
+
+            sub.on('subscribed', (ctx) => {
+                console.log('Subscribed to game:', gameId);
+                if (ctx.publications) {
+                    for (const pub of ctx.publications) {
+                        if (pub.key && pub.key.startsWith('slot_')) {
+                            try {
+                                const player = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
+                                gameState.slots[pub.key] = player;
+                                if (player.userId === userId) {
+                                    mySlots.set(gameId, player.slot);
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                }
+                renderGames();
+            });
+
+            sub.on('publication', (ctx) => {
+                if (ctx.key === 'game_event') {
+                    if (!ctx.removed) {
+                        try {
+                            const event = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+                            if (event.event === 'game_start') {
+                                showGameStarted(event.players);
+                            }
+                        } catch (e) {}
+                    }
+                    return;
+                }
+
+                if (ctx.key && ctx.key.startsWith('slot_')) {
+                    if (ctx.removed) {
+                        const oldPlayer = gameState.slots[ctx.key];
+                        if (oldPlayer && oldPlayer.userId === userId) {
+                            mySlots.delete(gameId);
+                        }
+                        delete gameState.slots[ctx.key];
+                    } else {
+                        try {
+                            const player = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
+                            gameState.slots[ctx.key] = player;
+                            if (player.userId === userId) {
+                                mySlots.set(gameId, player.slot);
+                            }
+                        } catch (e) {}
+                    }
+                    renderGames();
+                }
+            });
+
+            sub.subscribe();
+            gameSubscriptions.set(gameId, gameState);
+        }
+
+        function unsubscribeFromGame(gameId) {
+            const gameState = gameSubscriptions.get(gameId);
+            if (gameState) {
+                gameState.sub.unsubscribe();
+                gameSubscriptions.delete(gameId);
+                mySlots.delete(gameId);
+            }
+        }
+
+        // Render functions
+        function renderOnlineUsers() {
+            const list = document.getElementById('userList');
+            const count = document.getElementById('onlineCount');
+
+            count.textContent = onlineUsers.size;
+
+            if (onlineUsers.size === 0) {
+                list.innerHTML = '<li class="user-item" style="color: #888;">No users online</li>';
                 return;
             }
 
-            if (ctx.key && ctx.key.startsWith('slot_')) {
-                if (ctx.removed) {
-                    const wasMySlot = slots[ctx.key]?.userId === userId;
-                    slots[ctx.key] = null;
-                    if (wasMySlot) {
-                        mySlot = null;
-                    }
-                } else {
-                    try {
-                        slots[ctx.key] = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-                    } catch (e) {
-                        console.error('Error parsing slot data:', e);
-                    }
-                }
-                renderAllSlots();
+            let html = '';
+            for (const [clientId, user] of onlineUsers) {
+                const isMe = clientId === myClientId;
+                html += `
+                    <li class="user-item ${isMe ? 'me' : ''}">
+                        <div class="user-avatar" style="background: ${user.color}">${user.name.charAt(0).toUpperCase()}</div>
+                        <span class="user-name">${user.name}${isMe ? ' (you)' : ''}</span>
+                    </li>
+                `;
             }
-        });
+            list.innerHTML = html;
+        }
 
-        sub.subscribe();
-        centrifuge.connect();
+        function renderGames() {
+            const container = document.getElementById('gamesList');
 
-        // Join a slot.
-        async function joinSlot(slotNum) {
-            if (mySlot !== null) return;
+            if (availableGames.size === 0) {
+                container.innerHTML = '<div class="no-games">No games available. Create one to get started!</div>';
+                return;
+            }
+
+            let html = '';
+            for (const [gameId, game] of availableGames) {
+                const gameState = gameSubscriptions.get(gameId);
+                const slots = gameState ? gameState.slots : {};
+                const mySlot = mySlots.get(gameId);
+                const isMyGame = mySlot !== undefined;
+
+                html += `
+                    <div class="game-card ${isMyGame ? 'my-game' : ''}">
+                        <div class="game-header">
+                            <div>
+                                <div class="game-name">${escapeHtml(game.name || 'Unnamed Game')}</div>
+                                <div class="game-id">${gameId}</div>
+                            </div>
+                        </div>
+                        <div class="slots-container">
+                            ${renderSlots(gameId, game.maxPlayers, slots, mySlot)}
+                        </div>
+                    </div>
+                `;
+            }
+            container.innerHTML = html;
+        }
+
+        function renderSlots(gameId, maxPlayers, slots, mySlot) {
+            let html = '';
+            for (let i = 1; i <= maxPlayers; i++) {
+                const slotKey = 'slot_' + i;
+                const player = slots[slotKey];
+                const isOccupied = !!player;
+                const isMine = player && player.userId === userId;
+
+                if (isOccupied) {
+                    html += `
+                        <div class="slot occupied ${isMine ? 'mine' : ''}" ${isMine ? `onclick="leaveGame('${gameId}', ${i})"` : ''}>
+                            <div class="slot-label">Slot ${i}</div>
+                            <div class="slot-avatar" style="background: ${stringToColor(player.userId)}">${player.name.charAt(0).toUpperCase()}</div>
+                            <div class="slot-name">${escapeHtml(player.name)}${isMine ? ' (you)' : ''}</div>
+                        </div>
+                    `;
+                } else {
+                    const canJoin = mySlot === undefined;
+                    html += `
+                        <div class="slot" onclick="${canJoin ? `joinGame('${gameId}', ${i})` : ''}">
+                            <div class="slot-label">Slot ${i}</div>
+                            <div class="slot-empty">+</div>
+                            <div class="slot-name">${canJoin ? 'Click to join' : 'Empty'}</div>
+                        </div>
+                    `;
+                }
+            }
+            return html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showGameStarted(players) {
+            const overlay = document.getElementById('gameStartedOverlay');
+            const playersDiv = document.getElementById('gameStartedPlayers');
+
+            let html = '';
+            players.forEach((player, index) => {
+                if (index > 0) {
+                    html += '<div class="vs-text">VS</div>';
+                }
+                const isMe = player.userId === userId;
+                html += `
+                    <div class="game-started-player">
+                        <div class="slot-avatar" style="background: ${stringToColor(player.userId)}">${player.name.charAt(0).toUpperCase()}</div>
+                        <div>${escapeHtml(player.name)}${isMe ? ' (you)' : ''}</div>
+                    </div>
+                `;
+            });
+            playersDiv.innerHTML = html;
+
+            overlay.classList.remove('hidden');
+
+            // Reset my slots since game started
+            for (const [gameId, slot] of mySlots) {
+                mySlots.delete(gameId);
+            }
+
+            setTimeout(() => {
+                overlay.classList.add('hidden');
+            }, 3000);
+        }
+
+        // Actions
+        async function createGame() {
+            const nameInput = document.getElementById('gameName');
+            const maxPlayersSelect = document.getElementById('maxPlayers');
+
+            const name = nameInput.value.trim() || 'Game ' + Math.floor(Math.random() * 1000);
+            const maxPlayers = parseInt(maxPlayersSelect.value);
 
             try {
-                const result = await centrifuge.rpc('lobby:join', {
-                    slot: slotNum,
+                await centrifuge.rpc('game:create', { name, maxPlayers });
+                nameInput.value = '';
+            } catch (err) {
+                console.error('Error creating game:', err);
+                alert('Failed to create game: ' + err.message);
+            }
+        }
+
+        async function joinGame(gameId, slot) {
+            if (mySlots.has(gameId)) {
+                alert('You are already in this game!');
+                return;
+            }
+
+            try {
+                await centrifuge.rpc('game:join', {
+                    gameId: gameId,
+                    slot: slot,
                     name: getPlayerName()
                 });
-                mySlot = slotNum;
-                const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
-                slots['slot_' + slotNum] = data;
-                renderAllSlots();
             } catch (err) {
-                console.error('Error joining slot:', err);
+                console.error('Error joining game:', err);
                 if (err.message === 'slot already taken') {
                     alert('This slot is already taken!');
+                } else {
+                    alert('Failed to join game: ' + err.message);
                 }
             }
         }
 
-        // Leave a slot.
-        async function leaveSlot(slotNum) {
-            if (mySlot !== slotNum) return;
-
+        async function leaveGame(gameId, slot) {
             try {
-                await centrifuge.rpc('lobby:leave', { slot: slotNum });
-                mySlot = null;
-                slots['slot_' + slotNum] = null;
-                renderAllSlots();
+                await centrifuge.rpc('game:leave', {
+                    gameId: gameId,
+                    slot: slot
+                });
+                mySlots.delete(gameId);
+                renderGames();
             } catch (err) {
-                console.error('Error leaving slot:', err);
+                console.error('Error leaving game:', err);
             }
         }
+
+        // Start connection
+        gamesSub.subscribe();
+        lobbySub.subscribe();  // Subscribe to lobby first (enables presence tracking)
+        presenceSub.subscribe();  // Then subscribe to presence to see online users
+        centrifuge.connect();
+
+        // Update name in online users when changed
+        document.getElementById('playerName').addEventListener('input', () => {
+            if (myClientId && onlineUsers.has(myClientId)) {
+                onlineUsers.get(myClientId).name = getPlayerName();
+                renderOnlineUsers();
+            }
+        });
     </script>
 </body>
 </html>

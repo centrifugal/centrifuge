@@ -146,9 +146,13 @@
         // Cursors from other users.
         const cursors = new Map();
 
-        // Create my cursor element.
+        // Our client ID (set on connect).
+        let myClientId = null;
+
+        // Create my cursor element (hidden initially until first mousemove).
         const myCursor = document.createElement('div');
         myCursor.className = 'cursor my-cursor';
+        myCursor.style.display = 'none';
         myCursor.innerHTML = `
             <div class="cursor-pointer" style="background: ${userColor}"></div>
             <div class="cursor-label">${userName} (you)</div>
@@ -194,9 +198,11 @@
             name: userId
         });
 
-        centrifuge.on('connected', () => {
+        centrifuge.on('connected', (ctx) => {
+            myClientId = ctx.client;
             document.getElementById('statusDot').classList.add('connected');
             document.getElementById('statusText').textContent = 'Connected';
+            updateUserCount();
         });
 
         centrifuge.on('disconnected', () => {
@@ -214,10 +220,10 @@
             console.log('Subscribed to cursors channel');
             console.log('Snapshot:', ctx.publications);
 
-            // Process snapshot - show all existing cursors.
+            // Process snapshot - show all existing cursors (excluding our own).
             if (ctx.publications) {
                 for (const pub of ctx.publications) {
-                    if (pub.key && pub.key !== centrifuge._client) {
+                    if (pub.key && pub.key !== myClientId) {
                         try {
                             const data = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
                             updateCursor(pub.key, data);
@@ -230,8 +236,8 @@
         });
 
         sub.on('publication', (ctx) => {
-            // Skip our own cursor.
-            if (!ctx.key) return;
+            // Skip if no key or if it's our own cursor.
+            if (!ctx.key || ctx.key === myClientId) return;
 
             if (ctx.removed) {
                 removeCursor(ctx.key);
@@ -253,7 +259,10 @@
         const updateInterval = 50; // ms
 
         document.addEventListener('mousemove', (e) => {
-            // Update my cursor immediately.
+            // Show and update my cursor.
+            if (myCursor.style.display === 'none') {
+                myCursor.style.display = '';
+            }
             myCursor.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
 
             // Throttle updates to server.

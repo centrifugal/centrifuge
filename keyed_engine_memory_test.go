@@ -39,21 +39,24 @@ func TestMemoryKeyedEngine_StatefulChannel(t *testing.T) {
 	channel := "test_stateful"
 
 	// Publish some keyed state updates
-	_, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key2", KeyedPublishOptions{
+		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key1", []byte("data1_updated"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1_updated"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -95,7 +98,8 @@ func TestMemoryKeyedEngine_StatefulChannelOrdered(t *testing.T) {
 
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf("data%d", i)),
 			Ordered:    true,
 			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
 			StreamSize: 100,
@@ -131,7 +135,8 @@ func TestMemoryKeyedEngine_SnapshotRevision(t *testing.T) {
 	channel := "test_revision"
 
 	// Publish a keyed state update
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -140,7 +145,8 @@ func TestMemoryKeyedEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish another update
-	res2, err := engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key2", KeyedPublishOptions{
+		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -279,7 +285,8 @@ func TestMemoryKeyedEngine_SnapshotPagination(t *testing.T) {
 
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf("data%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -333,7 +340,8 @@ func TestMemoryKeyedEngine_EpochHandling(t *testing.T) {
 	channel := "test_epoch"
 
 	// Publish initial data
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -354,6 +362,47 @@ func TestMemoryKeyedEngine_EpochHandling(t *testing.T) {
 	require.NotEmpty(t, epoch1)
 }
 
+// TestMemoryKeyedEngine_EpochMismatchWhenChannelNotExists tests that we return
+// ErrorUnrecoverablePosition when client sends an epoch but the channel doesn't exist
+// (e.g., after server restart). This is the server restart recovery scenario.
+func TestMemoryKeyedEngine_EpochMismatchWhenChannelNotExists(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+
+	ctx := context.Background()
+	channel := "test_nonexistent_channel"
+
+	// Client tries to read snapshot with an old epoch, but channel doesn't exist
+	// (simulates reconnection after server restart)
+	_, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Revision: &StreamPosition{
+			Epoch:  "old_epoch_from_previous_session",
+			Offset: 100,
+		},
+		Limit: 100,
+	})
+	require.ErrorIs(t, err, ErrorUnrecoverablePosition)
+}
+
+// TestMemoryKeyedEngine_NoEpochWhenChannelNotExists tests that we return success
+// when client doesn't send an epoch and the channel doesn't exist (fresh subscription).
+func TestMemoryKeyedEngine_NoEpochWhenChannelNotExists(t *testing.T) {
+	node, _ := New(Config{})
+	engine := newTestMemoryKeyedEngine(t, node)
+
+	ctx := context.Background()
+	channel := "test_fresh_channel"
+
+	// Fresh subscription - no epoch provided
+	entries, streamPos, cursor, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Empty(t, entries) // No entries in non-existent channel
+	require.NotEmpty(t, streamPos.Epoch) // Should get a new epoch
+	require.Empty(t, cursor) // No cursor for empty result
+}
+
 // TestMemoryKeyedEngine_Idempotency tests idempotent publishing.
 func TestMemoryKeyedEngine_Idempotency(t *testing.T) {
 	node, _ := New(Config{})
@@ -363,7 +412,8 @@ func TestMemoryKeyedEngine_Idempotency(t *testing.T) {
 	channel := "test_idempotency"
 
 	// Publish with idempotency key
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -371,11 +421,12 @@ func TestMemoryKeyedEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res1.Applied)
+	require.False(t, res1.Suppressed)
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish again with same idempotency key
-	res2, err := engine.Publish(ctx, channel, "key1", []byte("data1_different"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1_different"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -383,7 +434,8 @@ func TestMemoryKeyedEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res2.Applied)                               // Not applied due to idempotency suppression
+	require.True(t, res2.Suppressed)                                 // Suppressed due to idempotency
+	require.Equal(t, SuppressReasonIdempotency, res2.SuppressReason)
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
@@ -407,36 +459,40 @@ func TestMemoryKeyedEngine_VersionedPublishing(t *testing.T) {
 	channel := "test_version"
 
 	// Publish with version 2 (version 0 means "disable version check")
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("data_v2"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data_v2"),
 		Version:    2,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res1.Applied)
+	require.False(t, res1.Suppressed)
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Try to publish older version (should be suppressed)
-	res2, err := engine.Publish(ctx, channel, "key1", []byte("data_v1"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data_v1"),
 		Version:    1,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res2.Applied)                               // Not applied due to out-of-order version
+	require.True(t, res2.Suppressed)                                 // Suppressed due to out-of-order version
+	require.Equal(t, SuppressReasonVersion, res2.SuppressReason)
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset (suppressed)
 
 	// Publish newer version
-	res3, err := engine.Publish(ctx, channel, "key1", []byte("data_v3"), KeyedPublishOptions{
+	res3, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data_v3"),
 		Version:    3,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res3.Applied)
+	require.False(t, res3.Suppressed)
 	require.Equal(t, uint64(2), res3.Position.Offset) // New offset
 
 	// Snapshot should have v3 data
@@ -459,7 +515,8 @@ func TestMemoryKeyedEngine_MultipleChannels(t *testing.T) {
 	channel2 := "test_multi2"
 
 	// Publish to channel1
-	_, err := engine.Publish(ctx, channel1, "key1", []byte("data1"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel1, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -467,7 +524,8 @@ func TestMemoryKeyedEngine_MultipleChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish to channel2
-	_, err = engine.Publish(ctx, channel2, "key2", []byte("data2"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel2, "key2", KeyedPublishOptions{
+		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -518,7 +576,8 @@ func TestMemoryKeyedEngine_OrderedSnapshotOrdering(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := engine.Publish(ctx, channel, tc.key, []byte(tc.data), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, tc.key, KeyedPublishOptions{
+		Data:       []byte(tc.data),
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -561,7 +620,8 @@ func TestMemoryKeyedEngine_OrderedSnapshotPagination(t *testing.T) {
 		score := int64(i * 100)
 		data := fmt.Sprintf("data_%02d", i)
 
-		_, err := engine.Publish(ctx, channel, key, []byte(data), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(data),
 			Ordered:    true,
 			Score:      score,
 			StreamSize: 100,
@@ -628,7 +688,8 @@ func TestMemoryKeyedEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := engine.Publish(ctx, channel, tc.key, []byte("data"), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, tc.key, KeyedPublishOptions{
+		Data:       []byte("data"),
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -667,7 +728,8 @@ func TestMemoryKeyedEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 
 	// Publish 5 entries
 	for i := 1; i <= 5; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%d", i), []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf("data_%d", i)),
 			Ordered:    true,
 			Score:      int64(i * 10), // 10, 20, 30, 40, 50
 			StreamSize: 100,
@@ -688,7 +750,8 @@ func TestMemoryKeyedEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 	require.Equal(t, "key_1", entries1[4].Key) // Lowest score (10)
 
 	// Update key_1 to have highest score (60)
-	_, err = engine.Publish(ctx, channel, "key_1", []byte("updated_data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_1", KeyedPublishOptions{
+		Data:       []byte("updated_data"),
 		Ordered:    true,
 		Score:      60, // Now highest
 		StreamSize: 100,
@@ -724,14 +787,16 @@ func TestMemoryKeyedEngine_Remove(t *testing.T) {
 	channel := "test_remove"
 
 	// Publish some keys
-	_, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key2", KeyedPublishOptions{
+		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -784,25 +849,28 @@ func TestMemoryKeyedEngine_KeyModeIfNew(t *testing.T) {
 	channel := "test_keymode_if_new"
 
 	// First publish with KeyModeIfNew should succeed (key doesn't exist)
-	res1, err := engine.Publish(ctx, channel, "slot1", []byte("player1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "slot1", KeyedPublishOptions{
+		Data:       []byte("player1"),
 		KeyMode:    KeyModeIfNew,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res1.Applied, "First publish should be applied")
+	require.False(t, res1.Suppressed, "First publish should not be suppressed")
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Second publish with KeyModeIfNew should be suppressed (key exists)
-	res2, err := engine.Publish(ctx, channel, "slot1", []byte("player2"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "slot1", KeyedPublishOptions{
+		Data:       []byte("player2"),
 		KeyMode:    KeyModeIfNew,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res2.Applied, "Second publish should be suppressed (key exists)")
+	require.True(t, res2.Suppressed, "Second publish should be suppressed (key exists)")
+	require.Equal(t, SuppressReasonKeyExists, res2.SuppressReason)
 	require.Equal(t, uint64(1), res2.Position.Offset, "Offset should not change")
 
 	// Verify snapshot still has original data
@@ -831,34 +899,38 @@ func TestMemoryKeyedEngine_KeyModeIfExists(t *testing.T) {
 	channel := "test_keymode_if_exists"
 
 	// First publish with KeyModeIfExists should be suppressed (key doesn't exist)
-	res1, err := engine.Publish(ctx, channel, "presence1", []byte("heartbeat1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "presence1", KeyedPublishOptions{
+		Data:       []byte("heartbeat1"),
 		KeyMode:    KeyModeIfExists,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res1.Applied, "First publish should be suppressed (key doesn't exist)")
+	require.True(t, res1.Suppressed, "First publish should be suppressed (key doesn't exist)")
+	require.Equal(t, SuppressReasonKeyNotFound, res1.SuppressReason)
 
 	// Create the key first with regular publish
-	res2, err := engine.Publish(ctx, channel, "presence1", []byte("initial"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "presence1", KeyedPublishOptions{
+		Data:       []byte("initial"),
 		KeyMode:    KeyModeReplace, // or just leave empty
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res2.Applied, "Regular publish should be applied")
+	require.False(t, res2.Suppressed, "Regular publish should not be suppressed")
 
 	// Now publish with KeyModeIfExists should succeed (key exists)
-	res3, err := engine.Publish(ctx, channel, "presence1", []byte("heartbeat2"), KeyedPublishOptions{
+	res3, err := engine.Publish(ctx, channel, "presence1", KeyedPublishOptions{
+		Data:       []byte("heartbeat2"),
 		KeyMode:    KeyModeIfExists,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res3.Applied, "Third publish should be applied (key exists)")
+	require.False(t, res3.Suppressed, "Third publish should not be suppressed (key exists)")
 
 	// Verify snapshot has updated data
 	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
@@ -879,24 +951,26 @@ func TestMemoryKeyedEngine_KeyModeReplace(t *testing.T) {
 	channel := "test_keymode_replace"
 
 	// First publish (key doesn't exist)
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("value1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("value1"),
 		KeyMode:    KeyModeReplace, // explicit, same as default
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res1.Applied)
+	require.False(t, res1.Suppressed)
 
 	// Second publish (key exists) - should still apply
-	res2, err := engine.Publish(ctx, channel, "key1", []byte("value2"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("value2"),
 		KeyMode:    KeyModeReplace,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res2.Applied, "Replace should always apply")
+	require.False(t, res2.Suppressed, "Replace should never be suppressed")
 
 	// Verify snapshot has updated data
 	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
@@ -917,7 +991,8 @@ func TestMemoryKeyedEngine_Aggregation(t *testing.T) {
 
 	// Simulate presence scenario: multiple connections (keys) per user (aggregation value)
 	// User "alice" has 2 connections
-	_, err := engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -926,7 +1001,8 @@ func TestMemoryKeyedEngine_Aggregation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -936,7 +1012,8 @@ func TestMemoryKeyedEngine_Aggregation(t *testing.T) {
 	require.NoError(t, err)
 
 	// User "bob" has 1 connection
-	_, err = engine.Publish(ctx, channel, "conn3", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn3", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -1000,7 +1077,8 @@ func TestMemoryKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	channel := "test_aggregation_autodiscover"
 
 	// Publish with aggregation
-	_, err := engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -1009,7 +1087,8 @@ func TestMemoryKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -1054,7 +1133,8 @@ func TestMemoryKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	channel := "test_aggregation_ttl_cleanup"
 
 	// Publish with very short TTL (1 second)
-	_, err := engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           1 * time.Second,
@@ -1063,7 +1143,8 @@ func TestMemoryKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           1 * time.Second,
@@ -1072,7 +1153,8 @@ func TestMemoryKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "conn3", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn3", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           1 * time.Second,
@@ -1188,7 +1270,8 @@ func TestMemoryKeyedEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	// Create 20 entries: key_00 to key_19
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -1283,7 +1366,8 @@ func TestMemoryKeyedEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
 	// Create 20 entries: key_00 to key_19
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -1299,7 +1383,8 @@ func TestMemoryKeyedEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
 
 	// CONCURRENT MODIFICATION: Add new entry that lexicographically comes before cursor
 	// This would shift entries with integer offset pagination
-	_, err = engine.Publish(ctx, channel, "key_05b", []byte("data_05b"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_05b", KeyedPublishOptions{
+		Data:       []byte("data_05b"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -1325,7 +1410,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	// Create 20 entries with scores 100, 200, ..., 2000
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1348,7 +1434,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 
 	// CONCURRENT MODIFICATION: Add entry with HIGHEST score
 	// This entry would appear at position 0, shifting all entries
-	_, err = engine.Publish(ctx, channel, "key_top", []byte("data_top"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_top", KeyedPublishOptions{
+		Data:       []byte("data_top"),
 		Ordered:    true,
 		Score:      5000, // Higher than any existing
 		StreamSize: 100,
@@ -1382,7 +1469,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	// Create 20 entries
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1400,7 +1488,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 
 	// CONCURRENT MODIFICATION: Add entry with LOWEST score
 	// This entry appears at end, shouldn't affect pagination much
-	_, err = engine.Publish(ctx, channel, "key_bottom", []byte("data_bottom"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_bottom", KeyedPublishOptions{
+		Data:       []byte("data_bottom"),
 		Ordered:    true,
 		Score:      1, // Lower than any existing
 		StreamSize: 100,
@@ -1435,7 +1524,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 	// Create 20 entries
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1455,7 +1545,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 	// CONCURRENT MODIFICATION: Change score of key_05 to make it jump to top
 	// key_05 had score 500, now gets score 3000 (highest)
 	// This entry was NOT in first page, but now would appear at position 0
-	_, err = engine.Publish(ctx, channel, "key_05", []byte("data_05_updated"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_05", KeyedPublishOptions{
+		Data:       []byte("data_05_updated"),
 		Ordered:    true,
 		Score:      3000,
 		StreamSize: 100,
@@ -1517,7 +1608,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 	// Create 20 entries
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1601,7 +1693,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// Create 30 entries
 	for i := 1; i <= 30; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -1619,7 +1712,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// CONCURRENT MODIFICATIONS:
 	// 1. Add new highest score entry
-	_, err = engine.Publish(ctx, channel, "key_new_top", []byte("data_new_top"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_new_top", KeyedPublishOptions{
+		Data:       []byte("data_new_top"),
 		Ordered:    true,
 		Score:      5000,
 		StreamSize: 100,
@@ -1636,7 +1730,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Update score of an entry (move it)
-	_, err = engine.Publish(ctx, channel, "key_05", []byte("data_05_moved"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_05", KeyedPublishOptions{
+		Data:       []byte("data_05_moved"),
 		Ordered:    true,
 		Score:      4000, // Move from 500 to 4000
 		StreamSize: 100,
@@ -1653,7 +1748,8 @@ func TestMemoryKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	// 4. Add new lowest score entry
-	_, err = engine.Publish(ctx, channel, "key_new_bottom", []byte("data_new_bottom"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_new_bottom", KeyedPublishOptions{
+		Data:       []byte("data_new_bottom"),
 		Ordered:    true,
 		Score:      1,
 		StreamSize: 100,
@@ -1700,7 +1796,8 @@ func TestMemoryKeyedEngine_CursorFormat(t *testing.T) {
 		// Create entries
 		for i := 0; i < 20; i++ {
 			key := fmt.Sprintf("key_%02d", i)
-			_, err := engine.Publish(ctx, channel, key, []byte("data"), KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte("data"),
 				StreamSize: 100,
 				StreamTTL:  300 * time.Second,
 			})
@@ -1739,7 +1836,8 @@ func TestMemoryKeyedEngine_CursorFormat(t *testing.T) {
 		// Create entries with different scores
 		for i := 1; i <= 20; i++ {
 			key := fmt.Sprintf("key_%02d", i)
-			_, err := engine.Publish(ctx, channel, key, []byte("data"), KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte("data"),
 				Ordered:    true,
 				Score:      int64(i * 100),
 				StreamSize: 100,

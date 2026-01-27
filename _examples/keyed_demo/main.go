@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -21,11 +23,33 @@ var (
 	leaderboardScores = make(map[string]*LeaderboardEntry)
 )
 
+// Store for games (in-memory for demo).
+var (
+	gamesMu     sync.RWMutex
+	games       = make(map[string]*GameInfo)
+	gameCounter int
+)
+
 type LeaderboardEntry struct {
 	UserID string `json:"userId"`
 	Name   string `json:"name"`
 	Score  int64  `json:"score"`
 	Color  string `json:"color"`
+}
+
+type GameInfo struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	CreatedBy string    `json:"createdBy"`
+	CreatedAt time.Time `json:"createdAt"`
+	MaxPlayers int      `json:"maxPlayers"`
+}
+
+type GamePlayer struct {
+	UserID   string `json:"userId"`
+	Name     string `json:"name"`
+	ClientID string `json:"clientId"`
+	Slot     int    `json:"slot"`
 }
 
 func handleLog(e centrifuge.LogEntry) {
@@ -67,11 +91,19 @@ func main() {
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
 			log.Printf("client %s subscribing to %s (keyed: %v)",
 				client.ID(), e.Channel, e.Keyed)
+			// Enable presence for lobby channel (for online users list) and game channels.
+			emitPresence := e.Channel == "lobby" || strings.HasPrefix(e.Channel, "game:")
 			cb(centrifuge.SubscribeReply{
 				Options: centrifuge.SubscribeOptions{
-					EnableKeyed: true,
+					EnableKeyed:  true,
+					EmitPresence: emitPresence,
 				},
 			}, nil)
+		})
+
+		client.OnPresenceSubscribe(func(e centrifuge.PresenceSubscribeEvent, cb centrifuge.PresenceSubscribeCallback) {
+			log.Printf("client %s presence subscribing to %s", client.ID(), e.Channel)
+			cb(centrifuge.PresenceSubscribeReply{Allowed: true}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -82,10 +114,12 @@ func main() {
 			switch e.Method {
 			case "cursor:update":
 				handleCursorUpdate(client, node.KeyedEngine(), e.Data, cb)
-			case "lobby:join":
-				handleLobbyJoin(client, node.KeyedEngine(), e.Data, cb)
-			case "lobby:leave":
-				handleLobbyLeave(client, node.KeyedEngine(), e.Data, cb)
+			case "game:create":
+				handleGameCreate(client, node.KeyedEngine(), e.Data, cb)
+			case "game:join":
+				handleGameJoin(client, node.KeyedEngine(), e.Data, cb)
+			case "game:leave":
+				handleGameLeave(client, node.KeyedEngine(), e.Data, cb)
 			case "leaderboard:click":
 				handleLeaderboardClick(client, node.KeyedEngine(), e.Data, cb)
 			case "leaderboard:join":
@@ -154,8 +188,9 @@ func handleCursorUpdate(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 		return
 	}
 
-	_, err := ke.Publish(context.Background(), "cursors", client.ID(), data, centrifuge.KeyedPublishOptions{
+	_, err := ke.Publish(context.Background(), "cursors", client.ID(), centrifuge.KeyedPublishOptions{
 		Publish: true,
+		Data:    data,
 		KeyTTL:  30 * time.Second, // Auto-expire if client stops sending updates.
 	})
 	if err != nil {
@@ -167,87 +202,146 @@ func handleCursorUpdate(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 	cb(centrifuge.RPCReply{}, nil)
 }
 
-// Lobby handlers.
-type LobbySlot struct {
-	Slot   int    `json:"slot"`
-	UserID string `json:"userId"`
-	Name   string `json:"name"`
-	Ready  bool   `json:"ready"`
-}
-
-func handleLobbyJoin(client *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
+// Game handlers.
+func handleGameCreate(client *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
 	if ke == nil {
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
 		return
 	}
 
 	var req struct {
-		Slot int    `json:"slot"`
-		Name string `json:"name"`
+		Name       string `json:"name"`
+		MaxPlayers int    `json:"maxPlayers"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorBadRequest)
 		return
 	}
 
-	if req.Slot < 1 || req.Slot > 2 {
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorBadRequest)
-		return
+	if req.MaxPlayers < 2 {
+		req.MaxPlayers = 2
+	}
+	if req.MaxPlayers > 4 {
+		req.MaxPlayers = 4
 	}
 
-	key := "slot_" + string(rune('0'+req.Slot))
-	slot := LobbySlot{
-		Slot:   req.Slot,
-		UserID: client.UserID(),
-		Name:   req.Name,
-		Ready:  true,
+	gamesMu.Lock()
+	gameCounter++
+	gameID := fmt.Sprintf("game_%d", gameCounter)
+	game := &GameInfo{
+		ID:         gameID,
+		Name:       req.Name,
+		CreatedBy:  client.UserID(),
+		CreatedAt:  time.Now(),
+		MaxPlayers: req.MaxPlayers,
 	}
+	games[gameID] = game
+	gamesMu.Unlock()
 
-	slotData, _ := json.Marshal(slot)
-
-	// Use KeyModeIfNew to prevent slot stealing.
-	result, err := ke.Publish(context.Background(), "lobby", key, slotData, centrifuge.KeyedPublishOptions{
+	// Publish game to games list channel.
+	gameData, _ := json.Marshal(game)
+	_, err := ke.Publish(context.Background(), "games", gameID, centrifuge.KeyedPublishOptions{
 		Publish: true,
-		KeyMode: centrifuge.KeyModeIfNew,
+		Data:    gameData,
+		KeyTTL:  10 * time.Minute, // Games expire after 10 minutes of inactivity.
 	})
 	if err != nil {
-		log.Printf("lobby join error: %v", err)
+		log.Printf("game create error: %v", err)
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
 		return
 	}
 
-	if !result.Applied {
-		// Slot already taken.
-		cb(centrifuge.RPCReply{}, &centrifuge.Error{Code: 4001, Message: "slot already taken"})
-		return
-	}
-
-	cb(centrifuge.RPCReply{Data: slotData}, nil)
-
-	// Check if both slots are filled.
-	go checkLobbyFull(ke)
+	cb(centrifuge.RPCReply{Data: gameData}, nil)
 }
 
-func handleLobbyLeave(client *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
+func handleGameJoin(client *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
 	if ke == nil {
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
 		return
 	}
 
 	var req struct {
-		Slot int `json:"slot"`
+		GameID string `json:"gameId"`
+		Name   string `json:"name"`
+		Slot   int    `json:"slot"`
 	}
 	if err := json.Unmarshal(data, &req); err != nil {
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorBadRequest)
 		return
 	}
 
-	key := "slot_" + string(rune('0'+req.Slot))
-	_, err := ke.Unpublish(context.Background(), "lobby", key, centrifuge.KeyedUnpublishOptions{
+	gamesMu.RLock()
+	game, exists := games[req.GameID]
+	gamesMu.RUnlock()
+
+	if !exists {
+		cb(centrifuge.RPCReply{}, &centrifuge.Error{Code: 4004, Message: "game not found"})
+		return
+	}
+
+	if req.Slot < 1 || req.Slot > game.MaxPlayers {
+		cb(centrifuge.RPCReply{}, centrifuge.ErrorBadRequest)
+		return
+	}
+
+	channel := "game:" + req.GameID
+	key := fmt.Sprintf("slot_%d", req.Slot)
+
+	player := GamePlayer{
+		UserID:   client.UserID(),
+		Name:     req.Name,
+		ClientID: client.ID(),
+		Slot:     req.Slot,
+	}
+	playerData, _ := json.Marshal(player)
+
+	// Use KeyModeIfNew to prevent slot stealing.
+	result, err := ke.Publish(context.Background(), channel, key, centrifuge.KeyedPublishOptions{
+		Publish: true,
+		Data:    playerData,
+		KeyMode: centrifuge.KeyModeIfNew,
+		KeyTTL:  5 * time.Minute,
+	})
+	if err != nil {
+		log.Printf("game join error: %v", err)
+		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
+		return
+	}
+
+	if result.Suppressed {
+		cb(centrifuge.RPCReply{}, &centrifuge.Error{Code: 4001, Message: "slot already taken"})
+		return
+	}
+
+	cb(centrifuge.RPCReply{Data: playerData}, nil)
+
+	// Check if game is full.
+	go checkGameFull(ke, req.GameID, game.MaxPlayers)
+}
+
+func handleGameLeave(_ *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
+	if ke == nil {
+		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
+		return
+	}
+
+	var req struct {
+		GameID string `json:"gameId"`
+		Slot   int    `json:"slot"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		cb(centrifuge.RPCReply{}, centrifuge.ErrorBadRequest)
+		return
+	}
+
+	channel := "game:" + req.GameID
+	key := fmt.Sprintf("slot_%d", req.Slot)
+
+	_, err := ke.Unpublish(context.Background(), channel, key, centrifuge.KeyedUnpublishOptions{
 		Publish: true,
 	})
 	if err != nil {
-		log.Printf("lobby leave error: %v", err)
+		log.Printf("game leave error: %v", err)
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
 		return
 	}
@@ -255,37 +349,60 @@ func handleLobbyLeave(client *centrifuge.Client, ke centrifuge.KeyedEngine, data
 	cb(centrifuge.RPCReply{}, nil)
 }
 
-func checkLobbyFull(ke centrifuge.KeyedEngine) {
-	pubs, _, _, err := ke.ReadSnapshot(context.Background(), "lobby", centrifuge.KeyedReadSnapshotOptions{
+func checkGameFull(ke centrifuge.KeyedEngine, gameID string, maxPlayers int) {
+	channel := "game:" + gameID
+
+	pubs, _, _, err := ke.ReadSnapshot(context.Background(), channel, centrifuge.KeyedReadSnapshotOptions{
 		Limit: 10,
 	})
 	if err != nil {
 		return
 	}
 
-	// Count actual player slots (not game_event).
+	// Count players (slots).
 	playerCount := 0
+	var players []GamePlayer
 	for _, pub := range pubs {
-		if pub.Key != "game_event" {
+		if strings.HasPrefix(pub.Key, "slot_") {
 			playerCount++
+			var player GamePlayer
+			if err := json.Unmarshal(pub.Data, &player); err == nil {
+				players = append(players, player)
+			}
 		}
 	}
 
-	if playerCount >= 2 {
-		// Both slots filled - publish game start event.
+	if playerCount >= maxPlayers {
+		// Game is full - publish game start event.
 		gameData, _ := json.Marshal(map[string]any{
 			"event":   "game_start",
+			"gameId":  gameID,
+			"players": players,
 			"message": "Game is starting!",
 		})
-		_, _ = ke.Publish(context.Background(), "lobby", "game_event", gameData, centrifuge.KeyedPublishOptions{
+		_, _ = ke.Publish(context.Background(), channel, "game_event", centrifuge.KeyedPublishOptions{
 			Publish: true,
+			Data:    gameData,
 		})
 
-		// Clear lobby after a short delay.
+		// Remove game from games list and clear game channel after delay.
 		time.AfterFunc(3*time.Second, func() {
-			_, _ = ke.Unpublish(context.Background(), "lobby", "slot_1", centrifuge.KeyedUnpublishOptions{Publish: true})
-			_, _ = ke.Unpublish(context.Background(), "lobby", "slot_2", centrifuge.KeyedUnpublishOptions{Publish: true})
-			_, _ = ke.Unpublish(context.Background(), "lobby", "game_event", centrifuge.KeyedUnpublishOptions{Publish: true})
+			// Remove from games list.
+			_, _ = ke.Unpublish(context.Background(), "games", gameID, centrifuge.KeyedUnpublishOptions{
+				Publish: true,
+			})
+
+			// Clear all slots and event.
+			for i := 1; i <= maxPlayers; i++ {
+				key := fmt.Sprintf("slot_%d", i)
+				_, _ = ke.Unpublish(context.Background(), channel, key, centrifuge.KeyedUnpublishOptions{Publish: true})
+			}
+			_, _ = ke.Unpublish(context.Background(), channel, "game_event", centrifuge.KeyedUnpublishOptions{Publish: true})
+
+			// Remove from in-memory store.
+			gamesMu.Lock()
+			delete(games, gameID)
+			gamesMu.Unlock()
 		})
 	}
 }
@@ -318,8 +435,9 @@ func handleLeaderboardJoin(client *centrifuge.Client, ke centrifuge.KeyedEngine,
 	leaderboardMu.Unlock()
 
 	entryData, _ := json.Marshal(entry)
-	_, err := ke.Publish(context.Background(), "leaderboard", client.UserID(), entryData, centrifuge.KeyedPublishOptions{
+	_, err := ke.Publish(context.Background(), "leaderboard", client.UserID(), centrifuge.KeyedPublishOptions{
 		Publish: true,
+		Data:    entryData,
 		Score:   entry.Score,
 		Ordered: true,
 	})
@@ -332,7 +450,7 @@ func handleLeaderboardJoin(client *centrifuge.Client, ke centrifuge.KeyedEngine,
 	cb(centrifuge.RPCReply{Data: entryData}, nil)
 }
 
-func handleLeaderboardLeave(client *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
+func handleLeaderboardLeave(client *centrifuge.Client, ke centrifuge.KeyedEngine, _ []byte, cb centrifuge.RPCCallback) {
 	if ke == nil {
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
 		return
@@ -353,7 +471,7 @@ func handleLeaderboardLeave(client *centrifuge.Client, ke centrifuge.KeyedEngine
 	cb(centrifuge.RPCReply{}, nil)
 }
 
-func handleLeaderboardClick(client *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
+func handleLeaderboardClick(client *centrifuge.Client, ke centrifuge.KeyedEngine, _ []byte, cb centrifuge.RPCCallback) {
 	if ke == nil {
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
 		return
@@ -371,8 +489,9 @@ func handleLeaderboardClick(client *centrifuge.Client, ke centrifuge.KeyedEngine
 	leaderboardMu.Unlock()
 
 	entryData, _ := json.Marshal(entryCopy)
-	_, err := ke.Publish(context.Background(), "leaderboard", client.UserID(), entryData, centrifuge.KeyedPublishOptions{
+	_, err := ke.Publish(context.Background(), "leaderboard", client.UserID(), centrifuge.KeyedPublishOptions{
 		Publish: true,
+		Data:    entryData,
 		Score:   entryCopy.Score,
 		Ordered: true,
 	})

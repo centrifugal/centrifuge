@@ -55,21 +55,24 @@ func TestRedisKeyedEngine_StatefulChannel(t *testing.T) {
 	channel := randomChannel("test_stateful")
 
 	// Publish some keyed state updates
-	_, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key2", KeyedPublishOptions{
+		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key1", []byte("data1_updated"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1_updated"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -111,7 +114,8 @@ func TestRedisKeyedEngine_StatefulChannelOrdered(t *testing.T) {
 
 	// Publish with scores for ordering
 	for i := 0; i < 5; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf("data%d", i)),
 			Ordered:    true,
 			Score:      int64(i * 10), // Scores: 0, 10, 20, 30, 40
 			StreamSize: 100,
@@ -147,7 +151,8 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 	channel := randomChannel("test_revision")
 
 	// Publish a keyed state update
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -156,7 +161,8 @@ func TestRedisKeyedEngine_SnapshotRevision(t *testing.T) {
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish another update
-	res2, err := engine.Publish(ctx, channel, "key2", []byte("data2"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key2", KeyedPublishOptions{
+		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -311,7 +317,8 @@ func TestRedisKeyedEngine_SnapshotPagination(t *testing.T) {
 
 	// Publish 10 keyed entries
 	for i := 0; i < 10; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), []byte(fmt.Sprintf("data%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf("data%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -366,7 +373,8 @@ func TestRedisKeyedEngine_EpochHandling(t *testing.T) {
 	channel := randomChannel("test_epoch")
 
 	// Publish initial data
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -398,7 +406,8 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 	channel := randomChannel("test_idempotency")
 
 	// Publish with idempotency key
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("data1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -406,11 +415,12 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res1.Applied)
+	require.False(t, res1.Suppressed)
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Publish again with same idempotency key
-	res2, err := engine.Publish(ctx, channel, "key1", []byte("data1_different"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data1_different"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -418,7 +428,8 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res2.Applied)                               // Not applied due to idempotency suppression
+	require.True(t, res2.Suppressed)                                 // Suppressed due to idempotency
+	require.Equal(t, "idempotency", res2.SuppressReason)
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
@@ -442,36 +453,40 @@ func TestRedisKeyedEngine_VersionedPublishing(t *testing.T) {
 	channel := randomChannel("test_version")
 
 	// Publish with version 2 (version 0 means "disable version check")
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("data_v2"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data_v2"),
 		Version:    2,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res1.Applied)
+	require.False(t, res1.Suppressed)
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Try to publish older version (should be suppressed)
-	res2, err := engine.Publish(ctx, channel, "key1", []byte("data_v1"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data_v1"),
 		Version:    1,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res2.Applied)                               // Not applied due to out-of-order version
+	require.True(t, res2.Suppressed)                                 // Suppressed due to out-of-order version
+	require.Equal(t, "version", res2.SuppressReason)
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset (suppressed)
 
 	// Publish newer version
-	res3, err := engine.Publish(ctx, channel, "key1", []byte("data_v3"), KeyedPublishOptions{
+	res3, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("data_v3"),
 		Version:    3,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res3.Applied)
+	require.False(t, res3.Suppressed)
 	require.Equal(t, uint64(2), res3.Position.Offset) // New offset
 
 	// Snapshot should have v3 data
@@ -494,7 +509,8 @@ func TestRedisKeyedEngine_MultipleChannels(t *testing.T) {
 	channel2 := randomChannel("test_multi2")
 
 	// Publish to channel1
-	_, err := engine.Publish(ctx, channel1, "key1", []byte("data1"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel1, "key1", KeyedPublishOptions{
+		Data:       []byte("data1"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -502,7 +518,8 @@ func TestRedisKeyedEngine_MultipleChannels(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish to channel2
-	_, err = engine.Publish(ctx, channel2, "key2", []byte("data2"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel2, "key2", KeyedPublishOptions{
+		Data:       []byte("data2"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -603,7 +620,8 @@ func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 
 	// Publish 5 messages to stream
 	for i := 1; i <= 5; i++ {
-		_, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("msg_%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -684,7 +702,8 @@ func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 
 	// Publish 5 messages to stream
 	for i := 1; i <= 5; i++ {
-		_, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("msg_%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -765,7 +784,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 
 	// Publish 10 messages
 	for i := 1; i <= 10; i++ {
-		_, err := engine.Publish(ctx, channel, "", []byte(fmt.Sprintf("msg_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("msg_%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -1105,7 +1125,8 @@ func TestRedisKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	channel := randomChannel("test_agg_cleanup_ttl")
 
 	// Alice opens 2 connections with aggregation
-	_, err = engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           2 * time.Second, // Short TTL
@@ -1114,7 +1135,8 @@ func TestRedisKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           2 * time.Second, // Short TTL
@@ -1124,7 +1146,8 @@ func TestRedisKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
 	require.NoError(t, err)
 
 	// Bob opens 1 connection
-	_, err = engine.Publish(ctx, channel, "conn3", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn3", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           2 * time.Second, // Short TTL
@@ -1177,7 +1200,8 @@ func TestRedisKeyedEngine_OrderedSnapshotOrdering(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := engine.Publish(ctx, channel, tc.key, []byte(tc.data), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, tc.key, KeyedPublishOptions{
+			Data:       []byte(tc.data),
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -1220,7 +1244,8 @@ func TestRedisKeyedEngine_OrderedSnapshotPagination(t *testing.T) {
 		score := int64(i * 100)
 		data := fmt.Sprintf("data_%02d", i)
 
-		_, err := engine.Publish(ctx, channel, key, []byte(data), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data:       []byte(data),
 			Ordered:    true,
 			Score:      score,
 			StreamSize: 100,
@@ -1336,7 +1361,8 @@ func TestRedisKeyedEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := engine.Publish(ctx, channel, tc.key, []byte("data"), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, tc.key, KeyedPublishOptions{
+		Data:       []byte("data"),
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -1376,7 +1402,8 @@ func TestRedisKeyedEngine_OrderedSnapshotWithSameScores(t *testing.T) {
 	// Redis ZSET uses lexicographic ordering for members with equal scores
 	for i := 1; i <= 5; i++ {
 		key := fmt.Sprintf("key_%d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%d", i)),
 			Ordered:    true,
 			Score:      100, // Same score for all
 			StreamSize: 100,
@@ -1415,7 +1442,8 @@ func TestRedisKeyedEngine_OrderedSnapshotPaginationBoundaries(t *testing.T) {
 
 	// Publish 10 entries
 	for i := 1; i <= 10; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%02d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 10),
 			StreamSize: 100,
@@ -1511,7 +1539,8 @@ func TestRedisKeyedEngine_OrderedSnapshotFullPagination(t *testing.T) {
 
 	// Publish entries
 	for i := 1; i <= totalEntries; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%03d", i), []byte(fmt.Sprintf("data_%03d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%03d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf("data_%03d", i)),
 			Ordered:    true,
 			Score:      int64(i * 10),
 			StreamSize: 100,
@@ -1575,7 +1604,8 @@ func TestRedisKeyedEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 
 	// Publish 5 entries
 	for i := 1; i <= 5; i++ {
-		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%d", i), []byte(fmt.Sprintf("data_%d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, fmt.Sprintf("key_%d", i), KeyedPublishOptions{
+			Data:       []byte(fmt.Sprintf("data_%d", i)),
 			Ordered:    true,
 			Score:      int64(i * 10), // 10, 20, 30, 40, 50
 			StreamSize: 100,
@@ -1596,7 +1626,8 @@ func TestRedisKeyedEngine_OrderedSnapshotUpdatePreservesOrder(t *testing.T) {
 	require.Equal(t, "key_1", entries1[4].Key) // Lowest score (10)
 
 	// Update key_1 to have highest score (60)
-	_, err = engine.Publish(ctx, channel, "key_1", []byte("updated_data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_1", KeyedPublishOptions{
+		Data:       []byte("updated_data"),
 		Ordered:    true,
 		Score:      60, // Now highest
 		StreamSize: 100,
@@ -1632,25 +1663,28 @@ func TestRedisKeyedEngine_KeyModeIfNew(t *testing.T) {
 	channel := randomChannel("test_keymode_if_new")
 
 	// First publish with KeyModeIfNew should succeed (key doesn't exist)
-	res1, err := engine.Publish(ctx, channel, "slot1", []byte("player1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "slot1", KeyedPublishOptions{
+		Data:       []byte("player1"),
 		KeyMode:    KeyModeIfNew,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res1.Applied, "First publish should be applied")
+	require.False(t, res1.Suppressed, "First publish should not be suppressed")
 	require.Equal(t, uint64(1), res1.Position.Offset)
 
 	// Second publish with KeyModeIfNew should be suppressed (key exists)
-	res2, err := engine.Publish(ctx, channel, "slot1", []byte("player2"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "slot1", KeyedPublishOptions{
+		Data:       []byte("player2"),
 		KeyMode:    KeyModeIfNew,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res2.Applied, "Second publish should be suppressed (key exists)")
+	require.True(t, res2.Suppressed, "Second publish should be suppressed (key exists)")
+	require.Equal(t, "key_exists", res2.SuppressReason)
 	require.Equal(t, uint64(1), res2.Position.Offset, "Offset should not change")
 
 	// Verify snapshot still has original data
@@ -1679,34 +1713,38 @@ func TestRedisKeyedEngine_KeyModeIfExists(t *testing.T) {
 	channel := randomChannel("test_keymode_if_exists")
 
 	// First publish with KeyModeIfExists should be suppressed (key doesn't exist)
-	res1, err := engine.Publish(ctx, channel, "presence1", []byte("heartbeat1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "presence1", KeyedPublishOptions{
+		Data:       []byte("heartbeat1"),
 		KeyMode:    KeyModeIfExists,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.False(t, res1.Applied, "First publish should be suppressed (key doesn't exist)")
+	require.True(t, res1.Suppressed, "First publish should be suppressed (key doesn't exist)")
+	require.Equal(t, "key_not_found", res1.SuppressReason)
 
 	// Create the key first with regular publish
-	res2, err := engine.Publish(ctx, channel, "presence1", []byte("initial"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "presence1", KeyedPublishOptions{
+		Data:       []byte("initial"),
 		KeyMode:    KeyModeReplace, // or just leave empty
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res2.Applied, "Regular publish should be applied")
+	require.False(t, res2.Suppressed, "Regular publish should not be suppressed")
 
 	// Now publish with KeyModeIfExists should succeed (key exists)
-	res3, err := engine.Publish(ctx, channel, "presence1", []byte("heartbeat2"), KeyedPublishOptions{
+	res3, err := engine.Publish(ctx, channel, "presence1", KeyedPublishOptions{
+		Data:       []byte("heartbeat2"),
 		KeyMode:    KeyModeIfExists,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res3.Applied, "Third publish should be applied (key exists)")
+	require.False(t, res3.Suppressed, "Third publish should not be suppressed (key exists)")
 
 	// Verify snapshot has updated data
 	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
@@ -1727,24 +1765,26 @@ func TestRedisKeyedEngine_KeyModeReplace(t *testing.T) {
 	channel := randomChannel("test_keymode_replace")
 
 	// First publish (key doesn't exist)
-	res1, err := engine.Publish(ctx, channel, "key1", []byte("value1"), KeyedPublishOptions{
+	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("value1"),
 		KeyMode:    KeyModeReplace, // explicit, same as default
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res1.Applied)
+	require.False(t, res1.Suppressed)
 
 	// Second publish (key exists) - should still apply
-	res2, err := engine.Publish(ctx, channel, "key1", []byte("value2"), KeyedPublishOptions{
+	res2, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte("value2"),
 		KeyMode:    KeyModeReplace,
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res2.Applied, "Replace should always apply")
+	require.False(t, res2.Suppressed, "Replace should never be suppressed")
 
 	// Verify snapshot has updated data
 	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
@@ -1765,7 +1805,8 @@ func TestRedisKeyedEngine_Aggregation(t *testing.T) {
 
 	// Simulate presence scenario: multiple connections (keys) per user (aggregation value)
 	// User "alice" has 2 connections
-	_, err := engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -1774,7 +1815,8 @@ func TestRedisKeyedEngine_Aggregation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -1784,7 +1826,8 @@ func TestRedisKeyedEngine_Aggregation(t *testing.T) {
 	require.NoError(t, err)
 
 	// User "bob" has 1 connection
-	_, err = engine.Publish(ctx, channel, "conn3", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn3", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -1848,7 +1891,8 @@ func TestRedisKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	channel := randomChannel("test_aggregation_autodiscover")
 
 	// Publish with aggregation
-	_, err := engine.Publish(ctx, channel, "conn1", []byte("data"), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -1857,7 +1901,8 @@ func TestRedisKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "conn2", []byte("data"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
+		Data:       []byte("data"),
 		StreamSize:       100,
 		StreamTTL:        300 * time.Second,
 		KeyTTL:           300 * time.Second,
@@ -1913,7 +1958,8 @@ func TestRedisKeyedEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	// Create 20 entries: key_00 to key_19
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -2008,7 +2054,8 @@ func TestRedisKeyedEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
 	// Create 20 entries: key_00 to key_19
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -2024,7 +2071,8 @@ func TestRedisKeyedEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
 
 	// CONCURRENT MODIFICATION: Add new entry that lexicographically comes before cursor
 	// This would shift entries with integer offset pagination
-	_, err = engine.Publish(ctx, channel, "key_05b", []byte("data_05b"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_05b", KeyedPublishOptions{
+		Data:       []byte("data_05b"),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 	})
@@ -2050,7 +2098,8 @@ func TestRedisKeyedEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	// Create 20 entries with scores 100, 200, ..., 2000
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2075,7 +2124,8 @@ func TestRedisKeyedEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 
 	// CONCURRENT MODIFICATION: Add entry with HIGHEST score
 	// This entry would appear at position 0, shifting all entries
-	_, err = engine.Publish(ctx, channel, "key_top", []byte("data_top"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_top", KeyedPublishOptions{
+		Data:       []byte("data_top"),
 		Ordered:    true,
 		Score:      5000, // Higher than any existing
 		StreamSize: 100,
@@ -2110,7 +2160,8 @@ func TestRedisKeyedEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	// Create 20 entries
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2130,7 +2181,8 @@ func TestRedisKeyedEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 
 	// CONCURRENT MODIFICATION: Add entry with LOWEST score
 	// This entry appears at end, shouldn't affect pagination much
-	_, err = engine.Publish(ctx, channel, "key_bottom", []byte("data_bottom"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_bottom", KeyedPublishOptions{
+		Data:       []byte("data_bottom"),
 		Ordered:    true,
 		Score:      1, // Lower than any existing
 		StreamSize: 100,
@@ -2167,7 +2219,8 @@ func TestRedisKeyedEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 	// Create 20 entries
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2189,7 +2242,8 @@ func TestRedisKeyedEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 	// CONCURRENT MODIFICATION: Change score of key_05 to make it jump to top
 	// key_05 had score 500, now gets score 3000 (highest)
 	// This entry was NOT in first page, but now would appear at position 0
-	_, err = engine.Publish(ctx, channel, "key_05", []byte("data_05_updated"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_05", KeyedPublishOptions{
+		Data:       []byte("data_05_updated"),
 		Ordered:    true,
 		Score:      3000,
 		StreamSize: 100,
@@ -2253,7 +2307,8 @@ func TestRedisKeyedEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 	// Create 20 entries
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2340,7 +2395,8 @@ func TestRedisKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	// Create 30 entries
 	for i := 1; i <= 30; i++ {
 		key := fmt.Sprintf("key_%02d", i)
-		_, err := engine.Publish(ctx, channel, key, []byte(fmt.Sprintf("data_%02d", i)), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+		Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2360,7 +2416,8 @@ func TestRedisKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 
 	// CONCURRENT MODIFICATIONS:
 	// 1. Add new highest score entry
-	_, err = engine.Publish(ctx, channel, "key_new_top", []byte("data_new_top"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_new_top", KeyedPublishOptions{
+		Data:       []byte("data_new_top"),
 		Ordered:    true,
 		Score:      5000,
 		StreamSize: 100,
@@ -2378,7 +2435,8 @@ func TestRedisKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Update score of an entry (move it)
-	_, err = engine.Publish(ctx, channel, "key_05", []byte("data_05_moved"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_05", KeyedPublishOptions{
+		Data:       []byte("data_05_moved"),
 		Ordered:    true,
 		Score:      4000, // Move from 500 to 4000
 		StreamSize: 100,
@@ -2397,7 +2455,8 @@ func TestRedisKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	// 4. Add new lowest score entry
-	_, err = engine.Publish(ctx, channel, "key_new_bottom", []byte("data_new_bottom"), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key_new_bottom", KeyedPublishOptions{
+		Data:       []byte("data_new_bottom"),
 		Ordered:    true,
 		Score:      1,
 		StreamSize: 100,

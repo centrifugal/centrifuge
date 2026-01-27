@@ -69,14 +69,16 @@ func TestKeyedSubscribe_SnapshotPhase(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate some keyed data. Must use valid JSON for data since test uses JSON transport.
-	_, err := engine.Publish(ctx, channel, "key1", []byte(`{"value":"data1"}`), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte(`{"value":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, channel, "key2", []byte(`{"value":"data2"}`), KeyedPublishOptions{
+	_, err = engine.Publish(ctx, channel, "key2", KeyedPublishOptions{
+		Data:       []byte(`{"value":"data2"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -127,7 +129,8 @@ func TestKeyedSubscribe_SnapshotPagination(t *testing.T) {
 
 	// Pre-populate keyed data.
 	for i := 0; i < 10; i++ {
-		_, err := engine.Publish(ctx, channel, string(rune('a'+i)), []byte(`{"v":"data"}`), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, string(rune('a'+i)), KeyedPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -188,7 +191,8 @@ func TestKeyedSubscribe_StreamPhase(t *testing.T) {
 	var lastOffset uint64
 	var epoch string
 	for i := 0; i < 5; i++ {
-		res, err := engine.Publish(ctx, channel, string(rune('a'+i)), []byte(`{"v":"data"}`), KeyedPublishOptions{
+		res, err := engine.Publish(ctx, channel, string(rune('a'+i)), KeyedPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -241,7 +245,8 @@ func TestKeyedSubscribe_LivePhase(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate some data.
-	res, err := engine.Publish(ctx, channel, "key1", []byte(`{"v":"data1"}`), KeyedPublishOptions{
+	res, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte(`{"v":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -295,7 +300,8 @@ func TestKeyedSubscribe_DirectLive(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate some data.
-	_, err := engine.Publish(ctx, channel, "key1", []byte(`{"v":"data1"}`), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte(`{"v":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -335,7 +341,8 @@ func TestKeyedSubscribe_FullTwoPhase(t *testing.T) {
 
 	// Pre-populate data.
 	for i := 0; i < 5; i++ {
-		_, err := engine.Publish(ctx, channel, string(rune('a'+i)), []byte(`{"v":"data"}`), KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, string(rune('a'+i)), KeyedPublishOptions{
+			Data:       []byte(`{"v":"data"}`),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -453,7 +460,8 @@ func TestKeyedSubscribe_WithPresence(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate data.
-	_, err := engine.Publish(ctx, channel, "key1", []byte(`{"v":"data1"}`), KeyedPublishOptions{
+	_, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Data:       []byte(`{"v":"data1"}`),
 		StreamSize: 100,
 		StreamTTL:  300 * time.Second,
 		KeyTTL:     300 * time.Second,
@@ -590,18 +598,18 @@ func TestKeyedSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 func TestPresenceSubscribe_Snapshot(t *testing.T) {
 	node, engine := newTestNodeWithKeyedEngine(t)
 
-	channel := "test_presence_sub"
+	baseChannel := "test_presence_sub"
 	ctx := context.Background()
 
 	// Pre-populate presence data.
-	presenceChannel := channel + ":presence"
-	_, err := engine.Publish(ctx, presenceChannel, "client1", nil, KeyedPublishOptions{
+	presenceChannel := baseChannel + ":presence"
+	_, err := engine.Publish(ctx, presenceChannel, "client1", KeyedPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Publish(ctx, presenceChannel, "client2", nil, KeyedPublishOptions{
+	_, err = engine.Publish(ctx, presenceChannel, "client2", KeyedPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client2", UserID: "user2"},
 		KeyTTL:     300 * time.Second,
 	})
@@ -609,16 +617,17 @@ func TestPresenceSubscribe_Snapshot(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			require.Equal(t, channel, e.Channel)
+			// Event receives the base channel (without :presence suffix).
+			require.Equal(t, baseChannel, e.Channel)
 			cb(PresenceSubscribeReply{Allowed: true}, nil)
 		})
 	})
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Subscribe to presence snapshot.
+	// Subscribe to presence snapshot - channel must have :presence suffix.
 	result := subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
-		Channel:       channel,
+		Channel:       presenceChannel,
 		KeyedPresence: true,
 		KeyedPhase:    KeyedPhaseSnapshot,
 		KeyedLimit:    100,
@@ -632,12 +641,12 @@ func TestPresenceSubscribe_Snapshot(t *testing.T) {
 func TestPresenceSubscribe_Live(t *testing.T) {
 	node, engine := newTestNodeWithKeyedEngine(t)
 
-	channel := "test_presence_live"
+	baseChannel := "test_presence_live"
 	ctx := context.Background()
 
 	// Pre-populate presence data.
-	presenceChannel := channel + ":presence"
-	_, err := engine.Publish(ctx, presenceChannel, "client1", nil, KeyedPublishOptions{
+	presenceChannel := baseChannel + ":presence"
+	_, err := engine.Publish(ctx, presenceChannel, "client1", KeyedPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
 		KeyTTL:     300 * time.Second,
 	})
@@ -651,9 +660,9 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// First do snapshot.
+	// First do snapshot - channel must have :presence suffix.
 	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
-		Channel:       channel,
+		Channel:       presenceChannel,
 		KeyedPresence: true,
 		KeyedPhase:    KeyedPhaseSnapshot,
 		KeyedLimit:    100,
@@ -661,7 +670,7 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 
 	// Then go live.
 	result := subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
-		Channel:       channel,
+		Channel:       presenceChannel,
 		KeyedPresence: true,
 		KeyedPhase:    KeyedPhaseLive,
 	})
@@ -679,7 +688,8 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 	node, _ := newTestNodeWithKeyedEngine(t)
 
-	channel := "test_presence_not_allowed"
+	// Presence channel must end with :presence suffix.
+	presenceChannel := "test_presence_not_allowed:presence"
 
 	node.OnConnect(func(client *Client) {
 		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
@@ -692,7 +702,7 @@ func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 	// Try to subscribe to presence - should be denied.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:       channel,
+		Channel:       presenceChannel,
 		KeyedPresence: true,
 		KeyedPhase:    KeyedPhaseSnapshot,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
@@ -705,7 +715,8 @@ func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 func TestPresenceSubscribe_NoHandler(t *testing.T) {
 	node, _ := newTestNodeWithKeyedEngine(t)
 
-	channel := "test_presence_no_handler"
+	// Presence channel must end with :presence suffix.
+	presenceChannel := "test_presence_no_handler:presence"
 
 	// No OnPresenceSubscribe handler set.
 	node.OnConnect(func(client *Client) {})
@@ -715,7 +726,7 @@ func TestPresenceSubscribe_NoHandler(t *testing.T) {
 	// Try to subscribe to presence - should fail.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:       channel,
+		Channel:       presenceChannel,
 		KeyedPresence: true,
 		KeyedPhase:    KeyedPhaseSnapshot,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)
@@ -728,7 +739,8 @@ func TestPresenceSubscribe_NoHandler(t *testing.T) {
 func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 	node, _ := newTestNodeWithKeyedEngine(t)
 
-	channel := "test_presence_already_sub"
+	// Presence channel must end with :presence suffix.
+	presenceChannel := "test_presence_already_sub:presence"
 
 	node.OnConnect(func(client *Client) {
 		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
@@ -740,12 +752,12 @@ func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 
 	// First subscribe to presence.
 	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
-		Channel:       channel,
+		Channel:       presenceChannel,
 		KeyedPresence: true,
 		KeyedPhase:    KeyedPhaseSnapshot,
 	})
 	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
-		Channel:       channel,
+		Channel:       presenceChannel,
 		KeyedPresence: true,
 		KeyedPhase:    KeyedPhaseLive,
 	})
@@ -753,7 +765,7 @@ func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 	// Second subscribe should fail.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
-		Channel:       channel,
+		Channel:       presenceChannel,
 		KeyedPresence: true,
 		KeyedPhase:    KeyedPhaseSnapshot,
 	}, &protocol.Command{Id: 1}, time.Now(), rwWrapper.rw)

@@ -90,19 +90,19 @@ func (e *MemoryKeyedEngine) Unsubscribe(_ string) error {
 }
 
 // Publish publishes data to channel with optional key for keyed state.
-func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (KeyedPublishResult, error) {
+func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
 
 	if opts.IdempotencyKey != "" {
 		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
-			return KeyedPublishResult{Position: res, Applied: false}, nil
+			return KeyedPublishResult{Position: res, Suppressed: true, SuppressReason: SuppressReasonIdempotency}, nil
 		}
 	}
 
 	pub := &Publication{
-		Data: data,
+		Data: opts.Data,
 		Info: opts.ClientInfo,
 		Tags: opts.Tags,
 		Time: time.Now().UnixMilli(),
@@ -110,12 +110,12 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	}
 
 	var prevPub *Publication
-	streamTop, prevPub, skip, err := e.keyedHub.add(ch, key, pub, opts)
+	streamTop, prevPub, suppressReason, err := e.keyedHub.add(ch, key, pub, opts)
 	if err != nil {
 		return KeyedPublishResult{}, err
 	}
-	if skip {
-		return KeyedPublishResult{Position: streamTop, Applied: false}, nil
+	if suppressReason != "" {
+		return KeyedPublishResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}, nil
 	}
 
 	pub.Offset = streamTop.Offset
@@ -129,10 +129,10 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	}
 
 	if e.eventHandler != nil {
-		return KeyedPublishResult{Position: streamTop, Applied: true}, e.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
+		return KeyedPublishResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
 	}
 
-	return KeyedPublishResult{Position: streamTop, Applied: true}, nil
+	return KeyedPublishResult{Position: streamTop}, nil
 }
 
 // Unpublish removes a key from keyed state.
@@ -147,7 +147,7 @@ func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string
 	}
 
 	if !applied {
-		return KeyedPublishResult{Position: streamTop, Applied: false}, nil
+		return KeyedPublishResult{Position: streamTop, Suppressed: true, SuppressReason: SuppressReasonKeyNotFound}, nil
 	}
 
 	if opts.Publish && e.eventHandler != nil {
@@ -157,10 +157,10 @@ func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string
 			Offset:  streamTop.Offset,
 			Time:    time.Now().UnixMilli(),
 		}
-		return KeyedPublishResult{Position: streamTop, Applied: true}, e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
+		return KeyedPublishResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, pub, streamTop, false, nil)
 	}
 
-	return KeyedPublishResult{Position: streamTop, Applied: true}, nil
+	return KeyedPublishResult{Position: streamTop}, nil
 }
 
 // ReadStream retrieves publications from stream.
@@ -503,7 +503,7 @@ func (h *keyedHub) parseChKey(chKey string) (string, string) {
 	return "", ""
 }
 
-func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublishOptions) (StreamPosition, *Publication, bool, error) {
+func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublishOptions) (StreamPosition, *Publication, SuppressReason, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -539,7 +539,7 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 			if channel.stream != nil {
 				pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
 			}
-			return pos, nil, true, nil
+			return pos, nil, SuppressReasonKeyExists, nil
 		}
 		if opts.KeyMode == KeyModeIfExists && !keyExists {
 			// KeyModeIfExists but key doesn't exist - skip
@@ -547,7 +547,7 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 			if channel.stream != nil {
 				pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
 			}
-			return pos, nil, true, nil
+			return pos, nil, SuppressReasonKeyNotFound, nil
 		}
 	}
 
@@ -586,7 +586,7 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 			if (opts.VersionEpoch == "" || opts.VersionEpoch == topVersionEpoch) &&
 				opts.Version <= topVersion {
 				// Skip unordered publication
-				return StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}, nil, true, nil
+				return StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}, nil, SuppressReasonVersion, nil
 			}
 		}
 
@@ -669,7 +669,7 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 		}
 	}
 
-	return streamPosition, prevPub, false, nil
+	return streamPosition, prevPub, SuppressReasonNone, nil
 }
 
 func (h *keyedHub) remove(ch string, key string, opts KeyedUnpublishOptions) (StreamPosition, bool, error) {
@@ -857,6 +857,11 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 
 	channel, ok := h.channels[ch]
 	if !ok {
+		// If client provided a revision (epoch), the channel is gone - return unrecoverable.
+		// This happens when server restarts and client tries to reconnect with old epoch.
+		if opts.Revision != nil && opts.Revision.Epoch != "" {
+			return nil, h.createStreamPosition(ch), "", ErrorUnrecoverablePosition
+		}
 		return nil, h.createStreamPosition(ch), "", nil
 	}
 

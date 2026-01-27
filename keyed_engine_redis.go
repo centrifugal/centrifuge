@@ -508,17 +508,17 @@ func (e *RedisKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRemo
 }
 
 // Publish publishes data to a stateful channel with optional keyed state.
-func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (KeyedPublishResult, error) {
+func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
 	// Fast path for non-history, non-idempotent, non-keyed publications.
 	if opts.StreamSize == 0 && opts.StreamTTL == 0 && opts.IdempotencyKey == "" && key == "" {
 		if e.conf.SkipPubSub {
-			return KeyedPublishResult{Applied: true}, nil
+			return KeyedPublishResult{}, nil
 		}
 		protoPub := &protocol.Publication{
-			Data: data,
+			Data: opts.Data,
 			Info: infoToProto(opts.ClientInfo),
 			Tags: opts.Tags,
 			Time: time.Now().UnixMilli(),
@@ -538,14 +538,14 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, d
 		chID := e.messageChannelID(s.shard, ch)
 		if e.useShardedPubSub(s.shard) {
 			cmd := shardClient.B().Spublish().Channel(chID).Message(payload).Build()
-			return KeyedPublishResult{Applied: true}, shardClient.Do(ctx, cmd).Error()
+			return KeyedPublishResult{}, shardClient.Do(ctx, cmd).Error()
 		}
 		cmd := shardClient.B().Publish().Channel(chID).Message(payload).Build()
-		return KeyedPublishResult{Applied: true}, shardClient.Do(ctx, cmd).Error()
+		return KeyedPublishResult{}, shardClient.Do(ctx, cmd).Error()
 	}
 
 	protoPub := &protocol.Publication{
-		Data: data,
+		Data: opts.Data,
 		Info: infoToProto(opts.ClientInfo),
 		Tags: opts.Tags,
 		Time: time.Now().UnixMilli(),
@@ -2630,26 +2630,23 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (KeyedPublishResult, e
 		return KeyedPublishResult{}, fmt.Errorf("could not parse epoch: %w", err)
 	}
 
-	// Check if suppressed due to idempotency (3rd value = "1") or version (4th value = "1")
-	// Applied is true only when neither suppression flag is set.
-	applied := true
+	// Check for suppression reason (3rd value is the reason string, empty means not suppressed)
+	var suppressReason SuppressReason
 	if len(replies) >= 3 {
-		fromCacheVal, err := replies[2].ToString()
-		if err == nil && fromCacheVal == "1" {
-			applied = false // Suppressed due to idempotency cache
-		}
-	}
-	if len(replies) >= 4 && applied {
-		versionSuppressedVal, err := replies[3].ToString()
-		if err == nil && versionSuppressedVal == "1" {
-			applied = false // Suppressed due to out-of-order version
+		reason, err := replies[2].ToString()
+		if err == nil && reason != "" {
+			suppressReason = SuppressReason(reason)
 		}
 	}
 
-	return KeyedPublishResult{
+	result := KeyedPublishResult{
 		Position: StreamPosition{Offset: offset, Epoch: epoch},
-		Applied:  applied,
-	}, nil
+	}
+	if suppressReason != SuppressReasonNone {
+		result.Suppressed = true
+		result.SuppressReason = suppressReason
+	}
+	return result, nil
 }
 
 //// AddMember adds a client to converged membership (presence with ordering).

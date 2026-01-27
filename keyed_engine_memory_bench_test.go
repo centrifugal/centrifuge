@@ -34,7 +34,8 @@ func BenchmarkMemoryKeyedEngine_PublishStreamOnly(b *testing.B) {
 		for pb.Next() {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
-			_, err := engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
+			Data: data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 			})
@@ -62,7 +63,8 @@ func BenchmarkMemoryKeyedEngine_PublishKeyedStateSimple(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -91,7 +93,8 @@ func BenchmarkMemoryKeyedEngine_PublishKeyedStateOrdered(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 				Ordered:    true,
 				Score:      i,
 				StreamSize: 10000,
@@ -122,7 +125,8 @@ func BenchmarkMemoryKeyedEngine_PublishCombined(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i)
 			data := []byte(fmt.Sprintf("data%d", i))
-			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
 				KeyTTL:     300 * time.Second,
@@ -146,7 +150,8 @@ func BenchmarkMemoryKeyedEngine_ReadStream(b *testing.B) {
 	var sp StreamPosition
 	for i := 0; i < 1000; i++ {
 		data := []byte(fmt.Sprintf("message_%d", i))
-		res, err := engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
+		res, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
+			Data: data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 		})
@@ -188,7 +193,8 @@ func BenchmarkMemoryKeyedEngine_ReadSnapshotFull(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -226,7 +232,8 @@ func BenchmarkMemoryKeyedEngine_ReadSnapshotPaginated(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -265,7 +272,8 @@ func BenchmarkMemoryKeyedEngine_ReadSnapshotOrdered(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 			Ordered:    true,
 			Score:      int64(i),
 			StreamSize: 10000,
@@ -306,7 +314,8 @@ func BenchmarkMemoryKeyedEngine_Stats(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -341,7 +350,8 @@ func BenchmarkMemoryKeyedEngine_Remove(b *testing.B) {
 	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("data%d", i))
-		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -388,7 +398,8 @@ func BenchmarkMemoryKeyedEngine_IdempotentPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			data := []byte(fmt.Sprintf("message_%d", i))
 			idempotencyKey := fmt.Sprintf("key_%d", i)
-			_, err := engine.Publish(ctx, channel, "", data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
+			Data: data,
 				IdempotencyKey:      idempotencyKey,
 				IdempotentResultTTL: 60 * time.Second,
 				StreamSize:          10000,
@@ -418,7 +429,8 @@ func BenchmarkMemoryKeyedEngine_VersionedPublish(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("data_%d", i))
-			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 				Version:    uint64(i),
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,
@@ -443,7 +455,8 @@ func BenchmarkMemoryKeyedEngine_PublishWithDelta(b *testing.B) {
 	for i := 0; i < 100; i++ {
 		key := fmt.Sprintf("key%d", i)
 		data := []byte(fmt.Sprintf("initial_data%d", i))
-		_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 			StreamSize: 10000,
 			StreamTTL:  300 * time.Second,
 			KeyTTL:     300 * time.Second,
@@ -462,7 +475,8 @@ func BenchmarkMemoryKeyedEngine_PublishWithDelta(b *testing.B) {
 			i := atomic.AddInt64(&counter, 1)
 			key := fmt.Sprintf("key%d", i%100) // Reuse 100 keys
 			data := []byte(fmt.Sprintf("updated_data_%d", i))
-			_, err := engine.Publish(ctx, channel, key, data, KeyedPublishOptions{
+			_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
+			Data: data,
 				UseDelta:   true,
 				StreamSize: 10000,
 				StreamTTL:  300 * time.Second,

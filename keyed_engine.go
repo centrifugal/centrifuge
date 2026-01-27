@@ -14,12 +14,12 @@ const (
 
 	// KeyModeIfNew only writes if the key does NOT exist in the snapshot.
 	// Use cases: lobby slots, distributed locks, first-claim resources.
-	// When key already exists, Applied=false is returned.
+	// When key already exists, Suppressed=true with SuppressReason="key_exists".
 	KeyModeIfNew KeyMode = "if_new"
 
 	// KeyModeIfExists only writes if the key ALREADY exists in the snapshot.
 	// Use cases: heartbeats, update-only operations, presence renewal.
-	// When key does not exist, Applied=false is returned.
+	// When key does not exist, Suppressed=true with SuppressReason="key_not_found".
 	KeyModeIfExists KeyMode = "if_exists"
 )
 
@@ -30,14 +30,14 @@ type KeyedEngine interface {
 	Unsubscribe(ch string) error
 
 	// Publish allows sending data into a channel. It can optionally use stream
-	// and keyed snapshots. Returns KeyedPublishResult with Applied=true only when
-	// the snapshot was actually changed. When Applied=false (due to idempotency
-	// suppression or out-of-order version), no message is appended to stream
-	// and no publication is sent to PUB/SUB.
-	Publish(ctx context.Context, ch string, key string, data []byte, opts KeyedPublishOptions) (KeyedPublishResult, error)
+	// and keyed snapshots. Returns KeyedPublishResult with Suppressed=false when
+	// the snapshot was actually changed. When Suppressed=true (due to idempotency,
+	// out-of-order version, or key mode conditions), no message is appended to stream
+	// and no publication is sent to PUB/SUB. SuppressReason contains the reason.
+	Publish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error)
 	// Unpublish removes a key from keyed state snapshot and optionally sends remove
-	// Publication to stream. Returns KeyedPublishResult with Applied=true only when
-	// the key was actually removed from the snapshot. When Applied=false (key not
+	// Publication to stream. Returns KeyedPublishResult with Suppressed=false when
+	// the key was actually removed from the snapshot. When Suppressed=true (key not
 	// found), no message is appended to stream and no publication is sent.
 	Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (KeyedPublishResult, error)
 
@@ -75,6 +75,7 @@ type KeyedPublishOptions struct {
 	// StreamMetaTTL for stream metadata.
 	StreamMetaTTL time.Duration
 
+	Data         []byte
 	Tags         map[string]string
 	ClientInfo   *ClientInfo
 	UseDelta     bool
@@ -164,19 +165,37 @@ type KeyedStats struct {
 	NumAggregationKeys int
 }
 
+// SuppressReason explains why a Publish or Unpublish operation was suppressed.
+type SuppressReason string
+
+const (
+	// SuppressReasonNone indicates the operation was not suppressed.
+	SuppressReasonNone SuppressReason = ""
+
+	// SuppressReasonIdempotency indicates duplicate detected via idempotency key.
+	SuppressReasonIdempotency SuppressReason = "idempotency"
+
+	// SuppressReasonVersion indicates skipped due to out-of-order version.
+	SuppressReasonVersion SuppressReason = "version"
+
+	// SuppressReasonKeyExists indicates KeyModeIfNew was used but key already exists.
+	SuppressReasonKeyExists SuppressReason = "key_exists"
+
+	// SuppressReasonKeyNotFound indicates KeyModeIfExists was used but key doesn't exist,
+	// or Unpublish was called on a non-existent key.
+	SuppressReasonKeyNotFound SuppressReason = "key_not_found"
+)
+
 // KeyedPublishResult contains the result of Publish or Unpublish operation.
 type KeyedPublishResult struct {
 	// Position is the current stream position after the operation.
 	Position StreamPosition
-	// Applied is true only when the operation actually changed the snapshot.
-	// It is false when:
-	// - Suppressed due to idempotency key (duplicate detected)
-	// - Skipped due to out-of-order version
-	// - KeyMode condition not met (KeyModeIfNew when key exists, KeyModeIfExists when key absent)
-	// - Key not found (for Unpublish)
-	// When Applied is false, no message is appended to the stream and no
+	// Suppressed is true when the operation did NOT change the snapshot.
+	// When Suppressed is true, no message is appended to the stream and no
 	// publication is sent to PUB/SUB.
-	Applied bool
+	Suppressed bool
+	// SuppressReason explains why the operation was suppressed (empty when Suppressed is false).
+	SuppressReason SuppressReason
 }
 
 type KeyedRemoveOptions struct{}
