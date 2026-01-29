@@ -3,9 +3,11 @@ package centrifuge
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/centrifugal/centrifuge/internal/filter"
 	"github.com/centrifugal/centrifuge/internal/recovery"
 	"github.com/centrifugal/protocol"
 )
@@ -14,13 +16,155 @@ import (
 const (
 	KeyedPhaseSnapshot int32 = 0 // Paginating over snapshot (keyed state)
 	KeyedPhaseStream   int32 = 1 // Paginating over stream (history catch-up)
-	KeyedPhaseLive     int32 = 2 // Join pub/sub, switch to real-time streaming
+	KeyedPhaseLive     int32 = 2 // Join live pub/sub, switch to real-time streaming
 )
 
 // keyedSubscribeState tracks state for keyed subscriptions that are still loading.
 type keyedSubscribeState struct {
-	options SubscribeOptions // From OnSubscribe callback
-	epoch   string           // Epoch from first response (for validation)
+	options    SubscribeOptions // From OnSubscribe callback
+	epoch      string           // Epoch from first response (for validation)
+	isPresence bool             // True if this is a presence subscription (:clients or :users suffix)
+}
+
+// handlePresenceSubscribe handles presence subscriptions (watching who is online).
+// This is a separate permission scope from data subscriptions.
+// Presence subscriptions use KeyedEngine internally but go through OnPresenceSubscribe handler.
+func (c *Client) handlePresenceSubscribe(
+	req *protocol.SubscribeRequest,
+	cmd *protocol.Command,
+	started time.Time,
+	rw *replyWriter,
+) error {
+	presenceChannel := req.Channel
+
+	// Validate that channel ends with proper suffix.
+	if !strings.HasSuffix(presenceChannel, clientsSuffix) && !strings.HasSuffix(presenceChannel, usersSuffix) {
+		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorBadRequest, started, rw)
+		return nil
+	}
+
+	// Extract base channel from presence channel.
+	var baseChannel string
+	if strings.HasSuffix(presenceChannel, clientsSuffix) {
+		baseChannel = strings.TrimSuffix(presenceChannel, clientsSuffix)
+	} else {
+		baseChannel = strings.TrimSuffix(presenceChannel, usersSuffix)
+	}
+
+	keyedEngine := c.node.keyedEngine
+	if keyedEngine == nil {
+		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)
+		return nil
+	}
+
+	// Validate the request.
+	replyError := c.validatePresenceSubscribeRequest(req)
+	if replyError != nil {
+		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, replyError, started, rw)
+		return nil
+	}
+
+	// Check if this is a continuation request (pagination or live phase).
+	c.mu.RLock()
+	state, hasState := c.keyedSubscribing[presenceChannel]
+	c.mu.RUnlock()
+
+	// For continuation requests, bypass the OnPresenceSubscribe callback.
+	if hasState {
+		if req.KeyedCursor != "" || req.KeyedPhase != KeyedPhaseSnapshot {
+			reply := SubscribeReply{Options: state.options}
+			if handleErr := c.handleKeyedSubscribe(req, reply, cmd, started, rw); handleErr != nil {
+				c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
+			}
+			return nil
+		}
+	}
+
+	// Also check if already fully subscribed.
+	c.mu.RLock()
+	_, inChannels := c.channels[presenceChannel]
+	c.mu.RUnlock()
+	if inChannels {
+		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorAlreadySubscribed, started, rw)
+		return nil
+	}
+
+	// Initial request - need to call handler for authorization.
+	if c.eventHub.presenceSubscribeHandler == nil {
+		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)
+		return nil
+	}
+
+	event := PresenceSubscribeEvent{
+		Channel: baseChannel,
+		Data:    req.Data,
+	}
+
+	cb := func(reply PresenceSubscribeReply, err error) {
+		if err != nil {
+			c.cleanupKeyedSubscribing(presenceChannel)
+			c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, err, started, rw)
+			return
+		}
+
+		// Build SubscribeReply with keyed options for presence.
+		subscribeReply := SubscribeReply{
+			Options: SubscribeOptions{
+				EnableKeyed: true,
+				ExpireAt:    reply.ExpireAt,
+			},
+		}
+
+		// Track that we're subscribing (for continuation requests).
+		c.mu.Lock()
+		if c.keyedSubscribing == nil {
+			c.keyedSubscribing = make(map[string]*keyedSubscribeState)
+		}
+		c.keyedSubscribing[presenceChannel] = &keyedSubscribeState{
+			options:    subscribeReply.Options,
+			isPresence: true,
+		}
+		c.mu.Unlock()
+
+		// Route to keyed subscription handler.
+		if handleErr := c.handleKeyedSubscribe(req, subscribeReply, cmd, started, rw); handleErr != nil {
+			c.cleanupKeyedSubscribing(presenceChannel)
+			c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
+		}
+	}
+
+	c.eventHub.presenceSubscribeHandler(event, cb)
+	return nil
+}
+
+// validatePresenceSubscribeRequest validates presence subscription request.
+func (c *Client) validatePresenceSubscribeRequest(req *protocol.SubscribeRequest) *Error {
+	presenceChannel := req.Channel
+
+	config := c.node.config
+	channelMaxLength := config.ChannelMaxLength
+	channelLimit := config.ClientChannelLimit
+
+	if channelMaxLength > 0 && len(presenceChannel) > channelMaxLength {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long for presence", map[string]any{
+			"max": channelMaxLength, "channel": presenceChannel, "user": c.user, "client": c.uid,
+		}))
+		return ErrorBadRequest
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check channel limit.
+	numChannels := len(c.channels) + len(c.keyedSubscribing)
+	if channelLimit > 0 && numChannels >= channelLimit {
+		c.node.logger.log(newLogEntry(LogLevelInfo, "maximum limit of channels per client reached", map[string]any{
+			"limit": channelLimit, "user": c.user, "client": c.uid,
+		}))
+		return ErrorLimitExceeded
+	}
+
+	return nil
 }
 
 // handleKeyedSubscribe routes keyed subscription requests to the appropriate phase handler.
@@ -79,7 +223,8 @@ func (c *Client) handleKeyedSnapshotPhase(
 			c.keyedSubscribing = make(map[string]*keyedSubscribeState)
 		}
 		c.keyedSubscribing[channel] = &keyedSubscribeState{
-			options: reply.Options,
+			options:    reply.Options,
+			isPresence: req.KeyedPresence,
 		}
 		c.mu.Unlock()
 	} else {
@@ -167,7 +312,7 @@ func (c *Client) handleKeyedSnapshotPhase(
 // handleKeyedStreamPhase handles stateless stream pagination (history catch-up).
 func (c *Client) handleKeyedStreamPhase(
 	req *protocol.SubscribeRequest,
-	reply SubscribeReply,
+	_ SubscribeReply,
 	cmd *protocol.Command,
 	started time.Time,
 	rw *replyWriter,
@@ -271,12 +416,14 @@ func (c *Client) handleKeyedLivePhase(
 
 	// Get stored state if exists (for two-phase), or use reply options (for direct live).
 	var opts SubscribeOptions
+	var isPresence bool
 	c.mu.RLock()
 	state, hasState := c.keyedSubscribing[channel]
 	c.mu.RUnlock()
 
 	if hasState {
 		opts = state.options
+		isPresence = state.isPresence
 		// Validate epoch if client provided one.
 		if req.KeyedEpoch != "" && state.epoch != "" && req.KeyedEpoch != state.epoch {
 			c.cleanupKeyedSubscribing(channel)
@@ -285,6 +432,7 @@ func (c *Client) handleKeyedLivePhase(
 	} else {
 		// Direct live subscription (no prior pagination).
 		opts = reply.Options
+		isPresence = req.KeyedPresence
 	}
 
 	// Start coordination: buffer -> subscribe -> read remaining -> merge.
@@ -303,6 +451,39 @@ func (c *Client) handleKeyedLivePhase(
 	// Add subscription to node hub.
 	useID := opts.AllowChannelCompaction && req.Flag&subscriptionFlagChannelCompression != 0
 	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: useID}
+
+	// Process tags filter if provided.
+	if req.Tf != nil {
+		if !opts.AllowTagsFilter {
+			c.pubSubSync.StopBuffering(channel)
+			_ = keyedEngine.Unsubscribe(channel)
+			c.cleanupKeyedSubscribing(channel)
+			c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for keyed channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return ErrorBadRequest
+		}
+		if err := filter.Validate(req.Tf); err != nil {
+			c.pubSubSync.StopBuffering(channel)
+			_ = keyedEngine.Unsubscribe(channel)
+			c.cleanupKeyedSubscribing(channel)
+			c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for keyed channel", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return ErrorBadRequest
+		}
+		sub.tagsFilter = &tagsFilter{
+			filter: req.Tf,
+			hash:   filter.Hash(req.Tf),
+		}
+	}
+
+	// Negotiate delta type if requested.
+	var deltaEnabled bool
+	if req.Delta != "" {
+		dt := DeltaType(req.Delta)
+		if slices.Contains(opts.AllowedDeltaTypes, dt) {
+			deltaEnabled = true
+			sub.deltaType = dt
+		}
+	}
+
 	chanID, err := c.node.addSubscription(channel, sub)
 	if err != nil {
 		c.pubSubSync.StopBuffering(channel)
@@ -378,6 +559,18 @@ func (c *Client) handleKeyedLivePhase(
 		}
 	}
 
+	// Apply tags filter to stream publications (after offset calculation).
+	if sub.tagsFilter != nil {
+		filteredPubs := make([]*protocol.Publication, 0, len(recoveredPubs))
+		for _, pub := range recoveredPubs {
+			match, _ := filter.Match(sub.tagsFilter.filter, pub.Tags)
+			if match {
+				filteredPubs = append(filteredPubs, pub)
+			}
+		}
+		recoveredPubs = filteredPubs
+	}
+
 	// Build response.
 	res := &protocol.SubscribeResult{
 		Keyed:                  true,
@@ -385,6 +578,7 @@ func (c *Client) handleKeyedLivePhase(
 		Epoch:                  streamPos.Epoch,
 		Offset:                 latestOffset,
 		KeyedPresenceAvailable: opts.KeyedPresenceAvailable,
+		Delta:                  deltaEnabled,
 	}
 	if chanID > 0 {
 		res.Id = chanID
@@ -413,6 +607,9 @@ func (c *Client) handleKeyedLivePhase(
 	channelFlags |= flagSubscribed
 	channelFlags |= flagPositioning // Keyed subscriptions are always positioned.
 	channelFlags |= flagKeyed       // Mark as keyed subscription.
+	if isPresence {
+		channelFlags |= flagKeyedPresence
+	}
 	if opts.EmitPresence {
 		channelFlags |= flagEmitPresence
 	}
@@ -424,6 +621,12 @@ func (c *Client) handleKeyedLivePhase(
 	}
 	if reply.ClientSideRefresh {
 		channelFlags |= flagClientSideRefresh
+	}
+	if opts.EmitKeyedClientPresence {
+		channelFlags |= flagEmitKeyedClientPresence
+	}
+	if opts.EmitKeyedUserPresence {
+		channelFlags |= flagEmitKeyedUserPresence
 	}
 
 	channelContext := ChannelContext{
@@ -449,6 +652,7 @@ func (c *Client) handleKeyedLivePhase(
 	c.pubSubSync.StopBuffering(channel)
 
 	// Add presence if enabled (uses KeyedEngine for keyed channels).
+	// EmitPresence uses :presence suffix (legacy behavior for PresenceManager-like usage).
 	if opts.EmitPresence {
 		info := &ClientInfo{
 			ClientID: c.uid,
@@ -456,8 +660,32 @@ func (c *Client) handleKeyedLivePhase(
 			ConnInfo: c.info,
 			ChanInfo: opts.ChannelInfo,
 		}
-		if err := c.addKeyedPresence(channel, info); err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error adding keyed presence", map[string]any{
+		if err = c.node.addPresence(channel, c.uid, info); err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error adding client presence", map[string]any{
+				"channel": channel, "user": c.user, "client": c.uid,
+			}))
+		}
+	}
+
+	// Add keyed client presence to {channel}:clients (key=clientId, full info).
+	if opts.EmitKeyedClientPresence {
+		info := &ClientInfo{
+			ClientID: c.uid,
+			UserID:   c.user,
+			ConnInfo: c.info,
+			ChanInfo: opts.ChannelInfo,
+		}
+		if err := c.addKeyedClientPresence(channel, info); err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error adding keyed client presence", map[string]any{
+				"channel": channel, "user": c.user, "client": c.uid,
+			}))
+		}
+	}
+
+	// Add keyed user presence to {channel}:users (key=userId, no info).
+	if opts.EmitKeyedUserPresence {
+		if err := c.addKeyedUserPresence(channel); err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error adding keyed user presence", map[string]any{
 				"channel": channel, "user": c.user, "client": c.uid,
 			}))
 		}
@@ -477,291 +705,10 @@ func (c *Client) handleKeyedLivePhase(
 	return nil
 }
 
-const presenceSuffix = ":presence"
-
-// handlePresenceSubscribe handles presence subscriptions as first-class independent subscriptions.
-// Presence subscriptions have their own lifecycle and permission callback.
-// The channel must end with ":presence" suffix (e.g., "lobby:presence").
-func (c *Client) handlePresenceSubscribe(
-	req *protocol.SubscribeRequest,
-	cmd *protocol.Command,
-	started time.Time,
-	rw *replyWriter,
-) error {
-	presenceChannel := req.Channel
-
-	// Validate that channel ends with :presence suffix.
-	if !strings.HasSuffix(presenceChannel, presenceSuffix) {
-		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorBadRequest, started, rw)
-		return nil
-	}
-
-	// Extract base channel (without :presence suffix) for the event.
-	baseChannel := strings.TrimSuffix(presenceChannel, presenceSuffix)
-
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)
-		return nil
-	}
-
-	// Check if this is a continuation request (pagination or live phase).
-	isInitialRequest := req.KeyedCursor == "" && req.KeyedPhase == KeyedPhaseSnapshot
-
-	if isInitialRequest {
-		// Initial request - need to call handler for authorization.
-		if c.eventHub.presenceSubscribeHandler == nil {
-			c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorNotAvailable, started, rw)
-			return nil
-		}
-
-		// Validate presence subscription request.
-		replyError := c.validatePresenceSubscribeRequest(req)
-		if replyError != nil {
-			c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, replyError, started, rw)
-			return nil
-		}
-
-		event := PresenceSubscribeEvent{
-			Channel: baseChannel,
-			Data:    req.Data,
-		}
-
-		cb := func(reply PresenceSubscribeReply, err error) {
-			if err != nil {
-				c.cleanupKeyedPresenceSubscribing(presenceChannel)
-				c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, err, started, rw)
-				return
-			}
-
-			if !reply.Allowed {
-				c.cleanupKeyedPresenceSubscribing(presenceChannel)
-				c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorPermissionDenied, started, rw)
-				return
-			}
-
-			handleErr := c.handlePresenceSnapshotPhase(req, cmd, started, rw, presenceChannel)
-			if handleErr != nil {
-				// Cleanup already done inside handlePresenceSnapshotPhase on error.
-				c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
-			}
-		}
-
-		c.eventHub.presenceSubscribeHandler(event, cb)
-		return nil
-	}
-
-	// Continuation request - verify authorization from stored state.
-	c.mu.RLock()
-	_, inSubscribing := c.keyedPresenceSubscribing[presenceChannel]
-	_, inSubs := c.keyedPresenceSubs[presenceChannel]
-	c.mu.RUnlock()
-
-	if !inSubscribing && !inSubs {
-		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, ErrorPermissionDenied, started, rw)
-		return nil
-	}
-
-	// Route to appropriate handler based on phase.
-	var handleErr error
-	switch req.KeyedPhase {
-	case KeyedPhaseSnapshot:
-		// Cleanup done inside handlePresenceSnapshotPhase on error.
-		handleErr = c.handlePresenceSnapshotPhase(req, cmd, started, rw, presenceChannel)
-	case KeyedPhaseLive:
-		// Cleanup done inside handlePresenceLivePhase on error.
-		handleErr = c.handlePresenceLivePhase(req, cmd, started, rw, presenceChannel)
-	default:
-		c.cleanupKeyedPresenceSubscribing(presenceChannel)
-		handleErr = ErrorBadRequest
-	}
-
-	if handleErr != nil {
-		c.writeDisconnectOrErrorFlush(presenceChannel, protocol.FrameTypeSubscribe, cmd, handleErr, started, rw)
-	}
-	return nil
-}
-
-// validatePresenceSubscribeRequest validates presence subscription request.
-// The channel is expected to already include the :presence suffix.
-func (c *Client) validatePresenceSubscribeRequest(req *protocol.SubscribeRequest) *Error {
-	presenceChannel := req.Channel
-
-	config := c.node.config
-	channelMaxLength := config.ChannelMaxLength
-
-	if channelMaxLength > 0 && len(presenceChannel) > channelMaxLength {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "channel too long for presence", map[string]any{
-			"max": channelMaxLength, "channel": presenceChannel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorBadRequest
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Check if already subscribing to presence on this channel.
-	if _, inSubscribing := c.keyedPresenceSubscribing[presenceChannel]; inSubscribing {
-		// Allow continuation requests (cursor set or live phase).
-		if req.KeyedCursor != "" || req.KeyedPhase != KeyedPhaseSnapshot {
-			return nil
-		}
-		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribing to presence", map[string]any{
-			"channel": presenceChannel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorAlreadySubscribed
-	}
-
-	// Check if already subscribed to presence on this channel.
-	if _, inSubs := c.keyedPresenceSubs[presenceChannel]; inSubs {
-		c.node.logger.log(newLogEntry(LogLevelInfo, "client already subscribed to presence", map[string]any{
-			"channel": presenceChannel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorAlreadySubscribed
-	}
-
-	// Track that we're subscribing to presence (for initial snapshot request).
-	if req.KeyedCursor == "" && req.KeyedPhase == KeyedPhaseSnapshot {
-		if c.keyedPresenceSubscribing == nil {
-			c.keyedPresenceSubscribing = make(map[string]struct{})
-		}
-		c.keyedPresenceSubscribing[presenceChannel] = struct{}{}
-	}
-
-	return nil
-}
-
-// handlePresenceSnapshotPhase handles presence snapshot pagination.
-func (c *Client) handlePresenceSnapshotPhase(
-	req *protocol.SubscribeRequest,
-	cmd *protocol.Command,
-	started time.Time,
-	rw *replyWriter,
-	presenceChannel string,
-) error {
-	channel := req.Channel
-
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return ErrorNotAvailable
-	}
-
-	// Acquire pagination lock.
-	if !c.acquireKeyedPaginationLock(presenceChannel) {
-		return ErrorConcurrentPagination
-	}
-	defer c.releaseKeyedPaginationLock(presenceChannel)
-
-	// Build read options.
-	limit := int(req.KeyedLimit)
-	if limit <= 0 {
-		limit = 100
-	}
-	if c.node.config.KeyedMaxPaginationLimit > 0 && limit > c.node.config.KeyedMaxPaginationLimit {
-		limit = c.node.config.KeyedMaxPaginationLimit
-	}
-
-	opts := KeyedReadSnapshotOptions{
-		Cursor:  req.KeyedCursor,
-		Limit:   limit,
-		Ordered: req.KeyedOrdered,
-	}
-
-	// If client provided position, validate epoch.
-	if req.KeyedOffset > 0 || req.KeyedEpoch != "" {
-		opts.Revision = &StreamPosition{
-			Offset: req.KeyedOffset,
-			Epoch:  req.KeyedEpoch,
-		}
-	}
-
-	// Read presence snapshot.
-	pubs, streamPos, nextCursor, err := keyedEngine.ReadSnapshot(c.ctx, presenceChannel, opts)
-	if err != nil {
-		if errors.Is(err, ErrorUnrecoverablePosition) {
-			c.cleanupKeyedPresenceSubscribing(presenceChannel)
-			return ErrorUnrecoverablePosition
-		}
-		c.node.logger.log(newErrorLogEntry(err, "error reading presence snapshot", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		c.cleanupKeyedPresenceSubscribing(presenceChannel)
-		return ErrorInternal
-	}
-
-	res := &protocol.SubscribeResult{
-		Keyed:       true,
-		KeyedPhase:  KeyedPhaseSnapshot,
-		KeyedCursor: nextCursor,
-		Epoch:       streamPos.Epoch,
-		Offset:      streamPos.Offset,
-	}
-
-	protoPubs := make([]*protocol.Publication, 0, len(pubs))
-	for _, pub := range pubs {
-		protoPubs = append(protoPubs, pubToProto(pub))
-	}
-	res.Publications = protoPubs
-
-	return c.writeKeyedSubscribeReply(channel, cmd, res, started, rw)
-}
-
-// handlePresenceLivePhase handles joining presence pub/sub.
-func (c *Client) handlePresenceLivePhase(
-	req *protocol.SubscribeRequest,
-	cmd *protocol.Command,
-	started time.Time,
-	rw *replyWriter,
-	presenceChannel string,
-) error {
-	channel := req.Channel
-
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return ErrorNotAvailable
-	}
-
-	// Subscribe to presence pub/sub via KeyedEngine.
-	if err := keyedEngine.Subscribe(presenceChannel); err != nil {
-		c.cleanupKeyedPresenceSubscribing(presenceChannel)
-		c.node.logger.log(newErrorLogEntry(err, "error subscribing to presence channel", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		return ErrorInternal
-	}
-
-	// Add subscription to node hub so we receive publications.
-	sub := subInfo{client: c, deltaType: deltaTypeNone, useID: false}
-	_, err := c.node.addSubscription(presenceChannel, sub)
-	if err != nil {
-		_ = keyedEngine.Unsubscribe(presenceChannel)
-		c.cleanupKeyedPresenceSubscribing(presenceChannel)
-		c.node.logger.log(newErrorLogEntry(err, "error adding presence subscription", map[string]any{
-			"channel": channel, "user": c.user, "client": c.uid,
-		}))
-		var clientErr *Error
-		if errors.As(err, &clientErr) && !errors.Is(clientErr, ErrorInternal) {
-			return clientErr
-		}
-		return ErrorInternal
-	}
-
-	// Move from subscribing to subscribed.
-	c.mu.Lock()
-	delete(c.keyedPresenceSubscribing, presenceChannel)
-	if c.keyedPresenceSubs == nil {
-		c.keyedPresenceSubs = make(map[string]struct{})
-	}
-	c.keyedPresenceSubs[presenceChannel] = struct{}{}
-	c.mu.Unlock()
-
-	res := &protocol.SubscribeResult{
-		Keyed:      true,
-		KeyedPhase: KeyedPhaseLive,
-	}
-
-	return c.writeKeyedSubscribeReply(channel, cmd, res, started, rw)
-}
+const (
+	clientsSuffix = ":clients" // For EmitKeyedClientPresence (key=clientId, full info)
+	usersSuffix   = ":users"   // For EmitKeyedUserPresence (key=userId, no info)
+)
 
 // writeKeyedSubscribeReply writes a keyed subscribe result to the client.
 func (c *Client) writeKeyedSubscribeReply(
@@ -813,13 +760,6 @@ func (c *Client) cleanupKeyedSubscribing(channel string) {
 	delete(c.keyedSubscribing, channel)
 }
 
-// cleanupKeyedPresenceSubscribing removes keyed presence subscribing state for a channel.
-func (c *Client) cleanupKeyedPresenceSubscribing(presenceChannel string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.keyedPresenceSubscribing, presenceChannel)
-}
-
 // keyedPresenceTTL returns TTL for keyed presence entries.
 // Uses 3x the presence update interval to allow for some delay while still expiring if updates stop.
 func (c *Client) keyedPresenceTTL() time.Duration {
@@ -830,57 +770,145 @@ func (c *Client) keyedPresenceTTL() time.Duration {
 	return ttl
 }
 
-// addKeyedPresence adds presence for a keyed channel using KeyedEngine.
-// This is called when a keyed subscription becomes live with EmitPresence enabled.
-func (c *Client) addKeyedPresence(channel string, info *ClientInfo) error {
+// addKeyedClientPresence adds client presence to {channel}:clients.
+// Key is clientId, stores full ClientInfo.
+func (c *Client) addKeyedClientPresence(channel string, info *ClientInfo) error {
 	keyedEngine := c.node.keyedEngine
 	if keyedEngine == nil {
 		return ErrorNotAvailable
 	}
 
-	presenceChannel := channel + ":presence"
+	clientsChannel := channel + clientsSuffix
 
-	// Use KeyedPublishOptions.ClientInfo - data is not used for keyed presence.
-	_, err := keyedEngine.Publish(c.ctx, presenceChannel, c.uid, KeyedPublishOptions{
-		Publish:    true,
-		ClientInfo: info,
-		KeyTTL:     c.keyedPresenceTTL(),
+	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
+	// - Publish JOIN event only if this is a new presence entry
+	// - Refresh TTL without publishing if entry already exists (quick reconnect)
+	_, err := keyedEngine.Publish(c.ctx, clientsChannel, c.uid, KeyedPublishOptions{
+		Publish:              true,
+		ClientInfo:           info,
+		KeyTTL:               c.keyedPresenceTTL(),
+		StreamSize:           1000,
+		StreamTTL:            300 * time.Second,
+		StreamMetaTTL:        time.Hour,
+		KeyMode:              KeyModeIfNew,
+		RefreshTTLOnSuppress: true,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// addKeyedUserPresence adds user presence to {channel}:users.
+// Key is userId, no ClientInfo stored (just the key for uniqueness).
+func (c *Client) addKeyedUserPresence(channel string) error {
+	keyedEngine := c.node.keyedEngine
+	if keyedEngine == nil {
+		return ErrorNotAvailable
+	}
+
+	usersChannel := channel + usersSuffix
+
+	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
+	// - Publish JOIN event only if this is a new user
+	// - Refresh TTL without publishing if user already exists
+	_, err := keyedEngine.Publish(c.ctx, usersChannel, c.user, KeyedPublishOptions{
+		Publish:              true,
+		KeyTTL:               c.keyedPresenceTTL(),
+		StreamSize:           1000,
+		StreamTTL:            300 * time.Second,
+		StreamMetaTTL:        time.Hour,
+		KeyMode:              KeyModeIfNew,
+		RefreshTTLOnSuppress: true,
 	})
 	return err
 }
 
 // updateKeyedPresence updates presence for a keyed channel using KeyedEngine.
 // This is called periodically by updateChannelPresence to refresh the TTL.
-func (c *Client) updateKeyedPresence(channel string, info *ClientInfo) error {
+// Handles :clients and :users channels based on flags.
+func (c *Client) updateKeyedPresence(channel string, info *ClientInfo, flags uint16) error {
 	keyedEngine := c.node.keyedEngine
 	if keyedEngine == nil {
 		return ErrorNotAvailable
 	}
 
-	presenceChannel := channel + ":presence"
+	// Use KeyModeIfNew with RefreshTTLOnSuppress for TTL refresh:
+	// - Since key already exists, publish is suppressed (no offset increment)
+	// - TTL is refreshed without generating stream entries
 
-	// Use Publish: false for TTL refresh - we don't want to send publications
-	// to subscribers on every heartbeat since nothing actually changed.
-	_, err := keyedEngine.Publish(c.ctx, presenceChannel, c.uid, KeyedPublishOptions{
-		Publish:    false,
-		ClientInfo: info,
-		KeyTTL:     c.keyedPresenceTTL(),
-	})
-	return err
+	// Update :clients if EmitKeyedClientPresence is enabled.
+	if channelHasFlag(flags, flagEmitKeyedClientPresence) {
+		clientsChannel := channel + clientsSuffix
+		_, err := keyedEngine.Publish(c.ctx, clientsChannel, c.uid, KeyedPublishOptions{
+			Publish:              true,
+			ClientInfo:           info,
+			KeyTTL:               c.keyedPresenceTTL(),
+			StreamSize:           1000,
+			StreamTTL:            300 * time.Second,
+			StreamMetaTTL:        time.Hour,
+			KeyMode:              KeyModeIfNew,
+			RefreshTTLOnSuppress: true,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	// Update :users if EmitKeyedUserPresence is enabled.
+	if channelHasFlag(flags, flagEmitKeyedUserPresence) {
+		usersChannel := channel + usersSuffix
+		_, err := keyedEngine.Publish(c.ctx, usersChannel, c.user, KeyedPublishOptions{
+			Publish:              true,
+			KeyTTL:               c.keyedPresenceTTL(),
+			StreamSize:           1000,
+			StreamTTL:            300 * time.Second,
+			StreamMetaTTL:        time.Hour,
+			KeyMode:              KeyModeIfNew,
+			RefreshTTLOnSuppress: true,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // removeKeyedPresence removes presence for a keyed channel using KeyedEngine.
-func (c *Client) removeKeyedPresence(channel string) error {
+// Called on explicit unsubscribe or disconnect. Only removes from :presence and :clients,
+// :users entries expire via TTL (acts as debounce for quick reconnects).
+func (c *Client) removeKeyedPresence(channel string, flags uint16) error {
 	keyedEngine := c.node.keyedEngine
 	if keyedEngine == nil {
 		return nil
 	}
 
-	presenceChannel := channel + ":presence"
-	_, err := keyedEngine.Unpublish(context.Background(), presenceChannel, c.uid, KeyedUnpublishOptions{
-		Publish: true,
-	})
-	return err
+	// Remove from :presence if EmitPresence is enabled.
+	if channelHasFlag(flags, flagEmitPresence) {
+		if err := c.node.removePresence(channel, c.uid, c.user); err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	}
+
+	// Remove from :clients if EmitKeyedClientPresence is enabled.
+	if channelHasFlag(flags, flagEmitKeyedClientPresence) {
+		clientsChannel := channel + clientsSuffix
+		_, err := keyedEngine.Unpublish(context.Background(), clientsChannel, c.uid, KeyedUnpublishOptions{
+			Publish:       true,
+			StreamSize:    1000,
+			StreamTTL:     300 * time.Second,
+			StreamMetaTTL: time.Hour,
+		})
+		if err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error removing keyed clients presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	}
+
+	// :users entries are NOT removed on disconnect - they only expire via TTL.
+	// This provides debounce/grace period for quick reconnects.
+
+	return nil
 }
 
 // cleanupKeyedPresence removes presence for all keyed channels on disconnect.
@@ -891,22 +919,30 @@ func (c *Client) cleanupKeyedPresence() {
 	}
 
 	c.mu.RLock()
-	channels := make([]string, 0, len(c.channels))
+	type channelWithFlags struct {
+		channel string
+		flags   uint16
+	}
+	channels := make([]channelWithFlags, 0, len(c.channels))
 	for ch, ctx := range c.channels {
-		// Only clean up keyed channels with EmitPresence enabled.
-		if channelHasFlag(ctx.flags, flagKeyed) && channelHasFlag(ctx.flags, flagEmitPresence) {
-			channels = append(channels, ch)
+		// Clean up keyed channels with any presence enabled.
+		if channelHasFlag(ctx.flags, flagKeyed) &&
+			(channelHasFlag(ctx.flags, flagEmitPresence) ||
+				channelHasFlag(ctx.flags, flagEmitKeyedClientPresence) ||
+				channelHasFlag(ctx.flags, flagEmitKeyedUserPresence)) {
+			channels = append(channels, channelWithFlags{channel: ch, flags: ctx.flags})
 		}
 	}
 	c.mu.RUnlock()
 
 	// Remove presence for channels where it was maintained.
-	for _, ch := range channels {
-		_ = c.removeKeyedPresence(ch)
+	for _, cwf := range channels {
+		_ = c.removeKeyedPresence(cwf.channel, cwf.flags)
 	}
 }
 
 // cleanupKeyedPresenceSubs unsubscribes from all presence subscriptions.
+// Presence subscriptions are identified by the flagKeyedPresence flag in the unified channels map.
 func (c *Client) cleanupKeyedPresenceSubs() {
 	keyedEngine := c.node.keyedEngine
 	if keyedEngine == nil {
@@ -914,14 +950,18 @@ func (c *Client) cleanupKeyedPresenceSubs() {
 	}
 
 	c.mu.RLock()
-	// Collect presence channels to unsubscribe from.
-	presenceSubs := make([]string, 0, len(c.keyedPresenceSubs))
-	for presenceChannel := range c.keyedPresenceSubs {
-		presenceSubs = append(presenceSubs, presenceChannel)
+	// Collect presence channels from the unified channels map.
+	var presenceSubs []string
+	for channel, ctx := range c.channels {
+		if channelHasFlag(ctx.flags, flagKeyedPresence) {
+			presenceSubs = append(presenceSubs, channel)
+		}
 	}
-	// Also clean up any in-progress presence subscriptions.
-	for presenceChannel := range c.keyedPresenceSubscribing {
-		presenceSubs = append(presenceSubs, presenceChannel)
+	// Also clean up any in-progress presence subscriptions from keyedSubscribing.
+	for channel, state := range c.keyedSubscribing {
+		if state.isPresence {
+			presenceSubs = append(presenceSubs, channel)
+		}
 	}
 	c.mu.RUnlock()
 

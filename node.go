@@ -1550,7 +1550,11 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 	return historyResult.StreamPosition, nil
 }
 
-func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration) (bool, error) {
+func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration, isKeyed bool) (bool, error) {
+	if isKeyed {
+		// TODO: need to use KeyedEngine to check position.
+		return true, nil
+	}
 	mu := n.subLock(ch)
 	mu.Lock()
 	medium, ok := n.mediums[ch]

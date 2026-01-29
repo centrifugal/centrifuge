@@ -507,6 +507,13 @@ func (e *RedisKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRemo
 	return nil
 }
 
+func boolToStr(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
 // Publish publishes data to a stateful channel with optional keyed state.
 func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
 	s := e.getShard(ch)
@@ -620,19 +627,10 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
 	}
 
-	// Setup aggregation keys if aggregation is enabled
-	var aggregationZSetKey, aggregationHashKey, aggregationMappingKey string
-	if opts.AggregationKey != "" && key != "" {
-		aggregationZSetKey = e.aggregationZSetKey(s.shard, ch)
-		aggregationHashKey = e.aggregationHashKey(s.shard, ch)
-		aggregationMappingKey = e.aggregationMappingHashKey(s.shard, ch)
-	}
-
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
 			streamKey, metaKey, resultKey, snapshotHashKey, snapshotOrderKey, snapshotExpireKey,
-			aggregationZSetKey, aggregationHashKey, snapshotMetaKey,
-			cleanupRegKey, aggregationMappingKey,
+			snapshotMetaKey, cleanupRegKey,
 		},
 		[]string{
 			key,                                // message_key
@@ -650,12 +648,10 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 			"0", // is_remove
 			strconv.FormatInt(opts.Score, 10),
 			strconv.FormatInt(int64(opts.KeyTTL.Seconds()), 10),
-			"0",                   // use_hexpire
-			opts.AggregationKey,   // aggregation_key
-			opts.AggregationValue, // aggregation_value
-			"",                    // key_state
-			ch,                    // channel_for_cleanup (for cleanup registration)
-			string(opts.KeyMode),  // key_mode
+			"0",                  // use_hexpire
+			ch,                   // channel_for_cleanup (for cleanup registration)
+			string(opts.KeyMode), // key_mode
+			boolToStr(opts.RefreshTTLOnSuppress), // refresh_ttl_on_suppress
 		},
 	).ToArray()
 	if err != nil {
@@ -718,20 +714,14 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 		return KeyedPublishResult{}, err
 	}
 
-	// Always setup aggregation keys for Unpublish to enable auto-discovery
-	// The Lua script will auto-discover aggregation value from stored mapping if not provided
-	aggregationZSetKey := e.aggregationZSetKey(s.shard, ch)
-	aggregationHashKey := e.aggregationHashKey(s.shard, ch)
-	aggregationMappingKey := e.aggregationMappingHashKey(s.shard, ch)
-
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
 			streamKey, metaKey, "", // Optional stream, no result key
 			snapshotHashKey,
 			"", // No order key for unpublish
 			snapshotExpireKey,
-			aggregationZSetKey, aggregationHashKey, snapshotMetaKey,
-			"", aggregationMappingKey, // No cleanup registration, but aggregation mapping for leave
+			snapshotMetaKey,
+			"", // No cleanup registration for unpublish
 		},
 		[]string{
 			key,                             // message_key
@@ -743,15 +733,13 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 			e.node.ID(), // new_epoch_if_empty
 			publishCommand,
 			"", "0", "0", "", // result_key_expire, use_delta, version, version_epoch
-			"1",                   // is_leave (this triggers removal)
-			"0",                   // score
-			"0",                   // keyed_member_ttl
-			"0",                   // use_hexpire
-			opts.AggregationKey,   // aggregation_key (optional hint)
-			opts.AggregationValue, // aggregation_value (optional, auto-discovered if empty)
-			"",                    // message_key_payload (empty - we're removing)
-			"",                    // channel_for_cleanup (not used for unpublish)
-			"",                    // key_mode (not used for unpublish)
+			"1", // is_leave (this triggers removal)
+			"0", // score
+			"0", // keyed_member_ttl
+			"0", // use_hexpire
+			"",  // channel_for_cleanup (not used for unpublish)
+			"",  // key_mode (not used for unpublish)
+			"0", // refresh_ttl_on_suppress (not used for unpublish)
 		},
 	).ToArray()
 	if err != nil {
@@ -1908,11 +1896,7 @@ func (e *RedisKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, er
 	if err != nil {
 		return KeyedStats{}, err
 	}
-	numAggregated, err := replies[1].AsInt64()
-	if err != nil {
-		return KeyedStats{}, err
-	}
-	return KeyedStats{NumKeys: int(numKeys), NumAggregationKeys: int(numAggregated)}, nil
+	return KeyedStats{NumKeys: int(numKeys)}, nil
 }
 
 // ReadPresenceSnapshot retrieves presence snapshot with per-entry revisions for converged membership.

@@ -174,7 +174,8 @@
                 cursors.set(key, cursor);
             }
 
-            cursor.style.transform = `translate(${data.x}px, ${data.y}px)`;
+            // Offset by half cursor size (10px) to center on the point
+            cursor.style.transform = `translate(${data.x - 10}px, ${data.y - 10}px)`;
             updateUserCount();
         }
 
@@ -263,7 +264,8 @@
             if (myCursor.style.display === 'none') {
                 myCursor.style.display = '';
             }
-            myCursor.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+            // Offset by half cursor size (10px) to center on the point
+            myCursor.style.transform = `translate(${e.clientX - 10}px, ${e.clientY - 10}px)`;
 
             // Throttle updates to server.
             const now = Date.now();

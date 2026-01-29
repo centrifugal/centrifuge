@@ -129,7 +129,13 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	}
 
 	if e.eventHandler != nil {
-		return KeyedPublishResult{Position: streamTop}, e.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
+		if opts.Publish {
+			err = e.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
+			if err != nil {
+				e.node.logger.log(newErrorLogEntry(err, "error handling publication in channel", map[string]any{"channel": ch}))
+			}
+		}
+		return KeyedPublishResult{Position: streamTop}, nil
 	}
 
 	return KeyedPublishResult{Position: streamTop}, nil
@@ -249,6 +255,7 @@ type keyedHub struct {
 	keyExpireQueue     priority.Queue     // priority queue of {ch:key, expireAt}
 	keyExpires         map[string]int64   // "ch:key" -> expireAt
 	eventHandler       BrokerEventHandler // for publishing removal events
+	streamSize         int                // default stream size for cleanup-generated events
 }
 
 // keyedChannel represents keyed state for a single channel.
@@ -259,9 +266,6 @@ type keyedChannel struct {
 	scores          map[string]int64 // key -> score (for ordered snapshots)
 	sortedKeys      []string         // cached sorted keys by score (descending) for ordered snapshots
 	sortedKeysDirty bool             // true if sortedKeys needs rebuilding
-	// Aggregation support (e.g., counting unique users across connections)
-	aggregations     map[string]int    // aggregation_value -> count
-	keyToAggregation map[string]string // key -> aggregation_value (for cleanup)
 }
 
 type snapshotEntry struct {
@@ -283,6 +287,7 @@ func newKeyedHub(historyMetaTTL time.Duration, closeCh chan struct{}) *keyedHub 
 		closeCh:        closeCh,
 		keyExpireQueue: priority.MakeQueue(),
 		keyExpires:     make(map[string]int64),
+		streamSize:     100,
 	}
 }
 
@@ -378,6 +383,13 @@ func (h *keyedHub) removeChannels() {
 	}
 }
 
+// expiredKeyEvent holds data for publishing removal events after lock is released.
+type expiredKeyEvent struct {
+	channel   string
+	pub       *Publication
+	streamPos StreamPosition
+}
+
 // expireKeys handles TTL-based expiration of individual snapshot keys.
 // When a key expires, it removes it from the snapshot, updates aggregation counts,
 // and publishes a removal event.
@@ -389,102 +401,111 @@ func (h *keyedHub) expireKeys() {
 		case <-h.closeCh:
 			return
 		}
-		h.Lock()
-		if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > time.Now().Unix() {
-			h.Unlock()
+		h.expireKeysIteration(&nextKeyExpireCheck)
+	}
+}
+
+func (h *keyedHub) expireKeysIteration(nextKeyExpireCheck *int64) {
+	// Collect expired keys while holding lock
+	var expiredEvents []expiredKeyEvent
+	var eventHandler BrokerEventHandler
+
+	h.Lock()
+	if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > time.Now().Unix() {
+		h.Unlock()
+		return
+	}
+	*nextKeyExpireCheck = 0
+	now := time.Now().Unix()
+	eventHandler = h.eventHandler
+
+	for h.keyExpireQueue.Len() > 0 {
+		item := heap.Pop(&h.keyExpireQueue).(*priority.Item)
+		expireAt := item.Priority
+		if expireAt > now {
+			heap.Push(&h.keyExpireQueue, item)
+			*nextKeyExpireCheck = expireAt
+			break
+		}
+
+		chKey := item.Value // format: "channel\x00key"
+		storedExpireAt, ok := h.keyExpires[chKey]
+		if !ok {
 			continue
 		}
-		nextKeyExpireCheck = 0
-		now := time.Now().Unix()
 
-		for h.keyExpireQueue.Len() > 0 {
-			item := heap.Pop(&h.keyExpireQueue).(*priority.Item)
-			expireAt := item.Priority
-			if expireAt > now {
-				heap.Push(&h.keyExpireQueue, item)
-				nextKeyExpireCheck = expireAt
-				break
-			}
-
-			chKey := item.Value // format: "channel\x00key"
-			storedExpireAt, ok := h.keyExpires[chKey]
-			if !ok {
-				continue
-			}
-
-			// Check if expiration time was updated (key was refreshed)
-			if storedExpireAt > expireAt {
-				// Re-queue with updated expiration
-				heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: storedExpireAt})
-				continue
-			}
-
-			// Parse channel and key from combined string
-			ch, key := h.parseChKey(chKey)
-			if ch == "" || key == "" {
-				delete(h.keyExpires, chKey)
-				continue
-			}
-
-			channel, ok := h.channels[ch]
-			if !ok {
-				delete(h.keyExpires, chKey)
-				continue
-			}
-
-			entry, ok := channel.snapshot[key]
-			if !ok {
-				delete(h.keyExpires, chKey)
-				continue
-			}
-
-			// Verify entry's expiration matches (wasn't refreshed)
-			if entry.ExpireAt != expireAt {
-				if entry.ExpireAt > now {
-					// Entry was refreshed, re-queue
-					h.keyExpires[chKey] = entry.ExpireAt
-					heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: entry.ExpireAt})
-				}
-				continue
-			}
-
-			// Remove the expired key
-			delete(channel.snapshot, key)
-			delete(h.keyExpires, chKey)
-			channel.sortedKeysDirty = true
-			if channel.ordered {
-				delete(channel.scores, key)
-			}
-
-			// Update aggregation counts
-			if aggValue, ok := channel.keyToAggregation[key]; ok {
-				channel.aggregations[aggValue]--
-				if channel.aggregations[aggValue] <= 0 {
-					delete(channel.aggregations, aggValue)
-				}
-				delete(channel.keyToAggregation, key)
-			}
-
-			// Publish removal event
-			if h.eventHandler != nil {
-				var streamPos StreamPosition
-				if channel.stream != nil {
-					streamPos = StreamPosition{
-						Offset: channel.stream.Top(),
-						Epoch:  channel.stream.Epoch(),
-					}
-				}
-				removePub := &Publication{
-					Key:     key,
-					Removed: true,
-					Time:    time.Now().UnixMilli(),
-					Info:    entry.Publication.Info,
-				}
-				_ = h.eventHandler.HandlePublication(ch, removePub, streamPos, false, nil)
-			}
+		// Check if expiration time was updated (key was refreshed)
+		if storedExpireAt > expireAt {
+			// Re-queue with updated expiration
+			heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: storedExpireAt})
+			continue
 		}
-		h.nextKeyExpireCheck = nextKeyExpireCheck
-		h.Unlock()
+
+		// Parse channel and key from combined string
+		ch, key := h.parseChKey(chKey)
+		if ch == "" || key == "" {
+			delete(h.keyExpires, chKey)
+			continue
+		}
+
+		channel, ok := h.channels[ch]
+		if !ok {
+			delete(h.keyExpires, chKey)
+			continue
+		}
+
+		entry, ok := channel.snapshot[key]
+		if !ok {
+			delete(h.keyExpires, chKey)
+			continue
+		}
+
+		// Verify entry's expiration matches (wasn't refreshed)
+		if entry.ExpireAt != expireAt {
+			if entry.ExpireAt > now {
+				// Entry was refreshed, re-queue
+				h.keyExpires[chKey] = entry.ExpireAt
+				heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: entry.ExpireAt})
+			}
+			continue
+		}
+
+		// Remove the expired key
+		delete(channel.snapshot, key)
+		delete(h.keyExpires, chKey)
+		channel.sortedKeysDirty = true
+		if channel.ordered {
+			delete(channel.scores, key)
+		}
+
+		// Prepare removal event (add to stream while holding lock)
+		if eventHandler != nil && channel.stream != nil {
+			removePub := &Publication{
+				Key:     key,
+				Removed: true,
+				Time:    time.Now().UnixMilli(),
+				Info:    entry.Publication.Info,
+			}
+			// Add removal to stream and set offset
+			offset, _ := channel.stream.Add(removePub, h.streamSize, 0, "")
+			removePub.Offset = offset
+			streamPos := StreamPosition{
+				Offset: offset,
+				Epoch:  channel.stream.Epoch(),
+			}
+			expiredEvents = append(expiredEvents, expiredKeyEvent{
+				channel:   ch,
+				pub:       removePub,
+				streamPos: streamPos,
+			})
+		}
+	}
+	h.nextKeyExpireCheck = *nextKeyExpireCheck
+	h.Unlock()
+
+	// Publish removal events after releasing lock to avoid deadlock
+	for _, event := range expiredEvents {
+		_ = eventHandler.HandlePublication(event.channel, event.pub, event.streamPos, false, nil)
 	}
 }
 
@@ -520,21 +541,33 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 	channel, ok := h.channels[ch]
 	if !ok {
 		channel = &keyedChannel{
-			stream:           memstream.New(),
-			snapshot:         make(map[string]*snapshotEntry),
-			ordered:          opts.Ordered,
-			scores:           make(map[string]int64),
-			aggregations:     make(map[string]int),
-			keyToAggregation: make(map[string]string),
+			stream:   memstream.New(),
+			snapshot: make(map[string]*snapshotEntry),
+			ordered:  opts.Ordered,
+			scores:   make(map[string]int64),
 		}
 		h.channels[ch] = channel
 	}
 
 	// Check KeyMode condition before proceeding
 	if key != "" && opts.KeyMode != KeyModeReplace {
-		_, keyExists := channel.snapshot[key]
+		existingEntry, keyExists := channel.snapshot[key]
 		if opts.KeyMode == KeyModeIfNew && keyExists {
-			// KeyModeIfNew but key already exists - skip
+			// KeyModeIfNew but key already exists - suppress publish
+			// But optionally refresh TTL if RefreshTTLOnSuppress is set
+			if opts.RefreshTTLOnSuppress && opts.KeyTTL > 0 {
+				expireAt := time.Now().Unix() + int64(opts.KeyTTL.Seconds())
+				existingEntry.ExpireAt = expireAt
+				// Update TTL tracking
+				chKey := h.makeChKey(ch, key)
+				if _, exists := h.keyExpires[chKey]; !exists {
+					heap.Push(&h.keyExpireQueue, &priority.Item{Value: chKey, Priority: expireAt})
+				}
+				h.keyExpires[chKey] = expireAt
+				if h.nextKeyExpireCheck == 0 || h.nextKeyExpireCheck > expireAt {
+					h.nextKeyExpireCheck = expireAt
+				}
+			}
 			var pos StreamPosition
 			if channel.stream != nil {
 				pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
@@ -591,6 +624,7 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 		}
 
 		offset, _ := channel.stream.Add(pub, opts.StreamSize, opts.Version, opts.VersionEpoch)
+		pub.Offset = offset // Set offset on publication for delivery
 		streamPosition = StreamPosition{
 			Offset: offset,
 			Epoch:  channel.stream.Epoch(),
@@ -607,9 +641,6 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 
 	// Handle keyed snapshot
 	if key != "" {
-		// Check if this is a new key for aggregation tracking
-		_, keyExisted := channel.snapshot[key]
-
 		// Calculate expiration time
 		var expireAt int64
 		if opts.KeyTTL > 0 {
@@ -630,30 +661,6 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 		channel.sortedKeysDirty = true
 		if opts.Ordered {
 			channel.scores[key] = opts.Score
-		}
-
-		// Handle aggregation tracking
-		if opts.AggregationKey != "" && opts.AggregationValue != "" {
-			if !keyExisted {
-				// New key - increment aggregation count
-				channel.aggregations[opts.AggregationValue]++
-			} else {
-				// Existing key - check if aggregation value changed
-				oldAggValue, hadAggValue := channel.keyToAggregation[key]
-				if hadAggValue && oldAggValue != opts.AggregationValue {
-					// Aggregation value changed - decrement old, increment new
-					channel.aggregations[oldAggValue]--
-					if channel.aggregations[oldAggValue] <= 0 {
-						delete(channel.aggregations, oldAggValue)
-					}
-					channel.aggregations[opts.AggregationValue]++
-				} else if !hadAggValue {
-					// Key existed but wasn't tracked for aggregation before
-					channel.aggregations[opts.AggregationValue]++
-				}
-			}
-			// Store key -> aggregation value mapping
-			channel.keyToAggregation[key] = opts.AggregationValue
 		}
 
 		// Handle key TTL expiration tracking
@@ -707,15 +714,6 @@ func (h *keyedHub) remove(ch string, key string, opts KeyedUnpublishOptions) (St
 		delete(channel.scores, key)
 	}
 
-	// Handle aggregation cleanup
-	if aggValue, ok := channel.keyToAggregation[key]; ok {
-		channel.aggregations[aggValue]--
-		if channel.aggregations[aggValue] <= 0 {
-			delete(channel.aggregations, aggValue)
-		}
-		delete(channel.keyToAggregation, key)
-	}
-
 	// Clean up key expiration tracking
 	chKey := h.makeChKey(ch, key)
 	delete(h.keyExpires, chKey)
@@ -741,6 +739,7 @@ func (h *keyedHub) remove(ch string, key string, opts KeyedUnpublishOptions) (St
 		}
 
 		offset, _ := channel.stream.Add(removePub, opts.StreamSize, 0, "")
+		removePub.Offset = offset // Set offset on publication for delivery
 		streamPosition = StreamPosition{
 			Offset: offset,
 			Epoch:  channel.stream.Epoch(),
@@ -1022,8 +1021,7 @@ func (h *keyedHub) getStats(ch string) (KeyedStats, error) {
 	}
 
 	return KeyedStats{
-		NumKeys:            len(channel.snapshot),
-		NumAggregationKeys: len(channel.aggregations),
+		NumKeys: len(channel.snapshot),
 	}, nil
 }
 
@@ -1033,11 +1031,9 @@ func (h *keyedHub) createStreamPosition(ch string) StreamPosition {
 	if !ok {
 		stream := memstream.New()
 		h.channels[ch] = &keyedChannel{
-			stream:           stream,
-			snapshot:         make(map[string]*snapshotEntry),
-			scores:           make(map[string]int64),
-			aggregations:     make(map[string]int),
-			keyToAggregation: make(map[string]string),
+			stream:   stream,
+			snapshot: make(map[string]*snapshotEntry),
+			scores:   make(map[string]int64),
 		}
 		return StreamPosition{
 			Offset: 0,

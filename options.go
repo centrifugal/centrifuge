@@ -150,6 +150,13 @@ type SubscribeOptions struct {
 	EnableKeyed bool
 	// KeyedPresenceAvailable indicates that presence data is available for sub-subscription.
 	KeyedPresenceAvailable bool
+	// EmitKeyedClientPresence emits presence to {channel}:clients with key=clientId
+	// and full ClientInfo. Use for tracking individual connections.
+	EmitKeyedClientPresence bool
+	// EmitKeyedUserPresence emits presence to {channel}:users with key=userId.
+	// No ClientInfo is stored (just the key for uniqueness). TTL-based leave
+	// provides debounce/grace period for quick reconnects.
+	EmitKeyedUserPresence bool
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

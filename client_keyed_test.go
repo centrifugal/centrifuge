@@ -472,8 +472,8 @@ func TestKeyedSubscribe_WithPresence(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableKeyed:  true,
-					EmitPresence: true,
+					EnableKeyed:             true,
+					EmitKeyedClientPresence: true,
 				},
 			}, nil)
 		})
@@ -481,26 +481,26 @@ func TestKeyedSubscribe_WithPresence(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Subscribe with presence.
+	// Subscribe with keyed client presence.
 	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
 		Channel:    channel,
 		Keyed:      true,
 		KeyedPhase: KeyedPhaseLive,
 	})
 
-	// Verify presence was added.
-	presenceChannel := channel + ":presence"
-	entries, _, _, err := engine.ReadSnapshot(ctx, presenceChannel, KeyedReadSnapshotOptions{
+	// Verify presence was added to :clients channel.
+	clientsChannel := channel + ":clients"
+	entries, _, _, err := engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.Equal(t, client.uid, entries[0].Key)
 
-	// Verify flagEmitPresence is set.
+	// Verify flagEmitKeyedClientPresence is set.
 	require.Contains(t, client.channels, channel)
 	chCtx := client.channels[channel]
-	require.True(t, channelHasFlag(chCtx.flags, flagEmitPresence))
+	require.True(t, channelHasFlag(chCtx.flags, flagEmitKeyedClientPresence))
 	require.True(t, channelHasFlag(chCtx.flags, flagKeyed))
 }
 
@@ -514,8 +514,8 @@ func TestKeyedSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableKeyed:  true,
-					EmitPresence: true,
+					EnableKeyed:             true,
+					EmitKeyedClientPresence: true,
 				},
 			}, nil)
 		})
@@ -523,16 +523,16 @@ func TestKeyedSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Subscribe with presence.
+	// Subscribe with keyed client presence.
 	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
 		Channel:    channel,
 		Keyed:      true,
 		KeyedPhase: KeyedPhaseLive,
 	})
 
-	// Verify presence exists.
-	presenceChannel := channel + ":presence"
-	entries, _, _, err := engine.ReadSnapshot(ctx, presenceChannel, KeyedReadSnapshotOptions{
+	// Verify presence exists in :clients channel.
+	clientsChannel := channel + ":clients"
+	entries, _, _, err := engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -542,7 +542,7 @@ func TestKeyedSubscribe_PresenceCleanupOnUnsubscribe(t *testing.T) {
 	client.Unsubscribe(channel)
 
 	// Verify presence was removed.
-	entries, _, _, err = engine.ReadSnapshot(ctx, presenceChannel, KeyedReadSnapshotOptions{
+	entries, _, _, err = engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -559,8 +559,8 @@ func TestKeyedSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
 			cb(SubscribeReply{
 				Options: SubscribeOptions{
-					EnableKeyed:  true,
-					EmitPresence: true,
+					EnableKeyed:             true,
+					EmitKeyedClientPresence: true,
 				},
 			}, nil)
 		})
@@ -568,16 +568,16 @@ func TestKeyedSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Subscribe with presence.
+	// Subscribe with keyed client presence.
 	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
 		Channel:    channel,
 		Keyed:      true,
 		KeyedPhase: KeyedPhaseLive,
 	})
 
-	// Verify presence exists.
-	presenceChannel := channel + ":presence"
-	entries, _, _, err := engine.ReadSnapshot(ctx, presenceChannel, KeyedReadSnapshotOptions{
+	// Verify presence exists in :clients channel.
+	clientsChannel := channel + ":clients"
+	entries, _, _, err := engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -588,7 +588,7 @@ func TestKeyedSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify presence was removed.
-	entries, _, _, err = engine.ReadSnapshot(ctx, presenceChannel, KeyedReadSnapshotOptions{
+	entries, _, _, err = engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -598,11 +598,10 @@ func TestKeyedSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 func TestPresenceSubscribe_Snapshot(t *testing.T) {
 	node, engine := newTestNodeWithKeyedEngine(t)
 
-	baseChannel := "test_presence_sub"
 	ctx := context.Background()
 
 	// Pre-populate presence data.
-	presenceChannel := baseChannel + ":presence"
+	presenceChannel := "test_presence_sub:clients"
 	_, err := engine.Publish(ctx, presenceChannel, "client1", KeyedPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
 		KeyTTL:     300 * time.Second,
@@ -616,16 +615,17 @@ func TestPresenceSubscribe_Snapshot(t *testing.T) {
 	require.NoError(t, err)
 
 	node.OnConnect(func(client *Client) {
+		// Presence subscriptions go through OnPresenceSubscribe (separate permission scope).
 		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			// Event receives the base channel (without :presence suffix).
-			require.Equal(t, baseChannel, e.Channel)
-			cb(PresenceSubscribeReply{Allowed: true}, nil)
+			// Event receives the base channel (without :clients suffix).
+			require.Equal(t, "test_presence_sub", e.Channel)
+			cb(PresenceSubscribeReply{}, nil)
 		})
 	})
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Subscribe to presence snapshot - channel must have :presence suffix.
+	// Subscribe to presence snapshot.
 	result := subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
 		Channel:       presenceChannel,
 		KeyedPresence: true,
@@ -641,11 +641,10 @@ func TestPresenceSubscribe_Snapshot(t *testing.T) {
 func TestPresenceSubscribe_Live(t *testing.T) {
 	node, engine := newTestNodeWithKeyedEngine(t)
 
-	baseChannel := "test_presence_live"
 	ctx := context.Background()
 
 	// Pre-populate presence data.
-	presenceChannel := baseChannel + ":presence"
+	presenceChannel := "test_presence_live:clients"
 	_, err := engine.Publish(ctx, presenceChannel, "client1", KeyedPublishOptions{
 		ClientInfo: &ClientInfo{ClientID: "client1", UserID: "user1"},
 		KeyTTL:     300 * time.Second,
@@ -654,13 +653,13 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 
 	node.OnConnect(func(client *Client) {
 		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			cb(PresenceSubscribeReply{Allowed: true}, nil)
+			cb(PresenceSubscribeReply{}, nil)
 		})
 	})
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// First do snapshot - channel must have :presence suffix.
+	// First do snapshot.
 	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
 		Channel:       presenceChannel,
 		KeyedPresence: true,
@@ -678,22 +677,23 @@ func TestPresenceSubscribe_Live(t *testing.T) {
 	require.True(t, result.Keyed)
 	require.Equal(t, KeyedPhaseLive, result.KeyedPhase)
 
-	// Verify presence subscription is tracked.
+	// Verify presence subscription is tracked in unified channels map with flagKeyedPresence.
 	client.mu.RLock()
-	_, ok := client.keyedPresenceSubs[presenceChannel]
+	ctx2, ok := client.channels[presenceChannel]
 	client.mu.RUnlock()
 	require.True(t, ok)
+	require.True(t, channelHasFlag(ctx2.flags, flagKeyedPresence))
 }
 
 func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 	node, _ := newTestNodeWithKeyedEngine(t)
 
-	// Presence channel must end with :presence suffix.
-	presenceChannel := "test_presence_not_allowed:presence"
+	presenceChannel := "test_presence_not_allowed:clients"
 
 	node.OnConnect(func(client *Client) {
 		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			cb(PresenceSubscribeReply{Allowed: false}, nil)
+			// Deny presence subscriptions.
+			cb(PresenceSubscribeReply{}, ErrorPermissionDenied)
 		})
 	})
 
@@ -715,15 +715,14 @@ func TestPresenceSubscribe_NotAllowed(t *testing.T) {
 func TestPresenceSubscribe_NoHandler(t *testing.T) {
 	node, _ := newTestNodeWithKeyedEngine(t)
 
-	// Presence channel must end with :presence suffix.
-	presenceChannel := "test_presence_no_handler:presence"
+	presenceChannel := "test_presence_no_handler:clients"
 
 	// No OnPresenceSubscribe handler set.
 	node.OnConnect(func(client *Client) {})
 
 	client := newTestConnectedClientV2(t, node, "user1")
 
-	// Try to subscribe to presence - should fail.
+	// Try to subscribe to presence - should fail because no OnPresenceSubscribe handler.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel:       presenceChannel,
@@ -739,12 +738,11 @@ func TestPresenceSubscribe_NoHandler(t *testing.T) {
 func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 	node, _ := newTestNodeWithKeyedEngine(t)
 
-	// Presence channel must end with :presence suffix.
-	presenceChannel := "test_presence_already_sub:presence"
+	presenceChannel := "test_presence_already_sub:clients"
 
 	node.OnConnect(func(client *Client) {
 		client.OnPresenceSubscribe(func(e PresenceSubscribeEvent, cb PresenceSubscribeCallback) {
-			cb(PresenceSubscribeReply{Allowed: true}, nil)
+			cb(PresenceSubscribeReply{}, nil)
 		})
 	})
 
@@ -762,7 +760,7 @@ func TestPresenceSubscribe_AlreadySubscribed(t *testing.T) {
 		KeyedPhase:    KeyedPhaseLive,
 	})
 
-	// Second subscribe should fail.
+	// Second subscribe should fail with AlreadySubscribed.
 	rwWrapper := testReplyWriterWrapper()
 	err := client.handleSubscribe(&protocol.SubscribeRequest{
 		Channel:       presenceChannel,
@@ -791,4 +789,178 @@ func TestKeyedPresenceTTL(t *testing.T) {
 	node.config.ClientPresenceUpdateInterval = 5 * time.Second
 	ttl = client.keyedPresenceTTL()
 	require.Equal(t, 30*time.Second, ttl) // Minimum 30 seconds.
+}
+
+func TestKeyedSubscribe_WithKeyedClientAndUserPresence(t *testing.T) {
+	node, engine := newTestNodeWithKeyedEngine(t)
+
+	channel := "test_keyed_presence"
+	ctx := context.Background()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableKeyed:             true,
+					EmitKeyedClientPresence: true,
+					EmitKeyedUserPresence:   true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Subscribe with both client and user presence.
+	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
+		Channel:    channel,
+		Keyed:      true,
+		KeyedPhase: KeyedPhaseLive,
+	})
+
+	// Verify :clients presence was added (key=clientId, full info).
+	clientsChannel := channel + ":clients"
+	entries, _, _, err := engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, client.uid, entries[0].Key)
+	require.NotNil(t, entries[0].Info)
+	require.Equal(t, client.uid, entries[0].Info.ClientID)
+	require.Equal(t, "user1", entries[0].Info.UserID)
+
+	// Verify :users presence was added (key=userId, no info).
+	usersChannel := channel + ":users"
+	entries, _, _, err = engine.ReadSnapshot(ctx, usersChannel, KeyedReadSnapshotOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "user1", entries[0].Key)
+	// No ClientInfo for :users channel.
+	require.Nil(t, entries[0].Info)
+
+	// Verify flags are set correctly.
+	require.Contains(t, client.channels, channel)
+	chCtx := client.channels[channel]
+	require.True(t, channelHasFlag(chCtx.flags, flagEmitKeyedClientPresence))
+	require.True(t, channelHasFlag(chCtx.flags, flagEmitKeyedUserPresence))
+	require.True(t, channelHasFlag(chCtx.flags, flagKeyed))
+}
+
+func TestKeyedSubscribe_KeyedPresenceCleanupOnDisconnect(t *testing.T) {
+	node, engine := newTestNodeWithKeyedEngine(t)
+
+	channel := "test_keyed_presence_cleanup"
+	ctx := context.Background()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableKeyed:             true,
+					EmitKeyedClientPresence: true,
+					EmitKeyedUserPresence:   true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+
+	// Subscribe with both client and user presence.
+	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
+		Channel:    channel,
+		Keyed:      true,
+		KeyedPhase: KeyedPhaseLive,
+	})
+
+	// Verify presence exists in both channels.
+	clientsChannel := channel + ":clients"
+	usersChannel := channel + ":users"
+
+	entries, _, _, err := engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	entries, _, _, err = engine.ReadSnapshot(ctx, usersChannel, KeyedReadSnapshotOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// Disconnect client.
+	err = client.close(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+
+	// Verify :clients presence was removed.
+	entries, _, _, err = engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, entries, 0)
+
+	// Verify :users presence is NOT removed (TTL-based expiration).
+	entries, _, _, err = engine.ReadSnapshot(ctx, usersChannel, KeyedReadSnapshotOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, entries, 1) // Still there, will expire via TTL.
+}
+
+func TestKeyedSubscribe_MultipleClientsPerUser(t *testing.T) {
+	node, engine := newTestNodeWithKeyedEngine(t)
+
+	channel := "test_multi_clients"
+	ctx := context.Background()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableKeyed:             true,
+					EmitKeyedClientPresence: true,
+					EmitKeyedUserPresence:   true,
+				},
+			}, nil)
+		})
+	})
+
+	// Connect two clients with the same user.
+	client1 := newTestConnectedClientV2(t, node, "user1")
+	client2 := newTestConnectedClientV2(t, node, "user1")
+
+	// Subscribe both clients.
+	subscribeKeyedClient(t, client1, &protocol.SubscribeRequest{
+		Channel:    channel,
+		Keyed:      true,
+		KeyedPhase: KeyedPhaseLive,
+	})
+	subscribeKeyedClient(t, client2, &protocol.SubscribeRequest{
+		Channel:    channel,
+		Keyed:      true,
+		KeyedPhase: KeyedPhaseLive,
+	})
+
+	// Verify :clients has two entries (one per connection).
+	clientsChannel := channel + ":clients"
+	entries, _, _, err := engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	// Verify :users has one entry (deduplicated by userId).
+	usersChannel := channel + ":users"
+	entries, _, _, err = engine.ReadSnapshot(ctx, usersChannel, KeyedReadSnapshotOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "user1", entries[0].Key)
+
+	// Disconnect one client.
+	err = client1.close(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+
+	// :clients should have one entry.
+	entries, _, _, err = engine.ReadSnapshot(ctx, clientsChannel, KeyedReadSnapshotOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// :users still has the user (TTL refresh from client2).
+	entries, _, _, err = engine.ReadSnapshot(ctx, usersChannel, KeyedReadSnapshotOptions{Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 }

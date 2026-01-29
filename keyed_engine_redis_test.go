@@ -407,7 +407,7 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 
 	// Publish with idempotency key
 	res1, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
-		Data:       []byte("data1"),
+		Data:                []byte("data1"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -420,7 +420,7 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 
 	// Publish again with same idempotency key
 	res2, err := engine.Publish(ctx, channel, "key1", KeyedPublishOptions{
-		Data:       []byte("data1_different"),
+		Data:                []byte("data1_different"),
 		IdempotencyKey:      "unique-id-1",
 		IdempotentResultTTL: 60 * time.Second,
 		StreamSize:          100,
@@ -428,8 +428,8 @@ func TestRedisKeyedEngine_Idempotency(t *testing.T) {
 		KeyTTL:              300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res2.Suppressed)                                 // Suppressed due to idempotency
-	require.Equal(t, "idempotency", res2.SuppressReason)
+	require.True(t, res2.Suppressed) // Suppressed due to idempotency
+	require.Equal(t, SuppressReasonIdempotency, res2.SuppressReason)
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset
 	require.Equal(t, res1.Position.Epoch, res2.Position.Epoch)   // Same epoch
 
@@ -473,8 +473,8 @@ func TestRedisKeyedEngine_VersionedPublishing(t *testing.T) {
 		KeyTTL:     300 * time.Second,
 	})
 	require.NoError(t, err)
-	require.True(t, res2.Suppressed)                                 // Suppressed due to out-of-order version
-	require.Equal(t, "version", res2.SuppressReason)
+	require.True(t, res2.Suppressed) // Suppressed due to out-of-order version
+	require.Equal(t, SuppressReasonVersion, res2.SuppressReason)
 	require.Equal(t, res1.Position.Offset, res2.Position.Offset) // Same offset (suppressed)
 
 	// Publish newer version
@@ -621,7 +621,7 @@ func TestRedisKeyedEngine_ReadStream2(t *testing.T) {
 	// Publish 5 messages to stream
 	for i := 1; i <= 5; i++ {
 		_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("msg_%d", i)),
+			Data:       []byte(fmt.Sprintf("msg_%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -703,7 +703,7 @@ func TestRedisKeyedEngine_ReadStreamZero2(t *testing.T) {
 	// Publish 5 messages to stream
 	for i := 1; i <= 5; i++ {
 		_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("msg_%d", i)),
+			Data:       []byte(fmt.Sprintf("msg_%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -785,7 +785,7 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 	// Publish 10 messages
 	for i := 1; i <= 10; i++ {
 		_, err := engine.Publish(ctx, channel, "", KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("msg_%d", i)),
+			Data:       []byte(fmt.Sprintf("msg_%d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -1099,83 +1099,8 @@ func TestRedisKeyedEngine_ReadStream2_Compatibility(t *testing.T) {
 //	t.Logf("SUCCESS: Cleanup script correctly updates aggregation")
 //}
 
-// TestRedisKeyedEngine_AggregationCleanupOnTTL verifies that cleanup script
-// correctly updates aggregation counts when snapshot keys expire via TTL.
-func TestRedisKeyedEngine_AggregationCleanupOnTTL(t *testing.T) {
-	node, _ := New(Config{})
-
-	redisConf := testSingleRedisConf(6379)
-	shard, err := NewRedisShard(node, redisConf)
-	require.NoError(t, err)
-	engine, err := NewRedisKeyedEngine(node, RedisKeyedEngineConfig{
-		Shards:                []*RedisShard{shard},
-		PresenceTTL:           2 * time.Second, // Short TTL for testing
-		PresenceStreamSize:    100,
-		PresenceStreamTTL:     300 * time.Second,
-		PresenceStreamMetaTTL: 3600 * time.Second,
-		CleanupInterval:       100 * time.Millisecond, // Fast cleanup for testing
-		CleanupBatchSize:      100,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = node.Shutdown(context.Background())
-	})
-
-	ctx := context.Background()
-	channel := randomChannel("test_agg_cleanup_ttl")
-
-	// Alice opens 2 connections with aggregation
-	_, err = engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
-		Data:       []byte("data"),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           2 * time.Second, // Short TTL
-		AggregationKey:   "user_id",
-		AggregationValue: "alice",
-	})
-	require.NoError(t, err)
-
-	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
-		Data:       []byte("data"),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           2 * time.Second, // Short TTL
-		AggregationKey:   "user_id",
-		AggregationValue: "alice",
-	})
-	require.NoError(t, err)
-
-	// Bob opens 1 connection
-	_, err = engine.Publish(ctx, channel, "conn3", KeyedPublishOptions{
-		Data:       []byte("data"),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           2 * time.Second, // Short TTL
-		AggregationKey:   "user_id",
-		AggregationValue: "bob",
-	})
-	require.NoError(t, err)
-
-	// Verify initial state: 3 connections, 2 unique users
-	stats, err := engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 3, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregationKeys)
-
-	// Simulate cleanup by calling cleanupChannel with future timestamp
-	shardWrapper := engine.shards[0]
-	cleanupKey := engine.cleanupRegistrationKeyForChannel(shardWrapper.shard, channel)
-	futureTime := time.Now().Unix() + 10 // 10 seconds in the future
-
-	err = engine.cleanupChannel(ctx, shardWrapper.shard, channel, cleanupKey, futureTime)
-	require.NoError(t, err)
-
-	// After cleanup: should have 0 connections, 0 users
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 0, stats.NumKeys, "All keys should be cleaned up")
-	require.Equal(t, 0, stats.NumAggregationKeys, "All aggregations should be cleaned up")
-}
+// TestRedisKeyedEngine_AggregationCleanupOnTTL - REMOVED: aggregation feature was removed.
+// TODO: consider adding a simpler cleanup test without aggregation tracking.
 
 // TestRedisKeyedEngine_OrderedSnapshotOrdering tests that ordered snapshots return entries
 // in correct score order (ascending by score).
@@ -1362,7 +1287,7 @@ func TestRedisKeyedEngine_OrderedSnapshotWithNegativeScores(t *testing.T) {
 
 	for _, tc := range testCases {
 		_, err := engine.Publish(ctx, channel, tc.key, KeyedPublishOptions{
-		Data:       []byte("data"),
+			Data:       []byte("data"),
 			Ordered:    true,
 			Score:      tc.score,
 			StreamSize: 100,
@@ -1403,7 +1328,7 @@ func TestRedisKeyedEngine_OrderedSnapshotWithSameScores(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		key := fmt.Sprintf("key_%d", i)
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%d", i)),
+			Data:       []byte(fmt.Sprintf("data_%d", i)),
 			Ordered:    true,
 			Score:      100, // Same score for all
 			StreamSize: 100,
@@ -1684,7 +1609,7 @@ func TestRedisKeyedEngine_KeyModeIfNew(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, res2.Suppressed, "Second publish should be suppressed (key exists)")
-	require.Equal(t, "key_exists", res2.SuppressReason)
+	require.Equal(t, SuppressReasonKeyExists, res2.SuppressReason)
 	require.Equal(t, uint64(1), res2.Position.Offset, "Offset should not change")
 
 	// Verify snapshot still has original data
@@ -1722,7 +1647,7 @@ func TestRedisKeyedEngine_KeyModeIfExists(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, res1.Suppressed, "First publish should be suppressed (key doesn't exist)")
-	require.Equal(t, "key_not_found", res1.SuppressReason)
+	require.Equal(t, SuppressReasonKeyNotFound, res1.SuppressReason)
 
 	// Create the key first with regular publish
 	res2, err := engine.Publish(ctx, channel, "presence1", KeyedPublishOptions{
@@ -1796,147 +1721,8 @@ func TestRedisKeyedEngine_KeyModeReplace(t *testing.T) {
 	require.Equal(t, []byte("value2"), entries[0].Data)
 }
 
-// TestRedisKeyedEngine_Aggregation tests aggregation tracking (e.g., counting unique users).
-func TestRedisKeyedEngine_Aggregation(t *testing.T) {
-	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
-	ctx := context.Background()
-	channel := randomChannel("test_aggregation")
-
-	// Simulate presence scenario: multiple connections (keys) per user (aggregation value)
-	// User "alice" has 2 connections
-	_, err := engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
-		Data:       []byte("data"),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
-		AggregationKey:   "user_id",
-		AggregationValue: "alice",
-	})
-	require.NoError(t, err)
-
-	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
-		Data:       []byte("data"),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
-		AggregationKey:   "user_id",
-		AggregationValue: "alice",
-	})
-	require.NoError(t, err)
-
-	// User "bob" has 1 connection
-	_, err = engine.Publish(ctx, channel, "conn3", KeyedPublishOptions{
-		Data:       []byte("data"),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
-		AggregationKey:   "user_id",
-		AggregationValue: "bob",
-	})
-	require.NoError(t, err)
-
-	// Check stats - should have 3 keys and 2 aggregated keys (unique users)
-	stats, err := engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 3, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregationKeys)
-
-	// Remove one of alice's connections
-	_, err = engine.Unpublish(ctx, channel, "conn1", KeyedUnpublishOptions{
-		AggregationKey:   "user_id",
-		AggregationValue: "alice",
-	})
-	require.NoError(t, err)
-
-	// Check stats - should have 2 keys, still 2 unique users
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 2, stats.NumKeys)
-	require.Equal(t, 2, stats.NumAggregationKeys)
-
-	// Remove alice's last connection
-	_, err = engine.Unpublish(ctx, channel, "conn2", KeyedUnpublishOptions{
-		AggregationKey:   "user_id",
-		AggregationValue: "alice",
-	})
-	require.NoError(t, err)
-
-	// Check stats - should have 1 key, 1 unique user (bob)
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregationKeys)
-
-	// Remove bob's connection
-	_, err = engine.Unpublish(ctx, channel, "conn3", KeyedUnpublishOptions{
-		AggregationKey:   "user_id",
-		AggregationValue: "bob",
-	})
-	require.NoError(t, err)
-
-	// Check stats - should have 0 keys, 0 unique users
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 0, stats.NumKeys)
-	require.Equal(t, 0, stats.NumAggregationKeys)
-}
-
-// TestRedisKeyedEngine_AggregationAutoDiscovery tests that Unpublish auto-discovers
-// aggregation values from stored mapping when not provided in options.
-func TestRedisKeyedEngine_AggregationAutoDiscovery(t *testing.T) {
-	node, _ := New(Config{})
-	engine := newTestSnapshotRedisEngine(t, node)
-	ctx := context.Background()
-	channel := randomChannel("test_aggregation_autodiscover")
-
-	// Publish with aggregation
-	_, err := engine.Publish(ctx, channel, "conn1", KeyedPublishOptions{
-		Data:       []byte("data"),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
-		AggregationKey:   "user_id",
-		AggregationValue: "alice",
-	})
-	require.NoError(t, err)
-
-	_, err = engine.Publish(ctx, channel, "conn2", KeyedPublishOptions{
-		Data:       []byte("data"),
-		StreamSize:       100,
-		StreamTTL:        300 * time.Second,
-		KeyTTL:           300 * time.Second,
-		AggregationKey:   "user_id",
-		AggregationValue: "alice",
-	})
-	require.NoError(t, err)
-
-	// Verify initial state
-	stats, err := engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 2, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregationKeys)
-
-	// Unpublish WITHOUT providing aggregation options - should auto-discover
-	_, err = engine.Unpublish(ctx, channel, "conn1", KeyedUnpublishOptions{})
-	require.NoError(t, err)
-
-	// Should still have 1 unique user (alice still has conn2)
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 1, stats.NumKeys)
-	require.Equal(t, 1, stats.NumAggregationKeys)
-
-	// Unpublish last connection without aggregation options
-	_, err = engine.Unpublish(ctx, channel, "conn2", KeyedUnpublishOptions{})
-	require.NoError(t, err)
-
-	// Should have 0 keys and 0 unique users
-	stats, err = engine.Stats(ctx, channel)
-	require.NoError(t, err)
-	require.Equal(t, 0, stats.NumKeys)
-	require.Equal(t, 0, stats.NumAggregationKeys)
-}
+// TestRedisKeyedEngine_Aggregation - REMOVED: aggregation feature was removed.
+// TestRedisKeyedEngine_AggregationAutoDiscovery - REMOVED: aggregation feature was removed.
 
 // =============================================================================
 // Pagination Continuity Tests
@@ -1959,7 +1745,7 @@ func TestRedisKeyedEngine_UnorderedContinuity_EntryRemoved(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -2055,7 +1841,7 @@ func TestRedisKeyedEngine_UnorderedContinuity_EntryAdded(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			StreamSize: 100,
 			StreamTTL:  300 * time.Second,
 		})
@@ -2099,7 +1885,7 @@ func TestRedisKeyedEngine_OrderedContinuity_HigherScoreAdded(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2161,7 +1947,7 @@ func TestRedisKeyedEngine_OrderedContinuity_LowerScoreAdded(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2220,7 +2006,7 @@ func TestRedisKeyedEngine_OrderedContinuity_ScoreChanged(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2308,7 +2094,7 @@ func TestRedisKeyedEngine_OrderedContinuity_EntryRemoved(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,
@@ -2396,7 +2182,7 @@ func TestRedisKeyedEngine_OrderedContinuity_MultipleChanges(t *testing.T) {
 	for i := 1; i <= 30; i++ {
 		key := fmt.Sprintf("key_%02d", i)
 		_, err := engine.Publish(ctx, channel, key, KeyedPublishOptions{
-		Data:       []byte(fmt.Sprintf("data_%02d", i)),
+			Data:       []byte(fmt.Sprintf("data_%02d", i)),
 			Ordered:    true,
 			Score:      int64(i * 100),
 			StreamSize: 100,

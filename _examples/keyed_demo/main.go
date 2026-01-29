@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -38,11 +39,11 @@ type LeaderboardEntry struct {
 }
 
 type GameInfo struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	CreatedBy string    `json:"createdBy"`
-	CreatedAt time.Time `json:"createdAt"`
-	MaxPlayers int      `json:"maxPlayers"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	CreatedBy  string    `json:"createdBy"`
+	CreatedAt  time.Time `json:"createdAt"`
+	MaxPlayers int       `json:"maxPlayers"`
 }
 
 type GamePlayer struct {
@@ -56,7 +57,13 @@ func handleLog(e centrifuge.LogEntry) {
 	log.Printf("[centrifuge] %s: %v", e.Message, e.Fields)
 }
 
+var (
+	redisAddr = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory engine.")
+)
+
 func main() {
+	flag.Parse()
+
 	node, err := centrifuge.New(centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
@@ -65,8 +72,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Set up in-memory keyed engine.
-	keyedEngine, err := centrifuge.NewMemoryKeyedEngine(node, centrifuge.MemoryKeyedEngineConfig{})
+	// Set up keyed engine (memory or Redis based on flag).
+	keyedEngine, registerHandler, err := setupKeyedEngine(node, *redisAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -89,21 +96,29 @@ func main() {
 		log.Printf("client connected: %s (user: %s)", client.ID(), client.UserID())
 
 		client.OnSubscribe(func(e centrifuge.SubscribeEvent, cb centrifuge.SubscribeCallback) {
-			log.Printf("client %s subscribing to %s (keyed: %v)",
-				client.ID(), e.Channel, e.Keyed)
-			// Enable presence for lobby channel (for online users list) and game channels.
-			emitPresence := e.Channel == "lobby" || strings.HasPrefix(e.Channel, "game:")
-			cb(centrifuge.SubscribeReply{
-				Options: centrifuge.SubscribeOptions{
-					EnableKeyed:  true,
-					EmitPresence: emitPresence,
-				},
-			}, nil)
+			log.Printf("client %s subscribing to %s (keyed: %v)", client.ID(), e.Channel, e.Keyed)
+
+			opts := centrifuge.SubscribeOptions{
+				EnableKeyed: true,
+			}
+
+			// Enable keyed presence for lobby and game channels.
+			// - :clients tracks each connection (key=clientId, full ClientInfo)
+			// - :users tracks unique users (key=userId, TTL-based leave for debounce)
+			if e.Channel == "lobby" || strings.HasPrefix(e.Channel, "game:") {
+				opts.EmitKeyedClientPresence = true
+				opts.EmitKeyedUserPresence = true
+			}
+
+			cb(centrifuge.SubscribeReply{Options: opts}, nil)
 		})
 
+		// Handle presence subscriptions (channels ending with :clients or :users).
+		// This is a separate permission scope - watching who's online.
 		client.OnPresenceSubscribe(func(e centrifuge.PresenceSubscribeEvent, cb centrifuge.PresenceSubscribeCallback) {
 			log.Printf("client %s presence subscribing to %s", client.ID(), e.Channel)
-			cb(centrifuge.PresenceSubscribeReply{Allowed: true}, nil)
+			// e.Channel is the base channel (without :clients or :users suffix)
+			cb(centrifuge.PresenceSubscribeReply{}, nil)
 		})
 
 		client.OnUnsubscribe(func(e centrifuge.UnsubscribeEvent) {
@@ -136,7 +151,10 @@ func main() {
 			// Clean up cursor on disconnect.
 			if node.KeyedEngine() != nil {
 				_, _ = node.KeyedEngine().Unpublish(context.Background(), "cursors", client.ID(), centrifuge.KeyedUnpublishOptions{
-					Publish: true,
+					Publish:       true,
+					StreamSize:    1000,
+					StreamTTL:     300 * time.Second,
+					StreamMetaTTL: time.Hour,
 				})
 			}
 		})
@@ -147,7 +165,7 @@ func main() {
 	}
 
 	// Register broker event handler for the keyed engine.
-	if err := keyedEngine.RegisterBrokerEventHandler(node); err != nil {
+	if err := registerHandler(node); err != nil {
 		log.Fatal(err)
 	}
 
@@ -189,9 +207,12 @@ func handleCursorUpdate(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 	}
 
 	_, err := ke.Publish(context.Background(), "cursors", client.ID(), centrifuge.KeyedPublishOptions{
-		Publish: true,
-		Data:    data,
-		KeyTTL:  30 * time.Second, // Auto-expire if client stops sending updates.
+		Publish:       true,
+		Data:          data,
+		KeyTTL:        5 * time.Second, // Auto-expire if client stops sending updates.
+		StreamSize:    1000,
+		StreamTTL:     300 * time.Second,
+		StreamMetaTTL: time.Hour,
 	})
 	if err != nil {
 		log.Printf("cursor update error: %v", err)
@@ -502,4 +523,35 @@ func handleLeaderboardClick(client *centrifuge.Client, ke centrifuge.KeyedEngine
 	}
 
 	cb(centrifuge.RPCReply{Data: entryData}, nil)
+}
+
+// setupKeyedEngine creates either a memory or Redis keyed engine.
+// Returns the engine and a function to register the broker event handler.
+func setupKeyedEngine(node *centrifuge.Node, redisAddr string) (centrifuge.KeyedEngine, func(centrifuge.BrokerEventHandler) error, error) {
+	if redisAddr == "" {
+		log.Println("Using in-memory keyed engine")
+		engine, err := centrifuge.NewMemoryKeyedEngine(node, centrifuge.MemoryKeyedEngineConfig{})
+		if err != nil {
+			return nil, nil, err
+		}
+		return engine, engine.RegisterBrokerEventHandler, nil
+	}
+
+	log.Printf("Using Redis keyed engine at %s", redisAddr)
+
+	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
+		Address: redisAddr,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("error creating Redis shard: %w", err)
+	}
+
+	engine, err := centrifuge.NewRedisKeyedEngine(node, centrifuge.RedisKeyedEngineConfig{
+		Shards: []*centrifuge.RedisShard{redisShard},
+		Prefix: "keyed_demo",
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return engine, engine.RegisterEventHandler, nil
 }

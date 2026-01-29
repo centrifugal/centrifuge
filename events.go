@@ -219,6 +219,32 @@ type SubscribeReply struct {
 // SubscribeHandler called when client wants to subscribe on channel.
 type SubscribeHandler func(SubscribeEvent, SubscribeCallback)
 
+// PresenceSubscribeEvent contains fields related to presence subscribe event.
+// Presence subscriptions allow watching who is currently subscribed to a channel.
+// This is a separate permission scope from data subscriptions.
+type PresenceSubscribeEvent struct {
+	// Channel is the base channel name (without :clients or :users suffix).
+	// For example, if client subscribes to "lobby:clients", Channel will be "lobby".
+	Channel string
+	// Data received from client as part of Subscribe Command.
+	Data []byte
+}
+
+// PresenceSubscribeReply contains fields determining the reaction on presence subscribe event.
+type PresenceSubscribeReply struct {
+	// ExpireAt defines time in future when subscription should expire.
+	ExpireAt int64
+}
+
+// PresenceSubscribeCallback should be called as soon as handler decides what to do
+// with presence subscribe event.
+type PresenceSubscribeCallback func(PresenceSubscribeReply, error)
+
+// PresenceSubscribeHandler called when client wants to subscribe to presence on a channel.
+// Presence subscriptions allow watching who is online - this is a separate permission
+// scope from data subscriptions (OnSubscribe).
+type PresenceSubscribeHandler func(PresenceSubscribeEvent, PresenceSubscribeCallback)
+
 // PublishEvent contains fields related to publish event. Note that this event
 // called before actual publish to Broker so handler has an option to reject this
 // publication returning an error.
@@ -370,29 +396,6 @@ type HistoryCallback func(HistoryReply, error)
 // HistoryHandler must handle incoming command from client.
 type HistoryHandler func(HistoryEvent, HistoryCallback)
 
-// PresenceSubscribeEvent contains fields related to presence subscribe event.
-// Presence subscriptions are first-class keyed subscriptions that track
-// active connections on a channel independently from data subscriptions.
-type PresenceSubscribeEvent struct {
-	// Channel client wants to subscribe to presence for.
-	Channel string
-	// Data received from client as part of Subscribe Command.
-	Data []byte
-}
-
-// PresenceSubscribeReply contains fields determining the reaction on presence subscribe event.
-type PresenceSubscribeReply struct {
-	// Allowed indicates whether the client is allowed to subscribe to presence.
-	Allowed bool
-}
-
-// PresenceSubscribeCallback should be called as soon as handler decides what to do
-// with presence subscribe event.
-type PresenceSubscribeCallback func(PresenceSubscribeReply, error)
-
-// PresenceSubscribeHandler called when client wants to subscribe to presence on a channel.
-// Presence is a first-class keyed subscription that tracks active connections.
-type PresenceSubscribeHandler func(PresenceSubscribeEvent, PresenceSubscribeCallback)
 
 // StateSnapshotHandler must return a copy of current client's
 // internal state. Returning a copy is important to avoid data races.

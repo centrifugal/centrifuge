@@ -46,6 +46,7 @@ type clientEventHub struct {
 	aliveHandler             AliveHandler
 	disconnectHandler        DisconnectHandler
 	subscribeHandler         SubscribeHandler
+	presenceSubscribeHandler PresenceSubscribeHandler
 	unsubscribeHandler       UnsubscribeHandler
 	publishHandler           PublishHandler
 	refreshHandler           RefreshHandler
@@ -56,7 +57,6 @@ type clientEventHub struct {
 	presenceStatsHandler     PresenceStatsHandler
 	historyHandler           HistoryHandler
 	stateSnapshotHandler     StateSnapshotHandler
-	presenceSubscribeHandler PresenceSubscribeHandler
 }
 
 // OnAlive allows setting AliveHandler.
@@ -101,6 +101,14 @@ func (c *Client) OnSubscribe(h SubscribeHandler) {
 	c.eventHub.subscribeHandler = h
 }
 
+// OnPresenceSubscribe allows setting PresenceSubscribeHandler.
+// PresenceSubscribeHandler called when client wants to subscribe to presence
+// on a channel (watch who is online). This is a separate permission scope from
+// data subscriptions (OnSubscribe). Presence channels use KeyedEngine internally.
+func (c *Client) OnPresenceSubscribe(h PresenceSubscribeHandler) {
+	c.eventHub.presenceSubscribeHandler = h
+}
+
 // OnUnsubscribe allows setting UnsubscribeHandler.
 // UnsubscribeHandler called when client unsubscribes from channel.
 func (c *Client) OnUnsubscribe(h UnsubscribeHandler) {
@@ -134,14 +142,6 @@ func (c *Client) OnHistory(h HistoryHandler) {
 	c.eventHub.historyHandler = h
 }
 
-// OnPresenceSubscribe allows setting PresenceSubscribeHandler.
-// PresenceSubscribeHandler called when client wants to subscribe to presence
-// on a channel. Presence is a first-class keyed subscription that tracks
-// active connections independently from data subscriptions.
-func (c *Client) OnPresenceSubscribe(h PresenceSubscribeHandler) {
-	c.eventHub.presenceSubscribeHandler = h
-}
-
 const (
 	// flagSubscribed will be set upon successful Subscription to a channel.
 	// Until that moment channel exists in client Channels map only to track
@@ -154,7 +154,10 @@ const (
 	flagServerSide
 	flagClientSideRefresh
 	flagDeltaAllowed
-	flagKeyed // Channel uses keyed subscription (presence via KeyedEngine)
+	flagKeyed                   // Channel uses keyed subscription (presence via KeyedEngine)
+	flagKeyedPresence           // Presence subscription (:clients or :users suffix)
+	flagEmitKeyedClientPresence // Emit to {channel}:clients, key=clientId, full ClientInfo
+	flagEmitKeyedUserPresence   // Emit to {channel}:users, key=userId, no info
 )
 
 // ChannelContext contains extra context for channel connection subscribed to.
@@ -286,14 +289,11 @@ type Client struct {
 	connectedAtMS     int64
 	replyWithoutQueue bool
 	unusable          bool
+
 	// keyedSubscribing tracks keyed subscriptions that are still loading (not yet live).
 	keyedSubscribing map[string]*keyedSubscribeState
 	// keyedPaginationLocks tracks channels currently being paginated to prevent concurrent pagination.
 	keyedPaginationLocks map[string]struct{}
-	// keyedPresenceSubscribing tracks presence subscriptions that are still loading (not yet live).
-	keyedPresenceSubscribing map[string]struct{}
-	// keyedPresenceSubs tracks live presence subscriptions.
-	keyedPresenceSubs map[string]struct{}
 }
 
 // ClientCloseFunc must be called on Transport handler close to clean up Client.
@@ -703,9 +703,14 @@ func (c *Client) writeEncodedPushData(data []byte, ch string, frameType protocol
 // updateChannelPresence updates client presence info for channel so it
 // won't expire until client disconnect.
 func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
-	if !channelHasFlag(chCtx.flags, flagEmitPresence) {
+	// Check if any presence is enabled for this channel.
+	hasAnyPresence := channelHasFlag(chCtx.flags, flagEmitPresence) ||
+		channelHasFlag(chCtx.flags, flagEmitKeyedClientPresence) ||
+		channelHasFlag(chCtx.flags, flagEmitKeyedUserPresence)
+	if !hasAnyPresence {
 		return nil
 	}
+
 	c.mu.RLock()
 	if _, ok := c.channels[ch]; !ok {
 		c.mu.RUnlock()
@@ -720,12 +725,21 @@ func (c *Client) updateChannelPresence(ch string, chCtx ChannelContext) error {
 		ChanInfo: chCtx.info,
 	}
 
-	// Use KeyedEngine for keyed channels.
-	if channelHasFlag(chCtx.flags, flagKeyed) {
-		return c.updateKeyedPresence(ch, info)
+	if channelHasFlag(chCtx.flags, flagEmitPresence) {
+		err := c.node.addPresence(ch, c.uid, info)
+		if err != nil {
+			return err
+		}
 	}
 
-	return c.node.addPresence(ch, c.uid, info)
+	if channelHasFlag(chCtx.flags, flagKeyed) {
+		err := c.updateKeyedPresence(ch, info, chCtx.flags)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Context returns client Context. This context will be canceled
@@ -847,11 +861,6 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 	if !channelHasFlag(chCtx.flags, flagPositioning) {
 		return true
 	}
-	// Keyed channels use KeyedEngine for stream management, not Broker.
-	// TODO: fixme.
-	if channelHasFlag(chCtx.flags, flagKeyed) {
-		return true
-	}
 	nowUnix := c.node.nowTimeGetter().Unix()
 
 	needCheckPosition := nowUnix-chCtx.positionCheckTime > int64(checkDelay.Seconds())
@@ -877,7 +886,8 @@ func (c *Client) checkPosition(checkDelay time.Duration, ch string, chCtx Channe
 	position := chCtx.streamPosition
 	c.mu.Unlock()
 
-	validPosition, err := c.node.checkPosition(ch, position, historyMetaTTL)
+	isKeyed := channelHasFlag(chCtx.flags, flagKeyed)
+	validPosition, err := c.node.checkPosition(ch, position, historyMetaTTL, isKeyed)
 	if err != nil {
 		// Check later.
 		return true
@@ -1118,6 +1128,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 
 	// Cleanup keyed presence and sub-subscriptions.
+	// TODO: upper unsubscribe cycle does not clean keyed subs??
 	c.cleanupKeyedPresence()
 	c.cleanupKeyedPresenceSubs()
 
@@ -1778,7 +1789,7 @@ func (c *Client) handleSubscribe(req *protocol.SubscribeRequest, cmd *protocol.C
 		return c.logDisconnectBadRequest("channel required for subscribe")
 	}
 
-	// Route presence subscriptions to dedicated handler.
+	// Route presence subscriptions to dedicated handler (separate permission scope).
 	if req.KeyedPresence {
 		return c.handlePresenceSubscribe(req, cmd, started, rw)
 	}
@@ -2944,6 +2955,7 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 
 	// Check for keyed subscription continuation (pagination or live join).
 	// These requests should be allowed even if keyedSubscribing entry exists.
+	// Note: KeyedPresence subscriptions are routed to handlePresenceSubscribe before this.
 	if cmd.Keyed {
 		_, inKeyedSubscribing := c.keyedSubscribing[channel]
 		_, inChannels := c.channels[channel]
@@ -2977,7 +2989,8 @@ func (c *Client) validateSubscribeRequest(cmd *protocol.SubscribeRequest) (*Erro
 		}
 		c.mu.Unlock()
 		return nil, nil
-	}
+	} // TODO: it would be better to combine with normal flow, including having subscribingCh for keyed subs also.
+	// TODO: also, normal sub flow should look at len(c.keyedSubscribing) also.
 
 	// Regular subscription validation.
 	numChannels := len(c.channels)
@@ -3826,15 +3839,24 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	}
 	c.mu.Unlock()
 
-	if channelHasFlag(chCtx.flags, flagEmitPresence) && channelHasFlag(chCtx.flags, flagSubscribed) {
+	// Remove presence if any presence flag is enabled.
+	hasAnyPresence := channelHasFlag(chCtx.flags, flagEmitPresence) ||
+		channelHasFlag(chCtx.flags, flagEmitKeyedClientPresence) ||
+		channelHasFlag(chCtx.flags, flagEmitKeyedUserPresence)
+
+	if hasAnyPresence && channelHasFlag(chCtx.flags, flagSubscribed) {
 		var err error
 		if channelHasFlag(chCtx.flags, flagKeyed) {
-			err = c.removeKeyedPresence(channel)
-		} else {
-			err = c.node.removePresence(channel, c.uid, c.user)
+			err = c.removeKeyedPresence(channel, chCtx.flags)
+			if err != nil {
+				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+			}
 		}
-		if err != nil {
-			c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		if channelHasFlag(chCtx.flags, flagEmitPresence) {
+			err = c.node.removePresence(channel, c.uid, c.user)
+			if err != nil {
+				c.node.logger.log(newErrorLogEntry(err, "error removing channel presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+			}
 		}
 	}
 

@@ -382,8 +382,13 @@
 
         <div class="main-content">
             <aside class="sidebar">
-                <h2>Online Users <span class="online-count" id="onlineCount">0</span></h2>
-                <ul class="user-list" id="userList"></ul>
+                <h2>Clients <span class="online-count" id="clientsCount">0</span></h2>
+                <p style="font-size: 11px; color: #666; margin: -10px 0 10px;">:clients channel (key=clientId)</p>
+                <ul class="user-list" id="clientsList"></ul>
+
+                <h2 style="margin-top: 15px;">Unique Users <span class="online-count" id="usersCount">0</span></h2>
+                <p style="font-size: 11px; color: #666; margin: -10px 0 10px;">:users channel (key=userId)</p>
+                <ul class="user-list" id="usersList"></ul>
             </aside>
 
             <div class="main-area">
@@ -426,7 +431,8 @@
         let myClientId = null;
 
         // State
-        const onlineUsers = new Map(); // clientId -> {userId, name, color}
+        const uniqueUsers = new Map(); // userId -> {userId}
+        const onlineClients = new Map(); // clientId -> {userId, name, color}
         const availableGames = new Map(); // gameId -> GameInfo
         const gameSubscriptions = new Map(); // gameId -> {sub, slots}
         const mySlots = new Map(); // gameId -> slotNum
@@ -457,19 +463,12 @@
         centrifuge.on('connected', (ctx) => {
             // Clean up old entry if clientId changed (reconnection)
             if (myClientId && myClientId !== ctx.client) {
-                onlineUsers.delete(myClientId);
+                onlineClients.delete(myClientId);
             }
             myClientId = ctx.client;
             document.getElementById('statusDot').classList.add('connected');
             document.getElementById('statusText').textContent = 'Connected';
-
-            // Add ourselves to online users
-            onlineUsers.set(myClientId, {
-                userId: userId,
-                name: getPlayerName(),
-                color: stringToColor(userId)
-            });
-            renderOnlineUsers();
+            // Presence will be populated from server data via subscriptions
         });
 
         centrifuge.on('disconnected', () => {
@@ -484,7 +483,18 @@
         });
 
         gamesSub.on('subscribed', (ctx) => {
-            console.log('Subscribed to games list');
+            console.log('Subscribed to games list, recovered:', ctx.recovered);
+            if (!ctx.recovered) {
+                // Fresh snapshot - clear old state and subscriptions
+                availableGames.clear();
+                // Unsubscribe and remove all old game subscriptions
+                for (const [gameId, gameState] of gameSubscriptions) {
+                    gameState.sub.unsubscribe();
+                    centrifuge.removeSubscription(gameState.sub);
+                }
+                gameSubscriptions.clear();
+                mySlots.clear();
+            }
             if (ctx.publications) {
                 for (const pub of ctx.publications) {
                     if (pub.key && !pub.removed) {
@@ -520,29 +530,32 @@
         });
 
         // Subscribe to lobby channel for presence tracking.
-        // This subscription enables presence - the server will track us in lobby:presence.
+        // This subscription enables presence - the server tracks us in lobby:clients and lobby:users.
         const lobbySub = centrifuge.newSubscription('lobby', {
             keyed: true,
             keyedLimit: 1
         });
 
         lobbySub.on('subscribed', () => {
-            console.log('Subscribed to lobby (for presence)');
+            console.log('Subscribed to lobby (enables presence tracking)');
         });
 
-        // Subscribe to presence for online users.
-        // SDK automatically appends :presence suffix to the channel.
-        // Presence subscriptions use keyed mode - publications have client info.
-        const presenceSub = centrifuge.newPresenceSubscription('lobby');
+        // Subscribe to :clients channel for tracking individual connections.
+        // Key is clientId, contains full ClientInfo.
+        // Use this to see all connected browser tabs/sessions.
+        const clientsSub = centrifuge.newKeyedClientsSubscription('lobby');
 
-        presenceSub.on('subscribed', (ctx) => {
-            console.log('Presence subscribed:', ctx);
-            // Keyed subscriptions return publications array with client info.
+        clientsSub.on('subscribed', (ctx) => {
+            console.log('Clients subscribed, recovered:', ctx.recovered);
+            if (!ctx.recovered) {
+                // Fresh snapshot - clear old state
+                onlineClients.clear();
+            }
             if (ctx.publications) {
                 for (const pub of ctx.publications) {
                     // Key is the client ID, info contains user details.
-                    if (pub.key && pub.key !== myClientId && pub.info) {
-                        onlineUsers.set(pub.key, {
+                    if (pub.key && pub.info) {
+                        onlineClients.set(pub.key, {
                             userId: pub.info.user,
                             name: pub.info.user ? 'Player ' + pub.info.user.substr(5, 4).toUpperCase() : 'Anonymous',
                             color: stringToColor(pub.info.user || pub.key)
@@ -550,26 +563,57 @@
                     }
                 }
             }
-            renderOnlineUsers();
+            renderPresence();
         });
 
-        presenceSub.on('publication', (ctx) => {
-            console.log('Presence publication:', ctx);
-            // Key is the client ID, info contains user details.
-            if (!ctx.key || ctx.key === myClientId) return;
+        clientsSub.on('publication', (ctx) => {
+            console.log('Clients publication:', ctx);
+            if (!ctx.key) return;
 
             if (ctx.removed) {
-                // User left.
-                onlineUsers.delete(ctx.key);
+                onlineClients.delete(ctx.key);
             } else if (ctx.info) {
-                // User joined or updated.
-                onlineUsers.set(ctx.key, {
+                onlineClients.set(ctx.key, {
                     userId: ctx.info.user,
                     name: ctx.info.user ? 'Player ' + ctx.info.user.substr(5, 4).toUpperCase() : 'Anonymous',
                     color: stringToColor(ctx.info.user || ctx.key)
                 });
             }
-            renderOnlineUsers();
+            renderPresence();
+        });
+
+        // Subscribe to :users channel for tracking unique users.
+        // Key is userId, no ClientInfo (just key for uniqueness).
+        // Users expire via TTL - provides debounce for quick reconnects.
+        const usersSub = centrifuge.newKeyedUsersSubscription('lobby');
+
+        usersSub.on('subscribed', (ctx) => {
+            console.log('Users subscribed, recovered:', ctx.recovered);
+            if (!ctx.recovered) {
+                // Fresh snapshot - clear old state
+                uniqueUsers.clear();
+            }
+            if (ctx.publications) {
+                for (const pub of ctx.publications) {
+                    // Key is the user ID, no info stored.
+                    if (pub.key) {
+                        uniqueUsers.set(pub.key, { userId: pub.key });
+                    }
+                }
+            }
+            renderPresence();
+        });
+
+        usersSub.on('publication', (ctx) => {
+            console.log('Users publication:', ctx);
+            if (!ctx.key) return;
+
+            if (ctx.removed) {
+                uniqueUsers.delete(ctx.key);
+            } else {
+                uniqueUsers.set(ctx.key, { userId: ctx.key });
+            }
+            renderPresence();
         });
 
         // Subscribe to a specific game channel
@@ -589,7 +633,12 @@
             };
 
             sub.on('subscribed', (ctx) => {
-                console.log('Subscribed to game:', gameId);
+                console.log('Subscribed to game:', gameId, 'recovered:', ctx.recovered);
+                if (!ctx.recovered) {
+                    // Fresh snapshot - clear old state
+                    gameState.slots = {};
+                    mySlots.delete(gameId);
+                }
                 if (ctx.publications) {
                     for (const pub of ctx.publications) {
                         if (pub.key && pub.key.startsWith('slot_')) {
@@ -647,34 +696,58 @@
             const gameState = gameSubscriptions.get(gameId);
             if (gameState) {
                 gameState.sub.unsubscribe();
+                centrifuge.removeSubscription(gameState.sub);
                 gameSubscriptions.delete(gameId);
                 mySlots.delete(gameId);
             }
         }
 
         // Render functions
-        function renderOnlineUsers() {
-            const list = document.getElementById('userList');
-            const count = document.getElementById('onlineCount');
+        function renderPresence() {
+            // Render unique users (:users channel)
+            const usersList = document.getElementById('usersList');
+            const usersCount = document.getElementById('usersCount');
 
-            count.textContent = onlineUsers.size;
+            usersCount.textContent = uniqueUsers.size;
 
-            if (onlineUsers.size === 0) {
-                list.innerHTML = '<li class="user-item" style="color: #888;">No users online</li>';
-                return;
+            if (uniqueUsers.size === 0) {
+                usersList.innerHTML = '<li class="user-item" style="color: #888;">No users</li>';
+            } else {
+                let html = '';
+                for (const [uid, user] of uniqueUsers) {
+                    const isMe = uid === userId;
+                    const name = 'Player ' + uid.substr(5, 4).toUpperCase();
+                    html += `
+                        <li class="user-item ${isMe ? 'me' : ''}">
+                            <div class="user-avatar" style="background: ${stringToColor(uid)}">${name.charAt(0).toUpperCase()}</div>
+                            <span class="user-name">${name}${isMe ? ' (you)' : ''}</span>
+                        </li>
+                    `;
+                }
+                usersList.innerHTML = html;
             }
 
-            let html = '';
-            for (const [clientId, user] of onlineUsers) {
-                const isMe = clientId === myClientId;
-                html += `
-                    <li class="user-item ${isMe ? 'me' : ''}">
-                        <div class="user-avatar" style="background: ${user.color}">${user.name.charAt(0).toUpperCase()}</div>
-                        <span class="user-name">${user.name}${isMe ? ' (you)' : ''}</span>
-                    </li>
-                `;
+            // Render connections (:clients channel)
+            const clientsList = document.getElementById('clientsList');
+            const clientsCount = document.getElementById('clientsCount');
+
+            clientsCount.textContent = onlineClients.size;
+
+            if (onlineClients.size === 0) {
+                clientsList.innerHTML = '<li class="user-item" style="color: #888;">No clients</li>';
+            } else {
+                let html = '';
+                for (const [clientId, client] of onlineClients) {
+                    const isMe = clientId === myClientId;
+                    html += `
+                        <li class="user-item ${isMe ? 'me' : ''}">
+                            <div class="user-avatar" style="background: ${client.color}">${client.name.charAt(0).toUpperCase()}</div>
+                            <span class="user-name">${client.name}${isMe ? ' (you)' : ''}</span>
+                        </li>
+                    `;
+                }
+                clientsList.innerHTML = html;
             }
-            list.innerHTML = html;
         }
 
         function renderGames() {
@@ -831,14 +904,15 @@
         // Start connection
         gamesSub.subscribe();
         lobbySub.subscribe();  // Subscribe to lobby first (enables presence tracking)
-        presenceSub.subscribe();  // Then subscribe to presence to see online users
+        clientsSub.subscribe();  // Subscribe to :clients to see all connections
+        usersSub.subscribe();  // Subscribe to :users to see unique users
         centrifuge.connect();
 
-        // Update name in online users when changed
+        // Update name in online clients when changed
         document.getElementById('playerName').addEventListener('input', () => {
-            if (myClientId && onlineUsers.has(myClientId)) {
-                onlineUsers.get(myClientId).name = getPlayerName();
-                renderOnlineUsers();
+            if (myClientId && onlineClients.has(myClientId)) {
+                onlineClients.get(myClientId).name = getPlayerName();
+                renderPresence();
             }
         });
     </script>

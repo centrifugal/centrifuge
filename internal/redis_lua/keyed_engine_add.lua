@@ -2,10 +2,9 @@
 Unified publish script supporting:
 1. Append log with offset/epoch for continuity.
 2. Keyed snapshot (simple HASH or ordered HASH+ZSET) with optional TTL - used for both state and presence.
-3. Per-user tracking for presence (connection count optimization).
-4. Leave messages (remove from keyed snapshot + user tracking).
-5. Idempotency via result key.
-6. Delta or full payload publishing with simplified format.
+3. Leave messages (remove from keyed snapshot).
+4. Idempotency via result key.
+5. Delta or full payload publishing with simplified format.
 
 Publishing format (via PUBLISH/SPUBLISH):
 - Non-delta: "offset:epoch:protobuf" where protobuf is protocol.Publication
@@ -20,11 +19,8 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- KEYS[4] = snapshot hash key (optional, empty '' to disable) - used for both keyed state AND presence
 -- KEYS[5] = snapshot order zset key (optional, empty '' to disable)
 -- KEYS[6] = snapshot expire zset key (optional, empty '' to disable)
--- KEYS[7] = aggregation zset key (optional, empty '' to disable) - for generic aggregations (e.g., user tracking in presence)
--- KEYS[8] = aggregation hash key (optional, empty '' to disable) - for generic aggregations (e.g., user tracking in presence)
--- KEYS[9] = snapshot meta key (optional, empty '' to disable)
--- KEYS[10] = cleanup registration zset key (optional, empty '' to disable) - for scheduling cleanup
--- KEYS[11] = aggregation mapping hash key (optional, empty '' to disable) - stores client_id -> aggregation_value mapping for cleanup
+-- KEYS[7] = snapshot meta key (optional, empty '' to disable)
+-- KEYS[8] = cleanup registration zset key (optional, empty '' to disable) - for scheduling cleanup
 
 -- ==== ARGV ====
 -- ARGV[1]  = message_key (Key for snapshot field - Client ID for presence, state key for keyed state)
@@ -43,11 +39,9 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[14] = score (for ordered keyed state)
 -- ARGV[15] = keyed_member_ttl (seconds for keyed snapshot TTL)
 -- ARGV[16] = use_hexpire ("0" or "1" - Redis 7.4+ per-field TTL)
--- ARGV[17] = aggregation_key (aggregation identifier, empty "" to disable - e.g., "user_id" for presence)
--- ARGV[18] = aggregation_value (value to aggregate by - e.g., actual user ID for presence user counting)
--- ARGV[19] = message_key_payload (optional alternative payload for snapshot storage - not used when message_payload is Publication)
--- ARGV[20] = channel_for_cleanup (channel name for cleanup registration, empty '' to disable)
--- ARGV[21] = key_mode ("" for replace/always, "if_new" only if key doesn't exist, "if_exists" only if key exists)
+-- ARGV[17] = channel_for_cleanup (channel name for cleanup registration, empty '' to disable)
+-- ARGV[18] = key_mode ("" for replace/always, "if_new" only if key doesn't exist, "if_exists" only if key exists)
+-- ARGV[19] = refresh_ttl_on_suppress ("0" or "1" - refresh TTL even when suppressed by key_mode)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -56,11 +50,8 @@ local result_key = KEYS[3]
 local snapshot_hash_key = KEYS[4]
 local snapshot_order_key = KEYS[5]
 local snapshot_expire_key = KEYS[6]
-local aggregation_zset_key = KEYS[7]
-local aggregation_hash_key = KEYS[8]
-local snapshot_meta_key = KEYS[9]
-local cleanup_registration_key = KEYS[10]
-local aggregation_mapping_key = KEYS[11]
+local snapshot_meta_key = KEYS[7]
+local cleanup_registration_key = KEYS[8]
 
 -- Local variables from ARGV
 local message_key = ARGV[1]
@@ -79,17 +70,12 @@ local is_leave = ARGV[13]
 local score = ARGV[14]
 local keyed_member_ttl = ARGV[15]
 local use_hexpire = ARGV[16]
-local aggregation_key = ARGV[17]
-local aggregation_value = ARGV[18]
-local message_key_payload = ARGV[19]
-local channel_for_cleanup = ARGV[20]
-local key_mode = ARGV[21] or ""
+local channel_for_cleanup = ARGV[17]
+local key_mode = ARGV[18] or ""
+local refresh_ttl_on_suppress = ARGV[19] or "0"
 
 -- Determine which payload to use for snapshot storage
 local snapshot_payload = message_payload
-if message_key_payload and message_key_payload ~= '' then
-    snapshot_payload = message_key_payload
-end
 
 -- ==== Step 0: Idempotency check ====
 if result_key_expire ~= '' and result_key ~= '' then
@@ -132,6 +118,33 @@ if meta_key ~= '' then
         local key_exists = redis.call("hexists", snapshot_hash_key, message_key) == 1
         if key_mode == "if_new" and key_exists then
             -- KeyModeIfNew but key already exists - suppress
+            -- But optionally refresh TTL if refresh_ttl_on_suppress is set
+            if refresh_ttl_on_suppress == "1" and tonumber(keyed_member_ttl) > 0 then
+                local now = tonumber(redis.call("time")[1])
+                local expire_at = now + tonumber(keyed_member_ttl)
+                local ttl = tonumber(keyed_member_ttl)
+
+                -- Update expire zset with new expiry time
+                if snapshot_expire_key ~= '' then
+                    redis.call("zadd", snapshot_expire_key, expire_at, message_key)
+                    redis.call("expire", snapshot_expire_key, ttl)
+                end
+
+                -- Update cleanup registration with new expiry
+                if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
+                    local current_score = redis.call("zscore", cleanup_registration_key, channel_for_cleanup)
+                    if not current_score or tonumber(current_score) > expire_at then
+                        redis.call("zadd", cleanup_registration_key, expire_at, channel_for_cleanup)
+                    end
+                end
+
+                -- Refresh per-field TTL if using HEXPIRE
+                if use_hexpire == "1" then
+                    redis.call("hexpire", snapshot_hash_key, ttl, "FIELDS", "1", message_key)
+                else
+                    redis.call("expire", snapshot_hash_key, ttl)
+                end
+            end
             local current_offset = redis.call("hget", meta_key, "s") or 0
             return { tonumber(current_offset), current_epoch, "key_exists" }
         end
@@ -164,23 +177,8 @@ end
 if is_leave == "1" then
     -- Remove from keyed snapshot (works for both state and presence)
     if snapshot_hash_key ~= '' then
-        -- Check if client exists (for user tracking)
-        local clientExists = redis.call("hexists", snapshot_hash_key, message_key) == 1
-
-        -- Auto-discover aggregation_value from mapping if not provided (optimization: skip HGET if provided)
-        local effective_aggregation_value = aggregation_value
-        if aggregation_mapping_key ~= '' and aggregation_hash_key ~= '' and clientExists then
-            if effective_aggregation_value == '' or effective_aggregation_value == nil then
-                -- Not provided - read from mapping before deletion
-                effective_aggregation_value = redis.call("hget", aggregation_mapping_key, message_key)
-            end
-        end
-
         -- Remove from snapshot
         redis.call("hdel", snapshot_hash_key, message_key)
-        if aggregation_mapping_key ~= '' then
-            redis.call("hdel", aggregation_mapping_key, message_key)
-        end
         if snapshot_order_key ~= '' then
             redis.call("zrem", snapshot_order_key, message_key)
         end
@@ -205,23 +203,11 @@ if is_leave == "1" then
                 end
             end
         end
-
-        -- Update aggregation tracking if enabled (auto-discovered or provided)
-        if effective_aggregation_value and effective_aggregation_value ~= '' and clientExists and aggregation_hash_key ~= '' then
-            local connectionsCount = redis.call("hincrby", aggregation_hash_key, effective_aggregation_value, -1)
-            if connectionsCount <= 0 then
-                if use_hexpire == '0' and aggregation_zset_key ~= '' then
-                    redis.call("zrem", aggregation_zset_key, effective_aggregation_value)
-                end
-                redis.call("hdel", aggregation_hash_key, effective_aggregation_value)
-            end
-        end
     end
 end
 
 -- ==== Step 5: Add/update keyed snapshot ====
 -- Skip for leave messages (they already removed entries in Step 4)
-local wasNewClient = false
 if snapshot_hash_key ~= '' and is_leave ~= "1" then
     -- Check if snapshot is from a different epoch - clear if so
     if snapshot_meta_key ~= '' then
@@ -236,27 +222,11 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
                 redis.call("del", snapshot_expire_key)
             end
             redis.call("del", snapshot_meta_key)
-            -- Clear user tracking data from previous epoch
-            if aggregation_hash_key ~= '' then
-                redis.call("del", aggregation_hash_key)
-            end
-            if aggregation_zset_key ~= '' then
-                redis.call("del", aggregation_zset_key)
-            end
-            -- Clear aggregation mapping from previous epoch
-            if aggregation_mapping_key ~= '' then
-                redis.call("del", aggregation_mapping_key)
-            end
             -- Remove channel from cleanup registration (no entries left after epoch change)
             if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
                 redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
             end
         end
-    end
-
-    -- Check if this is a new client (for user tracking)
-    if aggregation_key ~= '0' then
-        wasNewClient = redis.call("hexists", snapshot_hash_key, message_key) == 0
     end
 
     local now = tonumber(redis.call("time")[1])
@@ -296,20 +266,6 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
         end
     end
 
-    -- Store aggregation mapping for cleanup (enables user count updates on TTL expiry)
-    if aggregation_mapping_key ~= '' and aggregation_key ~= '0' and aggregation_value ~= '' then
-        redis.call("hset", aggregation_mapping_key, message_key, aggregation_value)
-        if ttl > 0 then
-            if use_hexpire == "1" then
-                -- Redis 7.4+ per-field TTL for aggregation mappings
-                redis.call("hexpire", aggregation_mapping_key, ttl, "FIELDS", "1", message_key)
-            else
-                -- Whole hash TTL as fallback
-                redis.call("expire", aggregation_mapping_key, ttl)
-            end
-        end
-    end
-
     -- Register channel for cleanup with earliest expiry time
     if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' and ttl > 0 then
         -- Use NX to only set if score doesn't exist or is higher (earlier expiry wins)
@@ -330,28 +286,7 @@ if snapshot_hash_key ~= '' and is_leave ~= "1" then
     end
 end
 
--- ==== Step 6: User tracking (for presence) ====
--- Update per-user connection count if tracking is enabled and this was a new client
-if aggregation_key ~= '0' and aggregation_hash_key ~= '' and wasNewClient and is_leave ~= "1" then
-    redis.call("hincrby", aggregation_hash_key, aggregation_value, 1)
-    if tonumber(keyed_member_ttl) > 0 then
-        redis.call("expire", aggregation_hash_key, tonumber(keyed_member_ttl))
-    end
-    if use_hexpire == '0' and aggregation_zset_key ~= '' then
-        local now = tonumber(redis.call("time")[1])
-        local expire_at = now + tonumber(keyed_member_ttl)
-        redis.call("zadd", aggregation_zset_key, expire_at, aggregation_value)
-        if tonumber(keyed_member_ttl) > 0 then
-            redis.call("expire", aggregation_zset_key, tonumber(keyed_member_ttl))
-        end
-    else
-        if tonumber(keyed_member_ttl) > 0 then
-            redis.call("hexpire", aggregation_hash_key, tonumber(keyed_member_ttl), "FIELDS", "1", aggregation_value)
-        end
-    end
-end
-
--- ==== Step 7: Update append log (if stream keys provided) ====
+-- ==== Step 6: Update append log (if stream keys provided) ====
 if stream_key ~= '' and meta_key ~= '' then
     if top_offset == 1 then
         -- Offset is 1 - could be first message ever OR epoch change
@@ -382,17 +317,6 @@ if stream_key ~= '' and meta_key ~= '' then
             if snapshot_meta_key ~= '' then
                 redis.call("del", snapshot_meta_key)
             end
-            -- Clear user tracking data from previous epoch
-            if aggregation_hash_key ~= '' then
-                redis.call("del", aggregation_hash_key)
-            end
-            if aggregation_zset_key ~= '' then
-                redis.call("del", aggregation_zset_key)
-            end
-            -- Clear aggregation mapping from previous epoch
-            if aggregation_mapping_key ~= '' then
-                redis.call("del", aggregation_mapping_key)
-            end
             -- Remove channel from cleanup registration (no entries left after epoch change)
             if cleanup_registration_key ~= '' and channel_for_cleanup ~= '' then
                 redis.call("zrem", cleanup_registration_key, channel_for_cleanup)
@@ -407,7 +331,7 @@ if stream_key ~= '' and meta_key ~= '' then
     end
 end
 
--- ==== Step 8: Publish to channel (simplified format) ====
+-- ==== Step 7: Publish to channel (simplified format) ====
 if channel ~= '' and publish_command ~= '' then
     local payload
     if use_delta == "1" and stream_key ~= '' then
@@ -433,11 +357,11 @@ if channel ~= '' and publish_command ~= '' then
     redis.call(publish_command, channel, payload)
 end
 
--- ==== Step 9: Store result key for idempotency ====
+-- ==== Step 8: Store result key for idempotency ====
 if result_key_expire ~= '' and result_key ~= '' then
     redis.call("hset", result_key, "e", current_epoch, "s", top_offset)
     redis.call("expire", result_key, result_key_expire)
 end
 
--- ==== Step 10: Return top_offset and epoch ====
+-- ==== Step 9: Return top_offset and epoch ====
 return { top_offset, current_epoch, "" }

@@ -1407,21 +1407,21 @@ func TestNodeCheckPosition(t *testing.T) {
 	isValid, err := node.checkPosition("test", StreamPosition{
 		Offset: 20,
 		Epoch:  "test",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
 	require.NoError(t, err)
 	require.True(t, isValid)
 
 	isValid, err = node.checkPosition("test", StreamPosition{
 		Offset: 19,
 		Epoch:  "test",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
 	require.NoError(t, err)
 	require.False(t, isValid)
 
 	isValid, err = node.checkPosition("test", StreamPosition{
 		Offset: 20,
 		Epoch:  "test_new",
-	}, 200*time.Second)
+	}, 200*time.Second, false)
 	require.NoError(t, err)
 	require.False(t, isValid)
 }

@@ -89,13 +89,10 @@ type KeyedPublishOptions struct {
 	// Default (empty) always writes. See KeyModeIfNew and KeyModeIfExists.
 	KeyMode KeyMode
 
-	// AggregationKey is an identifier for grouping keys by a common attribute.
-	// For example, "user_id" for presence to track unique users across connections.
-	// When set, enables per-aggregation counting in the snapshot.
-	AggregationKey string
-	// AggregationValue is the value to aggregate by (e.g., actual user ID).
-	// Used together with AggregationKey for counting unique values.
-	AggregationValue string
+	// RefreshTTLOnSuppress when true will refresh the TTL of existing key even when
+	// publish is suppressed due to KeyMode (e.g., KeyModeIfNew when key exists).
+	// This is useful for presence keep-alive without generating new stream entries.
+	RefreshTTLOnSuppress bool
 }
 
 // KeyedUnpublishOptions defines options for unpublishing (removing a key from keyed state).
@@ -113,15 +110,6 @@ type KeyedUnpublishOptions struct {
 	StreamTTL time.Duration
 	// StreamMetaTTL for stream metadata.
 	StreamMetaTTL time.Duration
-
-	// AggregationKey is an identifier for grouping keys by a common attribute.
-	// Optional for Unpublish - if not provided, the aggregation value is auto-discovered
-	// from the stored mapping (set during Publish). Providing it is an optimization
-	// that skips the lookup.
-	AggregationKey string
-	// AggregationValue is the value to aggregate by.
-	// Optional for Unpublish - auto-discovered from stored mapping if not provided.
-	AggregationValue string
 }
 
 // StreamFilter allows filtering stream according to fields set.
@@ -161,8 +149,7 @@ type KeyedReadSnapshotOptions struct {
 
 // KeyedStats provide current statistics for channel in KeyedEngine.
 type KeyedStats struct {
-	NumKeys            int
-	NumAggregationKeys int
+	NumKeys int
 }
 
 // SuppressReason explains why a Publish or Unpublish operation was suppressed.
