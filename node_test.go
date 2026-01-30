@@ -1426,6 +1426,70 @@ func TestNodeCheckPosition(t *testing.T) {
 	require.False(t, isValid)
 }
 
+func TestNodeCheckPositionKeyed(t *testing.T) {
+	node := defaultTestNode()
+	defer func() { _ = node.Shutdown(context.Background()) }()
+
+	// Set up keyed engine.
+	keyedEngine, err := NewMemoryKeyedEngine(node, MemoryKeyedEngineConfig{})
+	require.NoError(t, err)
+	node.SetKeyedEngine(keyedEngine)
+
+	ctx := context.Background()
+	channel := "test_keyed"
+
+	// Publish some data to create stream position.
+	result, err := keyedEngine.Publish(ctx, channel, "key1", KeyedPublishOptions{
+		Publish:    true,
+		Data:       []byte(`{"test": 1}`),
+		StreamSize: 100,
+		StreamTTL:  time.Hour,
+	})
+	require.NoError(t, err)
+	streamPos := result.Position
+
+	// Check with correct position - should be valid.
+	isValid, err := node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+
+	// Check with wrong offset - should be invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset - 1,
+		Epoch:  streamPos.Epoch,
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Check with wrong epoch - should be invalid.
+	isValid, err = node.checkPosition(channel, StreamPosition{
+		Offset: streamPos.Offset,
+		Epoch:  "wrong_epoch",
+	}, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// Publish more data.
+	result2, err := keyedEngine.Publish(ctx, channel, "key2", KeyedPublishOptions{
+		Publish:    true,
+		Data:       []byte(`{"test": 2}`),
+		StreamSize: 100,
+		StreamTTL:  time.Hour,
+	})
+	require.NoError(t, err)
+	streamPos2 := result2.Position
+
+	// Old position should now be invalid.
+	isValid, err = node.checkPosition(channel, streamPos, 200*time.Second, true)
+	require.NoError(t, err)
+	require.False(t, isValid)
+
+	// New position should be valid.
+	isValid, err = node.checkPosition(channel, streamPos2, 200*time.Second, true)
+	require.NoError(t, err)
+	require.True(t, isValid)
+}
+
 func TestGetBroker(t *testing.T) {
 	node := defaultTestNode()
 	customBroker := NewTestBroker()

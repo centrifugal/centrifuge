@@ -1552,8 +1552,21 @@ func (n *Node) streamTop(ch string, historyMetaTTL time.Duration) (StreamPositio
 
 func (n *Node) checkPosition(ch string, clientPosition StreamPosition, historyMetaTTL time.Duration, isKeyed bool) (bool, error) {
 	if isKeyed {
-		// TODO: need to use KeyedEngine to check position.
-		return true, nil
+		keyedEngine := n.keyedEngine
+		if keyedEngine == nil {
+			// No KeyedEngine configured, skip position check.
+			return true, nil
+		}
+		// Use ReadStream with Limit: 0 to only get stream top position.
+		_, streamTop, err := keyedEngine.ReadStream(context.Background(), ch, KeyedReadStreamOptions{
+			Filter:  StreamFilter{Limit: 0},
+			MetaTTL: historyMetaTTL,
+		})
+		if err != nil {
+			// Will be checked later.
+			return false, err
+		}
+		return streamTop.Epoch == clientPosition.Epoch && clientPosition.Offset == streamTop.Offset, nil
 	}
 	mu := n.subLock(ch)
 	mu.Lock()

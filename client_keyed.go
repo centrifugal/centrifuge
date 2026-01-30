@@ -21,9 +21,10 @@ const (
 
 // keyedSubscribeState tracks state for keyed subscriptions that are still loading.
 type keyedSubscribeState struct {
-	options    SubscribeOptions // From OnSubscribe callback
-	epoch      string           // Epoch from first response (for validation)
-	isPresence bool             // True if this is a presence subscription (:clients or :users suffix)
+	options       SubscribeOptions // From OnSubscribe callback
+	epoch         string           // Epoch from first response (for validation)
+	isPresence    bool             // True if this is a presence subscription (:clients or :users suffix)
+	subscribingCh chan struct{}    // Closed when subscription completes (for race handling)
 }
 
 // handlePresenceSubscribe handles presence subscriptions (watching who is online).
@@ -121,8 +122,9 @@ func (c *Client) handlePresenceSubscribe(
 			c.keyedSubscribing = make(map[string]*keyedSubscribeState)
 		}
 		c.keyedSubscribing[presenceChannel] = &keyedSubscribeState{
-			options:    subscribeReply.Options,
-			isPresence: true,
+			options:       subscribeReply.Options,
+			isPresence:    true,
+			subscribingCh: make(chan struct{}),
 		}
 		c.mu.Unlock()
 
@@ -223,8 +225,9 @@ func (c *Client) handleKeyedSnapshotPhase(
 			c.keyedSubscribing = make(map[string]*keyedSubscribeState)
 		}
 		c.keyedSubscribing[channel] = &keyedSubscribeState{
-			options:    reply.Options,
-			isPresence: req.KeyedPresence,
+			options:       reply.Options,
+			isPresence:    req.KeyedPresence,
+			subscribingCh: make(chan struct{}),
 		}
 		c.mu.Unlock()
 	} else {
@@ -571,6 +574,13 @@ func (c *Client) handleKeyedLivePhase(
 		recoveredPubs = filteredPubs
 	}
 
+	// Apply delta compression to recovered publications if enabled.
+	// Unlike normal subs, we don't check for "Recovered" flag here because keyed subs
+	// always error out on failed recovery (never reach this point with failed recovery).
+	if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
+		recoveredPubs = c.makeRecoveredPubsDeltaFossil(recoveredPubs)
+	}
+
 	// Build response.
 	res := &protocol.SubscribeResult{
 		Keyed:                  true,
@@ -607,6 +617,11 @@ func (c *Client) handleKeyedLivePhase(
 	channelFlags |= flagSubscribed
 	channelFlags |= flagPositioning // Keyed subscriptions are always positioned.
 	channelFlags |= flagKeyed       // Mark as keyed subscription.
+	if deltaEnabled && req.Delta == string(DeltaTypeFossil) {
+		// Allow delta for following real-time publications. Recovery is implicitly
+		// successful here - keyed subs error out earlier if recovery fails.
+		channelFlags |= flagDeltaAllowed
+	}
 	if isPresence {
 		channelFlags |= flagKeyedPresence
 	}
@@ -644,6 +659,9 @@ func (c *Client) handleKeyedLivePhase(
 
 	// Move from keyedSubscribing to channels.
 	c.mu.Lock()
+	if state, ok := c.keyedSubscribing[channel]; ok && state.subscribingCh != nil {
+		close(state.subscribingCh)
+	}
 	delete(c.keyedSubscribing, channel)
 	c.channels[channel] = channelContext
 	c.mu.Unlock()
@@ -757,7 +775,24 @@ func (c *Client) releaseKeyedPaginationLock(channel string) {
 func (c *Client) cleanupKeyedSubscribing(channel string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.keyedSubscribing, channel)
+	if state, ok := c.keyedSubscribing[channel]; ok {
+		if state.subscribingCh != nil {
+			close(state.subscribingCh)
+		}
+		delete(c.keyedSubscribing, channel)
+	}
+}
+
+// cleanupKeyedSubscribingAll removes all in-progress keyed subscriptions on disconnect.
+func (c *Client) cleanupKeyedSubscribingAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for channel, state := range c.keyedSubscribing {
+		if state.subscribingCh != nil {
+			close(state.subscribingCh)
+		}
+		delete(c.keyedSubscribing, channel)
+	}
 }
 
 // keyedPresenceTTL returns TTL for keyed presence entries.
@@ -911,63 +946,3 @@ func (c *Client) removeKeyedPresence(channel string, flags uint16) error {
 	return nil
 }
 
-// cleanupKeyedPresence removes presence for all keyed channels on disconnect.
-func (c *Client) cleanupKeyedPresence() {
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return
-	}
-
-	c.mu.RLock()
-	type channelWithFlags struct {
-		channel string
-		flags   uint16
-	}
-	channels := make([]channelWithFlags, 0, len(c.channels))
-	for ch, ctx := range c.channels {
-		// Clean up keyed channels with any presence enabled.
-		if channelHasFlag(ctx.flags, flagKeyed) &&
-			(channelHasFlag(ctx.flags, flagEmitPresence) ||
-				channelHasFlag(ctx.flags, flagEmitKeyedClientPresence) ||
-				channelHasFlag(ctx.flags, flagEmitKeyedUserPresence)) {
-			channels = append(channels, channelWithFlags{channel: ch, flags: ctx.flags})
-		}
-	}
-	c.mu.RUnlock()
-
-	// Remove presence for channels where it was maintained.
-	for _, cwf := range channels {
-		_ = c.removeKeyedPresence(cwf.channel, cwf.flags)
-	}
-}
-
-// cleanupKeyedPresenceSubs unsubscribes from all presence subscriptions.
-// Presence subscriptions are identified by the flagKeyedPresence flag in the unified channels map.
-func (c *Client) cleanupKeyedPresenceSubs() {
-	keyedEngine := c.node.keyedEngine
-	if keyedEngine == nil {
-		return
-	}
-
-	c.mu.RLock()
-	// Collect presence channels from the unified channels map.
-	var presenceSubs []string
-	for channel, ctx := range c.channels {
-		if channelHasFlag(ctx.flags, flagKeyedPresence) {
-			presenceSubs = append(presenceSubs, channel)
-		}
-	}
-	// Also clean up any in-progress presence subscriptions from keyedSubscribing.
-	for channel, state := range c.keyedSubscribing {
-		if state.isPresence {
-			presenceSubs = append(presenceSubs, channel)
-		}
-	}
-	c.mu.RUnlock()
-
-	// Unsubscribe from all presence channels.
-	for _, presenceChannel := range presenceSubs {
-		_ = c.node.removeSubscription(presenceChannel, c)
-		_ = keyedEngine.Unsubscribe(presenceChannel)
-	}
-}

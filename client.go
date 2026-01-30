@@ -1119,7 +1119,7 @@ func (c *Client) close(disconnect Disconnect) error {
 	}
 	c.mu.Unlock()
 
-	// Unsubscribe from all channels.
+	// Unsubscribe from all channels (handles both normal and keyed subscriptions).
 	for channel := range channels {
 		err := c.unsubscribe(channel, unsubscribeDisconnect, &disconnect)
 		if err != nil {
@@ -1127,10 +1127,8 @@ func (c *Client) close(disconnect Disconnect) error {
 		}
 	}
 
-	// Cleanup keyed presence and sub-subscriptions.
-	// TODO: upper unsubscribe cycle does not clean keyed subs??
-	c.cleanupKeyedPresence()
-	c.cleanupKeyedPresenceSubs()
+	// Clean up any in-progress keyed subscriptions that aren't in channels yet.
+	c.cleanupKeyedSubscribingAll()
 
 	c.mu.RLock()
 	authenticated := c.authenticated
@@ -3791,12 +3789,22 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 	subscribingCh := chCtx.subscribingCh
 	isSubscribed := channelHasFlag(chCtx.flags, flagSubscribed)
 	serverSide := channelHasFlag(chCtx.flags, flagServerSide)
+	isKeyed := channelHasFlag(chCtx.flags, flagKeyed)
+	// Also check for in-progress keyed subscriptions.
+	keyedState, hasKeyedState := c.keyedSubscribing[channel]
+	var keyedSubscribingCh chan struct{}
+	if hasKeyedState {
+		keyedSubscribingCh = keyedState.subscribingCh
+	}
 	c.mu.RUnlock()
-	if !ok {
+
+	// If channel is not in channels map, check if it's only in keyedSubscribing.
+	if !ok && !hasKeyedState {
 		return nil
 	}
 
-	if !serverSide && !isSubscribed && subscribingCh != nil {
+	// Wait for normal subscription in progress.
+	if ok && !serverSide && !isSubscribed && subscribingCh != nil {
 		// If client is not yet subscribed on a client-side channel, and subscribe
 		// command is in progress - we need to wait for it to finish before proceeding.
 		// We hang no longer than maxWaitTimeout here, if timeout happens - it's a signal
@@ -3807,6 +3815,7 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		case <-subscribingCh:
 			c.mu.RLock()
 			chCtx, ok = c.channels[channel]
+			isKeyed = channelHasFlag(chCtx.flags, flagKeyed)
 			c.mu.RUnlock()
 			if !ok {
 				return nil
@@ -3828,16 +3837,58 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		}
 	}
 
-	c.mu.Lock()
-	currentChCtx, ok := c.channels[channel]
-	if ok && currentChCtx.subscribingCh != nil {
-		close(currentChCtx.subscribingCh)
+	// Wait for keyed subscription in progress.
+	if hasKeyedState && keyedSubscribingCh != nil {
+		maxWaitTimeout := 5 * time.Second
+		select {
+		case <-keyedSubscribingCh:
+			c.mu.RLock()
+			chCtx, ok = c.channels[channel]
+			if ok {
+				isKeyed = channelHasFlag(chCtx.flags, flagKeyed)
+			}
+			c.mu.RUnlock()
+		case <-time.After(maxWaitTimeout):
+			c.mu.Lock()
+			if state, exists := c.keyedSubscribing[channel]; exists && state.subscribingCh != nil {
+				close(state.subscribingCh)
+			}
+			delete(c.keyedSubscribing, channel)
+			c.mu.Unlock()
+			go func() {
+				_ = c.close(DisconnectServerError)
+			}()
+			c.node.logger.log(newLogEntry(LogLevelInfo, "timeout waiting for keyed subscribe to finish", map[string]any{"channel": channel, "user": c.user, "client": c.uid}))
+			return nil
+		}
 	}
-	delete(c.channels, channel)
+
+	c.mu.Lock()
+	// Clean up normal subscription.
+	if currentChCtx, exists := c.channels[channel]; exists {
+		if currentChCtx.subscribingCh != nil {
+			close(currentChCtx.subscribingCh)
+		}
+		delete(c.channels, channel)
+	}
+	// Clean up keyed subscribing state.
+	if state, exists := c.keyedSubscribing[channel]; exists {
+		if state.subscribingCh != nil {
+			close(state.subscribingCh)
+		}
+		delete(c.keyedSubscribing, channel)
+	}
 	if disconnect == nil && c.perChannelWriter != nil {
 		c.perChannelWriter.delWriter(channel, false)
 	}
 	c.mu.Unlock()
+
+	// Unsubscribe from keyed engine pub/sub if this was a keyed subscription.
+	if isKeyed {
+		if keyedEngine := c.node.keyedEngine; keyedEngine != nil {
+			_ = keyedEngine.Unsubscribe(channel)
+		}
+	}
 
 	// Remove presence if any presence flag is enabled.
 	hasAnyPresence := channelHasFlag(chCtx.flags, flagEmitPresence) ||
