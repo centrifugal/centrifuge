@@ -12,6 +12,85 @@ import (
 	"github.com/centrifugal/protocol"
 )
 
+// Keyed Subscriptions
+//
+// Keyed subscriptions provide synchronized state across clients. Unlike normal pub/sub
+// subscriptions, keyed subscriptions maintain a snapshot of key-value state plus a stream
+// of changes for recovery.
+//
+// Subscription protocol phases:
+//
+//  1. Snapshot phase: Client paginates through current key-value state. Each response
+//     includes a stream position (offset/epoch) marking the snapshot's point in time.
+//
+//  2. Stream phase (optional): Client paginates through stream history to catch up on
+//     changes since the snapshot was taken. May skip if snapshot is up-to-date.
+//
+//  3. Live phase: Server coordinates the transition to real-time:
+//     - Starts buffering pub/sub messages before subscribing
+//     - Subscribes to pub/sub channel
+//     - Reads final stream catch-up since client's position
+//     - Merges stream with buffered messages (deduplication by offset)
+//     - Sends merged publications to client and enables live updates
+//
+// This buffering mechanism ensures no messages are lost during the gap between
+// the final stream read and pub/sub subscription becoming active.
+//
+// Key differences from normal subscriptions:
+//
+// EnablePositioning and EnableRecovery options DO NOT APPLY to keyed subscriptions.
+// These capabilities are inherent to the keyed subscription model:
+//
+//   - Positioning is always enabled: Keyed subscriptions always track stream position
+//     (offset/epoch) because the snapshot+stream protocol requires it for consistency.
+//
+//   - Recovery is always enabled: The entire keyed subscription model is built around
+//     state recovery. Clients receive a snapshot plus stream catch-up, ensuring they
+//     can always recover the complete current state.
+//
+// When EnableKeyed is true in SubscribeOptions, the subscription automatically gets:
+//   - Stream position tracking (equivalent to EnablePositioning)
+//   - State recovery via snapshot + stream (superior to EnableRecovery)
+//   - Delta compression support for stream catch-up (if negotiated)
+//   - Tags filtering for stream and live publications (if allowed)
+//
+// Keyed Presence Subscriptions
+//
+// Keyed presence subscriptions allow clients to watch who is online in a channel.
+// They are a special type of keyed subscription that tracks client or user presence.
+//
+// Two presence channel types (suffixes appended to base channel name):
+//
+//   - {channel}:clients - Tracks individual client connections. Each entry is keyed
+//     by client ID and contains full ClientInfo. Use for tracking all connections,
+//     including multiple connections from the same user.
+//
+//   - {channel}:users - Tracks unique users. Each entry is keyed by user ID with
+//     minimal data (just the key). Provides natural deduplication when users have
+//     multiple connections. TTL-based expiration provides grace period for reconnects.
+//
+// Enabling presence emission (server-side, in OnSubscribe for base channel):
+//
+//   - EmitKeyedClientPresence: true - Emits presence to {channel}:clients
+//   - EmitKeyedUserPresence: true - Emits presence to {channel}:users
+//   - KeyedPresenceAvailable: true - Tells client that presence channels exist
+//
+// Authorization flow:
+//
+// Presence subscriptions go through OnPresenceSubscribe handler (separate from OnSubscribe)
+// to allow different permission checks. For example, a user might be allowed to subscribe
+// to a chat channel but not see who else is in it.
+//
+// Client subscribes to presence channel -> OnPresenceSubscribe called with base channel
+// -> Handler returns PresenceSubscribeReply{Allowed: true} -> Subscription proceeds
+//
+// Presence data lifecycle:
+//
+//   - On subscribe (with EmitKeyedClientPresence/EmitKeyedUserPresence): presence published
+//   - Periodically refreshed via TTL to handle connection drops
+//   - On unsubscribe/disconnect: presence removed (with stream entry for real-time notification)
+//   - TTL expiration: automatic cleanup if client disappears without clean disconnect
+
 // Keyed subscription phase constants.
 const (
 	KeyedPhaseSnapshot int32 = 0 // Paginating over snapshot (keyed state)
@@ -945,4 +1024,3 @@ func (c *Client) removeKeyedPresence(channel string, flags uint16) error {
 
 	return nil
 }
-
