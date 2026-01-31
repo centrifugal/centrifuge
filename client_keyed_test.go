@@ -964,3 +964,327 @@ func TestKeyedSubscribe_MultipleClientsPerUser(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }
+
+// TestKeyedEngine_ReadSnapshotByKey tests the Key filter for ReadSnapshot.
+func TestKeyedEngine_ReadSnapshotByKey(t *testing.T) {
+	_, engine := newTestNodeWithKeyedEngine(t)
+	ctx := context.Background()
+	ch := "test_read_by_key"
+
+	// Publish 3 keys
+	_, err := engine.Publish(ctx, ch, "key1", KeyedPublishOptions{
+		Data:       []byte(`{"value":"data1"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Publish(ctx, ch, "key2", KeyedPublishOptions{
+		Data:       []byte(`{"value":"data2"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	_, err = engine.Publish(ctx, ch, "key3", KeyedPublishOptions{
+		Data:       []byte(`{"value":"data3"}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read single key
+	pubs, pos, cursor, err := engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{
+		Key: "key2",
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, "key2", pubs[0].Key)
+	require.Equal(t, []byte(`{"value":"data2"}`), pubs[0].Data)
+	require.Empty(t, cursor) // No pagination for single key
+	require.NotEmpty(t, pos.Epoch)
+
+	// Read non-existent key
+	pubs, _, _, err = engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{
+		Key: "nonexistent",
+	})
+	require.NoError(t, err)
+	require.Len(t, pubs, 0)
+}
+
+// TestKeyedEngine_CASSuccess tests successful CAS update.
+func TestKeyedEngine_CASSuccess(t *testing.T) {
+	_, engine := newTestNodeWithKeyedEngine(t)
+	ctx := context.Background()
+	ch := "test_cas_success"
+
+	// Publish initial value
+	res1, err := engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:       []byte(`{"value":10}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res1.Suppressed)
+
+	// Read current state - position includes offset AND epoch
+	pubs, pos, _, err := engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "counter"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	expectedPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
+
+	// CAS update with correct position
+	res2, err := engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:             []byte(`{"value":15}`),
+		ExpectedPosition: &expectedPos,
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res2.Suppressed)
+	require.Greater(t, res2.Position.Offset, res1.Position.Offset)
+
+	// Verify the value was updated
+	pubs, _, _, err = engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "counter"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, []byte(`{"value":15}`), pubs[0].Data)
+}
+
+// TestKeyedEngine_CASConflict tests CAS conflict when position has changed.
+func TestKeyedEngine_CASConflict(t *testing.T) {
+	_, engine := newTestNodeWithKeyedEngine(t)
+	ctx := context.Background()
+	ch := "test_cas_conflict"
+
+	// Publish initial value
+	_, err := engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:       []byte(`{"value":10}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read current state
+	pubs, pos, _, err := engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "counter"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	originalPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
+
+	// Another client updates the key (simulated)
+	_, err = engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:       []byte(`{"value":12}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// CAS with stale position - should fail
+	res, err := engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:             []byte(`{"value":15}`),
+		ExpectedPosition: &originalPos, // stale offset!
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res.SuppressReason)
+
+	// CurrentPublication should contain the current state for immediate retry
+	require.NotNil(t, res.CurrentPublication)
+	require.Equal(t, []byte(`{"value":12}`), res.CurrentPublication.Data)
+
+	// Immediate retry using returned position - should succeed
+	retryPos := StreamPosition{Offset: res.CurrentPublication.Offset, Epoch: res.Position.Epoch}
+	res2, err := engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:             []byte(`{"value":15}`),
+		ExpectedPosition: &retryPos,
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.False(t, res2.Suppressed)
+
+	// Verify the value was updated
+	pubs, _, _, err = engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "counter"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, []byte(`{"value":15}`), pubs[0].Data)
+}
+
+// TestKeyedEngine_CASNonExistent tests CAS on a key that doesn't exist.
+func TestKeyedEngine_CASNonExistent(t *testing.T) {
+	_, engine := newTestNodeWithKeyedEngine(t)
+	ctx := context.Background()
+	ch := "test_cas_nonexistent"
+
+	// First create the channel by publishing something
+	_, err := engine.Publish(ctx, ch, "other_key", KeyedPublishOptions{
+		Data:       []byte(`{"value":1}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Get the epoch
+	_, pos, _, err := engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Limit: 1})
+	require.NoError(t, err)
+
+	// Try CAS on non-existent key with expected position
+	expectedPos := StreamPosition{Offset: 42, Epoch: pos.Epoch}
+	res, err := engine.Publish(ctx, ch, "newkey", KeyedPublishOptions{
+		Data:             []byte(`{"value":1}`),
+		ExpectedPosition: &expectedPos, // expects key to exist
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res.SuppressReason)
+}
+
+// TestKeyedEngine_CASWrongEpoch tests CAS with correct offset but wrong epoch.
+func TestKeyedEngine_CASWrongEpoch(t *testing.T) {
+	_, engine := newTestNodeWithKeyedEngine(t)
+	ctx := context.Background()
+	ch := "test_cas_wrong_epoch"
+
+	// Publish initial value
+	_, err := engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:       []byte(`{"value":10}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read current state
+	pubs, _, _, err := engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "counter"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+
+	// Use correct offset but wrong epoch
+	wrongPos := StreamPosition{Offset: pubs[0].Offset, Epoch: "wrong-epoch"}
+
+	res, err := engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:             []byte(`{"value":15}`),
+		ExpectedPosition: &wrongPos,
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+	})
+	require.NoError(t, err)
+	require.True(t, res.Suppressed)
+	require.Equal(t, SuppressReasonPositionMismatch, res.SuppressReason)
+
+	// CurrentPublication should contain the current state for immediate retry
+	require.NotNil(t, res.CurrentPublication)
+	require.Equal(t, []byte(`{"value":10}`), res.CurrentPublication.Data)
+
+	// Verify value unchanged
+	pubs, _, _, err = engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "counter"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, []byte(`{"value":10}`), pubs[0].Data)
+}
+
+// TestKeyedEngine_StreamDataDifferentPayloads tests publishing with different
+// data for snapshot (full state) and stream (incremental update).
+func TestKeyedEngine_StreamDataDifferentPayloads(t *testing.T) {
+	_, engine := newTestNodeWithKeyedEngine(t)
+	ctx := context.Background()
+	ch := "test_stream_data"
+
+	// Publish with different payloads: snapshot gets full state, stream gets delta
+	_, err := engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:       []byte(`{"count":100}`),  // Full state → snapshot
+		StreamData: []byte(`{"delta":100}`),  // Incremental → stream
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read snapshot - should have full state
+	pubs, pos, _, err := engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "counter"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, []byte(`{"count":100}`), pubs[0].Data)
+
+	// Read stream - should have incremental data
+	streamPubs, _, err := engine.ReadStream(ctx, ch, KeyedReadStreamOptions{
+		Filter: StreamFilter{Limit: 10},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamPubs, 1)
+	require.Equal(t, []byte(`{"delta":100}`), streamPubs[0].Data)
+
+	// Update with CAS: read current position, update with different payloads
+	expectedPos := StreamPosition{Offset: pubs[0].Offset, Epoch: pos.Epoch}
+	_, err = engine.Publish(ctx, ch, "counter", KeyedPublishOptions{
+		Data:             []byte(`{"count":105}`), // New full state → snapshot
+		StreamData:       []byte(`{"delta":5}`),   // Incremental → stream
+		ExpectedPosition: &expectedPos,
+		StreamSize:       100,
+		StreamTTL:        300 * time.Second,
+		KeyTTL:           300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Verify snapshot has new full state
+	pubs, _, _, err = engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "counter"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, []byte(`{"count":105}`), pubs[0].Data)
+
+	// Verify stream has both incremental updates
+	streamPubs, _, err = engine.ReadStream(ctx, ch, KeyedReadStreamOptions{
+		Filter: StreamFilter{Limit: 10},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamPubs, 2)
+	require.Equal(t, []byte(`{"delta":100}`), streamPubs[0].Data)
+	require.Equal(t, []byte(`{"delta":5}`), streamPubs[1].Data)
+}
+
+// TestKeyedEngine_StreamDataWithoutStreamData tests that when StreamData is not set,
+// Data is used for both snapshot and stream.
+func TestKeyedEngine_StreamDataWithoutStreamData(t *testing.T) {
+	_, engine := newTestNodeWithKeyedEngine(t)
+	ctx := context.Background()
+	ch := "test_no_stream_data"
+
+	// Publish without StreamData - Data should be used for both
+	_, err := engine.Publish(ctx, ch, "item", KeyedPublishOptions{
+		Data:       []byte(`{"name":"test","value":42}`),
+		StreamSize: 100,
+		StreamTTL:  300 * time.Second,
+		KeyTTL:     300 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Read snapshot
+	pubs, _, _, err := engine.ReadSnapshot(ctx, ch, KeyedReadSnapshotOptions{Key: "item"})
+	require.NoError(t, err)
+	require.Len(t, pubs, 1)
+	require.Equal(t, []byte(`{"name":"test","value":42}`), pubs[0].Data)
+
+	// Read stream - should have same data
+	streamPubs, _, err := engine.ReadStream(ctx, ch, KeyedReadStreamOptions{
+		Filter: StreamFilter{Limit: 10},
+	})
+	require.NoError(t, err)
+	require.Len(t, streamPubs, 1)
+	require.Equal(t, []byte(`{"name":"test","value":42}`), streamPubs[0].Data)
+}

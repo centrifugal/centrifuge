@@ -356,10 +356,9 @@
         });
 
         // Subscribe to leaderboard channel with keyed mode and ordering.
-        const sub = centrifuge.newSubscription('leaderboard', {
-            keyed: true,
-            keyedLimit: 1,
-            keyedOrdered: true
+        const sub = centrifuge.newKeyedSubscription('leaderboard', {
+            limit: 1,
+            ordered: true
         });
 
         sub.on('subscribed', (ctx) => {

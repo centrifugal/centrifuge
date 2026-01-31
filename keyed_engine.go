@@ -160,8 +160,13 @@ type KeyedPublishOptions struct {
 	// after all entries expire. Allows position validation even with empty stream.
 	StreamMetaTTL time.Duration
 
-	// Data is the publication payload (typically JSON).
+	// Data is the publication payload (usually JSON, but can be binary also).
+	// Stored in snapshot and published to stream/pub-sub (unless StreamData is set).
 	Data []byte
+	// StreamData, if set, overrides Data for stream and pub-sub publication.
+	// Use when you want to store full state in snapshot but publish incremental updates.
+	// Example: snapshot stores {"count":105}, stream publishes {"delta":5}.
+	StreamData []byte
 	// Tags are key-value metadata for filtering. Subscribers can filter by tags
 	// to receive only relevant publications.
 	Tags map[string]string
@@ -200,6 +205,12 @@ type KeyedPublishOptions struct {
 	// publish is suppressed due to KeyMode (e.g., KeyModeIfNew when key exists).
 	// Useful for presence keep-alive without generating new stream entries.
 	RefreshTTLOnSuppress bool
+
+	// ExpectedPosition enables Compare-And-Swap semantics.
+	// If set, publish only succeeds if the key's current position (offset+epoch) matches.
+	// Returns Suppressed=true with SuppressReasonPositionMismatch on mismatch.
+	// Use with ReadSnapshot Key filter for atomic read-modify-write.
+	ExpectedPosition *StreamPosition
 }
 
 // KeyedUnpublishOptions defines options for removing a key from a keyed channel.
@@ -272,6 +283,11 @@ type KeyedReadSnapshotOptions struct {
 
 	// SnapshotTTL extends the snapshot metadata TTL when reading.
 	SnapshotTTL time.Duration
+
+	// Key filters to a single entry by exact key match.
+	// When set, returns at most one publication (or empty if key not found).
+	// Cursor/Limit are ignored when Key is set.
+	Key string
 }
 
 // KeyedStats provides statistics about a channel's snapshot.
@@ -299,6 +315,9 @@ const (
 	// SuppressReasonKeyNotFound indicates KeyModeIfExists was used but key doesn't exist,
 	// or Unpublish was called on a non-existent key.
 	SuppressReasonKeyNotFound SuppressReason = "key_not_found"
+
+	// SuppressReasonPositionMismatch indicates CAS failed - key's position changed.
+	SuppressReasonPositionMismatch SuppressReason = "position_mismatch"
 )
 
 // KeyedPublishResult contains the result of Publish or Unpublish operation.
@@ -311,6 +330,10 @@ type KeyedPublishResult struct {
 	Suppressed bool
 	// SuppressReason explains why the operation was suppressed (empty when Suppressed is false).
 	SuppressReason SuppressReason
+	// CurrentPublication contains the current state when suppressed due to CAS mismatch.
+	// Allows immediate retry without extra ReadSnapshot call.
+	// Only set when SuppressReason is SuppressReasonPositionMismatch.
+	CurrentPublication *Publication
 }
 
 // KeyedRemoveOptions defines options for removing all channel data.

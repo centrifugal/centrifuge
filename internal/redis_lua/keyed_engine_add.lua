@@ -42,6 +42,9 @@ Publishing format (via PUBLISH/SPUBLISH):
 -- ARGV[17] = channel_for_cleanup (channel name for cleanup registration, empty '' to disable)
 -- ARGV[18] = key_mode ("" for replace/always, "if_new" only if key doesn't exist, "if_exists" only if key exists)
 -- ARGV[19] = refresh_ttl_on_suppress ("0" or "1" - refresh TTL even when suppressed by key_mode)
+-- ARGV[20] = expected_offset (for CAS, empty '' to disable)
+-- ARGV[21] = expected_epoch (for CAS, empty '' to disable)
+-- ARGV[22] = snapshot_payload (for snapshot storage, empty '' to use message_payload)
 
 -- Local variables from KEYS
 local stream_key = KEYS[1]
@@ -73,9 +76,16 @@ local use_hexpire = ARGV[16]
 local channel_for_cleanup = ARGV[17]
 local key_mode = ARGV[18] or ""
 local refresh_ttl_on_suppress = ARGV[19] or "0"
+local expected_offset = ARGV[20] or ""
+local expected_epoch = ARGV[21] or ""
+local snapshot_payload_arg = ARGV[22] or ""
 
 -- Determine which payload to use for snapshot storage
-local snapshot_payload = message_payload
+-- If snapshot_payload_arg is provided, use it; otherwise use message_payload
+local snapshot_payload = snapshot_payload_arg
+if snapshot_payload == "" then
+    snapshot_payload = message_payload
+end
 
 -- ==== Step 0: Idempotency check ====
 if result_key_expire ~= '' and result_key ~= '' then
@@ -152,6 +162,39 @@ if meta_key ~= '' then
             -- KeyModeIfExists but key doesn't exist - suppress
             local current_offset = redis.call("hget", meta_key, "s") or 0
             return { tonumber(current_offset), current_epoch, "key_not_found" }
+        end
+    end
+
+    -- ==== Step 2c: CAS position check (BEFORE incrementing offset) ====
+    if expected_offset ~= "" and expected_epoch ~= "" and message_key ~= "" and snapshot_hash_key ~= "" and is_leave ~= "1" then
+        local current_value = redis.call("hget", snapshot_hash_key, message_key)
+
+        -- First check epoch matches current channel epoch
+        if expected_epoch ~= current_epoch then
+            local current_offset = redis.call("hget", meta_key, "s") or 0
+            -- Return current value for immediate retry (4th element)
+            return { tonumber(current_offset), current_epoch, "position_mismatch", current_value or "" }
+        end
+
+        if current_value then
+            -- Parse offset from "offset:epoch:payload"
+            local colon_pos = string.find(current_value, ":")
+            if colon_pos then
+                local current_key_offset = tonumber(string.sub(current_value, 1, colon_pos - 1))
+                if current_key_offset ~= tonumber(expected_offset) then
+                    local current_offset = redis.call("hget", meta_key, "s") or 0
+                    -- Return current value for immediate retry (4th element)
+                    return { tonumber(current_offset), current_epoch, "position_mismatch", current_value }
+                end
+            else
+                -- Invalid format - mismatch
+                local current_offset = redis.call("hget", meta_key, "s") or 0
+                return { tonumber(current_offset), current_epoch, "position_mismatch", current_value }
+            end
+        else
+            -- Key doesn't exist but expected position was provided
+            local current_offset = redis.call("hget", meta_key, "s") or 0
+            return { tonumber(current_offset), current_epoch, "position_mismatch", "" }
         end
     end
 

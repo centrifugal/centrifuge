@@ -477,9 +477,8 @@
         });
 
         // Subscribe to games list (keyed channel)
-        const gamesSub = centrifuge.newSubscription('games', {
-            keyed: true,
-            keyedLimit: 50
+        const gamesSub = centrifuge.newKeyedSubscription('games', {
+            limit: 50
         });
 
         gamesSub.on('subscribed', (ctx) => {
@@ -529,21 +528,10 @@
             renderGames();
         });
 
-        // Subscribe to lobby channel for presence tracking.
-        // This subscription enables presence - the server tracks us in lobby:clients and lobby:users.
-        const lobbySub = centrifuge.newSubscription('lobby', {
-            keyed: true,
-            keyedLimit: 1
-        });
-
-        lobbySub.on('subscribed', () => {
-            console.log('Subscribed to lobby (enables presence tracking)');
-        });
-
         // Subscribe to :clients channel for tracking individual connections.
         // Key is clientId, contains full ClientInfo.
         // Use this to see all connected browser tabs/sessions.
-        const clientsSub = centrifuge.newKeyedClientsSubscription('lobby');
+        const clientsSub = centrifuge.newKeyedClientsSubscription('games');
 
         clientsSub.on('subscribed', (ctx) => {
             console.log('Clients subscribed, recovered:', ctx.recovered);
@@ -585,7 +573,7 @@
         // Subscribe to :users channel for tracking unique users.
         // Key is userId, no ClientInfo (just key for uniqueness).
         // Users expire via TTL - provides debounce for quick reconnects.
-        const usersSub = centrifuge.newKeyedUsersSubscription('lobby');
+        const usersSub = centrifuge.newKeyedUsersSubscription('games');
 
         usersSub.on('subscribed', (ctx) => {
             console.log('Users subscribed, recovered:', ctx.recovered);
@@ -621,9 +609,8 @@
             if (gameSubscriptions.has(gameId)) return;
 
             const channel = 'game:' + gameId;
-            const sub = centrifuge.newSubscription(channel, {
-                keyed: true,
-                keyedLimit: 10
+            const sub = centrifuge.newKeyedSubscription(channel, {
+                limit: 10
             });
 
             const gameState = {
@@ -903,9 +890,8 @@
 
         // Start connection
         gamesSub.subscribe();
-        lobbySub.subscribe();  // Subscribe to lobby first (enables presence tracking)
-        clientsSub.subscribe();  // Subscribe to :clients to see all connections
-        usersSub.subscribe();  // Subscribe to :users to see unique users
+        clientsSub.subscribe();  // Subscribe to games:clients to see all connections
+        usersSub.subscribe();  // Subscribe to games:users to see unique users
         centrifuge.connect();
 
         // Update name in online clients when changed

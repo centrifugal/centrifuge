@@ -551,18 +551,42 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 		return KeyedPublishResult{}, shardClient.Do(ctx, cmd).Error()
 	}
 
-	protoPub := &protocol.Publication{
-		Data: opts.Data,
+	now := time.Now().UnixMilli()
+
+	// Stream publication (used for stream and pub/sub) - may have StreamData for incremental updates.
+	streamData := opts.Data
+	if len(opts.StreamData) > 0 {
+		streamData = opts.StreamData
+	}
+	streamProtoPub := &protocol.Publication{
+		Data: streamData,
 		Info: infoToProto(opts.ClientInfo),
 		Tags: opts.Tags,
-		Time: time.Now().UnixMilli(),
+		Time: now,
 		Key:  key,
 	}
-
-	byteMessage, err := protoPub.MarshalVT()
+	streamBytes, err := streamProtoPub.MarshalVT()
 	if err != nil {
 		return KeyedPublishResult{}, err
 	}
+
+	// Snapshot publication (used for snapshot storage) - always uses full state Data.
+	var snapshotBytes []byte
+	if len(opts.StreamData) > 0 {
+		// Different data for snapshot vs stream - need separate serialization.
+		snapshotProtoPub := &protocol.Publication{
+			Data: opts.Data,
+			Info: infoToProto(opts.ClientInfo),
+			Tags: opts.Tags,
+			Time: now,
+			Key:  key,
+		}
+		snapshotBytes, err = snapshotProtoPub.MarshalVT()
+		if err != nil {
+			return KeyedPublishResult{}, err
+		}
+	}
+	// If snapshotBytes is nil, Lua will use streamBytes for both.
 
 	var resultKey string
 	var resultExpire string
@@ -627,14 +651,22 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 		cleanupRegKey = e.cleanupRegistrationKeyForChannel(s.shard, ch)
 	}
 
+	// Prepare ExpectedPosition arguments for CAS
+	expectedOffset := ""
+	expectedEpoch := ""
+	if opts.ExpectedPosition != nil {
+		expectedOffset = strconv.FormatUint(opts.ExpectedPosition.Offset, 10)
+		expectedEpoch = opts.ExpectedPosition.Epoch
+	}
+
 	replies, err := e.addScript.Exec(ctx, shardClient,
 		[]string{
 			streamKey, metaKey, resultKey, snapshotHashKey, snapshotOrderKey, snapshotExpireKey,
 			snapshotMetaKey, cleanupRegKey,
 		},
 		[]string{
-			key,                                // message_key
-			convert.BytesToString(byteMessage), // message_payload (Publication - for stream, publishing, and snapshot)
+			key,                                 // message_key
+			convert.BytesToString(streamBytes),  // message_payload (Publication - for stream and publishing)
 			strconv.Itoa(opts.StreamSize),
 			strconv.FormatInt(int64(opts.StreamTTL.Seconds()), 10),
 			chID, // channel (for Lua to publish)
@@ -652,6 +684,9 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 			ch,                   // channel_for_cleanup (for cleanup registration)
 			string(opts.KeyMode), // key_mode
 			boolToStr(opts.RefreshTTLOnSuppress), // refresh_ttl_on_suppress
+			expectedOffset,                       // expected_offset (for CAS)
+			expectedEpoch,                        // expected_epoch (for CAS)
+			convert.BytesToString(snapshotBytes), // snapshot_payload (for snapshot storage, empty to use message_payload)
 		},
 	).ToArray()
 	if err != nil {
@@ -740,6 +775,9 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 			"",  // channel_for_cleanup (not used for unpublish)
 			"",  // key_mode (not used for unpublish)
 			"0", // refresh_ttl_on_suppress (not used for unpublish)
+			"",  // expected_offset (not used for unpublish)
+			"",  // expected_epoch (not used for unpublish)
+			"",  // snapshot_payload (not used for unpublish)
 		},
 	).ToArray()
 	if err != nil {
@@ -755,6 +793,10 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 // Returns entries, stream position, next cursor for pagination, and error.
 // Cursor "0" or "" means end of iteration.
 func (e *RedisKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
+	// Handle single key lookup (Key filter)
+	if opts.Key != "" {
+		return e.readSingleKey(ctx, ch, opts)
+	}
 	if opts.Ordered {
 		return e.readOrderedSnapshot(ctx, ch, opts)
 	}
@@ -762,10 +804,79 @@ func (e *RedisKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts Key
 }
 
 func (e *RedisKeyedEngine) ReadSnapshotZero(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
+	// Handle single key lookup (Key filter)
+	if opts.Key != "" {
+		return e.readSingleKey(ctx, ch, opts)
+	}
 	if opts.Ordered {
 		return e.readOrderedSnapshot(ctx, ch, opts)
 	}
 	return e.readUnorderedSnapshotZero(ctx, ch, opts)
+}
+
+// readSingleKey retrieves a single key from the snapshot using HGET instead of HSCAN.
+// This is more efficient for single key lookups and supports CAS read-modify-write patterns.
+func (e *RedisKeyedEngine) readSingleKey(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
+	s := e.getShard(ch)
+	shardClient := s.shard.client
+
+	snapshotHashKey := e.snapshotHashKey(s.shard, ch)
+	metaKey := e.metaKey(s.shard, ch)
+
+	// Execute HGET and metadata read in pipeline
+	cmds := make([]rueidis.Completed, 0, 2)
+	cmds = append(cmds, shardClient.B().Hget().Key(snapshotHashKey).Field(opts.Key).Build())
+	cmds = append(cmds, shardClient.B().Hmget().Key(metaKey).Field("s", "e").Build())
+
+	results := shardClient.DoMulti(ctx, cmds...)
+
+	// Parse HGET result
+	valBytes, err := results[0].AsBytes()
+	keyNotFound := rueidis.IsRedisNil(err)
+	if err != nil && !keyNotFound {
+		return nil, StreamPosition{}, "", err
+	}
+
+	// Parse metadata
+	metaArr, err := results[1].ToArray()
+	if err != nil {
+		return nil, StreamPosition{}, "", err
+	}
+
+	var streamPos StreamPosition
+	if len(metaArr) >= 2 {
+		offsetVal, _ := metaArr[0].AsUint64()
+		epochVal, _ := metaArr[1].ToString()
+		streamPos = StreamPosition{Offset: offsetVal, Epoch: epochVal}
+	}
+
+	// Validate epoch if client provided snapshot revision
+	if opts.Revision != nil && opts.Revision.Epoch != streamPos.Epoch {
+		return nil, streamPos, "", ErrorUnrecoverablePosition
+	}
+
+	// Key not found - return empty
+	if keyNotFound || len(valBytes) == 0 {
+		return []*Publication{}, streamPos, "", nil
+	}
+
+	// Parse value: offset:epoch:payload
+	entryOffset, _, payload, err := parseSnapshotValue(valBytes)
+	if err != nil {
+		return nil, streamPos, "", fmt.Errorf("failed to parse snapshot value: %w", err)
+	}
+
+	// Unmarshal Publication from protobuf payload
+	var protoPub protocol.Publication
+	if err := protoPub.UnmarshalVT(payload); err != nil {
+		return nil, streamPos, "", fmt.Errorf("failed to unmarshal publication: %w", err)
+	}
+
+	pub := pubFromProto(&protoPub)
+	pub.Key = opts.Key
+	pub.Offset = entryOffset
+
+	return []*Publication{pub}, streamPos, "", nil
 }
 
 func (e *RedisKeyedEngine) readUnorderedSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
@@ -2629,6 +2740,24 @@ func parseAddScriptResult(replies []rueidis.RedisMessage) (KeyedPublishResult, e
 	if suppressReason != SuppressReasonNone {
 		result.Suppressed = true
 		result.SuppressReason = suppressReason
+
+		// For CAS mismatch, parse and return current publication for immediate retry.
+		// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
+		if suppressReason == SuppressReasonPositionMismatch && len(replies) >= 4 {
+			currentValue, err := replies[3].AsBytes()
+			if err == nil && len(currentValue) > 0 {
+				// Parse value: offset:epoch:payload
+				entryOffset, _, payload, parseErr := parseSnapshotValue(currentValue)
+				if parseErr == nil {
+					var protoPub protocol.Publication
+					if protoPub.UnmarshalVT(payload) == nil {
+						pub := pubFromProto(&protoPub)
+						pub.Offset = entryOffset
+						result.CurrentPublication = pub
+					}
+				}
+			}
+		}
 	}
 	return result, nil
 }

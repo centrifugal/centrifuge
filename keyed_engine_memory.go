@@ -101,24 +101,48 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 		}
 	}
 
-	pub := &Publication{
+	now := time.Now().UnixMilli()
+
+	// Snapshot publication stores full state (Data).
+	snapshotPub := &Publication{
 		Data: opts.Data,
 		Info: opts.ClientInfo,
 		Tags: opts.Tags,
-		Time: time.Now().UnixMilli(),
+		Time: now,
 		Key:  key,
 	}
 
+	// Stream publication may have different data (StreamData) for incremental updates.
+	var streamPub *Publication
+	if len(opts.StreamData) > 0 {
+		streamPub = &Publication{
+			Data: opts.StreamData,
+			Info: opts.ClientInfo,
+			Tags: opts.Tags,
+			Time: now,
+			Key:  key,
+		}
+	} else {
+		streamPub = snapshotPub
+	}
+
 	var prevPub *Publication
-	streamTop, prevPub, suppressReason, err := e.keyedHub.add(ch, key, pub, opts)
+	streamTop, prevPub, suppressReason, err := e.keyedHub.add(ch, key, snapshotPub, streamPub, opts)
 	if err != nil {
 		return KeyedPublishResult{}, err
 	}
 	if suppressReason != "" {
-		return KeyedPublishResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}, nil
+		result := KeyedPublishResult{Position: streamTop, Suppressed: true, SuppressReason: suppressReason}
+		// For CAS mismatch, include current publication for immediate retry.
+		// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
+		if suppressReason == SuppressReasonPositionMismatch {
+			result.CurrentPublication = prevPub
+		}
+		return result, nil
 	}
 
-	pub.Offset = streamTop.Offset
+	snapshotPub.Offset = streamTop.Offset
+	streamPub.Offset = streamTop.Offset
 
 	if opts.IdempotencyKey != "" {
 		resultExpireSeconds := int64(defaultIdempotentResultExpireSeconds)
@@ -130,7 +154,8 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 
 	if e.eventHandler != nil {
 		if opts.Publish {
-			err = e.eventHandler.HandlePublication(ch, pub, streamTop, opts.UseDelta, prevPub)
+			// Publish streamPub (with StreamData if set) to subscribers.
+			err = e.eventHandler.HandlePublication(ch, streamPub, streamTop, opts.UseDelta, prevPub)
 			if err != nil {
 				e.node.logger.log(newErrorLogEntry(err, "error handling publication in channel", map[string]any{"channel": ch}))
 			}
@@ -524,7 +549,7 @@ func (h *keyedHub) parseChKey(chKey string) (string, string) {
 	return "", ""
 }
 
-func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublishOptions) (StreamPosition, *Publication, SuppressReason, error) {
+func (h *keyedHub) add(ch string, key string, snapshotPub *Publication, streamPub *Publication, opts KeyedPublishOptions) (StreamPosition, *Publication, SuppressReason, error) {
 	h.Lock()
 	defer h.Unlock()
 
@@ -584,6 +609,26 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 		}
 	}
 
+	// CAS check: verify expected position (offset + epoch)
+	if key != "" && opts.ExpectedPosition != nil {
+		existing, exists := channel.snapshot[key]
+		var pos StreamPosition
+		if channel.stream != nil {
+			pos = StreamPosition{Offset: channel.stream.Top(), Epoch: channel.stream.Epoch()}
+		}
+		if !exists {
+			// Key doesn't exist - position mismatch
+			return pos, nil, SuppressReasonPositionMismatch, nil
+		}
+		// Check both offset AND epoch
+		if existing.Publication.Offset != opts.ExpectedPosition.Offset ||
+			pos.Epoch != opts.ExpectedPosition.Epoch {
+			// Return current publication for immediate retry.
+			// Client uses: CurrentPublication.Offset + Position.Epoch for next CAS attempt.
+			return pos, existing.Publication, SuppressReasonPositionMismatch, nil
+		}
+	}
+
 	var streamPosition StreamPosition
 
 	// Handle stream
@@ -623,8 +668,8 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 			}
 		}
 
-		offset, _ := channel.stream.Add(pub, opts.StreamSize, opts.Version, opts.VersionEpoch)
-		pub.Offset = offset // Set offset on publication for delivery
+		offset, _ := channel.stream.Add(streamPub, opts.StreamSize, opts.Version, opts.VersionEpoch)
+		streamPub.Offset = offset // Set offset on publication for delivery
 		streamPosition = StreamPosition{
 			Offset: offset,
 			Epoch:  channel.stream.Epoch(),
@@ -647,10 +692,12 @@ func (h *keyedHub) add(ch string, key string, pub *Publication, opts KeyedPublis
 			expireAt = time.Now().Unix() + int64(opts.KeyTTL.Seconds())
 		}
 
+		// Store snapshotPub in snapshot (contains full state Data)
+		snapshotPub.Offset = streamPosition.Offset
 		entry := &snapshotEntry{
 			Key:         key,
 			Revision:    streamPosition,
-			Publication: pub,
+			Publication: snapshotPub,
 			Score:       opts.Score,
 			ExpireAt:    expireAt,
 		}
@@ -878,6 +925,15 @@ func (h *keyedHub) getSnapshot(ch string, opts KeyedReadSnapshotOptions) ([]*Pub
 			// Epoch changed, client needs to restart from beginning
 			return nil, streamPosition, "", ErrorUnrecoverablePosition
 		}
+	}
+
+	// Handle single key lookup (Key filter)
+	if opts.Key != "" {
+		entry, exists := channel.snapshot[opts.Key]
+		if !exists {
+			return []*Publication{}, streamPosition, "", nil
+		}
+		return []*Publication{entry.Publication}, streamPosition, "", nil
 	}
 
 	var pubs []*Publication

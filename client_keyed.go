@@ -104,6 +104,7 @@ type keyedSubscribeState struct {
 	epoch         string           // Epoch from first response (for validation)
 	isPresence    bool             // True if this is a presence subscription (:clients or :users suffix)
 	subscribingCh chan struct{}    // Closed when subscription completes (for race handling)
+	tagsFilter    *tagsFilter      // Tags filter for snapshot/stream publications
 }
 
 // handlePresenceSubscribe handles presence subscriptions (watching who is online).
@@ -299,6 +300,26 @@ func (c *Client) handleKeyedSnapshotPhase(
 
 	// Track keyed subscription state on first snapshot request (no cursor).
 	if req.KeyedCursor == "" {
+		// Validate and store tags filter on first request.
+		var tf *tagsFilter
+		if req.Tf != nil {
+			if !reply.Options.AllowTagsFilter {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "tags filter not allowed for keyed channel", map[string]any{
+					"channel": channel, "user": c.user, "client": c.uid,
+				}))
+				return ErrorBadRequest
+			}
+			if err := filter.Validate(req.Tf); err != nil {
+				c.node.logger.log(newLogEntry(LogLevelInfo, "invalid tags filter for keyed channel", map[string]any{
+					"channel": channel, "user": c.user, "client": c.uid,
+				}))
+				return ErrorBadRequest
+			}
+			tf = &tagsFilter{
+				filter: req.Tf,
+				hash:   filter.Hash(req.Tf),
+			}
+		}
 		c.mu.Lock()
 		if c.keyedSubscribing == nil {
 			c.keyedSubscribing = make(map[string]*keyedSubscribeState)
@@ -307,6 +328,7 @@ func (c *Client) handleKeyedSnapshotPhase(
 			options:       reply.Options,
 			isPresence:    req.KeyedPresence,
 			subscribingCh: make(chan struct{}),
+			tagsFilter:    tf,
 		}
 		c.mu.Unlock()
 	} else {
@@ -362,13 +384,28 @@ func (c *Client) handleKeyedSnapshotPhase(
 		return ErrorInternal
 	}
 
+	// Get state for tags filter and epoch update.
+	c.mu.RLock()
+	state := c.keyedSubscribing[channel]
+	c.mu.RUnlock()
+
 	// Update epoch in state on first page.
-	if req.KeyedCursor == "" {
+	if req.KeyedCursor == "" && state != nil {
 		c.mu.Lock()
-		if state, ok := c.keyedSubscribing[channel]; ok {
-			state.epoch = streamPos.Epoch
-		}
+		state.epoch = streamPos.Epoch
 		c.mu.Unlock()
+	}
+
+	// Apply tags filter to snapshot publications.
+	if state != nil && state.tagsFilter != nil {
+		filteredPubs := make([]*Publication, 0, len(pubs))
+		for _, pub := range pubs {
+			match, _ := filter.Match(state.tagsFilter.filter, pub.Tags)
+			if match {
+				filteredPubs = append(filteredPubs, pub)
+			}
+		}
+		pubs = filteredPubs
 	}
 
 	// Build response.
@@ -461,6 +498,18 @@ func (c *Client) handleKeyedStreamPhase(
 		}))
 		c.cleanupKeyedSubscribing(channel)
 		return ErrorInternal
+	}
+
+	// Apply tags filter to stream publications.
+	if state.tagsFilter != nil {
+		filteredPubs := make([]*Publication, 0, len(pubs))
+		for _, pub := range pubs {
+			match, _ := filter.Match(state.tagsFilter.filter, pub.Tags)
+			if match {
+				filteredPubs = append(filteredPubs, pub)
+			}
+		}
+		pubs = filteredPubs
 	}
 
 	// Build response.

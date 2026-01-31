@@ -212,9 +212,8 @@
         });
 
         // Subscribe to cursors channel with keyed mode.
-        const sub = centrifuge.newSubscription('cursors', {
-            keyed: true,
-            keyedLimit: 50
+        const sub = centrifuge.newKeyedSubscription('cursors', {
+            limit: 50
         });
 
         sub.on('subscribed', (ctx) => {
