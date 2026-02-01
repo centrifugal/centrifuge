@@ -136,6 +136,10 @@ type KeyedEngine interface {
 	// Remove deletes all data for a channel (snapshot and stream).
 	// Use for cleanup when a channel is no longer needed.
 	Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error
+
+	// SetChannelOptionsResolver sets the callback for resolving channel options per channel.
+	// Called by Node when engine is registered via SetKeyedEngine.
+	SetChannelOptionsResolver(ChannelOptionsResolver)
 }
 
 // KeyedPublishOptions defines options for publishing to a keyed channel.
@@ -156,9 +160,13 @@ type KeyedPublishOptions struct {
 	StreamSize int
 	// StreamTTL sets how long stream entries are retained.
 	StreamTTL time.Duration
-	// StreamMetaTTL sets how long stream metadata (epoch, top offset) is retained
+	// MetaTTL sets how long stream metadata (epoch, top offset) is retained
 	// after all entries expire. Allows position validation even with empty stream.
-	StreamMetaTTL time.Duration
+	MetaTTL time.Duration
+	// KeyTTL sets automatic expiration for this key. After TTL expires, the key
+	// is removed from snapshot and a removal event is published to stream.
+	// Use for presence, ephemeral cursors, and auto-cleanup scenarios.
+	KeyTTL time.Duration
 
 	// Data is the publication payload (usually JSON, but can be binary also).
 	// Stored in snapshot and published to stream/pub-sub (unless StreamData is set).
@@ -182,11 +190,6 @@ type KeyedPublishOptions struct {
 	Version uint64
 	// VersionEpoch scopes the Version. Different epochs reset version comparison.
 	VersionEpoch string
-
-	// KeyTTL sets automatic expiration for this key. After TTL expires, the key
-	// is removed from snapshot and a removal event is published to stream.
-	// Use for presence, ephemeral cursors, and auto-cleanup scenarios.
-	KeyTTL time.Duration
 
 	// Ordered enables score-based ordering in the snapshot. When true, entries
 	// are returned sorted by Score (descending) instead of insertion order.
@@ -229,8 +232,8 @@ type KeyedUnpublishOptions struct {
 	StreamSize int
 	// StreamTTL sets how long the removal entry is retained in stream.
 	StreamTTL time.Duration
-	// StreamMetaTTL sets how long stream metadata is retained.
-	StreamMetaTTL time.Duration
+	// MetaTTL sets how long stream metadata is retained.
+	MetaTTL time.Duration
 }
 
 // StreamFilter controls which publications are returned from ReadStream.
@@ -339,3 +342,52 @@ type KeyedPublishResult struct {
 // KeyedRemoveOptions defines options for removing all channel data.
 // Currently empty but reserved for future options (e.g., selective removal).
 type KeyedRemoveOptions struct{}
+
+// applyChannelOptionsDefaults fills in missing channel options from the resolver.
+// If a value is 0, it's replaced with the default from resolver.
+// If a value is -1 (for durations) or negative (for StreamSize), it's set to 0 (explicitly disabled).
+// Positive values are kept as-is.
+func applyChannelOptionsDefaults(
+	streamSize int, streamTTL, metaTTL, keyTTL time.Duration,
+	resolver ChannelOptionsResolver, channel string,
+) (int, time.Duration, time.Duration, time.Duration) {
+	// Get defaults only if needed
+	var defaults KeyedChannelOptions
+	needDefaults := streamSize == 0 || streamTTL == 0 || metaTTL == 0 || keyTTL == 0
+	if needDefaults {
+		defaults = DefaultKeyedChannelOptions()
+		if resolver != nil {
+			defaults = resolver(channel)
+		}
+	}
+
+	// Apply StreamSize: negative means explicitly disabled (use 0), 0 means use default
+	if streamSize < 0 {
+		streamSize = 0
+	} else if streamSize == 0 {
+		streamSize = defaults.StreamSize
+	}
+
+	// Apply StreamTTL: -1 means explicitly disabled (use 0), 0 means use default
+	if streamTTL < 0 {
+		streamTTL = 0
+	} else if streamTTL == 0 {
+		streamTTL = defaults.StreamTTL
+	}
+
+	// Apply MetaTTL: -1 means explicitly disabled (use 0), 0 means use default
+	if metaTTL < 0 {
+		metaTTL = 0
+	} else if metaTTL == 0 {
+		metaTTL = defaults.MetaTTL
+	}
+
+	// Apply KeyTTL: -1 means explicitly disabled (use 0), 0 means use default
+	if keyTTL < 0 {
+		keyTTL = 0
+	} else if keyTTL == 0 {
+		keyTTL = defaults.KeyTTL
+	}
+
+	return streamSize, streamTTL, metaTTL, keyTTL
+}

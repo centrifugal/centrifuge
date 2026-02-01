@@ -19,16 +19,17 @@ import (
 // you should consider using another KeyedEngine implementation instead – for example
 // RedisKeyedEngine.
 type MemoryKeyedEngine struct {
-	node              *Node
-	eventHandler      BrokerEventHandler
-	keyedHub          *keyedHub
-	closeOnce         sync.Once
-	closeCh           chan struct{}
-	pubLocks          map[int]*sync.Mutex
-	resultCache       map[string]StreamPosition
-	resultCacheMu     sync.RWMutex
-	nextExpireCheck   int64
-	resultExpireQueue priority.Queue
+	node                   *Node
+	eventHandler           BrokerEventHandler
+	keyedHub               *keyedHub
+	closeOnce              sync.Once
+	closeCh                chan struct{}
+	pubLocks               map[int]*sync.Mutex
+	resultCache            map[string]StreamPosition
+	resultCacheMu          sync.RWMutex
+	nextExpireCheck        int64
+	resultExpireQueue      priority.Queue
+	channelOptionsResolver ChannelOptionsResolver
 }
 
 var _ KeyedEngine = (*MemoryKeyedEngine)(nil)
@@ -94,6 +95,12 @@ func (e *MemoryKeyedEngine) Publish(ctx context.Context, ch string, key string, 
 	mu := e.pubLock(ch)
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Apply channel options defaults from resolver.
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
+		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
+		e.channelOptionsResolver, ch,
+	)
 
 	if opts.IdempotencyKey != "" {
 		if res, ok := e.getResultFromCache(ch, opts.IdempotencyKey); ok {
@@ -172,6 +179,12 @@ func (e *MemoryKeyedEngine) Unpublish(ctx context.Context, ch string, key string
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Apply channel options defaults from resolver.
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
+		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
+		e.channelOptionsResolver, ch,
+	)
+
 	streamTop, applied, err := e.keyedHub.remove(ch, key, opts)
 	if err != nil {
 		return KeyedPublishResult{}, err
@@ -207,6 +220,12 @@ func (e *MemoryKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts Ke
 // Stats returns snapshot statistics.
 func (e *MemoryKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, error) {
 	return e.keyedHub.getStats(ch)
+}
+
+// SetChannelOptionsResolver sets the callback for resolving stream options per channel.
+func (e *MemoryKeyedEngine) SetChannelOptionsResolver(r ChannelOptionsResolver) {
+	e.channelOptionsResolver = r
+	e.keyedHub.setChannelOptionsResolver(r)
 }
 
 // RegisterEventHandler registers event handler.
@@ -276,11 +295,11 @@ type keyedHub struct {
 	removes         map[string]int64
 	closeCh         chan struct{}
 	// Key TTL tracking
-	nextKeyExpireCheck int64
-	keyExpireQueue     priority.Queue     // priority queue of {ch:key, expireAt}
-	keyExpires         map[string]int64   // "ch:key" -> expireAt
-	eventHandler       BrokerEventHandler // for publishing removal events
-	streamSize         int                // default stream size for cleanup-generated events
+	nextKeyExpireCheck     int64
+	keyExpireQueue         priority.Queue     // priority queue of {ch:key, expireAt}
+	keyExpires             map[string]int64   // "ch:key" -> expireAt
+	eventHandler           BrokerEventHandler // for publishing removal events
+	channelOptionsResolver ChannelOptionsResolver
 }
 
 // keyedChannel represents keyed state for a single channel.
@@ -312,8 +331,13 @@ func newKeyedHub(historyMetaTTL time.Duration, closeCh chan struct{}) *keyedHub 
 		closeCh:        closeCh,
 		keyExpireQueue: priority.MakeQueue(),
 		keyExpires:     make(map[string]int64),
-		streamSize:     100,
 	}
+}
+
+func (h *keyedHub) setChannelOptionsResolver(r ChannelOptionsResolver) {
+	h.Lock()
+	defer h.Unlock()
+	h.channelOptionsResolver = r
 }
 
 func (h *keyedHub) setEventHandler(handler BrokerEventHandler) {
@@ -505,6 +529,11 @@ func (h *keyedHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 
 		// Prepare removal event (add to stream while holding lock)
 		if eventHandler != nil && channel.stream != nil {
+			// Get channel options for this channel
+			opts := DefaultKeyedChannelOptions()
+			if h.channelOptionsResolver != nil {
+				opts = h.channelOptionsResolver(ch)
+			}
 			removePub := &Publication{
 				Key:     key,
 				Removed: true,
@@ -512,7 +541,7 @@ func (h *keyedHub) expireKeysIteration(nextKeyExpireCheck *int64) {
 				Info:    entry.Publication.Info,
 			}
 			// Add removal to stream and set offset
-			offset, _ := channel.stream.Add(removePub, h.streamSize, 0, "")
+			offset, _ := channel.stream.Add(removePub, opts.StreamSize, 0, "")
 			removePub.Offset = offset
 			streamPos := StreamPosition{
 				Offset: offset,
@@ -642,7 +671,7 @@ func (h *keyedHub) add(ch string, key string, snapshotPub *Publication, streamPu
 			h.nextExpireCheck = expireAt
 		}
 
-		historyMetaTTL := opts.StreamMetaTTL
+		historyMetaTTL := opts.MetaTTL
 		if historyMetaTTL == 0 {
 			historyMetaTTL = h.historyMetaTTL
 		}

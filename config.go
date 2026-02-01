@@ -6,6 +6,31 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// KeyedChannelOptions contains configuration for keyed channels.
+type KeyedChannelOptions struct {
+	// StreamSize is the maximum number of entries in the stream.
+	StreamSize int
+	// StreamTTL is how long stream entries are retained.
+	StreamTTL time.Duration
+	// MetaTTL is how long channel metadata (offset, epoch) is retained.
+	MetaTTL time.Duration
+	// KeyTTL is the default TTL for keys in the channel.
+	KeyTTL time.Duration
+}
+
+// ChannelOptionsResolver returns channel options for a channel.
+type ChannelOptionsResolver func(channel string) KeyedChannelOptions
+
+// DefaultKeyedChannelOptions returns sensible defaults for keyed channel options.
+func DefaultKeyedChannelOptions() KeyedChannelOptions {
+	return KeyedChannelOptions{
+		StreamSize: 1000,
+		StreamTTL:  5 * time.Minute,
+		MetaTTL:    time.Hour,
+		KeyTTL:     0, // No default key TTL
+	}
+}
+
 // Config contains Node configuration options.
 type Config struct {
 	// Version of server – if set will be sent to a client on connection
@@ -138,6 +163,9 @@ type Config struct {
 	// KeyedMaxPaginationLimit sets the maximum number of items a client can request
 	// per page in keyed subscription pagination requests. Zero means no limit.
 	KeyedMaxPaginationLimit int
+	// GetKeyedChannelOptions returns channel options for keyed channels.
+	// If nil, DefaultKeyedChannelOptions() is used for all channels.
+	GetKeyedChannelOptions func(channel string) KeyedChannelOptions
 }
 
 const (

@@ -269,6 +269,16 @@ func (n *Node) SetPresenceManager(m PresenceManager) {
 // SetKeyedEngine allows setting KeyedEngine to use.
 func (n *Node) SetKeyedEngine(e KeyedEngine) {
 	n.keyedEngine = e
+	// Register channel options resolver so engine can resolve options during cleanup.
+	e.SetChannelOptionsResolver(n.getKeyedChannelOptions)
+}
+
+// getKeyedChannelOptions resolves channel options using config callback or defaults.
+func (n *Node) getKeyedChannelOptions(channel string) KeyedChannelOptions {
+	if n.config.GetKeyedChannelOptions != nil {
+		return n.config.GetKeyedChannelOptions(channel)
+	}
+	return DefaultKeyedChannelOptions()
 }
 
 // KeyedEngine returns node's KeyedEngine. Can be nil if not configured.

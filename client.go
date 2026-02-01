@@ -158,6 +158,7 @@ const (
 	flagKeyedPresence           // Presence subscription (:clients or :users suffix)
 	flagEmitKeyedClientPresence // Emit to {channel}:clients, key=clientId, full ClientInfo
 	flagEmitKeyedUserPresence   // Emit to {channel}:users, key=userId, no info
+	flagCleanupOnUnsubscribe    // Clean up keys by client_id when subscription ends
 )
 
 // ChannelContext contains extra context for channel connection subscribed to.
@@ -3895,7 +3896,10 @@ func (c *Client) unsubscribe(channel string, unsubscribe Unsubscribe, disconnect
 		channelHasFlag(chCtx.flags, flagEmitKeyedClientPresence) ||
 		channelHasFlag(chCtx.flags, flagEmitKeyedUserPresence)
 
-	if hasAnyPresence && channelHasFlag(chCtx.flags, flagSubscribed) {
+	// Also need to run keyed cleanup if CleanupOnUnsubscribe is enabled.
+	needsKeyedCleanup := hasAnyPresence || channelHasFlag(chCtx.flags, flagCleanupOnUnsubscribe)
+
+	if needsKeyedCleanup && channelHasFlag(chCtx.flags, flagSubscribed) {
 		var err error
 		if channelHasFlag(chCtx.flags, flagKeyed) {
 			err = c.removeKeyedPresence(channel, chCtx.flags)

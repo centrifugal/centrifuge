@@ -157,6 +157,23 @@ type SubscribeOptions struct {
 	// No ClientInfo is stored (just the key for uniqueness). TTL-based leave
 	// provides debounce/grace period for quick reconnects.
 	EmitKeyedUserPresence bool
+	// CleanupOnUnsubscribe enables automatic cleanup of keyed state when the
+	// subscription ends. When enabled, all keys in the channel's snapshot that
+	// were published by this client (matched by client_id) will be removed
+	// when the client unsubscribes or disconnects. This is useful for ephemeral
+	// state like cursor positions or temporary resources that should not persist
+	// after the client leaves.
+	CleanupOnUnsubscribe bool
+	// KeyedStreamSize sets the maximum stream size for keyed presence channels.
+	// Used when EmitKeyedClientPresence, EmitKeyedUserPresence, or CleanupOnUnsubscribe is enabled.
+	// Default: 1000
+	KeyedStreamSize int
+	// KeyedStreamTTL sets how long stream entries are retained for keyed presence.
+	// Default: 5 minutes
+	KeyedStreamTTL time.Duration
+	// KeyedStreamMetaTTL sets how long stream metadata is retained for keyed presence.
+	// Default: 1 hour
+	KeyedStreamMetaTTL time.Duration
 }
 
 // SubscribeOption is a type to represent various Subscribe options.

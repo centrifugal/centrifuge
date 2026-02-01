@@ -27,19 +27,20 @@ import (
 // Use cases: collaborative boards, document editing, inventory/booking systems,
 // game lobbies with persistent state.
 type PostgresKeyedEngine struct {
-	node         *Node
-	conf         PostgresKeyedEngineConfig
-	pool         *pgxpool.Pool // Primary pool for writes
-	readPool     *pgxpool.Pool // Replica pool for reads (optional)
-	eventHandler BrokerEventHandler
-	lastID       int64 // Global polling cursor
-	lastIDMu     sync.Mutex
-	wakeup       chan struct{} // NOTIFY wake-up channel
-	closeCh      chan struct{}
-	closeOnce    sync.Once
-	running      atomic.Bool
-	cancelCtx    context.Context
-	cancelFunc   context.CancelFunc
+	node                   *Node
+	conf                   PostgresKeyedEngineConfig
+	pool                   *pgxpool.Pool // Primary pool for writes
+	readPool               *pgxpool.Pool // Replica pool for reads (optional)
+	eventHandler           BrokerEventHandler
+	lastID                 int64 // Global polling cursor
+	lastIDMu               sync.Mutex
+	wakeup                 chan struct{} // NOTIFY wake-up channel
+	closeCh                chan struct{}
+	closeOnce              sync.Once
+	running                atomic.Bool
+	cancelCtx              context.Context
+	cancelFunc             context.CancelFunc
+	channelOptionsResolver ChannelOptionsResolver
 }
 
 var _ KeyedEngine = (*PostgresKeyedEngine)(nil)
@@ -230,6 +231,11 @@ func (e *PostgresKeyedEngine) Unsubscribe(_ string) error {
 	return nil
 }
 
+// SetChannelOptionsResolver sets the callback for resolving stream options per channel.
+func (e *PostgresKeyedEngine) SetChannelOptionsResolver(r ChannelOptionsResolver) {
+	e.channelOptionsResolver = r
+}
+
 // parseSuppressReason converts SQL suppress_reason string to SuppressReason type.
 func parseSuppressReason(reason *string) SuppressReason {
 	if reason == nil {
@@ -253,6 +259,12 @@ func parseSuppressReason(reason *string) SuppressReason {
 
 // Publish publishes data to a keyed channel using the cf_keyed_publish SQL function.
 func (e *PostgresKeyedEngine) Publish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
+	// Apply channel options defaults from resolver.
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
+		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
+		e.channelOptionsResolver, ch,
+	)
+
 	// Prepare client info fields
 	var clientID, userID *string
 	var connInfo, chanInfo []byte
@@ -293,8 +305,8 @@ func (e *PostgresKeyedEngine) Publish(ctx context.Context, ch string, key string
 		s := fmt.Sprintf("%d seconds", int(opts.StreamTTL.Seconds()))
 		streamTTL = &s
 	}
-	if opts.StreamMetaTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(opts.StreamMetaTTL.Seconds()))
+	if opts.MetaTTL > 0 {
+		s := fmt.Sprintf("%d seconds", int(opts.MetaTTL.Seconds()))
 		metaTTL = &s
 	}
 	idempotentResultTTL := opts.IdempotentResultTTL
@@ -415,14 +427,20 @@ func (e *PostgresKeyedEngine) Publish(ctx context.Context, ch string, key string
 
 // Unpublish removes a key from keyed state using the cf_keyed_unpublish SQL function.
 func (e *PostgresKeyedEngine) Unpublish(ctx context.Context, ch string, key string, opts KeyedUnpublishOptions) (KeyedPublishResult, error) {
+	// Apply channel options defaults from resolver.
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
+		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
+		e.channelOptionsResolver, ch,
+	)
+
 	// Prepare TTLs as interval strings
 	var streamTTL, metaTTL, idempotencyTTL *string
 	if opts.StreamTTL > 0 {
 		s := fmt.Sprintf("%d seconds", int(opts.StreamTTL.Seconds()))
 		streamTTL = &s
 	}
-	if opts.StreamMetaTTL > 0 {
-		s := fmt.Sprintf("%d seconds", int(opts.StreamMetaTTL.Seconds()))
+	if opts.MetaTTL > 0 {
+		s := fmt.Sprintf("%d seconds", int(opts.MetaTTL.Seconds()))
 		metaTTL = &s
 	}
 	idempotentResultTTL := opts.IdempotentResultTTL
@@ -941,10 +959,19 @@ func (e *PostgresKeyedEngine) expireKeys(ctx context.Context) {
 		if err := rows.Scan(&ch, &key); err != nil {
 			continue
 		}
+
+		// Get channel options for this channel
+		opts := DefaultKeyedChannelOptions()
+		if e.channelOptionsResolver != nil {
+			opts = e.channelOptionsResolver(ch)
+		}
+
 		// Emit removal to stream
 		_, _ = e.Unpublish(ctx, ch, key, KeyedUnpublishOptions{
-			Publish:   true,
-			StreamTTL: 5 * time.Minute,
+			Publish:    true,
+			StreamSize: opts.StreamSize,
+			StreamTTL:  opts.StreamTTL,
+			MetaTTL:    opts.MetaTTL,
 		})
 	}
 }

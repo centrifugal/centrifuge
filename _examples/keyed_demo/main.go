@@ -94,6 +94,35 @@ func main() {
 	node, err := centrifuge.New(centrifuge.Config{
 		LogLevel:   centrifuge.LogLevelDebug,
 		LogHandler: handleLog,
+		// Configure channel options per channel - allows different TTLs for different use cases.
+		GetKeyedChannelOptions: func(channel string) centrifuge.KeyedChannelOptions {
+			// Cursors need short TTL since they're ephemeral.
+			if channel == "cursors" {
+				return centrifuge.KeyedChannelOptions{
+					StreamSize: 100,
+					StreamTTL:  time.Minute,
+					MetaTTL:    5 * time.Minute,
+				}
+			}
+			// Game channels need medium TTL.
+			if strings.HasPrefix(channel, "game:") || channel == "games" {
+				return centrifuge.KeyedChannelOptions{
+					StreamSize: 500,
+					StreamTTL:  5 * time.Minute,
+					MetaTTL:    30 * time.Minute,
+				}
+			}
+			// Inventory and leaderboard need longer TTL for transaction history.
+			if channel == "inventory" || channel == "leaderboard" {
+				return centrifuge.KeyedChannelOptions{
+					StreamSize: 1000,
+					StreamTTL:  time.Hour,
+					MetaTTL:    24 * time.Hour,
+				}
+			}
+			// Default for all other channels.
+			return centrifuge.DefaultKeyedChannelOptions()
+		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -145,6 +174,11 @@ func main() {
 				opts.EmitKeyedUserPresence = true
 			}
 
+			// Enable automatic cleanup for cursors channel - removes key=clientID on unsubscribe/disconnect.
+			if e.Channel == "cursors" {
+				opts.CleanupOnUnsubscribe = true
+			}
+
 			cb(centrifuge.SubscribeReply{Options: opts}, nil)
 		})
 
@@ -178,14 +212,7 @@ func main() {
 
 		client.OnDisconnect(func(e centrifuge.DisconnectEvent) {
 			log.Printf("client disconnected: %s", client.ID())
-			// Clean up cursor on disconnect.
-			if node.KeyedEngine() != nil {
-				_, _ = node.KeyedEngine().Unpublish(context.Background(), "cursors", client.ID(), centrifuge.KeyedUnpublishOptions{
-					Publish:       true,
-					StreamTTL:     300 * time.Second,
-					StreamMetaTTL: time.Hour,
-				})
-			}
+			// Cursor cleanup is now automatic via CleanupOnUnsubscribe option.
 		})
 	})
 
@@ -247,12 +274,11 @@ func handleCursorUpdate(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 		return
 	}
 
+	// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 	_, err := ke.Publish(context.Background(), "cursors", client.ID(), centrifuge.KeyedPublishOptions{
-		Publish:       true,
-		Data:          data,
-		KeyTTL:        5 * time.Second, // Auto-expire if client stops sending updates.
-		StreamTTL:     300 * time.Second,
-		StreamMetaTTL: time.Hour,
+		Publish: true,
+		Data:    data,
+		KeyTTL:  5 * time.Second, // Auto-expire if client stops sending updates.
 	})
 	if err != nil {
 		log.Printf("cursor update error: %v", err)
@@ -674,10 +700,10 @@ func initInventory(ke centrifuge.KeyedEngine) {
 	ctx := context.Background()
 	for _, item := range inventoryItems {
 		payload, _ := json.Marshal(InventoryPayload{Item: *item})
+		// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 		_, _ = ke.Publish(ctx, "inventory", item.ID, centrifuge.KeyedPublishOptions{
-			Data:      payload,
-			KeyMode:   centrifuge.KeyModeIfNew, // Only set if item doesn't exist yet.
-			StreamTTL: time.Hour,
+			Data:    payload,
+			KeyMode: centrifuge.KeyModeIfNew, // Only set if item doesn't exist yet.
 		})
 	}
 	log.Printf("Inventory initialized with %d items", len(inventoryItems))
@@ -772,11 +798,11 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 			Epoch:  pos.Epoch,
 		}
 
+		// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 		result, err := ke.Publish(ctx, "inventory", req.ItemID, centrifuge.KeyedPublishOptions{
 			Publish:          true,
 			Data:             payload,
 			ExpectedPosition: &expectedPos,
-			StreamTTL:        time.Hour,
 		})
 		if err != nil {
 			log.Printf("inventory CAS error: %v", err)
@@ -885,11 +911,11 @@ func handleInventoryRestock(_ *centrifuge.Client, ke centrifuge.KeyedEngine, dat
 			Epoch:  pos.Epoch,
 		}
 
+		// Note: StreamSize/TTL/MetaTTL are configured via GetKeyedChannelOptions in node config.
 		result, err := ke.Publish(ctx, "inventory", req.ItemID, centrifuge.KeyedPublishOptions{
 			Publish:          true,
 			Data:             payload,
 			ExpectedPosition: &expectedPos,
-			StreamTTL:        time.Hour,
 		})
 		if err != nil {
 			cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)

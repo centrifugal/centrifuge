@@ -771,6 +771,9 @@ func (c *Client) handleKeyedLivePhase(
 	if opts.EmitKeyedUserPresence {
 		channelFlags |= flagEmitKeyedUserPresence
 	}
+	if opts.CleanupOnUnsubscribe {
+		channelFlags |= flagCleanupOnUnsubscribe
+	}
 
 	channelContext := ChannelContext{
 		flags:    channelFlags,
@@ -946,13 +949,11 @@ func (c *Client) addKeyedClientPresence(channel string, info *ClientInfo) error 
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new presence entry
 	// - Refresh TTL without publishing if entry already exists (quick reconnect)
+	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
 	_, err := keyedEngine.Publish(c.ctx, clientsChannel, c.uid, KeyedPublishOptions{
 		Publish:              true,
 		ClientInfo:           info,
 		KeyTTL:               c.keyedPresenceTTL(),
-		StreamSize:           1000,
-		StreamTTL:            300 * time.Second,
-		StreamMetaTTL:        time.Hour,
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
 	})
@@ -975,12 +976,10 @@ func (c *Client) addKeyedUserPresence(channel string) error {
 	// Use KeyModeIfNew with RefreshTTLOnSuppress to:
 	// - Publish JOIN event only if this is a new user
 	// - Refresh TTL without publishing if user already exists
+	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
 	_, err := keyedEngine.Publish(c.ctx, usersChannel, c.user, KeyedPublishOptions{
 		Publish:              true,
 		KeyTTL:               c.keyedPresenceTTL(),
-		StreamSize:           1000,
-		StreamTTL:            300 * time.Second,
-		StreamMetaTTL:        time.Hour,
 		KeyMode:              KeyModeIfNew,
 		RefreshTTLOnSuppress: true,
 	})
@@ -999,6 +998,7 @@ func (c *Client) updateKeyedPresence(channel string, info *ClientInfo, flags uin
 	// Use KeyModeIfNew with RefreshTTLOnSuppress for TTL refresh:
 	// - Since key already exists, publish is suppressed (no offset increment)
 	// - TTL is refreshed without generating stream entries
+	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
 
 	// Update :clients if EmitKeyedClientPresence is enabled.
 	if channelHasFlag(flags, flagEmitKeyedClientPresence) {
@@ -1007,9 +1007,6 @@ func (c *Client) updateKeyedPresence(channel string, info *ClientInfo, flags uin
 			Publish:              true,
 			ClientInfo:           info,
 			KeyTTL:               c.keyedPresenceTTL(),
-			StreamSize:           1000,
-			StreamTTL:            300 * time.Second,
-			StreamMetaTTL:        time.Hour,
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
 		})
@@ -1024,9 +1021,6 @@ func (c *Client) updateKeyedPresence(channel string, info *ClientInfo, flags uin
 		_, err := keyedEngine.Publish(c.ctx, usersChannel, c.user, KeyedPublishOptions{
 			Publish:              true,
 			KeyTTL:               c.keyedPresenceTTL(),
-			StreamSize:           1000,
-			StreamTTL:            300 * time.Second,
-			StreamMetaTTL:        time.Hour,
 			KeyMode:              KeyModeIfNew,
 			RefreshTTLOnSuppress: true,
 		})
@@ -1055,13 +1049,11 @@ func (c *Client) removeKeyedPresence(channel string, flags uint16) error {
 	}
 
 	// Remove from :clients if EmitKeyedClientPresence is enabled.
+	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
 	if channelHasFlag(flags, flagEmitKeyedClientPresence) {
 		clientsChannel := channel + clientsSuffix
 		_, err := keyedEngine.Unpublish(context.Background(), clientsChannel, c.uid, KeyedUnpublishOptions{
-			Publish:       true,
-			StreamSize:    1000,
-			StreamTTL:     300 * time.Second,
-			StreamMetaTTL: time.Hour,
+			Publish: true,
 		})
 		if err != nil {
 			c.node.logger.log(newErrorLogEntry(err, "error removing keyed clients presence", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
@@ -1070,6 +1062,19 @@ func (c *Client) removeKeyedPresence(channel string, flags uint16) error {
 
 	// :users entries are NOT removed on disconnect - they only expire via TTL.
 	// This provides debounce/grace period for quick reconnects.
+
+	// Remove key=clientId from channel if CleanupOnUnsubscribe is enabled.
+	// This is for ephemeral state like cursors where each client publishes
+	// to a key that equals their client ID.
+	// Stream options (StreamSize/TTL/MetaTTL) use defaults from GetKeyedChannelOptions.
+	if channelHasFlag(flags, flagCleanupOnUnsubscribe) {
+		_, err := keyedEngine.Unpublish(context.Background(), channel, c.uid, KeyedUnpublishOptions{
+			Publish: true,
+		})
+		if err != nil {
+			c.node.logger.log(newErrorLogEntry(err, "error cleaning up keyed state on unsubscribe", map[string]any{"channel": channel, "user": c.user, "client": c.uid, "error": err.Error()}))
+		}
+	}
 
 	return nil
 }

@@ -91,10 +91,11 @@ type RedisKeyedEngine struct {
 	presenceStatsScript  *rueidis.Lua
 	cleanupScript        *rueidis.Lua
 
-	closeCh       chan struct{}
-	closeOnce     sync.Once
-	shardChannel  string
-	messagePrefix string
+	closeCh                chan struct{}
+	closeOnce              sync.Once
+	shardChannel           string
+	messagePrefix          string
+	channelOptionsResolver ChannelOptionsResolver
 }
 
 var _ KeyedEngine = (*RedisKeyedEngine)(nil)
@@ -502,6 +503,11 @@ func (e *RedisKeyedEngine) Close(_ context.Context) error {
 	return nil
 }
 
+// SetChannelOptionsResolver sets the callback for resolving stream options per channel.
+func (e *RedisKeyedEngine) SetChannelOptionsResolver(r ChannelOptionsResolver) {
+	e.channelOptionsResolver = r
+}
+
 func (e *RedisKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error {
 	// TODO: implement.
 	return nil
@@ -518,6 +524,12 @@ func boolToStr(b bool) string {
 func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
 	s := e.getShard(ch)
 	shardClient := s.shard.client
+
+	// Apply channel options defaults from resolver.
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL = applyChannelOptionsDefaults(
+		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, opts.KeyTTL,
+		e.channelOptionsResolver, ch,
+	)
 
 	// Fast path for non-history, non-idempotent, non-keyed publications.
 	if opts.StreamSize == 0 && opts.StreamTTL == 0 && opts.IdempotencyKey == "" && key == "" {
@@ -616,8 +628,8 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 	}
 
 	metaExpire := "0"
-	if opts.StreamMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(opts.StreamMetaTTL.Seconds()))
+	if opts.MetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
 	} else if e.node.config.HistoryMetaTTL > 0 {
 		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
@@ -665,8 +677,8 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 			snapshotMetaKey, cleanupRegKey,
 		},
 		[]string{
-			key,                                 // message_key
-			convert.BytesToString(streamBytes),  // message_payload (Publication - for stream and publishing)
+			key,                                // message_key
+			convert.BytesToString(streamBytes), // message_payload (Publication - for stream and publishing)
 			strconv.Itoa(opts.StreamSize),
 			strconv.FormatInt(int64(opts.StreamTTL.Seconds()), 10),
 			chID, // channel (for Lua to publish)
@@ -680,9 +692,9 @@ func (e *RedisKeyedEngine) Publish(ctx context.Context, ch string, key string, o
 			"0", // is_remove
 			strconv.FormatInt(opts.Score, 10),
 			strconv.FormatInt(int64(opts.KeyTTL.Seconds()), 10),
-			"0",                  // use_hexpire
-			ch,                   // channel_for_cleanup (for cleanup registration)
-			string(opts.KeyMode), // key_mode
+			"0",                                  // use_hexpire
+			ch,                                   // channel_for_cleanup (for cleanup registration)
+			string(opts.KeyMode),                 // key_mode
 			boolToStr(opts.RefreshTTLOnSuppress), // refresh_ttl_on_suppress
 			expectedOffset,                       // expected_offset (for CAS)
 			expectedEpoch,                        // expected_epoch (for CAS)
@@ -705,6 +717,12 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 	s := e.getShard(ch)
 	shardClient := s.shard.client
 
+	// Apply channel options defaults from resolver.
+	opts.StreamSize, opts.StreamTTL, opts.MetaTTL, _ = applyChannelOptionsDefaults(
+		opts.StreamSize, opts.StreamTTL, opts.MetaTTL, 0,
+		e.channelOptionsResolver, ch,
+	)
+
 	var streamKey, metaKey string
 	if opts.StreamSize > 0 && opts.StreamTTL > 0 {
 		streamKey = e.streamKey(s.shard, ch)
@@ -717,8 +735,8 @@ func (e *RedisKeyedEngine) Unpublish(ctx context.Context, ch string, key string,
 	snapshotMetaKey := e.snapshotMetaKey(s.shard, ch)
 
 	metaExpire := "0"
-	if opts.StreamMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(opts.StreamMetaTTL.Seconds()))
+	if opts.MetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
 	} else if e.node.config.HistoryMetaTTL > 0 {
 		metaExpire = strconv.Itoa(int(e.node.config.HistoryMetaTTL.Seconds()))
 	}
@@ -2207,9 +2225,15 @@ func (e *RedisKeyedEngine) cleanupChannel(ctx context.Context, shard *RedisShard
 		chID = e.messageChannelID(shard, ch)
 	}
 
+	// Get channel options for this channel
+	opts := DefaultKeyedChannelOptions()
+	if e.channelOptionsResolver != nil {
+		opts = e.channelOptionsResolver(ch)
+	}
+
 	metaExpire := "0"
-	if e.conf.PresenceStreamMetaTTL > 0 {
-		metaExpire = strconv.Itoa(int(e.conf.PresenceStreamMetaTTL.Seconds()))
+	if opts.MetaTTL > 0 {
+		metaExpire = strconv.Itoa(int(opts.MetaTTL.Seconds()))
 	}
 
 	_, err := e.cleanupScript.Exec(ctx, shard.client,
@@ -2224,12 +2248,12 @@ func (e *RedisKeyedEngine) cleanupChannel(ctx context.Context, shard *RedisShard
 			e.aggregationMappingHashKey(shard, ch), // KEYS[8]: aggregation mapping hash key
 		},
 		[]string{
-			strconv.FormatInt(now, 10),              // ARGV[1]: now
-			strconv.Itoa(e.conf.CleanupBatchSize),   // ARGV[2]: batch_size
-			chID,                                    // ARGV[3]: channel (for PUBLISH)
-			publishCommand,                          // ARGV[4]: publish_command
-			strconv.Itoa(e.conf.PresenceStreamSize), // ARGV[5]: stream_size
-			strconv.FormatInt(int64(e.conf.PresenceStreamTTL.Seconds()), 10), // ARGV[6]: stream_ttl
+			strconv.FormatInt(now, 10),            // ARGV[1]: now
+			strconv.Itoa(e.conf.CleanupBatchSize), // ARGV[2]: batch_size
+			chID,                                  // ARGV[3]: channel (for PUBLISH)
+			publishCommand,                        // ARGV[4]: publish_command
+			strconv.Itoa(opts.StreamSize),         // ARGV[5]: stream_size
+			strconv.FormatInt(int64(opts.StreamTTL.Seconds()), 10), // ARGV[6]: stream_ttl
 			metaExpire,  // ARGV[7]: meta_expire
 			e.node.ID(), // ARGV[8]: new_epoch_if_empty
 			"0",         // ARGV[9]: use_hexpire

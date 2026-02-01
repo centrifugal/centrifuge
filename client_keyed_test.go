@@ -595,6 +595,116 @@ func TestKeyedSubscribe_PresenceCleanupOnDisconnect(t *testing.T) {
 	require.Len(t, entries, 0)
 }
 
+func TestKeyedSubscribe_CleanupOnUnsubscribe(t *testing.T) {
+	node, engine := newTestNodeWithKeyedEngine(t)
+
+	channel := "test_cleanup_on_unsub"
+	ctx := context.Background()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableKeyed:          true,
+					CleanupOnUnsubscribe: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	clientID := client.ID()
+
+	// Subscribe with CleanupOnUnsubscribe.
+	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
+		Channel:    channel,
+		Keyed:      true,
+		KeyedPhase: KeyedPhaseLive,
+	})
+
+	// Publish a key with key=clientID (simulating cursor/ephemeral state).
+	_, err := engine.Publish(ctx, channel, clientID, KeyedPublishOptions{
+		Publish:    true,
+		Data:       []byte(`{"x":100,"y":200}`),
+		StreamSize: 1000,
+		ClientInfo: &ClientInfo{ClientID: clientID, UserID: "user1"},
+	})
+	require.NoError(t, err)
+
+	// Verify key exists.
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, clientID, entries[0].Key)
+
+	// Unsubscribe - should trigger cleanup of key=clientID.
+	client.Unsubscribe(channel)
+
+	// Verify key was removed.
+	entries, _, _, err = engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 0)
+}
+
+func TestKeyedSubscribe_CleanupOnDisconnect(t *testing.T) {
+	node, engine := newTestNodeWithKeyedEngine(t)
+
+	channel := "test_cleanup_on_disconnect"
+	ctx := context.Background()
+
+	node.OnConnect(func(client *Client) {
+		client.OnSubscribe(func(e SubscribeEvent, cb SubscribeCallback) {
+			cb(SubscribeReply{
+				Options: SubscribeOptions{
+					EnableKeyed:          true,
+					CleanupOnUnsubscribe: true,
+				},
+			}, nil)
+		})
+	})
+
+	client := newTestConnectedClientV2(t, node, "user1")
+	clientID := client.ID()
+
+	// Subscribe with CleanupOnUnsubscribe.
+	subscribeKeyedClient(t, client, &protocol.SubscribeRequest{
+		Channel:    channel,
+		Keyed:      true,
+		KeyedPhase: KeyedPhaseLive,
+	})
+
+	// Publish a key with key=clientID.
+	_, err := engine.Publish(ctx, channel, clientID, KeyedPublishOptions{
+		Publish:    true,
+		Data:       []byte(`{"x":100,"y":200}`),
+		StreamSize: 1000,
+		ClientInfo: &ClientInfo{ClientID: clientID, UserID: "user1"},
+	})
+	require.NoError(t, err)
+
+	// Verify key exists.
+	entries, _, _, err := engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// Disconnect client - should trigger cleanup of key=clientID.
+	err = client.close(DisconnectForceNoReconnect)
+	require.NoError(t, err)
+
+	// Verify key was removed.
+	entries, _, _, err = engine.ReadSnapshot(ctx, channel, KeyedReadSnapshotOptions{
+		Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 0)
+}
+
 func TestPresenceSubscribe_Snapshot(t *testing.T) {
 	node, engine := newTestNodeWithKeyedEngine(t)
 
