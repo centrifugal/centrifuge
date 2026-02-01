@@ -16,12 +16,7 @@ import (
 	"time"
 
 	"github.com/centrifugal/centrifuge"
-)
-
-// Store for leaderboard scores (in-memory for demo).
-var (
-	leaderboardMu     sync.RWMutex
-	leaderboardScores = make(map[string]*LeaderboardEntry)
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Store for games (in-memory for demo).
@@ -30,6 +25,9 @@ var (
 	games       = make(map[string]*GameInfo)
 	gameCounter int
 )
+
+// PostgreSQL pool for native leaderboard operations.
+var pgPool *pgxpool.Pool
 
 type LeaderboardEntry struct {
 	UserID string `json:"userId"`
@@ -54,14 +52,11 @@ type GamePlayer struct {
 }
 
 // Inventory items (in-memory for demo).
-var (
-	inventoryMu    sync.RWMutex
-	inventoryItems = map[string]*InventoryItem{
-		"golden_ticket": {ID: "golden_ticket", Name: "Golden Ticket", Price: 100, Stock: 3, Emoji: "🎫"},
-		"rare_potion":   {ID: "rare_potion", Name: "Rare Potion", Price: 50, Stock: 5, Emoji: "🧪"},
-		"dragon_egg":    {ID: "dragon_egg", Name: "Dragon Egg", Price: 500, Stock: 1, Emoji: "🥚"},
-	}
-)
+var inventoryItems = map[string]*InventoryItem{
+	"golden_ticket": {ID: "golden_ticket", Name: "Golden Ticket", Price: 100, Stock: 3, Emoji: "🎫"},
+	"rare_potion":   {ID: "rare_potion", Name: "Rare Potion", Price: 50, Stock: 5, Emoji: "🧪"},
+	"dragon_egg":    {ID: "dragon_egg", Name: "Dragon Egg", Price: 500, Stock: 1, Emoji: "🥚"},
+}
 
 type InventoryItem struct {
 	ID    string `json:"id"`
@@ -79,12 +74,18 @@ type InventoryTransaction struct {
 	Message  string `json:"message"`
 }
 
+type InventoryPayload struct {
+	Item        InventoryItem         `json:"item"`
+	Transaction *InventoryTransaction `json:"transaction,omitempty"`
+}
+
 func handleLog(e centrifuge.LogEntry) {
 	log.Printf("[centrifuge] %s: %v", e.Message, e.Fields)
 }
 
 var (
-	redisAddr = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory engine.")
+	redisAddr    = flag.String("redis", "", "Redis address (e.g., localhost:6379). If empty, uses in-memory engine.")
+	postgresAddr = flag.String("postgres", "", "PostgreSQL connection string (e.g., postgres://user:pass@localhost:5432/db?sslmode=disable)")
 )
 
 func main() {
@@ -98,12 +99,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Set up keyed engine (memory or Redis based on flag).
-	keyedEngine, registerHandler, err := setupKeyedEngine(node, *redisAddr)
+	// Set up keyed engine (memory, Redis, or PostgreSQL based on flags).
+	keyedEngine, registerHandler, err := setupKeyedEngine(node, *redisAddr, *postgresAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
 	node.SetKeyedEngine(keyedEngine)
+
+	// Set up PostgreSQL pool for native leaderboard operations.
+	if *postgresAddr != "" {
+		pool, err := pgxpool.New(context.Background(), *postgresAddr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pgPool = pool
+		log.Printf("PostgreSQL pool initialized for native leaderboard operations")
+	}
 
 	node.OnConnecting(func(ctx context.Context, e centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
 		// Use client name as user ID for simplicity.
@@ -129,8 +140,6 @@ func main() {
 			}
 
 			// Enable keyed presence for games and individual game channels.
-			// - :clients tracks each connection (key=clientId, full ClientInfo)
-			// - :users tracks unique users (key=userId, TTL-based leave for debounce)
 			if e.Channel == "games" || strings.HasPrefix(e.Channel, "game:") {
 				opts.EmitKeyedClientPresence = true
 				opts.EmitKeyedUserPresence = true
@@ -139,11 +148,8 @@ func main() {
 			cb(centrifuge.SubscribeReply{Options: opts}, nil)
 		})
 
-		// Handle presence subscriptions (channels ending with :clients or :users).
-		// This is a separate permission scope - watching who's online.
 		client.OnPresenceSubscribe(func(e centrifuge.PresenceSubscribeEvent, cb centrifuge.PresenceSubscribeCallback) {
 			log.Printf("client %s presence subscribing to %s", client.ID(), e.Channel)
-			// e.Channel is the base channel (without :clients or :users suffix)
 			cb(centrifuge.PresenceSubscribeReply{}, nil)
 		})
 
@@ -161,12 +167,6 @@ func main() {
 				handleGameJoin(client, node.KeyedEngine(), e.Data, cb)
 			case "game:leave":
 				handleGameLeave(client, node.KeyedEngine(), e.Data, cb)
-			case "leaderboard:click":
-				handleLeaderboardClick(client, node.KeyedEngine(), e.Data, cb)
-			case "leaderboard:join":
-				handleLeaderboardJoin(client, node.KeyedEngine(), e.Data, cb)
-			case "leaderboard:leave":
-				handleLeaderboardLeave(client, node.KeyedEngine(), e.Data, cb)
 			case "inventory:buy":
 				handleInventoryBuy(client, node.KeyedEngine(), e.Data, cb)
 			case "inventory:restock":
@@ -182,7 +182,6 @@ func main() {
 			if node.KeyedEngine() != nil {
 				_, _ = node.KeyedEngine().Unpublish(context.Background(), "cursors", client.ID(), centrifuge.KeyedUnpublishOptions{
 					Publish:       true,
-					StreamSize:    1000,
 					StreamTTL:     300 * time.Second,
 					StreamMetaTTL: time.Hour,
 				})
@@ -209,6 +208,11 @@ func main() {
 	wsHandler := centrifuge.NewWebsocketHandler(node, centrifuge.WebsocketConfig{})
 	http.Handle("/connection/websocket", wsHandler)
 
+	// Native PostgreSQL leaderboard HTTP endpoints.
+	http.HandleFunc("/api/leaderboard/join", handleLeaderboardJoinHTTP)
+	http.HandleFunc("/api/leaderboard/click", handleLeaderboardClickHTTP)
+	http.HandleFunc("/api/leaderboard/leave", handleLeaderboardLeaveHTTP)
+
 	server := &http.Server{Addr: ":3000"}
 
 	go func() {
@@ -231,6 +235,9 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(ctx)
 	_ = node.Shutdown(ctx)
+	if pgPool != nil {
+		pgPool.Close()
+	}
 }
 
 // Cursor update handler.
@@ -244,7 +251,6 @@ func handleCursorUpdate(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 		Publish:       true,
 		Data:          data,
 		KeyTTL:        5 * time.Second, // Auto-expire if client stops sending updates.
-		StreamSize:    1000,
 		StreamTTL:     300 * time.Second,
 		StreamMetaTTL: time.Hour,
 	})
@@ -462,101 +468,203 @@ func checkGameFull(ke centrifuge.KeyedEngine, gameID string, maxPlayers int) {
 	}
 }
 
-// Leaderboard handlers.
-func handleLeaderboardJoin(client *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
-	if ke == nil {
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
+// Native PostgreSQL leaderboard handlers - using cf_keyed_publish directly.
+
+func handleLeaderboardJoinHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if pgPool == nil {
+		http.Error(w, "PostgreSQL not configured - start with -postgres flag", http.StatusServiceUnavailable)
 		return
 	}
 
 	var req struct {
-		Name  string `json:"name"`
-		Color string `json:"color"`
+		UserID string `json:"userId"`
+		Name   string `json:"name"`
+		Color  string `json:"color"`
 	}
-	if err := json.Unmarshal(data, &req); err != nil {
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	entry := &LeaderboardEntry{
-		UserID: client.UserID(),
+	entry := LeaderboardEntry{
+		UserID: req.UserID,
 		Name:   req.Name,
 		Score:  0,
 		Color:  req.Color,
 	}
-
-	leaderboardMu.Lock()
-	leaderboardScores[client.UserID()] = entry
-	leaderboardMu.Unlock()
-
 	entryData, _ := json.Marshal(entry)
-	_, err := ke.Publish(context.Background(), "leaderboard", client.UserID(), centrifuge.KeyedPublishOptions{
-		Publish: true,
-		Data:    entryData,
-		Score:   entry.Score,
-		Ordered: true,
-	})
+
+	// Call cf_keyed_publish directly on PostgreSQL.
+	var resultID *int64
+	var channelOffset int64
+	var epoch string
+	var suppressed bool
+	var suppressReason *string
+	var currentData []byte
+	var currentOffset *int64
+
+	err := pgPool.QueryRow(r.Context(), `
+		SELECT * FROM cf_keyed_publish(
+			p_channel => $1,
+			p_key => $2,
+			p_data => $3,
+			p_score => $4,
+			p_stream_ttl => '1 hour'::interval
+		)
+	`, "leaderboard", req.UserID, entryData, entry.Score).Scan(
+		&resultID, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset,
+	)
+
 	if err != nil {
 		log.Printf("leaderboard join error: %v", err)
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	cb(centrifuge.RPCReply{Data: entryData}, nil)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"entry":   entry,
+		"offset":  channelOffset,
+		"epoch":   epoch,
+	})
 }
 
-func handleLeaderboardLeave(client *centrifuge.Client, ke centrifuge.KeyedEngine, _ []byte, cb centrifuge.RPCCallback) {
-	if ke == nil {
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
+func handleLeaderboardClickHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	leaderboardMu.Lock()
-	delete(leaderboardScores, client.UserID())
-	leaderboardMu.Unlock()
+	if pgPool == nil {
+		http.Error(w, "PostgreSQL not configured - start with -postgres flag", http.StatusServiceUnavailable)
+		return
+	}
 
-	_, err := ke.Unpublish(context.Background(), "leaderboard", client.UserID(), centrifuge.KeyedUnpublishOptions{
-		Publish: true,
-	})
+	var req struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Read current score from snapshot.
+	var currentData []byte
+	var currentOffset int64
+	err := pgPool.QueryRow(ctx, `
+		SELECT data, key_offset FROM cf_keyed_snapshot
+		WHERE channel = 'leaderboard' AND key = $1
+	`, req.UserID).Scan(&currentData, &currentOffset)
+
 	if err != nil {
-		log.Printf("leaderboard leave error: %v", err)
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
-		return
-	}
-	cb(centrifuge.RPCReply{}, nil)
-}
-
-func handleLeaderboardClick(client *centrifuge.Client, ke centrifuge.KeyedEngine, _ []byte, cb centrifuge.RPCCallback) {
-	if ke == nil {
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
+		http.Error(w, "Player not found - join first", http.StatusNotFound)
 		return
 	}
 
-	leaderboardMu.Lock()
-	entry, ok := leaderboardScores[client.UserID()]
-	if !ok {
-		leaderboardMu.Unlock()
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorBadRequest)
+	var entry LeaderboardEntry
+	if err := json.Unmarshal(currentData, &entry); err != nil {
+		http.Error(w, "Invalid player data", http.StatusInternalServerError)
 		return
 	}
+
+	// Increment score.
 	entry.Score++
-	entryCopy := *entry
-	leaderboardMu.Unlock()
+	newData, _ := json.Marshal(entry)
 
-	entryData, _ := json.Marshal(entryCopy)
-	_, err := ke.Publish(context.Background(), "leaderboard", client.UserID(), centrifuge.KeyedPublishOptions{
-		Publish: true,
-		Data:    entryData,
-		Score:   entryCopy.Score,
-		Ordered: true,
-	})
+	// Update using cf_keyed_publish with new score.
+	var resultID *int64
+	var channelOffset int64
+	var epoch string
+	var suppressed bool
+	var suppressReason *string
+	var returnedData []byte
+	var returnedOffset *int64
+
+	err = pgPool.QueryRow(ctx, `
+		SELECT * FROM cf_keyed_publish(
+			p_channel => 'leaderboard',
+			p_key => $1,
+			p_data => $2,
+			p_score => $3,
+			p_stream_ttl => '1 hour'::interval
+		)
+	`, req.UserID, newData, entry.Score).Scan(
+		&resultID, &channelOffset, &epoch, &suppressed, &suppressReason, &returnedData, &returnedOffset,
+	)
+
 	if err != nil {
 		log.Printf("leaderboard click error: %v", err)
-		cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 
-	cb(centrifuge.RPCReply{Data: entryData}, nil)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"entry":   entry,
+		"offset":  channelOffset,
+	})
+}
+
+func handleLeaderboardLeaveHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if pgPool == nil {
+		http.Error(w, "PostgreSQL not configured - start with -postgres flag", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Call cf_keyed_unpublish directly.
+	var resultID *int64
+	var channelOffset int64
+	var epoch string
+	var suppressed bool
+	var suppressReason *string
+
+	err := pgPool.QueryRow(r.Context(), `
+		SELECT result_id, channel_offset, epoch, suppressed, suppress_reason
+		FROM cf_keyed_unpublish(
+			'leaderboard',
+			$1,   -- key (userId)
+			NULL, -- client_id
+			$1,   -- user_id
+			'1 hour'::interval, -- stream_ttl
+			NULL, -- idempotency_key
+			NULL, -- idempotency_ttl
+			NULL  -- meta_ttl
+		)
+	`, req.UserID).Scan(&resultID, &channelOffset, &epoch, &suppressed, &suppressReason)
+
+	if err != nil {
+		log.Printf("leaderboard leave error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": !suppressed,
+		"offset":  channelOffset,
+	})
 }
 
 // Inventory handlers - demonstrates CAS (Compare-And-Swap) for preventing overselling.
@@ -565,12 +673,11 @@ func handleLeaderboardClick(client *centrifuge.Client, ke centrifuge.KeyedEngine
 func initInventory(ke centrifuge.KeyedEngine) {
 	ctx := context.Background()
 	for _, item := range inventoryItems {
-		itemData, _ := json.Marshal(item)
+		payload, _ := json.Marshal(InventoryPayload{Item: *item})
 		_, _ = ke.Publish(ctx, "inventory", item.ID, centrifuge.KeyedPublishOptions{
-			Data:       itemData,
-			KeyMode:    centrifuge.KeyModeIfNew, // Only set if item doesn't exist yet.
-			StreamSize: 100,
-			StreamTTL:  time.Hour,
+			Data:      payload,
+			KeyMode:   centrifuge.KeyModeIfNew, // Only set if item doesn't exist yet.
+			StreamTTL: time.Hour,
 		})
 	}
 	log.Printf("Inventory initialized with %d items", len(inventoryItems))
@@ -602,7 +709,7 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 
 	// CAS retry loop - keeps trying until success or terminal failure.
 	maxRetries := 5
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		// Step 1: Read current state using Key filter (single key lookup).
 		pubs, pos, _, err := ke.ReadSnapshot(ctx, "inventory", centrifuge.KeyedReadSnapshotOptions{
 			Key: req.ItemID,
@@ -618,19 +725,24 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 		}
 
 		// Parse current item state.
-		var item InventoryItem
-		if err := json.Unmarshal(pubs[0].Data, &item); err != nil {
+		var current InventoryPayload
+		if err := json.Unmarshal(pubs[0].Data, &current); err != nil {
 			cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
 			return
 		}
+		item := current.Item
 
 		// Check stock.
 		if item.Stock < req.Quantity {
 			// Not enough stock - return error with current state.
+			msg := "Out of stock"
+			if item.Stock > 0 {
+				msg = fmt.Sprintf("Only %d left in stock", item.Stock)
+			}
 			result, _ := json.Marshal(map[string]any{
 				"success":      false,
 				"error":        "insufficient_stock",
-				"message":      fmt.Sprintf("Only %d left in stock", item.Stock),
+				"message":      msg,
 				"currentStock": item.Stock,
 			})
 			cb(centrifuge.RPCReply{Data: result}, nil)
@@ -640,9 +752,8 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 		// Step 2: Prepare new state (decrement stock).
 		newStock := item.Stock - req.Quantity
 		item.Stock = newStock
-		newItemData, _ := json.Marshal(item)
 
-		// Prepare transaction record for stream (incremental update).
+		// Combined payload with item state and transaction info.
 		transaction := InventoryTransaction{
 			Action:   "purchase",
 			ItemID:   req.ItemID,
@@ -650,7 +761,10 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 			BuyerID:  client.UserID(),
 			Message:  fmt.Sprintf("%s bought %d x %s", client.UserID(), req.Quantity, item.Name),
 		}
-		transactionData, _ := json.Marshal(transaction)
+		payload, _ := json.Marshal(InventoryPayload{
+			Item:        item,
+			Transaction: &transaction,
+		})
 
 		// Step 3: CAS write - only succeeds if position matches what we read.
 		expectedPos := centrifuge.StreamPosition{
@@ -660,10 +774,8 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 
 		result, err := ke.Publish(ctx, "inventory", req.ItemID, centrifuge.KeyedPublishOptions{
 			Publish:          true,
-			Data:             newItemData,     // Full state -> snapshot
-			StreamData:       transactionData, // Transaction -> stream
+			Data:             payload,
 			ExpectedPosition: &expectedPos,
-			StreamSize:       100,
 			StreamTTL:        time.Hour,
 		})
 		if err != nil {
@@ -716,7 +828,7 @@ func handleInventoryBuy(client *centrifuge.Client, ke centrifuge.KeyedEngine, da
 }
 
 // handleInventoryRestock adds stock to an item (admin action).
-func handleInventoryRestock(client *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
+func handleInventoryRestock(_ *centrifuge.Client, ke centrifuge.KeyedEngine, data []byte, cb centrifuge.RPCCallback) {
 	if ke == nil {
 		cb(centrifuge.RPCReply{}, centrifuge.ErrorNotAvailable)
 		return
@@ -738,7 +850,7 @@ func handleInventoryRestock(client *centrifuge.Client, ke centrifuge.KeyedEngine
 
 	// CAS retry loop for restock.
 	maxRetries := 5
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for range maxRetries {
 		pubs, pos, _, err := ke.ReadSnapshot(ctx, "inventory", centrifuge.KeyedReadSnapshotOptions{
 			Key: req.ItemID,
 		})
@@ -747,15 +859,15 @@ func handleInventoryRestock(client *centrifuge.Client, ke centrifuge.KeyedEngine
 			return
 		}
 
-		var item InventoryItem
-		if err := json.Unmarshal(pubs[0].Data, &item); err != nil {
+		var current InventoryPayload
+		if err := json.Unmarshal(pubs[0].Data, &current); err != nil {
 			cb(centrifuge.RPCReply{}, centrifuge.ErrorInternal)
 			return
 		}
+		item := current.Item
 
 		// Prepare new state.
 		item.Stock += req.Quantity
-		newItemData, _ := json.Marshal(item)
 
 		transaction := InventoryTransaction{
 			Action:   "restock",
@@ -763,7 +875,10 @@ func handleInventoryRestock(client *centrifuge.Client, ke centrifuge.KeyedEngine
 			Quantity: req.Quantity,
 			Message:  fmt.Sprintf("Restocked %d x %s", req.Quantity, item.Name),
 		}
-		transactionData, _ := json.Marshal(transaction)
+		payload, _ := json.Marshal(InventoryPayload{
+			Item:        item,
+			Transaction: &transaction,
+		})
 
 		expectedPos := centrifuge.StreamPosition{
 			Offset: pubs[0].Offset,
@@ -772,10 +887,8 @@ func handleInventoryRestock(client *centrifuge.Client, ke centrifuge.KeyedEngine
 
 		result, err := ke.Publish(ctx, "inventory", req.ItemID, centrifuge.KeyedPublishOptions{
 			Publish:          true,
-			Data:             newItemData,
-			StreamData:       transactionData,
+			Data:             payload,
 			ExpectedPosition: &expectedPos,
-			StreamSize:       100,
 			StreamTTL:        time.Hour,
 		})
 		if err != nil {
@@ -806,33 +919,47 @@ func handleInventoryRestock(client *centrifuge.Client, ke centrifuge.KeyedEngine
 	cb(centrifuge.RPCReply{}, &centrifuge.Error{Code: 4002, Message: "too many conflicts"})
 }
 
-// setupKeyedEngine creates either a memory or Redis keyed engine.
+// setupKeyedEngine creates either a memory, Redis, or PostgreSQL keyed engine.
 // Returns the engine and a function to register the broker event handler.
-func setupKeyedEngine(node *centrifuge.Node, redisAddr string) (centrifuge.KeyedEngine, func(centrifuge.BrokerEventHandler) error, error) {
-	if redisAddr == "" {
-		log.Println("Using in-memory keyed engine")
-		engine, err := centrifuge.NewMemoryKeyedEngine(node, centrifuge.MemoryKeyedEngineConfig{})
+func setupKeyedEngine(node *centrifuge.Node, redisAddr, postgresAddr string) (centrifuge.KeyedEngine, func(centrifuge.BrokerEventHandler) error, error) {
+	// PostgreSQL takes priority if specified
+	if postgresAddr != "" {
+		log.Printf("Using PostgreSQL keyed engine")
+		engine, err := centrifuge.NewPostgresKeyedEngine(node, centrifuge.PostgresKeyedEngineConfig{
+			ConnString: postgresAddr,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("error creating PostgreSQL keyed engine: %w", err)
+		}
+		return engine, engine.RegisterEventHandler, nil
+	}
+
+	// Redis if specified
+	if redisAddr != "" {
+		log.Printf("Using Redis keyed engine at %s", redisAddr)
+
+		redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
+			Address: redisAddr,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("error creating Redis shard: %w", err)
+		}
+
+		engine, err := centrifuge.NewRedisKeyedEngine(node, centrifuge.RedisKeyedEngineConfig{
+			Shards: []*centrifuge.RedisShard{redisShard},
+			Prefix: "keyed_demo",
+		})
 		if err != nil {
 			return nil, nil, err
 		}
-		return engine, engine.RegisterBrokerEventHandler, nil
+		return engine, engine.RegisterEventHandler, nil
 	}
 
-	log.Printf("Using Redis keyed engine at %s", redisAddr)
-
-	redisShard, err := centrifuge.NewRedisShard(node, centrifuge.RedisShardConfig{
-		Address: redisAddr,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("error creating Redis shard: %w", err)
-	}
-
-	engine, err := centrifuge.NewRedisKeyedEngine(node, centrifuge.RedisKeyedEngineConfig{
-		Shards: []*centrifuge.RedisShard{redisShard},
-		Prefix: "keyed_demo",
-	})
+	// Default to memory
+	log.Println("Using in-memory keyed engine")
+	engine, err := centrifuge.NewMemoryKeyedEngine(node, centrifuge.MemoryKeyedEngineConfig{})
 	if err != nil {
 		return nil, nil, err
 	}
-	return engine, engine.RegisterEventHandler, nil
+	return engine, engine.RegisterBrokerEventHandler, nil
 }

@@ -10,7 +10,7 @@
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 800px;
+            max-width: 900px;
             margin: 0 auto;
             padding: 40px 20px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -28,56 +28,74 @@
         }
         .demos {
             display: grid;
-            gap: 20px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+        @media (max-width: 600px) {
+            .demos {
+                grid-template-columns: 1fr;
+            }
         }
         .demo-card {
             background: white;
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
             transition: transform 0.2s;
+            display: flex;
+            flex-direction: column;
         }
         .demo-card:hover {
-            transform: translateY(-5px);
+            transform: translateY(-3px);
+        }
+        .demo-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .icon {
+            font-size: 28px;
         }
         .demo-card h2 {
-            margin: 0 0 10px 0;
+            margin: 0;
+            font-size: 18px;
             color: #333;
         }
         .demo-card p {
             color: #666;
-            margin: 0 0 20px 0;
-            line-height: 1.6;
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            line-height: 1.5;
+            flex: 1;
+        }
+        .features {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .feature {
+            background: #f0f0f0;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #555;
         }
         .demo-card a {
             display: inline-block;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 12px 24px;
-            border-radius: 8px;
+            padding: 10px 16px;
+            border-radius: 6px;
             text-decoration: none;
             font-weight: 600;
+            font-size: 14px;
             transition: opacity 0.2s;
+            text-align: center;
         }
         .demo-card a:hover {
             opacity: 0.9;
-        }
-        .icon {
-            font-size: 40px;
-            margin-bottom: 15px;
-        }
-        .features {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-bottom: 15px;
-        }
-        .feature {
-            background: #f0f0f0;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 12px;
-            color: #555;
         }
     </style>
 </head>
@@ -87,51 +105,59 @@
 
     <div class="demos">
         <div class="demo-card">
-            <div class="icon">🖱️</div>
-            <h2>Ephemeral Cursors</h2>
+            <div class="demo-header">
+                <div class="icon">🖱️</div>
+                <h2>Ephemeral Cursors</h2>
+            </div>
             <div class="features">
                 <span class="feature">Real-time sync</span>
                 <span class="feature">Snapshot on join</span>
                 <span class="feature">Auto-cleanup</span>
             </div>
-            <p>
-                See other users' cursor positions in real-time. Like Figma or Google Docs -
-                when you join, you immediately see where everyone's cursor is, and movements
-                are synchronized instantly.
-            </p>
-            <a href="/cursors.html">Open Cursors Demo →</a>
+            <p>See other users' cursor positions in real-time with instant sync on join.</p>
+            <a href="/cursors.html">Open Demo</a>
         </div>
 
         <div class="demo-card">
-            <div class="icon">🎮</div>
-            <h2>Game Lobby</h2>
+            <div class="demo-header">
+                <div class="icon">🎮</div>
+                <h2>Game Lobby</h2>
+            </div>
             <div class="features">
                 <span class="feature">2-player slots</span>
                 <span class="feature">Live updates</span>
                 <span class="feature">Auto-start</span>
             </div>
-            <p>
-                A simple 2-player lobby. Players can join slots, and when both slots are
-                filled, the game automatically starts. Perfect for matchmaking scenarios
-                where you need synchronized state.
-            </p>
-            <a href="/lobby.html">Open Lobby Demo →</a>
+            <p>A 2-player lobby with slot claiming and automatic game start.</p>
+            <a href="/lobby.html">Open Demo</a>
         </div>
 
         <div class="demo-card">
-            <div class="icon">🏆</div>
-            <h2>Live Leaderboard</h2>
-            <div class="features">
-                <span class="feature">Ordered by score</span>
-                <span class="feature">Click counter</span>
-                <span class="feature">Presence</span>
+            <div class="demo-header">
+                <div class="icon">🏆</div>
+                <h2>Leaderboard (PostgreSQL)</h2>
             </div>
-            <p>
-                A real-time leaderboard where each click increments your score. The
-                leaderboard is automatically sorted by score. Also shows who's currently
-                online using keyed presence subscriptions.
-            </p>
-            <a href="/leaderboard.html">Open Leaderboard Demo →</a>
+            <div class="features">
+                <span class="feature">Native PG</span>
+                <span class="feature">Persistent</span>
+                <span class="feature">Ordered</span>
+            </div>
+            <p>Persistent leaderboard using native PostgreSQL cf_keyed_* functions.</p>
+            <a href="/leaderboard.html">Open Demo</a>
+        </div>
+
+        <div class="demo-card">
+            <div class="demo-header">
+                <div class="icon">📦</div>
+                <h2>Inventory (CAS)</h2>
+            </div>
+            <div class="features">
+                <span class="feature">Compare-And-Swap</span>
+                <span class="feature">Conflict handling</span>
+                <span class="feature">Stock tracking</span>
+            </div>
+            <p>Purchase items with CAS to prevent overselling and handle conflicts.</p>
+            <a href="/inventory.html">Open Demo</a>
         </div>
     </div>
 </body>

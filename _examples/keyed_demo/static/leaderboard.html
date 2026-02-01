@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Leaderboard - Keyed Subscriptions Demo</title>
+    <title>Live Leaderboard (PostgreSQL) - Keyed Subscriptions Demo</title>
     <style>
         * {
             box-sizing: border-box;
@@ -28,6 +28,16 @@
             text-align: center;
             color: #888;
             margin-bottom: 30px;
+        }
+        .pg-badge {
+            display: inline-block;
+            background: #336791;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-left: 8px;
+            vertical-align: middle;
         }
         .status-bar {
             display: flex;
@@ -126,10 +136,10 @@
             display: block;
         }
         .click-button {
-            width: 200px;
-            height: 200px;
+            width: 100px;
+            height: 100px;
             border-radius: 50%;
-            font-size: 24px;
+            font-size: 14px;
             font-weight: 600;
             cursor: pointer;
             border: none;
@@ -141,9 +151,9 @@
             transform: scale(0.95);
         }
         .my-score {
-            font-size: 48px;
+            font-size: 22px;
             font-weight: bold;
-            margin: 20px 0;
+            margin: 10px 0;
         }
         .leaderboard {
             background: rgba(255,255,255,0.1);
@@ -230,12 +240,33 @@
         .leave-btn-container {
             margin-top: 20px;
         }
+        .info-box {
+            background: rgba(51, 103, 145, 0.3);
+            border: 1px solid #336791;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #aaa;
+        }
+        .info-box code {
+            background: rgba(255,255,255,0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Live Leaderboard</h1>
-        <p class="subtitle">Click to score! Leaderboard updates in real-time for all players.</p>
+        <h1>Live Leaderboard <span class="pg-badge">PostgreSQL</span></h1>
+        <p class="subtitle">Persistent leaderboard using native cf_keyed_publish() SQL functions</p>
+
+        <div class="info-box">
+            This demo calls PostgreSQL's <code>cf_keyed_publish()</code> and <code>cf_keyed_unpublish()</code>
+            functions directly via HTTP endpoints. Data persists across server restarts.
+            Real-time updates are delivered via WebSocket subscription.
+        </div>
 
         <div class="status-bar">
             <div class="status">
@@ -287,7 +318,11 @@
 
     <script src="http://localhost:2000/centrifuge.js"></script>
     <script>
-        const userId = 'user_' + Math.random().toString(36).substr(2, 8);
+        const userId = localStorage.getItem('leaderboard_userId') || (() => {
+            const id = 'user_' + Math.random().toString(36).substr(2, 8);
+            localStorage.setItem('leaderboard_userId', id);
+            return id;
+        })();
         let selectedColor = '#e91e63';
         let myEntry = null;
         let inGame = false;
@@ -357,26 +392,21 @@
 
         // Subscribe to leaderboard channel with keyed mode and ordering.
         const sub = centrifuge.newKeyedSubscription('leaderboard', {
-            limit: 1,
+            limit: 100,
             ordered: true
         });
 
         sub.on('subscribed', (ctx) => {
             console.log('Subscribed to leaderboard');
 
-            // Process snapshot.
+            // Process snapshot (persistent data from PostgreSQL).
             if (ctx.publications) {
                 for (const pub of ctx.publications) {
-                    if (pub.key) {
-                        try {
-                            const data = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
-                            entries.set(pub.key, data);
-                            if (data.userId === userId) {
-                                myEntry = data;
-                                showGameSection();
-                            }
-                        } catch (e) {
-                            console.error('Error parsing entry:', e);
+                    if (pub.key && pub.data) {
+                        entries.set(pub.key, pub.data);
+                        if (pub.data.userId === userId) {
+                            myEntry = pub.data;
+                            showGameSection();
                         }
                     }
                 }
@@ -393,16 +423,11 @@
                     myEntry = null;
                     hideGameSection();
                 }
-            } else {
-                try {
-                    const data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-                    entries.set(ctx.key, data);
-                    if (data.userId === userId) {
-                        myEntry = data;
-                        document.getElementById('myScore').textContent = data.score;
-                    }
-                } catch (e) {
-                    console.error('Error parsing entry:', e);
+            } else if (ctx.data) {
+                entries.set(ctx.key, ctx.data);
+                if (ctx.data.userId === userId) {
+                    myEntry = ctx.data;
+                    document.getElementById('myScore').textContent = ctx.data.score;
                 }
             }
             renderLeaderboard();
@@ -428,15 +453,29 @@
             inGame = false;
         }
 
+        // HTTP API calls to PostgreSQL via cf_keyed_publish()
         async function joinGame() {
             try {
-                const result = await centrifuge.rpc('leaderboard:join', {
-                    name: getPlayerName(),
-                    color: selectedColor
+                const response = await fetch('/api/leaderboard/join', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: userId,
+                        name: getPlayerName(),
+                        color: selectedColor
+                    })
                 });
-                const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
-                myEntry = data;
-                entries.set(userId, data);
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+
+                const result = await response.json();
+                console.log('Joined via cf_keyed_publish:', result);
+
+                myEntry = result.entry;
+                entries.set(userId, result.entry);
                 showGameSection();
                 renderLeaderboard();
             } catch (err) {
@@ -447,7 +486,18 @@
 
         async function leaveGame() {
             try {
-                await centrifuge.rpc('leaderboard:leave', {});
+                const response = await fetch('/api/leaderboard/leave', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: userId })
+                });
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+
+                console.log('Left via cf_keyed_unpublish');
                 entries.delete(userId);
                 myEntry = null;
                 hideGameSection();
@@ -461,11 +511,21 @@
             if (!inGame) return;
 
             try {
-                const result = await centrifuge.rpc('leaderboard:click', {});
-                const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
-                myEntry = data;
-                document.getElementById('myScore').textContent = data.score;
-                entries.set(userId, data);
+                const response = await fetch('/api/leaderboard/click', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: userId })
+                });
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error);
+                }
+
+                const result = await response.json();
+                myEntry = result.entry;
+                document.getElementById('myScore').textContent = result.entry.score;
+                entries.set(userId, result.entry);
                 renderLeaderboard();
             } catch (err) {
                 console.error('Error handling click:', err);

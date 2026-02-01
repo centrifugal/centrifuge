@@ -7,710 +7,386 @@ This document describes the PostgreSQL implementation of the KeyedEngine interfa
 PostgresKeyedEngine is ideal for:
 - **Collaborative boards** (Miro, Figma-like) - objects must persist across sessions
 - **Document editing** - persistent state with real-time sync
+- **Inventory/booking systems** - CAS operations for atomic updates
 - **Game lobbies with persistent state** - saved game rooms
 - **Any keyed subscription requiring durability**
 
 For ephemeral use cases (presence, cursors), use MemoryKeyedEngine or RedisKeyedEngine.
 
-## Channel Routing
+## Architecture
 
-Users can choose implementation per channel:
+The design uses **direct polling** from Centrifuge nodes to PostgreSQL, eliminating the need for an intermediate pub/sub layer (Redis, NATS, etc.).
 
-```go
-node.config.GetKeyedEngine = func(channel string) KeyedEngine {
-    if strings.HasPrefix(channel, "board:") {
-        return postgresKeyedEngine  // Persistent
-    }
-    return redisKeyedEngine  // Ephemeral
-}
 ```
+┌─────────────────────────────────────────────────────────────────┐
+│                         PostgreSQL                              │
+│                                                                 │
+│  cf_keyed_snapshot         cf_keyed_stream                      │
+│  ┌──────────────┐         ┌─────────────────────────────────┐   │
+│  │ channel, key │         │ id (global), channel, offset,   │   │
+│  │ data, score  │         │ key, data, removed, expires_at  │   │
+│  └──────────────┘         └─────────────────────────────────┘   │
+│         │                              │                        │
+│   (new subscriber)            (real-time + recovery)            │
+└─────────┼──────────────────────────────┼────────────────────────┘
+          │                              │
+          │         NOTIFY (wake-up)     │
+          │              +               │
+          │    Poll WHERE id > last_id   │
+          │                              │
+          ▼                              ▼
+      ┌──────────┐  ┌──────────┐  ┌──────────┐
+      │  Node 1  │  │  Node 2  │  │  Node N  │
+      │ last_id: │  │ last_id: │  │ last_id: │
+      │  98760   │  │  98755   │  │  98762   │
+      └────┬─────┘  └────┬─────┘  └────┬─────┘
+           │             │             │
+           ▼             ▼             ▼
+       Clients       Clients       Clients
+       (offset)      (offset)      (offset)
+```
+
+### Key Design Decisions
+
+1. **Dual ID System**
+   - `id` (global BIGSERIAL): For efficient node polling across all channels
+   - `channel_offset` (per-channel): For Centrifuge recovery semantics
+
+2. **No Intermediate Pub/Sub**
+   - Nodes poll PostgreSQL directly
+   - NOTIFY used only as wake-up signal (not for data)
+   - Simpler operations, fewer failure points
+
+3. **Read Replicas for Scale**
+   - Writes go to primary
+   - 250 nodes distribute reads across replicas
+
+4. **SQL Functions for Publishing**
+   - Single function call instead of multiple queries
+   - All logic encapsulated in `cf_keyed_publish()` and `cf_keyed_unpublish()`
+   - Enables transactional publishing from any language with a PostgreSQL driver
+
+5. **Split Client Info**
+   - Individual columns (client_id, user_id, conn_info, chan_info, subscribed_at) instead of single BYTEA
+   - Enables SQL queries filtering by user/client
 
 ## Database Schema
 
-### Snapshot Table (Current State)
+All tables and functions use the `cf_` prefix to avoid naming collisions.
+
+### cf_keyed_stream (Change History + Fan-out)
+
+The stream table has two IDs:
+- `id`: Global auto-increment for efficient node polling
+- `channel_offset`: Per-channel sequence for Centrifuge client recovery
 
 ```sql
-CREATE TABLE keyed_snapshot (
+CREATE TABLE cf_keyed_stream (
+    id              BIGSERIAL PRIMARY KEY,
     channel         TEXT NOT NULL,
+    channel_offset  BIGINT NOT NULL,
     key             TEXT NOT NULL,
     data            BYTEA,
     tags            JSONB,
-    client_info     BYTEA,              -- Serialized ClientInfo
-    score           BIGINT,             -- For ordered snapshots
-    version         BIGINT DEFAULT 0,
-    version_epoch   TEXT,
-    offset          BIGINT NOT NULL,    -- Stream offset when written
-    expires_at      TIMESTAMPTZ,        -- For KeyTTL
-    created_at      TIMESTAMPTZ DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    client_id       TEXT,
+    user_id         TEXT,
+    conn_info       BYTEA,
+    chan_info       BYTEA,
+    subscribed_at   TIMESTAMPTZ,
+    removed         BOOLEAN DEFAULT FALSE,
+    expires_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX cf_keyed_stream_channel_offset_idx ON cf_keyed_stream (channel, channel_offset);
+CREATE INDEX cf_keyed_stream_expires_idx ON cf_keyed_stream (expires_at) WHERE expires_at IS NOT NULL;
+```
+
+### cf_keyed_snapshot (Current State)
+
+```sql
+CREATE TABLE cf_keyed_snapshot (
+    channel             TEXT NOT NULL,
+    key                 TEXT NOT NULL,
+    data                BYTEA,
+    tags                JSONB,
+    client_id           TEXT,
+    user_id             TEXT,
+    conn_info           BYTEA,
+    chan_info           BYTEA,
+    subscribed_at       TIMESTAMPTZ,
+    score               BIGINT,
+    key_version         BIGINT DEFAULT 0,
+    key_version_epoch   TEXT,
+    key_offset          BIGINT NOT NULL,
+    expires_at          TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (channel, key)
 );
 
--- For ordered snapshot queries
-CREATE INDEX keyed_snapshot_ordered_idx
-    ON keyed_snapshot (channel, score DESC, key)
+CREATE INDEX cf_keyed_snapshot_ordered_idx
+    ON cf_keyed_snapshot (channel, score DESC, key)
     WHERE score IS NOT NULL;
-
--- For TTL expiration cleanup
-CREATE INDEX keyed_snapshot_expires_idx
-    ON keyed_snapshot (expires_at)
+CREATE INDEX cf_keyed_snapshot_expires_idx
+    ON cf_keyed_snapshot (expires_at)
     WHERE expires_at IS NOT NULL;
 ```
 
-### Stream Table (Change History)
+### cf_keyed_stream_meta (Stream Metadata)
 
 ```sql
-CREATE TABLE keyed_stream (
-    channel     TEXT NOT NULL,
-    offset      BIGINT NOT NULL,
-    epoch       TEXT NOT NULL,
-    key         TEXT NOT NULL,
-    data        BYTEA,
-    tags        JSONB,
-    client_info BYTEA,
-    removed     BOOLEAN DEFAULT FALSE,
-    created_at  TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (channel, offset)
-);
-
--- For reading stream since offset
-CREATE INDEX keyed_stream_lookup_idx
-    ON keyed_stream (channel, offset);
-```
-
-### Stream Metadata Table
-
-```sql
-CREATE TABLE keyed_stream_meta (
+CREATE TABLE cf_keyed_stream_meta (
     channel         TEXT PRIMARY KEY,
-    epoch           TEXT NOT NULL,
     top_offset      BIGINT NOT NULL DEFAULT 0,
+    epoch           TEXT NOT NULL DEFAULT '',
+    version         BIGINT DEFAULT 0,
+    version_epoch   TEXT,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
-    meta_expires_at TIMESTAMPTZ           -- For StreamMetaTTL
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    expires_at      TIMESTAMPTZ
 );
+
+CREATE INDEX cf_keyed_stream_meta_expires_idx
+    ON cf_keyed_stream_meta (expires_at)
+    WHERE expires_at IS NOT NULL;
 ```
 
-### Idempotency Table
+### cf_keyed_idempotency (Duplicate Detection)
 
 ```sql
-CREATE TABLE keyed_idempotency (
+CREATE TABLE cf_keyed_idempotency (
     channel         TEXT NOT NULL,
     idempotency_key TEXT NOT NULL,
     result_offset   BIGINT NOT NULL,
+    result_id       BIGINT NOT NULL,
     expires_at      TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (channel, idempotency_key)
 );
 
-CREATE INDEX keyed_idempotency_expires_idx
-    ON keyed_idempotency (expires_at);
+CREATE INDEX cf_keyed_idempotency_expires_idx ON cf_keyed_idempotency (expires_at);
 ```
 
-## Interface Method Implementations
+## SQL Functions
 
-### Subscribe / Unsubscribe
+The Go implementation uses SQL functions for Publish and Unpublish operations. This provides:
+- Single RTT instead of multiple queries
+- Transactional guarantees handled by PostgreSQL
+- Same code path as users calling SQL functions directly
 
-```go
-func (e *PostgresKeyedEngine) Subscribe(ch string) error {
-    // PostgreSQL LISTEN for real-time notifications
-    _, err := e.conn.Exec(ctx, "LISTEN $1", sanitizeChannel(ch))
-    return err
-}
+### cf_keyed_publish
 
-func (e *PostgresKeyedEngine) Unsubscribe(ch string) error {
-    _, err := e.conn.Exec(ctx, "UNLISTEN $1", sanitizeChannel(ch))
-    return err
-}
-```
-
-Note: LISTEN/NOTIFY channel names have restrictions. Use a sanitization function or hash.
-
-### Publish
-
-```go
-func (e *PostgresKeyedEngine) Publish(ctx context.Context, ch, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
-    tx, err := e.pool.Begin(ctx)
-    if err != nil {
-        return KeyedPublishResult{}, err
-    }
-    defer tx.Rollback(ctx)
-
-    // 1. Check idempotency
-    if opts.IdempotencyKey != "" {
-        var existingOffset int64
-        err := tx.QueryRow(ctx, `
-            SELECT result_offset FROM keyed_idempotency
-            WHERE channel = $1 AND idempotency_key = $2 AND expires_at > NOW()
-        `, ch, opts.IdempotencyKey).Scan(&existingOffset)
-
-        if err == nil {
-            // Duplicate - return cached result
-            return KeyedPublishResult{
-                Position:       StreamPosition{Offset: existingOffset, Epoch: epoch},
-                Suppressed:     true,
-                SuppressReason: SuppressReasonIdempotency,
-            }, nil
-        }
-    }
-
-    // 2. Get or create stream meta, increment offset
-    var epoch string
-    var newOffset int64
-    err = tx.QueryRow(ctx, `
-        INSERT INTO keyed_stream_meta (channel, epoch, top_offset)
-        VALUES ($1, $2, 1)
-        ON CONFLICT (channel) DO UPDATE
-        SET top_offset = keyed_stream_meta.top_offset + 1
-        RETURNING epoch, top_offset
-    `, ch, generateEpoch()).Scan(&epoch, &newOffset)
-    if err != nil {
-        return KeyedPublishResult{}, err
-    }
-
-    // 3. Check KeyMode conditions
-    if opts.KeyMode == KeyModeIfNew || opts.KeyMode == KeyModeIfExists {
-        var exists bool
-        err = tx.QueryRow(ctx, `
-            SELECT EXISTS(SELECT 1 FROM keyed_snapshot WHERE channel = $1 AND key = $2)
-        `, ch, key).Scan(&exists)
-        if err != nil {
-            return KeyedPublishResult{}, err
-        }
-
-        if opts.KeyMode == KeyModeIfNew && exists {
-            if opts.RefreshTTLOnSuppress && opts.KeyTTL > 0 {
-                // Refresh TTL without updating data
-                tx.Exec(ctx, `
-                    UPDATE keyed_snapshot SET expires_at = $3
-                    WHERE channel = $1 AND key = $2
-                `, ch, key, time.Now().Add(opts.KeyTTL))
-            }
-            tx.Commit(ctx)
-            return KeyedPublishResult{
-                Position:       StreamPosition{Offset: newOffset, Epoch: epoch},
-                Suppressed:     true,
-                SuppressReason: SuppressReasonKeyExists,
-            }, nil
-        }
-
-        if opts.KeyMode == KeyModeIfExists && !exists {
-            tx.Commit(ctx)
-            return KeyedPublishResult{
-                Position:       StreamPosition{Offset: newOffset, Epoch: epoch},
-                Suppressed:     true,
-                SuppressReason: SuppressReasonKeyNotFound,
-            }, nil
-        }
-    }
-
-    // 4. Check version (optimistic concurrency)
-    if opts.Version > 0 {
-        var currentVersion int64
-        err = tx.QueryRow(ctx, `
-            SELECT COALESCE(version, 0) FROM keyed_snapshot
-            WHERE channel = $1 AND key = $2
-        `, ch, key).Scan(&currentVersion)
-
-        if err == nil && currentVersion >= opts.Version {
-            tx.Commit(ctx)
-            return KeyedPublishResult{
-                Position:       StreamPosition{Offset: newOffset, Epoch: epoch},
-                Suppressed:     true,
-                SuppressReason: SuppressReasonVersion,
-            }, nil
-        }
-    }
-
-    // 5. Update snapshot
-    var expiresAt *time.Time
-    if opts.KeyTTL > 0 {
-        t := time.Now().Add(opts.KeyTTL)
-        expiresAt = &t
-    }
-
-    _, err = tx.Exec(ctx, `
-        INSERT INTO keyed_snapshot (channel, key, data, tags, score, version, version_epoch, offset, expires_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-        ON CONFLICT (channel, key) DO UPDATE SET
-            data = EXCLUDED.data,
-            tags = EXCLUDED.tags,
-            score = EXCLUDED.score,
-            version = EXCLUDED.version,
-            version_epoch = EXCLUDED.version_epoch,
-            offset = EXCLUDED.offset,
-            expires_at = EXCLUDED.expires_at,
-            updated_at = NOW()
-    `, ch, key, opts.Data, opts.Tags, opts.Score, opts.Version, opts.VersionEpoch, newOffset, expiresAt)
-    if err != nil {
-        return KeyedPublishResult{}, err
-    }
-
-    // 6. Append to stream (if StreamSize > 0)
-    if opts.StreamSize > 0 {
-        _, err = tx.Exec(ctx, `
-            INSERT INTO keyed_stream (channel, offset, epoch, key, data, tags, removed)
-            VALUES ($1, $2, $3, $4, $5, $6, FALSE)
-        `, ch, newOffset, epoch, key, opts.Data, opts.Tags)
-        if err != nil {
-            return KeyedPublishResult{}, err
-        }
-
-        // Trim old entries
-        _, _ = tx.Exec(ctx, `
-            DELETE FROM keyed_stream
-            WHERE channel = $1 AND offset <= $2 - $3
-        `, ch, newOffset, opts.StreamSize)
-    }
-
-    // 7. Save idempotency key
-    if opts.IdempotencyKey != "" {
-        _, _ = tx.Exec(ctx, `
-            INSERT INTO keyed_idempotency (channel, idempotency_key, result_offset, expires_at)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT DO NOTHING
-        `, ch, opts.IdempotencyKey, newOffset, time.Now().Add(opts.IdempotentResultTTL))
-    }
-
-    // 8. Notify (best effort, outside transaction is fine)
-    if opts.Publish {
-        // Notify with minimal payload - clients fetch actual data
-        payload := fmt.Sprintf(`{"ch":"%s","k":"%s","o":%d}`, ch, key, newOffset)
-        _, _ = tx.Exec(ctx, "SELECT pg_notify($1, $2)", notifyChannel(ch), payload)
-    }
-
-    if err := tx.Commit(ctx); err != nil {
-        return KeyedPublishResult{}, err
-    }
-
-    return KeyedPublishResult{
-        Position:   StreamPosition{Offset: newOffset, Epoch: epoch},
-        Suppressed: false,
-    }, nil
-}
-```
-
-### Unpublish
-
-```go
-func (e *PostgresKeyedEngine) Unpublish(ctx context.Context, ch, key string, opts KeyedUnpublishOptions) (KeyedPublishResult, error) {
-    tx, err := e.pool.Begin(ctx)
-    if err != nil {
-        return KeyedPublishResult{}, err
-    }
-    defer tx.Rollback(ctx)
-
-    // 1. Get stream meta
-    var epoch string
-    var newOffset int64
-    err = tx.QueryRow(ctx, `
-        UPDATE keyed_stream_meta
-        SET top_offset = top_offset + 1
-        WHERE channel = $1
-        RETURNING epoch, top_offset
-    `, ch).Scan(&epoch, &newOffset)
-    if err != nil {
-        return KeyedPublishResult{}, err
-    }
-
-    // 2. Delete from snapshot
-    result, err := tx.Exec(ctx, `
-        DELETE FROM keyed_snapshot WHERE channel = $1 AND key = $2
-    `, ch, key)
-    if err != nil {
-        return KeyedPublishResult{}, err
-    }
-
-    if result.RowsAffected() == 0 {
-        // Key didn't exist
-        tx.Commit(ctx)
-        return KeyedPublishResult{
-            Position:       StreamPosition{Offset: newOffset, Epoch: epoch},
-            Suppressed:     true,
-            SuppressReason: SuppressReasonKeyNotFound,
-        }, nil
-    }
-
-    // 3. Append removal to stream
-    if opts.StreamSize > 0 {
-        _, err = tx.Exec(ctx, `
-            INSERT INTO keyed_stream (channel, offset, epoch, key, removed)
-            VALUES ($1, $2, $3, $4, TRUE)
-        `, ch, newOffset, epoch, key)
-        if err != nil {
-            return KeyedPublishResult{}, err
-        }
-    }
-
-    // 4. Notify
-    if opts.Publish {
-        payload := fmt.Sprintf(`{"ch":"%s","k":"%s","o":%d,"r":true}`, ch, key, newOffset)
-        _, _ = tx.Exec(ctx, "SELECT pg_notify($1, $2)", notifyChannel(ch), payload)
-    }
-
-    if err := tx.Commit(ctx); err != nil {
-        return KeyedPublishResult{}, err
-    }
-
-    return KeyedPublishResult{
-        Position:   StreamPosition{Offset: newOffset, Epoch: epoch},
-        Suppressed: false,
-    }, nil
-}
-```
-
-### ReadSnapshot
-
-```go
-func (e *PostgresKeyedEngine) ReadSnapshot(ctx context.Context, ch string, opts KeyedReadSnapshotOptions) ([]*Publication, StreamPosition, string, error) {
-    // Get current stream position
-    var epoch string
-    var topOffset int64
-    err := e.pool.QueryRow(ctx, `
-        SELECT epoch, top_offset FROM keyed_stream_meta WHERE channel = $1
-    `, ch).Scan(&epoch, &topOffset)
-    if err == pgx.ErrNoRows {
-        // No data yet
-        return nil, StreamPosition{}, "", nil
-    }
-    if err != nil {
-        return nil, StreamPosition{}, "", err
-    }
-
-    // Validate epoch if revision provided
-    if opts.Revision != nil && opts.Revision.Epoch != "" && opts.Revision.Epoch != epoch {
-        return nil, StreamPosition{}, "", ErrorUnrecoverablePosition
-    }
-
-    // Build query
-    var query string
-    var args []interface{}
-
-    if opts.Ordered {
-        query = `
-            SELECT key, data, tags, offset, score
-            FROM keyed_snapshot
-            WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
-            ORDER BY score DESC, key
-            LIMIT $2 OFFSET $3
-        `
-    } else {
-        query = `
-            SELECT key, data, tags, offset, score
-            FROM keyed_snapshot
-            WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
-            ORDER BY key
-            LIMIT $2 OFFSET $3
-        `
-    }
-
-    limit := opts.Limit
-    if limit <= 0 {
-        limit = 100
-    }
-    args = []interface{}{ch, limit + 1, opts.Offset} // +1 to detect more pages
-
-    rows, err := e.pool.Query(ctx, query, args...)
-    if err != nil {
-        return nil, StreamPosition{}, "", err
-    }
-    defer rows.Close()
-
-    var pubs []*Publication
-    for rows.Next() {
-        var p Publication
-        var score *int64
-        if err := rows.Scan(&p.Key, &p.Data, &p.Tags, &p.Offset, &score); err != nil {
-            return nil, StreamPosition{}, "", err
-        }
-        pubs = append(pubs, &p)
-    }
-
-    // Determine next cursor
-    var nextCursor string
-    if len(pubs) > limit {
-        pubs = pubs[:limit]
-        nextCursor = fmt.Sprintf("%d", opts.Offset+limit)
-    }
-
-    return pubs, StreamPosition{Offset: topOffset, Epoch: epoch}, nextCursor, nil
-}
-```
-
-### ReadStream
-
-```go
-func (e *PostgresKeyedEngine) ReadStream(ctx context.Context, ch string, opts KeyedReadStreamOptions) ([]*Publication, StreamPosition, error) {
-    // Get current stream position
-    var epoch string
-    var topOffset int64
-    err := e.pool.QueryRow(ctx, `
-        SELECT epoch, top_offset FROM keyed_stream_meta WHERE channel = $1
-    `, ch).Scan(&epoch, &topOffset)
-    if err == pgx.ErrNoRows {
-        // Channel doesn't exist - create with new epoch
-        epoch = generateEpoch()
-        return nil, StreamPosition{Offset: 0, Epoch: epoch}, nil
-    }
-    if err != nil {
-        return nil, StreamPosition{}, err
-    }
-
-    streamPos := StreamPosition{Offset: topOffset, Epoch: epoch}
-
-    // Limit = 0 means only return position
-    if opts.Filter.Limit == 0 {
-        return nil, streamPos, nil
-    }
-
-    // Validate epoch if Since provided
-    if opts.Filter.Since != nil && opts.Filter.Since.Epoch != "" && opts.Filter.Since.Epoch != epoch {
-        return nil, StreamPosition{}, ErrorUnrecoverablePosition
-    }
-
-    // Build query
-    var query string
-    sinceOffset := int64(0)
-    if opts.Filter.Since != nil {
-        sinceOffset = int64(opts.Filter.Since.Offset)
-    }
-
-    limit := opts.Filter.Limit
-    if limit < 0 {
-        limit = 10000 // Reasonable max
-    }
-
-    if opts.Filter.Reverse {
-        query = `
-            SELECT key, data, tags, offset, removed
-            FROM keyed_stream
-            WHERE channel = $1 AND offset > $2
-            ORDER BY offset DESC
-            LIMIT $3
-        `
-    } else {
-        query = `
-            SELECT key, data, tags, offset, removed
-            FROM keyed_stream
-            WHERE channel = $1 AND offset > $2
-            ORDER BY offset ASC
-            LIMIT $3
-        `
-    }
-
-    rows, err := e.pool.Query(ctx, query, ch, sinceOffset, limit)
-    if err != nil {
-        return nil, StreamPosition{}, err
-    }
-    defer rows.Close()
-
-    var pubs []*Publication
-    for rows.Next() {
-        var p Publication
-        var removed bool
-        if err := rows.Scan(&p.Key, &p.Data, &p.Tags, &p.Offset, &removed); err != nil {
-            return nil, StreamPosition{}, err
-        }
-        // Mark removed publications (client handles this)
-        if removed {
-            p.Data = nil // Convention: nil data means removed
-        }
-        pubs = append(pubs, &p)
-    }
-
-    return pubs, streamPos, nil
-}
-```
-
-### Stats
-
-```go
-func (e *PostgresKeyedEngine) Stats(ctx context.Context, ch string) (KeyedStats, error) {
-    var count int
-    err := e.pool.QueryRow(ctx, `
-        SELECT COUNT(*) FROM keyed_snapshot
-        WHERE channel = $1 AND (expires_at IS NULL OR expires_at > NOW())
-    `, ch).Scan(&count)
-    if err != nil {
-        return KeyedStats{}, err
-    }
-    return KeyedStats{NumKeys: count}, nil
-}
-```
-
-### Remove
-
-```go
-func (e *PostgresKeyedEngine) Remove(ctx context.Context, ch string, opts KeyedRemoveOptions) error {
-    tx, err := e.pool.Begin(ctx)
-    if err != nil {
-        return err
-    }
-    defer tx.Rollback(ctx)
-
-    _, _ = tx.Exec(ctx, "DELETE FROM keyed_snapshot WHERE channel = $1", ch)
-    _, _ = tx.Exec(ctx, "DELETE FROM keyed_stream WHERE channel = $1", ch)
-    _, _ = tx.Exec(ctx, "DELETE FROM keyed_stream_meta WHERE channel = $1", ch)
-    _, _ = tx.Exec(ctx, "DELETE FROM keyed_idempotency WHERE channel = $1", ch)
-
-    return tx.Commit(ctx)
-}
-```
-
-## Background Workers
-
-### TTL Expiration Worker
-
-Periodically removes expired keys and emits removal events:
-
-```go
-func (e *PostgresKeyedEngine) runTTLExpirationWorker(ctx context.Context) {
-    ticker := time.NewTicker(time.Second)
-    defer ticker.Stop()
-
-    for {
-        select {
-        case <-ctx.Done():
-            return
-        case <-ticker.C:
-            e.expireKeys(ctx)
-        }
-    }
-}
-
-func (e *PostgresKeyedEngine) expireKeys(ctx context.Context) {
-    // Find and remove expired keys, emitting removal events
-    rows, err := e.pool.Query(ctx, `
-        DELETE FROM keyed_snapshot
-        WHERE expires_at IS NOT NULL AND expires_at <= NOW()
-        RETURNING channel, key
-    `)
-    if err != nil {
-        return
-    }
-    defer rows.Close()
-
-    for rows.Next() {
-        var ch, key string
-        if err := rows.Scan(&ch, &key); err != nil {
-            continue
-        }
-        // Emit removal to stream (fire and forget)
-        e.Unpublish(ctx, ch, key, KeyedUnpublishOptions{
-            Publish:    true,
-            StreamSize: 1000, // Use default
-        })
-    }
-}
-```
-
-### Idempotency Cleanup Worker
-
-```go
-func (e *PostgresKeyedEngine) runIdempotencyCleanupWorker(ctx context.Context) {
-    ticker := time.NewTicker(time.Minute)
-    defer ticker.Stop()
-
-    for {
-        select {
-        case <-ctx.Done():
-            return
-        case <-ticker.C:
-            e.pool.Exec(ctx, "DELETE FROM keyed_idempotency WHERE expires_at < NOW()")
-        }
-    }
-}
-```
-
-## LISTEN/NOTIFY Handling
-
-### Notification Listener
-
-```go
-func (e *PostgresKeyedEngine) listenForNotifications(ctx context.Context) {
-    conn, err := e.pool.Acquire(ctx)
-    if err != nil {
-        return
-    }
-    defer conn.Release()
-
-    for {
-        notification, err := conn.Conn().WaitForNotification(ctx)
-        if err != nil {
-            return
-        }
-
-        // Parse minimal payload
-        var msg struct {
-            Channel string `json:"ch"`
-            Key     string `json:"k"`
-            Offset  int64  `json:"o"`
-            Removed bool   `json:"r"`
-        }
-        json.Unmarshal([]byte(notification.Payload), &msg)
-
-        // Forward to Centrifuge broker for pub/sub delivery
-        e.eventHandler.HandlePublication(msg.Channel, &Publication{
-            Key:    msg.Key,
-            Offset: uint64(msg.Offset),
-            // Data fetched by client via ReadStream if needed
-        }, StreamPosition{Offset: uint64(msg.Offset)}, false, nil)
-    }
-}
-```
-
-## Advantages Over Redis Implementation
-
-| Aspect | PostgreSQL | Redis |
-|--------|------------|-------|
-| Durability | Built-in WAL | Requires AOF config |
-| Consistency | Full ACID | Eventual (pub/sub) |
-| Position checks | Not needed (transactions) | Required (buffering) |
-| Rich queries | Full SQL | Limited |
-| Existing infra | Often already have PG | Additional system |
-
-## Scalability
-
-### Expected Performance (Single Node)
-
-- **Writes:** 5,000-20,000/sec
-- **Reads:** 50,000-100,000/sec
-- **Concurrent boards:** 10,000+
-- **Objects per board:** 10,000+
-
-### Scaling Strategies
-
-1. **Read replicas** - Route reads to replicas
-2. **Connection pooling** - PgBouncer
-3. **Table partitioning** - Partition by channel hash
-4. **Citus** - Distributed PostgreSQL, shard by channel
-
-## Configuration
-
-```go
-type PostgresKeyedEngineConfig struct {
-    // Connection
-    ConnString string
-    PoolSize   int
-
-    // Defaults
-    DefaultStreamSize    int
-    DefaultStreamTTL     time.Duration
-    DefaultStreamMetaTTL time.Duration
-
-    // Workers
-    TTLCheckInterval        time.Duration
-    IdempotencyCheckInterval time.Duration
-}
-```
-
-## Migration
+Main publishing function with all suppression checks:
 
 ```sql
--- Initial migration
-CREATE TABLE keyed_snapshot (...);
-CREATE TABLE keyed_stream (...);
-CREATE TABLE keyed_stream_meta (...);
-CREATE TABLE keyed_idempotency (...);
-
--- Create indexes
-CREATE INDEX ...;
+CREATE OR REPLACE FUNCTION cf_keyed_publish(
+    p_channel TEXT,
+    p_key TEXT,
+    p_data BYTEA,
+    p_tags JSONB DEFAULT NULL,
+    p_client_id TEXT DEFAULT NULL,
+    p_user_id TEXT DEFAULT NULL,
+    p_conn_info BYTEA DEFAULT NULL,
+    p_chan_info BYTEA DEFAULT NULL,
+    p_subscribed_at TIMESTAMPTZ DEFAULT NULL,
+    p_key_mode TEXT DEFAULT NULL,
+    p_key_ttl INTERVAL DEFAULT NULL,
+    p_stream_ttl INTERVAL DEFAULT NULL,
+    p_meta_ttl INTERVAL DEFAULT NULL,
+    p_expected_offset BIGINT DEFAULT NULL,
+    p_score BIGINT DEFAULT NULL,
+    p_version BIGINT DEFAULT NULL,
+    p_version_epoch TEXT DEFAULT NULL,
+    p_key_version BIGINT DEFAULT NULL,
+    p_key_version_epoch TEXT DEFAULT NULL,
+    p_idempotency_key TEXT DEFAULT NULL,
+    p_idempotency_ttl INTERVAL DEFAULT NULL,
+    p_stream_size INT DEFAULT NULL,
+    p_refresh_ttl_on_suppress BOOLEAN DEFAULT FALSE
+) RETURNS TABLE(
+    id BIGINT,
+    channel_offset BIGINT,
+    epoch TEXT,
+    suppressed BOOLEAN,
+    suppress_reason TEXT,
+    current_data BYTEA,
+    current_offset BIGINT
+) AS $$
+-- Implementation handles:
+-- 1. Get or create stream metadata
+-- 2. Check idempotency
+-- 3. CAS check (ExpectedPosition)
+-- 4. KeyMode check (if_new, if_exists)
+-- 5. Stream-level version check
+-- 6. Increment offset and update version
+-- 7. Update snapshot
+-- 8. Insert into stream
+-- 9. Trim stream if needed
+-- 10. Save idempotency key
+-- 11. NOTIFY polling nodes
+$$ LANGUAGE plpgsql;
 ```
+
+### cf_keyed_publish_strict
+
+Auto-rollback version that raises exceptions on suppression:
+
+```sql
+CREATE OR REPLACE FUNCTION cf_keyed_publish_strict(
+    -- Same parameters as cf_keyed_publish
+) RETURNS TABLE(id BIGINT, channel_offset BIGINT, epoch TEXT) AS $$
+-- Calls cf_keyed_publish and raises exception if suppressed
+$$ LANGUAGE plpgsql;
+```
+
+### cf_keyed_unpublish
+
+Remove a key from the snapshot:
+
+```sql
+CREATE OR REPLACE FUNCTION cf_keyed_unpublish(
+    p_channel TEXT,
+    p_key TEXT,
+    p_client_id TEXT DEFAULT NULL,
+    p_user_id TEXT DEFAULT NULL,
+    p_stream_ttl INTERVAL DEFAULT NULL,
+    p_idempotency_key TEXT DEFAULT NULL,
+    p_idempotency_ttl INTERVAL DEFAULT NULL,
+    p_meta_ttl INTERVAL DEFAULT NULL
+) RETURNS TABLE(
+    id BIGINT,
+    channel_offset BIGINT,
+    epoch TEXT,
+    suppressed BOOLEAN,
+    suppress_reason TEXT
+) AS $$
+-- Implementation handles:
+-- 1. Get stream metadata
+-- 2. Check idempotency
+-- 3. Check if key exists
+-- 4. Increment offset
+-- 5. Delete from snapshot
+-- 6. Insert removal into stream
+-- 7. Save idempotency key
+-- 8. NOTIFY polling nodes
+$$ LANGUAGE plpgsql;
+```
+
+## Go Implementation
+
+The Go code uses the SQL functions for Publish and Unpublish:
+
+```go
+func (e *PostgresKeyedEngine) Publish(ctx context.Context, ch string, key string, opts KeyedPublishOptions) (KeyedPublishResult, error) {
+    // Prepare parameters...
+
+    err := e.pool.QueryRow(ctx, `
+        SELECT id, channel_offset, epoch, suppressed, suppress_reason, current_data, current_offset
+        FROM cf_keyed_publish($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::interval, $12::interval, $13::interval, $14, $15, $16, $17, $18, $19, $20, $21::interval, $22, $23)
+    `,
+        ch, key, opts.Data, tagsJSON,
+        clientID, userID, connInfo, chanInfo, subscribedAt,
+        keyMode, keyTTL, streamTTL, metaTTL,
+        expectedOffset, score, version, versionEpoch,
+        keyVersion, keyVersionEpoch,
+        idempotencyKey, idempotencyTTL, streamSize, opts.RefreshTTLOnSuppress,
+    ).Scan(&id, &channelOffset, &epoch, &suppressed, &suppressReason, &currentData, &currentOffset)
+
+    // Handle result...
+}
+```
+
+## Transactional Publishing
+
+Applications can publish real-time events atomically with their business logic:
+
+```sql
+BEGIN;
+    -- Business logic
+    INSERT INTO orders (id, user_id, total) VALUES ('ord_123', 'user_1', 99.99);
+
+    -- Real-time publish - SAME TRANSACTION!
+    SELECT * FROM cf_keyed_publish(
+        'orders:user_1',
+        'order_ord_123',
+        '{"id": "ord_123", "total": 99.99}'::bytea
+    );
+COMMIT;
+```
+
+If either operation fails, both are rolled back.
+
+## Docker Setup
+
+Quick start with Docker Compose:
+
+```yaml
+version: '3.8'
+services:
+  postgres:
+    image: postgres:16
+    container_name: keyed_engine_postgres
+    environment:
+      POSTGRES_USER: centrifuge
+      POSTGRES_PASSWORD: centrifuge
+      POSTGRES_DB: centrifuge
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+```
+
+```bash
+cd _examples/keyed_demo
+docker-compose up -d
+```
+
+Connection string:
+```
+postgres://centrifuge:centrifuge@localhost:5432/centrifuge?sslmode=disable
+```
+
+## Testing
+
+```bash
+# Run integration tests
+CENTRIFUGE_POSTGRES_URL="postgres://centrifuge:centrifuge@localhost:5432/centrifuge?sslmode=disable" \
+  go test -v -tags=integration -run TestPostgresKeyed ./...
+```
+
+Verify installation:
+```bash
+docker exec -it keyed_engine_postgres psql -U centrifuge -d centrifuge
+
+# Test publish
+SELECT * FROM cf_keyed_publish('test', 'key1', 'hello'::bytea);
+
+# Check snapshot
+SELECT * FROM cf_keyed_snapshot WHERE channel = 'test';
+
+# Check stream
+SELECT * FROM cf_keyed_stream WHERE channel = 'test';
+```
+
+## Migration Notes
+
+This schema uses the `cf_` prefix for all tables and functions. If migrating from a previous version:
+
+1. Create new tables with `cf_` prefix
+2. Migrate data from old tables
+3. Drop old tables and functions
+
+For new deployments, the `init.sql` script handles everything automatically.
+
+## Summary
+
+PostgresKeyedEngine provides:
+
+1. **Durability** - Full ACID transactions, WAL-based persistence
+2. **CAS Support** - ExpectedPosition for atomic read-modify-write
+3. **Simple Architecture** - Direct polling, no intermediate pub/sub
+4. **Scalability** - Read replicas for 250+ nodes
+5. **Dual ID System** - Global `id` for efficient fan-out, per-channel `channel_offset` for Centrifuge semantics
+6. **SQL Functions** - Single-call Publish/Unpublish via `cf_keyed_publish()` and `cf_keyed_unpublish()`
+7. **Transactional Publishing** - Atomic real-time events with business logic, any language
+8. **Split Client Info** - Individual columns for client_id, user_id, etc. enabling SQL queries

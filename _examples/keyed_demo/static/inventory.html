@@ -313,13 +313,8 @@
             // Process initial snapshot.
             if (ctx.publications) {
                 for (const pub of ctx.publications) {
-                    if (pub.key) {
-                        try {
-                            const data = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
-                            items.set(pub.key, data);
-                        } catch (e) {
-                            console.error('Error parsing item data:', e);
-                        }
+                    if (pub.key && pub.data) {
+                        items.set(pub.key, pub.data.item);
                     }
                 }
                 renderItems();
@@ -331,24 +326,10 @@
 
             if (ctx.removed) {
                 items.delete(ctx.key);
-            } else {
-                try {
-                    const data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-
-                    // Stream data contains transactions - apply delta to local state.
-                    if (data.action && data.itemId) {
-                        const item = items.get(data.itemId);
-                        if (item) {
-                            if (data.action === 'purchase') {
-                                item.stock -= data.quantity;
-                            } else if (data.action === 'restock') {
-                                item.stock += data.quantity;
-                            }
-                        }
-                        addActivityLog(data);
-                    }
-                } catch (e) {
-                    console.error('Error parsing publication:', e);
+            } else if (ctx.data) {
+                items.set(ctx.key, ctx.data.item);
+                if (ctx.data.transaction) {
+                    addActivityLog(ctx.data.transaction);
                 }
             }
             renderItems();
@@ -396,14 +377,13 @@
             btn.classList.add('loading');
             centrifuge.rpc('inventory:buy', { itemId: itemId, quantity: 1 })
                 .then(result => {
-                    const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
-                    if (data.success) {
-                        showToast(data.message, 'success');
-                        if (data.attempts > 1) {
-                            showToast(`Resolved after ${data.attempts} CAS retries!`, 'info');
+                    if (result.data.success) {
+                        showToast(result.data.message, 'success');
+                        if (result.data.attempts > 1) {
+                            showToast(`Resolved after ${result.data.attempts} CAS retries!`, 'info');
                         }
                     } else {
-                        showToast(data.message || 'Purchase failed', 'error');
+                        showToast(result.data.message || 'Purchase failed', 'error');
                     }
                 })
                 .catch(err => {
@@ -418,9 +398,8 @@
         function restockItem(itemId) {
             centrifuge.rpc('inventory:restock', { itemId: itemId, quantity: 1 })
                 .then(result => {
-                    const data = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
-                    if (data.success) {
-                        showToast(data.message, 'info');
+                    if (result.data.success) {
+                        showToast(result.data.message, 'info');
                     } else {
                         showToast('Restock failed', 'error');
                     }

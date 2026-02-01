@@ -496,14 +496,9 @@
             }
             if (ctx.publications) {
                 for (const pub of ctx.publications) {
-                    if (pub.key && !pub.removed) {
-                        try {
-                            const game = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
-                            availableGames.set(pub.key, game);
-                            subscribeToGame(pub.key, game.maxPlayers);
-                        } catch (e) {
-                            console.error('Error parsing game:', e);
-                        }
+                    if (pub.key && !pub.removed && pub.data) {
+                        availableGames.set(pub.key, pub.data);
+                        subscribeToGame(pub.key, pub.data.maxPlayers);
                     }
                 }
             }
@@ -516,14 +511,9 @@
             if (ctx.removed) {
                 availableGames.delete(ctx.key);
                 unsubscribeFromGame(ctx.key);
-            } else {
-                try {
-                    const game = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-                    availableGames.set(ctx.key, game);
-                    subscribeToGame(ctx.key, game.maxPlayers);
-                } catch (e) {
-                    console.error('Error parsing game:', e);
-                }
+            } else if (ctx.data) {
+                availableGames.set(ctx.key, ctx.data);
+                subscribeToGame(ctx.key, ctx.data.maxPlayers);
             }
             renderGames();
         });
@@ -628,14 +618,11 @@
                 }
                 if (ctx.publications) {
                     for (const pub of ctx.publications) {
-                        if (pub.key && pub.key.startsWith('slot_')) {
-                            try {
-                                const player = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
-                                gameState.slots[pub.key] = player;
-                                if (player.userId === userId) {
-                                    mySlots.set(gameId, player.slot);
-                                }
-                            } catch (e) {}
+                        if (pub.key && pub.key.startsWith('slot_') && pub.data) {
+                            gameState.slots[pub.key] = pub.data;
+                            if (pub.data.userId === userId) {
+                                mySlots.set(gameId, pub.data.slot);
+                            }
                         }
                     }
                 }
@@ -644,13 +631,8 @@
 
             sub.on('publication', (ctx) => {
                 if (ctx.key === 'game_event') {
-                    if (!ctx.removed) {
-                        try {
-                            const event = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-                            if (event.event === 'game_start') {
-                                showGameStarted(event.players);
-                            }
-                        } catch (e) {}
+                    if (!ctx.removed && ctx.data && ctx.data.event === 'game_start') {
+                        showGameStarted(ctx.data.players);
                     }
                     return;
                 }
@@ -662,14 +644,11 @@
                             mySlots.delete(gameId);
                         }
                         delete gameState.slots[ctx.key];
-                    } else {
-                        try {
-                            const player = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-                            gameState.slots[ctx.key] = player;
-                            if (player.userId === userId) {
-                                mySlots.set(gameId, player.slot);
-                            }
-                        } catch (e) {}
+                    } else if (ctx.data) {
+                        gameState.slots[ctx.key] = ctx.data;
+                        if (ctx.data.userId === userId) {
+                            mySlots.set(gameId, ctx.data.slot);
+                        }
                     }
                     renderGames();
                 }

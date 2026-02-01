@@ -223,13 +223,8 @@
             // Process snapshot - show all existing cursors (excluding our own).
             if (ctx.publications) {
                 for (const pub of ctx.publications) {
-                    if (pub.key && pub.key !== myClientId) {
-                        try {
-                            const data = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
-                            updateCursor(pub.key, data);
-                        } catch (e) {
-                            console.error('Error parsing cursor data:', e);
-                        }
+                    if (pub.key && pub.key !== myClientId && pub.data) {
+                        updateCursor(pub.key, pub.data);
                     }
                 }
             }
@@ -241,13 +236,8 @@
 
             if (ctx.removed) {
                 removeCursor(ctx.key);
-            } else {
-                try {
-                    const data = typeof ctx.data === 'string' ? JSON.parse(ctx.data) : ctx.data;
-                    updateCursor(ctx.key, data);
-                } catch (e) {
-                    console.error('Error parsing cursor data:', e);
-                }
+            } else if (ctx.data) {
+                updateCursor(ctx.key, ctx.data);
             }
         });
 
